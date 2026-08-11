@@ -66,7 +66,7 @@ const subagentRegistryReadMock = vi.hoisted(() => {
   };
 });
 
-vi.mock("../agents/subagent-registry-read.js", () => subagentRegistryReadMock);
+vi.mock("../agents/subagents/registry/subagent-registry-read.js", () => subagentRegistryReadMock);
 
 import {
   listSessionsFromStore,

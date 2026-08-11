@@ -6,6 +6,8 @@ import type {
   CronStatus,
 } from "../ui/src/api/types.ts";
 
+const CRON_LIST_SNAPSHOT_REVISION = "control-ui-mock-cron";
+
 function listResult(
   jobs: CronJob[],
   options: { total?: number; limit?: number; offset?: number } = {},
@@ -17,6 +19,7 @@ function listResult(
   const hasMore = nextOffset < total;
   return {
     jobs,
+    snapshotRevision: CRON_LIST_SNAPSHOT_REVISION,
     total,
     offset,
     limit,

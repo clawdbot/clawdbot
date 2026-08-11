@@ -13,6 +13,7 @@ import {
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   doesApprovalRequestMatchChannelAccount,
+  doesApprovalRequestSelectChannelAccount,
   resolveApprovalRequestAccountId,
   resolveApprovalRequestChannelAccountId,
 } from "./approval-request-account-binding.js";
@@ -64,6 +65,122 @@ const baseRequest: ExecApprovalRequest = {
   createdAtMs: 1000,
   expiresAtMs: 6000,
 };
+
+describe("native approval account selection", () => {
+  it("selects only the sole eligible account when no owner is recorded", () => {
+    expect(
+      doesApprovalRequestSelectChannelAccount({
+        cfg: {},
+        request: baseRequest,
+        channel: "telegram",
+        accountId: "default",
+        defaultAccountId: "default",
+        eligibleAccountIds: ["default"],
+      }),
+    ).toBe(true);
+    expect(
+      doesApprovalRequestSelectChannelAccount({
+        cfg: {},
+        request: baseRequest,
+        channel: "telegram",
+        accountId: "default",
+        defaultAccountId: "default",
+        eligibleAccountIds: ["default", "ops"],
+      }),
+    ).toBe(false);
+  });
+
+  it("selects the recorded account even when several accounts are eligible", () => {
+    const request = buildRequest({
+      turnSourceChannel: "telegram",
+      turnSourceAccountId: "ops",
+    });
+    expect(
+      doesApprovalRequestSelectChannelAccount({
+        cfg: {},
+        request,
+        channel: "telegram",
+        accountId: "ops",
+        defaultAccountId: "default",
+        eligibleAccountIds: ["default", "ops"],
+      }),
+    ).toBe(true);
+    expect(
+      doesApprovalRequestSelectChannelAccount({
+        cfg: {},
+        request,
+        channel: "telegram",
+        accountId: "default",
+        defaultAccountId: "default",
+        eligibleAccountIds: ["default", "ops"],
+      }),
+    ).toBe(false);
+  });
+
+  it("maps unscoped explicit targets to default and preserves scoped targets", () => {
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [
+            { channel: "telegram", to: "owner" },
+            { channel: "telegram", to: "ops-owner", accountId: "ops" },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+    for (const [accountId, selected] of [
+      ["default", true],
+      ["ops", true],
+      ["other", false],
+    ] as const) {
+      expect(
+        doesApprovalRequestSelectChannelAccount({
+          cfg,
+          request: baseRequest,
+          channel: "telegram",
+          accountId,
+          defaultAccountId: "default",
+          eligibleAccountIds: ["default", "ops", "other"],
+        }),
+      ).toBe(selected);
+    }
+  });
+
+  it("selects the source account and explicit targets in both mode", () => {
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "both",
+          targets: [{ channel: "telegram", accountId: "audit" }],
+        },
+      },
+    } as OpenClawConfig;
+    const request = buildRequest({
+      turnSourceChannel: "telegram",
+      turnSourceAccountId: "ops",
+    });
+
+    for (const [accountId, selected] of [
+      ["ops", true],
+      ["audit", true],
+      ["other", false],
+    ] as const) {
+      expect(
+        doesApprovalRequestSelectChannelAccount({
+          cfg,
+          request,
+          channel: "telegram",
+          accountId,
+          defaultAccountId: "default",
+          eligibleAccountIds: ["ops", "audit", "other"],
+        }),
+      ).toBe(selected);
+    }
+  });
+});
 
 type SessionEntryFixture = Partial<SessionEntry> & {
   origin?: SessionOrigin;

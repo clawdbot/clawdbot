@@ -3,6 +3,7 @@ import fs from "node:fs";
 import Module from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import { PluginLruCache } from "./plugin-cache-primitives.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import {
@@ -48,7 +49,6 @@ type InstallOpenClawPluginSdkNativeResolverOptions = {
   moduleUrl?: string;
   devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
-  trustedInstalledPrivateSdkOwner?: string;
 };
 
 const moduleWithResolver = Module as ModuleWithResolver;
@@ -153,13 +153,7 @@ function isNativeLoadableSdkTarget(targetPath: string): boolean {
   }
 }
 
-function normalizePathForBoundary(candidate: string): string {
-  try {
-    return fs.realpathSync(candidate);
-  } catch {
-    return path.resolve(candidate);
-  }
-}
+const normalizePathForBoundary = resolveRealpathOrAbsolute;
 
 function findNearestPackageRoot(modulePath: string): string {
   let cursor = path.dirname(path.resolve(modulePath));
@@ -303,7 +297,6 @@ function listPluginSdkNativeAliases(
     // plugin loader itself is configured to prefer source imports.
     "dist",
     options.devSourceRoot,
-    options.trustedInstalledPrivateSdkOwner,
   );
   const cached = pluginSdkNativeAliasesByMap.get(aliasMap);
   if (cached) {
@@ -311,13 +304,6 @@ function listPluginSdkNativeAliases(
   }
   const aliases = Object.entries(aliasMap)
     .filter(([specifier]) => isPluginSdkAliasSpecifier(specifier))
-    // This capability is injected through the owner-scoped plugin loader.
-    // A process-global resolver cannot authenticate caller-supplied parent metadata.
-    .filter(
-      ([specifier]) =>
-        specifier !== "openclaw/plugin-sdk/agent-harness-tool-authority-runtime" &&
-        specifier !== "openclaw/plugin-sdk/agent-harness-tool-authority-runtime.js",
-    )
     .filter(([, target]) => isNativeLoadableSdkTarget(target))
     .flatMap(([specifier, target]) => {
       if (specifier.endsWith(".js")) {

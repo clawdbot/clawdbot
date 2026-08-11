@@ -9,6 +9,7 @@ import {
   resolveConfigIncludeWritePath,
 } from "../config/includes.js";
 import type { ConfigWriteOptions } from "../config/io.js";
+import { containsConfigIncludeDirective } from "../config/io.read-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -17,6 +18,7 @@ import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { enablePluginInConfig } from "./enable.js";
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
+import type { PluginInstallLogger } from "./install-types.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   recordPluginInstallInRecords,
@@ -92,19 +94,6 @@ export type ConfigMutationPreflight =
   | { mode: "blocked"; scope: "config" | ConfigMutationSection; reason: string };
 
 const CONFIG_MUTATION_ALLOWED = { mode: "allowed" } as const;
-
-export function containsConfigIncludeDirective(value: unknown): boolean {
-  if (Array.isArray(value)) {
-    return value.some((entry) => containsConfigIncludeDirective(entry));
-  }
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    Object.hasOwn(value, "$include") ||
-    Object.values(value).some((entry) => containsConfigIncludeDirective(entry))
-  );
-}
 
 export function supportsInstallConfigSingleTopLevelIncludeShape(authoredSection: unknown): boolean {
   if (!containsConfigIncludeDirective(authoredSection)) {
@@ -319,7 +308,7 @@ function logShadowedNpmInstallWarning(params: {
   config: OpenClawConfig;
   pluginId: string;
   install: Omit<PluginInstallUpdate, "pluginId">;
-  runtime: RuntimeEnv;
+  warn: (message: string, managementMessage: string) => void;
 }): void {
   // Warn when a newly installed npm plugin is shadowed by an explicit config source.
   if (params.install.source !== "npm") {
@@ -343,22 +332,15 @@ function logShadowedNpmInstallWarning(params: {
     return;
   }
 
-  params.runtime.log(
-    theme.warn(
-      [
-        `Warning: installed plugin "${params.pluginId}" is not the active source because a config-selected plugin with the same id is currently selected:`,
-        `  active config source: ${shortenHomePath(active.source)}`,
-        `  installed npm source: ${shortenHomePath(installedSource)}`,
-        "Run `openclaw plugins doctor` for repair options.",
-      ].join("\n"),
-    ),
+  params.warn(
+    [
+      `Warning: installed plugin "${params.pluginId}" is not the active source because a config-selected plugin with the same id is currently selected:`,
+      `  active config source: ${shortenHomePath(active.source)}`,
+      `  installed npm source: ${shortenHomePath(installedSource)}`,
+      "Run `openclaw plugins doctor` for repair options.",
+    ].join("\n"),
+    `Installed plugin "${params.pluginId}" is shadowed by a configured plugin source. Run \`openclaw plugins doctor\`.`,
   );
-}
-
-function logSlotWarnings(warnings: string[], runtime: RuntimeEnv): void {
-  for (const warning of warnings) {
-    runtime.log(theme.warn(warning));
-  }
 }
 
 function resolveComparableInstallPath(
@@ -488,8 +470,17 @@ export async function persistPluginInstall(params: {
   successMessage?: string;
   warningMessage?: string;
   runtime?: RuntimeEnv;
+  persistenceLogger?: PluginInstallLogger;
 }): Promise<OpenClawConfig> {
   const runtime = params.runtime ?? defaultRuntime;
+  // Terminal diagnostics may contain paths/errors; management receives only producer-authored summaries.
+  const warn = (message: string, managementMessage: string): void => {
+    if (params.persistenceLogger?.warn) {
+      params.persistenceLogger.warn(managementMessage);
+      return;
+    }
+    runtime.log(theme.warn(message));
+  };
   const installRecords = await tracePluginLifecyclePhaseAsync(
     "install records load",
     () => loadInstalledPluginIndexInstallRecords(),
@@ -567,7 +558,10 @@ export async function persistPluginInstall(params: {
       { command: "install", pluginId: params.pluginId },
     );
     for (const warning of removalResult.warnings) {
-      runtime.log(theme.warn(warning));
+      warn(
+        warning,
+        "A previous plugin installation could not be fully cleaned up. Run `openclaw plugins doctor`.",
+      );
     }
     if (removalResult.directoryRemoved) {
       runtime.log(
@@ -584,24 +578,33 @@ export async function persistPluginInstall(params: {
     invalidateRuntimeCache: params.invalidateRuntimeCache,
     traceCommand: "install",
     logger: {
-      warn: (message) => runtime.log(theme.warn(message)),
+      warn: (message) =>
+        warn(
+          message,
+          "Plugin registry refresh or runtime cache invalidation failed. Restart the gateway.",
+        ),
     },
   });
-  logSlotWarnings(slotResult.warnings, runtime);
+  for (const warning of slotResult.warnings) {
+    warn(warning, warning);
+  }
   const configWarning =
     params.enable !== false && configEnablement.mode === "missing"
       ? `Installed plugin "${params.pluginId}" without enabling it because it requires configuration first. Configure it, then run \`openclaw plugins enable ${params.pluginId}\`.`
       : undefined;
   const warningMessage = [params.warningMessage, configWarning].filter(Boolean).join("\n");
   if (warningMessage) {
-    runtime.log(theme.warn(warningMessage));
+    warn(
+      warningMessage,
+      configWarning ?? "Plugin installation reported a warning. Run `openclaw plugins doctor`.",
+    );
   }
   runtime.log(params.successMessage ?? `Installed plugin: ${params.pluginId}`);
   logShadowedNpmInstallWarning({
     config: next,
     pluginId: params.pluginId,
     install: params.install,
-    runtime,
+    warn,
   });
   runtime.log("Restart the gateway to load plugins.");
   return next;

@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import JSON5 from "json5";
+import type { classifyGatewayConnectFailure } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   createConfigIO,
   resolveConfigPath,
@@ -39,15 +40,13 @@ import {
   resolveBestEffortGatewayBindHostForDisplay,
 } from "../../infra/network-discovery-display.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
+import { formatPortDiagnostics } from "../../infra/ports-format.js";
 import {
-  formatPortDiagnostics,
   inspectPortConnections,
   inspectPortUsage,
   inspectPortUsages,
-  type PortConnection,
-  type PortListener,
-  type PortUsageStatus,
-} from "../../infra/ports.js";
+} from "../../infra/ports-inspect.js";
+import type { PortConnection, PortListener, PortUsageStatus } from "../../infra/ports-types.js";
 import {
   readGatewayRestartHandoffSync,
   type GatewayRestartHandoff,
@@ -124,6 +123,8 @@ type CliStatusSummary = {
   version: string;
   entrypoint?: string;
 };
+
+type GatewayConnectFailureKind = ReturnType<typeof classifyGatewayConnectFailure>["kind"];
 
 const gatewayProbeAuthModuleLoader = createLazyImportLoader(
   () => import("../../gateway/probe-auth.js"),
@@ -345,6 +346,10 @@ export type DaemonStatus = {
     };
     version?: string | null;
     error?: string;
+    connectFailure?: {
+      kind: GatewayConnectFailureKind;
+      detailCode?: string;
+    };
     url?: string;
     authWarning?: string;
   };
@@ -363,7 +368,7 @@ export type DaemonStatus = {
 };
 
 function shouldReportPortUsage(status: PortUsageStatus | undefined, rpcOk?: boolean) {
-  if (status !== "busy") {
+  if (status === undefined || status === "free") {
     return false;
   }
   if (rpcOk === true) {

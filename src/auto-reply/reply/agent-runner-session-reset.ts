@@ -2,7 +2,7 @@ import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
 // Handles session reset requests produced during agent runner execution.
-import { transitionMainSessionRecovery } from "../../agents/main-session-recovery-state.js";
+import { transitionMainSessionRecovery } from "../../agents/main-session-recovery/main-session-recovery-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { persistSessionResetLifecycle } from "../../config/sessions/session-accessor.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
@@ -86,6 +86,7 @@ export async function resetReplyRunSession(params: {
     outputTokens: undefined,
     totalTokens: undefined,
     totalTokensFresh: false,
+    totalTokensVersion: undefined,
     estimatedCostUsd: undefined,
     cacheRead: undefined,
     cacheWrite: undefined,

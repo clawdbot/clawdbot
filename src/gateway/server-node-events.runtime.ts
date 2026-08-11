@@ -22,6 +22,7 @@ export { normalizeMainKey } from "../routing/session-key.js";
 export { defaultRuntime } from "../runtime.js";
 export { resolveChatAttachmentMaxBytes } from "./chat-attachment-policy.js";
 export {
+  INLINE_IMAGE_DURABLE_OMISSION_MARKER,
   parseMessageWithAttachments,
   persistInboundImagesForTranscript,
 } from "./chat-attachments.js";

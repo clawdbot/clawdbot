@@ -2,9 +2,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { collectChannelSchemaMetadata } from "../config/channel-config-metadata.js";
+import { collectChannelSchemaMetadataCore } from "../config/channel-config-metadata.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
+import { collectBundledChannelConfigsCore } from "./bundled-channel-config-metadata.js";
 import type { PluginCandidate } from "./discovery.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
@@ -1664,7 +1664,7 @@ describe("loadPluginManifestRegistry", () => {
     });
 
     const registry = loadPluginManifestRegistry({
-      bundledChannelConfigCollector: collectBundledChannelConfigs,
+      bundledChannelConfigCollector: collectBundledChannelConfigsCore,
       candidates: [candidate],
     });
 
@@ -1683,7 +1683,7 @@ describe("loadPluginManifestRegistry", () => {
         manifestOnly: { help: "manifest hint" },
       },
     });
-    expect(collectChannelSchemaMetadata(registry)).toEqual([
+    expect(collectChannelSchemaMetadataCore(registry)).toEqual([
       {
         id: "alpha",
         label: "Alpha",

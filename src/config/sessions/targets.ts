@@ -11,13 +11,13 @@ import {
 } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
-  isSameOpenClawAgentDatabasePath,
+  createOpenClawAgentDatabasePathMatcher,
   listOpenClawRegisteredAgentDatabases,
 } from "../../state/openclaw-agent-db-registry.js";
 import { resolveStateDir } from "../paths.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAgentsDirFromSessionStorePath, resolveStorePath } from "./paths.js";
-import { readSqliteSessionEntryKeys } from "./session-accessor.sqlite-entry-store.js";
+import { readSessionEntryKeys } from "./session-accessor.sqlite-entry-store.js";
 import {
   listDurableSqliteTargetOwnersForSessionStorePath,
   resolveSqliteTargetFromSessionStorePath,
@@ -126,6 +126,7 @@ export function listKnownSessionStoreAgentIds(
 ): string[] {
   const env = params.env ?? process.env;
   const defaultAgentId = resolveDefaultAgentId(cfg);
+  const isSameDatabasePath = createOpenClawAgentDatabasePathMatcher();
   const ids = new Set(listConfiguredSessionStoreAgentIds(cfg));
   if (!isPerAgentSessionStoreConfig(cfg.session?.store)) {
     const storePath = resolveStorePath(cfg.session?.store, { agentId: defaultAgentId, env });
@@ -133,6 +134,7 @@ export function listKnownSessionStoreAgentIds(
       agentId: defaultAgentId,
       defaultAgentId,
       env,
+      isSameDatabasePath,
     });
     // Fixed stores can outlive their registry row. Preserve the database-recorded
     // owner so combined views and reapers do not drop a retired agent's live sessions.
@@ -150,7 +152,7 @@ export function listKnownSessionStoreAgentIds(
       try {
         const logicalOwners = withOpenClawAgentDatabaseReadOnly(
           (database) =>
-            readSqliteSessionEntryKeys(database).flatMap((sessionKey) => {
+            readSessionEntryKeys(database).flatMap((sessionKey) => {
               const parsed = parseAgentSessionKey(sessionKey);
               return parsed ? [normalizeAgentId(parsed.agentId)] : [];
             }),
@@ -173,8 +175,9 @@ export function listKnownSessionStoreAgentIds(
       agentId,
       defaultAgentId,
       env,
+      isSameDatabasePath,
     }).path;
-    if (isSameOpenClawAgentDatabasePath(registered.path, expectedPath)) {
+    if (isSameDatabasePath(registered.path, expectedPath)) {
       ids.add(agentId);
     }
   }
@@ -450,7 +453,7 @@ export function resolveExistingAgentSessionStoreTargetsSync(
           : requested;
         const result = withOpenClawAgentDatabaseReadOnly(
           (database) =>
-            readSqliteSessionEntryKeys(database).some((sessionKey) => {
+            readSessionEntryKeys(database).some((sessionKey) => {
               const parsed = parseAgentSessionKey(sessionKey);
               // Unscoped keys belong to the validated database owner. Explicit agent keys must
               // match so a fixed store containing only another agent's rows proves nothing.

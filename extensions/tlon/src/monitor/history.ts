@@ -1,6 +1,7 @@
 // Tlon plugin module implements history behavior.
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-import { asRecord, extractMessageText, formatErrorMessage } from "./utils.js";
+import { asNullableRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { extractMessageText, formatErrorMessage } from "./utils.js";
 
 /**
  * Format a number as @ud (with dots every 3 digits from the right)

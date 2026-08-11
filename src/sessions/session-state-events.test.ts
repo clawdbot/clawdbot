@@ -443,6 +443,7 @@ describe("session state events", () => {
 
     await drainFormattedSystemEvents({
       cfg,
+      agentId: "main",
       sessionKey: watcher,
       isMainSession: false,
       isNewSession: false,
@@ -454,6 +455,7 @@ describe("session state events", () => {
     enqueueSystemEvent("Exec completed", { sessionKey: watcher, contextKey: "exec:job-1" });
     await drainFormattedSystemEvents({
       cfg,
+      agentId: "main",
       sessionKey: watcher,
       isMainSession: false,
       isNewSession: false,

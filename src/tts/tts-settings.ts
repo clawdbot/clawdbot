@@ -134,10 +134,6 @@ export function asProviderConfigMap(value: unknown): Record<string, unknown> {
     : {};
 }
 
-export function hasOwnProperty(value: object, key: string): boolean {
-  return Object.hasOwn(value, key);
-}
-
 function normalizeProviderConfigMap(
   value: unknown,
 ): Record<string, SpeechProviderConfig> | undefined {
@@ -281,7 +277,7 @@ function resolveTtsPersonaIdFromPrefs(
   config: ResolvedTtsConfig,
   prefs: TtsUserPrefs,
 ): string | undefined {
-  if (prefs.tts && hasOwnProperty(prefs.tts, "persona")) {
+  if (prefs.tts && Object.hasOwn(prefs.tts, "persona")) {
     return normalizeTtsPersonaId(prefs.tts.persona);
   }
   return normalizeTtsPersonaId(config.persona);

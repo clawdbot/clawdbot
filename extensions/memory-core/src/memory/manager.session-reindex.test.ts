@@ -8,7 +8,6 @@ describe("memory manager session reindex gating", () => {
       shouldSyncSessionsForReindex({
         hasSessionSource: true,
         sessionsDirty: false,
-        dirtySessionFileCount: 0,
         sync: { reason: "session-start" },
         needsFullReindex: true,
       }),
@@ -17,7 +16,6 @@ describe("memory manager session reindex gating", () => {
       shouldSyncSessionsForReindex({
         hasSessionSource: true,
         sessionsDirty: false,
-        dirtySessionFileCount: 0,
         sync: { reason: "watch" },
         needsFullReindex: true,
       }),
@@ -26,7 +24,6 @@ describe("memory manager session reindex gating", () => {
       shouldSyncSessionsForReindex({
         hasSessionSource: true,
         sessionsDirty: false,
-        dirtySessionFileCount: 0,
         sync: { reason: "session-start" },
         needsFullReindex: false,
       }),
@@ -35,7 +32,6 @@ describe("memory manager session reindex gating", () => {
       shouldSyncSessionsForReindex({
         hasSessionSource: true,
         sessionsDirty: false,
-        dirtySessionFileCount: 0,
         sync: { reason: "watch" },
         needsFullReindex: false,
       }),
@@ -48,8 +44,15 @@ describe("memory manager session reindex gating", () => {
         hasSessionSource: true,
         sessionsDirty: true,
         sessionsFullRetryDirty: true,
-        dirtySessionFileCount: 0,
         sync: { reason: "interval" },
+        needsFullReindex: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSyncSessionsForReindex({
+        hasSessionSource: true,
+        sessionsDirty: true,
+        sync: { reason: "session-startup-catchup" },
         needsFullReindex: false,
       }),
     ).toBe(true);

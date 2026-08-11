@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveClaudeLiveMode } from "./claude-live-session-policy.js";
-import { readConfiguredExecPolicy } from "./claude-live-session.test-support.js";
+import { acceptsClaudeLive, resolveClaudeLiveMode } from "./claude-live-session-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 describe("resolveClaudeLiveMode", () => {
@@ -14,27 +13,31 @@ describe("resolveClaudeLiveMode", () => {
   });
 });
 
-describe("Claude live configured exec policy", () => {
-  it("uses the configured default agent for an unscoped legacy session key", () => {
+describe("acceptsClaudeLive", () => {
+  it("accepts only local Claude stdin/jsonl stdio contexts", () => {
     const context = {
-      params: {
-        sessionKey: "main",
-        config: {
-          tools: { exec: { security: "full", ask: "off" } },
-          agents: {
-            entries: {
-              main: {},
-              ops: { default: true, tools: { exec: { security: "deny", ask: "always" } } },
-            },
-          },
-        },
+      params: { sessionEntry: {} },
+      backendResolved: { id: "claude-cli" },
+      preparedBackend: {
+        backend: { liveSession: "claude-stdio", output: "jsonl", input: "stdin" },
       },
     } as unknown as PreparedCliRunContext;
 
-    expect(readConfiguredExecPolicy(context)).toEqual({
-      agentId: "ops",
-      security: "deny",
-      ask: "always",
-    });
+    expect(acceptsClaudeLive(context)).toBe(true);
+    expect(
+      acceptsClaudeLive({
+        ...context,
+        params: { ...context.params, sessionEntry: { execHost: "node" } },
+      } as unknown as PreparedCliRunContext),
+    ).toBe(false);
+    expect(
+      acceptsClaudeLive({
+        ...context,
+        preparedBackend: {
+          ...context.preparedBackend,
+          backend: { ...context.preparedBackend.backend, output: "json" },
+        },
+      }),
+    ).toBe(false);
   });
 });

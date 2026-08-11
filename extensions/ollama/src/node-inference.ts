@@ -18,6 +18,7 @@ import {
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import {
   DEFAULT_INFERENCE_TIMEOUT_MS,
@@ -82,17 +83,11 @@ type NodeSummary = Awaited<
   ReturnType<OpenClawPluginApi["runtime"]["nodes"]["list"]>
 >["nodes"][number];
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function readNodeCommandParams(paramsJSON?: string | null): Record<string, unknown> {
   if (!paramsJSON) {
     return {};
   }
-  const parsed = asRecord(JSON.parse(paramsJSON));
+  const parsed = asNullableRecord(JSON.parse(paramsJSON));
   if (!parsed) {
     throw new Error("node inference params must be a JSON object");
   }
@@ -144,7 +139,7 @@ async function requestOllamaJson<T>(params: {
       const body = (await readResponseTextLimited(response, MAX_ERROR_BODY_BYTES)).trim();
       let detail = body;
       try {
-        const parsed = asRecord(JSON.parse(body));
+        const parsed = asNullableRecord(JSON.parse(body));
         detail = typeof parsed?.error === "string" ? parsed.error : body;
       } catch {
         // Keep the bounded response text when Ollama returns a non-JSON error.
@@ -401,10 +396,10 @@ function findNode(nodes: NodeSummary[], query: string): NodeSummary {
 }
 
 function parseInvokePayload(raw: unknown): Record<string, unknown> {
-  const result = asRecord(raw);
-  let payload = asRecord(result?.payload);
+  const result = asNullableRecord(raw);
+  let payload = asNullableRecord(result?.payload);
   if (!payload && typeof result?.payloadJSON === "string") {
-    payload = asRecord(JSON.parse(result.payloadJSON));
+    payload = asNullableRecord(JSON.parse(result.payloadJSON));
   }
   if (!payload) {
     throw new Error("node returned an invalid Ollama inference payload");
@@ -437,7 +432,7 @@ export function createOllamaNodeInferenceTool(api: OpenClawPluginApi): AnyAgentT
     ...ollamaNodeInferenceToolDefinition,
     execute: async (_toolCallId, args, signal) => {
       throwIfOllamaRequestAborted(signal);
-      const params = asRecord(args) ?? {};
+      const params = asNullableRecord(args) ?? {};
       const action = readStringParam(params, "action", { required: true });
       const nodeQuery = readStringParam(params, "node");
       const listed = await api.runtime.nodes.list({ connected: true });

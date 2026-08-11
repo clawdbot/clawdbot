@@ -2,6 +2,7 @@
 import type { ProviderConfig } from "@github/copilot-sdk";
 import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { tokenFingerprint } from "./auth-bridge.js";
 
 const COPILOT_BYOK_PROVIDER_ERROR =
@@ -83,7 +84,7 @@ export function resolveCopilotProvider(params: {
     return { mode: "github-copilot" };
   }
 
-  const baseUrl = readString(params.model.baseUrl);
+  const baseUrl = normalizeOptionalString(params.model.baseUrl);
   if (!baseUrl) {
     throw new Error(COPILOT_BYOK_PROVIDER_ERROR);
   }
@@ -92,11 +93,11 @@ export function resolveCopilotProvider(params: {
     throw new Error(COPILOT_BYOK_TRANSPORT_POLICY_ERROR);
   }
 
-  const api = readString(params.model.api)?.toLowerCase() ?? "openai-responses";
+  const api = normalizeOptionalString(params.model.api)?.toLowerCase() ?? "openai-responses";
   const provider = resolveProviderType(api, baseUrl, params.model.azureApiVersion);
   const resolvedApiKey = resolveProviderCredential(params.resolvedApiKey);
   const headers = resolveProviderHeaders(params.model.headers);
-  const requestAuthMode = readString(params.model.requestAuthMode)?.toLowerCase();
+  const requestAuthMode = normalizeOptionalString(params.model.requestAuthMode)?.toLowerCase();
   const usePreparedRequestAuth =
     requestAuthMode !== undefined && requestAuthMode !== "provider-default";
   const providerConfig: ProviderConfig = {
@@ -156,16 +157,16 @@ export function supportsCopilotByokProviderShape(
     "api" | "baseUrl" | "requestProxy" | "requestTls" | "requestAllowPrivateNetwork"
   >,
 ): boolean {
-  if (!readString(model.baseUrl) || hasUnsupportedTransportPolicy(model)) {
+  if (!normalizeOptionalString(model.baseUrl) || hasUnsupportedTransportPolicy(model)) {
     return false;
   }
   try {
     resolveProviderType(
-      readString(model.api)?.toLowerCase() ?? "openai-responses",
-      readString(model.baseUrl)!,
+      normalizeOptionalString(model.api)?.toLowerCase() ?? "openai-responses",
+      normalizeOptionalString(model.baseUrl)!,
       undefined,
     );
-    assertByokEndpointHostAllowed(readString(model.baseUrl)!);
+    assertByokEndpointHostAllowed(normalizeOptionalString(model.baseUrl)!);
     return true;
   } catch {
     return false;
@@ -274,7 +275,7 @@ function resolveAzureProviderType(
   url.pathname = "";
   url.search = "";
   url.hash = "";
-  const resolvedApiVersion = readString(apiVersion);
+  const resolvedApiVersion = normalizeOptionalString(apiVersion);
   return {
     type: "azure",
     wireApi: "responses",
@@ -317,12 +318,8 @@ function stableSerialize(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function resolveProviderCredential(value: string | undefined): string | undefined {
-  const credential = readString(value);
+  const credential = normalizeOptionalString(value);
   return credential && !isNonSecretApiKeyMarker(credential) ? credential : undefined;
 }
 

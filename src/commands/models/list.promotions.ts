@@ -2,7 +2,7 @@
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { modelKey } from "../../agents/model-ref-shared.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-import type { ClawHubPromotionsFeedEntry } from "../../infra/clawhub.js";
+import type { ClawHubPromotionsFeedEntry } from "../../infra/clawhub-promotions.js";
 import {
   listLivePromotionEntries,
   markPromotionSlugsNotified,

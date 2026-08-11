@@ -1,6 +1,7 @@
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { DB as OpenClawStateKyselyDatabase } from "../src/state/openclaw-state-db.generated.js";
 import {
   WORKER_RESULT_SENTINEL,
@@ -411,10 +412,6 @@ async function runBenchmark(options: WorkerOptions): Promise<WorkerResult> {
   };
 }
 
-function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
-}
-
 async function main(): Promise<void> {
   const options = parseOptions(process.argv.slice(2));
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -448,7 +445,7 @@ async function main(): Promise<void> {
     }
   }
   if (failure) {
-    throw toError(failure);
+    throw toErrorObject(failure, "Task registry SQLite benchmark failed");
   }
   if (!result) {
     throw new Error("benchmark worker completed without a result");

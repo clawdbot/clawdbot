@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { detectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
+import { validateScriptFileForShellBleed } from "./bash-tools.exec-script-preflight.js";
 
 vi.mock("./bash-tools.exec-host-gateway.js", () => ({
   processGatewayAllowlist: async () => ({ allowWithoutEnforcedCommand: true }),
@@ -22,7 +23,7 @@ vi.mock("./bash-tools.exec-host-node.js", () => ({
   },
 }));
 
-vi.mock("../utils/delivery-context.js", () => ({
+vi.mock("../utils/delivery-context.shared.js", () => ({
   normalizeDeliveryContext: (value: unknown) => value,
 }));
 
@@ -573,12 +574,11 @@ describeWin("exec script preflight on windows path syntax", () => {
 
 describe("exec interpreter heuristics ReDoS guard", () => {
   it("does not hang on long commands with VAR=value assignments and whitespace-heavy text", async () => {
-    // Keep the workload side-effect free while exercising the full exec path.
     const htmlBlock = '<section style="padding: 30px 20px; font-family: Arial;">'.repeat(50);
     const command = `ACCESS_TOKEN=$(__openclaw_missing_redos_guard__)\nprintf '%s' '${htmlBlock}' >/dev/null`;
 
     const start = Date.now();
-    await runExecPreflight({ command, workdir: process.cwd() });
+    await validateScriptFileForShellBleed({ command, workdir: process.cwd() });
     const elapsed = Date.now() - start;
     expect(elapsed).toBeLessThan(5000);
   });

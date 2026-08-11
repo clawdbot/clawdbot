@@ -10,12 +10,12 @@ import {
   parseLaneSelection,
   requiredPrepublishPluginPackagesForLanes,
   resolveDockerE2ePlan,
-} from "../../scripts/lib/docker-e2e-plan.mjs";
+} from "../../scripts/lib/docker-e2e-plan.mts";
 import {
   allReleasePathLanes,
   BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS,
   mainLanes,
-} from "../../scripts/lib/docker-e2e-scenarios.mjs";
+} from "../../scripts/lib/docker-e2e-scenarios.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -252,7 +252,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       ".release-harness",
       "scripts",
       "lib",
-      "docker-e2e-scenarios.mjs",
+      "docker-e2e-scenarios.mts",
     );
 
     expect(sourceLanes).toHaveLength(trustedScripts.size);
@@ -263,7 +263,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     }
 
     mkdirSync(dirname(nestedModule), { recursive: true });
-    copyFileSync("scripts/lib/docker-e2e-scenarios.mjs", nestedModule);
+    copyFileSync("scripts/lib/docker-e2e-scenarios.mts", nestedModule);
 
     const laneJson = execFileSync(
       process.execPath,
@@ -414,7 +414,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.lanes.map((lane) => lane.name)).toContain("mcp-channels");
     expect(plan.lanes.map((lane) => lane.name)).toContain("plugin-binding-command-escape");
     expect(plan.lanes.map((lane) => lane.name)).toContain("live-plugin-tool");
-    expect(plan.lanes.map((lane) => lane.name)).toContain("commitments-safety");
     expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-plugin-install-uninstall-0");
     expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-plugin-install-uninstall-23");
     const countLane = (name: string) =>
@@ -1615,7 +1614,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "kitchen-sink-plugin",
         "kitchen-sink-rpc",
         "bundled-plugin-install-uninstall-0",
-        "commitments-safety",
         "multi-node-update",
         "update-channel-switch",
         "skill-install",
@@ -1644,7 +1642,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
       { name: "kitchen-sink-plugin", stateScenario: "empty" },
       { name: "kitchen-sink-rpc", stateScenario: "empty" },
       { name: "bundled-plugin-install-uninstall-0", stateScenario: "empty" },
-      { name: "commitments-safety", stateScenario: "empty" },
       { name: "multi-node-update", stateScenario: "empty" },
       { name: "update-channel-switch", stateScenario: "update-stable" },
       { name: "skill-install", stateScenario: "empty" },
@@ -1653,9 +1650,21 @@ describe("scripts/lib/docker-e2e-plan", () => {
   });
 
   it("derives prerelease npm companions from selected survivor recipes", () => {
-    const basePlan = planFor({ selectedLaneNames: ["published-upgrade-survivor"] });
-    expect(basePlan.requiredPrepublishPluginPackages).toEqual(["@openclaw/discord"]);
-    expect(basePlan.needs.prepublishPluginRegistry).toBe(true);
+    for (const laneName of [
+      "upgrade-survivor",
+      "published-upgrade-survivor",
+      "root-managed-vps-upgrade",
+      "update-restart-auth",
+      "update-migration",
+    ]) {
+      const plan = planFor({ selectedLaneNames: [laneName] });
+      expect(plan.requiredPrepublishPluginPackages).toEqual([
+        "@openclaw/codex",
+        "@openclaw/discord",
+        "@openclaw/whatsapp",
+      ]);
+      expect(plan.needs.prepublishPluginRegistry).toBe(true);
+    }
 
     const feishuPlan = planFor({
       selectedLaneNames: ["published-upgrade-survivor"],
@@ -1663,21 +1672,21 @@ describe("scripts/lib/docker-e2e-plan", () => {
       upgradeSurvivorScenarios: "base feishu-channel",
     });
     expect(feishuPlan.requiredPrepublishPluginPackages).toEqual([
+      "@openclaw/codex",
       "@openclaw/discord",
       "@openclaw/feishu",
+      "@openclaw/whatsapp",
     ]);
-    expect(
-      planFor({ selectedLaneNames: ["root-managed-vps-upgrade"] }).requiredPrepublishPluginPackages,
-    ).toEqual(["@openclaw/discord"]);
-    expect(
-      planFor({ selectedLaneNames: ["update-migration"] }).requiredPrepublishPluginPackages,
-    ).toEqual(["@openclaw/discord"]);
     const legacyFeishuPlan = planFor({
       selectedLaneNames: ["published-upgrade-survivor"],
       upgradeSurvivorBaselines: "2026.3.13",
       upgradeSurvivorScenarios: "feishu-channel",
     });
-    expect(legacyFeishuPlan.requiredPrepublishPluginPackages).toEqual(["@openclaw/discord"]);
+    expect(legacyFeishuPlan.requiredPrepublishPluginPackages).toEqual([
+      "@openclaw/codex",
+      "@openclaw/discord",
+      "@openclaw/whatsapp",
+    ]);
     const selfUpgradeLane = findLaneByName("update-run-package-self-upgrade");
     expect(selfUpgradeLane).toBeDefined();
     expect(requiredPrepublishPluginPackagesForLanes([selfUpgradeLane!])).toEqual([]);

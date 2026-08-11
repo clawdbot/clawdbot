@@ -169,6 +169,15 @@ export async function runPostCorePluginConvergence(params: {
     OPENCLAW_COMPATIBILITY_HOST_VERSION: params.compatibilityHostVersion ?? VERSION,
     [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1",
   };
+  // Retire obsolete managed shadows before relinking or smoke-checking them. A package that
+  // became bundled with the new core must not survive into the next startup's contract graph.
+  const { maybeRepairStaleManagedNpmBundledPlugins } =
+    await import("../../commands/doctor-plugin-registry.js");
+  maybeRepairStaleManagedNpmBundledPlugins({
+    config: params.cfg,
+    env,
+    prompter: { shouldRepair: true },
+  });
   const prunedBaseline = params.baselineInstallRecords
     ? pruneStaleLocalBundledPluginInstallRecords({
         installRecords: params.baselineInstallRecords,

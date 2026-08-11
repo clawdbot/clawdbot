@@ -6,7 +6,8 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseConfigJson5 } from "../config/io.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
-import { buildConfigSchema } from "../config/schema.js";
+import { buildConfigSchemaCore } from "../config/schema.js";
+import { isMissingPathError } from "../infra/errors.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import { readRegularFileSync } from "../infra/regular-file.js";
 import { VERSION } from "../version.js";
@@ -297,7 +298,7 @@ function sanitizeConfigShape(
 
 function sanitizeConfigDetails(parsed: unknown, redaction: SupportRedactionContext): unknown {
   return sanitizeSupportConfigValue(
-    redactConfigObject(parsed, buildConfigSchema().uiHints),
+    redactConfigObject(parsed, buildConfigSchemaCore().uiHints),
     redaction,
   );
 }
@@ -322,13 +323,6 @@ function configShapeReadFailure(params: {
     shape.error = redactSupportString(params.error, params.redaction);
   }
   return shape;
-}
-
-function isMissingPathError(error: unknown): boolean {
-  if (!error || typeof error !== "object" || !("code" in error)) {
-    return false;
-  }
-  return error.code === "ENOENT" || error.code === "ENOTDIR";
 }
 
 function configReadErrorMessage(error: unknown, stat?: fs.Stats): string | undefined {

@@ -4,7 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mjs";
+import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mts";
 import { withMockedWindowsPlatform, withRestoredMocks } from "../test-utils/vitest-spies.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";

@@ -861,7 +861,6 @@ async function runGatewayPrompt(prompt: string): Promise<PromptResult> {
           },
           discovery: {
             mdns: { mode: "off" },
-            wideArea: { enabled: false },
           },
           ...(proxyPort
             ? {
@@ -1015,7 +1014,6 @@ async function main() {
 export const testing = {
   cleanupPromptProbeTmpDir,
   installGatewayPromptParentSignalHandlers,
-  matchesExtraUsage400,
   promptProbeTmpResult,
   readLogTail,
   readRequestBody,
@@ -1023,8 +1021,6 @@ export const testing = {
   runDirectPrompt,
   startAnthropicProxy,
   stopGatewayPromptChild,
-  summarizeCapture,
-  summarizeText,
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

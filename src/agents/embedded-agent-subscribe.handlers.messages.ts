@@ -1,3 +1,4 @@
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 /**
  * Handles embedded-agent assistant message events, block replies, reasoning
  * streams, reply directives, and pending tool media attachment handoff.
@@ -14,6 +15,7 @@ import {
 } from "../auto-reply/reply/reply-directives.js";
 import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { splitMediaFromOutput } from "../media/parse.js";
 import { coerceChatContentText } from "../shared/chat-content.js";
@@ -26,17 +28,17 @@ import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
 } from "./embedded-agent-helpers.js";
+import { updateLiveEditDiffProgress } from "./embedded-agent-live-edit-diff.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type {
   EmbeddedAgentSubscribeContext,
   EmbeddedAgentSubscribeState,
 } from "./embedded-agent-subscribe.handlers.types.js";
-import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import { appendRawStream } from "./embedded-agent-subscribe.raw-stream.js";
 import { warnIfAssistantEmittedSuspiciousText } from "./embedded-agent-subscribe.tool-text-diagnostics.js";
 import {
-  extractAssistantText,
+  extractEmbeddedAssistantText,
   extractAssistantThinking,
   extractAssistantCommentaryText,
   extractAssistantVisibleText,
@@ -815,6 +817,16 @@ export function handleMessageUpdate(
       ? (assistantEvent as Record<string, unknown>)
       : undefined;
   const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
+  const liveEditDiff = updateLiveEditDiffProgress(ctx.state.liveEditDiffStateById, assistantRecord);
+  if (liveEditDiff) {
+    const data = { phase: "input_delta", ...liveEditDiff };
+    emitAgentEvent({ runId: ctx.params.runId, stream: "tool", data });
+    runBestEffortCallback({
+      label: "live edit diff agent event",
+      log: ctx.log,
+      callback: () => ctx.params.onAgentEvent?.({ stream: "tool", data }),
+    });
+  }
   const eventAssistantMessage =
     assistantRecord?.partial && typeof assistantRecord.partial === "object"
       ? (assistantRecord.partial as AssistantMessage)
@@ -1280,7 +1292,7 @@ export function handleMessageEnd(
       event: "assistant_message_end",
       runId: ctx.params.runId,
       sessionId: (ctx.params.session as { id?: string }).id,
-      rawText: coerceChatContentText(extractAssistantText(assistantMessage)),
+      rawText: coerceChatContentText(extractEmbeddedAssistantText(assistantMessage)),
       rawThinking: extractAssistantThinking(assistantMessage),
     });
     const commentaryAlreadyStreamed =
@@ -1317,7 +1329,7 @@ export function handleMessageEnd(
   }
   promoteThinkingTagsToBlocks(assistantMessage);
 
-  const rawText = coerceChatContentText(extractAssistantText(assistantMessage));
+  const rawText = coerceChatContentText(extractEmbeddedAssistantText(assistantMessage));
   const rawVisibleText = coerceChatContentText(extractAssistantVisibleText(assistantMessage));
   appendRawStream({
     ts: Date.now(),

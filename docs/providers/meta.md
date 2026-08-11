@@ -39,7 +39,7 @@ openclaw onboard --auth-choice meta-api-key
 ```
 
 ```bash Direct flag
-openclaw onboard --non-interactive --accept-risk \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --auth-choice meta-api-key \
   --meta-api-key "$MODEL_API_KEY"
 ```
@@ -66,7 +66,7 @@ export MODEL_API_KEY=<key>
 ## Non-interactive setup
 
 ```bash
-openclaw onboard --non-interactive --accept-risk \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --mode local \
   --auth-choice meta-api-key \
   --meta-api-key "$MODEL_API_KEY"
@@ -94,7 +94,7 @@ Capabilities:
 
 ```json5
 {
-  env: { MODEL_API_KEY: "<key>" },
+  env: { vars: { MODEL_API_KEY: "<key>" } },
   agents: {
     defaults: {
       model: { primary: "meta/muse-spark-1.1" },

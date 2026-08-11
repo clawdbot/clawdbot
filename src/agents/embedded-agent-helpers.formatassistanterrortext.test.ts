@@ -13,6 +13,7 @@ import {
   isRawApiErrorPayload,
 } from "./embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
+import { renderUserFacingText } from "./embedded-agent-helpers/user-facing-text.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
 describe("formatAssistantErrorText", () => {
@@ -71,10 +72,10 @@ describe("formatAssistantErrorText", () => {
       expected: "The AI service is temporarily overloaded. Please try again in a moment.",
     },
     {
-      title: "preserves overload wording for Z.AI rate-limit errors",
+      title: "uses classified rate-limit copy for Z.AI rate-limit errors",
       errorText:
         '429 status code (exceeded limit)\n{"code":1305,"message":"The service may be temporarily overloaded, please try again later."}',
-      expected: "The AI service is temporarily overloaded. Please try again in a moment.",
+      expected: "⚠️ API rate limit reached. Please try again later.",
     },
     {
       title: "rewrites generic provider internal errors without support request ids",
@@ -230,6 +231,23 @@ describe("formatAssistantErrorText", () => {
     const result = formatAssistantErrorText(msg, { provider: "Anthropic" });
     expect(result).toBe(formatBillingErrorMessage("Anthropic", "claude-3-5-sonnet"));
   });
+  it("uses prepared provider ownership for billing classification", () => {
+    const provider = "custom-openrouter";
+    const model = "anthropic/claude-sonnet-4";
+    const result = formatAssistantErrorText(
+      makeAssistantError("HTTP 403: API key budget limit exceeded"),
+      {
+        provider,
+        providerOwner: {
+          id: "openrouter",
+          classifyFailoverReason: ({ provider: owner, errorMessage }) =>
+            owner === "openrouter" && errorMessage.includes("budget limit") ? "billing" : undefined,
+        },
+        model,
+      },
+    );
+    expect(result).toBe(formatBillingErrorMessage(provider, model));
+  });
   it("returns generic billing message when provider is not given", () => {
     const msg = makeAssistantError("insufficient credits");
     const result = formatAssistantErrorText(msg);
@@ -306,14 +324,6 @@ describe("formatAssistantErrorText", () => {
       model: "custom-model",
     });
     expect(result).toBe(formatBillingErrorMessage("openai-compatible", "custom-model"));
-  });
-  it("keeps OpenRouter 429 key budget failures on billing copy", () => {
-    const msg = makeAssistantError("429 API key budget limit exceeded");
-    const result = formatAssistantErrorText(msg, {
-      provider: "openrouter",
-      model: "openai/gpt-5.5",
-    });
-    expect(result).toBe(formatBillingErrorMessage("openrouter", "openai/gpt-5.5"));
   });
   it("returns a friendly message for rate limit errors", () => {
     const msg = makeAssistantError("429 rate limit reached");
@@ -757,7 +767,7 @@ describe("formatBillingErrorMessage — authMode neutral copy (#80877)", () => {
 
 describe("sanitizeUserFacingText — streaming JSON parse error (#59076)", () => {
   it("rewrites transport-classified malformed streaming fragments in error context", () => {
-    const result = sanitizeUserFacingText(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, {
+    const result = renderUserFacingText(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, {
       errorContext: true,
     });
     expect(result).toBe("LLM streaming response contained a malformed fragment. Please try again.");

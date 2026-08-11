@@ -77,7 +77,7 @@ const channelPluginMocks = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("./dispatch-acp-tts.runtime.js", () => ({
+vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
 }));
 

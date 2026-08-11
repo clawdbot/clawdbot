@@ -171,6 +171,48 @@ suite.define(() => {
     await context.close();
   });
 
+  it("shows native tool input when the result sorts before its call", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-native",
+              name: "example_tool",
+              arguments: { query: "example" },
+            },
+          ],
+          timestamp: 2,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-native",
+          toolName: "example_tool",
+          content: [{ type: "text", text: "Native result payload" }],
+          timestamp: 1,
+        },
+      ],
+    });
+
+    await page.goto(`${suite.server.baseUrl}chat`);
+    const row = page.locator(".chat-tool-msg-summary");
+    await row.waitFor();
+    expect(await row.count()).toBe(1);
+    await row.click();
+    const card = page.locator(".chat-tool-card");
+    await card.waitFor();
+    expect(await card.getByText("query:", { exact: true }).count()).toBe(1);
+    expect(await card.getByText("example", { exact: true }).count()).toBe(1);
+    await card.getByText("Tool output", { exact: true }).waitFor();
+    await card.getByText("Native result payload", { exact: true }).waitFor();
+    await captureToolActivityProof(page, "native-result-before-call-expanded");
+    await context.close();
+  });
+
   it("keeps a message-only turn visible with its first message line", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const page = await context.newPage();

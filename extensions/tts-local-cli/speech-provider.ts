@@ -14,6 +14,7 @@ import type {
   SpeechSynthesisRequest,
   SpeechTelephonySynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
@@ -36,18 +37,12 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_AUDIO_OUTPUT_BYTES = 50 * 1024 * 1024;
 const MAX_CLI_STDERR_BYTES = 1024 * 1024;
 
-function asObject(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function asStringArray(value: unknown): string[] | undefined {
   return Array.isArray(value) && value.every((v) => typeof v === "string") ? value : undefined;
 }
 
-function asRecord(value: unknown): Record<string, string> | undefined {
-  const obj = asObject(value);
+function readStringRecord(value: unknown): Record<string, string> | undefined {
+  const obj = asOptionalRecord(value);
   if (!obj) {
     return undefined;
   }
@@ -72,8 +67,8 @@ function normalizeOutputFormat(value: unknown): OutputFormat {
 }
 
 function resolveCliProviderConfig(rawConfig: Record<string, unknown>): SpeechProviderConfig {
-  const providers = asObject(rawConfig.providers);
-  return asObject(providers?.["tts-local-cli"]) ?? asObject(providers?.cli) ?? {};
+  const providers = asOptionalRecord(rawConfig.providers);
+  return asOptionalRecord(providers?.["tts-local-cli"]) ?? asOptionalRecord(providers?.cli) ?? {};
 }
 
 function getConfig(cfg: SpeechProviderConfig): CliConfig | null {
@@ -87,7 +82,7 @@ function getConfig(cfg: SpeechProviderConfig): CliConfig | null {
     outputFormat: normalizeOutputFormat(cfg.outputFormat),
     timeoutMs: typeof cfg.timeoutMs === "number" ? cfg.timeoutMs : DEFAULT_TIMEOUT_MS,
     cwd: typeof cfg.cwd === "string" ? cfg.cwd : undefined,
-    env: asRecord(cfg.env),
+    env: readStringRecord(cfg.env),
   };
 }
 

@@ -47,7 +47,7 @@ function resolveRegisteredPluginExtensionsRoot(
 }
 
 /** Resolves all managed npm roots from the doctor state override or environment. */
-export function listManagedPluginNpmRoots(
+export function resolveDoctorPluginNpmRoots(
   params: InstalledPluginIndexRecordStoreOptions,
 ): string[] {
   const npmRoot = params.stateDir
@@ -63,7 +63,7 @@ export async function listPluginOpenClawHostLinkIssues(
   const packageReadFailures: PluginPackageReadFailure[] = [];
   const registeredPackageReadFailures: PluginPackageReadFailure[] = [];
   const audits = await Promise.all(
-    listManagedPluginNpmRoots(params).map((npmRoot) =>
+    resolveDoctorPluginNpmRoots(params).map((npmRoot) =>
       auditOpenClawPeerDependenciesInManagedNpmRoot({
         npmRoot,
         onPackageReadError: (error, packageDir) => {
@@ -99,7 +99,7 @@ export async function listPluginOpenClawHostLinkIssues(
 export async function maybeRepairPluginOpenClawHostLinks(
   params: PluginHostLinkDoctorParams,
 ): Promise<boolean> {
-  const npmRoots = listManagedPluginNpmRoots(params);
+  const npmRoots = resolveDoctorPluginNpmRoots(params);
   if (!params.prompter.shouldRepair) {
     const audit = await listPluginOpenClawHostLinkIssues(params);
     if (audit.peerLinkIssues.length > 0) {

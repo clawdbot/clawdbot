@@ -33,6 +33,7 @@ scenario:
     - test/e2e/qa-lab/runtime/otel-test-support.ts
   execution:
     kind: script
+    parallelSafe: true
     path: test/e2e/qa-lab/runtime/otel-generation-config-watcher-runtime.ts
     config:
       requiredProviderMode: mock-openai

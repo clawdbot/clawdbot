@@ -19,6 +19,7 @@ export {
   asFiniteNumber,
   asPositiveSafeInteger,
   asSafeIntegerInRange,
+  parseDateTimestampMs,
   parseFiniteNumber,
   parseStrictFiniteNumber,
   parseStrictInteger,
@@ -29,10 +30,12 @@ export { asBoolean, parseBooleanValue } from "../utils/boolean.js";
 export {
   asRecord,
   asNullableRecord,
+  asNullableObjectRecord,
   asOptionalRecord,
+  asOptionalObjectRecord,
+  isRecord,
   readStringField,
 } from "../../packages/normalization-core/src/record-coerce.js";
-export { isRecord } from "../utils.js";
 export {
   normalizeAtHashSlug,
   normalizeHyphenSlug,

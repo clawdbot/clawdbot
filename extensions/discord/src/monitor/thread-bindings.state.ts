@@ -1,5 +1,5 @@
 // Discord plugin module implements thread bindings.state behavior.
-import { recordOutboundMessageIdentity } from "openclaw/plugin-sdk/channel-outbound";
+import { recordOutboundMessageIdentity } from "openclaw/plugin-sdk/outbound-echo-runtime";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   normalizeLowercaseStringOrEmpty,

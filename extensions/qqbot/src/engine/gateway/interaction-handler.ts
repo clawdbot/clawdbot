@@ -290,7 +290,11 @@ async function handleApprovalButtonInteraction(params: {
   }
 
   try {
-    const result = await adapter.resolveApproval(params.parsed);
+    const result = await adapter.resolveApproval({
+      ...params.parsed,
+      accountId: params.account.accountId,
+      senderId: authorization.senderId,
+    });
     const canonicalDecision =
       "decision" in result.approval ? `, decision=${result.approval.decision}` : "";
     const canonicalOutcome = formatCanonicalApprovalOutcome(result.approval);
@@ -379,21 +383,13 @@ async function authorizeApprovalButtonActor(params: {
   event: InteractionEvent;
   approvalKind: "exec" | "plugin";
   resolveCommandAuthorized?: QQBotCommandAuthorizationResolver;
-}): Promise<{ authorized: boolean; reason?: string }> {
+}): Promise<{ authorized: true; senderId: string } | { authorized: false; reason?: string }> {
   const senderIds = resolveApprovalActorSenderIds(params.event);
   if (senderIds.length === 0) {
-    const result = authorizeQQBotApprovalAction({
-      cfg: params.cfg,
-      accountId: params.account.accountId,
-      senderId: null,
-      approvalKind: params.approvalKind,
-    });
-    return result.authorized && isImplicitSameChatApprovalAuthorization(result)
-      ? { authorized: false, reason: "You are not authorized to approve this request." }
-      : result;
+    return { authorized: false, reason: "You are not authorized to approve this request." };
   }
 
-  let denial: { authorized: boolean; reason?: string } | undefined;
+  let denial: { authorized: false; reason?: string } | undefined;
   for (const senderId of senderIds) {
     const result = authorizeQQBotApprovalAction({
       cfg: params.cfg,
@@ -412,7 +408,7 @@ async function authorizeApprovalButtonActor(params: {
           resolveCommandAuthorized: params.resolveCommandAuthorized,
         }))
       ) {
-        return result;
+        return { authorized: true, senderId };
       }
       denial ??= {
         authorized: false,
@@ -420,7 +416,7 @@ async function authorizeApprovalButtonActor(params: {
       };
       continue;
     }
-    denial ??= result;
+    denial ??= { authorized: false, ...(result.reason ? { reason: result.reason } : {}) };
   }
   return denial ?? { authorized: false, reason: "You are not authorized to approve this request." };
 }

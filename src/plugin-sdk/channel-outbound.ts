@@ -6,7 +6,7 @@ import type {
 } from "../channels/message/runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 
-type ChannelInboundKernelModule = typeof import("../channels/turn/kernel.js");
+type ChannelDurableDeliveryModule = typeof import("../channels/turn/durable-delivery.js");
 // Share one lazy import across SDK helper calls so plugin barrels do not eagerly pull
 // message runtime internals into registration/discovery-only paths.
 const loadChannelMessageRuntimeModule = createLazyRuntimeModule(
@@ -171,11 +171,11 @@ export type {
   MessageReceiptSourceResult,
 } from "../channels/message/index.js";
 
-/** Lazily forwards inbound reply delivery through the channel turn kernel. */
-export const deliverInboundReplyWithMessageSendContext: ChannelInboundKernelModule["deliverInboundReplyWithMessageSendContext"] =
+/** Lazily forwards inbound reply delivery through the channel turn durable-delivery module. */
+export const deliverInboundReplyWithMessageSendContext: ChannelDurableDeliveryModule["deliverInboundReplyWithMessageSendContextCore"] =
   async (...args) => {
-    const mod = await import("../channels/turn/kernel.js");
-    return await mod.deliverInboundReplyWithMessageSendContext(...args);
+    const mod = await import("../channels/turn/durable-delivery.js");
+    return await mod.deliverInboundReplyWithMessageSendContextCore(...args);
   };
 
 /** Sends a durable message batch without eager-loading channel message runtime internals. */

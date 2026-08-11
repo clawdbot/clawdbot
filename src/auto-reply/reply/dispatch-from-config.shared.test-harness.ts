@@ -498,6 +498,7 @@ vi.mock("../../logging/diagnostic.js", () => ({
   logMessageQueued: diagnosticMocks.logMessageQueued,
   logMessageProcessed: diagnosticMocks.logMessageProcessed,
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
+  logSessionTurnCreated: vi.fn(),
   markDiagnosticSessionProgress: diagnosticMocks.markDiagnosticSessionProgress,
   isStuckSessionRecoveryEnabled: (config?: { diagnostics?: { enabled?: boolean } }) =>
     config?.diagnostics?.enabled !== false,
@@ -582,6 +583,7 @@ vi.mock("../../bindings/records.js", () => ({
     sessionBindingMocks.touch(...args),
 }));
 vi.mock("../../infra/agent-events.js", () => ({
+  assertAgentRunLifecycleGenerationCurrent: vi.fn(),
   captureAgentRunLifecycleGeneration: () => "test-generation",
   emitAgentAuditEvent: (params: unknown) => agentEventMocks.emitAgentAuditEvent(params),
   emitAgentEvent: (params: unknown) => agentEventMocks.emitAgentEvent(params),
@@ -589,7 +591,8 @@ vi.mock("../../infra/agent-events.js", () => ({
   isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
   onAgentEvent: (listener: unknown) => agentEventMocks.onAgentEvent(listener),
   registerAgentEventLifecycleRotationHandler: vi.fn(),
-  withAgentRunLifecycleGeneration: <T>(_: string, run: () => T): T => run(),
+  runOncePerAgentRun: <T>(_runId: string, _operation: string, run: () => Promise<T>) => run(),
+  withAgentRunLifecycleGeneration: <T>(_generation: string, run: () => T) => run(),
 }));
 vi.mock("../../plugins/conversation-binding.js", () => ({
   buildPluginBindingDeclinedText: () => "Plugin binding request was declined.",
@@ -629,6 +632,8 @@ vi.mock("../../plugins/conversation-binding.js", () => ({
 }));
 vi.mock("./dispatch-acp-manager.runtime.js", () => ({
   getAcpSessionManager: () => acpManagerRuntimeMocks.getAcpSessionManager(),
+  readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
+    acpMocks.readAcpSessionEntry(params),
   getSessionBindingService: () => ({
     listBySession: (targetSessionKey: string) =>
       sessionBindingMocks.listBySession(targetSessionKey),
@@ -644,6 +649,9 @@ vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
 }));
 vi.mock("./reply-media-paths.runtime.js", () => ({
+  createReplyMediaContext: () => ({
+    normalizePayload: (payload: unknown) => payload,
+  }),
   createReplyMediaPathNormalizer: (params: unknown) =>
     replyMediaPathMocks.createReplyMediaPathNormalizer(params),
 }));
@@ -668,9 +676,6 @@ vi.mock("./conversation-binding-input.js", () => ({
 vi.mock("../../tts/status-config.js", () => ({
   resolveStatusTtsSnapshot: () => ttsMocks.state.statusSnapshot,
 }));
-vi.mock("./dispatch-acp-tts.runtime.js", () => ({
-  maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
-}));
 vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
   persistAcpDispatchTranscript: (params: unknown) =>
     transcriptMocks.persistAcpDispatchTranscript(params),
@@ -679,13 +684,10 @@ vi.mock("../../config/sessions/transcript.js", () => ({
   appendAssistantMessageToSessionTranscript: (params: unknown) =>
     transcriptMocks.appendAssistantMessageToSessionTranscript(params),
 }));
-vi.mock("./dispatch-acp-session.runtime.js", () => ({
-  readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
-    acpMocks.readAcpSessionEntry(params),
-}));
 vi.mock("../../tts/tts-config.js", () => ({
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
   resolveConfiguredTtsMode: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg).mode,
+  resolveEffectiveTtsConfig: (cfg: OpenClawConfig) => cfg.tts ?? {},
   shouldCleanTtsDirectiveText: () => true,
   shouldAttemptTtsPayload: () => true,
 }));

@@ -29,7 +29,7 @@ import {
   matchesMentionPatterns,
   matchesMentionWithExplicit,
 } from "../../auto-reply/reply/mentions.js";
-import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
+import { dispatchReplyWithBufferedBlockDispatcherCore } from "../../auto-reply/reply/provider-dispatcher.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import {
   createAckReactionHandle,
@@ -49,12 +49,12 @@ import {
 } from "../../channels/plugins/conversation-bindings.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import { recordInboundSession } from "../../channels/session.js";
+import { runPreparedChannelTurn } from "../../channels/turn/execution.js";
 import {
-  dispatchChannelInboundTurn,
-  dispatchChannelInboundReply,
-  runChannelInboundEvent,
-  runPreparedInboundReply,
-} from "../../channels/turn/kernel.js";
+  dispatchAssembledChannelTurn,
+  dispatchRoutedChannelTurn,
+} from "../../channels/turn/lifecycle.js";
+import { runChannelTurn } from "../../channels/turn/run-channel-turn.js";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
@@ -105,7 +105,7 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       convertMarkdownTables,
     },
     reply: {
-      dispatchReplyWithBufferedBlockDispatcher,
+      dispatchReplyWithBufferedBlockDispatcher: dispatchReplyWithBufferedBlockDispatcherCore,
       createReplyDispatcherWithTyping,
       resolveEffectiveMessagesConfig,
       resolveHumanDelayConfig,
@@ -186,10 +186,10 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     },
     inbound: {
       buildContext: buildChannelInboundEventContext,
-      run: runChannelInboundEvent,
-      runPreparedReply: runPreparedInboundReply,
-      dispatch: dispatchChannelInboundTurn,
-      dispatchReply: dispatchChannelInboundReply,
+      run: runChannelTurn,
+      runPreparedReply: runPreparedChannelTurn,
+      dispatch: dispatchRoutedChannelTurn,
+      dispatchReply: dispatchAssembledChannelTurn,
     },
     threadBindings: {
       setIdleTimeoutBySessionKey: ({ channelId, targetSessionKey, accountId, idleTimeoutMs }) =>

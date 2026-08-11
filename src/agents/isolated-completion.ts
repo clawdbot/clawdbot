@@ -7,11 +7,13 @@
  */
 import path from "node:path";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
 import { resolveCliBackendConfig, resolveCliRuntimeCanonicalProvider } from "./cli-backends.js";
 import { normalizeCliModel } from "./cli-runner/helpers.js";
@@ -148,84 +150,96 @@ async function runCliIsolatedCompletion(params: {
     async ({ dir }) => {
       const { runCliAgent } = await import("./cli-runner.runtime.js");
       const sessionId = `isolated-completion-${Date.now()}`;
-      const result = await runCliAgent({
+      const config = params.request.config ?? getRuntimeConfig();
+      const preparedRunAdmission = prepareSystemAgentRunAdmission(
+        config,
         sessionId,
-        sessionFile: path.join(dir, "session.json"),
-        workspaceDir: params.workspaceDir,
-        cwd: dir,
-        agentDir: params.agentDir,
-        agentId: params.agentId,
-        config: params.request.config,
-        prompt: params.request.prompt,
-        extraSystemPrompt: params.request.systemPrompt,
-        timeoutMs: params.request.timeoutMs,
-        runId: sessionId,
-        provider: params.provider,
-        modelProvider: params.modelProvider,
-        model: params.request.model,
-        // The CLI runner treats a supplied profile as exact; it auto-selects only
-        // when this field is absent. This path has no embedded-run fallback loop.
-        authProfileId: params.request.authProfileId,
-        thinkLevel: params.request.thinkLevel,
-        streamParams: params.request.streamParams,
-        abortSignal: params.request.abortSignal,
-        executionMode: "side-question",
-        cliToolAvailability: { native: [], openClaw: [] },
-        disableTools: true,
-        disableCliLiveSession: true,
-        cleanupCliLiveSessionOnRunEnd: true,
-        cleanupBundleMcpOnRunEnd: true,
-        requireExplicitMessageTarget: true,
-        isolatedCompletion: true,
-      });
-      if (hasCliSideEffectEvidence(result)) {
-        throw new IsolatedCompletionError(
-          "output-rejected",
-          "Isolated CLI completion returned side-effect evidence; result rejected.",
-        );
+        params.agentId,
+        "isolated-completion",
+      );
+      try {
+        const result = await runCliAgent({
+          preparedRunAdmission,
+          sessionId,
+          sessionFile: path.join(dir, "session.json"),
+          workspaceDir: params.workspaceDir,
+          cwd: dir,
+          agentDir: params.agentDir,
+          agentId: params.agentId,
+          config,
+          prompt: params.request.prompt,
+          extraSystemPrompt: params.request.systemPrompt,
+          timeoutMs: params.request.timeoutMs,
+          runId: sessionId,
+          provider: params.provider,
+          modelProvider: params.modelProvider,
+          model: params.request.model,
+          // The CLI runner treats a supplied profile as exact; it auto-selects only
+          // when this field is absent. This path has no embedded-run fallback loop.
+          authProfileId: params.request.authProfileId,
+          thinkLevel: params.request.thinkLevel,
+          streamParams: params.request.streamParams,
+          abortSignal: params.request.abortSignal,
+          executionMode: "side-question",
+          cliToolAvailability: { native: [], openClaw: [] },
+          disableTools: true,
+          disableCliLiveSession: true,
+          cleanupCliLiveSessionOnRunEnd: true,
+          cleanupBundleMcpOnRunEnd: true,
+          requireExplicitMessageTarget: true,
+          isolatedCompletion: true,
+        });
+        if (hasCliSideEffectEvidence(result)) {
+          throw new IsolatedCompletionError(
+            "output-rejected",
+            "Isolated CLI completion returned side-effect evidence; result rejected.",
+          );
+        }
+        const payloads = result.payloads ?? [];
+        if (
+          payloads.some(
+            (payload) =>
+              payload.isError ||
+              payload.mediaUrl ||
+              payload.mediaUrls?.length ||
+              payload.audioAsVoice ||
+              payload.channelData,
+          )
+        ) {
+          throw new IsolatedCompletionError(
+            "output-rejected",
+            "Isolated CLI completion returned non-text output; result rejected.",
+          );
+        }
+        const text = payloads
+          .filter((payload) => !payload.isReasoning && typeof payload.text === "string")
+          .map((payload) => payload.text ?? "")
+          .join("\n")
+          .trim();
+        if (!text) {
+          throw new IsolatedCompletionError(
+            "output-rejected",
+            "Isolated CLI completion returned empty output.",
+          );
+        }
+        const backend = resolveCliBackendConfig(params.provider, params.request.config, {
+          agentId: params.agentId,
+        });
+        if (!backend) {
+          throw new IsolatedCompletionError(
+            "runtime-unavailable",
+            `CLI backend ${params.provider} became unavailable after execution.`,
+          );
+        }
+        const usage = result.meta?.agentMeta?.usage;
+        return {
+          text,
+          model: normalizeCliModel(params.request.model, backend.config),
+          ...(usage ? { usage } : {}),
+        };
+      } finally {
+        preparedRunAdmission.close();
       }
-      const payloads = result.payloads ?? [];
-      if (
-        payloads.some(
-          (payload) =>
-            payload.isError ||
-            payload.mediaUrl ||
-            payload.mediaUrls?.length ||
-            payload.audioAsVoice ||
-            payload.channelData,
-        )
-      ) {
-        throw new IsolatedCompletionError(
-          "output-rejected",
-          "Isolated CLI completion returned non-text output; result rejected.",
-        );
-      }
-      const text = payloads
-        .filter((payload) => !payload.isReasoning && typeof payload.text === "string")
-        .map((payload) => payload.text ?? "")
-        .join("\n")
-        .trim();
-      if (!text) {
-        throw new IsolatedCompletionError(
-          "output-rejected",
-          "Isolated CLI completion returned empty output.",
-        );
-      }
-      const backend = resolveCliBackendConfig(params.provider, params.request.config, {
-        agentId: params.agentId,
-      });
-      if (!backend) {
-        throw new IsolatedCompletionError(
-          "runtime-unavailable",
-          `CLI backend ${params.provider} became unavailable after execution.`,
-        );
-      }
-      const usage = result.meta?.agentMeta?.usage;
-      return {
-        text,
-        model: normalizeCliModel(params.request.model, backend.config),
-        ...(usage ? { usage } : {}),
-      };
     },
   );
 }

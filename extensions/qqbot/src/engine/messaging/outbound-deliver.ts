@@ -11,15 +11,15 @@ import {
   sendPayloadMediaSequence,
   sendPayloadTextChunkSequence,
 } from "openclaw/plugin-sdk/reply-payload";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { GatewayAccount } from "../types.js";
 import { getImageSize, formatQQBotMarkdownImage, hasQQBotImageSize } from "../utils/image-size.js";
 import { normalizeMediaTags } from "../utils/media-tags.js";
 import { isLocalPath as isLocalFilePath } from "../utils/platform.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../utils/string-normalize.js";
 import { filterInternalMarkers } from "../utils/text-parsing.js";
 import { decodeMediaPath } from "./decode-media-path.js";
 import { DEFAULT_MEDIA_SEND_ERROR, type OutboundMediaAccessContext } from "./outbound-types.js";

@@ -12,25 +12,6 @@ CREATE TABLE IF NOT EXISTS schema_meta (
   updated_at INTEGER NOT NULL
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS state_leases (
-  scope TEXT NOT NULL,
-  lease_key TEXT NOT NULL,
-  owner TEXT NOT NULL,
-  expires_at INTEGER,
-  heartbeat_at INTEGER,
-  payload_json TEXT,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  PRIMARY KEY (scope, lease_key)
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_agent_state_leases_expiry
-  ON state_leases(expires_at, scope, lease_key)
-  WHERE expires_at IS NOT NULL;
-
-CREATE INDEX IF NOT EXISTS idx_agent_state_leases_owner
-  ON state_leases(owner, updated_at DESC);
-
 CREATE TABLE IF NOT EXISTS session_nodes (
   session_key TEXT NOT NULL PRIMARY KEY,
   current_session_id TEXT NOT NULL,

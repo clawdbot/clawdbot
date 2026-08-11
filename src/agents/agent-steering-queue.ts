@@ -5,7 +5,7 @@ import type {
   PendingFinalDeliveryPayload,
   SubagentCompletionDeliveryState,
   SubagentRunRecord,
-} from "./subagent-registry.types.js";
+} from "./subagents/registry/subagent-registry.types.js";
 import { selectDeliverableSessionsReply } from "./tools/sessions-send-tokens.js";
 
 // Steering queue utilities for delivering completed subagent results back into

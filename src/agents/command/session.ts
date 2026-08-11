@@ -41,7 +41,7 @@ import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
 import { clearAllCliSessions } from "../cli-session.js";
-import { transitionMainSessionRecovery } from "../main-session-recovery-state.js";
+import { transitionMainSessionRecovery } from "../main-session-recovery/main-session-recovery-state.js";
 
 /** Resolved command session identity plus backing store metadata. */
 type SessionResolution = {

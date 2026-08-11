@@ -1,8 +1,8 @@
 // Fetches and normalizes DeepSeek provider usage records.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { cancelUnreadResponseBody } from "./http-body.js";
 import {
   buildUsageHttpErrorSnapshot,
-  discardUsageResponseBody,
   fetchJson,
   parseFiniteNumber,
   readUsageJson,
@@ -75,7 +75,7 @@ export async function fetchDeepSeekUsage(
   );
 
   if (!res.ok) {
-    await discardUsageResponseBody(res);
+    await cancelUnreadResponseBody(res);
     return buildUsageHttpErrorSnapshot({
       provider: "deepseek",
       status: res.status,

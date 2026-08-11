@@ -7,7 +7,7 @@ import { stringEnum } from "../schema/typebox.js";
 import {
   type AnyAgentTool,
   jsonResult,
-  readStringParam,
+  readToolStringParam,
   textResult,
   ToolInputError,
 } from "./common.js";
@@ -113,17 +113,17 @@ export function createGatewayTool(): AnyAgentTool {
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
-      const action = readStringParam(params, "action", { required: true });
+      const action = readToolStringParam(params, "action", { required: true });
       const gatewayOpts = readGatewayCallOptions(params);
 
       if (action === "config.get") {
-        const path = readStringParam(params, "path");
+        const path = readToolStringParam(params, "path");
         const snapshot = await callGatewayTool("config.get", gatewayOpts, {}, { signal });
         const result = selectGatewayConfigGetResult(snapshot, path);
         return createGatewayConfigGetToolResult(result);
       }
       if (action === "config.schema.lookup") {
-        const path = readStringParam(params, "path", {
+        const path = readToolStringParam(params, "path", {
           required: true,
           label: "path",
         });

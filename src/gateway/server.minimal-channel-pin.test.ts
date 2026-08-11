@@ -10,7 +10,11 @@ import {
 } from "../plugins/runtime.js";
 import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
-import { getFreePort, installGatewayTestHooks, startGatewayServer } from "./test-helpers.js";
+import {
+  getGatewayTestPort,
+  installGatewayTestHooks,
+  startTestGatewayServer,
+} from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -43,8 +47,8 @@ test("minimal gateway tracks later channel registry updates", async () => {
   const prevVitest = process.env.VITEST;
   resetPluginRuntimeStateForTest();
   process.env.VITEST = "1";
-  const port = await getFreePort();
-  const server = await startGatewayServer(port);
+  const port = await getGatewayTestPort();
+  const server = await startTestGatewayServer(port);
   try {
     expect(getChannelPlugin("whatsapp")).not.toBe(replacementPlugin);
     setActivePluginRegistry(replacementRegistry);

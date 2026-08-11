@@ -55,9 +55,9 @@ import {
   assistantGroupCanOwnActiveRunStatus,
   assistantMessageExpansionSignature,
   buildCachedChatItems,
+  coalesceActivityRuns,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
-  deletedChatItemsSignature,
   getExpansionStateVersion,
   getExpandedToolCards,
   getExpandedAssistantMessages,
@@ -67,10 +67,10 @@ import {
   setExpansionState,
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
-import { DeletedMessages } from "../deleted-messages.ts";
 import { PinnedMessages } from "../pinned-messages.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import {
+  CHAT_TRANSCRIPT_END_THRESHOLD_PX,
   getChatSessionScrollPosition,
   saveChatSessionScrollPosition,
   type ChatSessionScrollPosition,
@@ -79,15 +79,15 @@ import { getOrCreateSessionCacheValue } from "../session-cache.ts";
 import type { PlanStatus } from "../tool-stream.ts";
 import { getToolTitlesVersion } from "../tool-titles.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
-import type { BackgroundTasksProps } from "./chat-background-tasks.ts";
+import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import { renderChatDivider, renderChatNotice } from "./chat-divider.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import {
   dismissConfirmedActionPopovers,
-  getAssistantAttachmentAvailabilityRenderVersion,
-  openChatHideConfirmation,
+  getChatMediaRenderVersion,
   openChatRewindConfirmation,
   renderMessageGroup,
+  renderActivityGroup,
   renderStreamGroup,
   renderWorkGroupSummary,
   type MessageReplyTarget,
@@ -101,14 +101,16 @@ import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcom
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
 const pinnedMessagesMap = new Map<string, PinnedMessages>();
-const deletedMessagesMap = new Map<string, DeletedMessages>();
 
 type ChatThreadState = {
   searchOpen: boolean;
   searchQuery: string;
+  searchFocusPending: boolean;
+  searchReturnFocusTarget: HTMLElement | null;
+  searchReturnFocusOwner: HTMLElement | null;
   pinnedExpanded: boolean;
   transcriptRenderDependencies: readonly unknown[];
-  transcriptRenderContext: object;
+  transcriptRenderContext: { onSetReply?: ChatThreadProps["onSetReply"] };
 };
 
 type ChatThreadProps = {
@@ -192,7 +194,7 @@ type ChatPinnedMessagesProps = Pick<
   "paneId" | "sessionKey" | "messages" | "userName" | "userAvatar"
 >;
 
-type ChatRenderItem = ReturnType<typeof collapseCompletedTurnWork>[number];
+type ChatRenderItem = ReturnType<typeof coalesceActivityRuns>[number];
 
 type ChatTranscriptRow =
   | { kind: "item"; key: string; item: ChatRenderItem }
@@ -205,7 +207,6 @@ type ChatTranscriptAnnouncement = {
 
 const CHAT_TRANSCRIPT_ESTIMATED_ROW_PX = 120;
 const CHAT_TRANSCRIPT_OVERSCAN = 6;
-const CHAT_TRANSCRIPT_END_THRESHOLD_PX = 8;
 const CHAT_TRANSCRIPT_ANNOUNCEMENT_MAX_CHARS = 500;
 // Initial virtual rows can correct their estimates for several frames. Hold a
 // restored offset for ~200ms so those corrections cannot reapply the end anchor.
@@ -213,10 +214,6 @@ const CHAT_TRANSCRIPT_SCROLL_RESTORE_STABLE_FRAMES = 12;
 // A committed short transcript can legitimately remain at maxOffset=0. Give
 // initial measurement one second before treating that zero range as final.
 const CHAT_TRANSCRIPT_ZERO_MAX_SETTLE_FRAMES = 60;
-// Keep the active transcript plus two recent sessions. Eviction always tears
-// down observers first; otherwise a discarded host would leak row observers.
-const CHAT_TRANSCRIPT_VIRTUALIZER_CACHE_LIMIT = 3;
-
 function initialTranscriptRect(host: ReactiveControllerHost) {
   const width = host instanceof HTMLElement ? host.clientWidth : 0;
   const height = host instanceof HTMLElement ? host.clientHeight : 0;
@@ -246,6 +243,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
   private threadInnerElement: HTMLDivElement | null = null;
   private connected = false;
   private observedWidth: number | null = null;
+  private observedHeight: number | null = null;
   private contentReady = false;
   private pendingScrollOffset: {
     offset: number;
@@ -342,10 +340,23 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
       followOnAppend: false,
       observeElementRect: (instance, callback) =>
         observeElementRect(instance, (rect) => {
+          const previousHeight = this.observedHeight;
           const widthChanged = this.observedWidth !== null && this.observedWidth !== rect.width;
+          const heightChanged = previousHeight !== null && previousHeight !== rect.height;
+          const scrollOffset = instance.scrollOffset;
+          const wasAtEndBeforeResize =
+            heightChanged &&
+            this.pendingScrollOffset === null &&
+            scrollOffset !== null &&
+            instance.getTotalSize() - previousHeight - scrollOffset <=
+              CHAT_TRANSCRIPT_END_THRESHOLD_PX;
           this.observedWidth = rect.width;
+          this.observedHeight = rect.height;
           this.syncScrollMargin(instance.scrollElement);
           callback(rect);
+          if (wasAtEndBeforeResize) {
+            instance.scrollToEnd({ behavior: "auto" });
+          }
           if (widthChanged) {
             // Cached offscreen sizes belong to the old wrapping width. Reset
             // them, seed current rows, then repeat after any same-commit
@@ -700,7 +711,6 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
 export class ChatTranscriptController implements ReactiveController {
   private activeSessionKey: string | null = null;
   private sessionVirtualizer: ChatSessionVirtualizerHost | null = null;
-  private readonly sessionVirtualizers = new Map<string, ChatSessionVirtualizerHost>();
   private connected = false;
 
   constructor(private readonly host: ReactiveControllerHost) {
@@ -717,37 +727,19 @@ export class ChatTranscriptController implements ReactiveController {
       this.activeSessionKey === null ||
       !areUiSessionKeysEquivalent(this.activeSessionKey, props.sessionKey)
     ) {
-      this.sessionVirtualizer?.disconnect();
-      let cachedKey: string | null = null;
-      let nextVirtualizer: ChatSessionVirtualizerHost | null = null;
-      for (const [sessionKey, virtualizer] of this.sessionVirtualizers) {
-        if (areUiSessionKeysEquivalent(sessionKey, props.sessionKey)) {
-          cachedKey = sessionKey;
-          nextVirtualizer = virtualizer;
-          break;
-        }
-      }
-      if (cachedKey !== null && nextVirtualizer) {
-        this.sessionVirtualizers.delete(cachedKey);
-      } else {
-        const savedPosition = getChatSessionScrollPosition(props.paneId, props.sessionKey);
-        const initialOffset = savedPosition?.anchorToEnd
-          ? null
-          : (savedPosition?.scrollTop ?? null);
-        nextVirtualizer = new ChatSessionVirtualizerHost(
-          this.host,
-          initialOffset,
-          initialOffset === null
-            ? undefined
-            : (position) => {
-                saveChatSessionScrollPosition(props.paneId, props.sessionKey, position);
-              },
-        );
-      }
+      this.sessionVirtualizer?.dispose();
+      const savedPosition = getChatSessionScrollPosition(props.paneId, props.sessionKey);
+      const initialOffset = savedPosition?.anchorToEnd ? null : (savedPosition?.scrollTop ?? null);
       this.activeSessionKey = props.sessionKey;
-      this.sessionVirtualizer = nextVirtualizer;
-      this.sessionVirtualizers.set(props.sessionKey, nextVirtualizer);
-      this.evictInactiveVirtualizers();
+      this.sessionVirtualizer = new ChatSessionVirtualizerHost(
+        this.host,
+        initialOffset,
+        initialOffset === null
+          ? undefined
+          : (position) => {
+              saveChatSessionScrollPosition(props.paneId, props.sessionKey, position);
+            },
+      );
       if (this.connected) {
         this.sessionVirtualizer.connect();
       }
@@ -789,23 +781,7 @@ export class ChatTranscriptController implements ReactiveController {
 
   hostDisconnected(): void {
     this.connected = false;
-    for (const virtualizer of this.sessionVirtualizers.values()) {
-      virtualizer.disconnect();
-    }
-  }
-
-  private evictInactiveVirtualizers(): void {
-    while (this.sessionVirtualizers.size > CHAT_TRANSCRIPT_VIRTUALIZER_CACHE_LIMIT) {
-      const oldest = this.sessionVirtualizers.entries().next().value as
-        | [string, ChatSessionVirtualizerHost]
-        | undefined;
-      if (!oldest) {
-        return;
-      }
-      const [sessionKey, virtualizer] = oldest;
-      this.sessionVirtualizers.delete(sessionKey);
-      virtualizer.dispose();
-    }
+    this.sessionVirtualizer?.disconnect();
   }
 }
 
@@ -813,6 +789,9 @@ function createChatThreadState(): ChatThreadState {
   return {
     searchOpen: false,
     searchQuery: "",
+    searchFocusPending: false,
+    searchReturnFocusTarget: null,
+    searchReturnFocusOwner: null,
     pinnedExpanded: false,
     transcriptRenderDependencies: [],
     transcriptRenderContext: {},
@@ -839,14 +818,6 @@ function getPinnedMessages(sessionKey: string): PinnedMessages {
   );
 }
 
-function getDeletedMessages(sessionKey: string): DeletedMessages {
-  return getOrCreateSessionCacheValue(
-    deletedMessagesMap,
-    sessionKey,
-    () => new DeletedMessages(sessionKey),
-  );
-}
-
 function getPinnedMessageSummary(message: unknown): string {
   return extractTextCached(message) ?? "";
 }
@@ -869,6 +840,9 @@ export function resetChatThreadSessionPresentationState(paneId: string, owner?: 
     // preferences or dependency memos and invalidate themselves on new props.
     state.searchOpen = false;
     state.searchQuery = "";
+    state.searchFocusPending = false;
+    state.searchReturnFocusTarget = null;
+    state.searchReturnFocusOwner = null;
   }
 }
 
@@ -899,6 +873,18 @@ export function renderChatSearchBar(
         placeholder=${t("chat.thread.searchPlaceholder")}
         aria-label=${t("chat.thread.search")}
         .value=${state.searchQuery}
+        ${state.searchFocusPending
+          ? ref((element) => {
+              if (element instanceof HTMLInputElement) {
+                state.searchFocusPending = false;
+                queueMicrotask(() => {
+                  if (element.isConnected) {
+                    element.focus({ preventScroll: true });
+                  }
+                });
+              }
+            })
+          : nothing}
         @input=${(event: Event) => {
           state.searchQuery = (event.target as HTMLInputElement).value;
           requestUpdate();
@@ -908,11 +894,7 @@ export function renderChatSearchBar(
         <button
           class="btn btn--ghost"
           aria-label=${t("chat.thread.closeSearch")}
-          @click=${() => {
-            state.searchOpen = false;
-            state.searchQuery = "";
-            requestUpdate();
-          }}
+          @click=${() => closeChatThreadSearch(state, requestUpdate)}
         >
           ${icons.x}
         </button>
@@ -921,12 +903,49 @@ export function renderChatSearchBar(
   `;
 }
 
-export function toggleChatThreadSearch(paneId: string, requestUpdate: () => void): void {
+function closeChatThreadSearch(state: ChatThreadState, requestUpdate: () => void): void {
+  const returnFocusTarget = state.searchReturnFocusTarget;
+  const returnFocusOwner = state.searchReturnFocusOwner;
+  state.searchOpen = false;
+  state.searchQuery = "";
+  state.searchFocusPending = false;
+  state.searchReturnFocusTarget = null;
+  state.searchReturnFocusOwner = null;
+  requestUpdate();
+  queueMicrotask(() => {
+    const target = returnFocusTarget?.isConnected
+      ? returnFocusTarget
+      : returnFocusOwner?.querySelector<HTMLTextAreaElement>(
+          ".agent-chat__composer-combobox > textarea",
+        );
+    target?.focus({ preventScroll: true });
+  });
+}
+
+/** Toggles transcript search and retains the shortcut origin for focus restoration. */
+export function toggleChatThreadSearch(
+  paneId: string,
+  requestUpdate: () => void,
+  triggerEvent?: Event,
+): void {
   const state = getChatThreadState(paneId);
-  state.searchOpen = !state.searchOpen;
-  if (!state.searchOpen) {
-    state.searchQuery = "";
+  if (state.searchOpen) {
+    closeChatThreadSearch(state, requestUpdate);
+    return;
   }
+
+  state.searchOpen = true;
+  state.searchFocusPending = true;
+  const returnFocusTarget = triggerEvent?.target;
+  const returnFocusOwner = triggerEvent?.currentTarget;
+  state.searchReturnFocusTarget =
+    returnFocusTarget instanceof HTMLElement && returnFocusTarget.isConnected
+      ? returnFocusTarget
+      : null;
+  state.searchReturnFocusOwner =
+    returnFocusOwner instanceof HTMLElement && returnFocusOwner.isConnected
+      ? returnFocusOwner
+      : null;
   requestUpdate();
 }
 
@@ -1115,7 +1134,7 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   if (!bubble) {
     return;
   }
-  const group = bubble.closest(".chat-group");
+  const group = bubble.closest<HTMLElement>(".chat-group");
   if (!group) {
     return;
   }
@@ -1130,7 +1149,6 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   const text = truncateUtf16Safe((bubble as HTMLElement).dataset.messageText?.trim() ?? "", 500);
   const entryId = (bubble as HTMLElement).dataset.entryId?.trim() ?? "";
   const messageId = (bubble as HTMLElement).dataset.messageId?.trim() ?? "";
-  const groupKey = (group as HTMLElement).dataset.chatRowKey?.trim() ?? "";
   const isUserMessage = group.classList.contains("user") && Boolean(entryId);
   // Grouped rows can contain several bubbles. Match the clicked bubble to its
   // own action owner so copy never targets a sibling message.
@@ -1140,10 +1158,9 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   const copyButton = actionOwner?.querySelector<HTMLButtonElement>(".chat-copy-btn");
   const canReply = Boolean(text && props.onSetReply);
   const canRewind = isUserMessage && typeof props.onRewindMessage === "function";
-  const canHide = Boolean(groupKey);
   const canCopy = Boolean(copyButton);
   const canFork = isUserMessage && typeof props.onForkMessage === "function";
-  if (!canReply && !canRewind && !canHide && !canCopy && !canFork) {
+  if (!canReply && !canRewind && !canCopy && !canFork) {
     return;
   }
 
@@ -1205,24 +1222,7 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
         });
       },
     });
-    action.element.classList.add("chat-delete-wrap", "chat-rewind-wrap");
-    menu.append(action.element);
-    focusCandidates.push(action.button);
-  }
-  if (canHide) {
-    const action = createMessageActionContextButton({
-      label: t("chat.messages.hideMessage"),
-      disabled: false,
-      tooltip: t("chat.messages.hideTooltip"),
-      onClick: () => {
-        openChatHideConfirmation(action.button, () => {
-          removeReplyContextMenu();
-          getDeletedMessages(props.sessionKey).delete(groupKey);
-          props.onRequestUpdate?.();
-        });
-      },
-    });
-    action.element.classList.add("chat-delete-wrap");
+    action.element.classList.add("chat-confirm-wrap", "chat-rewind-wrap");
     menu.append(action.element);
     focusCandidates.push(action.button);
   }
@@ -1382,6 +1382,9 @@ function chatRenderItemGuardDependencies(item: ChatRenderItem): readonly unknown
   if (item.kind === "work-group") {
     return [item.key, item.durationMs, item.hasError, ...item.groups];
   }
+  if (item.kind === "activity-run") {
+    return [item.key, ...item.groups];
+  }
   return [item];
 }
 
@@ -1455,7 +1458,6 @@ function renderChatThreadContents(
     name: props.assistantName,
     avatar: resolveAssistantDisplayAvatar(props),
   };
-  const deleted = getDeletedMessages(props.sessionKey);
   const locale = i18n.getLocale();
   const searchFiltering = state.searchOpen && Boolean(state.searchQuery.trim());
   const chatItems = buildCachedChatItems({
@@ -1578,24 +1580,40 @@ function renderChatThreadContents(
     { parts: StreamGroupPart[]; options: StreamGroupOptions }
   >();
   const turnRecapByGroupKey = new Map<string, TurnRecap>();
-  const renderGroupItem = (item: MessageGroup) => {
-    if (deleted.has(item.key)) {
-      return nothing;
-    }
+  const sharedMessageRenderOptions = {
+    onOpenSidebar: props.onOpenSidebar,
+    sessionKey: props.sessionKey,
+    boardProvider: props.boardProvider,
+    agentId: props.fullMessageAgentId,
+    runActive: props.runActive,
+    onOpenWorkspaceFile: props.onOpenWorkspaceFile,
+    onRequestUpdate: requestUpdate,
+    basePath: props.basePath,
+    localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
+    assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
+    resolveArtifactDownload: props.resolveArtifactDownload,
+    onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
+    onRequestOpenImage: props.onRequestOpenImage,
+    onOpenImage: props.onOpenImage,
+    canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
+    embedSandboxMode: props.embedSandboxMode ?? "scripts",
+    allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
+    showAssistantAvatar: false,
+  } satisfies StreamGroupOptions;
+  const streamGroupOptions = {
+    ...sharedMessageRenderOptions,
+    assistant: assistantIdentity,
+  } satisfies StreamGroupOptions;
+  const renderGroupOptions = (item: MessageGroup) => {
     const lastMessage = item.messages.at(-1)?.message;
     const rewindEntryId =
       item.role.toLowerCase() === "user" && lastMessage
         ? persistedMessageEntryId(lastMessage)
         : null;
-    return renderMessageGroup(item, {
-      onOpenSidebar: props.onOpenSidebar,
-      onOpenWorkspaceFile: props.onOpenWorkspaceFile,
-      sessionKey: props.sessionKey,
-      boardProvider: props.boardProvider,
-      agentId: props.fullMessageAgentId,
+    return {
+      ...sharedMessageRenderOptions,
       showReasoning,
       showToolCalls: props.showToolCalls,
-      runActive: props.runActive,
       autoExpandToolCalls: Boolean(props.autoExpandToolCalls),
       isToolMessageExpanded: (messageId: string) => expandedToolCards.get(messageId),
       onToggleToolMessageExpanded: (messageId: string, expanded?: boolean) => {
@@ -1616,29 +1634,16 @@ function renderChatThreadContents(
       onToggleAssistantMessageExpanded: toggleAssistantMessageExpanded,
       isToolExpanded: (toolCardId: string) => expandedToolCards.get(toolCardId) ?? false,
       onToggleToolExpanded: toggleToolCardExpanded,
-      onRequestUpdate: requestUpdate,
-      onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
-      onRequestOpenImage: props.onRequestOpenImage,
-      onOpenImage: props.onOpenImage,
       assistantName: props.assistantName,
       assistantAvatar: assistantIdentity.avatar,
       userId: props.userId ?? null,
       userName: props.userName ?? null,
       userAvatar: props.userAvatar ?? null,
       showAvatarGutter: !isDirectThread,
-      basePath: props.basePath,
-      localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
-      assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
-      resolveArtifactDownload: props.resolveArtifactDownload,
-      canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
-      embedSandboxMode: props.embedSandboxMode ?? "scripts",
-      allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
       contextWindow: threadContextWindow,
-      onReply: props.onSetReply,
-      onDelete: () => {
-        deleted.delete(item.key);
-        requestUpdate();
-      },
+      onReply: props.onSetReply
+        ? (target) => state.transcriptRenderContext.onSetReply?.(target)
+        : undefined,
       onRewind:
         rewindEntryId && props.onRewindMessage
           ? () => {
@@ -1652,7 +1657,10 @@ function renderChatThreadContents(
       rewindDisabled: Boolean(props.runActive || props.runWorking),
       activeContinuation: activeContinuationByGroupKey.get(item.key),
       turnRecap: turnRecapByGroupKey.get(item.key),
-    });
+    } satisfies Parameters<typeof renderMessageGroup>[1];
+  };
+  const renderGroupItem = (item: MessageGroup) => {
+    return renderMessageGroup(item, renderGroupOptions(item));
   };
   // Only the working indicator shows live usage, so rows without one keep
   // memoizing across usage patches.
@@ -1684,16 +1692,13 @@ function renderChatThreadContents(
     }
     if (item.kind === "stream-run") {
       return renderStreamGroup(item.parts, {
+        ...streamGroupOptions,
         questionPrompts,
         planStatus: props.planStatus,
         planActive: Boolean(props.runActive),
         startupPhase: props.startupStatus?.phase,
         waitingApproval: props.waitingApproval,
         runOutputTokens: props.runOutputTokens,
-        onOpenSidebar: props.onOpenSidebar,
-        assistant: assistantIdentity,
-        basePath: props.basePath,
-        authToken: props.assistantAttachmentAuthToken ?? null,
       });
     }
     if (item.kind === "work-group") {
@@ -1709,6 +1714,16 @@ function renderChatThreadContents(
         ${workExpanded ? item.groups.map((group) => renderGroupItem(group)) : nothing}
       `;
     }
+    if (item.kind === "activity-run") {
+      const firstGroup = item.groups[0];
+      if (!firstGroup) {
+        return nothing;
+      }
+      if (item.groups.length === 1) {
+        return renderGroupItem(firstGroup);
+      }
+      return renderActivityGroup(item.groups, renderGroupOptions(firstGroup));
+    }
     if (item.kind === "group") {
       return renderGroupItem(item);
     }
@@ -1719,11 +1734,14 @@ function renderChatThreadContents(
     }
     return nothing;
   });
-  const collapsedItems = collapseCompletedTurnWork(coalesceStreamRuns(chatItems), {
-    sessionKey: props.sessionKey,
-    runWorking: Boolean(props.runWorking),
-    searchActive: searchFiltering,
-  });
+  const collapsedItems = coalesceActivityRuns(
+    collapseCompletedTurnWork(coalesceStreamRuns(chatItems), {
+      sessionKey: props.sessionKey,
+      runWorking: Boolean(props.runWorking),
+      searchActive: searchFiltering,
+    }),
+    { searchActive: searchFiltering },
+  );
   // Watch/settle on actual indicator visibility (not runWorking): queued
   // sends show the claw before the run starts, and the recap must never
   // stack under a visible working row.
@@ -1740,7 +1758,6 @@ function renderChatThreadContents(
     if (
       previous?.kind !== "group" ||
       !isActiveStatusRun ||
-      deleted.has(previous.key) ||
       !assistantGroupCanOwnActiveRunStatus(previous)
     ) {
       return true;
@@ -1750,6 +1767,7 @@ function renderChatThreadContents(
     activeContinuationByGroupKey.set(previous.key, {
       parts: item.parts,
       options: {
+        ...streamGroupOptions,
         planStatus: props.planStatus,
         planActive: Boolean(props.runActive),
         startupPhase: props.startupStatus?.phase,
@@ -1762,11 +1780,7 @@ function renderChatThreadContents(
   let turnRecapOwnerKey: string | null = null;
   if (turnRecap !== null) {
     const lastItem = transcriptItems.at(-1);
-    if (
-      lastItem?.kind === "group" &&
-      !deleted.has(lastItem.key) &&
-      assistantGroupCanOwnActiveRunStatus(lastItem)
-    ) {
+    if (lastItem?.kind === "group" && assistantGroupCanOwnActiveRunStatus(lastItem)) {
       turnRecapByGroupKey.set(lastItem.key, turnRecap);
       turnRecapOwnerKey = lastItem.key;
     }
@@ -1805,13 +1819,12 @@ function renderChatThreadContents(
   trackTranscriptRenderDependencies(state, [
     chatItems,
     locale,
-    deletedChatItemsSignature(deleted, chatItems),
     expandedToolCards,
     getExpansionStateVersion(expandedToolCards),
     expandedUserMessages,
     getExpansionStateVersion(expandedUserMessages),
     assistantMessageExpansionSignature(expandedAssistantMessages),
-    getAssistantAttachmentAvailabilityRenderVersion(),
+    getChatMediaRenderVersion(),
     // The host minute poll requests an update; this key crosses row guard() memoization.
     Math.floor(Date.now() / 60_000),
     getToolTitlesVersion(),
@@ -1844,9 +1857,10 @@ function renderChatThreadContents(
     props.embedSandboxMode ?? "scripts",
     props.allowExternalEmbedUrls ?? false,
     threadContextWindow,
-    props.onSetReply,
+    Boolean(props.onSetReply),
     turnRecap === null ? "" : `${turnRecap.runtimeMs}:${turnRecap.outputTokens ?? ""}`,
   ]);
+  state.transcriptRenderContext.onSetReply = props.onSetReply;
   const transcriptContents =
     showLoadingSkeleton || isEmpty
       ? html`
@@ -1908,9 +1922,9 @@ function renderChatThreadContents(
       @pointerup=${(event: PointerEvent) => handleChatThreadSelectionPointerUp(event, props)}
     >
       <span
-        class="chat-transcript-announcement agent-chat__sr-only"
+        class="chat-transcript-announcement sr-only"
         role="status"
-        aria-live="polite"
+        aria-live=${props.announceTranscript !== false ? "polite" : "off"}
         aria-atomic="true"
         >${transcript.liveAnnouncementText}</span
       >

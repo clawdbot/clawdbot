@@ -1,4 +1,4 @@
-import { normalizeGatewayTokenScope } from "../../app/gateway-scope.ts";
+import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
@@ -18,7 +18,7 @@ type PersistedPreferences = {
 };
 
 function storageKey(gatewayUrl: string): string {
-  return `${STORAGE_KEY_PREFIX}${normalizeGatewayTokenScope(gatewayUrl)}`;
+  return `${STORAGE_KEY_PREFIX}${gatewayOriginScope(gatewayUrl)}`;
 }
 
 function normalizePreference(value: unknown): NewSessionPreference | null {

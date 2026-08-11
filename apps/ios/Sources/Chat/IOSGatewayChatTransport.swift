@@ -775,6 +775,13 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         return try JSONDecoder().decode(QuestionListResult.self, from: data).questions
     }
 
+    func listTasks(sessionKey: String, agentID: String?) async throws -> [TaskSummary] {
+        let data = try await gateway.request(OpenClawChatGatewayRequests.tasksList(
+            sessionKey: sessionKey,
+            agentID: agentID))
+        return try JSONDecoder().decode(TasksListResult.self, from: data).tasks
+    }
+
     func getQuestion(id: String) async throws -> QuestionRecord {
         let data = try await gateway.request(OpenClawChatGatewayRequests.questionGet(id: id))
         return try JSONDecoder().decode(QuestionGetResult.self, from: data).question

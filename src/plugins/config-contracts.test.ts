@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => {
   const loadManifestRegistry = vi.fn();
   return {
     discoverOpenClawPlugins: vi.fn(() => ({ candidates: [], diagnostics: [] })),
+    findBundledPluginMetadataById: vi.fn(),
     loadBundledManifestRegistry: vi.fn(),
     loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
     loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
@@ -15,6 +16,10 @@ const mocks = vi.hoisted(() => {
 
 vi.mock("./discovery.js", () => ({
   discoverOpenClawPlugins: mocks.discoverOpenClawPlugins,
+}));
+
+vi.mock("./bundled-plugin-metadata.js", () => ({
+  findBundledPluginMetadataById: mocks.findBundledPluginMetadataById,
 }));
 
 vi.mock("./manifest-registry.js", () => ({
@@ -85,12 +90,55 @@ describe("resolvePluginConfigContractsById", () => {
   beforeEach(() => {
     mocks.discoverOpenClawPlugins.mockReset();
     mocks.discoverOpenClawPlugins.mockReturnValue({ candidates: [], diagnostics: [] });
+    mocks.findBundledPluginMetadataById.mockReset();
     mocks.loadBundledManifestRegistry.mockReset();
     mocks.loadBundledManifestRegistry.mockReturnValue(createRegistry([]));
     mocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
     mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(createRegistry([]));
     mocks.loadPluginRegistrySnapshot.mockReset();
     mocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
+  });
+
+  it("uses a supplied manifest registry as the authoritative contract source", () => {
+    const manifestRegistry = createRegistry([
+      createPluginRecord({
+        id: "prepared-plugin",
+        origin: "config",
+        configContracts: {
+          secretInputs: {
+            paths: [{ path: "credentials.token", expected: "string" }],
+          },
+        },
+      }),
+    ]);
+
+    expect(
+      resolvePluginConfigContractsById({
+        pluginIds: ["prepared-plugin"],
+        manifestRegistry,
+        fallbackToBundledMetadata: true,
+        fallbackToBundledMetadataForResolvedBundled: true,
+        fallbackBundledPluginIds: ["prepared-plugin"],
+      }),
+    ).toEqual(
+      new Map([
+        [
+          "prepared-plugin",
+          {
+            origin: "config",
+            configContracts: {
+              secretInputs: {
+                paths: [{ path: "credentials.token", expected: "string" }],
+              },
+            },
+          },
+        ],
+      ]),
+    );
+    expect(mocks.loadPluginManifestRegistryForPluginRegistry).not.toHaveBeenCalled();
+    expect(mocks.discoverOpenClawPlugins).not.toHaveBeenCalled();
+    expect(mocks.loadBundledManifestRegistry).not.toHaveBeenCalled();
+    expect(mocks.findBundledPluginMetadataById).not.toHaveBeenCalled();
   });
 
   it("does not fall back to bundled registry when registry already resolved a plugin without config contracts", () => {
@@ -158,6 +206,8 @@ describe("resolvePluginConfigContractsById", () => {
         ],
       ]),
     );
+    expect(mocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledTimes(1);
+    expect(mocks.loadBundledManifestRegistry).toHaveBeenCalledTimes(1);
   });
 
   it("refreshes stale bundled SecretInput contracts from bundled registry", () => {

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -71,6 +72,7 @@ export type QaSuiteScenarioResult = {
   details?: string;
   timing?: QaEvidenceTiming;
   runtimeParity?: RuntimeParityResult;
+  modelSwitchEvidence?: Record<string, unknown>;
 };
 
 type QaSuiteEnvironment = {
@@ -134,6 +136,7 @@ export type QaSuiteRunParams = {
   evidenceMode?: QaScorecardEvidenceMode;
   repoRoot?: string;
   sutOpenClawCommand?: QaGatewayChildCommand;
+  mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
   outputDir?: string;
   providerMode?: QaProviderMode;
   transportId?: QaTransportId;

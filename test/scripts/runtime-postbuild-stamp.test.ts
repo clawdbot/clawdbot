@@ -2,8 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { RUNTIME_POSTBUILD_STAMP_FILE } from "../../scripts/lib/local-build-metadata-paths.mjs";
-import { writeRuntimePostBuildStamp } from "../../scripts/runtime-postbuild-stamp.mjs";
+import { RUNTIME_POSTBUILD_STAMP_FILE } from "../../scripts/lib/local-build-metadata-paths.mts";
+import { writeRuntimePostBuildStamp } from "../../scripts/runtime-postbuild-stamp.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 describe("runtime-postbuild-stamp script", () => {

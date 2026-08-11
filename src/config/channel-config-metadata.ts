@@ -124,7 +124,9 @@ function normalizeCoreOwnedChannelSchema(schema: Record<string, unknown>): Recor
 }
 
 /** Collects plugin config UI metadata with deterministic origin precedence and output ordering. */
-export function collectPluginSchemaMetadata(registry: PluginManifestRegistry): PluginUiMetadata[] {
+export function collectPluginSchemaMetadataCore(
+  registry: PluginManifestRegistry,
+): PluginUiMetadata[] {
   const deduped = new Map<
     string,
     PluginUiMetadata & {
@@ -217,7 +219,7 @@ export function collectChannelSchemaMetadataWithOwnership(
 }
 
 /** Collects public per-channel config UI metadata without internal schema ownership. */
-export function collectChannelSchemaMetadata(
+export function collectChannelSchemaMetadataCore(
   registry: PluginManifestRegistry,
 ): ChannelUiMetadata[] {
   return collectChannelSchemaMetadataWithOwnership(registry).map(

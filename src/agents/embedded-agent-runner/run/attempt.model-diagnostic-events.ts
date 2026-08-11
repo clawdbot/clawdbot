@@ -1,3 +1,4 @@
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 /**
@@ -22,6 +23,8 @@ import {
   cloneDiagnosticContentValue,
   type DiagnosticModelContentCapturePolicy,
 } from "../../../infra/diagnostic-llm-content.js";
+import { emitCoreModelRequestStartedDiagnosticEvent } from "../../../infra/diagnostic-model-request.js";
+import { emitCoreSemanticRunProgressDiagnosticEvent } from "../../../infra/diagnostic-semantic-run-progress.js";
 import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
@@ -97,12 +100,14 @@ type ModelCallObservationState = {
   usage?: ModelCallUsage;
   contentCapture?: DiagnosticModelContentCapturePolicy;
   lastStreamProgressAt?: number;
+  semanticProgressEmitted?: boolean;
   terminalEventEmitted?: boolean;
   suppressPluginHooks?: boolean;
 };
 
 const MODEL_CALL_STREAM_PROGRESS_INTERVAL_MS = 30_000;
 const MODEL_CALL_STREAM_PROGRESS_REASON = "model_call:stream_progress";
+const MODEL_CALL_SEMANTIC_PROGRESS_REASON = "model_call:semantic_result";
 const MODEL_CALL_STREAM_RETURN_TIMEOUT_MS = 1000;
 const TRACEPARENT_HEADER_NAME = "traceparent";
 const TIMELINE_ATTRIBUTE_MAX_LENGTH = 256;
@@ -297,6 +302,64 @@ function observeResultMessageContent(
   }
 }
 
+function isNormalizedToolCall(value: unknown): boolean {
+  if (!isRecord(value) || value.type !== "toolCall") {
+    return false;
+  }
+  return (
+    typeof value.id === "string" &&
+    value.id.trim().length > 0 &&
+    typeof value.name === "string" &&
+    value.name.trim().length > 0 &&
+    isRecord(value.arguments)
+  );
+}
+
+function isSemanticModelCallResult(result: unknown): boolean {
+  try {
+    if (
+      !isRecord(result) ||
+      result.role !== "assistant" ||
+      result.stopReason === "error" ||
+      result.stopReason === "aborted" ||
+      !Array.isArray(result.content)
+    ) {
+      return false;
+    }
+    const hasExecutableToolCall =
+      result.stopReason === "toolUse" && result.content.some(isNormalizedToolCall);
+    return (
+      hasExecutableToolCall ||
+      result.content.some(
+        (item) =>
+          isRecord(item) &&
+          item.type === "text" &&
+          typeof item.text === "string" &&
+          item.text.trim().length > 0,
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
+function maybeEmitModelCallSemanticProgress(
+  eventBase: ModelCallEventBase,
+  state: ModelCallObservationState,
+  result: unknown,
+): void {
+  if (state.semanticProgressEmitted || !isSemanticModelCallResult(result)) {
+    return;
+  }
+  state.semanticProgressEmitted = true;
+  emitCoreSemanticRunProgressDiagnosticEvent({
+    runId: eventBase.runId,
+    ...(eventBase.sessionKey ? { sessionKey: eventBase.sessionKey } : {}),
+    ...(eventBase.sessionId ? { sessionId: eventBase.sessionId } : {}),
+    reason: MODEL_CALL_SEMANTIC_PROGRESS_REASON,
+  });
+}
+
 function observeResponseChunk(
   state: ModelCallObservationState,
   startedAt: number,
@@ -353,17 +416,6 @@ function modelCallSizeTimingFields(state: ModelCallObservationState): ModelCallS
       ? { timeToFirstByteMs: state.timeToFirstByteMs }
       : {}),
   };
-}
-
-function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  if (value === null || (typeof value !== "object" && typeof value !== "function")) {
-    return false;
-  }
-  try {
-    return typeof (value as { then?: unknown }).then === "function";
-  } catch {
-    return false;
-  }
 }
 
 function asyncIteratorFactory(value: unknown): (() => AsyncIterator<unknown>) | undefined {
@@ -559,9 +611,8 @@ function emitModelCallStarted(
   modelContent: DiagnosticModelCallContent | undefined,
   suppressPluginHooks: boolean,
 ): void {
-  emitTrustedDiagnosticEventWithPrivateData(
+  emitCoreModelRequestStartedDiagnosticEvent(
     {
-      type: "model.call.started",
       ...eventBase,
     },
     modelContentPrivateData(modelContent),
@@ -770,6 +821,9 @@ function observeModelCallFinalResult<T>(
   state: ModelCallObservationState,
 ): T {
   observeResultMessageContent(state, startedAt, result);
+  // Queue semantic progress beside model lifecycle events so request starts,
+  // progress, and the next request retain their authoritative FIFO ordering.
+  maybeEmitModelCallSemanticProgress(eventBase, state, result);
   emitModelCallCompleted(eventBase, startedAt, state);
   return result;
 }

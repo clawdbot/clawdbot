@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE } from "../../../llm/types.js";
 import { FailoverError } from "../../failover-error.js";
 import { runWithModelFallback } from "../../model-fallback-runner.js";
 import {
@@ -8,6 +9,14 @@ import {
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { handleEmbeddedAssistantFailure } from "./assistant-failure.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
+
+const providerRuntimeMocks = vi.hoisted(() => ({
+  classifyProviderFailoverSignalWithPlugin: vi.fn(),
+}));
+
+vi.mock("../../../logging/node-require.js", () => ({
+  resolveNodeRequireFromMeta: () => () => providerRuntimeMocks,
+}));
 
 const CREDENTIAL_FILE_ENOENT_MESSAGE =
   "ENOENT: no such file or directory, open '/home/operator/.claude/.credentials.json'";
@@ -27,7 +36,7 @@ function makeExhaustedCredentialFailureInput(options?: { replaySafe?: boolean })
     currentAttemptAssistant: assistant,
     toolMetas: replaySafe ? [] : [{ toolName: "write", replaySafe: false }],
   });
-  const advanceAttemptAuthProfile = vi.fn(async () => true);
+  const advanceAuthProfile = vi.fn(async () => true);
   const maybeMarkAuthProfileFailure = vi.fn(async () => {});
   const traceAttempts: AssistantFailureInput["traceAttempts"] = [];
   const input: AssistantFailureInput = {
@@ -45,6 +54,7 @@ function makeExhaustedCredentialFailureInput(options?: { replaySafe?: boolean })
     }),
     activeErrorContext: { provider: "anthropic", model: "mock-1" },
     provider: "anthropic",
+    providerOwner: undefined,
     modelId: "mock-1",
     model: "mock-1",
     thinkLevel: "off",
@@ -79,15 +89,13 @@ function makeExhaustedCredentialFailureInput(options?: { replaySafe?: boolean })
     emptyErrorRetries: 3,
     overloadProfileRotations: 0,
     overloadProfileRotationLimit: 1,
-    rateLimitProfileRotations: 0,
-    rateLimitProfileRotationLimit: 1,
     sameModelIdleTimeoutRetries: 0,
     previousRetryFailoverReason: null,
     maybeMarkAuthProfileFailure,
-    maybeEscalateRateLimitProfileFallback: vi.fn(),
     maybeRetrySameModelRateLimit: vi.fn(async () => false),
     maybeBackoffBeforeOverloadFailover: vi.fn(async () => {}),
-    advanceAttemptAuthProfile,
+    advanceAuthProfile,
+    advanceRateLimitAuthProfile: vi.fn(async () => true),
     traceAttempts,
     suspendForFailure: vi.fn(),
     suspensionSessionId: "session:credential-enoent",
@@ -95,7 +103,7 @@ function makeExhaustedCredentialFailureInput(options?: { replaySafe?: boolean })
     isProbeSession: false,
   };
   return {
-    advanceAttemptAuthProfile,
+    advanceAuthProfile,
     input,
     maybeMarkAuthProfileFailure,
     traceAttempts,
@@ -103,6 +111,69 @@ function makeExhaustedCredentialFailureInput(options?: { replaySafe?: boolean })
 }
 
 describe("handleEmbeddedAssistantFailure", () => {
+  it("uses prepared OpenRouter ownership for custom-provider billing failures", async () => {
+    const fixture = makeExhaustedCredentialFailureInput();
+    const provider = "custom-openrouter";
+    const modelId = "anthropic/claude-sonnet-4";
+    const errorMessage = "HTTP 403: API key budget limit exceeded";
+    const assistant = buildEmbeddedRunnerAssistant({
+      provider,
+      model: modelId,
+      stopReason: "error",
+      errorMessage,
+    });
+    fixture.input.attemptAssistant = assistant;
+    fixture.input.currentAttemptAssistant = assistant;
+    fixture.input.provider = provider;
+    fixture.input.modelId = modelId;
+    fixture.input.model = modelId;
+    fixture.input.activeErrorContext = { provider, model: modelId };
+    fixture.input.authProfileId = undefined;
+    fixture.input.providerOwner = { id: "openrouter" };
+    fixture.input.resolveAuthProfileFailureReason = vi.fn((reason) =>
+      reason === "billing" ? "billing" : null,
+    );
+    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockImplementation(
+      ({ provider: classifiedProvider, context }) =>
+        classifiedProvider === "openrouter" && context.errorMessage === errorMessage
+          ? "billing"
+          : undefined,
+    );
+
+    const outcome = await handleEmbeddedAssistantFailure(fixture.input);
+
+    expect(outcome).toMatchObject({
+      action: "retry",
+      lastRetryFailoverReason: "billing",
+    });
+    expect(fixture.traceAttempts).toEqual([
+      {
+        provider,
+        model: modelId,
+        result: "rotate_profile",
+        reason: "billing",
+        stage: "assistant",
+      },
+    ]);
+  });
+
+  it("does not rotate profiles or models after an ambiguous post-dispatch failure", async () => {
+    const fixture = makeExhaustedCredentialFailureInput();
+    fixture.input.emptyErrorRetries = 0;
+    if (!fixture.input.attemptAssistant) {
+      throw new Error("expected assistant fixture");
+    }
+    fixture.input.attemptAssistant.errorCode = PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE;
+    fixture.input.attemptAssistant.errorMessage = "reasoning is required";
+
+    const outcome = await handleEmbeddedAssistantFailure(fixture.input);
+
+    expect(outcome.action).toBe("proceed");
+    expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
+    expect(fixture.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+    expect(fixture.traceAttempts).toEqual([]);
+  });
+
   it("falls back after exhausted replay-safe credential-file retries without touching auth state", async () => {
     const fixture = makeExhaustedCredentialFailureInput();
 
@@ -113,7 +184,7 @@ describe("handleEmbeddedAssistantFailure", () => {
       rawError: CREDENTIAL_FILE_ENOENT_MESSAGE,
     });
 
-    expect(fixture.advanceAttemptAuthProfile).not.toHaveBeenCalled();
+    expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
     expect(fixture.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
     expect(fixture.input.authProfileStore.usageStats).toEqual({
       "anthropic:p1": { lastUsed: 1 },
@@ -136,7 +207,7 @@ describe("handleEmbeddedAssistantFailure", () => {
     const outcome = await handleEmbeddedAssistantFailure(fixture.input);
 
     expect(outcome.action).toBe("proceed");
-    expect(fixture.advanceAttemptAuthProfile).not.toHaveBeenCalled();
+    expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
     expect(fixture.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
     expect(fixture.traceAttempts).toEqual([]);
   });

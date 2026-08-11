@@ -30,7 +30,7 @@ export function resolveFixedWindowRateLimitInteger(
 }
 
 /** Creates a fixed-window counter that reports allowance, remaining quota, and retry delay. */
-export function createFixedWindowRateLimiter(params: {
+export function createFixedWindowBudget(params: {
   /** Maximum successful consume calls allowed per window. */
   maxRequests: number;
   /** Fixed window duration in milliseconds. */

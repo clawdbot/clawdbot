@@ -5,6 +5,7 @@ import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatQuestionPrompt
+import ai.openclaw.app.chat.ChatSubagentActivity
 import ai.openclaw.app.chat.OUTBOX_OWNER_CHANGED_ERROR
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 
@@ -35,6 +36,11 @@ internal sealed class ChatTimelineItem {
     val toolCalls: List<ChatPendingToolCall>,
   ) : ChatTimelineItem()
 
+  data class SubagentActivity(
+    val activities: List<ChatSubagentActivity>,
+    val moreWorkingCount: Int = 0,
+  ) : ChatTimelineItem()
+
   data class QuestionPrompt(
     val prompt: ChatQuestionPrompt,
   ) : ChatTimelineItem()
@@ -60,11 +66,13 @@ internal fun buildChatTimeline(
   pendingRunCount: Int,
   pendingToolCalls: List<ChatPendingToolCall>,
   streamingAssistantText: String?,
+  subagentActivities: Map<String, ChatSubagentActivity> = emptyMap(),
   outboxItems: List<ChatOutboxItem> = emptyList(),
   recoveryOutboxItems: List<ChatOutboxItem> = emptyList(),
   questions: List<ChatQuestionPrompt> = emptyList(),
 ): ChatTimeline {
   val stream = streamingAssistantText?.trim()?.takeIf { it.isNotEmpty() }
+  val visibleSubagents = visibleSubagentActivities(subagentActivities.values)
   val items =
     buildList {
       // reverseLayout: index 0 renders bottom-most; queued commands are the newest user input.
@@ -74,6 +82,14 @@ internal fun buildChatTimeline(
       if (recoveryOutboxItems.isNotEmpty()) add(ChatTimelineItem.OutboxRecoveryHeader(recoveryOutboxItems.size))
       if (stream != null) add(ChatTimelineItem.StreamingAssistant(stream))
       if (pendingToolCalls.isNotEmpty()) add(ChatTimelineItem.PendingTools(pendingToolCalls))
+      if (visibleSubagents.activities.isNotEmpty()) {
+        add(
+          ChatTimelineItem.SubagentActivity(
+            activities = visibleSubagents.activities,
+            moreWorkingCount = visibleSubagents.moreWorkingCount,
+          ),
+        )
+      }
       if (pendingRunCount > 0) add(ChatTimelineItem.Thinking)
       messages.asReversed().forEach { message -> add(ChatTimelineItem.Message(message)) }
     }
@@ -114,6 +130,8 @@ internal fun buildChatTimeline(
         messages,
         pendingRunCount,
         pendingToolCalls,
+        visibleSubagents.activities,
+        visibleSubagents.moreWorkingCount,
         stream,
         outboxItems + recoveryOutboxItems,
         questions,
@@ -216,6 +234,8 @@ private fun latestContentVersion(
   messages: List<ChatMessage>,
   pendingRunCount: Int,
   pendingToolCalls: List<ChatPendingToolCall>,
+  subagentActivities: Collection<ChatSubagentActivity>,
+  moreWorkingCount: Int,
   stream: String?,
   outboxItems: List<ChatOutboxItem> = emptyList(),
   questions: List<ChatQuestionPrompt> = emptyList(),
@@ -252,8 +272,27 @@ private fun latestContentVersion(
       append(call.name)
       append(',')
       append(call.isError)
+      append(',')
+      append(call.liveDiff)
       append(';')
     }
+    append(":subagents=")
+    subagentActivities.sortedBy { it.id }.forEach { activity ->
+      append(activity.id)
+      append(',')
+      append(activity.status)
+      append(',')
+      append(activity.snippet?.hashCode() ?: 0)
+      append(',')
+      append(activity.terminalSummary?.hashCode() ?: 0)
+      append(',')
+      append(activity.error?.hashCode() ?: 0)
+      append(',')
+      append(activity.diffStat)
+      append(';')
+    }
+    append("more=")
+    append(moreWorkingCount)
     append(":stream=")
     append(stream?.hashCode() ?: 0)
     append(":outbox=")
@@ -288,8 +327,28 @@ internal fun chatTimelineItemKey(item: ChatTimelineItem): String =
     is ChatTimelineItem.RecoveryOutboxCommand -> "outbox-recovery:${item.item.id}"
     is ChatTimelineItem.OutboxRecoveryHeader -> "outbox-recovery-header"
     is ChatTimelineItem.PendingTools -> "tools"
+    is ChatTimelineItem.SubagentActivity -> "subagent-activity"
     is ChatTimelineItem.QuestionPrompt -> "question:${item.prompt.record.id}"
     is ChatTimelineItem.TurnRecapSummary -> "turn-recap"
     is ChatTimelineItem.StreamingAssistant -> "stream"
     ChatTimelineItem.Thinking -> "thinking"
   }
+
+internal data class VisibleSubagentActivities(
+  val activities: List<ChatSubagentActivity>,
+  val moreWorkingCount: Int,
+)
+
+internal fun visibleSubagentActivities(activities: Collection<ChatSubagentActivity>): VisibleSubagentActivities {
+  val working = activities.filter(ChatSubagentActivity::isWorking).sortedWith(compareBy<ChatSubagentActivity> { it.startedAtMs }.thenBy { it.id })
+  val finished =
+    activities
+      .filterNot(ChatSubagentActivity::isWorking)
+      .sortedWith(compareByDescending<ChatSubagentActivity> { it.endedAtMs ?: Long.MIN_VALUE }.thenBy { it.id })
+  val visible = (working + finished).take(5)
+  return VisibleSubagentActivities(
+    activities = visible,
+    moreWorkingCount =
+      working.count { it.status == "running" && it !in visible },
+  )
+}

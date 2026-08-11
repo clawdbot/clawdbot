@@ -40,7 +40,7 @@ openclaw onboard --auth-choice featherless-api-key
 For non-interactive setup:
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --mode local \
   --auth-choice featherless-api-key \
   --featherless-api-key "$FEATHERLESS_API_KEY"

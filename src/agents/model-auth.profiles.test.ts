@@ -7,10 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  ensureAuthProfileStore,
-} from "./auth-profiles/store.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
+import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import type {
   AuthProfileCredential,
   AuthProfileStore,
@@ -20,7 +18,7 @@ import { resolveInlineProviderApiKeyUsageId } from "./auth-profiles/usage.js";
 import type { ClaudeCliCredential } from "./cli-credentials.js";
 import {
   createRuntimeProviderAuthLookup,
-  getApiKeyForModel,
+  getApiKeyForModelCore,
   hasAvailableAuthForProvider,
   hasRuntimeAvailableProviderAuth,
   isConfigBackedInlineProviderApiKey,
@@ -405,7 +403,7 @@ async function resolveDemoLocalApiKey(params: {
   });
 }
 
-describe("getApiKeyForModel", () => {
+describe("getApiKeyForModelCore", () => {
   it("reads oauth auth-profiles entries from auth-profiles.json via explicit profile", async () => {
     await withOpenClawTestState(
       {
@@ -434,7 +432,7 @@ describe("getApiKeyForModel", () => {
         const store = ensureAuthProfileStore(process.env.OPENCLAW_AGENT_DIR, {
           allowKeychainPrompt: false,
         });
-        const apiKey = await getApiKeyForModel({
+        const apiKey = await getApiKeyForModelCore({
           model,
           profileId: "openai:default",
           store,
@@ -462,7 +460,7 @@ describe("getApiKeyForModel", () => {
       },
     };
 
-    const directAuth = await getApiKeyForModel({
+    const directAuth = await getApiKeyForModelCore({
       model: {
         id: "chat-latest",
         provider: "openai",
@@ -470,7 +468,7 @@ describe("getApiKeyForModel", () => {
       } as Model,
       store,
     });
-    const codexAuth = await getApiKeyForModel({
+    const codexAuth = await getApiKeyForModelCore({
       model: {
         id: "gpt-5.5",
         provider: "openai",
@@ -504,7 +502,7 @@ describe("getApiKeyForModel", () => {
     };
 
     await expect(
-      getApiKeyForModel({
+      getApiKeyForModelCore({
         model: {
           id: "chat-latest",
           provider: "openai",
@@ -530,7 +528,7 @@ describe("getApiKeyForModel", () => {
     };
 
     await expect(
-      getApiKeyForModel({
+      getApiKeyForModelCore({
         model: {
           id: "gpt-5.5",
           provider: "openai",

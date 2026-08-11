@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveOpenPathCommand } from "./open-path.js";
-import { sessionsFilesHandlers } from "./sessions-files.js";
+import { resolveLocalSessionWorkspaceRoot, sessionsFilesHandlers } from "./sessions-files.js";
 import {
   assistantToolCall,
   createSessionEntryFixture,
@@ -143,6 +143,27 @@ describe("sessions.files RPC handlers", () => {
     expect(payload).toMatchObject({ ok: false, path: workspaceRoot });
     expect(payload.error).toContain("exec node");
     expect(hoisted.execOpenPath).not.toHaveBeenCalled();
+  });
+
+  it("withholds the workspace root of an exec-node session", () => {
+    // Workspace identity surfaces read this root. An exec-node session's
+    // directory lives on another host, while the precedence below it falls back
+    // to the local agent workspace — handing that back would name this machine.
+    hoisted.loadSessionEntry.mockReturnValue({
+      canonicalKey: "agent:main:main",
+      cfg: {},
+      storePath: path.join(workspaceRoot, ".sessions.json"),
+      entry: { sessionId: "sess-main", sessionFile: "sess-main.jsonl", execNode: "build-mac" },
+    });
+    expect(resolveLocalSessionWorkspaceRoot({ sessionKey: "agent:main:main" })).toBeUndefined();
+
+    hoisted.loadSessionEntry.mockReturnValue({
+      canonicalKey: "agent:main:main",
+      cfg: {},
+      storePath: path.join(workspaceRoot, ".sessions.json"),
+      entry: { sessionId: "sess-main", sessionFile: "sess-main.jsonl", spawnedCwd: workspaceRoot },
+    });
+    expect(resolveLocalSessionWorkspaceRoot({ sessionKey: "agent:main:main" })).toBe(workspaceRoot);
   });
 
   it("refuses to reveal when the session has no workspace root", async () => {

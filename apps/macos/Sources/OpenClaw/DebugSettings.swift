@@ -511,13 +511,19 @@ struct DebugSettings: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    Button {
-                        LaunchdManager.startOpenClaw()
-                    } label: {
-                        Label("Restart OpenClaw", systemImage: "arrow.counterclockwise")
+                    if AppProfile.current.isActive {
+                        Text("Login-agent restart is unavailable under a profile.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Button {
+                            LaunchdManager.startOpenClaw()
+                        } label: {
+                            Label("Restart OpenClaw", systemImage: "arrow.counterclockwise")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
                 }
 
                 HStack(spacing: 8) {
@@ -971,55 +977,6 @@ struct DebugSettings_Previews: PreviewProvider {
     static var previews: some View {
         DebugSettings(state: .preview)
             .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
-    }
-}
-
-@MainActor
-extension DebugSettings {
-    static func exerciseForTesting() async {
-        let view = DebugSettings(state: .preview)
-        view.gatewayRootInput = "/tmp/openclaw"
-        view.sessionStorePath = "/tmp/sessions.json"
-        view.sessionStoreSaveError = "Save failed"
-        view.debugSendInFlight = true
-        view.debugSendStatus = "Sent"
-        view.debugSendError = "Failed"
-        view.portCheckInFlight = true
-        view.portReports = [
-            DebugActions.PortReport(
-                port: GatewayEnvironment.gatewayPort(),
-                expected: "Gateway websocket (node/tsx)",
-                status: .missing("Missing"),
-                listeners: []),
-        ]
-        view.portKillStatus = "Killed"
-        view.pendingKill = DebugActions.PortListener(
-            pid: 1,
-            command: "node",
-            fullCommand: "node",
-            user: nil,
-            expected: true)
-        view.canvasSessionKey = "main"
-        view.canvasStatus = "Canvas ok"
-        view.canvasError = "Canvas error"
-        view.canvasEvalJS = "document.title"
-        view.canvasEvalResult = "Canvas"
-        view.canvasSnapshotPath = "/tmp/snapshot.png"
-
-        _ = view.body
-        _ = view.header
-        _ = view.overviewSection
-        _ = view.appInfoSection
-        _ = view.gatewaySection
-        _ = view.logsSection
-        _ = view.portsSection
-        _ = view.pathsSection
-        _ = view.quickActionsSection
-        _ = view.canvasSection
-        _ = view.experimentsSection
-        _ = view.gridLabel("Test")
-
-        view.loadSessionStorePath()
     }
 }
 #endif

@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveTrustedGroupId } from "../../agents/agent-tools.policy.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
-import { buildMainSessionRecoveryClearPatch } from "../../agents/main-session-recovery-clear.js";
+import { buildMainSessionRecoveryClearPatch } from "../../agents/main-session-recovery/main-session-recovery-clear.js";
 import {
   evaluateSessionFreshness,
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,

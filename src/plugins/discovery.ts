@@ -7,13 +7,15 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { satisfiesPluginApiRange } from "../infra/clawhub.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
-import { resolveSourceCheckoutDependencyDiagnostic } from "./bundled-dir.js";
+import {
+  hasUsableBundledPluginTree,
+  resolveSourceCheckoutDependencyDiagnostic,
+} from "./bundled-dir.js";
 import { buildLegacyBundledRootPath } from "./bundled-load-path-aliases.js";
 import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
@@ -29,6 +31,7 @@ import {
   type PackageExtensionResolution,
   type PackageManifest,
 } from "./manifest.js";
+import { satisfiesPluginApiRange } from "./package-compat.js";
 import { resolvePackagePluginApiRange } from "./package-compat.js";
 import {
   resolvePackageRuntimeExtensionSources,
@@ -1214,31 +1217,13 @@ function discoverInDirectory(params: {
   }
 }
 
-function hasDiscoverablePluginTree(pluginsDir: string): boolean {
-  try {
-    return fs.readdirSync(pluginsDir, { withFileTypes: true }).some((entry) => {
-      if (!entry.isDirectory()) {
-        return false;
-      }
-      const pluginDir = path.join(pluginsDir, entry.name);
-      return (
-        fs.existsSync(path.join(pluginDir, "package.json")) ||
-        fs.existsSync(path.join(pluginDir, "openclaw.plugin.json"))
-      );
-    });
-  } catch {
-    return false;
-  }
-}
-
 function isSourceCheckoutExtensionsDir(extensionsDir: string): boolean {
   const packageRoot = path.dirname(extensionsDir);
   return (
     fs.existsSync(path.join(packageRoot, ".git")) &&
     fs.existsSync(path.join(packageRoot, "pnpm-workspace.yaml")) &&
     fs.existsSync(path.join(packageRoot, "src")) &&
-    fs.existsSync(extensionsDir) &&
-    hasDiscoverablePluginTree(extensionsDir)
+    hasUsableBundledPluginTree(extensionsDir)
   );
 }
 
