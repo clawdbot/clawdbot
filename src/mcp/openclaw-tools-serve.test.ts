@@ -37,6 +37,9 @@ describe("OpenClaw tools MCP server", () => {
         agentSessionKey: "agent:worker:main",
         config: config as never,
       });
+      if (!tool) {
+        throw new Error("expected the automations tool to be resolved");
+      }
       const parameters = tool.parameters as unknown as {
         properties: { job: { properties: Record<string, unknown> } };
       };
