@@ -31,9 +31,8 @@ import {
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-client/browser";
 import type {
+  GatewayScopeUpgrade,
   ScopeUpgradeBinding,
-  ScopeUpgradeOptions,
-  ScopeUpgradeOutcome,
 } from "@openclaw/gateway-client/scope-upgrade";
 // Control UI module implements gateway behavior.
 import {
@@ -56,11 +55,6 @@ import { generateUUID } from "../lib/uuid.ts";
 import { createBrowserGatewaySocket } from "./gateway-browser-socket.ts";
 
 export type GatewayEventFrame = EventFrame;
-
-type GatewayScopeUpgradeRuntime = {
-  requestScopeUpgrade: (options: ScopeUpgradeOptions) => Promise<ScopeUpgradeOutcome>;
-  cancelScopeUpgrade: () => void;
-};
 
 type GatewayErrorInfo = ErrorShape;
 
@@ -319,7 +313,7 @@ async function buildGatewayConnectDevice(params: {
 
 export class GatewayBrowserClient {
   private readonly client: GatewayProtocolClient<ConnectPlan>;
-  private scopeUpgradeRuntime: Promise<GatewayScopeUpgradeRuntime> | null = null;
+  private scopeUpgradeRuntime: Promise<GatewayScopeUpgrade> | null = null;
   inboundActivitySeq = 0;
   private lastInboundActivityAtMs: number | null = null;
   private tickWatchTimer: ReturnType<typeof setInterval> | null = null;
@@ -536,13 +530,11 @@ export class GatewayBrowserClient {
     this.deviceTokenRetryBudgetUsed = false;
     this.opts.bootstrapToken = undefined;
     this.opts.bootstrapProfile = undefined;
-    this.scopeUpgradeBinding = plan.deviceIdentity
-      ? {
-          clientId: plan.params.client.id,
-          deviceId: plan.deviceIdentity.deviceId,
-          role: plan.params.role ?? CONTROL_UI_OPERATOR_ROLE,
-        }
-      : null;
+    this.scopeUpgradeBinding = plan.deviceIdentity && {
+      clientId: plan.params.client.id,
+      deviceId: plan.deviceIdentity.deviceId,
+      role: plan.params.role ?? CONTROL_UI_OPERATOR_ROLE,
+    };
     if (hello?.auth?.deviceToken && plan.deviceIdentity) {
       const role = hello.auth.role ?? plan.params.role ?? CONTROL_UI_OPERATOR_ROLE;
       const scopes =
@@ -690,30 +682,26 @@ export class GatewayBrowserClient {
     return this.client.request<T>(method, params, options);
   }
 
-  requestScopeUpgrade(
-    options: { onPending?: (requestId: string) => void } = {},
-  ): Promise<ScopeUpgradeOutcome> {
+  async requestScopeUpgrade(options: { onPending?: (requestId: string) => void } = {}) {
     const binding = this.scopeUpgradeBinding;
     if (!this.connected || !binding) {
-      return Promise.reject(new Error("scope upgrade requires a connected browser device"));
+      throw new Error("scope upgrade requires a connected browser device");
     }
-    return this.loadScopeUpgradeRuntime().then((runtime) =>
-      runtime.requestScopeUpgrade({
-        binding,
-        scopes: CONTROL_UI_OPERATOR_SCOPES,
-        onPending: options.onPending,
-      }),
-    );
+    const runtime = await this.loadScopeUpgradeRuntime();
+    return runtime.requestScopeUpgrade({
+      binding,
+      scopes: CONTROL_UI_OPERATOR_SCOPES,
+      onPending: options.onPending,
+    });
   }
 
   cancelScopeUpgrade(): void {
-    void this.scopeUpgradeRuntime?.then(
-      (runtime) => runtime.cancelScopeUpgrade(),
-      () => undefined,
-    );
+    void this.scopeUpgradeRuntime
+      ?.then((runtime) => runtime.cancelScopeUpgrade())
+      .catch(() => undefined);
   }
 
-  private loadScopeUpgradeRuntime(): Promise<GatewayScopeUpgradeRuntime> {
+  private loadScopeUpgradeRuntime(): Promise<GatewayScopeUpgrade> {
     return (this.scopeUpgradeRuntime ??= import("./gateway-scope-upgrade.runtime.ts")
       .then(({ createGatewayScopeUpgradeRuntime }) =>
         createGatewayScopeUpgradeRuntime({
