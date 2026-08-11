@@ -288,12 +288,9 @@ export async function finishUpdate(params: {
           const completedPluginUpdate = await completePostCorePluginUpdate({
             root: postUpdateRoot,
             pluginUpdate: initialPluginUpdate,
-            // A plugin-only update can replace its migration owner without replacing core.
-            // Downgrades and resume fallbacks can also leave an updated core on disk in this process.
+            // Aggregate plugin changes and core install changes independently require fresh doctor.
             freshDoctorRequired:
-              didCoreUpdateChangeInstall(params.result) ||
-              initialPluginUpdate.sync.changed ||
-              initialPluginUpdate.npm.changed,
+              didCoreUpdateChangeInstall(params.result) || initialPluginUpdate.changed,
             yes: params.opts.yes === true,
             json: params.opts.json === true,
             timeoutMs: params.updateStepTimeoutMs,

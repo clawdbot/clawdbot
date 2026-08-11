@@ -4392,7 +4392,7 @@ async function resolveGatewayLiveRequestedModels(): Promise<string | undefined> 
   if (!selected) {
     throw new Error("fresh OpenAI API-key inference selection returned no candidate");
   }
-  expect(selected.modelRef).toBe("openai/gpt-5.6");
+  expect(selected.modelRef).toBe("openai/gpt-5.6-sol");
   return selected.modelRef;
 }
 

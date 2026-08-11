@@ -15,7 +15,8 @@ import type {
   WorkerPlacementDispatchRequest,
   WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
-import { type WorkerEnvironmentService, workerEnvironmentIdForIdempotencyKey } from "./service.js";
+import { deriveEnvironmentIntent } from "./service-contract.js";
+import type { WorkerEnvironmentService } from "./service.js";
 import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
 import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
 import {
@@ -156,7 +157,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       });
       const localPath = await options.resolveWorkspacePath(request);
       const idempotencyKey = `session-dispatch:${request.sessionId}:${placement.generation}`;
-      const expectedEnvironmentId = workerEnvironmentIdForIdempotencyKey(idempotencyKey);
+      const expectedEnvironmentId = deriveEnvironmentIntent(idempotencyKey).environmentId;
       placement = placements.transition({
         sessionId: request.sessionId,
         from: "requested",
