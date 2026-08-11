@@ -14,11 +14,11 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
-  asOptionalObjectRecord,
   normalizeOptionalString,
   readStringField,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { readQqbotObjectRecord as asOptionalObjectRecord } from "../object-record.js";
 import { sanitizeFileName } from "./string-normalize.js";
 
 const STT_ERROR_BODY_LIMIT_BYTES = 8 * 1024;

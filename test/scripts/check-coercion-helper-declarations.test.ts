@@ -1,14 +1,20 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   auditCoercionHelperDeclarations,
   findBannedCoercionHelperDeclarations,
   isGovernedCoercionHelperPath,
+  runCoercionHelperDeclarationGuard,
   type CoercionHelperCarveOut,
   type CoercionHelperDeclaration,
 } from "../../scripts/check-coercion-helper-declarations.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("coercion helper declaration AST guard", () => {
-  it("finds nested, exported, async, and callable-variable declarations", () => {
+  it("finds functions, callable variables, methods, fields, and object properties", () => {
     const source = [
       "export async function readString() {}",
       "if (true) {",
@@ -28,6 +34,18 @@ describe("coercion helper declaration AST guard", () => {
       "const readOptionalString = normalizeOptionalString;",
       "const optionalString = helpers.readStringValue;",
       "const asObject = helpers.asOptionalRecord;",
+      "class Example {",
+      "  readString() {}",
+      "  toError = () => new Error();",
+      "  asRecord = function () { return {}; };",
+      "}",
+      "const object = {",
+      "  optionalString() {},",
+      "  readBoolean: () => true,",
+      "  readNumber: function () { return 1; },",
+      "};",
+      "function normalizeOptionalString() {}",
+      "const parseDateFirstTimestampMs = () => 0;",
     ].join("\n");
 
     expect(findBannedCoercionHelperDeclarations(source, "src/example.ts")).toEqual([
@@ -44,19 +62,42 @@ describe("coercion helper declaration AST guard", () => {
       { file: "src/example.ts", kind: "function", line: 13, name: "normalizeString" },
       { file: "src/example.ts", kind: "variable", line: 14, name: "asString" },
       { file: "src/example.ts", kind: "function", line: 15, name: "asObject" },
-      { file: "src/example.ts", kind: "variable", line: 16, name: "readOptionalString" },
+      {
+        file: "src/example.ts",
+        kind: "variable",
+        line: 16,
+        name: "readOptionalString",
+      },
       { file: "src/example.ts", kind: "variable", line: 17, name: "optionalString" },
       { file: "src/example.ts", kind: "variable", line: 18, name: "asObject" },
+      { file: "src/example.ts", kind: "method", line: 20, name: "readString" },
+      { file: "src/example.ts", kind: "field", line: 21, name: "toError" },
+      { file: "src/example.ts", kind: "field", line: 22, name: "asRecord" },
+      { file: "src/example.ts", kind: "method", line: 25, name: "optionalString" },
+      { file: "src/example.ts", kind: "property", line: 26, name: "readBoolean" },
+      { file: "src/example.ts", kind: "property", line: 27, name: "readNumber" },
+      {
+        file: "src/example.ts",
+        kind: "function",
+        line: 29,
+        name: "normalizeOptionalString",
+      },
+      {
+        file: "src/example.ts",
+        kind: "variable",
+        line: 30,
+        name: "parseDateFirstTimestampMs",
+      },
     ]);
   });
 
-  it("ignores imports, aliases, methods, properties, callbacks, and inert text", () => {
+  it("ignores imports, non-callable properties, shorthand aliases, callback names, and inert text", () => {
     const source = [
       'import { isRecord, readString as importedReadString } from "./helpers.js";',
       "const alias = isRecord;",
       "const { asRecord } = helpers;",
-      "class Example { isRecord() {} readString = () => true; }",
-      "const object = { optionalString() {}, toError: () => new Error() };",
+      "const object = { isRecord, readString: 42, toError: importedToError };",
+      "const shorthand = { optionalString };",
       "values.map(function readString(value) { return value; });",
       "const aliasWithInternalName = function isRecord(value) { return value; };",
       "const asRecord = raw as Record<string, unknown>;",
@@ -112,20 +153,61 @@ describe("coercion helper declaration AST guard", () => {
     });
   });
 
-  it("excludes declarations, fixtures, generated sources, and browser bundles", () => {
+  it("excludes structural fixtures and generated sources without hiding authored fixture-named files", () => {
     expect(isGovernedCoercionHelperPath("src/runtime.ts")).toBe(true);
     expect(isGovernedCoercionHelperPath("extensions/demo/runtime.jsx")).toBe(true);
     expect(isGovernedCoercionHelperPath("src/runtime.d.ts")).toBe(false);
     expect(isGovernedCoercionHelperPath("scripts/runtime.d.mts")).toBe(false);
     expect(isGovernedCoercionHelperPath("test/fixtures/example.ts")).toBe(false);
     expect(isGovernedCoercionHelperPath("extensions/demo/dist/index.js")).toBe(false);
-    expect(isGovernedCoercionHelperPath("src/example.test-fixtures.ts")).toBe(false);
+    expect(isGovernedCoercionHelperPath("src/example.test-fixtures.ts")).toBe(true);
+    expect(isGovernedCoercionHelperPath("extensions/demo/runtime-tool-fixture.ts")).toBe(true);
     expect(isGovernedCoercionHelperPath("src/schema.generated.ts")).toBe(false);
     expect(isGovernedCoercionHelperPath("ui/src/vendor.bundle.js")).toBe(false);
     expect(
       isGovernedCoercionHelperPath(
         "extensions/browser/chrome-extension/modules/copilot-runtime.js",
       ),
-    ).toBe(false);
+    ).toBe(true);
+    expect(isGovernedCoercionHelperPath("root.config.ts")).toBe(true);
+    expect(isGovernedCoercionHelperPath(".github/actions/example/index.ts")).toBe(true);
+  });
+
+  it("scans a temporary repository and reports sorted, owner-specific diagnostics", () => {
+    const repoRoot = tempDirs.make("coercion-helper-guard-");
+    fs.mkdirSync(path.join(repoRoot, "src"), { recursive: true });
+    fs.mkdirSync(path.join(repoRoot, "extensions", "demo"), { recursive: true });
+    fs.mkdirSync(path.join(repoRoot, "config"), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, "src", "z.ts"), "function readString() {}\n");
+    fs.writeFileSync(
+      path.join(repoRoot, "extensions", "demo", "a.ts"),
+      "const asRecord = () => ({});\n",
+    );
+    fs.writeFileSync(
+      path.join(repoRoot, "config", "root.ts"),
+      "class Config { normalizeOptionalString() {} }\n",
+    );
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    expect(
+      runCoercionHelperDeclarationGuard({
+        carveOuts: [],
+        repoRoot,
+        io: {
+          stdout: { write: (value) => stdout.push(value) },
+          stderr: { write: (value) => stderr.push(value) },
+        },
+      }),
+    ).toBe(1);
+
+    expect(stdout).toEqual([]);
+    const output = stderr.join("");
+    expect(output.indexOf("config/root.ts:1")).toBeLessThan(
+      output.indexOf("extensions/demo/a.ts:1"),
+    );
+    expect(output.indexOf("extensions/demo/a.ts:1")).toBeLessThan(output.indexOf("src/z.ts:1"));
+    expect(output).toContain("Core/package/UI/workspace-script code");
+    expect(output).toContain("Plugin production code");
+    expect(output).toContain("Dependency-free, copied, generated, or serialized code");
   });
 });

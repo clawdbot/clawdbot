@@ -1,7 +1,10 @@
 /** Redaction-safe projection from live agent events into durable audit metadata. */
 import { createHash } from "node:crypto";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  readNonEmptyStringPreservingWhitespace as nonEmptyString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
@@ -29,10 +32,6 @@ export type AgentEventAuditRecorder = {
   recordTool: (event: TrustedToolExecutionEvent) => void;
   stop: () => Promise<void>;
 };
-
-function nonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
 
 function auditToolName(value: unknown): string | undefined {
   const toolName = nonEmptyString(value)?.trim();

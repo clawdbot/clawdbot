@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { redactTranscriptMessage } from "../agents/transcript-redact.js";
 import {
   appendTranscriptMessage,
@@ -523,10 +524,6 @@ function extractAssistantMirrorComparableText(
 
 function isDeliveryMirrorAssistantMessage(message: SessionTranscriptAssistantMessage): boolean {
   return message.provider === "openclaw" && message.model === "delivery-mirror";
-}
-
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
 function isAgentMessageRecord(value: unknown): value is AgentMessage & Record<string, unknown> {

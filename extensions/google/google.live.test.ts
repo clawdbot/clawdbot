@@ -1,4 +1,5 @@
 // Google tests cover google plugin behavior.
+import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
 import {
@@ -449,17 +450,3 @@ describeLive("google plugin live", () => {
     });
   }, 120_000);
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

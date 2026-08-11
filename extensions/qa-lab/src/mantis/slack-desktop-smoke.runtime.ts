@@ -1464,7 +1464,7 @@ export async function runMantisSlackDesktopSmoke(
       timer.updatePhaseStatus("crabbox.remote_run", "accepted");
     }
     if (remoteRunError && !gatewaySetupCompleted && !slackQaCompleted) {
-      throw toErrorObject(remoteRunError);
+      throw toMantisError(remoteRunError);
     }
     if (gatewaySetup && !gatewaySetupCompleted) {
       throw new Error("Slack desktop gateway setup did not report a live OpenClaw gateway.");
@@ -1580,7 +1580,7 @@ export async function runMantisSlackDesktopSmoke(
   }
 }
 
-function toErrorObject(error: unknown): Error {
+function toMantisError(error: unknown): Error {
   return error instanceof Error ? error : new Error(formatErrorMessage(error));
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

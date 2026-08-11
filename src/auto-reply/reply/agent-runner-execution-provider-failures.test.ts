@@ -529,9 +529,9 @@ describe("executeAgentTurn: provider failures", () => {
     },
   );
 
-  it("currently retries a CLI timeout whose recorded activity has no execution phase mark", async () => {
+  it("does not retry a CLI timeout whose recorded activity has no execution phase mark", async () => {
     vi.useFakeTimers();
-    // BUG(refactor-02b): replay guard ignores recorded cliTimeout.observedActivity; fixed in B2
+    // FIXED(refactor-02b): the typed CLI activity fact blocks whole-turn replay without a phase mark.
     const timeoutError = new FailoverError("CLI exceeded timeout (600s) and was terminated.", {
       reason: "timeout",
       provider: "claude-cli",
@@ -561,16 +561,16 @@ describe("executeAgentTurn: provider failures", () => {
     await vi.advanceTimersByTimeAsync(2_500);
     const result = await resultPromise;
 
-    expect(state.runCliAgentMock).toHaveBeenCalledTimes(2);
-    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(2);
+    expect(state.runCliAgentMock).toHaveBeenCalledTimes(1);
+    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(1);
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     const wholeTurnRetries = state.runCliAgentMock.mock.calls.length - 1;
-    expect(wholeTurnRetries).toBe(1);
+    expect(wholeTurnRetries).toBe(0);
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toContain("overall turn limit");
       expect(result.payload.text).toMatch(/effects may be partial/i);
-      expect(result.payload.text).not.toContain("did not replay this turn automatically");
+      expect(result.payload.text).toContain("did not replay this turn automatically");
     }
   });
 

@@ -4,7 +4,7 @@ import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { t } from "../i18n/index.ts";
-import { resolveEditableSnapshotConfig } from "../lib/config/index.ts";
+import { resolveEditableSnapshotConfig } from "../lib/config/config-state-model.ts";
 import {
   buildAddMcpServerPatch,
   buildRemoveMcpServerPatch,

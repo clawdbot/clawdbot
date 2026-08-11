@@ -10,56 +10,51 @@ import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { toLine, unwrapExpression } from "./lib/ts-guard-utils.mts";
 
-const BANNED_HELPER_NAMES = new Set([
+export const BANNED_COERCION_HELPER_NAMES = [
   "asObject",
+  "asFiniteNumber",
+  "asNonArrayRecord",
+  "asNonNegativeFiniteNumber",
+  "asNullableRecord",
+  "asOptionalRecord",
+  "asPositiveFiniteNumber",
   "asRecord",
   "asString",
+  "coerceErrorMessage",
   "isRecord",
+  "isStringRecord",
+  "normalizeBoundedOptionalString",
+  "normalizeOptionalLowercaseString",
+  "normalizeOptionalString",
   "normalizeString",
   "optionalString",
+  "parseBooleanValue",
+  "parseDateFirstTimestampMs",
+  "parseDateStringTimestampMs",
+  "parseFiniteNumber",
   "readBoolean",
+  "readNonBlankString",
+  "readNonEmptyStringPreservingWhitespace",
   "readNumber",
   "readOptionalString",
   "readString",
+  "readStringField",
+  "readStringValue",
   "timestampMs",
   "toError",
-]);
-const SCAN_ROOTS = [
-  "apps",
-  "deploy",
-  "examples",
-  "extensions",
-  "packages",
-  "qa",
-  "scripts",
-  "security",
-  "src",
-  "test",
-  "ui",
-];
+  "toLintErrorObject",
+  "toErrorObject",
+] as const;
+export type BannedCoercionHelperName = (typeof BANNED_COERCION_HELPER_NAMES)[number];
+const BANNED_HELPER_NAMES: ReadonlySet<string> = new Set(BANNED_COERCION_HELPER_NAMES);
+// One tracked-tree scan covers root configs plus config, Actions, skills, apps, plugins, and packages.
+const SCAN_ROOTS = ["."];
 const GENERATED_OR_FIXTURE_PATH_RE =
-  /(?:^|\/)(?:\.generated|__generated__|build|coverage|dist|generated|fixtures|node_modules|test-fixtures|vendor)(?:\/|$)|(?:^|\/)[^/]*(?:test-)?fixtures?\.[cm]?[jt]sx?$|\.generated\.[^/]+$|\.(?:bundle|min)\.[cm]?[jt]sx?$/u;
-const GENERATED_BROWSER_RUNTIME_PATHS = new Set([
-  "extensions/browser/chrome-extension/modules/copilot-runtime.js",
-]);
-
-export type BannedCoercionHelperName =
-  | "asObject"
-  | "asRecord"
-  | "asString"
-  | "isRecord"
-  | "normalizeString"
-  | "optionalString"
-  | "readBoolean"
-  | "readNumber"
-  | "readOptionalString"
-  | "readString"
-  | "timestampMs"
-  | "toError";
+  /(?:^|\/)(?:\.generated|__generated__|build|coverage|dist|generated|fixtures|node_modules|test-fixtures|vendor)(?:\/|$)|\.generated\.[^/]+$|\.(?:bundle|min)\.[cm]?[jt]sx?$/u;
 
 export type CoercionHelperDeclaration = {
   file: string;
-  kind: "function" | "variable";
+  kind: "field" | "function" | "method" | "property" | "variable";
   line: number;
   name: BannedCoercionHelperName;
 };
@@ -71,26 +66,53 @@ export type CoercionHelperCarveOut = {
   reason: string;
 };
 
+function canonicalOwnerCarveOuts(
+  file: string,
+  names: readonly BannedCoercionHelperName[],
+): CoercionHelperCarveOut[] {
+  return names.map((name) => ({
+    file,
+    name,
+    count: 1,
+    reason: "Canonical coercion helper owned by this module.",
+  }));
+}
+
 export const COERCION_HELPER_CARVE_OUTS: readonly CoercionHelperCarveOut[] = [
-  {
-    file: "packages/normalization-core/src/record-coerce.ts",
-    name: "asRecord",
-    count: 1,
-    reason: "Canonical object-to-record fallback coercion owned by normalization-core.",
-  },
-  {
-    file: "packages/normalization-core/src/record-coerce.ts",
-    name: "isRecord",
-    count: 1,
-    reason: "Canonical non-array record predicate owned by normalization-core.",
-  },
-  {
-    file: "packages/llm-core/src/validation.ts",
-    name: "isRecord",
-    count: 1,
-    reason:
-      "Dependency-free validator intentionally accepts arrays before JSON type-specific checks.",
-  },
+  ...canonicalOwnerCarveOuts("packages/normalization-core/src/string-coerce.ts", [
+    "normalizeBoundedOptionalString",
+    "normalizeOptionalLowercaseString",
+    "normalizeOptionalString",
+    "readNonBlankString",
+    "readNonEmptyStringPreservingWhitespace",
+    "readStringValue",
+  ]),
+  ...canonicalOwnerCarveOuts("packages/normalization-core/src/number-coercion.ts", [
+    "asFiniteNumber",
+    "asNonNegativeFiniteNumber",
+    "asPositiveFiniteNumber",
+    "parseDateFirstTimestampMs",
+    "parseDateStringTimestampMs",
+    "parseFiniteNumber",
+  ]),
+  ...canonicalOwnerCarveOuts("packages/normalization-core/src/record-coerce.ts", [
+    "asNonArrayRecord",
+    "asNullableRecord",
+    "asOptionalRecord",
+    "asRecord",
+    "isRecord",
+    "isStringRecord",
+    "readStringField",
+  ]),
+  ...canonicalOwnerCarveOuts("packages/normalization-core/src/error-coercion.ts", [
+    "coerceErrorMessage",
+    "toErrorObject",
+  ]),
+  ...canonicalOwnerCarveOuts("scripts/lib/error-format.mts", [
+    "coerceErrorMessage",
+    "toErrorObject",
+  ]),
+  ...canonicalOwnerCarveOuts("src/utils/boolean.ts", ["parseBooleanValue"]),
   {
     file: "ui/src/test-helpers/control-ui-e2e.ts",
     name: "isRecord",
@@ -98,28 +120,10 @@ export const COERCION_HELPER_CARVE_OUTS: readonly CoercionHelperCarveOut[] = [
     reason: "Serialized mock Gateway closure cannot capture module imports.",
   },
   {
-    file: "scripts/android-release-signing.mjs",
-    name: "asRecord",
-    count: 1,
-    reason: "Release signing entrypoint runs before workspace dependencies are installed.",
-  },
-  {
-    file: "scripts/changed-lanes.mts",
-    name: "isRecord",
-    count: 1,
-    reason: "Changed-lane classification also runs in temporary repositories.",
-  },
-  {
     file: "scripts/check-built-plugin-control-plane-modules.mts",
     name: "isRecord",
     count: 1,
     reason: "Copied standalone build guard cannot rely on workspace package resolution.",
-  },
-  {
-    file: "scripts/close-duplicate-prs-after-merge.mjs",
-    name: "isRecord",
-    count: 1,
-    reason: "Plain-Node Actions entrypoint runs in checkout-only jobs without dependencies.",
   },
   {
     file: "scripts/copy-bundled-plugin-metadata.mts",
@@ -152,17 +156,29 @@ export const COERCION_HELPER_CARVE_OUTS: readonly CoercionHelperCarveOut[] = [
     reason: "Copied standalone asset closure cannot rely on workspace package resolution.",
   },
   {
-    file: "scripts/periphery-intersection.mjs",
-    name: "isRecord",
-    count: 1,
-    reason: "Plain-Node Actions entrypoint runs in checkout-only jobs without dependencies.",
-  },
-  {
     file: "scripts/pr-lib/process-group-runner.mjs",
     name: "toError",
     count: 1,
     reason:
       "Bootstrap process supervisor preserves fallback errors without workspace dependencies.",
+  },
+  {
+    file: "scripts/lib/bounded-response.mjs",
+    name: "toLintErrorObject",
+    count: 1,
+    reason: "Standalone copied response reader cannot resolve workspace packages.",
+  },
+  {
+    file: "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs",
+    name: "toLintErrorObject",
+    count: 1,
+    reason: "Installed-image runtime smoke runs as a copied standalone closure.",
+  },
+  {
+    file: "scripts/e2e/lib/openai-web-search-minimal/client.mjs",
+    name: "toLintErrorObject",
+    count: 1,
+    reason: "Minimal copied E2E client runs without workspace package resolution.",
   },
   {
     file: "scripts/stage-bundled-plugin-runtime.mts",
@@ -200,6 +216,30 @@ function unwrapCallableInitializer(expression: ts.Expression) {
   return current;
 }
 
+/** Returns true for tracked source files governed by the declaration guard. */
+export function isGovernedCoercionHelperPath(filePath: string) {
+  return (
+    isCodeFile(filePath) &&
+    !/\.d\.[cm]?ts$/u.test(filePath) &&
+    !GENERATED_OR_FIXTURE_PATH_RE.test(filePath)
+  );
+}
+
+function propertyNameText(name: ts.PropertyName | undefined): string | undefined {
+  if (!name) {
+    return undefined;
+  }
+  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
+    return name.text;
+  }
+  return undefined;
+}
+
+function isCallableInitializer(expression: ts.Expression): boolean {
+  const initializer = unwrapCallableInitializer(expression);
+  return ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer);
+}
+
 function unwrapDirectAliasInitializer(expression: ts.Expression): ts.Expression | undefined {
   let current = expression;
   while (true) {
@@ -218,17 +258,7 @@ function unwrapDirectAliasInitializer(expression: ts.Expression): ts.Expression 
   }
 }
 
-/** Returns true for tracked source files governed by the declaration guard. */
-export function isGovernedCoercionHelperPath(filePath: string) {
-  return (
-    isCodeFile(filePath) &&
-    !/\.d\.[cm]?ts$/u.test(filePath) &&
-    !GENERATED_BROWSER_RUNTIME_PATHS.has(filePath) &&
-    !GENERATED_OR_FIXTURE_PATH_RE.test(filePath)
-  );
-}
-
-/** Finds banned function and callable-variable declarations in one source file. */
+/** Finds banned callable declarations in one source file. */
 export function findBannedCoercionHelperDeclarations(
   source: string,
   file = "source.ts",
@@ -253,11 +283,9 @@ export function findBannedCoercionHelperDeclarations(
       BANNED_HELPER_NAMES.has(node.name.text) &&
       node.initializer
     ) {
-      const initializer = unwrapCallableInitializer(node.initializer);
       const aliasInitializer = unwrapDirectAliasInitializer(node.initializer);
       if (
-        ts.isArrowFunction(initializer) ||
-        ts.isFunctionExpression(initializer) ||
+        isCallableInitializer(node.initializer) ||
         (aliasInitializer !== undefined &&
           (ts.isIdentifier(aliasInitializer) || ts.isPropertyAccessExpression(aliasInitializer)))
       ) {
@@ -266,6 +294,36 @@ export function findBannedCoercionHelperDeclarations(
           kind: "variable",
           line: toLine(sourceFile, node.name),
           name: node.name.text as BannedCoercionHelperName,
+        });
+      }
+    } else if (ts.isMethodDeclaration(node)) {
+      const name = propertyNameText(node.name);
+      if (name && BANNED_HELPER_NAMES.has(name)) {
+        declarations.push({
+          file,
+          kind: "method",
+          line: toLine(sourceFile, node.name),
+          name: name as BannedCoercionHelperName,
+        });
+      }
+    } else if (ts.isPropertyDeclaration(node) && node.initializer) {
+      const name = propertyNameText(node.name);
+      if (name && BANNED_HELPER_NAMES.has(name) && isCallableInitializer(node.initializer)) {
+        declarations.push({
+          file,
+          kind: "field",
+          line: toLine(sourceFile, node.name),
+          name: name as BannedCoercionHelperName,
+        });
+      }
+    } else if (ts.isPropertyAssignment(node)) {
+      const name = propertyNameText(node.name);
+      if (name && BANNED_HELPER_NAMES.has(name) && isCallableInitializer(node.initializer)) {
+        declarations.push({
+          file,
+          kind: "property",
+          line: toLine(sourceFile, node.name),
+          name: name as BannedCoercionHelperName,
         });
       }
     }
@@ -405,7 +463,15 @@ export function runCoercionHelperDeclarationGuard(
   }
   writeLine(
     io.stderr,
-    "Use @openclaw/normalization-core coercion subpaths in core/packages/UI/scripts, or openclaw/plugin-sdk/string-coerce-runtime and error-runtime in plugin production code.",
+    "Core/package/UI/workspace-script code: use the matching @openclaw/normalization-core coercion subpath.",
+  );
+  writeLine(
+    io.stderr,
+    "Plugin production code: use openclaw/plugin-sdk/string-coerce-runtime, number-runtime, or error-runtime.",
+  );
+  writeLine(
+    io.stderr,
+    "Dependency-free, copied, generated, or serialized code: use an existing dependency-light seam or a precise semantic name with an exact reasoned carve-out.",
   );
   return 1;
 }

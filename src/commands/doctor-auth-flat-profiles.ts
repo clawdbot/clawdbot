@@ -5,6 +5,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentDir, resolveDefaultAgentDir, listAgentIds } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
@@ -113,10 +114,6 @@ type LegacyFlatAuthProfileRepairResult = {
 };
 
 const UNSAFE_LEGACY_AUTH_PROFILE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
-
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
 
 function isSafeLegacyProviderKey(key: string): boolean {
   return key.trim().length > 0 && !UNSAFE_LEGACY_AUTH_PROFILE_KEYS.has(key);

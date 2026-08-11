@@ -1,5 +1,6 @@
 /** CLI command for exporting a session transcript as a trajectory artifact. */
 import path from "node:path";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
@@ -35,10 +36,6 @@ type EncodedExportTrajectoryRequest = {
 };
 
 const ENCODED_EXPORT_REQUEST_RE = /^[A-Za-z0-9_-]{1,65536}$/u;
-
-function readNonBlankString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
 
 function decodeExportTrajectoryRequest(encoded: string): Partial<ExportTrajectoryCommandOptions> {
   if (!ENCODED_EXPORT_REQUEST_RE.test(encoded)) {

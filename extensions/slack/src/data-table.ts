@@ -4,7 +4,7 @@ import {
   renderMessagePresentationTableFallbackText,
   type MessagePresentationTableBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalRecord, hasNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 import { renderSlackMessagePresentationTableFallbackText } from "./presentation-fallback.js";
 
@@ -45,7 +45,7 @@ type ParsedSlackDataTable = {
 };
 
 function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+  return hasNonEmptyString(value) ? value : undefined;
 }
 
 function countCharacters(value: string): number {

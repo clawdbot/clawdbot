@@ -2201,6 +2201,9 @@ importers:
       '@mistralai/mistralai':
         specifier: 2.5.0
         version: 2.5.0(@opentelemetry/api@1.9.1)
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
       openai:
         specifier: 6.49.0
         version: 6.49.0(@aws-sdk/credential-provider-node@3.972.72)(@smithy/hash-node@4.4.14)(@smithy/signature-v4@5.6.10)(ws@8.21.1)(zod@4.4.3)
@@ -2619,6 +2622,9 @@ packages:
   '@aws-sdk/core@3.977.1':
     resolution: {integrity: sha512-KVtQRtc00ES/y+Sc3vYXeP6pCIcNlBJCZOwvqSy8ZpVGmbM5+IG+AfhuTKQ2oXmIVqZJewaGMMpzPkywC6xg0w==}
     engines: {node: '>=20.0.0'}
+    deprecated: |-
+      Deprecated due to Document number parsing bug in JSON, see
+        https://github.com/aws/aws-sdk-js-v3/issues/8246. Newer version available.
 
   '@aws-sdk/credential-provider-cognito-identity@3.972.60':
     resolution: {integrity: sha512-16Fxa3veKIO6nHJr+vN76z3BkSU7725lzruc5S2SQSTUTbK4TXtmi8033WQljZj4k1+383UsMaNOHN6B76fK5A==}
@@ -6279,6 +6285,7 @@ packages:
 
   crypto-js@4.2.0:
     resolution: {integrity: sha512-KALDyEYgpY+Rlob/iriUtjV6d5Eq+Y191A5g4UqLAi8CyGP9N1+FdVbkc1SxKc2r4YAYqG8JzO2KGL+AizD70Q==}
+    deprecated: Active development of CryptoJS has been discontinued. This library is no longer maintained.
 
   css-functions-list@3.3.3:
     resolution: {integrity: sha512-8HFEBPKhOpJPEPu70wJJetjKta86Gw9+CCyCnB3sui2qQfOvRyqBy4IKLKKAwdMpWb2lHXWk9Wb4Z6AmaUT1Pg==}
