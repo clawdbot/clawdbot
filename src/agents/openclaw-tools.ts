@@ -737,16 +737,13 @@ export function createOpenClawTools(
     ];
     options?.recordToolPrepStage?.("openclaw-tools:plugin-tools");
   }
-
   allTools = filterToolsByClientCaps(allTools, options?.clientCaps);
   options?.recordToolPrepStage?.("openclaw-tools:client-capabilities");
-
   const hookAgentId = options?.requesterAgentIdOverride ?? sessionAgentId;
   const wrapGatewayCallerIdentity = createGatewayToolCallerWrapper(
     hookAgentId,
     options ? { ...options, agentAccountId: gatewayCallerAccountId } : options,
   );
-
   if (options?.wrapBeforeToolCallHook === false) {
     return allTools.map(wrapGatewayCallerIdentity);
   }
