@@ -84,6 +84,7 @@ import {
   sanitizeToolResult,
 } from "./embedded-agent-subscribe.tools.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
+import { readMcpConnectAction } from "./mcp-connect-action.js";
 import { readMcpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentEvent } from "./runtime/index.js";
 import {
@@ -123,6 +124,10 @@ export async function handleToolExecutionEnd(
     if (channelView) {
       // A later successful app result supersedes the earlier launch target.
       ctx.state.latestMcpAppChannelView = channelView;
+    }
+    const connectAction = readMcpConnectAction(result);
+    if (connectAction) {
+      ctx.state.latestMcpConnectAction = connectAction;
     }
   }
   try {

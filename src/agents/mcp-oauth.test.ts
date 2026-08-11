@@ -1,4 +1,3 @@
-// Covers MCP OAuth token persistence, isolation, and noninteractive behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -6,29 +5,76 @@ import path from "node:path";
 import { withTempHome as withBaseTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { vi } from "vitest";
+import type { McpServerConfig } from "../config/types.mcp.js";
+import { handleMcpOAuthCallback } from "../gateway/mcp-oauth-callback.js";
+import { createRequest, createResponse } from "../gateway/server-http.test-harness.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { getFreePort } from "../test-utils/ports.js";
-import { operatorMcpOAuthIdentity, type McpOAuthIdentity } from "./mcp-oauth-identity.js";
+import {
+  operatorMcpOAuthIdentity,
+  requesterMcpOAuthIdentity,
+  type McpOAuthIdentity,
+} from "./mcp-oauth-identity.js";
 import { createMcpOAuthClientProvider } from "./mcp-oauth-provider.js";
+import { readMcpOAuthPendingAuthorization as readPending } from "./mcp-oauth-store.js";
 import { readMcpOAuthStore, updateMcpOAuthStore } from "./mcp-oauth-store.js";
 import {
   clearMcpOAuthCredentials,
+  clearMcpOAuthServer,
   completeMcpOAuthAuthorization,
+  countMcpOAuthPrincipals,
   readMcpOAuthCredentialsStatus,
   recordMcpOAuthAuthorizationRequired,
   resolveMcpOAuthAccessToken,
   startMcpOAuthAuthorization,
 } from "./mcp-oauth.js";
+import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 
 const authMock = vi.hoisted(() => vi.fn());
 const ROTATED_ACCESS = "gateway-token";
 const LEGACY_ACCESS = "example";
 const REMOTE_IDENTITY = operatorMcpOAuthIdentity("Remote Docs", "https://mcp.example.com/mcp");
 const CALENDLY_IDENTITY = operatorMcpOAuthIdentity("Calendly", "https://mcp.calendly.com/");
+const REQUESTER_SCOPE = { messageChannel: "telegram", agentAccountId: "bot" } as const;
+
+function requesterIdentity(serverName: string, serverUrl: string, requesterSenderId: string) {
+  return requesterMcpOAuthIdentity(serverName, serverUrl, {
+    ...REQUESTER_SCOPE,
+    requesterSenderId,
+  });
+}
+
+async function saveAccessToken(identity: McpOAuthIdentity, accessToken: string): Promise<void> {
+  await createMcpOAuthClientProvider({ identity }).saveTokens({
+    access_token: accessToken,
+    token_type: "Bearer",
+    expires_in: 3600,
+  });
+}
+
+async function runGatewayOAuthCallback(params: {
+  serverName: string;
+  server: McpServerConfig;
+  code: string;
+  state: string;
+}) {
+  const response = createResponse();
+  await handleMcpOAuthCallback(
+    createRequest({
+      path: `/oauth/mcp/callback?code=${params.code}&state=${params.state}`,
+    }),
+    response.res,
+    {
+      config: { mcp: { servers: { [params.serverName]: params.server } } },
+      log: { warn: vi.fn() },
+    },
+  );
+  return response;
+}
 
 function resolvedOAuthConfig(identity: McpOAuthIdentity) {
   return {
@@ -231,8 +277,7 @@ describe("MCP OAuth provider", () => {
           scope: "docs.write",
         });
         await expect(readMcpOAuthCredentialsStatus(REMOTE_IDENTITY)).resolves.toMatchObject({
-          hasTokens: true,
-          requiresAuthorization: true,
+          state: "requires-authorization",
         });
 
         const storeKey = REMOTE_IDENTITY.storeKey;
@@ -637,12 +682,7 @@ describe("MCP OAuth provider", () => {
     await withTempHome(
       async () => {
         await expect(readMcpOAuthCredentialsStatus(REMOTE_IDENTITY)).resolves.toEqual({
-          hasTokens: false,
-          requiresAuthorization: false,
-          hasClientInformation: false,
-          hasCodeVerifier: false,
-          hasDiscoveryState: false,
-          hasLastAuthorizationUrl: false,
+          state: "unauthenticated",
         });
         await expect(fs.stat(resolveOpenClawStateSqlitePath())).rejects.toMatchObject({
           code: "ENOENT",
@@ -732,26 +772,35 @@ describe("MCP OAuth provider", () => {
     );
   });
 
-  it("isolates token state by configured server URL", async () => {
+  it("isolates, counts, and clears requester credentials by configured server", async () => {
     await withTempHome(
       async () => {
-        const first = createMcpOAuthClientProvider({
-          identity: REMOTE_IDENTITY,
-        });
-        const second = createMcpOAuthClientProvider({
-          identity: operatorMcpOAuthIdentity("Remote Docs", "https://other.example.com/mcp"),
-        });
-        await first.saveTokens({ access_token: "access", token_type: "Bearer" });
+        const serverUrl = "https://mcp.example.com/shared";
+        const alice = requesterIdentity("Shared", serverUrl, "alice");
+        const bob = requesterIdentity("Shared", serverUrl, "bob");
+        const other = requesterIdentity("Shared", "https://other.example.com/mcp", "alice");
+        await saveAccessToken(alice, "alice-token");
+        await saveAccessToken(bob, "bob-token");
+        await saveAccessToken(other, "other-token");
 
-        expect(second.tokens()).toBeUndefined();
+        closeOpenClawStateDatabaseForTest();
+        await expect(resolveMcpOAuthAccessToken({ identity: alice })).resolves.toBe("alice-token");
+        await expect(resolveMcpOAuthAccessToken({ identity: bob })).resolves.toBe("bob-token");
+        expect(alice.storeKey).not.toBe(bob.storeKey);
+        expect(countMcpOAuthPrincipals(operatorMcpOAuthIdentity("Shared", serverUrl))).toBe(2);
+
+        await clearMcpOAuthServer(operatorMcpOAuthIdentity("Shared", serverUrl));
+        for (const identity of [alice, bob]) {
+          await expect(readMcpOAuthCredentialsStatus(identity)).resolves.toEqual({
+            state: "unauthenticated",
+          });
+        }
+        await expect(resolveMcpOAuthAccessToken({ identity: other })).resolves.toBe("other-token");
       },
       {
-        prefix: "openclaw-mcp-oauth-url-",
+        prefix: "openclaw-mcp-oauth-requesters-",
         skipSessionCleanup: true,
-        env: {
-          OPENCLAW_CONFIG_PATH: undefined,
-          OPENCLAW_STATE_DIR: undefined,
-        },
+        env: { OPENCLAW_CONFIG_PATH: undefined, OPENCLAW_STATE_DIR: undefined },
       },
     );
   });
@@ -868,8 +917,6 @@ describe("MCP OAuth provider", () => {
   });
 
   it("does not start hidden authorization flows without an authorization callback", async () => {
-    // Normal agent/tool execution must not open browser auth flows implicitly;
-    // operators use the explicit mcp login command instead.
     await withTempHome(
       async () => {
         const provider = createMcpOAuthClientProvider({
@@ -927,11 +974,20 @@ describe("MCP OAuth provider", () => {
         >("@modelcontextprotocol/sdk/client/auth.js");
         authMock.mockImplementation(realAuth);
         const fixture = await startAuthorizationServer(await getFreePort());
-        const identity = operatorMcpOAuthIdentity("fixture", `${fixture.issuer}/mcp`);
-        const config = {
-          ...resolvedOAuthConfig(identity),
-          oauth: { redirectUrl: "http://127.0.0.1:8989/oauth/callback" },
+        const rawServer = {
+          url: `${fixture.issuer}/mcp`,
+          transport: "streamable-http" as const,
+          auth: "oauth" as const,
+          oauth: {
+            identity: "per-requester" as const,
+            redirectUrl: "https://gateway.example.com/oauth/mcp/callback",
+          },
         };
+        const config = resolveMcpTransportConfig("fixture", rawServer);
+        if (config?.kind !== "http") {
+          throw new Error("expected HTTP MCP OAuth config");
+        }
+        const identity = requesterIdentity("fixture", config.url, "sender-a");
         try {
           const first = await startMcpOAuthAuthorization(identity, config, {});
           if (first.status !== "redirect") {
@@ -942,43 +998,57 @@ describe("MCP OAuth provider", () => {
             lastAuthorizationUrl: first.authorizationUrl,
             redirectUrl: first.redirectUrl,
           });
-
           closeOpenClawStateDatabaseForTest();
-          await expect(
-            completeMcpOAuthAuthorization(identity, config, {
-              code: authorizationCode(first.authorizationUrl),
-            }),
-          ).resolves.toBe("authorized");
+          const callbacks = await Promise.all(
+            [0, 1].map(() =>
+              runGatewayOAuthCallback({
+                serverName: "fixture",
+                server: rawServer,
+                code: authorizationCode(first.authorizationUrl),
+                state: first.state,
+              }),
+            ),
+          );
+          expect(callbacks.map(({ res }) => res.statusCode).toSorted((a, b) => a - b)).toEqual([
+            200, 404,
+          ]);
+          expect(readMcpOAuthStore(identity.storeKey)).toMatchObject({
+            tokens: { access_token: expect.any(String) },
+          });
           expect(readMcpOAuthStore(identity.storeKey)).not.toHaveProperty("codeVerifier");
 
-          const second = await startMcpOAuthAuthorization(identity, config, {});
+          const secondIdentity = requesterIdentity("fixture", config.url, "sender-b");
+          const second = await startMcpOAuthAuthorization(secondIdentity, config, {});
           if (second.status !== "redirect") {
             throw new Error("expected second MCP OAuth redirect");
           }
           await expect(
-            completeMcpOAuthAuthorization(identity, config, { code: "wrong-code" }),
+            completeMcpOAuthAuthorization(secondIdentity, config, { code: "wrong-code" }),
           ).rejects.toThrow();
-          expect(readMcpOAuthStore(identity.storeKey)).toMatchObject({
+          expect(readMcpOAuthStore(secondIdentity.storeKey)).toMatchObject({
             lastAuthorizationUrl: second.authorizationUrl,
             redirectUrl: second.redirectUrl,
             codeVerifier: expect.any(String),
           });
+          expect(readMcpOAuthStore(secondIdentity.storeKey)).not.toHaveProperty("tokens");
 
-          const third = await startMcpOAuthAuthorization(identity, config, {});
+          const third = await startMcpOAuthAuthorization(secondIdentity, config, {});
           if (third.status !== "redirect") {
             throw new Error("expected third MCP OAuth redirect");
           }
           expect(third.authorizationUrl).not.toBe(second.authorizationUrl);
+          expect(readPending(second.state)).toBeUndefined();
+          expect(readPending(third.state)).toBe(secondIdentity.storeKey);
           await expect(
-            completeMcpOAuthAuthorization(identity, config, {
+            completeMcpOAuthAuthorization(secondIdentity, config, {
               code: authorizationCode(second.authorizationUrl),
             }),
           ).rejects.toThrow();
-          expect(readMcpOAuthStore(identity.storeKey).lastAuthorizationUrl).toBe(
+          expect(readMcpOAuthStore(secondIdentity.storeKey).lastAuthorizationUrl).toBe(
             third.authorizationUrl,
           );
           await expect(
-            completeMcpOAuthAuthorization(identity, config, {
+            completeMcpOAuthAuthorization(secondIdentity, config, {
               code: authorizationCode(third.authorizationUrl),
             }),
           ).resolves.toBe("authorized");

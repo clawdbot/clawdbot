@@ -14,6 +14,7 @@ import {
   GatewayRemoteConfigSchema,
   ResponsesEndpointUrlFetchShape,
   TailscaleServiceNameSchema,
+  validateHttpOrigin,
 } from "./zod-schema.root-support.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
@@ -42,6 +43,14 @@ export const GatewayConfigSchema = z
       ])
       .optional(),
     customBindHost: z.string().optional(),
+    publicOrigin: z
+      .string()
+      .url()
+      .refine(
+        validateHttpOrigin,
+        "gateway.publicOrigin must be an HTTP(S) origin without a path, query, or credentials",
+      )
+      .optional(),
     controlUi: z
       .strictObject({
         // Shipped legacy input. Doctor removes it after recording migration state.

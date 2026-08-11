@@ -6,7 +6,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
 import {
   cleanupMcpCliTestState,
-  clearMcpOAuthCredentials,
+  clearMcpOAuthServer,
   createWorkspace,
   lastErrorLine,
   lastLogLine,
@@ -446,11 +446,7 @@ describe("mcp cli", () => {
       readMcpOAuthCredentialsStatus.mockImplementation(async () => {
         await checksBlocked.promise;
         return {
-          hasTokens: false,
-          hasClientInformation: false,
-          hasCodeVerifier: false,
-          hasDiscoveryState: false,
-          hasLastAuthorizationUrl: false,
+          state: "unauthenticated",
         };
       });
 
@@ -646,7 +642,7 @@ describe("mcp cli", () => {
       ]);
       await runMcpCommand(["mcp", "configure", "docs", "--clear-auth"]);
 
-      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith(
+      expect(clearMcpOAuthServer).toHaveBeenCalledWith(
         expect.objectContaining({
           serverName: "docs",
           serverUrl: "https://mcp.example.com",
@@ -672,7 +668,7 @@ describe("mcp cli", () => {
       ]);
       await runMcpCommand(["mcp", "unset", "docs"]);
 
-      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith(
+      expect(clearMcpOAuthServer).toHaveBeenCalledWith(
         expect.objectContaining({
           serverName: "docs",
           serverUrl: "https://mcp.example.com",
@@ -692,10 +688,10 @@ describe("mcp cli", () => {
         "docs",
         '{"url":"https://mcp.example.com","transport":"streamable-http","auth":"oauth"}',
       ]);
-      clearMcpOAuthCredentials.mockClear();
+      clearMcpOAuthServer.mockClear();
       await runMcpCommand(["mcp", "set", "docs", '{"command":"uvx","args":["docs-mcp"]}']);
 
-      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith(
+      expect(clearMcpOAuthServer).toHaveBeenCalledWith(
         expect.objectContaining({
           serverName: "docs",
           serverUrl: "https://mcp.example.com",
@@ -715,7 +711,7 @@ describe("mcp cli", () => {
         "docs",
         '{"url":"https://mcp.example.com","transport":"streamable-http","auth":"oauth"}',
       ]);
-      clearMcpOAuthCredentials.mockClear();
+      clearMcpOAuthServer.mockClear();
       await runMcpCommand([
         "mcp",
         "add",
@@ -729,7 +725,7 @@ describe("mcp cli", () => {
         "--no-probe",
       ]);
 
-      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith(
+      expect(clearMcpOAuthServer).toHaveBeenCalledWith(
         expect.objectContaining({
           serverName: "docs",
           serverUrl: "https://mcp.example.com",

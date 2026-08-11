@@ -91,6 +91,7 @@ type PluginHttpRequestHandler = (
 ) => Promise<boolean>;
 
 type WatchNodeHttpRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+type McpOAuthCallbackHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
 type PluginHttpUpgradeHandler = (
   req: IncomingMessage,
@@ -331,6 +332,7 @@ export function createGatewayHttpServer(opts: {
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
   strictTransportSecurityHeader?: string;
   handleHooksRequest: HooksRequestHandler;
+  handleMcpOAuthCallbackRequest?: McpOAuthCallbackHandler;
   handleWatchNodeRequest?: WatchNodeHttpRequestHandler;
   handlePluginRequest?: PluginHttpRequestHandler;
   shouldEnforcePluginGatewayAuth?: (pathContext: PluginRoutePathContext) => boolean;
@@ -491,6 +493,13 @@ export function createGatewayHttpServer(opts: {
         run: GatewayHttpRequestStage["run"],
       ) => addRequestStage(name, enabled, run, true);
 
+      addAdmittedStage(
+        "mcp-oauth-callback",
+        req.method === "GET" &&
+          scopedRequestPath === "/oauth/mcp/callback" &&
+          Boolean(opts.handleMcpOAuthCallbackRequest),
+        () => opts.handleMcpOAuthCallbackRequest?.(req, res) ?? false,
+      );
       addAdmittedStage(
         "watch-node",
         Boolean(opts.handleWatchNodeRequest) && scopedRequestPath.startsWith("/api/nodes/watch/"),

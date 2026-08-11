@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { completeEmbeddedAttemptResult } from "./attempt-result.js";
+import { completeEmbeddedAttemptResult, createMcpAttemptCarryover } from "./attempt-result.js";
 
 function completeResult(params?: {
   latestMcpAppChannelView?: { viewId: string };
@@ -42,6 +42,7 @@ function completeResult(params?: {
       getLastCompactionTokensAfter: () => undefined,
       getLastToolError: () => undefined,
       getLatestMcpAppChannelView: () => params?.latestMcpAppChannelView,
+      getLatestMcpConnectAction: () => undefined,
       getMessagingToolSentMediaUrls: () => [],
       getMessagingToolSentTargets: () => [],
       getMessagingToolSentTexts: () => [],
@@ -77,6 +78,33 @@ function completeResult(params?: {
 }
 
 describe("attempt result projection", () => {
+  it("carries the newest MCP presentation state across retry attempts", () => {
+    const carryover = createMcpAttemptCarryover();
+    const first = {
+      latestMcpAppChannelView: { viewId: "view-first" },
+      latestMcpConnectAction: {
+        serverName: "calendar",
+        authorizationUrl: "https://auth.example/first",
+      },
+    };
+    const retry: Parameters<typeof carryover.apply>[0] = {};
+    const latest = {
+      latestMcpAppChannelView: { viewId: "view-latest" },
+      latestMcpConnectAction: {
+        serverName: "calendar",
+        authorizationUrl: "https://auth.example/latest",
+      },
+    };
+
+    carryover.apply(first);
+    carryover.apply(retry);
+    carryover.apply(latest);
+
+    expect(retry).toEqual(first);
+    expect(latest.latestMcpAppChannelView.viewId).toBe("view-latest");
+    expect(latest.latestMcpConnectAction.authorizationUrl).toBe("https://auth.example/latest");
+  });
+
   it("keeps completed client tool calls in reserved source order", () => {
     expect(
       completeResult({
