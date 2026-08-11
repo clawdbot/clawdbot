@@ -361,7 +361,7 @@ async function activateSetupInferenceUnredacted(
     if (testPlan.runner === "embedded" && stagedRoute.runner === "embedded") {
       testPlan = {
         ...testPlan,
-        config: stagedExecutionRoute.runConfig,
+        executionConfig: stagedExecutionRoute.runConfig,
         agentDir: hasPreparedAuthProfiles ? testAgentDir : stagedRoute.agentDir,
         ...(stagedRoute.agentHarnessRuntimeOverride
           ? { agentHarnessRuntimeOverride: stagedRoute.agentHarnessRuntimeOverride }
@@ -370,7 +370,7 @@ async function activateSetupInferenceUnredacted(
     } else {
       testPlan = {
         ...testPlan,
-        config: stagedExecutionRoute.runConfig,
+        executionConfig: stagedExecutionRoute.runConfig,
         ...(!hasPreparedAuthProfiles ? { agentDir: stagedRoute.agentDir } : {}),
       };
     }

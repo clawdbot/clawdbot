@@ -28,7 +28,10 @@ export type SetupInferenceTestPlan = {
   provider: string;
   model: string;
   modelRef: string;
+  /** Authored/staged config used for route, auth, and persistence decisions. */
   config: OpenClawConfig;
+  /** Execution-only projection that admits the reserved OpenClaw agent. */
+  executionConfig?: OpenClawConfig;
   /** Execution identity used by the real OpenClaw turn. */
   agentId?: string;
   /** Default-agent owner whose model/runtime config is being selected. */
