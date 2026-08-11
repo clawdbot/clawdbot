@@ -80,7 +80,7 @@ struct GatewayDiscoverySelectionSupportTests {
         let configPath = TestIsolation.tempConfigPath()
         await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath]) {
             let state = AppState(preview: true)
-            state.remoteTransport = .ssh
+            state.remoteTransport = .direct
 
             GatewayDiscoverySelectionSupport.applyRemoteSelection(
                 gateway: self.makeGateway(
@@ -92,6 +92,7 @@ struct GatewayDiscoverySelectionSupportTests {
 
             #expect(state.remoteTransport == .ssh)
             #expect(state.remoteUrl == "ws://127.0.0.1:18789")
+            #expect(CommandResolver.parseSSHTarget(state.remoteTarget)?.host == tailnetHost)
         }
     }
 

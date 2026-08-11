@@ -5,7 +5,7 @@ read_when:
 title: "Remote control"
 ---
 
-This flow lets the macOS app act as a full remote control for an OpenClaw gateway running on another host (desktop/server). The app connects directly to trusted LAN/Tailnet gateway URLs, or manages an SSH tunnel when the remote gateway is loopback-only. Health checks, Voice Wake forwarding, and Web Chat reuse the same remote configuration from _Settings -> General_.
+This flow lets the macOS app act as a full remote control for an OpenClaw gateway running on another host (desktop/server). New remote configurations use direct WSS; discovery selects direct only when the advertised endpoint is `wss://`, and otherwise configures SSH. You can still manually configure a trusted private `ws://` Gateway URL. Health checks, Voice Wake forwarding, and Web Chat reuse the same remote configuration from _Settings -> General_.
 
 ## Modes
 
@@ -17,6 +17,8 @@ This flow lets the macOS app act as a full remote control for an OpenClaw gatewa
 
 - **Direct (WSS default)**: connects straight to the Gateway URL with normal TLS certificate validation. The gateway sees the real client IP.
 - **SSH tunnel (fallback)**: uses `ssh -N -L ...` to forward the gateway port to localhost. The gateway sees the node's IP as `127.0.0.1` because the tunnel is loopback.
+
+Discovery intentionally does not auto-select plaintext `ws://` endpoints, including Tailnet and LAN endpoints: it falls back to SSH instead. A manually entered `ws://` URL remains valid only for localhost, private/LAN, link-local, `.local`, Tailnet, and Tailscale CGNAT hosts.
 
 The app disables SSH connection multiplexing and post-authentication backgrounding for its own SSH processes so it can monitor and restart the exact process, even if the selected alias enables `ControlMaster` or `ForkAfterAuthentication`.
 
