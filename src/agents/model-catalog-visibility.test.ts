@@ -325,21 +325,54 @@ describe("resolveLogicalVisibleModelCatalog", () => {
     expect(result).toEqual([]);
   });
 
-  it("does not let a default-runtime alias suppress a canonical runtime binding", async () => {
+  it.each([
+    {
+      name: "canonical agent binding over a defaults alias",
+      defaultsRef: "openai/gpt-5.4-codex",
+      defaultsRuntime: "auto",
+      agentRef: "openai/gpt-5.4",
+      agentRuntime: "codex",
+      visible: true,
+    },
+    {
+      name: "canonical agent default runtime over a defaults alias",
+      defaultsRef: "openai/gpt-5.4-codex",
+      defaultsRuntime: "codex",
+      agentRef: "openai/gpt-5.4",
+      agentRuntime: "auto",
+      visible: false,
+    },
+    {
+      name: "agent alias binding over a canonical default",
+      defaultsRef: "openai/gpt-5.4",
+      defaultsRuntime: "auto",
+      agentRef: "openai/gpt-5.4-codex",
+      agentRuntime: "codex",
+      visible: true,
+    },
+    {
+      name: "agent alias default runtime over a canonical binding",
+      defaultsRef: "openai/gpt-5.4",
+      defaultsRuntime: "codex",
+      agentRef: "openai/gpt-5.4-codex",
+      agentRuntime: "auto",
+      visible: false,
+    },
+  ])("honors $name", async ({ defaultsRef, defaultsRuntime, agentRef, agentRuntime, visible }) => {
     const cfg = {
       agents: {
         defaults: {
-          model: { primary: "openai/gpt-5.4" },
+          model: { primary: agentRef },
           modelPolicy: {},
           models: {
-            "openai/gpt-5.4-codex": { agentRuntime: { id: "auto" } },
+            [defaultsRef]: { agentRuntime: { id: defaultsRuntime } },
           },
         },
         list: [
           {
             id: "main",
             models: {
-              "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
+              [agentRef]: { agentRuntime: { id: agentRuntime } },
             },
           },
         ],
@@ -349,7 +382,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       cfg,
       catalog: [],
       defaultProvider: "openai",
-      defaultModel: "openai/gpt-5.4",
+      defaultModel: agentRef,
       agentId: "main",
       allowManifestNormalization: false,
       allowPluginNormalization: false,
@@ -359,7 +392,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       cfg,
       catalog: [],
       defaultProvider: "openai",
-      defaultModel: "openai/gpt-5.4",
+      defaultModel: agentRef,
       agentId: "main",
       view: "configured",
       policy,
@@ -376,69 +409,19 @@ describe("resolveLogicalVisibleModelCatalog", () => {
         }),
     });
 
-    expect(result).toEqual([
-      {
-        provider: "openai",
-        id: "gpt-5.4",
-        name: "gpt-5.4",
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-      },
-    ]);
-  });
-
-  it("does not let a runtime-bound alias bypass a canonical default-runtime override", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.4" },
-          modelPolicy: {},
-          models: {
-            "openai/gpt-5.4-codex": { agentRuntime: { id: "codex" } },
-          },
-        },
-        list: [
-          {
-            id: "main",
-            models: {
-              "openai/gpt-5.4": { agentRuntime: { id: "auto" } },
+    expect(result).toEqual(
+      visible
+        ? [
+            {
+              provider: "openai",
+              id: "gpt-5.4",
+              name: "gpt-5.4",
+              api: "openai-chatgpt-responses",
+              baseUrl: "https://chatgpt.com/backend-api/codex",
             },
-          },
-        ],
-      },
-    } as OpenClawConfig;
-    const policy = createModelVisibilityPolicy({
-      cfg,
-      catalog: [],
-      defaultProvider: "openai",
-      defaultModel: "openai/gpt-5.4",
-      agentId: "main",
-      allowManifestNormalization: false,
-      allowPluginNormalization: false,
-    });
-
-    const result = await resolveLogicalVisibleModelCatalog({
-      cfg,
-      catalog: [],
-      defaultProvider: "openai",
-      defaultModel: "openai/gpt-5.4",
-      agentId: "main",
-      view: "configured",
-      policy,
-      routePolicy: openAIModelCatalogRoutePolicy,
-      evaluateEntry: async (entry) =>
-        resolveLogicalModelCatalogEntryState({
-          entry,
-          evaluation: {
-            availability: true,
-            routeResolution: { kind: "routes", routes: [selectedRoute] },
-            selectedRoute,
-          },
-          routePolicy: openAIModelCatalogRoutePolicy,
-        }),
-    });
-
-    expect(result).toEqual([]);
+          ]
+        : [],
+    );
   });
 
   it("does not synthesize a primary without a model-specific runtime binding", async () => {
@@ -551,7 +534,10 @@ describe("resolveLogicalVisibleModelCatalog", () => {
           entry,
           evaluation: {
             availability: true,
-            routeResolution: { kind: "routes", routes: [openClawOnlyRoute] },
+            routeResolution: {
+              kind: "routes",
+              routes: [openClawOnlyRoute, selectedRoute],
+            },
             selectedRoute: openClawOnlyRoute,
           },
           routePolicy: openAIModelCatalogRoutePolicy,
@@ -559,6 +545,66 @@ describe("resolveLogicalVisibleModelCatalog", () => {
     });
 
     expect(result).toEqual([]);
+  });
+
+  it("keeps an unavailable configured runtime visible when one route is compatible", async () => {
+    const cfg = {
+      agents: {
+        defaults: { model: { primary: "openai/future-model" } },
+        list: [
+          {
+            id: "main",
+            models: {
+              "openai/future-model": { agentRuntime: { id: "codex" } },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const policy = createModelVisibilityPolicy({
+      cfg,
+      catalog: [],
+      defaultProvider: "openai",
+      defaultModel: "openai/future-model",
+      agentId: "main",
+      allowManifestNormalization: false,
+      allowPluginNormalization: false,
+    });
+    const apiKeyRoute = {
+      ...selectedRoute,
+      api: "openai-responses" as const,
+      baseUrl: "https://api.openai.com/v1",
+      authRequirement: "api-key" as const,
+      runtimePolicy: { compatibleIds: ["openclaw"] },
+    };
+
+    const result = await resolveLogicalVisibleModelCatalog({
+      cfg,
+      catalog: [],
+      defaultProvider: "openai",
+      defaultModel: "openai/future-model",
+      agentId: "main",
+      view: "configured",
+      policy,
+      routePolicy: openAIModelCatalogRoutePolicy,
+      evaluateEntry: async (entry) =>
+        resolveLogicalModelCatalogEntryState({
+          entry,
+          evaluation: {
+            availability: false,
+            routeResolution: { kind: "routes", routes: [apiKeyRoute, selectedRoute] },
+          },
+          routePolicy: openAIModelCatalogRoutePolicy,
+        }),
+    });
+
+    expect(result).toEqual([
+      {
+        provider: "openai",
+        id: "future-model",
+        name: "future-model",
+      },
+    ]);
   });
 
   it("does not synthesize runtime bindings outside the route policy owner", async () => {
@@ -641,6 +687,62 @@ describe("resolveLogicalVisibleModelCatalog", () => {
     });
 
     expect(result.map((entry) => entry.id)).toEqual(["gpt-5.5"]);
+  });
+
+  it("keeps unavailable non-primary runtime bindings allowed by a provider wildcard", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          modelPolicy: { allow: ["openai/*"] },
+        },
+        list: [
+          {
+            id: "main",
+            models: {
+              "openai/future-model": { agentRuntime: { id: "codex" } },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const policy = createModelVisibilityPolicy({
+      cfg,
+      catalog: [],
+      defaultProvider: "openai",
+      defaultModel: "openai/gpt-5.5",
+      agentId: "main",
+      allowManifestNormalization: false,
+      allowPluginNormalization: false,
+    });
+
+    const result = await resolveLogicalVisibleModelCatalog({
+      cfg,
+      catalog: [],
+      defaultProvider: "openai",
+      defaultModel: "openai/gpt-5.5",
+      agentId: "main",
+      view: "configured",
+      policy,
+      routePolicy: openAIModelCatalogRoutePolicy,
+      evaluateEntry: async (entry) =>
+        resolveLogicalModelCatalogEntryState({
+          entry,
+          evaluation: {
+            availability: false,
+            routeResolution: { kind: "routes", routes: [selectedRoute] },
+          },
+          routePolicy: openAIModelCatalogRoutePolicy,
+        }),
+    });
+
+    expect(result).toEqual([
+      {
+        provider: "openai",
+        id: "future-model",
+        name: "future-model",
+      },
+    ]);
   });
 
   it("does not add runtime-bound entries to the all inventory", async () => {

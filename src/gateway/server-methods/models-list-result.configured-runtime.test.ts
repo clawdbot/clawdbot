@@ -126,4 +126,79 @@ describe("models.list configured runtimes", () => {
       );
     });
   });
+
+  it("keeps a configured Codex default visible when route credentials are unavailable", async () => {
+    await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {
+      const cfg = {
+        agents: {
+          defaults: { model: { primary: "openai/gpt-5.6-sol" } },
+          list: [
+            {
+              id: "main",
+              default: true,
+              models: {
+                "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig;
+
+      await expect(listConfiguredModels({ cfg, catalog: [] })).resolves.toEqual({
+        models: [
+          {
+            id: "gpt-5.6-sol",
+            name: "gpt-5.6-sol",
+            provider: "openai",
+            agentRuntime: { id: "codex", source: "model" },
+            available: false,
+          },
+        ],
+      });
+    });
+  });
+
+  it.each([
+    ["an alias-only binding", undefined],
+    ["an agent alias override of a canonical default", "codex"],
+  ] as const)(
+    "reports %s from the effective alias runtime policy",
+    async (_name, defaultsRuntime) => {
+      await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {
+        const cfg = {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-5.4-codex" },
+              models: defaultsRuntime
+                ? {
+                    "openai/gpt-5.4": { agentRuntime: { id: defaultsRuntime } },
+                  }
+                : {},
+            },
+            list: [
+              {
+                id: "main",
+                default: true,
+                models: {
+                  "openai/gpt-5.4-codex": { agentRuntime: { id: "openclaw" } },
+                },
+              },
+            ],
+          },
+        } as OpenClawConfig;
+
+        await expect(listConfiguredModels({ cfg, catalog: [] })).resolves.toEqual({
+          models: [
+            {
+              id: "gpt-5.4",
+              name: "gpt-5.4",
+              provider: "openai",
+              agentRuntime: { id: "openclaw", source: "model" },
+              available: false,
+            },
+          ],
+        });
+      });
+    },
+  );
 });

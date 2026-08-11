@@ -17,7 +17,7 @@ import { listAgentEntries, resolveSessionAgentIds } from "./agent-scope.js";
 type ModelRuntimePolicySource = "model" | "provider";
 
 /** Runtime policy plus the config surface that supplied it. */
-type ResolvedModelRuntimePolicy = {
+export type ResolvedModelRuntimePolicy = {
   policy?: AgentRuntimePolicyConfig;
   source?: ModelRuntimePolicySource;
   matchedProvider?: string;

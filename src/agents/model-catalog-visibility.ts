@@ -19,7 +19,7 @@ import {
 } from "./model-catalog-route.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { createProviderAuthChecker } from "./model-provider-auth.js";
-import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
+import type { ResolvedModelRuntimePolicy } from "./model-runtime-policy.js";
 import {
   buildConfiguredModelCatalog,
   dedupeModelCatalogEntries,
@@ -44,6 +44,7 @@ type LogicalModelCatalogEntryState = {
   preferred: boolean;
   routeManaged: boolean;
   routeProjection: ModelCatalogRouteProjection;
+  routeRuntimeIds: readonly string[];
 };
 
 /** Maps one shared auth evaluation into logical catalog selection state. */
@@ -66,6 +67,13 @@ export function resolveLogicalModelCatalogEntryState(params: {
     preferred: selectedRoute ? params.routePolicy.matchesRoute(params.entry, selectedRoute) : false,
     routeManaged,
     routeProjection,
+    routeRuntimeIds:
+      selectedRoute?.runtimePolicy?.compatibleIds ??
+      (params.evaluation.routeResolution?.kind === "routes"
+        ? params.evaluation.routeResolution.routes.flatMap(
+            (route) => route.runtimePolicy?.compatibleIds ?? [],
+          )
+        : []),
   };
 }
 
@@ -106,16 +114,75 @@ function dedupeLogicalModelCatalogEntries(
   });
 }
 
-function listModelRuntimePolicyRefs(params: { cfg: OpenClawConfig; agentId?: string }): string[] {
+function listModelRuntimePolicyRefs(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  routePolicy: ModelCatalogRoutePolicy;
+}): Array<{ key: string; ref: string; resolution: ResolvedModelRuntimePolicy }> {
   const modelMaps = [
-    params.cfg.agents?.defaults?.models,
     params.agentId ? resolveAgentConfig(params.cfg, params.agentId)?.models : undefined,
+    params.cfg.agents?.defaults?.models,
   ];
-  return modelMaps.flatMap((models) =>
-    Object.entries(models ?? {}).flatMap(([ref, entry]) => {
-      return entry.agentRuntime?.id?.trim() ? [ref] : [];
-    }),
-  );
+  const acceptedKeys = new Set<string>();
+  const refs: Array<{ key: string; ref: string; resolution: ResolvedModelRuntimePolicy }> = [];
+  for (const models of modelMaps) {
+    const candidates = Object.entries(models ?? {})
+      .flatMap(([ref, entry]) => {
+        const runtimePolicy = entry.agentRuntime;
+        if (!runtimePolicy?.id?.trim()) {
+          return [];
+        }
+        const separator = ref.indexOf("/");
+        if (separator <= 0 || separator >= ref.length - 1) {
+          return [];
+        }
+        const id = ref.slice(separator + 1);
+        const identity = params.routePolicy.resolveIdentity({
+          provider: ref.slice(0, separator),
+          id,
+        });
+        return identity
+          ? [
+              {
+                ref,
+                resolution: {
+                  policy: runtimePolicy,
+                  source: "model" as const,
+                  matchedProvider: ref.slice(0, separator),
+                },
+                key: identity.key,
+                canonical: id.trim().toLowerCase() === identity.id.trim().toLowerCase(),
+              },
+            ]
+          : [];
+      })
+      .toSorted((a, b) => Number(b.canonical) - Number(a.canonical));
+    for (const candidate of candidates) {
+      if (acceptedKeys.has(candidate.key)) {
+        continue;
+      }
+      acceptedKeys.add(candidate.key);
+      refs.push({
+        key: candidate.key,
+        ref: candidate.ref,
+        resolution: candidate.resolution,
+      });
+    }
+  }
+  return refs;
+}
+
+/** Resolves one effective model-specific runtime policy for a logical catalog identity. */
+export function resolveLogicalModelRuntimePolicy(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  entry: Pick<ModelCatalogEntry, "provider" | "id">;
+  routePolicy: ModelCatalogRoutePolicy;
+}): ResolvedModelRuntimePolicy | undefined {
+  const key = params.routePolicy.resolveIdentity(params.entry)?.key;
+  return key
+    ? listModelRuntimePolicyRefs(params).find((candidate) => candidate.key === key)?.resolution
+    : undefined;
 }
 
 function isPickerVisibleCatalogEntry(
@@ -295,13 +362,15 @@ export async function resolveLogicalVisibleModelCatalog(params: {
 
   const catalog = [...params.catalog];
   const catalogKeys = new Set(catalog.map((entry) => resolveLogicalKey(entry, params.routePolicy)));
-  if (policy.allowAny) {
-    const checkedRuntimePolicyKeys = new Set<string>();
-    for (const ref of listModelRuntimePolicyRefs(params)) {
+  const synthesizedRuntimeKeys = new Set<string>();
+  if (policy.allowAny || policy.hasProviderWildcards) {
+    for (const candidate of listModelRuntimePolicyRefs({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      routePolicy: params.routePolicy,
+    })) {
+      const { ref } = candidate;
       const separator = ref.indexOf("/");
-      if (separator <= 0 || separator >= ref.length - 1) {
-        continue;
-      }
       const configuredEntry = {
         provider: ref.slice(0, separator),
         id: ref.slice(separator + 1),
@@ -312,37 +381,29 @@ export async function resolveLogicalVisibleModelCatalog(params: {
         !identity ||
         !configuredKeys.has(identity.key) ||
         catalogKeys.has(identity.key) ||
-        checkedRuntimePolicyKeys.has(identity.key)
+        (!policy.allowAny &&
+          !policy.allowsByWildcard({ provider: configuredEntry.provider, model: identity.id }))
       ) {
         continue;
       }
-      checkedRuntimePolicyKeys.add(identity.key);
       const entry = {
         provider: configuredEntry.provider,
         id: identity.id,
         name: identity.id,
       };
-      const runtimeId = normalizeOptionalAgentRuntimeId(
-        resolveModelRuntimePolicy({
-          config: params.cfg,
-          provider: entry.provider,
-          modelId: entry.id,
-          agentId: params.agentId,
-        }).policy?.id,
-      );
+      const runtimeId = normalizeOptionalAgentRuntimeId(candidate.resolution.policy?.id);
       const state = await evaluateEntry(entry);
-      const route =
-        state.routeProjection.kind === "selected" ? state.routeProjection.route : undefined;
       const runtimeCompatible =
         runtimeId !== undefined &&
-        route?.runtimePolicy?.compatibleIds.some(
+        state.routeRuntimeIds.some(
           (candidateId) => normalizeOptionalAgentRuntimeId(candidateId) === runtimeId,
-        ) === true;
+        );
       if (isDefaultAgentRuntimeId(runtimeId) || !runtimeCompatible) {
         continue;
       }
       // Provider-managed runtime bindings remain projectable when prepared inventory has no row.
       catalogKeys.add(identity.key);
+      synthesizedRuntimeKeys.add(identity.key);
       catalog.push(entry);
     }
   }
@@ -365,9 +426,10 @@ export async function resolveLogicalVisibleModelCatalog(params: {
     const key = resolveLogicalKey(entry, params.routePolicy);
     return catalogKeys.has(key) || configuredKeys.has(key);
   });
-  const retained = catalog.filter((entry) =>
-    retainedKeys.has(resolveLogicalKey(entry, params.routePolicy)),
-  );
+  const retained = catalog.filter((entry) => {
+    const key = resolveLogicalKey(entry, params.routePolicy);
+    return retainedKeys.has(key) || synthesizedRuntimeKeys.has(key);
+  });
   const preferredKeys = new Set(
     [...visible, ...retained].map((entry) => resolveLogicalKey(entry, params.routePolicy)),
   );
