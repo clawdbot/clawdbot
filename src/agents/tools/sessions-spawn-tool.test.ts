@@ -36,9 +36,6 @@ vi.mock("../subagents/spawn/subagent-spawn.js", () => ({
 }));
 
 vi.mock("../subagents/spawn/acp-spawn.js", () => ({
-  ACP_SPAWN_MODES: ["run", "session"],
-  ACP_SPAWN_STREAM_TARGETS: ["parent"],
-  isSpawnAcpAcceptedResult: (result: { status?: string }) => result?.status === "accepted",
   spawnAcpDirect: (...args: unknown[]) => hoisted.spawnAcpDirectMock(...args),
 }));
 

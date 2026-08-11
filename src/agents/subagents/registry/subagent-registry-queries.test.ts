@@ -7,7 +7,6 @@ import {
 } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   countActiveRunsForSessionFromRuns,
-  countPendingDescendantRunsExcludingRunFromRuns,
   countPendingDescendantRunsFromRuns,
   hasDescendantRunAwaitingSettleFromRuns,
   getSubagentRunByChildSessionKeyFromRuns,
@@ -396,33 +395,6 @@ describe("subagent registry query regressions", () => {
 
     expect(countPendingDescendantRunsFromRuns(runs, oldParentSessionKey)).toBe(0);
     expect(countPendingDescendantRunsFromRuns(runs, newParentSessionKey)).toBe(1);
-  });
-
-  it("regression excluding current run, countPendingDescendantRunsExcludingRun keeps sibling gating intact", () => {
-    // Regression guard: excluding the currently announcing run must not hide sibling pending work.
-    const runs = toRunMap([
-      makeRun({
-        runId: "run-self",
-        childSessionKey: "agent:main:subagent:self",
-        requesterSessionKey: "agent:main:main",
-        endedAt: 100,
-        cleanupCompletedAt: undefined,
-      }),
-      makeRun({
-        runId: "run-sibling",
-        childSessionKey: "agent:main:subagent:sibling",
-        requesterSessionKey: "agent:main:main",
-        endedAt: 101,
-        cleanupCompletedAt: undefined,
-      }),
-    ]);
-
-    expect(
-      countPendingDescendantRunsExcludingRunFromRuns(runs, "agent:main:main", "run-self"),
-    ).toBe(1);
-    expect(
-      countPendingDescendantRunsExcludingRunFromRuns(runs, "agent:main:main", "run-sibling"),
-    ).toBe(1);
   });
 
   it("counts ended orchestrators with pending descendants as active", () => {

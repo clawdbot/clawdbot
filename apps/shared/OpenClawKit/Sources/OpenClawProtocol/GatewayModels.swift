@@ -12990,18 +12990,22 @@ public struct ModelsAuthStatusParams: Codable, Sendable {
 }
 
 public struct ModelsListParams: Codable, Sendable {
+    public let agentid: String?
     public let includeprovidercapabilities: Bool?
     public let view: AnyCodable?
 
     public init(
+        agentid: String? = nil,
         includeprovidercapabilities: Bool? = nil,
         view: AnyCodable? = nil)
     {
+        self.agentid = agentid
         self.includeprovidercapabilities = includeprovidercapabilities
         self.view = view
     }
 
     private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
         case includeprovidercapabilities = "includeProviderCapabilities"
         case view
     }
@@ -13009,15 +13013,19 @@ public struct ModelsListParams: Codable, Sendable {
 
 public struct ModelsListResult: Codable, Sendable {
     public let models: [ModelChoice]
+    public let provideroutcomes: [[String: AnyCodable]]?
 
     public init(
-        models: [ModelChoice])
+        models: [ModelChoice],
+        provideroutcomes: [[String: AnyCodable]]? = nil)
     {
         self.models = models
+        self.provideroutcomes = provideroutcomes
     }
 
     private enum CodingKeys: String, CodingKey {
         case models
+        case provideroutcomes = "providerOutcomes"
     }
 }
 
