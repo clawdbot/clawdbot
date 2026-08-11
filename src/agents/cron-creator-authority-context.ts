@@ -57,20 +57,6 @@ export function shouldAdmitFreshChannelOwnerCronAuthority(params: {
     params.suppressNextUserMessagePersistence !== true
   );
 }
-/** Keeps fresh cron reauthorization within one admitted Gateway agent run. */
-export function runWithCronCreatorAuthority<T>(
-  runId: string,
-  run: () => T,
-  signal?: AbortSignal,
-): T {
-  const normalizedRunId = runId.trim();
-  if (!normalizedRunId) {
-    return run();
-  }
-  const scope = createCronCreatorAuthorityRunScope(normalizedRunId);
-  return runWithCronCreatorAuthorityCapability(scope, run, signal);
-}
-
 /** Owns one explicitly transported creator-authority capability until run settlement. */
 export function runWithCronCreatorAuthorityCapability<T>(
   scope: CronCreatorAuthorityCapability,
