@@ -13,11 +13,14 @@ import {
 } from "../monitor.test-helpers.js";
 import { formatSlackChannelResolved, formatSlackUserResolved } from "./provider-support.js";
 
+const webClientMocks = vi.hoisted(() => ({ constructed: vi.fn() }));
+
 const { monitorSlackProvider } = await import("./provider.js");
 const slackTestState = getSlackTestState();
 
 beforeEach(() => {
   resetSlackTestState();
+  webClientMocks.constructed.mockClear();
 });
 
 function createRuntimeContextCapture(): {
@@ -103,6 +106,23 @@ describe("slack allowlist log formatting", () => {
 
 describe("slack startup user allowlist resolution", () => {
   it("registers one native approval client per Enterprise Grid team", async () => {
+    vi.resetModules();
+    vi.doMock("../client.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../client.js")>();
+      const webApi = await vi.importActual<typeof import("@slack/web-api")>("@slack/web-api");
+      return {
+        ...actual,
+        createSlackStartupAuthClient: () => getSlackClient(),
+        createSlackWebClient: (
+          token: string,
+          options?: import("@slack/web-api").WebClientOptions,
+        ) => {
+          webClientMocks.constructed(token, options);
+          return new webApi.WebClient(token, options);
+        },
+      };
+    });
+    const { monitorSlackProvider: cacheAwareMonitor } = await import("./provider.js");
     resetSlackTestState({
       channels: {
         slack: {
@@ -120,13 +140,15 @@ describe("slack startup user allowlist resolution", () => {
       },
     });
     getSlackClient().auth.test.mockResolvedValueOnce({
+      user_id: "U_BOT",
+      bot_id: "B_BOT",
       enterprise_id: "E123",
       app_id: "A123",
       is_enterprise_install: true,
     });
     const { channelRuntime, register } = createRuntimeContextCapture();
 
-    const monitor = startSlackMonitor(monitorSlackProvider, {
+    const monitor = startSlackMonitor(cacheAwareMonitor, {
       channelRuntime,
       appToken: "xapp-1-A123-test",
     });
@@ -139,16 +161,27 @@ describe("slack startup user allowlist resolution", () => {
         | undefined;
       const resolveClient = registration?.context?.resolveClient;
       expect(resolveClient).toBeTypeOf("function");
-      const teamOne = resolveClient?.("T111") as { teamId?: string };
-      const teamOneAgain = resolveClient?.("T111") as { teamId?: string };
-      const teamTwo = resolveClient?.("T222") as { teamId?: string };
+      const teamOne = resolveClient?.("T111");
+      const teamOneAgain = resolveClient?.("T111");
+      const teamTwo = resolveClient?.("T222");
 
+      expect(webClientMocks.constructed).toHaveBeenCalledTimes(2);
       expect(teamOneAgain).toBe(teamOne);
       expect(teamTwo).not.toBe(teamOne);
-      expect(teamOne.teamId).toBe("T111");
-      expect(teamTwo.teamId).toBe("T222");
+      expect(webClientMocks.constructed).toHaveBeenNthCalledWith(
+        1,
+        "bot-token",
+        expect.objectContaining({ teamId: "T111" }),
+      );
+      expect(webClientMocks.constructed).toHaveBeenNthCalledWith(
+        2,
+        "bot-token",
+        expect.objectContaining({ teamId: "T222" }),
+      );
     } finally {
       await stopSlackMonitor(monitor);
+      vi.doUnmock("../client.js");
+      vi.resetModules();
     }
   });
 

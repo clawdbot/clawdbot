@@ -66,6 +66,7 @@ export function registerSlackMemberEvents(params: {
       ctx.runtime.error?.(
         danger(`slack ${paramsLocal.verb} handler failed: ${formatErrorMessage(err)}`),
       );
+      throw err;
     }
   };
 

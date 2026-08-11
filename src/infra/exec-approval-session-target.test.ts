@@ -67,6 +67,23 @@ const baseRequest: ExecApprovalRequest = {
 };
 
 describe("native approval account selection", () => {
+  it("does not let a conflicting turn-source channel fall through to the sole account", () => {
+    const discordRequest = buildRequest({
+      turnSourceChannel: "discord",
+      turnSourceAccountId: "default",
+    });
+    expect(
+      doesApprovalRequestSelectChannelAccount({
+        cfg: {},
+        request: discordRequest,
+        channel: "slack",
+        accountId: "default",
+        defaultAccountId: "default",
+        eligibleAccountIds: ["default"],
+      }),
+    ).toBe(false);
+  });
+
   it("selects only the sole eligible account when no owner is recorded", () => {
     expect(
       doesApprovalRequestSelectChannelAccount({
