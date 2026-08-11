@@ -23,7 +23,6 @@ import type { PluginRuntime, RuntimeGatewayRequestOptions } from "../plugins/run
 import type { PluginLogger, PluginOrigin } from "../plugins/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
-import { waitForAgentJobExecution } from "./agent-turn/agent-job.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import { normalizeOperatorScopeList, type OperatorScope } from "./operator-scopes.js";
 import type { GatewayRequestHandler, GatewayRequestOptions } from "./server-methods/types.js";
@@ -308,6 +307,9 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       return { runId, ...(runtime ? { runtime } : {}) };
     },
     async waitForRun(params) {
+      // The job registry installs its lifecycle listener on import, so defer loading
+      // until a plugin actually waits for a run.
+      const { waitForAgentJobExecution } = await import("./agent-turn/agent-job.js");
       const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000, 0);
       const payload = await waitForAgentJobExecution({ runId: params.runId, timeoutMs });
       const status = payload?.status ?? "timeout";
