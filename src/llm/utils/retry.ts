@@ -1,6 +1,7 @@
 import { classifyFailoverSignal } from "../../agents/failover/classify.js";
 import {
   extractFailoverHttpStatus,
+  hasTransientRetryEvidence,
   shouldRetryFailoverSignal,
 } from "../../agents/failover/retry-evidence.js";
 import {
@@ -38,5 +39,6 @@ export function isRetryableAssistantError(message: AssistantMessage): boolean {
     ...(status === undefined ? {} : { status }),
   };
   const classification = classifyFailoverSignal(signal);
-  return shouldRetryFailoverSignal({ classification, signal });
+  const hasTransientEvidence = hasTransientRetryEvidence(signal);
+  return shouldRetryFailoverSignal({ classification, hasTransientEvidence, signal });
 }

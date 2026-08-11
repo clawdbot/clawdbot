@@ -122,9 +122,10 @@ export function classifyRateLimitWindow(
 /** Apply the intra-attempt replay policy to one already-classified failover signal. */
 export function shouldRetryFailoverSignal(params: {
   classification: FailoverClassification | null;
+  hasTransientEvidence: boolean;
   signal: Pick<FailoverSignal, "message" | "status">;
 }): boolean {
-  if (!hasTransientRetryEvidence(params.signal)) {
+  if (!params.hasTransientEvidence) {
     return false;
   }
   const reason =
