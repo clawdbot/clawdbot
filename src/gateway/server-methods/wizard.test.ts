@@ -1,6 +1,8 @@
 // Wizard server-method tests cover stable lifecycle errors for process-local sessions.
+import fs from "node:fs/promises";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -17,6 +19,10 @@ import {
 import { systemAgentHandlers } from "./system-agent.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { type SetupWizardRunner, wizardHandlers } from "./wizard.js";
+
+afterEach(() => {
+  __setFsSafeTestHooksForTest(undefined);
+});
 
 function createWizardContext(
   wizardRunner: NonNullable<GatewayRequestHandlerOptions["context"]>["wizardRunner"],
@@ -280,6 +286,75 @@ describe("wizard setup ownership", () => {
     } finally {
       runnerSettled.resolve();
       resetGatewayWorkAdmission();
+    }
+  });
+
+  it("cleans up detached wizard owners when setup lock release fails", async () => {
+    resetGatewayWorkAdmission();
+    const runnerSettled = createDeferred();
+    const tracker = createWizardSessionTracker();
+    const context = {
+      ...tracker,
+      wizardRunner: async (_opts: unknown, _runtime: RuntimeEnv, prompter: WizardPrompter) => {
+        prompter.progress("working");
+        await runnerSettled.promise;
+      },
+    };
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+    let lockPath: string | undefined;
+
+    try {
+      let sessionId = "";
+      await runWithGatewayIndependentRootWorkAdmission(async () => {
+        const respond = vi.fn();
+        await expectDefined(
+          wizardHandlers["wizard.start"],
+          "wizard.start test invariant",
+        )({ params: { mode: "local" }, respond, context } as never);
+        sessionId = String(respond.mock.calls[0]?.[1]?.sessionId ?? "");
+      });
+      expect(sessionId).not.toBe("");
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+
+      const cancelRespond = vi.fn();
+      await expectDefined(
+        wizardHandlers["wizard.cancel"],
+        "wizard.cancel test invariant",
+      )({ params: { sessionId }, respond: cancelRespond, context } as never);
+      expect(cancelRespond.mock.calls[0]?.[1]).toMatchObject({ status: "cancelled" });
+
+      const releaseError = new Error("setup lock release failed");
+      __setFsSafeTestHooksForTest({
+        beforeSidecarLockSnapshotOpen: (candidate) => {
+          lockPath = candidate;
+          throw releaseError;
+        },
+      });
+      runnerSettled.resolve();
+      const session = expectDefined(
+        tracker.wizardSessions.get(sessionId),
+        "cancelled setup session",
+      );
+      await expect(whenAdmittedWizardSessionSettled(session)).rejects.toBe(releaseError);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      expect.soft(unhandledRejections).toEqual([]);
+      expect.soft(getActiveGatewayRootWorkCount()).toBe(0);
+      expect.soft(tracker.wizardSessions.has(sessionId)).toBe(false);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+      __setFsSafeTestHooksForTest(undefined);
+      runnerSettled.resolve();
+      resetGatewayWorkAdmission();
+      if (lockPath) {
+        await fs.rm(lockPath, { force: true });
+      }
     }
   });
 
