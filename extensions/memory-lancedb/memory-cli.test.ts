@@ -5,6 +5,12 @@ import type { Embeddings } from "./embeddings.js";
 import type { MemoryDB } from "./lancedb-store.js";
 import { registerMemoryCli } from "./memory-cli.js";
 
+const isLegacyMemorySurfaceDisabledMock = vi.hoisted(() => vi.fn(() => false));
+
+vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", () => ({
+  isLegacyMemorySurfaceDisabled: isLegacyMemorySurfaceDisabledMock,
+}));
+
 function createHarness(params?: { embedError?: unknown; closeError?: Error }) {
   const registerCli = vi.fn();
   const closeError = params?.closeError;
@@ -24,9 +30,12 @@ function createHarness(params?: { embedError?: unknown; closeError?: Error }) {
     close,
   };
   const search = vi.fn(async () => []);
+  const list = vi.fn(async () => []);
+  const query = vi.fn(async () => []);
+  const count = vi.fn(async () => 0);
   registerMemoryCli(
     { registerCli } as unknown as OpenClawPluginApi,
-    { search } as unknown as MemoryDB,
+    { count, list, query, search } as unknown as MemoryDB,
     embeddings,
     (rawAgentId) => (typeof rawAgentId === "string" ? rawAgentId : "main"),
     undefined,
@@ -39,10 +48,34 @@ function createHarness(params?: { embedError?: unknown; closeError?: Error }) {
   }
   const program = new Command();
   registrar({ program });
-  return { close, embed, program, search };
+  return { close, count, embed, list, program, query, search };
 }
 
 describe("memory-lancedb CLI embedding lifecycle", () => {
+  it.each([
+    ["list", ["node", "openclaw", "ltm", "list"]],
+    ["search", ["node", "openclaw", "ltm", "search", "hello"]],
+    ["query", ["node", "openclaw", "ltm", "query"]],
+    ["stats", ["node", "openclaw", "ltm", "stats"]],
+  ] as const)("blocks %s before legacy memory access after cut-over", async (_command, args) => {
+    isLegacyMemorySurfaceDisabledMock.mockReturnValueOnce(true);
+    const harness = createHarness();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      await expect(harness.program.parseAsync(args)).rejects.toThrow(
+        "Legacy memory CLI access is unavailable after scoped-memory cutover.",
+      );
+    } finally {
+      log.mockRestore();
+    }
+
+    expect(harness.embed).not.toHaveBeenCalled();
+    expect(harness.list).not.toHaveBeenCalled();
+    expect(harness.query).not.toHaveBeenCalled();
+    expect(harness.search).not.toHaveBeenCalled();
+    expect(harness.count).not.toHaveBeenCalled();
+  });
+
   it("closes embeddings after search", async () => {
     const harness = createHarness();
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);

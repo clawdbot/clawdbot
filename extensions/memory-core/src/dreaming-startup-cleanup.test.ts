@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isLegacyMemorySurfaceDisabled } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
@@ -11,16 +12,20 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerShortTermPromotionDreaming } from "./dreaming.js";
 
+vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", { spy: true });
+
 const ORPHAN_AGE_MS = 300_000;
 
 type GatewayHook = (event: unknown, context: unknown) => Promise<void> | void;
 
 let stateDir: string;
 let stopGateway: (() => Promise<void>) | undefined;
+const isLegacyMemorySurfaceDisabledMock = vi.mocked(isLegacyMemorySurfaceDisabled);
 
 beforeEach(async () => {
   stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dreaming-startup-"));
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  isLegacyMemorySurfaceDisabledMock.mockReturnValue(false);
 });
 
 afterEach(async () => {
@@ -298,6 +303,28 @@ describe("dreaming gateway restart cleanup", () => {
     await gateway.start();
 
     expect(stale.map(hasSession)).toEqual([false, false]);
+  });
+
+  it("does not clean a cut-over agent's dreaming sessions", async () => {
+    const now = Date.now();
+    const [cutOver, legacy] = await Promise.all(
+      ["main", "researcher"].map((agentId) =>
+        seedSession({
+          agentId,
+          suffix: "dreaming-narrative-light-interrupted",
+          pluginOwnerId: "memory-core",
+          updatedAt: now - ORPHAN_AGE_MS - 1,
+          transcriptAt: now - ORPHAN_AGE_MS - 1,
+        }),
+      ),
+    );
+    isLegacyMemorySurfaceDisabledMock.mockImplementation((agentId) => agentId === "main");
+    const gateway = createGateway({ agentIds: ["main", "researcher"] });
+
+    await gateway.start();
+
+    expect(hasSession(cutOver)).toBe(true);
+    expect(hasSession(legacy)).toBe(false);
   });
 
   it("preserves unconfigured agents sharing a configured agent's SQLite store", async () => {

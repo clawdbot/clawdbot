@@ -24,6 +24,7 @@ import {
   wrapToolWorkspaceRootGuardWithOptions,
 } from "./agent-tools.read.js";
 import { createApplyPatchTool } from "./apply-patch.js";
+import { createMemoryFileMutationGuard } from "./memory-file-mutation-guard.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
 import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
 import {
@@ -84,6 +85,65 @@ async function expectExecCwdResolvesTo(
 }
 
 describe("workspace path resolution", () => {
+  it("keeps controlled memory roots read-only while preserving ordinary host and sandbox writes", async () => {
+    await withTempDir("openclaw-memory-guard-host-", async (workspaceDir) => {
+      const guard = createMemoryFileMutationGuard({ mutationRoot: workspaceDir });
+      const writeTool = createHostWorkspaceWriteTool(workspaceDir, {
+        memoryFileMutationGuard: guard,
+      });
+      const editTool = createHostWorkspaceEditTool(workspaceDir, {
+        memoryFileMutationGuard: guard,
+      });
+      await fs.writeFile(path.join(workspaceDir, "USER.md"), "before", "utf8");
+
+      await expect(
+        writeTool.execute("host-memory-write", { path: "MEMORY.md", content: "blocked" }),
+      ).rejects.toThrow("Legacy memory file mutations are unavailable for this agent.");
+      await expect(
+        editTool.execute("host-user-edit", {
+          path: "USER.md",
+          edits: [{ oldText: "before", newText: "after" }],
+        }),
+      ).rejects.toThrow("Legacy memory file mutations are unavailable for this agent.");
+      await writeTool.execute("host-normal-write", { path: "notes.txt", content: "allowed" });
+      await expect(fs.readFile(path.join(workspaceDir, "notes.txt"), "utf8")).resolves.toBe(
+        "allowed",
+      );
+    });
+
+    await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, sandbox }) => {
+      const guard = createMemoryFileMutationGuard({ mutationRoot: sandbox.workspaceDir });
+      const writeTool = createSandboxedWriteTool({
+        root: sandbox.workspaceDir,
+        bridge: sandbox.fsBridge!,
+        memoryFileMutationGuard: guard,
+      });
+      const editTool = createSandboxedEditTool({
+        root: sandbox.workspaceDir,
+        bridge: sandbox.fsBridge!,
+        memoryFileMutationGuard: guard,
+      });
+      await fs.writeFile(path.join(sandboxRoot, "USER.md"), "before", "utf8");
+
+      await expect(
+        writeTool.execute("sandbox-memory-write", {
+          path: "memory/blocked.md",
+          content: "blocked",
+        }),
+      ).rejects.toThrow("Legacy memory file mutations are unavailable for this agent.");
+      await expect(
+        editTool.execute("sandbox-user-edit", {
+          path: "USER.md",
+          edits: [{ oldText: "before", newText: "after" }],
+        }),
+      ).rejects.toThrow("Legacy memory file mutations are unavailable for this agent.");
+      await writeTool.execute("sandbox-normal-write", { path: "notes.txt", content: "allowed" });
+      await expect(fs.readFile(path.join(sandboxRoot, "notes.txt"), "utf8")).resolves.toBe(
+        "allowed",
+      );
+    });
+  });
+
   it("uses cwd for coding filesystem tools while workspaceDir remains the agent workspace", async () => {
     await withTempDir("openclaw-agent-ws-", async (workspaceDir) => {
       await withTempDir("openclaw-task-cwd-", async (cwd) => {

@@ -7,10 +7,20 @@ import { resolveMemoryWikiConfig } from "./config.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 
-const { syncBridgeMock, syncUnsafeLocalMock, refreshIndexesMock } = vi.hoisted(() => ({
+const {
+  syncBridgeMock,
+  syncUnsafeLocalMock,
+  refreshIndexesMock,
+  isLegacyMemorySurfaceDisabledMock,
+} = vi.hoisted(() => ({
   syncBridgeMock: vi.fn(),
   syncUnsafeLocalMock: vi.fn(),
   refreshIndexesMock: vi.fn(),
+  isLegacyMemorySurfaceDisabledMock: vi.fn(() => false),
+}));
+
+vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", () => ({
+  isLegacyMemorySurfaceDisabled: isLegacyMemorySurfaceDisabledMock,
 }));
 
 vi.mock("./bridge.js", () => ({
@@ -67,6 +77,7 @@ describe("syncMemoryWikiImportedSources", () => {
     syncBridgeMock.mockReset();
     syncUnsafeLocalMock.mockReset();
     refreshIndexesMock.mockReset();
+    isLegacyMemorySurfaceDisabledMock.mockReset().mockReturnValue(false);
     syncBridgeMock.mockResolvedValue(bridgeResult);
     syncUnsafeLocalMock.mockResolvedValue({
       ...bridgeResult,
@@ -92,6 +103,18 @@ describe("syncMemoryWikiImportedSources", () => {
       indexRefreshReason: "import-changed",
       indexUpdatedFiles: ["index.md", "sources/index.md"],
     });
+  });
+
+  it("blocks source sync before bridge, unsafe-local, or index work after cut-over", async () => {
+    isLegacyMemorySurfaceDisabledMock.mockReturnValueOnce(true);
+
+    await expect(
+      syncMemoryWikiImportedSources({ config: createConfig(), appConfig }),
+    ).rejects.toThrow("Memory Wiki is unavailable after scoped-memory cutover.");
+
+    expect(syncBridgeMock).not.toHaveBeenCalled();
+    expect(syncUnsafeLocalMock).not.toHaveBeenCalled();
+    expect(refreshIndexesMock).not.toHaveBeenCalled();
   });
 
   it("shares one full source and index flight across equivalent polls", async () => {

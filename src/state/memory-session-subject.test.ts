@@ -15,6 +15,7 @@ import {
   captureTrustedMemoryAccessFacts,
   createTrustedMemoryAccessContext,
   isTrustedMemoryAccessContext,
+  materializeTrustedMemoryAccessContext,
   readTrustedMemoryAccessSessionContext,
 } from "./memory-access-context.js";
 import {
@@ -715,15 +716,29 @@ describe("memory session subject", () => {
     const facts = captureTrustedMemoryAccessFacts({
       requestId: "request-1",
       runId: "run-1",
-      actorEvidenceRevision: "actor-1",
-      verifiedPrincipalRevisions: ["principal-2", "principal-1"],
-      collaborationDecisionRevision: "collaboration-1",
+      actor: {
+        kind: "principal",
+        actorKind: "human",
+        principalId: binding.principalId,
+        assurance: "gateway-profile",
+        evidenceRevision: binding.evidenceRevision,
+      },
+      verifiedPrincipals: [
+        {
+          principalId: binding.principalId,
+          assurance: "gateway-profile",
+          evidenceRevision: binding.evidenceRevision,
+        },
+      ],
+      collaboration: { kind: "not-applicable" },
+      verifiedMemberships: [],
       delivery: {
         sink: "private",
         audiences: [{ kind: "user", id: binding.principalId }],
         routeRevision: "route-1",
+        egressCapabilityIds: ["reply.final"],
+        egressRegistryRevision: "egress-1",
       },
-      delegationSnapshotRevision: "delegation-1",
       operation: "read",
       hostFactsRevision: "host-1",
     });
@@ -740,8 +755,22 @@ describe("memory session subject", () => {
     expect(Object.isFrozen(result.context)).toBe(true);
     expect(isTrustedMemoryAccessContext(result.context)).toBe(true);
     expect(isTrustedMemoryAccessContext(JSON.parse(JSON.stringify(result.context)))).toBe(false);
+    expect(
+      materializeTrustedMemoryAccessContext({
+        operation: "read",
+        fingerprint: result.context.fingerprint,
+      } as never),
+    ).toBeUndefined();
     expect(readTrustedMemoryAccessSessionContext(result.context)).toMatchObject({
       bindingId: binding.bindingId,
+    });
+    expect(materializeTrustedMemoryAccessContext(result.context)).toMatchObject({
+      sessionIdentityRevision: expect.any(String),
+      subject: { kind: "user", principalId: binding.principalId },
+      delivery: {
+        audiences: [{ kind: "user", id: binding.principalId }],
+        egressCapabilityIds: ["reply.final"],
+      },
     });
     const changedHostFacts = createTrustedMemoryAccessContext({
       sessionKey: "agent:main:direct:dm",
@@ -750,15 +779,29 @@ describe("memory session subject", () => {
       facts: captureTrustedMemoryAccessFacts({
         requestId: "request-1",
         runId: "run-1",
-        actorEvidenceRevision: "actor-1",
-        verifiedPrincipalRevisions: ["principal-1", "principal-2"],
-        collaborationDecisionRevision: "collaboration-1",
+        actor: {
+          kind: "principal",
+          actorKind: "human",
+          principalId: binding.principalId,
+          assurance: "gateway-profile",
+          evidenceRevision: binding.evidenceRevision,
+        },
+        verifiedPrincipals: [
+          {
+            principalId: binding.principalId,
+            assurance: "gateway-profile",
+            evidenceRevision: binding.evidenceRevision,
+          },
+        ],
+        collaboration: { kind: "not-applicable" },
+        verifiedMemberships: [],
         delivery: {
           sink: "private",
           audiences: [{ kind: "user", id: binding.principalId }],
           routeRevision: "route-1",
+          egressCapabilityIds: ["reply.final"],
+          egressRegistryRevision: "egress-1",
         },
-        delegationSnapshotRevision: "delegation-1",
         operation: "read",
         hostFactsRevision: "host-2",
       }),
@@ -781,6 +824,7 @@ describe("memory session subject", () => {
     // The context object is intentionally inert: its handoff must recheck
     // current authority so revocation between mint and use fails closed.
     expect(readTrustedMemoryAccessSessionContext(result.context)).toBeUndefined();
+    expect(materializeTrustedMemoryAccessContext(result.context)).toBeUndefined();
     expect(
       createTrustedMemoryAccessContext({
         sessionKey: "agent:main:direct:dm",

@@ -184,6 +184,15 @@ describe("memory-wiki plugin", () => {
     }
   });
 
+  it("hides every wiki tool after the memory cut-over", () => {
+    const { api, registerTool } = createPluginApi();
+    plugin.register(api);
+
+    for (const [factory] of registerTool.mock.calls) {
+      expect(factory({ agentId: "main", memoryReadEnforced: true })).toBeNull();
+    }
+  });
+
   it("activates an initialized legacy vault before an external compile", async () => {
     const rootDir = await createTempDir("memory-wiki-index-legacy-vault-");
     await fs.mkdir(path.join(rootDir, ".openclaw-wiki"), { recursive: true });

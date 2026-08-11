@@ -8,9 +8,11 @@ import {
  * Normalizes workspace, delivery, browser, sandbox, and active-model inputs before plugin tool invocation.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isMemoryIsolationCutoverAgent } from "../plugins/memory-cutover.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
+import { createAuthorizedMemoryReadHost } from "./memory-authorized-read-host.js";
 import { modelKey } from "./model-ref-shared.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
@@ -33,6 +35,8 @@ export type OpenClawPluginToolOptions = {
   fsPolicy?: ToolFsPolicy;
   modelProvider?: string;
   modelId?: string;
+  /** Stable run identifier used to bind host-owned memory reads to this invocation. */
+  runId?: string;
   requesterSenderId?: string | null;
   senderIsOwner?: boolean;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
@@ -88,6 +92,18 @@ export function resolveOpenClawPluginToolInputs(params: {
     accountId: options?.agentAccountId,
     threadId: options?.agentThreadId,
   });
+  const memoryReadEnforced = sessionAgentId ? isMemoryIsolationCutoverAgent(sessionAgentId) : false;
+  const authorizedMemoryRead = memoryReadEnforced
+    ? createAuthorizedMemoryReadHost({
+        agentId: sessionAgentId,
+        sessionKey: options?.agentSessionKey,
+        sessionId: options?.sessionId,
+        runId: options?.runId,
+        deliveryContext,
+        messageChannel: options?.agentChannel,
+        agentAccountId: options?.agentAccountId,
+      })
+    : undefined;
 
   return {
     context: {
@@ -103,6 +119,8 @@ export function resolveOpenClawPluginToolInputs(params: {
       toolBindings: options?.toolBindings,
       activeProjectKeys: options?.activeProjectKeys,
       conversationRecall: options?.conversationRecall,
+      ...(memoryReadEnforced ? { memoryReadEnforced: true as const } : {}),
+      ...(authorizedMemoryRead ? { authorizedMemoryRead } : {}),
       activeModel,
       browser: {
         sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,

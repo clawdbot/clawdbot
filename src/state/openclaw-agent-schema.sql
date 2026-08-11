@@ -806,6 +806,108 @@ CREATE TABLE IF NOT EXISTS memory_migrations (
   UNIQUE (source_kind, source_hash)
 ) STRICT;
 
+-- Transcript memory policy labels are additive and lazily ensured with the scoped-memory group.
+-- They make a missing authorization receipt a durable deny rather than an unlabeled transcript copy.
+CREATE TABLE IF NOT EXISTS memory_policy_sets (
+  policy_set_id TEXT NOT NULL PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  memory_policy_revision TEXT NOT NULL,
+  member_policy_set_ids_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+) STRICT;
+
+CREATE TRIGGER IF NOT EXISTS memory_policy_sets_no_update
+BEFORE UPDATE ON memory_policy_sets
+BEGIN
+  SELECT RAISE(ABORT, 'memory policy sets are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_policy_sets_no_delete
+BEFORE DELETE ON memory_policy_sets
+BEGIN
+  SELECT RAISE(ABORT, 'memory policy sets cannot be deleted');
+END;
+
+CREATE TABLE IF NOT EXISTS memory_run_exposures (
+  exposure_set_id TEXT NOT NULL PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  context_fingerprint TEXT NOT NULL,
+  plan_id TEXT NOT NULL,
+  revision_number INTEGER NOT NULL CHECK (revision_number > 0),
+  previous_exposure_set_id TEXT,
+  source_policy_set_ids_json TEXT NOT NULL,
+  effective_source_policy_set_id TEXT NOT NULL,
+  exposed_resource_revisions_json TEXT NOT NULL,
+  exposure_receipt_ids_json TEXT NOT NULL,
+  egress_receipt_ids_json TEXT NOT NULL,
+  delivery_audiences_json TEXT NOT NULL,
+  delivery_revision TEXT NOT NULL,
+  egress_registry_revision TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  UNIQUE (run_id, revision_number),
+  FOREIGN KEY (previous_exposure_set_id) REFERENCES memory_run_exposures(exposure_set_id) ON DELETE RESTRICT,
+  FOREIGN KEY (effective_source_policy_set_id) REFERENCES memory_policy_sets(policy_set_id) ON DELETE RESTRICT
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_memory_run_exposures_run
+  ON memory_run_exposures(run_id, revision_number DESC);
+
+CREATE TRIGGER IF NOT EXISTS memory_run_exposures_no_update
+BEFORE UPDATE ON memory_run_exposures
+BEGIN
+  SELECT RAISE(ABORT, 'memory run exposures are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_run_exposures_no_delete
+BEFORE DELETE ON memory_run_exposures
+BEGIN
+  SELECT RAISE(ABORT, 'memory run exposures cannot be deleted');
+END;
+
+CREATE TABLE IF NOT EXISTS transcript_event_memory_policies (
+  session_id TEXT NOT NULL,
+  event_seq INTEGER NOT NULL,
+  authorization_status TEXT NOT NULL CHECK (authorization_status IN ('authorized', 'pending')),
+  source_policy_set_id TEXT,
+  run_exposure_set_id TEXT,
+  run_exposure_revision INTEGER,
+  delivery_audiences_json TEXT,
+  session_identity_revision TEXT,
+  subject_revision TEXT,
+  run_id TEXT,
+  context_fingerprint TEXT,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (session_id, event_seq),
+  FOREIGN KEY (session_id, event_seq) REFERENCES transcript_events(session_id, seq) ON DELETE CASCADE,
+  FOREIGN KEY (source_policy_set_id) REFERENCES memory_policy_sets(policy_set_id) ON DELETE RESTRICT,
+  FOREIGN KEY (run_exposure_set_id) REFERENCES memory_run_exposures(exposure_set_id) ON DELETE RESTRICT,
+  CHECK (
+    (authorization_status = 'authorized'
+      AND source_policy_set_id IS NOT NULL
+      AND run_exposure_set_id IS NOT NULL
+      AND run_exposure_revision IS NOT NULL
+      AND delivery_audiences_json IS NOT NULL
+      AND session_identity_revision IS NOT NULL
+      AND subject_revision IS NOT NULL
+      AND run_id IS NOT NULL
+      AND context_fingerprint IS NOT NULL)
+    OR
+    (authorization_status = 'pending'
+      AND source_policy_set_id IS NULL
+      AND run_exposure_set_id IS NULL
+      AND run_exposure_revision IS NULL
+      AND delivery_audiences_json IS NULL
+      AND session_identity_revision IS NULL
+      AND subject_revision IS NULL
+      AND run_id IS NULL
+      AND context_fingerprint IS NULL)
+  )
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_transcript_event_memory_policies_status
+  ON transcript_event_memory_policies(session_id, authorization_status, event_seq);
+
 CREATE TABLE IF NOT EXISTS standing_intents (
   intent_key INTEGER PRIMARY KEY,
   id TEXT NOT NULL UNIQUE,

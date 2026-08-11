@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../api.js";
 import { walkMemoryWikiDirectory } from "./bounded-walk.js";
 import { filterMemoryWikiBridgeArtifacts, resolveMemoryWikiVaultAgentId } from "./bridge.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
+import { assertLegacyMemoryWikiAccessAvailable } from "./legacy-memory-access.js";
 import { toWikiPageSummary, type WikiPageKind } from "./markdown.js";
 import { probeObsidianCli } from "./obsidian.js";
 
@@ -214,6 +215,11 @@ export async function resolveMemoryWikiStatus(
   config: ResolvedMemoryWikiConfig,
   deps?: ResolveMemoryWikiStatusDeps,
 ): Promise<MemoryWikiStatus> {
+  assertLegacyMemoryWikiAccessAvailable({
+    config,
+    appConfig: deps?.appConfig,
+    agentId: config.agentId ?? deps?.callerAgentId,
+  });
   const agentId = resolveMemoryWikiVaultAgentId(config);
   const exists = deps?.pathExists ?? pathExists;
   const vaultExists = await exists(config.vault.path);

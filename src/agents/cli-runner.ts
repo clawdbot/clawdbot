@@ -22,6 +22,7 @@ import {
 } from "../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { isMemoryIsolationCutoverAgent } from "../plugins/memory-cutover.js";
 import {
   loadAuthProfileStoreForRuntime,
   markAuthProfileFailure,
@@ -292,6 +293,9 @@ export async function runPreparedCliAgent(
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
+    ...(params.agentId && isMemoryIsolationCutoverAgent(params.agentId)
+      ? { memoryReadEnforced: true as const }
+      : {}),
     workspaceDir: params.workspaceDir,
     trigger: params.trigger,
     ...(params.config ? { config: params.config } : {}),

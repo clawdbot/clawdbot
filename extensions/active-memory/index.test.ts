@@ -727,6 +727,31 @@ describe("active-memory plugin", () => {
     expect(typeof hooks.agent_end).toBe("function");
   });
 
+  it("does not recall or prewarm legacy memory after memory cut-over", async () => {
+    setMemorySlot("memory-core");
+    const context = {
+      agentId: "main",
+      memoryReadEnforced: true as const,
+      messageProvider: "webchat",
+      runId: "run-enforced-memory",
+      sessionKey: "agent:main:main",
+      trigger: "user",
+    };
+
+    await expect(
+      runPromptBuild({ prompt: "private legacy memory must stay unavailable" }, context),
+    ).resolves.toBeUndefined();
+    await expect(
+      requireHook("before_model_resolve")(
+        { prompt: "private legacy memory must stay unavailable" },
+        context,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(hoisted.getActiveMemorySearchManager).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
   it("prewarms a cold lane-1 lookup before the first QA-channel turn budget starts", async () => {
     registerPluginConfig({ mode: "off" });
     let cold = true;

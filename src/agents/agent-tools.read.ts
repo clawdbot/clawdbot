@@ -33,6 +33,7 @@ import {
 } from "./agent-tools.params.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
+import type { MemoryFileMutationGuard } from "./memory-file-mutation-guard.js";
 import {
   type MemoryWriteProvenanceObserver,
   withMemoryWriteProvenance,
@@ -876,6 +877,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
 type SandboxToolParams = {
   root: string;
   bridge: SandboxFsBridge;
+  memoryFileMutationGuard?: MemoryFileMutationGuard;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
@@ -1053,33 +1055,43 @@ function createSandboxReadOperations(params: SandboxToolParams) {
 
 function createSandboxWriteOperations(params: SandboxToolParams) {
   return withMemoryWriteProvenance(
-    {
-      mkdir: async (dir: string) => {
-        await params.bridge.mkdirp({ filePath: dir, cwd: params.root });
-      },
-      writeFile: async (absolutePath: string, content: string) => {
-        await params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content });
-      },
-      readFile: (absolutePath: string) =>
-        params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
-      statFile: (absolutePath: string) =>
-        params.bridge.stat({ filePath: absolutePath, cwd: params.root }),
-    } as const,
+    withMemoryFileMutationGuard({
+      guard: params.memoryFileMutationGuard,
+      operations: {
+        mkdir: async (dir: string) => {
+          await params.bridge.mkdirp({ filePath: dir, cwd: params.root });
+        },
+        writeFile: async (absolutePath: string, content: string) => {
+          await params.bridge.writeFile({
+            filePath: absolutePath,
+            cwd: params.root,
+            data: content,
+          });
+        },
+        readFile: (absolutePath: string) =>
+          params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
+        statFile: (absolutePath: string) =>
+          params.bridge.stat({ filePath: absolutePath, cwd: params.root }),
+      } as const,
+    }),
     params.memoryWriteProvenance,
   );
 }
 
 function createSandboxEditOperations(params: SandboxToolParams) {
   return withMemoryWriteProvenance(
-    {
-      readFile: (absolutePath: string) =>
-        params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
-      writeFile: (absolutePath: string, content: string) =>
-        params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content }),
-      statFile: (absolutePath: string) =>
-        params.bridge.stat({ filePath: absolutePath, cwd: params.root }),
-      access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),
-    } as const,
+    withMemoryFileMutationGuard({
+      guard: params.memoryFileMutationGuard,
+      operations: {
+        readFile: (absolutePath: string) =>
+          params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
+        writeFile: (absolutePath: string, content: string) =>
+          params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content }),
+        statFile: (absolutePath: string) =>
+          params.bridge.stat({ filePath: absolutePath, cwd: params.root }),
+        access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),
+      } as const,
+    }),
     params.memoryWriteProvenance,
   );
 }
@@ -1150,6 +1162,7 @@ function createHostWriteOperations(
   root: string,
   options?: {
     workspaceOnly?: boolean;
+    memoryFileMutationGuard?: MemoryFileMutationGuard;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   },
 ) {
@@ -1158,17 +1171,20 @@ function createHostWriteOperations(
   if (!workspaceOnly) {
     // When workspaceOnly is false, allow writes anywhere on the host
     return withMemoryWriteProvenance(
-      {
-        mkdir: async (dir: string) => {
-          const resolved = resolveHostPath(dir);
-          await fs.mkdir(resolved, { recursive: true });
-        },
-        writeFile: writeHostFile,
-        readFile: async (absolutePath: string) =>
-          fs.readFile(path.resolve(expandOsHomePrefix(absolutePath))),
-        statFile: (absolutePath: string) =>
-          statHostFile(path.resolve(expandOsHomePrefix(absolutePath))),
-      } as const,
+      withMemoryFileMutationGuard({
+        guard: options?.memoryFileMutationGuard,
+        operations: {
+          mkdir: async (dir: string) => {
+            const resolved = resolveHostPath(dir);
+            await fs.mkdir(resolved, { recursive: true });
+          },
+          writeFile: writeHostFile,
+          readFile: async (absolutePath: string) =>
+            fs.readFile(path.resolve(expandOsHomePrefix(absolutePath))),
+          statFile: (absolutePath: string) =>
+            statHostFile(path.resolve(expandOsHomePrefix(absolutePath))),
+        } as const,
+      }),
       options?.memoryWriteProvenance,
     );
   }
@@ -1180,27 +1196,30 @@ function createHostWriteOperations(
   let rootPromise: ReturnType<typeof fsRoot> | undefined;
   const getRoot = () => (rootPromise ??= fsRoot(root));
   return withMemoryWriteProvenance(
-    {
-      mkdir: async (dir: string) => {
-        const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
-        const resolved = relative ? path.resolve(root, relative) : path.resolve(root);
-        await assertSandboxPath({ filePath: resolved, cwd: root, root });
-        await fs.mkdir(resolved, { recursive: true });
-      },
-      writeFile: (absolutePath: string, content: string) =>
-        writeWorkspaceFile(root, getRoot, absolutePath, content),
-      readFile: async (absolutePath: string) => {
-        // Canonicalize symlink parents like the write path: fs-safe 0.5.2
-        // rejects intermediate symlinks by default, but in-workspace symlink
-        // parents are part of the workspace contract.
-        const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
-        return (await (await getRoot()).read(relative)).buffer;
-      },
-      statFile: async (absolutePath: string) => {
-        const relative = toRelativeWorkspacePath(root, absolutePath);
-        return statHostFile(path.resolve(root, relative));
-      },
-    } as const,
+    withMemoryFileMutationGuard({
+      guard: options?.memoryFileMutationGuard,
+      operations: {
+        mkdir: async (dir: string) => {
+          const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
+          const resolved = relative ? path.resolve(root, relative) : path.resolve(root);
+          await assertSandboxPath({ filePath: resolved, cwd: root, root });
+          await fs.mkdir(resolved, { recursive: true });
+        },
+        writeFile: (absolutePath: string, content: string) =>
+          writeWorkspaceFile(root, getRoot, absolutePath, content),
+        readFile: async (absolutePath: string) => {
+          // Canonicalize symlink parents like the write path: fs-safe 0.5.2
+          // rejects intermediate symlinks by default, but in-workspace symlink
+          // parents are part of the workspace contract.
+          const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
+          return (await (await getRoot()).read(relative)).buffer;
+        },
+        statFile: async (absolutePath: string) => {
+          const relative = toRelativeWorkspacePath(root, absolutePath);
+          return statHostFile(path.resolve(root, relative));
+        },
+      } as const,
+    }),
     options?.memoryWriteProvenance,
   );
 }
@@ -1209,6 +1228,7 @@ function createHostEditOperations(
   root: string,
   options?: {
     workspaceOnly?: boolean;
+    memoryFileMutationGuard?: MemoryFileMutationGuard;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   },
 ) {
@@ -1217,16 +1237,19 @@ function createHostEditOperations(
   if (!workspaceOnly) {
     // When workspaceOnly is false, allow edits anywhere on the host
     return withMemoryWriteProvenance(
-      {
-        readFile: async (absolutePath: string) => {
-          return await fs.readFile(resolveHostPath(absolutePath));
-        },
-        writeFile: writeHostFile,
-        statFile: (absolutePath: string) => statHostFile(resolveHostPath(absolutePath)),
-        access: async (absolutePath: string) => {
-          await fs.access(resolveHostPath(absolutePath));
-        },
-      } as const,
+      withMemoryFileMutationGuard({
+        guard: options?.memoryFileMutationGuard,
+        operations: {
+          readFile: async (absolutePath: string) => {
+            return await fs.readFile(resolveHostPath(absolutePath));
+          },
+          writeFile: writeHostFile,
+          statFile: (absolutePath: string) => statHostFile(resolveHostPath(absolutePath)),
+          access: async (absolutePath: string) => {
+            await fs.access(resolveHostPath(absolutePath));
+          },
+        } as const,
+      }),
       options?.memoryWriteProvenance,
     );
   }
@@ -1238,52 +1261,84 @@ function createHostEditOperations(
   let rootPromise: ReturnType<typeof fsRoot> | undefined;
   const getRoot = () => (rootPromise ??= fsRoot(root));
   return withMemoryWriteProvenance(
-    {
-      readFile: async (absolutePath: string) => {
-        // Canonicalize symlink parents like the write path: fs-safe 0.5.2
-        // rejects intermediate symlinks by default, but in-workspace symlink
-        // parents are part of the workspace contract.
-        const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
-        const safeRead = await (await getRoot()).read(relative);
-        return safeRead.buffer;
-      },
-      writeFile: (absolutePath: string, content: string) =>
-        writeWorkspaceFile(root, getRoot, absolutePath, content),
-      statFile: async (absolutePath: string) => {
-        const relative = toRelativeWorkspacePath(root, absolutePath);
-        return statHostFile(path.resolve(root, relative));
-      },
-      access: async (absolutePath: string) => {
-        let relative: string;
-        try {
-          // Canonicalized like readFile so in-workspace symlink parents pass.
-          relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
-        } catch {
-          // Path escapes workspace root.  Don't throw here – the upstream
-          // library replaces any `access` error with a misleading "File not
-          // found" message.  By returning silently the subsequent `readFile`
-          // call will throw the same "Path escapes workspace root" error
-          // through a code-path that propagates the original message.
-          return;
-        }
-        try {
-          const opened = await (await getRoot()).open(relative);
-          await opened.handle.close().catch(() => {});
-        } catch (error) {
-          if (error instanceof FsSafeError && error.code === "not-found") {
-            throw createFsAccessError("ENOENT", absolutePath);
-          }
-          if (error instanceof FsSafeError && error.code === "outside-workspace") {
-            // Don't throw here – see the comment above about the upstream
-            // library swallowing access errors as "File not found".
+    withMemoryFileMutationGuard({
+      guard: options?.memoryFileMutationGuard,
+      operations: {
+        readFile: async (absolutePath: string) => {
+          // Canonicalize symlink parents like the write path: fs-safe 0.5.2
+          // rejects intermediate symlinks by default, but in-workspace symlink
+          // parents are part of the workspace contract.
+          const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
+          const safeRead = await (await getRoot()).read(relative);
+          return safeRead.buffer;
+        },
+        writeFile: (absolutePath: string, content: string) =>
+          writeWorkspaceFile(root, getRoot, absolutePath, content),
+        statFile: async (absolutePath: string) => {
+          const relative = toRelativeWorkspacePath(root, absolutePath);
+          return statHostFile(path.resolve(root, relative));
+        },
+        access: async (absolutePath: string) => {
+          let relative: string;
+          try {
+            // Canonicalized like readFile so in-workspace symlink parents pass.
+            relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
+          } catch {
+            // Path escapes workspace root.  Don't throw here – the upstream
+            // library replaces any `access` error with a misleading "File not
+            // found" message.  By returning silently the subsequent `readFile`
+            // call will throw the same "Path escapes workspace root" error
+            // through a code-path that propagates the original message.
             return;
           }
-          throw error;
-        }
-      },
-    } as const,
+          try {
+            const opened = await (await getRoot()).open(relative);
+            await opened.handle.close().catch(() => {});
+          } catch (error) {
+            if (error instanceof FsSafeError && error.code === "not-found") {
+              throw createFsAccessError("ENOENT", absolutePath);
+            }
+            if (error instanceof FsSafeError && error.code === "outside-workspace") {
+              // Don't throw here – see the comment above about the upstream
+              // library swallowing access errors as "File not found".
+              return;
+            }
+            throw error;
+          }
+        },
+      } as const,
+    }),
     options?.memoryWriteProvenance,
   );
+}
+
+type FileMutationOperations = {
+  writeFile: (absolutePath: string, content: string) => Promise<void>;
+  mkdir?: (dir: string) => Promise<void>;
+};
+
+function withMemoryFileMutationGuard<T extends FileMutationOperations>(params: {
+  operations: T;
+  guard: MemoryFileMutationGuard | undefined;
+}): T {
+  if (!params.guard) {
+    return params.operations;
+  }
+  return {
+    ...params.operations,
+    writeFile: async (absolutePath, content) => {
+      await params.guard.assertCanMutate(absolutePath);
+      await params.operations.writeFile(absolutePath, content);
+    },
+    ...(params.operations.mkdir
+      ? {
+          mkdir: async (dir: string) => {
+            await params.guard.assertCanMutate(dir);
+            await params.operations.mkdir?.(dir);
+          },
+        }
+      : {}),
+  } as T;
 }
 
 async function toCanonicalRelativeWorkspacePath(

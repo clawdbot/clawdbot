@@ -5,7 +5,21 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { buildSessionStartupContextPrelude, shouldApplyStartupContext } from "./startup-context.js";
+import { resetMemoryIsolationCutoverForTest } from "../../plugins/memory-cutover.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import {
+  buildSessionStartupContextPrelude as buildSessionStartupContextPreludeForAgent,
+  shouldApplyStartupContext,
+} from "./startup-context.js";
+
+const buildSessionStartupContextPrelude = (
+  params: Omit<Parameters<typeof buildSessionStartupContextPreludeForAgent>[0], "agentId"> & {
+    agentId?: string;
+  },
+) => buildSessionStartupContextPreludeForAgent({ agentId: "main", ...params });
 
 const tmpDirs: string[] = [];
 
@@ -18,10 +32,51 @@ async function makeWorkspace(): Promise<string> {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  closeOpenClawAgentDatabasesForTest();
+  resetMemoryIsolationCutoverForTest();
   await Promise.all(tmpDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
 describe("buildSessionStartupContextPrelude", () => {
+  it("does not enumerate or read daily memory for a cut-over agent", async () => {
+    const workspaceDir = await makeWorkspace();
+    await fs.writeFile(path.join(workspaceDir, "memory", "2026-04-11.md"), "private notes", "utf8");
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-startup-cutover-"));
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    try {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      database.db
+        .prepare(
+          `INSERT INTO memory_migrations
+            (migration_id, source_kind, source_hash, phase, classification_json, plan_hash,
+             verified_at, cutover_at, updated_at)
+           VALUES ('memory-cutover-test', 'test', 'test-source', 'cutover', '{}', 'test-plan', 1, 1, 1)`,
+        )
+        .run();
+      resetMemoryIsolationCutoverForTest();
+      const readdir = vi.spyOn(fsCore.promises, "readdir");
+
+      await expect(
+        buildSessionStartupContextPreludeForAgent({
+          workspaceDir,
+          agentId: "main",
+          nowMs: Date.UTC(2026, 3, 11, 18, 0, 0),
+        }),
+      ).resolves.toBeNull();
+      expect(readdir).not.toHaveBeenCalled();
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      resetMemoryIsolationCutoverForTest();
+      if (originalStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      }
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("loads today's and yesterday's daily memory files for the first turn", async () => {
     const workspaceDir = await makeWorkspace();
     await fs.writeFile(path.join(workspaceDir, "memory", "2026-04-11.md"), "today notes", "utf-8");

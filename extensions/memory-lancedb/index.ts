@@ -198,6 +198,9 @@ export default definePluginEntry({
 
     api.registerTool(
       (ctx) => {
+        if (ctx.memoryReadEnforced) {
+          return null;
+        }
         const agentId = resolveEnabledAgentId(
           ctx.agentId,
           ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config ?? resolveRuntimeConfig(),
@@ -314,6 +317,9 @@ export default definePluginEntry({
 
     api.registerTool(
       (ctx) => {
+        if (ctx.memoryReadEnforced) {
+          return null;
+        }
         const agentId = resolveEnabledAgentId(
           ctx.agentId,
           ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config ?? resolveRuntimeConfig(),
@@ -410,6 +416,9 @@ export default definePluginEntry({
 
     api.registerTool(
       (ctx) => {
+        if (ctx.memoryReadEnforced) {
+          return null;
+        }
         const agentId = resolveEnabledAgentId(
           ctx.agentId,
           ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config ?? resolveRuntimeConfig(),
@@ -502,6 +511,9 @@ export default definePluginEntry({
     registerMemoryCli(api, db, embeddings, resolveCliAgentId, cfg.recallMaxChars);
 
     api.on("before_prompt_build", async (event, ctx) => {
+      if (ctx.memoryReadEnforced) {
+        return undefined;
+      }
       const currentCfg = resolveCurrentHookConfig();
       if (!currentCfg.autoRecall) {
         return undefined;
@@ -599,6 +611,9 @@ export default definePluginEntry({
     });
 
     api.on("agent_end", async (event, ctx) => {
+      if (ctx.memoryReadEnforced) {
+        return;
+      }
       const currentCfg = resolveCurrentHookConfig();
       if (!currentCfg.autoCapture || isIncognitoSessionKey(ctx.sessionKey)) {
         return;

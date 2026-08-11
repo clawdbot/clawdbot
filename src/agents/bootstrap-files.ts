@@ -8,6 +8,8 @@ import type { ChatType } from "../channels/chat-type.js";
 import { readRecentSessionTranscriptActiveEvents } from "../config/sessions/session-accessor.js";
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { canonicalPathFromExistingAncestor } from "../infra/fs-safe.js";
+import { isMemoryIsolationCutoverAgent } from "../plugins/memory-cutover.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
@@ -216,6 +218,60 @@ function filterBootstrapFilesAfterHooks(params: {
   return sessionFiltered.filter((file) => !workspaceFilesShareSourceIdentity(file, rootMemoryFile));
 }
 
+async function filterEnforcedMemoryBootstrapFiles(params: {
+  files: WorkspaceBootstrapFile[];
+  workspaceDir: string;
+  agentId?: string;
+}): Promise<WorkspaceBootstrapFile[]> {
+  if (!params.agentId || !isMemoryIsolationCutoverAgent(params.agentId)) {
+    return params.files;
+  }
+  const workspaceRoot = resolveUserPath(params.workspaceDir);
+  const canonicalWorkspaceRoot = await canonicalPathFromExistingAncestor(workspaceRoot).catch(
+    () => workspaceRoot,
+  );
+  const entries = await Promise.all(
+    params.files.map(async (file) => {
+      const pathValue = normalizeOptionalString(file.path);
+      if (!pathValue) {
+        return { file, controlled: false };
+      }
+      const resolvedPath = path.isAbsolute(pathValue)
+        ? path.resolve(pathValue)
+        : pathValue.startsWith("~")
+          ? resolveUserPath(pathValue)
+          : path.resolve(workspaceRoot, pathValue);
+      const canonicalParent = await canonicalPathFromExistingAncestor(
+        path.dirname(resolvedPath),
+      ).catch(() => path.dirname(resolvedPath));
+      const relativePath = path.relative(
+        canonicalWorkspaceRoot,
+        path.join(canonicalParent, path.basename(resolvedPath)),
+      );
+      if (
+        !relativePath ||
+        path.isAbsolute(relativePath) ||
+        relativePath === ".." ||
+        relativePath.startsWith(`..${path.sep}`)
+      ) {
+        return { file, controlled: false };
+      }
+      const normalized = relativePath.replaceAll(path.sep, "/").toLowerCase();
+      return {
+        file,
+        controlled:
+          normalized === "memory.md" ||
+          normalized === "user.md" ||
+          normalized === "memory" ||
+          normalized.startsWith("memory/"),
+      };
+    }),
+  );
+  // Hooks can relabel or path-alias loader records. Admission is based on the canonical source
+  // location, so an enforced run cannot regain controlled memory through a hook-added context file.
+  return entries.filter((entry) => !entry.controlled).map((entry) => entry.file);
+}
+
 /** Resolves hook-adjusted, session-filtered bootstrap files for a run. */
 export async function resolveBootstrapFilesForRun(params: {
   workspaceDir: string;
@@ -275,7 +331,15 @@ export async function resolveBootstrapFilesForRun(params: {
     workspaceSetupCompleted,
     params.workspaceDir,
   );
-  return sanitizeBootstrapFiles(filteredUpdated, params.workspaceDir, params.warn);
+  return sanitizeBootstrapFiles(
+    await filterEnforcedMemoryBootstrapFiles({
+      files: filteredUpdated,
+      workspaceDir: params.workspaceDir,
+      agentId: params.agentId,
+    }),
+    params.workspaceDir,
+    params.warn,
+  );
 }
 
 /** Resolves both raw bootstrap metadata and bounded context files for a run. */

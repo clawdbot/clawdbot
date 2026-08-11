@@ -3,6 +3,7 @@ import {
   prepareMemoryPromptSection,
   type PreparedMemoryPromptSection,
 } from "../plugins/memory-state.js";
+import { isMemoryIsolationCutoverAgent } from "../plugins/memory-cutover.js";
 
 /** Prepare memory prompt state with the same normalized tool context used by assembly. */
 export async function prepareAgentMemoryPrompt(params: {
@@ -28,5 +29,8 @@ export async function prepareAgentMemoryPrompt(params: {
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
     sandboxed: params.sandboxed,
+    ...(params.agentId && isMemoryIsolationCutoverAgent(params.agentId)
+      ? { memoryReadEnforced: true as const }
+      : {}),
   });
 }

@@ -251,6 +251,11 @@ export function buildMemorySystemPromptAddition(
     agentId: params.agentId ?? prepared.context.agentId,
     agentSessionKey: params.agentSessionKey ?? prepared.context.agentSessionKey,
     sandboxed: params.sandboxed ?? prepared.context.sandboxed,
+    // A prepared cut-over section is the run-owned proof that its legacy
+    // supplements were withheld. Keep that state when the delegate rebuilds
+    // its synchronous view, or an omitted flag would reopen those supplements.
+    memoryReadEnforced:
+      params.memoryReadEnforced ?? (prepared.context.memoryReadEnforced ? true : undefined),
   };
   return renderMemorySystemPromptAddition(contextParams, prepared);
 }

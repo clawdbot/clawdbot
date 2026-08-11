@@ -742,7 +742,10 @@ export async function runPreflightCompactionIfNeeded(params: {
     modelId: params.followupRun.run.model ?? params.defaultModel,
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
-  const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
+  const memoryFlushPlan = resolveMemoryFlushPlan({
+    cfg: params.cfg,
+    agentId: compactionAgentId,
+  });
   const reserveTokensFloor = memoryFlushPlan?.reserveTokensFloor ?? 20_000;
   const softThresholdTokens = memoryFlushPlan?.softThresholdTokens ?? 4_000;
   const freshPersistedTokens = resolveFreshSessionTotalTokens(entry);
@@ -1033,6 +1036,12 @@ export async function runMemoryFlushIfNeeded(params: {
   replyOperation: ReplyOperation;
   onVisibleErrorPayloads?: (payloads: ReplyPayload[]) => void;
 }): Promise<MemoryFlushResult> {
+  const memoryFlushAgentId = params.sessionKey
+    ? resolveAgentIdFromSessionKey(
+        params.sessionKey,
+        params.followupRun.run.agentId ?? resolveDefaultAgentId(params.cfg),
+      )
+    : (params.followupRun.run.agentId ?? resolveDefaultAgentId(params.cfg));
   const memoryFlushWritable = (() => {
     if (!params.sessionKey) {
       return true;
@@ -1078,7 +1087,7 @@ export async function runMemoryFlushIfNeeded(params: {
     recordMemoryFlushFailure(error, params, activeSessionEntry);
   let memoryFlushPlan: MemoryFlushPlan | null;
   try {
-    memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
+    memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg, agentId: memoryFlushAgentId });
   } catch (error) {
     return await recordFailure(error);
   }
@@ -1268,7 +1277,11 @@ export async function runMemoryFlushIfNeeded(params: {
       (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.systemPromptReport : undefined),
   );
   const prepareMemoryFlushAttempt = async () => {
-    const plan = resolveMemoryFlushPlan({ cfg: params.cfg, nowMs: memoryDeps.now() });
+    const plan = resolveMemoryFlushPlan({
+      cfg: params.cfg,
+      agentId: memoryFlushAgentId,
+      nowMs: memoryDeps.now(),
+    });
     if (!plan) {
       return null;
     }

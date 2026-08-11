@@ -7,6 +7,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatDateStamp, resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { openRootFile } from "../../infra/boundary-file-read.js";
+import { isMemoryIsolationCutoverAgent } from "../../plugins/memory-cutover.js";
 
 const STARTUP_MEMORY_FILE_MAX_BYTES = 16_384;
 const STARTUP_MEMORY_FILE_MAX_CHARS = 1_200;
@@ -285,9 +286,15 @@ async function listStartupMemoryPathsByDate(params: {
 
 export async function buildSessionStartupContextPrelude(params: {
   workspaceDir: string;
+  agentId: string;
   cfg?: OpenClawConfig;
   nowMs?: number;
 }): Promise<string | null> {
+  if (isMemoryIsolationCutoverAgent(params.agentId)) {
+    // Daily files are legacy workspace reads without a bound invocation or egress receipt.
+    // Until the selected runtime can issue those, startup memory is explicitly unavailable.
+    return null;
+  }
   const nowMs = params.nowMs ?? Date.now();
   const timezone = resolveUserTimezone(params.cfg?.agents?.defaults?.userTimezone);
   const limits = resolveStartupContextLimits(params.cfg);

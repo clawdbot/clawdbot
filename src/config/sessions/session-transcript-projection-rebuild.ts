@@ -7,6 +7,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import { readAuthorizedTranscriptEventSeqs } from "./session-transcript-memory-policy.js";
 import {
   isCanonicalSessionTranscriptEntry,
   parseSessionTranscriptTreeEntry,
@@ -162,6 +163,8 @@ export function shouldProjectActiveEvent(event: unknown): boolean {
 export function buildSessionTranscriptProjection(params: {
   rows: readonly SessionTranscriptProjectionSourceRow[];
   sessionId: string;
+  /** The raw high-water mark; pending rows are deliberately absent from the projection. */
+  sourceIndexedSeq?: number;
   sourceTranscriptUpdatedAt: number | null;
 }): PreparedSessionTranscriptProjection {
   const now = Date.now();
@@ -199,7 +202,7 @@ export function buildSessionTranscriptProjection(params: {
     ftsRows,
     leafEventId: resolveVisibleTranscriptAppendParentId(events),
     sessionId: params.sessionId,
-    sourceIndexedSeq: params.rows.at(-1)?.seq ?? -1,
+    sourceIndexedSeq: params.sourceIndexedSeq ?? params.rows.at(-1)?.seq ?? -1,
     sourceTranscriptUpdatedAt: params.sourceTranscriptUpdatedAt,
   };
 }
@@ -232,12 +235,15 @@ export function prepareSessionTranscriptProjection(
         return undefined;
       }
 
+      const sourceRows = rows.map((row) => ({
+        createdAt: row.created_at,
+        event: JSON.parse(row.event_json) as unknown,
+        seq: row.seq,
+      }));
+      const authorizedSeqs = readAuthorizedTranscriptEventSeqs(db, sessionId);
       return buildSessionTranscriptProjection({
-        rows: rows.map((row) => ({
-          createdAt: row.created_at,
-          event: JSON.parse(row.event_json) as unknown,
-          seq: row.seq,
-        })),
+        rows: authorizedSeqs ? sourceRows.filter((row) => authorizedSeqs.has(row.seq)) : sourceRows,
+        sourceIndexedSeq: sourceRows.at(-1)?.seq ?? -1,
         sessionId,
         sourceTranscriptUpdatedAt: session.transcript_updated_at,
       });

@@ -1,8 +1,16 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES } from "../memory-host-sdk/host/authorization.js";
+import { resetMemoryIsolationCutoverForTest } from "../plugins/memory-cutover.js";
 import { getSelectedMemoryRuntime } from "../plugins/memory-runtime.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import {
   buildProjectMemoryWriteInstruction,
   filterProjectScopedCuratedContextFiles,
@@ -33,7 +41,14 @@ function installSelectedMemoryRuntime() {
 }
 
 describe("project memory bootstrap", () => {
+  let originalStateDir: string | undefined;
+  let stateDir = "";
+
   beforeEach(() => {
+    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-project-memory-"));
+    originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    resetMemoryIsolationCutoverForTest();
     resetPluginRuntimeStateForTest();
     runtimeMocks.getManager.mockReset();
     runtimeMocks.listCurated.mockReset();
@@ -42,6 +57,14 @@ describe("project memory bootstrap", () => {
   });
 
   afterEach(() => {
+    closeOpenClawAgentDatabasesForTest();
+    resetMemoryIsolationCutoverForTest();
+    if (originalStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = originalStateDir;
+    }
+    fs.rmSync(stateDir, { recursive: true, force: true });
     resetPluginRuntimeStateForTest();
   });
 
@@ -122,6 +145,29 @@ describe("project memory bootstrap", () => {
     await expect(prepareEntries(entries, [])).resolves.toEqual([]);
     expect(runtimeMocks.getManager).not.toHaveBeenCalled();
     expect(buildProjectMemoryWriteInstruction(undefined)).toBe("");
+  });
+
+  it("does not acquire legacy curated candidates for a cut-over agent", async () => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    database.db
+      .prepare(
+        `INSERT INTO memory_migrations
+          (migration_id, source_kind, source_hash, phase, classification_json, plan_hash,
+           verified_at, cutover_at, updated_at)
+         VALUES ('memory-cutover-test', 'test', 'test-source', 'cutover', '{}', 'test-plan', 1, 1, 1)`,
+      )
+      .run();
+    resetMemoryIsolationCutoverForTest();
+
+    await expect(
+      prepareProjectMemoryBootstrap({
+        cfg: {},
+        agentId: "main",
+        activeProjectKeys: ["github.com/OpenClaw/OpenClaw"],
+      }),
+    ).resolves.toEqual([]);
+    expect(runtimeMocks.getManager).not.toHaveBeenCalled();
+    expect(runtimeMocks.listCurated).not.toHaveBeenCalled();
   });
 
   it("renders budgeted curated candidates through the selected active runtime", async () => {

@@ -5,6 +5,11 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookEntry } from "../hooks/types.js";
+import type {
+  MemoryReadResult,
+  MemorySearchResult,
+  MemorySource,
+} from "../memory-host-sdk/host/types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
 export type OpenClawPluginActiveModelContext = {
@@ -12,6 +17,43 @@ export type OpenClawPluginActiveModelContext = {
   modelId?: string;
   modelRef?: string;
 };
+
+/** A generic, model-safe denial returned by the host-owned memory read broker. */
+export type AuthorizedMemoryReadUnavailable = Readonly<{
+  disabled: true;
+  unavailable: true;
+  error: "memory unavailable";
+}>;
+
+/** A scoped search hit whose continuation is valid only for this tool invocation. */
+export type AuthorizedMemoryReadSearchResult = Readonly<
+  MemorySearchResult & {
+    /** Opaque, revision-bound continuation; never a filesystem path or namespace. */
+    handleId: string;
+  }
+>;
+
+/**
+ * Host-owned, selected-runtime-only read capability. Plugins cannot construct
+ * it or convert arbitrary paths into reads; an opaque continuation comes from
+ * a prior authorized search in the same invocation.
+ */
+export type AuthorizedMemoryReadHost = Readonly<{
+  search: (params: {
+    query: string;
+    sources?: readonly MemorySource[];
+    limit?: number;
+    signal?: AbortSignal;
+  }) => Promise<
+    | Readonly<{ results: readonly AuthorizedMemoryReadSearchResult[] }>
+    | AuthorizedMemoryReadUnavailable
+  >;
+  read: (params: {
+    handleId: string;
+    from?: number;
+    lines?: number;
+  }) => Promise<MemoryReadResult | AuthorizedMemoryReadUnavailable>;
+}>;
 
 /** Trusted execution context passed to plugin-owned agent tool factories. */
 export type OpenClawPluginToolContext = {
@@ -34,6 +76,10 @@ export type OpenClawPluginToolContext = {
   activeProjectKeys?: readonly string[];
   /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
   conversationRecall?: ConversationRecallContext;
+  /** True when legacy memory surfaces are disabled for this agent's completed cutover. */
+  memoryReadEnforced?: true;
+  /** Host-owned authorized-read capability for the selected memory runtime. */
+  authorizedMemoryRead?: AuthorizedMemoryReadHost;
   /**
    * Runtime-supplied active model metadata for informational use, diagnostics,
    * and plugin-owned policy decisions. This is not a security boundary against

@@ -148,6 +148,15 @@ describe("Memory Wiki prompt section", () => {
     expect(buildGuidance({ availableTools: new Set(["web_search"]) })).toStrictEqual([]);
   });
 
+  it("does not advertise unavailable wiki tools after the memory cut-over", () => {
+    expect(
+      buildGuidance({
+        availableTools: new Set(["wiki_search", "wiki_get"]),
+        memoryReadEnforced: true,
+      }),
+    ).toStrictEqual([]);
+  });
+
   it("prepares a compact compiled digest from SQLite", async () => {
     const config = resolveMemoryWikiConfig({
       vault: { path: path.join(suiteRoot, "digest-enabled") },
@@ -195,6 +204,22 @@ describe("Memory Wiki prompt section", () => {
     });
 
     await expect(createStaticPreparer(config)({ availableTools: new Set() })).resolves.toEqual([]);
+  });
+
+  it("does not inject a legacy digest after the memory cut-over", async () => {
+    const config = resolveMemoryWikiConfig({
+      vault: { path: path.join(suiteRoot, "digest-enforced") },
+      context: { includeCompiledDigestPrompt: true },
+    });
+    await seedCompiledDigest({
+      config,
+      claimCount: 1,
+      pages: [{ title: "Private", kind: "entity", claimCount: 1 }],
+    });
+
+    await expect(
+      createStaticPreparer(config)({ availableTools: new Set(), memoryReadEnforced: true }),
+    ).resolves.toEqual([]);
   });
 
   it("stabilizes digest ordering for prompt-cache-friendly output", async () => {

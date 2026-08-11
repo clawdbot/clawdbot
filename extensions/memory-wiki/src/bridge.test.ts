@@ -7,10 +7,16 @@ import {
   type MemoryPluginPublicArtifact,
   registerMemoryCapability,
 } from "openclaw/plugin-sdk/memory-host-core";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { syncMemoryWikiBridgeSources } from "./bridge.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
+
+const isLegacyMemorySurfaceDisabledMock = vi.hoisted(() => vi.fn(() => false));
+
+vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", () => ({
+  isLegacyMemorySurfaceDisabled: isLegacyMemorySurfaceDisabledMock,
+}));
 
 const { createVault } = createMemoryWikiTestHarness();
 
@@ -31,6 +37,7 @@ describe("syncMemoryWikiBridgeSources", () => {
 
   afterEach(() => {
     clearMemoryPluginState();
+    isLegacyMemorySurfaceDisabledMock.mockReset().mockReturnValue(false);
   });
 
   function nextCaseRoot(name: string): string {
@@ -52,6 +59,51 @@ describe("syncMemoryWikiBridgeSources", () => {
       },
     });
   }
+
+  it("fails closed before direct bridge sync can inspect artifacts or vault paths", async () => {
+    const listArtifacts = vi.fn(async () => [
+      {
+        kind: "memory-root" as const,
+        workspaceDir: "/private/workspace",
+        relativePath: "MEMORY.md",
+        absolutePath: "/private/workspace/MEMORY.md",
+        agentIds: ["cutover"],
+        contentType: "markdown" as const,
+      },
+    ]);
+    registerMemoryCapability("memory-core", {
+      publicArtifacts: { listArtifacts },
+    });
+    const stat = vi.spyOn(fs, "stat");
+    const mkdir = vi.spyOn(fs, "mkdir");
+    isLegacyMemorySurfaceDisabledMock.mockImplementation((agentId: string) => agentId === "cutover");
+
+    await expect(
+      syncMemoryWikiBridgeSources({
+        config: {
+          vaultMode: "bridge",
+          vault: { scope: "global", path: "/private/vault", renderMode: "native" },
+          bridge: {
+            enabled: true,
+            readMemoryArtifacts: true,
+            indexDreamReports: true,
+            indexDailyNotes: true,
+            indexMemoryRoot: true,
+            followMemoryEvents: false,
+          },
+        } as never,
+        appConfig: {
+          agents: {
+            list: [{ id: "cutover", default: true, workspace: "/private/workspace" }],
+          },
+        } as OpenClawConfig,
+      }),
+    ).rejects.toThrow("Memory Wiki is unavailable after scoped-memory cutover.");
+
+    expect(listArtifacts).not.toHaveBeenCalled();
+    expect(stat).not.toHaveBeenCalled();
+    expect(mkdir).not.toHaveBeenCalled();
+  });
 
   it("imports public memory artifacts and stays idempotent across reruns", async () => {
     const workspaceDir = await createBridgeWorkspace("workspace");

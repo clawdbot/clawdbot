@@ -5,13 +5,11 @@ import {
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
-import {
-  loadTranscriptEventsFromDatabase,
-  readTranscriptEventMessage,
-} from "./session-accessor.sqlite-read.js";
+import { readTranscriptEventMessage } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readMessageIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
+import { readAuthorizedTranscriptEventSeqs } from "./session-transcript-memory-policy.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
 // Keep supplied-key probes below SQLite's conservative variable ceiling.
@@ -23,11 +21,11 @@ type TranscriptMirrorFacts = {
   messagesByIdempotencyKey: Map<string, unknown>;
 };
 
-/** Returns raw events only when the transcript identity projection is not current. */
+/** Returns raw rows only when the transcript identity projection is not current. */
 function loadTranscriptEventsForMirrorFallback(
   database: OpenClawAgentDatabase,
   sessionId: string,
-): TranscriptEvent[] | undefined {
+): Array<{ eventJson: string; seq: number }> | undefined {
   const db = getSessionKysely(database.db);
   const latest = executeSqliteQueryTakeFirstSync(
     database.db,
@@ -52,7 +50,14 @@ function loadTranscriptEventsForMirrorFallback(
     return undefined;
   }
   // Raw rows stay authoritative if projection maintenance has not caught up.
-  return loadTranscriptEventsFromDatabase(database, sessionId);
+  return executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select(["event_json", "seq"])
+      .where("session_id", "=", sessionId)
+      .orderBy("seq", "asc"),
+  ).rows.map((row) => ({ eventJson: row.event_json, seq: row.seq }));
 }
 
 /** Reads the bounded identity facts needed by transcript mirrors. */
@@ -82,9 +87,17 @@ function readTranscriptMirrorFactsInSnapshot(
   },
 ): TranscriptMirrorFacts {
   const idempotencyKeys = [...new Set(params.idempotencyKeys)];
+  // Index freshness proves identities are current, not that their raw events
+  // were admitted after cutover. Keep the companion policy fence on this fast path.
+  const authorizedEventSeqs = readAuthorizedTranscriptEventSeqs(database.db, resolved.sessionId);
   const fallbackEvents = loadTranscriptEventsForMirrorFallback(database, resolved.sessionId);
   if (fallbackEvents !== undefined) {
-    return readMirrorFactsFromEvents(fallbackEvents, new Set(idempotencyKeys));
+    return readMirrorFactsFromEvents(
+      authorizedEventSeqs
+        ? fallbackEvents.filter((row) => authorizedEventSeqs.has(row.seq))
+        : fallbackEvents,
+      new Set(idempotencyKeys),
+    );
   }
 
   const db = getSessionKysely(database.db);
@@ -108,12 +121,20 @@ function readTranscriptMirrorFactsInSnapshot(
             .onRef("event.session_id", "=", "identity.session_id")
             .onRef("event.seq", "=", "identity.seq"),
         )
-        .select(["identity.event_id", "identity.message_idempotency_key", "event.event_json"])
+        .select([
+          "identity.event_id",
+          "identity.message_idempotency_key",
+          "identity.seq",
+          "event.event_json",
+        ])
         .where("identity.session_id", "=", resolved.sessionId)
         .where("identity.message_idempotency_key", "in", batch)
         .orderBy("identity.seq", "asc"),
     ).rows;
     for (const row of rows) {
+      if (authorizedEventSeqs && !authorizedEventSeqs.has(row.seq)) {
+        continue;
+      }
       const idempotencyKey = row.message_idempotency_key;
       if (!idempotencyKey) {
         continue;
@@ -138,7 +159,7 @@ function readTranscriptMirrorFactsInSnapshot(
 
 /** Extracts supplied mirror identities from authoritative transcript events. */
 function readMirrorFactsFromEvents(
-  events: readonly TranscriptEvent[],
+  rows: readonly { eventJson: string; seq: number }[],
   candidateKeys: ReadonlySet<string>,
 ): TranscriptMirrorFacts {
   const facts: TranscriptMirrorFacts = {
@@ -146,7 +167,8 @@ function readMirrorFactsFromEvents(
     existingIdempotencyKeys: new Set(),
     messagesByIdempotencyKey: new Map(),
   };
-  for (const event of events) {
+  for (const row of rows) {
+    const event = JSON.parse(row.eventJson) as TranscriptEvent;
     const message = readTranscriptEventMessage(event);
     const idempotencyKey = readMessageIdempotencyKey(message);
     if (!idempotencyKey || !candidateKeys.has(idempotencyKey)) {

@@ -18,6 +18,7 @@ import type { ProcessToolDefaults } from "./bash-tools.process.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { createLazyExecTool } from "./lazy-exec-tool.js";
 import { createLazyProcessTool } from "./lazy-process-tool.js";
+import type { MemoryFileMutationGuard } from "./memory-file-mutation-guard.js";
 import type { MemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
 import type { SandboxContext } from "./sandbox.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
@@ -77,6 +78,7 @@ type CoreCodingToolsOptions = {
   skillsSnapshot?: SkillSnapshot;
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
+  memoryFileMutationGuard?: MemoryFileMutationGuard;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   baseToolNames?: readonly string[];
   baseToolFactories?: {
@@ -160,6 +162,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
     if (!sandboxRoot && baseToolNames.has("edit")) {
       const edit = createHostWorkspaceEditTool(options.codingRoot, {
         workspaceOnly: options.workspaceOnly,
+        memoryFileMutationGuard: options.memoryFileMutationGuard,
         memoryWriteProvenance: options.memoryWriteProvenance,
         createTool: options.baseToolFactories?.createEditTool,
       });
@@ -170,6 +173,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
     if (!sandboxRoot && baseToolNames.has("write")) {
       const write = createHostWorkspaceWriteTool(options.codingRoot, {
         workspaceOnly: options.workspaceOnly,
+        memoryFileMutationGuard: options.memoryFileMutationGuard,
         memoryWriteProvenance: options.memoryWriteProvenance,
         createTool: options.baseToolFactories?.createWriteTool,
       });
@@ -183,6 +187,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
     const toolOptions = {
       root: sandboxRoot,
       bridge: sandboxFsBridge!,
+      memoryFileMutationGuard: options.memoryFileMutationGuard,
       memoryWriteProvenance: options.memoryWriteProvenance,
     };
     const edit = createSandboxedEditTool({
@@ -219,6 +224,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
               ? { root: sandboxRoot, bridge: sandboxFsBridge! }
               : undefined,
           workspaceOnly: options.applyPatchWorkspaceOnly,
+          memoryFileMutationGuard: options.memoryFileMutationGuard,
           memoryWriteProvenance: options.memoryWriteProvenance,
         }) as unknown as AnyAgentTool,
       );

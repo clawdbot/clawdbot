@@ -45,10 +45,18 @@ export type CurrentMemorySessionContext = Readonly<{
   agentId: string;
   sessionKey: string;
   sessionId: string;
+  /** Immutable generation of the session identity snapshot used by protected-memory plans. */
+  sessionIdentityRevision: string;
   subjectRevision: string;
   subject: PersistedMemorySessionSubject["subject"];
   principalId: string;
   bindingId?: string;
+  /** Persisted transport identity for a channel/group subject; never a sender identity. */
+  conversation?: Readonly<{
+    channel: string;
+    accountId: string;
+    primaryConversationId: string;
+  }>;
   authorityRevision: string;
   fingerprint: string;
 }>;
@@ -255,10 +263,14 @@ export function createCurrentMemorySessionContext(params: {
       `SELECT sn.current_session_id, ms.binding_id, ms.principal_id, ms.subject_kind, ms.subject_revision,
               ss.session_id AS snapshot_session_id, ss.session_key AS snapshot_session_key,
               ss.subject_revision AS snapshot_subject_revision,
-              ss.session_identity_revision
+              ss.session_identity_revision,
+              sw.channel AS conversation_channel, sw.account_id AS conversation_account_id,
+              sw.primary_conversation_id
        FROM session_nodes sn
        LEFT JOIN session_memory_subjects ms ON ms.session_key = sn.session_key
        LEFT JOIN session_memory_subject_snapshots ss ON ss.session_id = sn.current_session_id
+       LEFT JOIN session_windows sw
+         ON sw.session_id = sn.current_session_id AND sw.session_key = sn.session_key
        WHERE sn.session_key = ?`,
     )
     .get(sessionKey) as
@@ -272,6 +284,9 @@ export function createCurrentMemorySessionContext(params: {
         snapshot_session_key: string | null;
         snapshot_subject_revision: string | null;
         session_identity_revision: string | null;
+        conversation_channel: string | null;
+        conversation_account_id: string | null;
+        primary_conversation_id: string | null;
       }
     | undefined;
   if (
@@ -295,6 +310,20 @@ export function createCurrentMemorySessionContext(params: {
     subject_revision: row.subject_revision,
   });
   if (persisted.subject.kind === "ambiguous" || persisted.subject.kind === "quarantined") {
+    return { kind: "ambiguous" };
+  }
+  const conversation =
+    persisted.subject.kind === "conversation" &&
+    row.conversation_channel &&
+    row.conversation_account_id &&
+    row.primary_conversation_id
+      ? Object.freeze({
+          channel: row.conversation_channel,
+          accountId: row.conversation_account_id,
+          primaryConversationId: row.primary_conversation_id,
+        })
+      : undefined;
+  if (persisted.subject.kind === "conversation" && !conversation) {
     return { kind: "ambiguous" };
   }
   let authorityRevision: string;
@@ -331,10 +360,12 @@ export function createCurrentMemorySessionContext(params: {
     agentId: params.options.agentId,
     sessionKey,
     sessionId,
+    sessionIdentityRevision: row.session_identity_revision,
     subjectRevision: row.subject_revision,
     subject: persisted.subject,
     principalId: persisted.subject.principalId,
     ...(persisted.subject.kind === "user" ? { bindingId: persisted.subject.bindingId } : {}),
+    ...(conversation ? { conversation } : {}),
     authorityRevision,
     fingerprint,
   }) as CurrentMemorySessionContext;

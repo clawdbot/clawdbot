@@ -241,6 +241,9 @@ export default definePluginEntry({
     api.on(
       "before_prompt_build",
       async (event, ctx) => {
+        if (ctx.memoryReadEnforced) {
+          return undefined;
+        }
         refreshLiveConfigFromRuntime();
         const liveConfig = readCurrentConfig() ?? api.config;
         // The hook deadline, watchdog, and embedded-run budget all flow from
@@ -498,6 +501,9 @@ export default definePluginEntry({
       { timeoutMs: beforePromptBuildTimeoutMs },
     );
     api.on("before_model_resolve", async (event, ctx) => {
+      if (ctx.memoryReadEnforced) {
+        return;
+      }
       refreshLiveConfigFromRuntime();
       const liveConfig = readCurrentConfig() ?? (api.config as OpenClawConfig);
       const effectiveAgentId = resolveStatusUpdateAgentId(ctx);

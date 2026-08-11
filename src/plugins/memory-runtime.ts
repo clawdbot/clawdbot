@@ -6,6 +6,7 @@ import { resolveUserPath } from "../utils.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { loadPluginRegistryHandle, resolvePluginRegistryLoadCacheKey } from "./loader.js";
 import { observeMemoryAuthorizationShadowSurface } from "./memory-authorization-shadow.js";
+import { isMemoryIsolationCutoverAgent } from "./memory-cutover.js";
 import {
   resolveSelectedMemoryCapabilityRegistration,
   setStandaloneMemoryManagerActive,
@@ -171,6 +172,11 @@ export async function getActiveMemorySearchManagerCore(params: {
   agentId: string;
   purpose?: "default" | "status" | "cli";
 }) {
+  if (isMemoryIsolationCutoverAgent(params.agentId)) {
+    // Enforced runs may use only the broker's opaque invocation. Returning a legacy manager here
+    // would let every older caller recover broad filesystem and transcript reads on backend failure.
+    return { manager: null, error: "memory authorization required" };
+  }
   const owner = ensureMemoryRuntime(params);
   if (!owner) {
     return { manager: null, error: "memory plugin unavailable" };
@@ -188,6 +194,9 @@ export async function getActiveMemorySearchManagerCore(params: {
 export async function authorizeActiveMemorySearchHits(
   params: MemorySearchAuthorization,
 ): Promise<MemorySearchAuthorization["hits"]> {
+  if (isMemoryIsolationCutoverAgent(params.agentId)) {
+    return [];
+  }
   const owner = ensureMemoryRuntime(params);
   if (!owner) {
     // Session artifacts need plugin-owned identity mapping before they are safe
@@ -204,6 +213,9 @@ export async function authorizeActiveMemorySearchHits(
 
 /** Resolves current memory backend config without constructing a manager. */
 export function resolveActiveMemoryBackendConfig(params: { cfg: OpenClawConfig; agentId: string }) {
+  if (isMemoryIsolationCutoverAgent(params.agentId)) {
+    return null;
+  }
   const owner = ensureMemoryRuntime(params);
   return owner
     ? withMemoryRuntimeOwner(owner, (runtime) => runtime.resolveMemoryBackendConfig(params))

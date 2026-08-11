@@ -38,6 +38,7 @@ import type {
 } from "../../plugins/cli-backend.types.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { isMemoryIsolationCutoverAgent } from "../../plugins/memory-cutover.js";
 import {
   LEGACY_IMPLICIT_AGENT_ID,
   isSubagentSessionKey,
@@ -780,6 +781,9 @@ export async function prepareCliRunContext(
           agentId: sessionAgentId,
           sessionKey: params.sessionKey,
           sessionId: params.sessionId,
+          ...(sessionAgentId && isMemoryIsolationCutoverAgent(sessionAgentId)
+            ? { memoryReadEnforced: true as const }
+            : {}),
           workspaceDir,
           modelProviderId: params.provider,
           modelId,

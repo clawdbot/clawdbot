@@ -1,4 +1,8 @@
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -11,6 +15,7 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
+import { readAuthorizedTranscriptEventSeqs } from "./session-transcript-memory-policy.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 
@@ -81,6 +86,25 @@ function readProjectionSnapshot(
   };
 }
 
+/** A current index can still contain a row whose companion was later revoked. */
+function projectionMatchesCurrentMemoryPolicy(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+): boolean {
+  const authorizedSeqs = readAuthorizedTranscriptEventSeqs(database.db, sessionId);
+  if (!authorizedSeqs) {
+    return true;
+  }
+  const rows = executeSqliteQuerySync(
+    database.db,
+    getActiveTranscriptKysely(database)
+      .selectFrom("session_transcript_active_events")
+      .select("event_seq")
+      .where("session_id", "=", sessionId),
+  ).rows;
+  return rows.every((row) => authorizedSeqs.has(row.event_seq));
+}
+
 export function withCurrentProjectionSnapshot<T>(
   scope: SessionTranscriptReadScope,
   read: (projection: CurrentTranscriptProjection) => T,
@@ -101,7 +125,8 @@ export function withCurrentProjectionSnapshot<T>(
       if (
         snapshot.state &&
         !snapshot.state.needsRebuild &&
-        snapshot.state.indexedSeq === snapshot.latestSeq
+        snapshot.state.indexedSeq === snapshot.latestSeq &&
+        projectionMatchesCurrentMemoryPolicy(database, resolved.sessionId)
       ) {
         return {
           kind: "value" as const,

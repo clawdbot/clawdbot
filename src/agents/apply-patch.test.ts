@@ -13,6 +13,7 @@ import {
 } from "../test-utils/symlink-rebind-race.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import { applyPatch } from "./apply-patch.test-support.js";
+import { createMemoryFileMutationGuard } from "./memory-file-mutation-guard.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>) {
@@ -134,6 +135,50 @@ describe("applyPatch", () => {
 -price: 5
 +price: 7
 *** End Patch`;
+
+  it("blocks every legacy memory mutation before patch file operations", async () => {
+    await withTempDir(async (dir) => {
+      const guard = createMemoryFileMutationGuard({ mutationRoot: dir });
+      await fs.writeFile(path.join(dir, "MEMORY.md"), "before\n", "utf8");
+      await fs.writeFile(path.join(dir, "USER.md"), "before\n", "utf8");
+      await fs.writeFile(path.join(dir, "source.txt"), "before\n", "utf8");
+
+      await expect(
+        applyPatch(`*** Begin Patch\n*** Add File: memory/new.md\n+blocked\n*** End Patch`, {
+          cwd: dir,
+          memoryFileMutationGuard: guard,
+        }),
+      ).rejects.toThrow("Legacy memory file mutations are unavailable for this agent.");
+      await expect(fs.access(path.join(dir, "memory"))).rejects.toMatchObject({ code: "ENOENT" });
+
+      await expect(
+        applyPatch(
+          `*** Begin Patch\n*** Update File: MEMORY.md\n@@\n-before\n+after\n*** End Patch`,
+          {
+            cwd: dir,
+            memoryFileMutationGuard: guard,
+          },
+        ),
+      ).rejects.toThrow("Legacy memory file mutations are unavailable for this agent.");
+      await expect(fs.readFile(path.join(dir, "MEMORY.md"), "utf8")).resolves.toBe("before\n");
+
+      await expect(
+        applyPatch(`*** Begin Patch\n*** Delete File: USER.md\n*** End Patch`, {
+          cwd: dir,
+          memoryFileMutationGuard: guard,
+        }),
+      ).rejects.toThrow("Legacy memory file mutations are unavailable for this agent.");
+      await expect(fs.readFile(path.join(dir, "USER.md"), "utf8")).resolves.toBe("before\n");
+
+      await expect(
+        applyPatch(
+          `*** Begin Patch\n*** Update File: source.txt\n*** Move to: memory/moved.txt\n@@\n-before\n+after\n*** End Patch`,
+          { cwd: dir, memoryFileMutationGuard: guard },
+        ),
+      ).rejects.toThrow("Legacy memory file mutations are unavailable for this agent.");
+      await expect(fs.readFile(path.join(dir, "source.txt"), "utf8")).resolves.toBe("before\n");
+    });
+  });
 
   it.each([
     { name: "workspace-confined host", workspaceOnly: true },

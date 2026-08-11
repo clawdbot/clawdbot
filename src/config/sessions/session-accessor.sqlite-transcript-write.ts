@@ -55,6 +55,7 @@ import {
   rewriteSqliteTranscriptEventRowsInTransaction,
 } from "./session-accessor.sqlite-transcript-store.js";
 import type { SessionTranscriptWriteTransactionContext } from "./session-accessor.types.js";
+import { readAuthorizedTranscriptEventSeqs } from "./session-transcript-memory-policy.js";
 import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
@@ -195,6 +196,12 @@ export async function trimTranscriptForManualCompact(
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
     const snapshotRows = readTranscriptEventRows(database, resolved.sessionId);
+    const authorizedSeqs = readAuthorizedTranscriptEventSeqs(database.db, resolved.sessionId);
+    // A compact rewrite cannot preserve Phase 2B policy lineage yet. Never hand
+    // a pending/stale row to its selector or archive it as a derived artifact.
+    if (authorizedSeqs && authorizedSeqs.size !== snapshotRows.length) {
+      return { trimmed: false };
+    }
     const sessionSnapshot = readSessionEntrySelectionSnapshot(database, resolved.sessionKey, true);
     const lines = snapshotRows.map((row) => row.eventJson);
     const retainedLines = selectRetainedLines(lines);

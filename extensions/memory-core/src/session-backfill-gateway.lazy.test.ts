@@ -3,6 +3,13 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { expect, it, vi } from "vitest";
 import { registerSessionBackfillGatewayMethods } from "./session-backfill-gateway.js";
 
+const isLegacyMemorySurfaceDisabled = vi.hoisted(() => vi.fn(() => false));
+
+vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-core")>()),
+  isLegacyMemorySurfaceDisabled,
+}));
+
 const backfillModule = vi.hoisted(() => ({
   loadCount: 0,
   executeSessionBackfill: vi.fn(),
@@ -52,6 +59,17 @@ it("loads session backfill execution only for the first valid request", async ()
   } as unknown as GatewayRequestHandlerOptions);
   expect(backfillModule.loadCount).toBe(0);
   expect(invalidRespond.mock.calls[0]?.[2]).toMatchObject({ code: "INVALID_REQUEST" });
+
+  isLegacyMemorySurfaceDisabled.mockReturnValue(true);
+  const cutoverRespond = vi.fn();
+  await preview!({
+    params: { agentId: "main" },
+    respond: cutoverRespond,
+  } as unknown as GatewayRequestHandlerOptions);
+  expect(backfillModule.loadCount).toBe(0);
+  expect(cutoverRespond.mock.calls[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
+
+  isLegacyMemorySurfaceDisabled.mockReturnValue(false);
 
   backfillModule.executeSessionBackfillBatch.mockResolvedValue({
     result: {

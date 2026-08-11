@@ -335,7 +335,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     isBareSessionReset &&
     bareResetPromptState?.shouldPrependStartupContext !== false &&
     shouldApplyStartupContext({ cfg, action: startupAction })
-      ? await buildSessionStartupContextPrelude({ workspaceDir, cfg })
+      ? await buildSessionStartupContextPrelude({ workspaceDir, agentId, cfg })
       : null;
   const baseBodyFinal = isBareSessionReset
     ? (bareResetPromptState?.prompt ?? "")

@@ -6,7 +6,10 @@ import {
   type GatewayRequestHandlerOptions,
 } from "openclaw/plugin-sdk/gateway-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { listAgentIds } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  isLegacyMemorySurfaceDisabled,
+  listAgentIds,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
@@ -96,6 +99,9 @@ function resolveExecutionContext(api: OpenClawPluginApi, agentId: string) {
   const configuredAgentIds = listAgentIds(config);
   if (!configuredAgentIds.includes(agentId)) {
     throw new InvalidSessionBackfillRequestError(`Unknown agent id "${agentId}".`);
+  }
+  if (isLegacyMemorySurfaceDisabled(agentId)) {
+    throw new Error("Session backfill is unavailable after scoped-memory cutover.");
   }
   const workspaceDir = api.runtime.agent.resolveAgentWorkspaceDir(config, agentId);
   const remConfig = resolveMemoryRemDreamingConfig({

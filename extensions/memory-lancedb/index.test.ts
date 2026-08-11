@@ -429,6 +429,31 @@ describe("memory plugin e2e", () => {
     expectHookRegistered(on, "before_prompt_build");
   });
 
+  test("hides legacy LanceDB tools and skips automatic recall and capture after memory cut-over", async () => {
+    const on = vi.fn();
+    const registerTool = vi.fn();
+    registerTestPlugin(memoryPlugin, createMemoryPluginApi(getDbPath(), { on, registerTool }));
+
+    for (const [factory] of registerTool.mock.calls) {
+      expect(materializeRegisteredTool(factory, { memoryReadEnforced: true })).toBeNull();
+    }
+    await expect(
+      hookHandler(on, "before_prompt_build")?.(
+        { prompt: "recall this private fact", messages: [] },
+        { agentId: "main", memoryReadEnforced: true },
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      hookHandler(on, "agent_end")?.(
+        {
+          success: true,
+          messages: [{ role: "user", content: "store this private fact" }],
+        },
+        { agentId: "main", memoryReadEnforced: true },
+      ),
+    ).resolves.toBeUndefined();
+  });
+
   test("registers memory public artifact provider for memory-wiki bridge parity", async () => {
     const workspaceDir = path.join(getTmpDir(), "workspace-public-artifacts");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });

@@ -13,7 +13,11 @@ import {
   registerInternalHook,
   type AgentBootstrapHookContext,
 } from "../hooks/internal-hooks.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { resetMemoryIsolationCutoverForTest } from "../plugins/memory-cutover.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -216,6 +220,7 @@ describe("resolveBootstrapFilesForRun", () => {
   afterEach(async () => {
     clearInternalHooks();
     closeOpenClawStateDatabaseForTest();
+    resetMemoryIsolationCutoverForTest();
     resetLegacyWorkspaceStateCheckForTest();
     await testState?.cleanup();
     testState = undefined;
@@ -303,6 +308,33 @@ describe("resolveBootstrapFilesForRun", () => {
     expect(first.find((file) => file.name === "USER.md")?.content).toBe("Prefer concise answers.");
     expect(second.find((file) => file.name === "USER.md")?.content).toBe(
       "Prefer detailed answers.",
+    );
+  });
+
+  it("omits controlled memory files after hooks for a cut-over agent", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "workspace rules", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "private memory", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "USER.md"), "private profile", "utf8");
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "memory", "2026-08-10.md"), "private daily", "utf8");
+    registerNamedBootstrapFileHook("memory/2026-08-10.md", "AGENTS.md");
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    database.db
+      .prepare(
+        `INSERT INTO memory_migrations
+          (migration_id, source_kind, source_hash, phase, classification_json, plan_hash,
+           verified_at, cutover_at, updated_at)
+         VALUES ('memory-cutover-test', 'test', 'test-source', 'cutover', '{}', 'test-plan', 1, 1, 1)`,
+      )
+      .run();
+    resetMemoryIsolationCutoverForTest();
+
+    const files = await resolveBootstrapFilesForRun({ workspaceDir, agentId: "main" });
+
+    expect(files.map((file) => file.content)).toContain("workspace rules");
+    expect(files.map((file) => file.content)).not.toEqual(
+      expect.arrayContaining(["private memory", "private profile", "private daily", "hook memory"]),
     );
   });
 

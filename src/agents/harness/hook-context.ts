@@ -9,6 +9,7 @@ import type {
   PluginHookChannelContext,
   PluginHookContextWindowSource,
 } from "../../plugins/hook-types.js";
+import { isMemoryIsolationCutoverAgent } from "../../plugins/memory-cutover.js";
 
 /**
  * Input facts used to build the agent portion of plugin hook events.
@@ -48,6 +49,9 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+    ...(params.agentId && isMemoryIsolationCutoverAgent(params.agentId)
+      ? { memoryReadEnforced: true as const }
+      : {}),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     ...(params.modelProviderId ? { modelProviderId: params.modelProviderId } : {}),
     ...(params.modelId ? { modelId: params.modelId } : {}),

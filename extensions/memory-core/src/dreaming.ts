@@ -1,7 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Memory Core plugin module implements dreaming behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { resolveMemoryDreamingPluginConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  isLegacyMemorySurfaceDisabled,
+  resolveMemoryDreamingPluginConfig,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS as DEFAULT_MEMORY_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
   DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS as DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS,
@@ -434,6 +437,18 @@ export function resolveShortTermPromotionDreamingConfig(params: {
   };
 }
 
+function isDreamingWorkspaceLegacyMemoryDisabled(agentIds: readonly string[]): boolean {
+  return (
+    agentIds.length === 0 || agentIds.some((agentId) => isLegacyMemorySurfaceDisabled(agentId))
+  );
+}
+
+function hasLegacyDreamingWorkspace(cfg: OpenClawConfig): boolean {
+  return resolveMemoryDreamingWorkspaces(cfg).some(
+    ({ agentIds }) => !isDreamingWorkspaceLegacyMemoryDisabled(agentIds),
+  );
+}
+
 async function reconcileShortTermDreamingCronJob(params: {
   cron: CronServiceLike | null;
   config: ShortTermPromotionDreamingConfig;
@@ -563,6 +578,13 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
   if (!includesSystemEventToken(params.cleanedBody, DREAMING_SYSTEM_EVENT_TEXT)) {
     return undefined;
   }
+  const triggerAgentId = normalizeLowercaseStringOrEmpty(params.agentId);
+  if (triggerAgentId && isLegacyMemorySurfaceDisabled(triggerAgentId)) {
+    return {
+      handled: true,
+      reason: "memory-core: short-term dreaming unavailable for isolated memory",
+    };
+  }
   if (!params.config.enabled) {
     return { handled: true, reason: "memory-core: short-term dreaming disabled" };
   }
@@ -572,15 +594,31 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
   const fallbackWorkspaceDir = normalizeOptionalString(params.workspaceDir);
   // Narrative subagent sessions live in per-agent SQLite stores, so every swept workspace
   // carries its owning agent. The triggering agent owns whatever the roster cannot attribute.
-  const triggerAgentId = normalizeLowercaseStringOrEmpty(params.agentId);
   const seenWorkspaces = new Set<string>();
-  const workspaces: Array<{ agentId?: string; workspaceDir: string }> = [];
-  const addWorkspace = (workspaceDir: string, agentId: string): void => {
+  const workspaces: Array<{ agentId: string; workspaceDir: string }> = [];
+  let skippedIsolatedWorkspace = false;
+  const addWorkspace = (workspaceDir: string, agentIds: readonly string[]): void => {
     if (!workspaceDir || seenWorkspaces.has(workspaceDir)) {
       return;
     }
+    const workspaceAgentIds = uniqueStrings(
+      agentIds
+        .map((agentId) => normalizeLowercaseStringOrEmpty(agentId))
+        .filter((agentId) => agentId.length > 0),
+    );
+    // A shared workspace is legacy state for every listed owner. Selecting an uncut owner
+    // would still let a cut-over agent's files enter the promotion pipeline.
+    if (isDreamingWorkspaceLegacyMemoryDisabled(workspaceAgentIds)) {
+      skippedIsolatedWorkspace = true;
+      return;
+    }
+    const agentId = resolveWorkspaceOwnerAgentId(workspaceAgentIds);
+    if (!agentId) {
+      skippedIsolatedWorkspace = true;
+      return;
+    }
     seenWorkspaces.add(workspaceDir);
-    workspaces.push({ ...(agentId ? { agentId } : {}), workspaceDir });
+    workspaces.push({ agentId, workspaceDir });
   };
   // The triggering agent wins its own workspace; otherwise sort so a workspace shared by
   // several agents always resolves the same owner across sweeps.
@@ -597,13 +635,19 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
       // the host falls back to the roster default agent when the turn has no id.
       ...(triggerAgentId ? { primaryAgentId: triggerAgentId } : {}),
     })) {
-      addWorkspace(entry.workspaceDir, resolveWorkspaceOwnerAgentId(entry.agentIds));
+      addWorkspace(entry.workspaceDir, entry.agentIds);
     }
   }
-  if (workspaces.length === 0 && fallbackWorkspaceDir) {
-    addWorkspace(fallbackWorkspaceDir, triggerAgentId);
+  if (workspaces.length === 0 && fallbackWorkspaceDir && triggerAgentId) {
+    addWorkspace(fallbackWorkspaceDir, [triggerAgentId]);
   }
   if (workspaces.length === 0) {
+    if (skippedIsolatedWorkspace) {
+      return {
+        handled: true,
+        reason: "memory-core: short-term dreaming unavailable for isolated memory",
+      };
+    }
     params.logger.warn(
       "memory-core: dreaming promotion skipped because no memory workspace is available.",
     );
@@ -900,6 +944,9 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       pluginConfig,
       cfg: startupCfg,
     });
+    if (!hasLegacyDreamingWorkspace(startupCfg)) {
+      return { ...config, enabled: false };
+    }
     if (params.reason === "startup") {
       resolveStartupCron = params.startupCron ?? null;
     }
@@ -968,7 +1015,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
   };
 
   const scheduleStartupCronRetry = (): void => {
-    if (disposed || hasStartupCron()) {
+    if (disposed || !hasLegacyDreamingWorkspace(resolveCurrentConfig()) || hasStartupCron()) {
       clearStartupCronRetry();
       return;
     }
@@ -1040,6 +1087,9 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         if (disposed || generation !== gatewayLifecycleGeneration) {
           return;
         }
+        if (isLegacyMemorySurfaceDisabled(agentId)) {
+          continue;
+        }
         try {
           await scrubDreamingNarrativeArtifacts({
             agentId,
@@ -1093,6 +1143,10 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       clearTimeout(startupDreamingCleanupTimer);
       startupDreamingCleanupTimer = null;
     }
+    const startupConfig = ctx.config ?? api.config;
+    if (!hasLegacyDreamingWorkspace(startupConfig)) {
+      return;
+    }
     const generation = ++gatewayLifecycleGeneration;
     // Store the gateway context for runtime cron resolution retries.
     gatewayContext = ctx;
@@ -1109,15 +1163,13 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     } finally {
       startRuntimeCronReconcileTimer();
       scheduleStartupCronRetry();
-      await startDreamingSessionCleanup(
-        ctx.config ?? api.config,
-        generation,
-        startupStartedAtMs,
-      ).catch((error: unknown) => {
-        api.logger.warn(
-          `memory-core: dreaming startup cleanup failed: ${formatErrorMessage(error)}`,
-        );
-      });
+      await startDreamingSessionCleanup(startupConfig, generation, startupStartedAtMs).catch(
+        (error: unknown) => {
+          api.logger.warn(
+            `memory-core: dreaming startup cleanup failed: ${formatErrorMessage(error)}`,
+          );
+        },
+      );
     }
   });
 
@@ -1132,7 +1184,24 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         if (ctx.trigger !== "heartbeat" && ctx.trigger !== "cron") {
           return undefined;
         }
+        const agentId = normalizeLowercaseStringOrEmpty(ctx.agentId);
+        if (agentId && isLegacyMemorySurfaceDisabled(agentId)) {
+          return includesSystemEventToken(event.cleanedBody, DREAMING_SYSTEM_EVENT_TEXT)
+            ? {
+                handled: true,
+                reason: "memory-core: short-term dreaming unavailable for isolated memory",
+              }
+            : undefined;
+        }
         const currentConfig = resolveCurrentConfig();
+        if (!hasLegacyDreamingWorkspace(currentConfig)) {
+          return includesSystemEventToken(event.cleanedBody, DREAMING_SYSTEM_EVENT_TEXT)
+            ? {
+                handled: true,
+                reason: "memory-core: short-term dreaming unavailable for isolated memory",
+              }
+            : undefined;
+        }
         const hasManagedDreamingToken = includesSystemEventToken(
           event.cleanedBody,
           DREAMING_SYSTEM_EVENT_TEXT,

@@ -13,6 +13,7 @@ export {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
 export {
   getRuntimeConfig,
+  isLegacyMemorySurfaceDisabled,
   resolveDefaultAgentId,
   resolveSessionTranscriptsDirForAgent,
   resolveStateDir,

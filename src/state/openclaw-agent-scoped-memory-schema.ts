@@ -14,6 +14,9 @@ export const AGENT_SCOPED_MEMORY_TABLES = [
   "memory_scoped_chunks",
   "memory_scoped_chunk_vectors",
   "memory_migrations",
+  "memory_policy_sets",
+  "memory_run_exposures",
+  "transcript_event_memory_policies",
 ] as const;
 
 export const AGENT_SCOPED_MEMORY_FTS_TABLE = "memory_scoped_chunks_fts";

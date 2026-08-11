@@ -14,6 +14,7 @@ import {
   resolveDiagnosticModelContentCapturePolicy,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { isLegacyMemorySurfaceDisabled } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   resolveCodexAppServerForModelProvider,
   resolveCodexAppServerForOpenClawToolPolicy,
@@ -48,6 +49,34 @@ import {
 } from "./session-binding.js";
 import { getLeasedSharedCodexAppServerClient } from "./shared-client.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
+
+const CODEX_PROJECT_DOCUMENTS_DISABLED_OVERRIDE = "project_doc_max_bytes=0";
+
+function fenceCodexProjectDocumentsForMemoryIsolation(params: {
+  agentId: string;
+  appServer: ReturnType<typeof resolveCodexBindingAppServerConnection>["appServer"];
+}) {
+  if (!isLegacyMemorySurfaceDisabled(params.agentId)) {
+    return params.appServer;
+  }
+  if (params.appServer.start.transport !== "stdio") {
+    // Codex reads project documents while a process initializes. A pre-existing
+    // endpoint cannot receive the startup override, so continuing would reopen
+    // workspace MEMORY.md through project_doc_fallback_filenames.
+    throw new Error(
+      "Codex memory-isolation runs require a local stdio app-server so project documents can be disabled at startup",
+    );
+  }
+  return {
+    ...params.appServer,
+    start: {
+      ...params.appServer.start,
+      // Upstream applies repeated -c values in order; append after operator args
+      // so their local config.toml is never rewritten or allowed to re-enable docs.
+      args: [...params.appServer.start.args, "-c", CODEX_PROJECT_DOCUMENTS_DISABLED_OVERRIDE],
+    },
+  };
+}
 
 function applyStoredBindingPermissions(params: {
   appServer: ReturnType<typeof resolveCodexBindingAppServerConnection>["appServer"];
@@ -305,13 +334,16 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
           isCodexAppServerApprovalPolicyAllowedByRequirements("untrusted")),
     });
   let policyAppServer = resolvePolicyAppServer();
-  let appServer = resolveCodexAppServerForModelProvider({
-    appServer: policyAppServer,
-    provider: reviewerPolicyContext.modelProvider,
-    model: reviewerPolicyContext.model,
-    config: params.config,
-    env: process.env,
-    agentDir,
+  let appServer = fenceCodexProjectDocumentsForMemoryIsolation({
+    agentId: sessionAgentId,
+    appServer: resolveCodexAppServerForModelProvider({
+      appServer: policyAppServer,
+      provider: reviewerPolicyContext.modelProvider,
+      model: reviewerPolicyContext.model,
+      config: params.config,
+      env: process.env,
+      agentDir,
+    }),
   });
   let approvalPolicyPromotedForOpenClawToolPolicy =
     configuredAppServer.approvalPolicy === "never" && appServer.approvalPolicy === "untrusted";
@@ -385,13 +417,16 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       model: reviewerPolicyContext.model,
     });
     policyAppServer = resolvePolicyAppServer();
-    appServer = resolveCodexAppServerForModelProvider({
-      appServer: policyAppServer,
-      provider: reviewerPolicyContext.modelProvider,
-      model: reviewerPolicyContext.model,
-      config: params.config,
-      env: process.env,
-      agentDir,
+    appServer = fenceCodexProjectDocumentsForMemoryIsolation({
+      agentId: sessionAgentId,
+      appServer: resolveCodexAppServerForModelProvider({
+        appServer: policyAppServer,
+        provider: reviewerPolicyContext.modelProvider,
+        model: reviewerPolicyContext.model,
+        config: params.config,
+        env: process.env,
+        agentDir,
+      }),
     });
     approvalPolicyPromotedForOpenClawToolPolicy =
       configuredAppServer.approvalPolicy === "never" && appServer.approvalPolicy === "untrusted";

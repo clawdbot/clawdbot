@@ -23,6 +23,7 @@ import {
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
 const getRuntimeConfig = vi.hoisted(() => vi.fn(() => ({})));
+const isLegacyMemorySurfaceDisabled = vi.hoisted(() => vi.fn(() => false));
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
 const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
   vi.fn(async ({ config }: { config: unknown }) => ({
@@ -93,6 +94,7 @@ vi.mock("./cli.host.runtime.js", async () => {
     getMemorySearchManager,
     listMemoryFiles,
     getRuntimeConfig,
+    isLegacyMemorySurfaceDisabled,
     normalizeExtraMemoryPaths,
     resolveCommandSecretRefsViaGateway,
     resolveDefaultAgentId,
@@ -109,6 +111,7 @@ vi.mock("./cli.host.runtime.js", async () => {
 });
 
 let registerMemoryCli: typeof import("./cli.js").registerMemoryCli;
+let scanMemorySources: typeof import("./cli-runtime-common.js").scanMemorySources;
 let defaultRuntime: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").defaultRuntime;
 let isVerbose: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").isVerbose;
 let setVerbose: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").setVerbose;
@@ -119,6 +122,7 @@ let workspaceCaseId = 0;
 beforeAll(async () => {
   await configureMemoryCoreDreamingStateForTests();
   ({ registerMemoryCli } = await import("./cli.js"));
+  ({ scanMemorySources } = await import("./cli-runtime-common.js"));
   const {
     defaultRuntime: loadedDefaultRuntime,
     isVerbose: loadedIsVerbose,
@@ -135,6 +139,7 @@ beforeAll(async () => {
 beforeEach(() => {
   getMemorySearchManager.mockReset();
   getRuntimeConfig.mockReset().mockReturnValue({});
+  isLegacyMemorySurfaceDisabled.mockReset().mockReturnValue(false);
   resolveDefaultAgentId.mockReset().mockReturnValue("main");
   resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
     resolvedConfig: config,
@@ -322,6 +327,52 @@ describe("memory cli", () => {
       }),
     ).rejects.toThrow("--max-results must be a positive integer.");
     expect(getMemorySearchManager).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["status", ["status", "--agent", "main"]],
+    ["index", ["index", "--agent", "main"]],
+    ["promotion apply", ["promote", "--agent", "main", "--apply"]],
+    ["REM backfill", ["rem-backfill", "--agent", "main", "--rollback"]],
+    [
+      "session backfill apply",
+      ["session-backfill", "--agent", "main", "--apply"],
+    ],
+  ] as const)(
+    "blocks %s before acquiring a legacy manager for a cut-over agent",
+    async (_command, args) => {
+      isLegacyMemorySurfaceDisabled.mockReturnValue(true);
+      const error = spyRuntimeErrors(defaultRuntime);
+
+      await runMemoryCli([...args]);
+
+      expect(isLegacyMemorySurfaceDisabled).toHaveBeenCalledWith("main");
+      expect(getMemorySearchManager).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledWith(
+        "Legacy memory CLI access is unavailable after scoped-memory cutover.",
+      );
+      expect(process.exitCode).toBe(1);
+    },
+  );
+
+  it("does not scan legacy memory sources for a cut-over agent", async () => {
+    isLegacyMemorySurfaceDisabled.mockReturnValue(true);
+    const access = vi.spyOn(fs, "access");
+    const readdir = vi.spyOn(fs, "readdir");
+
+    await expect(
+      scanMemorySources({
+        workspaceDir: "/memory-must-not-be-read",
+        agentId: "main",
+        sources: ["memory", "sessions"],
+      }),
+    ).resolves.toEqual({
+      sources: [],
+      totalFiles: null,
+      issues: ["Legacy memory CLI access is unavailable after scoped-memory cutover."],
+    });
+    expect(access).not.toHaveBeenCalled();
+    expect(readdir).not.toHaveBeenCalled();
   });
 
   it("rejects fractional memory search result limits before running the command", async () => {
