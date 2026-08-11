@@ -124,7 +124,7 @@ describe("production plugin normalization ownership boundary", () => {
       kind: "dynamic-import",
       specifier: "@openclaw/normalization-core/number-coercion",
       resolvedPath: "packages/normalization-core/src/number-coercion.ts",
-      facade: "openclaw/plugin-sdk/string-coerce-runtime",
+      facade: "openclaw/plugin-sdk/number-runtime",
     },
     {
       name: "error import",
@@ -188,9 +188,6 @@ describe("production plugin normalization ownership boundary", () => {
         resolvedPath,
       });
       expect(entries[0]?.reason).toContain(facade ?? "matching public openclaw/plugin-sdk facade");
-      if (resolvedPath.includes("number-coercion")) {
-        expect(entries[0]?.reason).not.toContain("number-runtime");
-      }
     },
   );
 

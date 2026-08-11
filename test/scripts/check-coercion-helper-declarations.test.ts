@@ -287,6 +287,7 @@ describe("coercion helper declaration AST guard", () => {
     expect(output).toContain("expected 1 function declaration(s), found 0");
     expect(output).toContain("Core/package/UI/workspace-script code");
     expect(output).toContain("Plugin production code");
+    expect(output).toContain("number-runtime");
     expect(output).toContain("Dependency-free, copied, generated, or serialized code");
   });
 

@@ -523,7 +523,7 @@ export function runCoercionHelperDeclarationGuard(
   );
   writeLine(
     io.stderr,
-    "Plugin production code: use openclaw/plugin-sdk/string-coerce-runtime or error-runtime.",
+    "Plugin production code: use openclaw/plugin-sdk/string-coerce-runtime, number-runtime, or error-runtime.",
   );
   writeLine(
     io.stderr,

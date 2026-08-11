@@ -105,10 +105,12 @@ function recommendedCoercionFacade(resolvedPath: string): string | undefined {
     ownerPath.endsWith("/string-normalization") ||
     ownerPath.endsWith("/record-coerce") ||
     ownerPath.endsWith("/boolean-coercion") ||
-    ownerPath === "src/utils/boolean" ||
-    ownerPath.endsWith("/number-coercion")
+    ownerPath === "src/utils/boolean"
   ) {
     return "openclaw/plugin-sdk/string-coerce-runtime";
+  }
+  if (ownerPath.endsWith("/number-coercion")) {
+    return "openclaw/plugin-sdk/number-runtime";
   }
   if (ownerPath.endsWith("/error-coercion") || ownerPath === "src/infra/errors") {
     return "openclaw/plugin-sdk/error-runtime";
