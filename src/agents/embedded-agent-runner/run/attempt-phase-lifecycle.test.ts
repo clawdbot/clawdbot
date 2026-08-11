@@ -292,6 +292,7 @@ describe("embedded attempt phase lifecycle state", () => {
     expect(result.lastAssistant).toBe(modelAssistant);
     expect(result.currentAttemptAssistant).toBe(modelAssistant);
     expect(result.currentAttemptCompletedAssistant).toEqual(modelAssistant);
+    expect(result.successfulNestedToolNames).toEqual([]);
     expect(result.messagesSnapshot).toHaveLength(5);
     expect(result.messagesSnapshot.at(-2)).toMatchObject({
       role: "assistant",

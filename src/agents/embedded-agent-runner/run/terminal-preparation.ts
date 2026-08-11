@@ -9,6 +9,7 @@ import type { NormalizedUsage, UsageLike } from "../../usage.js";
 import { resolveEmbeddedRunFailureSignal } from "../failure-signal.js";
 import type { EmbeddedAgentMeta, EmbeddedAgentRunResult } from "../types.js";
 import type { UsageAccumulator } from "../usage-accumulator.js";
+import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import {
   buildUsageAgentMetaFields,
@@ -25,11 +26,10 @@ import {
   type EmbeddedRunTerminalState,
 } from "./terminal-outcome.js";
 import { mergeAttemptToolMediaPayloads } from "./tool-media-payloads.js";
-import type { EmbeddedRunAttemptResult } from "./types.js";
 
 export function prepareEmbeddedRunTerminal(input: {
   runParams: RunEmbeddedAgentParams;
-  attempt: EmbeddedRunAttemptResult;
+  attempt: EmbeddedRunAttemptWithReceiptEvidence;
   currentAttemptCompletedAssistant?: AssistantMessage;
   provider: string;
   providerOwner?: PreparedProviderFailoverOwner;
@@ -143,6 +143,14 @@ export function prepareEmbeddedRunTerminal(input: {
         .filter(Boolean),
     ),
   ];
+  const missingNestedToolNames = [
+    ...new Set(
+      (attempt.successfulNestedToolNames ?? []).map((name) => name.trim()).filter(Boolean),
+    ),
+  ]
+    .filter((name) => !successfulToolNames.includes(name))
+    .toSorted();
+  successfulToolNames.push(...missingNestedToolNames);
   Object.assign(agentMeta, {
     terminalReceipt: {
       runId: runParams.runId,

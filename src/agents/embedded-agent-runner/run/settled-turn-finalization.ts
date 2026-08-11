@@ -9,6 +9,7 @@ import {
   mergeAttemptRunStatsIntoAccumulator,
   mergeUsageIntoAccumulator,
 } from "../usage-accumulator.js";
+import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { runEmbeddedSettledTurnFinalizationWithBackend } from "./backend.js";
 import { withEmbeddedRunLaneProgressHeartbeat } from "./lane-runtime.js";
 import {
@@ -20,7 +21,7 @@ import {
   copyAttemptDeliveryState,
   resolveSettledTurnFinalizationRequest,
 } from "./terminal-resolution.js";
-import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type TerminalPreparationInput = Parameters<typeof prepareEmbeddedRunTerminal>[0];
 type TerminalPreparationBase = Omit<
@@ -35,9 +36,9 @@ type TerminalPreparationBase = Omit<
 
 export async function prepareTerminalWithSettledTurnFinalization(input: {
   initial: {
-    attempt: EmbeddedRunAttemptResult;
-    attemptAssistant: EmbeddedRunAttemptResult["lastAssistant"];
-    currentAttemptCompletedAssistant: EmbeddedRunAttemptResult["currentAttemptCompletedAssistant"];
+    attempt: EmbeddedRunAttemptWithReceiptEvidence;
+    attemptAssistant: EmbeddedRunAttemptWithReceiptEvidence["lastAssistant"];
+    currentAttemptCompletedAssistant: EmbeddedRunAttemptWithReceiptEvidence["currentAttemptCompletedAssistant"];
     sessionIdUsed: string;
     sessionFileUsed?: string;
     terminalState: EmbeddedRunTerminalState;
@@ -181,12 +182,12 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
 
 async function runPreparedSettledTurnFinalization(input: {
   attempt: EmbeddedRunAttemptParams;
-  settledAttempt: EmbeddedRunAttemptResult;
+  settledAttempt: EmbeddedRunAttemptWithReceiptEvidence;
   harness: AgentHarness;
   prompt: string;
   noteLaneTaskProgress: () => void;
 }): Promise<
-  | { outcome: "answered"; attempt: EmbeddedRunAttemptResult }
+  | { outcome: "answered"; attempt: EmbeddedRunAttemptWithReceiptEvidence }
   | {
       outcome: "empty";
       result: AgentHarnessSettledTurnFinalizationResult;
@@ -222,13 +223,13 @@ async function runPreparedSettledTurnFinalization(input: {
 
 function buildSettledTurnFinalizationAttemptResult(input: {
   result: AgentHarnessSettledTurnFinalizationResult;
-  settledAttempt: EmbeddedRunAttemptResult;
+  settledAttempt: EmbeddedRunAttemptWithReceiptEvidence;
   prompt: string;
   agentHarnessId?: string;
-}): EmbeddedRunAttemptResult {
+}): EmbeddedRunAttemptWithReceiptEvidence {
   const { result, settledAttempt } = input;
   const text = resolveSettledTurnFinalizationText(result);
-  // Finalization replaces terminal ownership, not facts from already-settled tools.
+  // Finalization replaces terminal ownership, not host-private facts from settled tools.
   // Keep those facts while replay, abort, and lifecycle state remain finalizer-local.
   return {
     terminal: { kind: "ok" },
@@ -249,6 +250,7 @@ function buildSettledTurnFinalizationAttemptResult(input: {
     currentAttemptAssistant: result.assistant,
     currentAttemptCompletedAssistant: result.assistant,
     toolMetas: settledAttempt.toolMetas,
+    successfulNestedToolNames: settledAttempt.successfulNestedToolNames,
     hasToolMediaBlockReply: false,
     cloudCodeAssistFormatError: false,
     attemptUsage: result.usage,
