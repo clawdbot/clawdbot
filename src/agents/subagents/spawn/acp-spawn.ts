@@ -191,6 +191,8 @@ const ACP_SPAWN_ACCEPTED_NOTE =
 const ACP_SPAWN_SESSION_ACCEPTED_NOTE =
   "thread-bound ACP session stays active after this task; continue in-thread for follow-ups.";
 
+import { resolveAcpSpawnRuntimePolicyError } from "./acp-spawn-policy.js";
+
 export { resolveAcpSpawnRuntimePolicyError } from "./acp-spawn-policy.js";
 
 function createAcpSpawnFailure(params: {
