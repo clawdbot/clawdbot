@@ -9,13 +9,12 @@ import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/messa
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import { resolveMessageToolUseId, resolveToolBlockId } from "./chat-thread-items.ts";
 import {
   assistantGroupIsForwardedBoundary,
   chatItemStartsUserTurn,
-  resolveMessageToolUseId,
-  resolveToolBlockId,
   safeNormalizeMessage,
-} from "./chat-thread-items.ts";
+} from "./chat-turn-boundary.ts";
 
 export function isKeyedAssistantStreamFallbackMessage(message: unknown): boolean {
   const record = asRecord(message);

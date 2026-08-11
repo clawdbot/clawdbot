@@ -2,22 +2,14 @@ import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
 import { escapeRegExp } from "../../../../src/shared/regexp.js";
-import type {
-  ChatItem,
-  ChatQueueItem,
-  MessageGroup,
-  NormalizedMessage,
-  ToolCard,
-} from "../../lib/chat/chat-types.ts";
+import type { ChatItem, ChatQueueItem, ToolCard } from "../../lib/chat/chat-types.ts";
 import { extractTextCached, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
-import {
-  normalizeMessage,
-  stripMessageDisplayMetadataText,
-} from "../../lib/chat/message-normalizer.ts";
+import { stripMessageDisplayMetadataText } from "../../lib/chat/message-normalizer.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { extractToolCardsCached, extractToolPreview } from "../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../lib/fnv1a.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 export function appendCanvasBlockToAssistantMessage(
@@ -62,48 +54,6 @@ export function appendCanvasBlockToAssistantMessage(
       },
     ],
   };
-}
-
-export function safeNormalizeMessage(message: unknown): NormalizedMessage | null {
-  if (!asRecord(message)) {
-    return null;
-  }
-  try {
-    return normalizeMessage(message);
-  } catch {
-    return null;
-  }
-}
-
-export function assistantGroupIsForwardedBoundary(group: MessageGroup): boolean {
-  return group.messages.some(({ message }) => {
-    const provenance = asRecord(asRecord(message)?.provenance);
-    return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
-  });
-}
-
-function groupStartsProjectedTurnBoundary(group: MessageGroup): boolean {
-  return asRecord(asRecord(group.messages[0]?.message)?.["__openclaw"])?.turnBoundary === true;
-}
-
-/** Canonical user-turn boundary shared by insertion, outcome, and collapse projections. */
-export function chatItemStartsUserTurn(item: ChatItem | MessageGroup): boolean {
-  if (item.kind === "notice") {
-    return item.startsTurn === true;
-  }
-  if (item.kind === "message") {
-    const normalized = safeNormalizeMessage(item.message);
-    return normalized ? normalizeRoleForGrouping(normalized.role).toLowerCase() === "user" : false;
-  }
-  if (item.kind !== "group") {
-    return false;
-  }
-  const role = item.role.toLowerCase();
-  return (
-    role === "user" ||
-    groupStartsProjectedTurnBoundary(item) ||
-    (role === "assistant" && assistantGroupIsForwardedBoundary(item))
-  );
 }
 
 export function messageMatchesSearchQuery(message: unknown, query: string): boolean {

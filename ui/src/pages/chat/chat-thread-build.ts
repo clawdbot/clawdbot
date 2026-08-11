@@ -48,7 +48,6 @@ import {
   messageMatchesSearchQuery,
   queuedSendThreadMessage,
   rawMessageTimestamp,
-  safeNormalizeMessage,
   insertChatItemsByTimestamp,
   sanitizeStreamText,
   timestampAfterVisibleItems,
@@ -57,6 +56,7 @@ import {
   userTurnSendIdentity,
   type TurnInsertionBounds,
 } from "./chat-thread-items.ts";
+import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { chatMessagesContainQueuedSend } from "./steer-lifecycle.ts";
 import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
 import {
