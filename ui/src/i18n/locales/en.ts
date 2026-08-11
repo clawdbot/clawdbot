@@ -5373,17 +5373,11 @@ export const en: TranslationMap = {
         otherMany: "used {count} tools",
         emptyOne: "Ran a tool call",
         emptyMany: "Ran {count} tool calls",
-        failedOne: "{count} failed",
-        failedMany: "{count} failed",
-        activityErrorOne: "Activity: {count} tool, includes errors.",
-        activityErrorMany: "Activity: {count} tools, includes errors.",
       },
     },
     workRun: {
       workedFor: "Worked for {duration}",
       worked: "Worked",
-      workedForError: "Worked for {duration}, includes errors.",
-      workedError: "Worked, includes errors.",
     },
     backgroundTasks: {
       label: "Background tasks",
