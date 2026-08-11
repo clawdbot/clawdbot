@@ -7,12 +7,10 @@ import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { cleanDeferredFinalText } from "../../tts/captioned-final.js";
-import type { BlockReplyContext } from "../get-reply-options.types.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
-  type ReplyPayload,
 } from "../reply-payload.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
@@ -23,6 +21,7 @@ import {
 } from "./dispatch-from-config.events.js";
 import {
   hasAskUserPayload,
+  prepareReplyPayloadForSideEffects as preparePayload,
   readAskUserQuestionId,
   requiresDurableToolResultDelivery,
   shouldDeliverDespiteSourceReplySuppression,
@@ -81,8 +80,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     params.configOverride ? undefined : state.preparedReplyDispatchRuntime,
     state.replyResolver,
   );
-  const resolverConfigOverride =
-    state.preparedReplyDispatchRuntime && !params.configOverride ? undefined : replyConfig;
   let deliberateSilentTerminalReply = false;
   let pendingContinuation = false;
   let didDeliverVisiblePartialReply = false;
@@ -196,7 +193,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   requiresToolSummaryVisibility: true,
                   waitForDirectBlockReplyDelivery: true,
                 }),
-                onToolResult: (payload: ReplyPayload) => {
+                onToolResult: (payload) => {
                   state.getDispatchReplyOperation()?.recordActivity();
                   markProgress();
                   const run = async () => {
@@ -272,9 +269,12 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     ) {
                       return;
                     }
-                    const visibleToolPayload = isForcedToolProgress
-                      ? payload
-                      : resolveToolDeliveryPayload(payload);
+                    const visibleToolPayload = preparePayload(
+                      dispatcher,
+                      "tool",
+                      isForcedToolProgress ? payload : resolveToolDeliveryPayload(payload),
+                      state.progressState,
+                    );
                     if (!visibleToolPayload) {
                       return;
                     }
@@ -427,35 +427,38 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     await state.onPatchSummaryFromReplyOptions?.(payload);
                   }
                 },
-                onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => {
+                onBlockReply: (inputPayload, context) => {
                   markProgress();
                   const run = async () => {
                     if (isDispatchOperationAborted()) {
                       return;
                     }
-                    if (
-                      payload.isReasoning !== true &&
-                      payload.isCommentary !== true &&
-                      hasOutboundReplyContent(payload, { trimText: true })
-                    ) {
-                      markInboundDedupeReplayUnsafe();
-                    }
                     // Buffered commentary preceded this block; deliver it first.
                     await flushPendingCommentaryProgress();
                     if (
                       state.suppressDelivery &&
-                      !shouldDeliverDespiteSourceReplySuppression(payload, state)
+                      !shouldDeliverDespiteSourceReplySuppression(inputPayload, state)
                     ) {
                       return;
                     }
                     // Durable reasoning is a channel-owned lane; generic channels
                     // keep the historical suppression unless they explicitly opt in.
-                    if (payload.isReasoning === true && !reasoningPayloadsEnabled) {
+                    if (inputPayload.isReasoning === true && !reasoningPayloadsEnabled) {
                       return;
                     }
                     // Durable commentary is a channel-owned lane; generic channels keep the
                     // historical suppression unless they explicitly opt in.
-                    if (payload.isCommentary === true && !commentaryPayloadsEnabled) {
+                    if (inputPayload.isCommentary === true && !commentaryPayloadsEnabled) {
+                      return;
+                    }
+                    const payload = preparePayload(
+                      dispatcher,
+                      "block",
+                      inputPayload,
+                      state.progressState,
+                      markInboundDedupeReplayUnsafe,
+                    );
+                    if (!payload) {
                       return;
                     }
                     // Accumulate block text for TTS generation after streaming.
@@ -597,7 +600,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   return run();
                 },
               },
-              resolverConfigOverride,
+              state.preparedReplyDispatchRuntime && !params.configOverride
+                ? undefined
+                : replyConfig,
             ),
           ),
         trackDispatchLifecycleWork,
@@ -721,9 +726,3 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
   });
   return { status: "ready" as const, state: nextState };
 }
-
-type ExecuteDispatchResult = Awaited<ReturnType<typeof executeDispatch>>;
-export type ExecuteDispatchReadyState = Extract<
-  ExecuteDispatchResult,
-  { status: "ready" }
->["state"];

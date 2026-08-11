@@ -201,15 +201,17 @@ describe("detectChangedScope Windows routing", () => {
     }
   });
 
-  it("routes MCP environment resolution and native doctor coverage to Windows", () => {
-    for (const mcpPath of [
+  it("routes child environment resolution and native doctor coverage to Windows", () => {
+    for (const envPath of [
+      "src/agents/provider-local-service.ts",
+      "src/agents/provider-local-service.env-case.test.ts",
       "src/cli/mcp-cli.ts",
       "src/cli/mcp-cli.test.ts",
       "src/cli/mcp-cli.path-case.windows.test.ts",
       "src/infra/process-env.ts",
       "src/infra/process-env.test.ts",
     ]) {
-      expect(detectChangedScope([mcpPath]), mcpPath).toMatchObject({
+      expect(detectChangedScope([envPath]), envPath).toMatchObject({
         runNode: true,
         runWindows: true,
       });
