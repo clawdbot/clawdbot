@@ -29,12 +29,15 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
-import { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
+import {
+  SubagentLifecycleController,
+  type SubagentLifecycleOptions,
+} from "./subagent-registry-lifecycle.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-manager.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-type LifecycleControllerParams = Parameters<typeof createSubagentRegistryLifecycleController>[0];
-type LifecycleController = ReturnType<typeof createSubagentRegistryLifecycleController>;
+type LifecycleControllerParams = SubagentLifecycleOptions;
+type LifecycleController = SubagentLifecycleController;
 type SubagentCompletionParams = Parameters<LifecycleController["completeSubagentRun"]>[0];
 type AnnounceFlowOutcome = Awaited<
   ReturnType<LifecycleControllerParams["runSubagentAnnounceFlow"]>
@@ -109,10 +112,6 @@ const browserLifecycleCleanupMocks = vi.hoisted(() => ({
   cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
 }));
 
-const completionSupportMocks = vi.hoisted(() => ({
-  loadCleanupBrowserSessionsForLifecycleEnd: vi.fn(),
-}));
-
 const bundleMcpRuntimeMocks = vi.hoisted(() => ({
   retireSessionMcpRuntimeForSessionKey: vi.fn(async () => true),
 }));
@@ -138,12 +137,6 @@ vi.mock("../../../sessions/session-lifecycle-events.js", () => ({
 vi.mock("../../../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd:
     browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
-}));
-
-vi.mock("./subagent-registry-lifecycle-completion-support.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./subagent-registry-lifecycle-completion-support.js")>()),
-  loadCleanupBrowserSessionsForLifecycleEnd:
-    completionSupportMocks.loadCleanupBrowserSessionsForLifecycleEnd,
 }));
 
 vi.mock("../../agent-bundle-mcp-tools.js", () => ({
@@ -373,7 +366,7 @@ function createLifecycleController({
 }: {
   entry: SubagentRunRecord;
   runs?: Map<string, SubagentRunRecord>;
-} & Partial<Parameters<typeof createSubagentRegistryLifecycleController>[0]>) {
+} & Partial<SubagentLifecycleOptions>) {
   const params: LifecycleControllerParams = {
     runs,
     resumedRuns: new Set(),
@@ -394,6 +387,8 @@ function createLifecycleController({
     callGateway: async <T = Record<string, unknown>>(opts: CallGatewayOptions): Promise<T> =>
       (await gatewayMocks.callGateway(opts)) as T,
     captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
+    cleanupBrowserSessionsForLifecycleEnd:
+      browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
     runSubagentAnnounceFlow: vi.fn(async () => "delivered" as const),
     maybeWakeRequesterAfterAllChildrenSettled: vi.fn(
       async (wakeParams: {
@@ -407,7 +402,7 @@ function createLifecycleController({
     warn: vi.fn(),
   };
   Object.assign(params, overrides);
-  return createSubagentRegistryLifecycleController(params);
+  return new SubagentLifecycleController(params);
 }
 
 function completeRun(
@@ -484,9 +479,6 @@ describe("subagent registry lifecycle hardening", () => {
     gatewayMocks.callGateway.mockReset();
     gatewayMocks.callGateway.mockResolvedValue({});
     browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd.mockClear();
-    completionSupportMocks.loadCleanupBrowserSessionsForLifecycleEnd
-      .mockReset()
-      .mockResolvedValue(browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd);
     bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey.mockClear();
     bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey.mockResolvedValue(true);
     internalSessionEffectsMocks.removeInternalSessionEffectsSession.mockClear();
@@ -2684,14 +2676,17 @@ describe("subagent registry lifecycle hardening", () => {
     const browserLoaderRelease = new Promise<void>((resolve) => {
       releaseBrowserLoader = resolve;
     });
-    completionSupportMocks.loadCleanupBrowserSessionsForLifecycleEnd.mockImplementationOnce(
-      async () => {
-        markBrowserLoaderEntered();
-        await browserLoaderRelease;
-        return browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd;
-      },
-    );
-    const controller = createLifecycleController({ entry, runs });
+    const loadCleanupBrowserSessionsForLifecycleEnd = vi.fn(async () => {
+      markBrowserLoaderEntered();
+      await browserLoaderRelease;
+      return browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd;
+    });
+    const controller = createLifecycleController({
+      entry,
+      runs,
+      cleanupBrowserSessionsForLifecycleEnd: undefined,
+      loadCleanupBrowserSessionsForLifecycleEnd,
+    });
 
     const completion = completeRun(controller, entry, { triggerCleanup: true });
     await browserLoaderEntered;
@@ -2726,19 +2721,22 @@ describe("subagent registry lifecycle hardening", () => {
     const browserLoaderRelease = new Promise<void>((resolve) => {
       releaseBrowserLoader = resolve;
     });
-    completionSupportMocks.loadCleanupBrowserSessionsForLifecycleEnd.mockImplementationOnce(
-      async () => {
-        markBrowserLoaderEntered();
-        await browserLoaderRelease;
-        return browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd;
-      },
-    );
+    const loadCleanupBrowserSessionsForLifecycleEnd = vi.fn(async () => {
+      markBrowserLoaderEntered();
+      await browserLoaderRelease;
+      return browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd;
+    });
     const persistOrThrow = vi.fn(() => {
       if (entry.execution.suppressSessionEffects === true) {
         throw new Error("suppression persistence failed");
       }
     });
-    const controller = createLifecycleController({ entry, persistOrThrow });
+    const controller = createLifecycleController({
+      entry,
+      persistOrThrow,
+      cleanupBrowserSessionsForLifecycleEnd: undefined,
+      loadCleanupBrowserSessionsForLifecycleEnd,
+    });
 
     const completion = completeRun(controller, entry, { triggerCleanup: true });
     await browserLoaderEntered;

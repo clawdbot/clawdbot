@@ -12,7 +12,7 @@ export type QaTargetParts = {
 };
 
 /** Encode a canonical QA channel target. */
-export function buildQaTarget(params: {
+function buildQaTargetCore(params: {
   chatType: QaBusConversationKind;
   conversationId: string;
   threadId?: string | null;
@@ -22,6 +22,8 @@ export function buildQaTarget(params: {
   }
   return `${params.chatType === "direct" ? "dm" : params.chatType}:${params.conversationId}`;
 }
+
+export { buildQaTargetCore as buildQaTarget };
 
 /** Parse the lowercase, prefix-scoped target grammar shared by QA Channel and QA Lab. */
 export function parseQaTarget(

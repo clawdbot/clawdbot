@@ -99,6 +99,7 @@ import {
   type ToolSearchCatalogRef,
   type ToolSearchCatalogToolExecutor,
 } from "./tool-search.js";
+import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import {
   replaceWithEffectiveCronCreatorToolAllowlist,
   type CronCreatorToolAllowlistEntry,
@@ -639,8 +640,15 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     },
     recordToolPrepStage: options?.recordToolPrepStage,
   });
+  const cronCreatorAuthorityResolver = bindActiveCronCreatorAuthorityResolver(options?.runId);
+  // A fresh exact-run capability authorizes only automation creation. Keep every
+  // other owner-only control-plane tool denied for senderless operator turns.
   const ownerOnlyCoreToolDenylist =
-    options?.senderIsOwner === false ? [...GATEWAY_OWNER_ONLY_CORE_TOOLS] : [];
+    options?.senderIsOwner === false
+      ? GATEWAY_OWNER_ONLY_CORE_TOOLS.filter(
+          (toolName) => toolName !== AUTOMATIONS_TOOL_NAME || !cronCreatorAuthorityResolver,
+        )
+      : [];
   const ownerOnlyCoreToolPolicy =
     ownerOnlyCoreToolDenylist.length > 0 ? { deny: ownerOnlyCoreToolDenylist } : undefined;
   const pluginToolAllowlist = appendRuntimePluginToolGrant(
@@ -789,7 +797,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             pluginToolDenylist,
             cronCreatorToolAllowlist,
             cronCreatorToolAllowlistCaptureRef,
-            resolveCronCreatorToolAuthority: bindActiveCronCreatorAuthorityResolver(options?.runId),
+            resolveCronCreatorToolAuthority: cronCreatorAuthorityResolver,
             cronCreatorAuthorityUnavailableReason: options?.cronCreatorAuthorityUnavailableReason,
             currentChannelId: options?.currentChannelId,
             currentChatType: options?.chatType,

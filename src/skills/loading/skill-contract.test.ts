@@ -2,7 +2,7 @@
 import { formatSkillsForPrompt as upstreamFormatSkillsForPrompt } from "openclaw/plugin-sdk/agent-sessions";
 import { describe, expect, it } from "vitest";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
-import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
+import { formatSkillsForPromptCore, type Skill } from "./skill-contract.js";
 import { formatSkillsCompactForPrompt as formatSkillsCompact } from "./skill-contract.js";
 
 function makeSkill(name: string, desc = "A skill", filePath = `/skills/${name}/SKILL.md`): Skill {
@@ -21,12 +21,12 @@ describe("formatSkillsCompact", () => {
       { ...makeSkill("weather", "Get weather <data> & forecasts"), promptVersion: "sha256:abc123" },
       makeSkill("notes", "Summarize notes", "/tmp/notes/SKILL.md"),
     ];
-    expect(formatSkillsForPrompt(skills)).toBe(upstreamFormatSkillsForPrompt(skills));
+    expect(formatSkillsForPromptCore(skills)).toBe(upstreamFormatSkillsForPrompt(skills));
   });
 
   it("renders all passed skills in the full formatter without reapplying visibility policy", () => {
     const hidden: Skill = { ...makeSkill("hidden"), disableModelInvocation: true };
-    const out = formatSkillsForPrompt([makeSkill("visible"), hidden]);
+    const out = formatSkillsForPromptCore([makeSkill("visible"), hidden]);
     expect(out).toContain("visible");
     expect(out).toContain("hidden");
   });
@@ -91,6 +91,6 @@ describe("formatSkillsCompact", () => {
   it("is significantly smaller than full format", () => {
     const skills = Array.from({ length: 50 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(800)));
     const compact = formatSkillsCompact(skills);
-    expect(compact.length).toBeLessThan(formatSkillsForPrompt(skills).length / 2);
+    expect(compact.length).toBeLessThan(formatSkillsForPromptCore(skills).length / 2);
   });
 });

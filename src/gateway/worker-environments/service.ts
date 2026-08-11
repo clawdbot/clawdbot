@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import {
@@ -6,6 +7,9 @@ import {
   type WorkerConnectParams,
   type WorkerLiveEventParams,
   type WorkerProtocolCloseReason,
+  type WorkerSessionsSendParams,
+  type WorkerSessionsSpawnParams,
+  type WorkerSessionToolResult,
   type WorkerTranscriptCommitErrorReason,
   type WorkerTranscriptCommitParams,
   type WorkerTranscriptCommitResult,
@@ -35,6 +39,7 @@ import {
 } from "../../plugins/types.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
+import type { WorkerSessionToolName } from "../../worker/tool-authority.js";
 import {
   admitWorkerConnection,
   validateWorkerConnectionIdentity,
@@ -162,14 +167,33 @@ type WorkerEnvironmentServiceOptions = {
   executeInference: WorkerInferenceExecutor;
   inferenceStore?: WorkerInferenceStore;
   placementStore?: WorkerSessionPlacementGate;
+  executeSessionTool?: (
+    params:
+      | {
+          identity: WorkerConnectionIdentity;
+          toolName: "sessions_spawn";
+          request: WorkerSessionsSpawnParams;
+          signal?: AbortSignal;
+        }
+      | {
+          identity: WorkerConnectionIdentity;
+          toolName: "sessions_send";
+          request: WorkerSessionsSendParams;
+          signal?: AbortSignal;
+        },
+  ) => Promise<WorkerSessionToolResult>;
 };
 
-export type WorkerPlacementTurnBinding = Readonly<{
+export type WorkerPlacementBinding = Readonly<{
   sessionId: string;
   environmentId: string;
   ownerEpoch: number;
-  runId: string;
 }>;
+
+export type WorkerPlacementTurnBinding = WorkerPlacementBinding &
+  Readonly<{
+    runId: string;
+  }>;
 
 type WorkerProcessTurnBinding = WorkerPlacementTurnBinding & {
   credentialHash: string;
@@ -187,10 +211,13 @@ type WorkerPendingTerminalTurnFence = WorkerProcessTurnBinding & {
 type WorkerTurnRequest =
   | { kind: "inference" }
   | { kind: "live"; seq: number }
-  | { kind: "transcript"; seq: number };
+  | { kind: "transcript"; seq: number }
+  | { kind: "session-tool" };
 
 export type WorkerSessionPlacementGate = {
+  hasWorkerTurn(binding: WorkerPlacementBinding): boolean;
   validateWorkerTurn(binding: WorkerPlacementTurnBinding): boolean;
+  isWorkerTurnToolAuthorized(binding: WorkerPlacementTurnBinding, toolName: string): boolean;
   updateAckCursors(
     binding: WorkerPlacementTurnBinding & {
       transcriptSeq?: number;
@@ -225,6 +252,11 @@ type WorkerInferenceCancelServiceResult =
   | { ok: true; result: WorkerInferenceCancelResult }
   | { ok: false; reason: WorkerInferenceErrorReason }
   | { ok: false; closeReason: WorkerProtocolCloseReason };
+
+type WorkerSessionToolServiceResult =
+  | { ok: true; result: WorkerSessionToolResult }
+  | { ok: false; closeReason: WorkerProtocolCloseReason }
+  | { ok: false; reason: WorkerProtocolCloseReason };
 
 function requireWorkerProfile(value: unknown): WorkerProfile {
   const error = validateCloudWorkerProfileSettings(value);
@@ -763,10 +795,20 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const ensurePendingCredential = (record: WorkerEnvironmentRecord, sessionId: string | null) => {
     const credential = store.getCredential(record.environmentId);
     const pending = pendingCredentials.get(record.environmentId);
+    const credentialHasDurableTurn =
+      credential?.deliveredAtMs !== null &&
+      credential?.ownerEpoch === record.ownerEpoch &&
+      credential.sessionId === sessionId &&
+      sessionId !== null &&
+      options.placementStore?.hasWorkerTurn({
+        sessionId,
+        environmentId: record.environmentId,
+        ownerEpoch: record.ownerEpoch,
+      }) === true;
     const credentialIsCurrent =
       credential?.ownerEpoch === record.ownerEpoch &&
       credential.sessionId === sessionId &&
-      credential.expiresAtMs > now();
+      (credential.expiresAtMs > now() || credentialHasDurableTurn);
     const pendingIsCurrent =
       credentialIsCurrent &&
       pending?.deliveryId === credential.credentialHash &&
@@ -952,6 +994,17 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   };
 
   const create = async (profileId: string, idempotencyKey: string) => {
+    return await createWithProfile(profileId, idempotencyKey);
+  };
+
+  const createWithProfile = async (
+    profileId: string,
+    idempotencyKey: string,
+    inherited?: {
+      providerId: string;
+      profileSnapshot: WorkerProfile;
+    },
+  ) => {
     if (stopping) {
       throw serviceError("invalid_state", "Worker environment service is stopping");
     }
@@ -967,7 +1020,12 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       }
       const existing = store.get(environmentId);
       if (existing) {
-        if (existing.profileId !== normalizedProfileId) {
+        if (
+          existing.profileId !== normalizedProfileId ||
+          (inherited !== undefined &&
+            (existing.providerId !== inherited.providerId ||
+              !isDeepStrictEqual(existing.profileSnapshot, inherited.profileSnapshot)))
+        ) {
           throw serviceError("invalid_profile", "Idempotency key belongs to another profile");
         }
         if (existing.destroyRequestedAtMs !== null) {
@@ -978,24 +1036,42 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         }
         return existing;
       }
-      const profiles = options.getConfig().cloudWorkers?.profiles;
-      if (!profiles || !Object.hasOwn(profiles, normalizedProfileId)) {
-        throw serviceError("profile_not_found", `Unknown worker profile: ${normalizedProfileId}`);
-      }
-      const profile = expectDefined(
-        profiles[normalizedProfileId],
-        "profiles entry at normalized profile id",
-      );
-      const provider = providerFor(profile.provider);
-      const settings = requireWorkerProfile(profile.settings ?? {});
-      const intent = store.createIntent({
-        environmentId,
-        providerId: normalizeCapabilityProviderId(provider.id) ?? provider.id,
-        profileId: normalizedProfileId,
-        profileSnapshot: requireWorkerProfile({
+      let provider: WorkerProvider;
+      let providerId: string;
+      let profileSnapshot: WorkerProfile;
+      if (inherited) {
+        providerId = normalizeCapabilityProviderId(inherited.providerId) ?? inherited.providerId;
+        if (providerId !== inherited.providerId) {
+          throw serviceError("invalid_profile", "Inherited worker provider id is not canonical");
+        }
+        provider = providerFor(providerId);
+        const resolvedProviderId = normalizeCapabilityProviderId(provider.id) ?? provider.id;
+        if (resolvedProviderId !== providerId) {
+          throw serviceError("invalid_profile", "Inherited worker provider identity changed");
+        }
+        profileSnapshot = requireWorkerProfile(inherited.profileSnapshot);
+      } else {
+        const profiles = options.getConfig().cloudWorkers?.profiles;
+        if (!profiles || !Object.hasOwn(profiles, normalizedProfileId)) {
+          throw serviceError("profile_not_found", `Unknown worker profile: ${normalizedProfileId}`);
+        }
+        const profile = expectDefined(
+          profiles[normalizedProfileId],
+          "profiles entry at normalized profile id",
+        );
+        provider = providerFor(profile.provider);
+        providerId = normalizeCapabilityProviderId(provider.id) ?? provider.id;
+        const settings = requireWorkerProfile(profile.settings ?? {});
+        profileSnapshot = requireWorkerProfile({
           install: profile.install ?? "bundle",
           settings,
-        }),
+        });
+      }
+      const intent = store.createIntent({
+        environmentId,
+        providerId,
+        profileId: normalizedProfileId,
+        profileSnapshot,
         provisionOperationId: `provision:v2:${digest}`,
       });
       return resumeProvision(intent, provider);
@@ -1523,8 +1599,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     if (!credential || !safeEqualSecret(credential.credentialHash, identity.credentialHash)) {
       return { ok: false, closeReason: "credential-replaced" };
     }
-    // TTL limits admission and reconnect. An already-admitted exact durable
-    // turn stays usable until its terminal ACK or placement fence.
+    // TTL limits unattached admission. An exact durable turn stays usable,
+    // including reconnects, until its terminal ACK or placement fence.
     if (now() >= credential.expiresAtMs && !placement.durableClaim) {
       return { ok: false, closeReason: "credential-expired" };
     }
@@ -1594,6 +1670,60 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       }
       return result;
     });
+
+  const executeSessionTool = async (
+    identity: WorkerConnectionIdentity,
+    toolName: WorkerSessionToolName,
+    request: WorkerSessionsSpawnParams | WorkerSessionsSendParams,
+    signal?: AbortSignal,
+  ): Promise<WorkerSessionToolServiceResult> => {
+    const validate = () => {
+      const requestAdmission = validateAttachedWorkerRequest(identity, identity.ownerEpoch, {
+        kind: "session-tool",
+      });
+      if (!requestAdmission.ok) {
+        return "closeReason" in requestAdmission
+          ? requestAdmission
+          : { ok: false as const, closeReason: "placement-mismatch" as const };
+      }
+      const binding = placementBinding(identity);
+      if (!binding || !options.placementStore?.isWorkerTurnToolAuthorized(binding, toolName)) {
+        return { ok: false as const, closeReason: "method-not-allowed" as const };
+      }
+      return { ok: true as const };
+    };
+    const admitted = validate();
+    if (!admitted.ok) {
+      return admitted;
+    }
+    if (!options.executeSessionTool) {
+      return { ok: false, reason: "gateway-unavailable" };
+    }
+    let result: WorkerSessionToolResult;
+    try {
+      result = await options.executeSessionTool(
+        toolName === "sessions_spawn"
+          ? {
+              identity,
+              toolName,
+              request: request as WorkerSessionsSpawnParams,
+              ...(signal ? { signal } : {}),
+            }
+          : {
+              identity,
+              toolName,
+              request: request as WorkerSessionsSendParams,
+              ...(signal ? { signal } : {}),
+            },
+      );
+    } catch {
+      return { ok: false, reason: "gateway-unavailable" };
+    }
+    // The tool may have awaited provider provisioning or another session turn.
+    // Never return its result after the source turn or placement was revoked.
+    const current = validate();
+    return current.ok ? { ok: true, result } : current;
+  };
 
   const applyLiveEvent = (
     identity: WorkerConnectionIdentity,
@@ -1739,6 +1869,16 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     },
     create: async (profileId: string, idempotencyKey: string) =>
       project(await create(profileId, idempotencyKey)),
+    createFromProfileSnapshot: async (
+      profile: { profileId: string; providerId: string; profileSnapshot: WorkerProfile },
+      idempotencyKey: string,
+    ) =>
+      project(
+        await createWithProfile(profile.profileId, idempotencyKey, {
+          providerId: profile.providerId,
+          profileSnapshot: profile.profileSnapshot,
+        }),
+      ),
     destroy: async (environmentId: string) => project(await destroy(environmentId)),
     destroyUnattached: async (environmentId: string) =>
       project(await destroy(environmentId, { requireUnattached: true })),
@@ -1748,14 +1888,22 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       if (stopping) {
         return { ok: false, reason: "environment-unavailable" } as const;
       }
+      const preflightAtMs = now();
       const preflight = admitWorkerConnection({
         store,
         admission,
         expectedBuild: admission.handshake,
-        nowMs: now(),
+        nowMs: preflightAtMs,
+        allowExpiredCredential: true,
       });
       if (!preflight.ok) {
         return preflight;
+      }
+      if (preflightAtMs >= preflight.identity.credentialExpiresAtMs) {
+        const placement = placementBinding(preflight.identity);
+        if (!placement || !options.placementStore?.validateWorkerTurn(placement)) {
+          return { ok: false, reason: "credential-expired" } as const;
+        }
       }
       let expectedBuild: ExpectedWorkerBuild;
       try {
@@ -1766,17 +1914,30 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       if (stopping) {
         return { ok: false, reason: "environment-unavailable" } as const;
       }
-      const admitted = admitWorkerConnection({ store, admission, expectedBuild, nowMs: now() });
+      const admittedAtMs = now();
+      const admitted = admitWorkerConnection({
+        store,
+        admission,
+        expectedBuild,
+        nowMs: admittedAtMs,
+        allowExpiredCredential: true,
+      });
+      if (!admitted.ok) {
+        return admitted;
+      }
+      const expired = admittedAtMs >= admitted.identity.credentialExpiresAtMs;
       if (
-        !admitted.ok ||
         !options.placementStore ||
         (admitted.identity.sessionId === null && admitted.identity.runId === null)
       ) {
-        return admitted;
+        return expired ? ({ ok: false, reason: "credential-expired" } as const) : admitted;
       }
       const placement = placementBinding(admitted.identity);
       if (!placement || !options.placementStore.validateWorkerTurn(placement)) {
-        return { ok: false, reason: "placement-mismatch" } as const;
+        return {
+          ok: false,
+          reason: expired ? "credential-expired" : "placement-mismatch",
+        } as const;
       }
       return admitted;
     },
@@ -1803,6 +1964,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     },
     commitTranscript,
     pushLiveEvent,
+    executeSessionTool,
     startInference,
     cancelInference,
     cancelInferenceForSession: (params: { sessionId: string; runId?: string }): string[] =>

@@ -6,7 +6,7 @@ import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   ensureMigrationDir,
   existsDir,
-  fileExists,
+  migrationFileExists,
   readSessionStoreJson5,
   safeReadDir,
 } from "./state-migrations.fs.js";
@@ -33,9 +33,9 @@ describe("state migration fs helpers", () => {
       fs.writeFileSync(filePath, "{}", "utf8");
       fs.mkdirSync(dirPath);
 
-      expect(fileExists(filePath)).toBe(true);
-      expect(fileExists(dirPath)).toBe(false);
-      expect(fileExists(path.join(base, "missing.json"))).toBe(false);
+      expect(migrationFileExists(filePath)).toBe(true);
+      expect(migrationFileExists(dirPath)).toBe(false);
+      expect(migrationFileExists(path.join(base, "missing.json"))).toBe(false);
     });
   });
 

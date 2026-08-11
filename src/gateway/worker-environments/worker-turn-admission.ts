@@ -115,11 +115,14 @@ export function requireActivePlacement(
   return placement;
 }
 
-export function releaseClaimIfOwned(
+export async function releaseClaimIfOwned(
   placements: WorkerSessionPlacementStore,
   turnClaim: WorkerSessionTurnClaim,
-): void {
+): Promise<void> {
   if (placements.validateTurnClaim(turnClaim)) {
+    if (turnClaim.owner.kind === "worker") {
+      await placements.closeWorkerTurnToolState(turnClaim);
+    }
     placements.releaseTurn(turnClaim);
   }
 }

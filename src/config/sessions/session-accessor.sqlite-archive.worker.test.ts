@@ -22,14 +22,14 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "./session-accessor.js";
-import { materializeSqliteSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
-import { materializeSqliteTranscriptArchiveInWorker } from "./session-accessor.sqlite-archive.worker.js";
+import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
+import { materializeTranscriptArchiveInWorker } from "./session-accessor.sqlite-archive.worker.js";
 import {
-  deleteMaterializedSqliteSessionStatePlans,
-  planSqliteSessionStateDeleteIfUnreferenced,
+  deleteMaterializedSessionStatePlans,
+  planSessionStateDeleteIfUnreferenced,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import { touchTranscriptMutationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
-import { replaceSqliteTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 type TestTranscriptEvent = {
@@ -65,17 +65,17 @@ describe("SQLite transcript archive worker", () => {
             : `${index}:${randomBytes(576 * 1024).toString("base64")}`,
       ),
     );
-    await replaceSqliteTranscriptEvents({ sessionKey, sessionId, storePath }, events);
+    await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, events);
 
     const heartbeatTimes = [performance.now()];
     const heartbeat = setInterval(() => {
       heartbeatTimes.push(performance.now());
     }, 5);
-    let materialized: Awaited<ReturnType<typeof materializeSqliteSessionStateDeletePlans>>;
+    let materialized: Awaited<ReturnType<typeof materializeSessionStateDeletePlans>>;
     try {
       const database = openLifecycleTestDatabase(storePath);
       const plan = planArchiveWorker(database, path.dirname(storePath), sessionId);
-      materialized = await materializeSqliteSessionStateDeletePlans([plan]);
+      materialized = await materializeSessionStateDeletePlans([plan]);
     } finally {
       heartbeatTimes.push(performance.now());
       clearInterval(heartbeat);
@@ -115,7 +115,7 @@ describe("SQLite transcript archive worker", () => {
         updatedAt: Date.now(),
       },
     );
-    await replaceSqliteTranscriptEvents({ sessionKey, sessionId, storePath }, [
+    await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [
       createTranscriptEvent(sessionId, "durable archive first"),
     ]);
 
@@ -143,7 +143,7 @@ describe("SQLite transcript archive worker", () => {
     let archivedPath: string | null = null;
     try {
       const database = openLifecycleTestDatabase(storePath);
-      const workerResult = materializeSqliteTranscriptArchiveInWorker(
+      const workerResult = materializeTranscriptArchiveInWorker(
         planArchiveWorker(database, path.dirname(storePath), sessionId),
       );
       archivedPath = workerResult.archivedPath;
@@ -200,9 +200,9 @@ describe("SQLite transcript archive worker", () => {
     const opsEvent = createTranscriptEvent(opsSessionId, "archive logical-owner transcript");
 
     await replaceSessionEntry(mainScope, { sessionId: mainSessionId, updatedAt: Date.now() });
-    await replaceSqliteTranscriptEvents(mainScope, [mainEvent]);
+    await replaceTranscriptEvents(mainScope, [mainEvent]);
     await replaceSessionEntry(opsScope, { sessionId: opsSessionId, updatedAt: Date.now() });
-    await replaceSqliteTranscriptEvents(opsScope, [opsEvent]);
+    await replaceTranscriptEvents(opsScope, [opsEvent]);
 
     const opsTarget = resolveSqliteTargetFromSessionStorePath(sharedDatabasePath, {
       agentId: opsScope.agentId,
@@ -223,7 +223,7 @@ describe("SQLite transcript archive worker", () => {
       databasePath: database.path,
       sessionId: opsSessionId,
     });
-    const materialized = await materializeSqliteSessionStateDeletePlans([plan]);
+    const materialized = await materializeSessionStateDeletePlans([plan]);
     const archivedPath = materialized[0]?.archivedTranscript?.archivedPath;
     expect(readArchiveLines(archivedPath ?? undefined)).toEqual([JSON.stringify(opsEvent)]);
 
@@ -242,16 +242,16 @@ describe("SQLite transcript archive worker", () => {
       storePath,
     };
     const original = createTranscriptEvent(sessionId, "original transcript");
-    await replaceSqliteTranscriptEvents(scope, [original]);
+    await replaceTranscriptEvents(scope, [original]);
     const database = openLifecycleTestDatabase(storePath);
     const plan = planArchiveWorker(database, path.dirname(storePath), sessionId);
 
-    await replaceSqliteTranscriptEvents(scope, [
+    await replaceTranscriptEvents(scope, [
       original,
       createTranscriptEvent("concurrent-event", "concurrent append"),
     ]);
 
-    await expect(materializeSqliteSessionStateDeletePlans([plan])).rejects.toThrow(
+    await expect(materializeSessionStateDeletePlans([plan])).rejects.toThrow(
       `SQLite session state changed before archive materialization for ${sessionId}`,
     );
     await expect(loadTranscriptEvents(scope)).resolves.toHaveLength(2);
@@ -264,7 +264,7 @@ describe("SQLite transcript archive worker", () => {
 
   it("rejects deduped plans with different transcript snapshots", async () => {
     const sessionId = "conflicting-plan-snapshots";
-    await replaceSqliteTranscriptEvents(
+    await replaceTranscriptEvents(
       { sessionKey: "agent:main:conflicting-plan-snapshots", sessionId, storePath },
       [createTranscriptEvent(sessionId, "original transcript")],
     );
@@ -278,7 +278,7 @@ describe("SQLite transcript archive worker", () => {
       },
     };
 
-    await expect(materializeSqliteSessionStateDeletePlans([plan, conflictingPlan])).rejects.toThrow(
+    await expect(materializeSessionStateDeletePlans([plan, conflictingPlan])).rejects.toThrow(
       `Conflicting SQLite transcript archive plans for ${sessionId}`,
     );
   });
@@ -295,11 +295,11 @@ describe("SQLite transcript archive worker", () => {
     const plan = planArchiveWorker(database, path.dirname(storePath), sessionId);
     expect(plan.snapshot.lastSeq).toBeNull();
 
-    await replaceSqliteTranscriptEvents(scope, [
+    await replaceTranscriptEvents(scope, [
       createTranscriptEvent(sessionId, "first concurrent append"),
     ]);
 
-    await expect(materializeSqliteSessionStateDeletePlans([plan])).rejects.toThrow(
+    await expect(materializeSessionStateDeletePlans([plan])).rejects.toThrow(
       `SQLite session state changed before archive materialization for ${sessionId}`,
     );
     await expect(loadTranscriptEvents(scope)).resolves.toHaveLength(1);
@@ -312,7 +312,7 @@ describe("SQLite transcript archive worker", () => {
       sessionId,
       storePath,
     };
-    await replaceSqliteTranscriptEvents(scope, [
+    await replaceTranscriptEvents(scope, [
       createTranscriptEvent(sessionId, "preserve after file failure"),
     ]);
     const blockedArchiveDirectory = path.join(tempDir, "archive-path-is-a-file");
@@ -325,13 +325,13 @@ describe("SQLite transcript archive worker", () => {
       sessionId: recoverySessionId,
       storePath,
     };
-    await replaceSqliteTranscriptEvents(recoveryScope, [
+    await replaceTranscriptEvents(recoveryScope, [
       createTranscriptEvent(recoverySessionId, "archive after queued failure"),
     ]);
     const recoveryPlan = planArchiveWorker(database, path.dirname(storePath), recoverySessionId);
 
-    const failedArchive = materializeSqliteSessionStateDeletePlans([plan]);
-    const recoveredArchive = materializeSqliteSessionStateDeletePlans([recoveryPlan]);
+    const failedArchive = materializeSessionStateDeletePlans([plan]);
+    const recoveredArchive = materializeSessionStateDeletePlans([recoveryPlan]);
 
     await expect(failedArchive).rejects.toThrow();
     await expect(recoveredArchive).resolves.toMatchObject([
@@ -351,7 +351,7 @@ describe("SQLite transcript archive worker", () => {
     const sessionKey = "agent:main:archive-worker-lifecycle-failure";
     const scope = { sessionKey, sessionId, storePath };
     await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
-    await replaceSqliteTranscriptEvents(scope, [
+    await replaceTranscriptEvents(scope, [
       {
         type: "message",
         id: "archive-worker-lifecycle-failure-message",
@@ -452,12 +452,12 @@ describe("SQLite transcript archive worker", () => {
   it("keeps rows when a transcript changes after its archive snapshot", async () => {
     const sessionId = "stale-archive-snapshot-session";
     const sessionKey = "agent:main:stale-archive-snapshot";
-    await replaceSqliteTranscriptEvents({ sessionKey, sessionId, storePath }, [
+    await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [
       createTranscriptEvent(sessionId, "archived snapshot"),
     ]);
     const database = openLifecycleTestDatabase(storePath);
     const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
-    const plan = planSqliteSessionStateDeleteIfUnreferenced({
+    const plan = planSessionStateDeleteIfUnreferenced({
       archiveDirectory: path.dirname(storePath),
       database,
       referencedSessionIds: new Set(),
@@ -466,7 +466,7 @@ describe("SQLite transcript archive worker", () => {
     if (!plan) {
       throw new Error("expected an unreferenced SQLite transcript delete plan");
     }
-    const materialized = await materializeSqliteSessionStateDeletePlans([plan]);
+    const materialized = await materializeSessionStateDeletePlans([plan]);
 
     appendTranscriptEvent(database, sessionId);
 
@@ -492,7 +492,7 @@ describe("SQLite transcript archive worker", () => {
             : "window"
       }-snapshot`;
       const sessionKey = `agent:main:${sessionId}`;
-      await replaceSqliteTranscriptEvents({ sessionKey, sessionId, storePath }, [
+      await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [
         createTranscriptEvent(sessionId, "archived transcript"),
       ]);
       const database = openLifecycleTestDatabase(storePath);
@@ -501,7 +501,7 @@ describe("SQLite transcript archive worker", () => {
       expect(plan.snapshot.generation).not.toBeNull();
       expect(plan.snapshot.sessionUpdatedAt).not.toBeNull();
       expect(plan.snapshot.transcriptUpdatedAt).not.toBeNull();
-      const materialized = await materializeSqliteSessionStateDeletePlans([plan]);
+      const materialized = await materializeSessionStateDeletePlans([plan]);
 
       if (kind === "rewrite generation") {
         executeSqliteQuerySync(
@@ -551,12 +551,12 @@ describe("SQLite transcript archive worker", () => {
   it("keeps rows when a non-archive delete plan becomes stale", async () => {
     const sessionId = "stale-non-archive-snapshot-session";
     const sessionKey = "agent:main:stale-non-archive-snapshot";
-    await replaceSqliteTranscriptEvents({ sessionKey, sessionId, storePath }, [
+    await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [
       createTranscriptEvent(sessionId, "planned transcript"),
     ]);
     const database = openLifecycleTestDatabase(storePath);
     const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
-    const plan = planSqliteSessionStateDeleteIfUnreferenced({
+    const plan = planSessionStateDeleteIfUnreferenced({
       archiveDirectory: path.dirname(storePath),
       archiveTranscript: false,
       database,
@@ -566,7 +566,7 @@ describe("SQLite transcript archive worker", () => {
     if (!plan) {
       throw new Error("expected an unreferenced SQLite transcript delete plan");
     }
-    const materialized = await materializeSqliteSessionStateDeletePlans([plan]);
+    const materialized = await materializeSessionStateDeletePlans([plan]);
 
     appendTranscriptEvent(database, sessionId);
 
@@ -586,13 +586,13 @@ describe("SQLite transcript archive worker", () => {
     async (kind) => {
       const sessionId = `stale-${kind === "trajectory" ? "trajectory" : "acp"}-snapshot-session`;
       const sessionKey = `agent:main:${sessionId}`;
-      await replaceSqliteTranscriptEvents({ sessionKey, sessionId, storePath }, [
+      await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [
         createTranscriptEvent(sessionId, "archived transcript"),
       ]);
       const database = openLifecycleTestDatabase(storePath);
       const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
       const plan = planArchiveWorker(database, path.dirname(storePath), sessionId);
-      const materialized = await materializeSqliteSessionStateDeletePlans([plan]);
+      const materialized = await materializeSessionStateDeletePlans([plan]);
 
       if (kind === "trajectory") {
         appendSqliteTrajectoryRuntimeEvents({ sessionId, storePath }, [
@@ -634,7 +634,7 @@ describe("SQLite transcript archive worker", () => {
   it("does not reuse a matching in-flight temp file as an archive", async () => {
     const sessionId = "in-flight-temp-archive-session";
     const line = createTranscriptEventLine(sessionId, "in-flight temp archive");
-    await replaceSqliteTranscriptEvents(
+    await replaceTranscriptEvents(
       { sessionKey: "agent:main:in-flight-temp-archive", sessionId, storePath },
       [JSON.parse(line) as TestTranscriptEvent],
     );
@@ -647,7 +647,7 @@ describe("SQLite transcript archive worker", () => {
     fs.writeFileSync(tempPath, `${line}\n`, "utf8");
 
     const database = openLifecycleTestDatabase(storePath);
-    const result = materializeSqliteTranscriptArchiveInWorker(
+    const result = materializeTranscriptArchiveInWorker(
       planArchiveWorker(database, archiveDirectory, sessionId),
     );
 
@@ -660,7 +660,7 @@ describe("SQLite transcript archive worker", () => {
     const sessionId = "duplicate-archive-session";
     const sessionKey = "agent:main:duplicate-archive";
     await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: Date.now() });
-    await replaceSqliteTranscriptEvents({ sessionKey, sessionId, storePath }, [
+    await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [
       createTranscriptEvent(sessionId, "reuse archive"),
     ]);
     const archivePath = path.join(
@@ -687,7 +687,7 @@ describe("SQLite transcript archive worker", () => {
 
     try {
       const database = openLifecycleTestDatabase(storePath);
-      const workerResult = materializeSqliteTranscriptArchiveInWorker(
+      const workerResult = materializeTranscriptArchiveInWorker(
         planArchiveWorker(database, path.dirname(storePath), sessionId),
       );
       expect(workerResult.archivedPath).toBe(archivePath);
@@ -759,7 +759,7 @@ function planArchiveWorker(
   archiveDirectory: string,
   sessionId: string,
 ) {
-  const plan = planSqliteSessionStateDeleteIfUnreferenced({
+  const plan = planSessionStateDeleteIfUnreferenced({
     archiveDirectory,
     database,
     referencedSessionIds: new Set(),
@@ -795,12 +795,12 @@ function appendTranscriptEvent(
 
 function deleteMaterializedPlans(
   database: ReturnType<typeof openLifecycleTestDatabase>,
-  plans: Parameters<typeof deleteMaterializedSqliteSessionStatePlans>[1],
+  plans: Parameters<typeof deleteMaterializedSessionStatePlans>[1],
   excludedSessionKey: string,
 ): void {
   runOpenClawAgentWriteTransaction(
     (transactionDb) =>
-      deleteMaterializedSqliteSessionStatePlans(
+      deleteMaterializedSessionStatePlans(
         transactionDb,
         plans,
         undefined,

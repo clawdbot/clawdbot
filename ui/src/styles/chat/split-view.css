@@ -162,8 +162,35 @@ openclaw-chat-pane {
   -webkit-user-select: none;
 }
 
-/* The title hugs its text so the workspace chip sits right after it (the
-   header's shared 8px gap provides the spacing); it may shrink with ellipsis
+/* Identity trail: project, then session. One flex row owns the alignment of
+   every segment, so the 26px project chip and the 12px text segments centre on
+   a single line and a future parent-session segment inherits it for free. */
+.chat-pane__crumbs {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  align-items: center;
+  /* Both interactive segments pull their 5px hover padding back out of flow, so
+     this gap is the separator's actual optical air on each side. */
+  gap: 6px;
+}
+
+/* Renaming needs the row's spare width, which the trail must pass through:
+   without this the input is trapped inside a shrink-only container. */
+.chat-pane__crumbs:has(.chat-pane__session-title-input) {
+  flex: 1 1 auto;
+}
+
+/* House separator treatment: an aria-hidden glyph tinted with --muted, spacing
+   from the row gap, no size or color of its own beyond matching the title. */
+.chat-pane__crumb-sep {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* The title hugs its text so the segments after it stay adjacent (the trail's
+   shared 8px gap provides the spacing); it may shrink with ellipsis
    when space runs out, and the action row pushes itself to the right edge. */
 .chat-pane__session-title {
   flex: 0 1 auto;
@@ -198,8 +225,6 @@ openclaw-chat-pane {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  /* Inter's visible ink sits 0.8px above its line-box center at this size. */
-  transform: translateY(1px);
 }
 
 .chat-pane__session-title-input {
@@ -248,6 +273,21 @@ openclaw-chat-pane {
   stroke-width: 1.5px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+/* Project icons are arbitrary artwork, so they keep their own pixels: matched to
+   the glyph box, contained rather than stretched, and deliberately unstyled —
+   no shadow, plate, or filter. Accepted tradeoff: a favicon that is one flat
+   dark color on transparency loses contrast against a dark chip. Rescuing it
+   unconditionally would cost every normal full-color icon, so if it ever
+   matters in practice the escape hatch is a plate applied conditionally, not a
+   blanket effect here. */
+.chat-pane__workspace-chip .workspace-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  border-radius: 2px;
+  object-fit: contain;
 }
 
 .chat-pane__workspace-menu {
@@ -393,26 +433,31 @@ openclaw-chat-pane {
   color: var(--accent);
 }
 
+/* A breadcrumb segment, not a badge: flat and inline, sharing the title's type
+   size so the two read as one trail and the hierarchy comes from colour alone —
+   the project is --muted, the session --text. Hover and focus reuse the sibling
+   title button's tint, which keeps a visible focus indicator without a border. */
 .chat-pane__workspace-chip {
   display: inline-flex;
   max-width: 180px;
-  /* Same 28px control height as .chat-icon-btn, so every hit/hover surface in
-     the row starts and ends on the same two lines. */
-  height: 28px;
   align-items: center;
-  gap: 5px;
-  padding: 0 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  background: var(--panel);
+  gap: 6px;
+  /* Hover padding drawn outside the text box, matching the title button, so the
+     icon starts flush at the row and the separator keeps equal air on both
+     sides instead of inheriting only the title's pull-back. */
+  padding: 3px 5px;
+  margin-inline: -5px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   cursor: var(--cursor-action);
 }
 
 .chat-pane__workspace-chip:hover,
 .chat-pane__workspace-chip:focus-visible {
-  border-color: var(--muted-strong);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
   color: var(--text);
   outline: none;
 }
@@ -503,12 +548,16 @@ openclaw-chat-pane {
 
 @container (max-width: 480px) {
   .chat-pane__workspace-chip {
-    width: 28px;
-    padding: 0 6px;
-    justify-content: center;
+    max-width: none;
   }
 
   .chat-pane__workspace-chip span {
+    display: none;
+  }
+
+  /* The project name is gone at this width, so the separator would trail an
+     icon-only pill and read as punctuation with nothing on its left. */
+  .chat-pane__crumb-sep {
     display: none;
   }
 

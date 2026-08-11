@@ -9,7 +9,7 @@ import {
   extractTextFromMessage,
   extractTuiAbortedText,
   formatTuiAbortDiagnostic,
-  isCommandMessage,
+  isCommandMarkedMessage,
 } from "./tui-formatters.js";
 import { createTuiRunLifecycle } from "./tui-run-lifecycle.js";
 import { matchesSelectedTuiSession, readTuiSessionUserMessage } from "./tui-session-events.js";
@@ -300,7 +300,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         tui.requestRender(true);
         return;
       }
-      if (isCommandMessage(evt.message)) {
+      if (isCommandMarkedMessage(evt.message)) {
         maybeRefreshHistoryForRun(evt.runId, { wasPendingChatRun: isPendingChatRun });
         const text = extractTextFromMessage(evt.message);
         if (text) {

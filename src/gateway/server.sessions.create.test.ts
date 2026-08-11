@@ -333,12 +333,18 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
 
     const child = await directSessionReq<{
       key: string;
-      entry: { incognito?: true; parentSessionKey?: string; sessionFile?: string };
+      entry: {
+        incognito?: true;
+        parentSessionId?: string;
+        parentSessionKey?: string;
+        sessionFile?: string;
+      };
     }>("sessions.create", { agentId: "main", parentSessionKey: key });
     expect(child.ok).toBe(true);
     const childKey = requireNonEmptyString(child.payload?.key, "incognito child key");
     expect(child.payload?.entry.incognito).toBe(true);
     expect(child.payload?.entry.parentSessionKey).toBe(key);
+    expect(child.payload?.entry.parentSessionId).toBe(entry?.sessionId);
     expect(child.payload?.entry).not.toHaveProperty("sessionFile");
 
     const rejectedInheritedChannel = await directSessionReq("sessions.create", {

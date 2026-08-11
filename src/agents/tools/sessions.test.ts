@@ -1,3 +1,4 @@
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Sessions tool tests cover list/send helpers, announce-target resolution,
@@ -6,12 +7,14 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
+import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import {
   getOwnedSessionTranscriptWriterFence,
   withOwnedSessionTranscriptWrites,
 } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { extractStoredAssistantText, sanitizeTextContent } from "./chat-history-text.js";
 
@@ -862,6 +865,73 @@ describe("sessions_send gating", () => {
         params: expect.objectContaining({ label: "stale-label" }),
       }),
     ]);
+  });
+
+  it("keeps an exact-incarnation send synchronous to its scoped lifecycle grant", async () => {
+    await withTempDir({ prefix: "openclaw-exact-session-send-" }, async (dir) => {
+      const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
+      vi.mocked(runSessionsSendA2AFlow).mockClear();
+      const storePath = path.join(dir, "sessions.json");
+      const targetSessionKey = "agent:main:dashboard:child";
+      const targetSessionId = "child-incarnation";
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: targetSessionKey, storePath },
+        {
+          sessionId: targetSessionId,
+          updatedAt: 1,
+          parentSessionKey: MAIN_AGENT_SESSION_KEY,
+        },
+      );
+      callGatewayMock.mockImplementation(async (opts: unknown) => {
+        const request = opts as { method?: string };
+        if (request.method === "sessions.list") {
+          return {
+            path: storePath,
+            sessions: [{ key: targetSessionKey, kind: "direct" }],
+          };
+        }
+        if (request.method === "agent") {
+          return { runId: "run-exact-send", acceptedAt: 123 };
+        }
+        return {};
+      });
+      const tool = createSessionsSendTool({
+        agentSessionKey: MAIN_AGENT_SESSION_KEY,
+        expectedTargetSessionId: targetSessionId,
+        idempotencyKey: "worker-session-send:stable-operation",
+        callGateway: callGatewayMock,
+        config: {
+          session: { scope: "per-sender", mainKey: "main", store: storePath },
+          tools: {
+            agentToAgent: { enabled: true },
+            sessions: { visibility: "all" },
+          },
+        } as never,
+      });
+
+      const result = await tool.execute("call-exact-send", {
+        sessionKey: targetSessionKey,
+        message: "ping",
+        timeoutSeconds: 0,
+        watch: true,
+      });
+
+      expect(requireDetails(result)).toMatchObject({
+        status: "accepted",
+        sessionKey: targetSessionKey,
+        delivery: { status: "skipped", mode: "announce" },
+        watched: false,
+      });
+      expect(runSessionsSendA2AFlow).not.toHaveBeenCalled();
+      expect(callGatewayMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "agent",
+          params: expect.objectContaining({
+            idempotencyKey: "worker-session-send:stable-operation",
+          }),
+        }),
+      );
+    });
   });
 
   it("does not disclose a resolved session key when sessionId access is denied", async () => {

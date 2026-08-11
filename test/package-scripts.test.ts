@@ -356,4 +356,10 @@ describe("package scripts", () => {
     expect(script).toContain("src/infra/process-env.test.ts");
     expect(script).toContain("src/cli/mcp-cli.path-case.windows.test.ts");
   });
+
+  it("runs explicit memory extra-file casing coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "extensions/memory-core/src/memory-extra-file-path.windows.test.ts",
+    );
+  });
 });

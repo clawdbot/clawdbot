@@ -14,7 +14,7 @@ import {
   upsertSessionEntry,
   withTranscriptWriteLock,
 } from "./session-accessor.js";
-import { replaceSqliteTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 
 vi.mock("../config.js", async () => ({
   ...(await vi.importActual<typeof import("../config.js")>("../config.js")),
@@ -528,7 +528,7 @@ describe("session accessor cross-process concurrency", () => {
         sessionId,
         updatedAt: Date.now(),
       });
-      await replaceSqliteTranscriptEvents(scope, [
+      await replaceTranscriptEvents(scope, [
         { type: "session", version: 3, id: sessionId },
         {
           type: "message",
@@ -688,7 +688,7 @@ describe("session accessor cross-process concurrency", () => {
 
     try {
       await upsertSessionEntry(scope, { sessionId, updatedAt: Date.now() });
-      await replaceSqliteTranscriptEvents(scope, [
+      await replaceTranscriptEvents(scope, [
         { type: "session", version: 3, id: sessionId },
         {
           type: "message",

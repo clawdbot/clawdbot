@@ -5,6 +5,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
+import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { icons } from "../../components/icons.ts";
 import {
@@ -15,6 +16,7 @@ import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { listSessionCreators } from "../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { hasSessionPresenceViewers } from "../../components/viewer-facepile.ts";
+import { workspaceIconRouteUrl } from "../../components/workspace-icon.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
@@ -60,6 +62,24 @@ import {
 } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
+  /** Gateway-served project icon for a session workspace, on the same credentials as agent avatars. */
+  private resolveWorkspaceIcon(sessionKey: string | undefined) {
+    if (!sessionKey) {
+      return null;
+    }
+    const gateway = this.context.gateway;
+    const authTokens = resolveControlUiAuthCandidates({
+      hello: gateway.snapshot.hello,
+      settings: { token: gateway.connection.token },
+      password: gateway.connection.password,
+    });
+    return {
+      routeUrl: workspaceIconRouteUrl(this.context.basePath, sessionKey),
+      authTokens,
+      authReady: Boolean(gateway.snapshot.hello || authTokens.length),
+    };
+  }
+
   protected renderPaneHeader(
     sessionWorkspace: SessionWorkspaceProps,
     backgroundTasks: BackgroundTasksProps,
@@ -291,6 +311,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
       renameValue: this.headerRenameValue,
       workspaceRoot: workspace.root,
       workspaceLabel: workspace.label,
+      workspaceIcon: this.resolveWorkspaceIcon(workspace.root ? row?.key : undefined),
       branch,
       branches:
         this.state && this.state.chatBranchesSessionKey === this.state.sessionKey

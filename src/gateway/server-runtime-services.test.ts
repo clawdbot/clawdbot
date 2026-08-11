@@ -19,7 +19,7 @@ function waitForFast<T>(
 type StartSessionDeliveryRuntime =
   typeof import("../infra/session-delivery-queue-runtime.js").startSessionDeliveryRuntime;
 type DrainPendingDeliveries =
-  typeof import("../infra/outbound/delivery-queue.js").drainPendingDeliveries;
+  typeof import("../infra/outbound/delivery-queue.js").drainPendingDeliveriesCore;
 type RecoverPendingDeliveries =
   typeof import("../infra/outbound/delivery-queue.js").recoverPendingDeliveries;
 
@@ -82,7 +82,7 @@ vi.mock("../infra/outbound/deliver.js", () => ({
 
 vi.mock("../infra/outbound/delivery-queue.js", () => ({
   recoverPendingDeliveries: hoisted.recoverPendingDeliveries,
-  drainPendingDeliveries: hoisted.drainPendingDeliveries,
+  drainPendingDeliveriesCore: hoisted.drainPendingDeliveries,
 }));
 
 vi.mock("../infra/session-delivery-queue-runtime.js", () => ({

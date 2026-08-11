@@ -28,14 +28,6 @@
     ]
   },
   {
-    "name": "authorizeConfigWrite",
-    "files": [
-      "src/channels/plugins/config-writes.ts",
-      "src/plugin-sdk/channel-config-helpers.ts"
-    ],
-    "sdk": true
-  },
-  {
     "name": "buildBundleMcpToolsFromCatalog",
     "files": [
       "src/agents/agent-bundle-mcp-materialize.ts",
@@ -71,22 +63,6 @@
     ]
   },
   {
-    "name": "buildQaTarget",
-    "files": [
-      "src/plugin-sdk/qa-channel-protocol.ts",
-      "src/plugin-sdk/qa-channel.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "bundledPluginFile",
-    "files": [
-      "src/plugin-sdk/test-helpers/bundled-plugin-paths.ts",
-      "src/plugins/contracts/test-helpers/bundled-plugin-roots.ts"
-    ],
-    "sdk": true
-  },
-  {
     "name": "callGateway",
     "files": [
       "src/cli/program.test-mocks.ts",
@@ -101,19 +77,19 @@
     ]
   },
   {
-    "name": "canBypassConfigWritePolicy",
-    "files": [
-      "src/channels/plugins/config-writes.ts",
-      "src/plugin-sdk/channel-config-helpers.ts"
-    ],
-    "sdk": true
-  },
-  {
     "name": "classifySessionKind",
     "files": [
       "src/agents/tools/sessions-helpers.ts",
       "src/sessions/classify-session-kind.ts"
     ]
+  },
+  {
+    "name": "cleanupSessionLifecycleArtifacts",
+    "files": [
+      "src/config/sessions/session-accessor.sqlite-lifecycle.ts",
+      "src/plugin-sdk/session-store-runtime.ts"
+    ],
+    "sdk": true
   },
   {
     "name": "clearPluginRegistryLoadCache",
@@ -130,35 +106,11 @@
     ]
   },
   {
-    "name": "closeActiveMemorySearchManager",
-    "files": [
-      "src/plugin-sdk/memory-host-search.ts",
-      "src/plugins/memory-runtime.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "closeActiveMemorySearchManagers",
-    "files": [
-      "src/plugin-sdk/memory-host-search.ts",
-      "src/plugins/memory-runtime.ts"
-    ],
-    "sdk": true
-  },
-  {
     "name": "containsConfigIncludeDirective",
     "files": [
       "src/config/io.read-helpers.ts",
       "src/plugins/install-persistence.ts"
     ]
-  },
-  {
-    "name": "createFixedWindowRateLimiter",
-    "files": [
-      "src/infra/fixed-window-rate-limit.ts",
-      "src/plugin-sdk/webhook-memory-guards.ts"
-    ],
-    "sdk": true
   },
   {
     "name": "createGatewayStartupTrace",
@@ -182,76 +134,11 @@
     ]
   },
   {
-    "name": "createTestRegistry",
-    "files": [
-      "src/gateway/server/__tests__/test-utils.ts",
-      "src/test-utils/channel-plugins.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "defaultRuntime",
-    "files": [
-      "src/cli/daemon-cli/test-helpers/lifecycle-core-harness.ts",
-      "src/runtime.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "deliverInboundReplyWithMessageSendContext",
-    "files": [
-      "src/channels/turn/durable-delivery.ts",
-      "src/plugin-sdk/channel-outbound.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "dispatchReplyWithBufferedBlockDispatcher",
-    "files": [
-      "src/auto-reply/reply/provider-dispatcher.ts",
-      "src/plugin-sdk/reply-dispatch-runtime.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "dispatchReplyWithDispatcher",
-    "files": [
-      "src/auto-reply/reply/provider-dispatcher.ts",
-      "src/plugin-sdk/reply-dispatch-runtime.ts"
-    ],
-    "sdk": true
-  },
-  {
     "name": "doctorCommand",
     "files": [
       "src/commands/doctor.ts",
       "src/flows/doctor-health.ts"
     ]
-  },
-  {
-    "name": "drainPendingDeliveries",
-    "files": [
-      "src/infra/outbound/delivery-queue-recovery.ts",
-      "src/plugin-sdk/delivery-queue-runtime.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "enablePluginInConfig",
-    "files": [
-      "src/cli/plugins-cli-test-helpers.ts",
-      "src/plugin-sdk/provider-enable-config.ts",
-      "src/plugins/enable.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "ensureConfiguredAcpBindingReady",
-    "files": [
-      "src/acp/persistent-bindings.lifecycle.ts",
-      "src/plugin-sdk/core.ts"
-    ],
-    "sdk": true
   },
   {
     "name": "extractAssistantVisibleText",
@@ -268,60 +155,11 @@
     ]
   },
   {
-    "name": "fileExists",
-    "files": [
-      "src/infra/state-migrations.fs.ts",
-      "src/media-understanding/fs.ts",
-      "src/plugin-sdk/security-runtime.ts"
-    ],
-    "sdk": true
-  },
-  {
     "name": "formatConfigPath",
     "files": [
       "src/commands/doctor-config-analysis.ts",
       "src/config/logging.ts"
     ]
-  },
-  {
-    "name": "formatConfigWriteDeniedMessage",
-    "files": [
-      "src/channels/plugins/config-writes.ts",
-      "src/plugin-sdk/channel-config-helpers.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "formatEnvelopeTimestamp",
-    "files": [
-      "src/auto-reply/envelope.ts",
-      "src/plugin-sdk/test-helpers/envelope-timestamp.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "formatSkillsForPrompt",
-    "files": [
-      "src/skills/loading/session.ts",
-      "src/skills/loading/skill-contract.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "generateOAuthState",
-    "files": [
-      "src/plugin-sdk/provider-auth-runtime.ts",
-      "src/plugin-sdk/provider-oauth-runtime.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "getActiveMemorySearchManager",
-    "files": [
-      "src/plugin-sdk/memory-host-search.ts",
-      "src/plugins/memory-runtime.ts"
-    ],
-    "sdk": true
   },
   {
     "name": "getActivePluginChannelRegistryVersion",
@@ -338,51 +176,11 @@
     ]
   },
   {
-    "name": "getChatChannelMeta",
-    "files": [
-      "src/channels/chat-meta.ts",
-      "src/plugin-sdk/core.ts"
-    ],
-    "sdk": true
-  },
-  {
     "name": "getFreePort",
     "files": [
       "src/gateway/test-helpers.server.ts",
       "src/test-utils/ports.ts"
     ]
-  },
-  {
-    "name": "getReplyFromConfig",
-    "files": [
-      "src/auto-reply/reply/get-reply.ts",
-      "src/gateway/test-helpers.runtime-state.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "getRuntimeAuthForModel",
-    "files": [
-      "src/plugin-sdk/provider-auth-runtime.ts",
-      "src/plugins/runtime/runtime-model-auth.runtime.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "hasOwnProperty",
-    "files": [
-      "src/secrets/runtime-shared.ts",
-      "src/tts/tts-settings.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "inferToolMetaFromArgs",
-    "files": [
-      "src/agents/embedded-agent-utils.ts",
-      "src/plugin-sdk/agent-harness-runtime.ts"
-    ],
-    "sdk": true
   },
   {
     "name": "inspectPluginRegistry",
@@ -453,30 +251,6 @@
       "src/cli/plugins-cli-test-helpers.ts",
       "src/plugins/install-package.ts"
     ]
-  },
-  {
-    "name": "isClaudeCliProvider",
-    "files": [
-      "src/agents/cli-runner/helpers.ts",
-      "src/plugin-sdk/anthropic-cli.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "isCommandMessage",
-    "files": [
-      "src/auto-reply/commands-registry.ts",
-      "src/tui/tui-formatters.ts"
-    ],
-    "sdk": true
-  },
-  {
-    "name": "isQaRuntimeAvailable",
-    "files": [
-      "src/plugin-sdk/qa-runner-runtime.ts",
-      "src/plugin-sdk/qa-runtime.ts"
-    ],
-    "sdk": true
   },
   {
     "name": "killProcessTree",
@@ -749,6 +523,14 @@
     ]
   },
   {
+    "name": "patchSessionEntry",
+    "files": [
+      "src/config/sessions/session-accessor.sqlite-entry.ts",
+      "src/plugin-sdk/session-store-runtime.ts"
+    ],
+    "sdk": true
+  },
+  {
     "name": "pathExists",
     "files": [
       "src/agents/worktrees/git.ts",
@@ -827,6 +609,14 @@
     "files": [
       "src/config/sessions/session-accessor.sqlite-active-events.ts",
       "src/plugin-sdk/session-transcript-runtime.ts"
+    ],
+    "sdk": true
+  },
+  {
+    "name": "readSessionUpdatedAt",
+    "files": [
+      "src/config/sessions/session-accessor.sqlite-entry.ts",
+      "src/plugin-sdk/session-store-runtime.ts"
     ],
     "sdk": true
   },
@@ -1199,6 +989,14 @@
       "src/cli/plugins-cli-test-helpers.ts",
       "src/plugins/update-installed.ts"
     ]
+  },
+  {
+    "name": "upsertSessionEntry",
+    "files": [
+      "src/config/sessions/session-accessor.sqlite-entry.ts",
+      "src/plugin-sdk/session-store-runtime.ts"
+    ],
+    "sdk": true
   },
   {
     "name": "VERSION",

@@ -20,7 +20,12 @@ const mocks = await vi.hoisted(async () => {
 });
 
 vi.mock("../runtime.js", () => ({ defaultRuntime: mocks.defaultRuntime }));
-vi.mock("../secrets/store/secret-store.js", () => ({
+vi.mock("../secrets/store/secret-store.js", async (importOriginal) => ({
+  // Import the real validation error: the CLI classifies size/empty failures by it,
+  // and a stub class would silently change the mapped exit code.
+  SecretStoreValidationError: (
+    await importOriginal<typeof import("../secrets/store/secret-store.js")>()
+  ).SecretStoreValidationError,
   SECRET_STORE_VALUE_MAX_BYTES: 64 * 1024,
   listSecretStoreEntries: (params: unknown) => mocks.list(params),
   readSecretStoreValue: (params: unknown) => mocks.read(params),
@@ -77,6 +82,25 @@ describe("secrets store CLI", () => {
     expect(mocks.runtimeErrors.join("\n")).toContain("--value-file");
     expect(mocks.runtimeErrors.join("\n")).toContain("interactive no-echo prompt");
     expect(mocks.write).not.toHaveBeenCalled();
+  });
+
+  it("reports an oversized --value-file as validation (exit 2), matching the stdin path", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "secret-store-cli-oversize-"));
+    const file = path.join(dir, "too-big.txt");
+    await fs.writeFile(file, "a".repeat(64 * 1024 + 1), "utf8");
+    try {
+      // Same violation as an oversized stdin value, so it must share exit code 2
+      // rather than falling through to the generic runtime-failure code.
+      await expect(
+        createProgram().parseAsync(
+          ["secrets", "store", "set", "BIG_ENV_VALUE", "--kind", "env", "--value-file", file],
+          { from: "user" },
+        ),
+      ).rejects.toThrow("__exit__:2");
+      expect(mocks.write).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("refuses get for secret entries without reading their values", async () => {

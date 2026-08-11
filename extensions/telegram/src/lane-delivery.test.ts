@@ -184,33 +184,33 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.lanes.answer.finalized).toBe(true);
   });
 
-  it("claims an equal visible preview before finalization can crash", async () => {
+  it("claims an equal visible preview and survives a cleanup-only crash", async () => {
     const events: string[] = [];
     const answer = createTestDraftStream({ messageId: 999 });
     answer.lastDeliveredText.mockReturnValue(HELLO_FINAL);
     const harness = createHarness({ answerStream: answer });
-    const finalizationCrash = new Error("injected finalization crash");
     harness.stopDraftLane.mockImplementationOnce(async () => {
       events.push("finalize");
-      throw finalizationCrash;
+      throw new Error("injected finalization crash");
     });
     const onPlatformSendDispatch = vi.fn(async () => {
       events.push("custody");
     });
 
-    await expect(
-      harness.deliverLaneText({
-        laneName: "answer",
-        text: HELLO_FINAL,
-        payload: { text: HELLO_FINAL },
-        infoKind: "final",
-        onPlatformSendDispatch,
-      }),
-    ).rejects.toBe(finalizationCrash);
+    // The preview text is already on screen: custody must be claimed, and a
+    // cleanup crash must not convert the accepted preview into a send failure.
+    await harness.deliverLaneText({
+      laneName: "answer",
+      text: HELLO_FINAL,
+      payload: { text: HELLO_FINAL },
+      infoKind: "final",
+      onPlatformSendDispatch,
+    });
 
     expect(events).toEqual(["custody", "finalize"]);
     expect(answer.update).not.toHaveBeenCalled();
     expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+    expect(harness.lanes.answer.finalized).toBe(true);
   });
 
   it("streams block and final text through the same lane", async () => {

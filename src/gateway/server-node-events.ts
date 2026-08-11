@@ -36,6 +36,7 @@ import {
   enqueueSystemEvent,
   formatForLog,
   getRuntimeConfig,
+  INLINE_IMAGE_DURABLE_OMISSION_MARKER,
   loadOrCreateProcessDeviceIdentity,
   loadSessionEntry,
   normalizeChannelId,
@@ -656,11 +657,11 @@ export const handleNodeEvent = async (
       }
 
       let message = (link?.message ?? "").trim();
-      const transcriptMessage = message;
+      let transcriptMessage = message;
       const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
         link?.attachments ?? undefined,
       );
-      let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+      let images: Awaited<ReturnType<typeof parseMessageWithAttachments>>["images"] = [];
       let imageOrder: PromptImageOrderEntry[] = [];
       let offloadedRefs: Awaited<ReturnType<typeof parseMessageWithAttachments>>["offloadedRefs"] =
         [];
@@ -790,22 +791,23 @@ export const handleNodeEvent = async (
       }
       const persistedTranscriptMedia = await persistInboundImagesForTranscript({
         images,
-        imageOrder,
         offloadedRefs,
         log: ctx.logGateway,
         logContext: "agent.request",
       });
       if (!(await isNodeEventConnectionCurrent(opts))) {
         await cleanupNodeEventMedia(
-          persistedTranscriptMedia.map((media) => media.id),
+          persistedTranscriptMedia.entries.map((media) => media.id),
           ctx,
         );
         return pairingChangedResult(evt.event);
       }
-      const transcriptMedia = persistedTranscriptMedia.map((media) => ({
-        path: media.path,
-        contentType: media.contentType,
-      }));
+      if (persistedTranscriptMedia.omission === "inline-image-save-failed") {
+        transcriptMessage = [transcriptMessage, INLINE_IMAGE_DURABLE_OMISSION_MARKER]
+          .filter(Boolean)
+          .join("\n");
+      }
+      const transcriptMedia = persistedTranscriptMedia.entries.map((media) => media.fact);
 
       if (wantsReceipt && deliveryChannel && deliveryTo) {
         // Delivery stays detached from agent startup, but remains part of the
@@ -839,7 +841,10 @@ export const handleNodeEvent = async (
           message,
           images,
           imageOrder,
-          ...(transcriptMedia.length > 0 ? { transcriptMessage, transcriptMedia } : {}),
+          ...(transcriptMedia.length > 0 ||
+          persistedTranscriptMedia.omission === "inline-image-save-failed"
+            ? { transcriptMessage, ...(transcriptMedia.length > 0 ? { transcriptMedia } : {}) }
+            : {}),
           sessionId,
           sessionKey: canonicalKey,
           thinking: link?.thinking ?? undefined,
@@ -854,7 +859,7 @@ export const handleNodeEvent = async (
         opts?.isConnectionCurrent,
         () =>
           cleanupNodeEventMedia(
-            persistedTranscriptMedia.map((media) => media.id),
+            persistedTranscriptMedia.entries.map((media) => media.id),
             ctx,
           ),
       );

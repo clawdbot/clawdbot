@@ -15,7 +15,7 @@ import {
   loadTranscriptEvents,
   patchSessionEntry,
 } from "./session-accessor.js";
-import { replaceSqliteTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 
 const sessionKey = "agent:main:dashboard:incognito-round-trip";
 
@@ -123,7 +123,7 @@ describe("incognito transcript access", () => {
           skipMaintenance: true,
         },
       );
-      await replaceSqliteTranscriptEvents({ ...staleScope, sessionId: "incognito-stale-session" }, [
+      await replaceTranscriptEvents({ ...staleScope, sessionId: "incognito-stale-session" }, [
         {
           id: "incognito-stale-event",
           timestamp: new Date(now).toISOString(),

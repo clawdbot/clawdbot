@@ -262,6 +262,10 @@ export const discordOutbound: ChannelOutboundAdapter = {
         onPlatformSendDispatch,
       }),
   }),
+  adoptTargetFromDelivery: ({ result }) => {
+    const threadId = normalizeOptionalStringifiedId(result.receipt?.threadId);
+    return threadId ? { threadId } : null;
+  },
   afterDeliverPayload: async ({ cfg, target, payload, results }) => {
     notifyDiscordInboundEventOutboundPayloadSuccess({
       payload,

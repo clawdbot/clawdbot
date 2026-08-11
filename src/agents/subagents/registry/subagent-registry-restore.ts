@@ -18,7 +18,7 @@ import {
   reconcileOrphanedRestoredRuns,
   updateSubagentArchiveAtMs,
 } from "./subagent-registry-helpers.js";
-import type { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
+import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import {
@@ -53,9 +53,7 @@ export function createSubagentRegistryRestorer(config: {
   deps: () => SubagentRegistryDeps;
   persist: (...runIds: string[]) => void;
   persistOrThrow: (...runIds: string[]) => void;
-  settleRequesterTurn: ReturnType<
-    typeof createSubagentRegistryLifecycleController
-  >["settleRequesterTurnAfterSessionSpawns"];
+  settleRequesterTurn: SubagentLifecycleController["settleRequesterTurnAfterSessionSpawns"];
   ensureListener: () => void;
   startSweeper: () => void;
   resumeRun: (runId: string) => void;

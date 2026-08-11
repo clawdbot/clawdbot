@@ -1,5 +1,4 @@
 // Doctor OAuth sidecar tests cover encrypted sidecar detection and auth repair guidance.
-import { createCipheriv } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +8,6 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { maybeRepairLegacyOAuthSidecarProfiles } from "./doctor-auth-oauth-sidecar.js";
-import { testing } from "./doctor-auth-oauth-sidecar.test-support.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const states: OpenClawTestState[] = [];
@@ -52,34 +50,6 @@ function writeLegacyAuthProfiles(
   agentId = "main",
 ): Promise<string> {
   return state.writeJson(path.join("agents", agentId, "agent", "auth-profiles.json"), store);
-}
-
-function encryptLegacySidecarMaterial(params: {
-  ref: { source: "openclaw-credentials"; provider: "openai-codex"; id: string };
-  profileId: string;
-  provider: string;
-  seed: string;
-  material: Record<string, string>;
-}) {
-  const iv = Buffer.alloc(12, 7);
-  const cipher = createCipheriv("aes-256-gcm", testing.buildLegacyOAuthSecretKey(params.seed), iv);
-  cipher.setAAD(
-    testing.buildLegacyOAuthSecretAad({
-      ref: params.ref,
-      profileId: params.profileId,
-      provider: params.provider,
-    }),
-  );
-  const ciphertext = Buffer.concat([
-    cipher.update(JSON.stringify(params.material), "utf8"),
-    cipher.final(),
-  ]);
-  return {
-    algorithm: "aes-256-gcm",
-    iv: iv.toString("base64url"),
-    tag: cipher.getAuthTag().toString("base64url"),
-    ciphertext: ciphertext.toString("base64url"),
-  };
 }
 
 afterEach(async () => {
@@ -126,17 +96,13 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
         version: 1,
         profileId,
         provider: "openai-codex",
-        encrypted: encryptLegacySidecarMaterial({
-          ref,
-          profileId,
-          provider: "openai-codex",
-          seed,
-          material: {
-            access: "access-token",
-            refresh: "refresh-token",
-            idToken: "id-token",
-          },
-        }),
+        encrypted: {
+          algorithm: "aes-256-gcm",
+          iv: "BwcHBwcHBwcHBwcH",
+          tag: "gSm_Lg58EVO-5wZGQlWHEA",
+          ciphertext:
+            "4qrZ4-zdgUdttB3gTUNORWdtO4gqLiFgTsilUX3-9RZiN2MLkCDdxQXQ2GfeqN1zi1qb9iURwK0sO0TJZfxO3zULMKNlRgUT",
+        },
       },
     );
 
@@ -231,16 +197,12 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
         version: 1,
         profileId,
         provider: "openai-codex",
-        encrypted: encryptLegacySidecarMaterial({
-          ref,
-          profileId,
-          provider: "openai-codex",
-          seed: "right-seed",
-          material: {
-            access: "access-token",
-            refresh: "refresh-token",
-          },
-        }),
+        encrypted: {
+          algorithm: "aes-256-gcm",
+          iv: "BwcHBwcHBwcHBwcH",
+          tag: "ZHGhT2cekYFZCOxu8pP0KA",
+          ciphertext: "OQPDJez2jSRH4FPxFNNkwEw7PDbClF6Ty6T2l4TLGvr6bdJfhK6VA6ccWwC1xlrR4ENA",
+        },
       },
     );
 
@@ -450,16 +412,13 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
         version: 1,
         profileId,
         provider: "openai-codex",
-        encrypted: encryptLegacySidecarMaterial({
-          ref,
-          profileId,
-          provider: "openai-codex",
-          seed,
-          material: {
-            access: "shared-access-token",
-            refresh: "shared-refresh-token",
-          },
-        }),
+        encrypted: {
+          algorithm: "aes-256-gcm",
+          iv: "BwcHBwcHBwcHBwcH",
+          tag: "91XpNgcMQ-AVeo7NDnv11Q",
+          ciphertext:
+            "fVMsIFtJ0LX1ayciusBnyS7KulJU2dCAdkKU4yMLGYTVB-Gq0X_SvUqPTkAX_a1ZBIjGIC6nFH_3HvhWHMIX7Cs",
+        },
       },
     );
 

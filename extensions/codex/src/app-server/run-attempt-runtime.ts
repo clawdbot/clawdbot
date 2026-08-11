@@ -21,6 +21,10 @@ import {
 import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js";
 import { prewarmCodexAttemptClient } from "./run-attempt-client-prewarm.js";
 import type { CodexAttemptConnection } from "./run-attempt-connection.js";
+import {
+  assertScheduledCodexAppAuthorityRuntime,
+  buildLegacyScheduledCodexAppRecoveryPrompt,
+} from "./scheduled-app-authority.js";
 import { canResolveScheduledConfiguredMcpCreatorAuthority } from "./scheduled-configured-mcp-authority.js";
 import { resolveCodexAppServerThreadModelSelection } from "./thread-lifecycle.js";
 import { resolveCodexWebSearchPlan } from "./web-search.js";
@@ -63,6 +67,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
           config: params.config,
         })
       : undefined;
+  assertScheduledCodexAppAuthorityRuntime(connection, params);
   const attemptAuthProfileStore = preparedAuthBinding?.authProfileStore ?? params.authProfileStore;
   prewarmCodexAttemptClient({
     connection,
@@ -107,6 +112,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     contextWindow: undefined,
     maxTokens: undefined,
   } as unknown as EmbeddedRunAttemptParams["model"];
+  const legacyScheduledAppRecoveryPrompt = buildLegacyScheduledCodexAppRecoveryPrompt(params);
   const runtimeParams: EmbeddedRunAttemptParams = usesSupervisionConnection
     ? {
         ...paramsWithoutOuterNativeOwnership,
@@ -121,6 +127,13 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
         ...params,
         authProfileStore: attemptAuthProfileStore,
         sessionKey: contextSessionKey,
+        ...(legacyScheduledAppRecoveryPrompt
+          ? {
+              extraSystemPrompt: [params.extraSystemPrompt, legacyScheduledAppRecoveryPrompt]
+                .filter((value): value is string => Boolean(value?.trim()))
+                .join("\n\n"),
+            }
+          : {}),
         ...(startupAuthProfileId ? { authProfileId: startupAuthProfileId } : {}),
       };
   const activeSessionId = params.sessionId;
@@ -172,6 +185,13 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     authenticatedScheduledMode &&
     (bundleMcpThreadConfig.staticServerNames.length > 0 ||
       mutable.startupBinding?.configuredMcpOwnershipVersion === 1);
+  const cronCreatorAuthorityCapability = params.cronCreatorAuthorityCapability;
+  // Senderless local operator RPCs prove freshness with the host-minted exact-run
+  // capability; do not promote that fact to general sender ownership.
+  const hasFreshCreatorAuthority =
+    cronCreatorAuthorityCapability?.active === true &&
+    cronCreatorAuthorityCapability.runId === params.runId &&
+    !cronCreatorAuthorityCapability.signal.aborted;
   const mayResolveScheduledConfiguredMcpCreatorAuthority =
     !authenticatedScheduledMode &&
     canResolveScheduledConfiguredMcpCreatorAuthority({
@@ -186,6 +206,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
       usesSupervisionConnection,
       preservesNativeModel: mutable.startupBinding?.preserveNativeModel === true,
       senderIsOwner: params.senderIsOwner,
+      hasFreshCreatorAuthority,
       senderId: params.senderId,
       inputProvenance: params.inputProvenance,
       trustedInternalHandoff: params.trustedInternalHandoff,

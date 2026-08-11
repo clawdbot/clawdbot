@@ -67,6 +67,7 @@ import {
   releaseCodexSandboxExecServerEnvironment,
   type CodexSandboxExecEnvironment,
 } from "./sandbox-exec-server.js";
+import { buildScheduledCodexAppAuthorityInputFingerprint } from "./scheduled-app-authority.js";
 import type { CodexAppServerBindingStore } from "./session-binding.js";
 import {
   clearSharedCodexAppServerClientIfCurrent,
@@ -204,6 +205,7 @@ export async function startCodexAttemptThread(params: {
         const pluginStartupPolicy = resolveCodexPluginThreadConfigStartupPolicy({
           pluginConfig: params.pluginConfig,
           nativeToolSurfaceEnabled: params.nativeToolSurfaceEnabled,
+          scheduledRuntimeAuthority: params.buildAttemptParams().scheduledRuntimeAuthority,
         });
         const {
           pluginThreadConfigRequired,
@@ -353,11 +355,17 @@ export async function startCodexAttemptThread(params: {
               appServerVersion: activeStartupClient.getServerVersion(),
               runtimeIdentity: startupRuntimeIdentity,
             });
-            const pluginThreadConfigInputFingerprint = pluginThreadConfigRequired
+            const basePluginThreadConfigInputFingerprint = pluginThreadConfigRequired
               ? buildCodexPluginThreadConfigInputFingerprint({
                   pluginConfig: pluginThreadConfigPluginConfig,
                   appCacheKey: pluginAppCacheKey,
                 })
+              : undefined;
+            const pluginThreadConfigInputFingerprint = basePluginThreadConfigInputFingerprint
+              ? buildScheduledCodexAppAuthorityInputFingerprint(
+                  basePluginThreadConfigInputFingerprint,
+                  attemptParams.scheduledRuntimeAuthority,
+                )
               : undefined;
             embeddedAgentLog.debug(
               "codex plugin thread config eligibility",
@@ -502,6 +510,7 @@ export async function startCodexAttemptThread(params: {
                       client: activeStartupClient,
                       configCwd: startupExecutionCwd,
                       appCacheKey: pluginAppCacheKey,
+                      scheduledRuntimeAuthority: attemptParams.scheduledRuntimeAuthority,
                     })
                   : undefined,
               }) satisfies Parameters<typeof startOrResumeThread>[0];
@@ -719,11 +728,5 @@ function shouldClearSharedClientAfterStartupFailure(params: {
   error: unknown;
   spawnedBy: EmbeddedRunAttemptParams["spawnedBy"];
 }): boolean {
-  if (!(params.error instanceof Error)) {
-    return !params.spawnedBy;
-  }
-  if (isCodexAppServerBrokenPipeError(params.error)) {
-    return true;
-  }
-  return !params.spawnedBy;
+  return isCodexAppServerBrokenPipeError(params.error) || !params.spawnedBy;
 }

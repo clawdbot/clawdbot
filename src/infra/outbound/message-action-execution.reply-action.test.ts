@@ -7,7 +7,7 @@ import {
   registerReplyPlugin,
   runCurrentConversationPollAction as runPollAction,
   runReplyAction,
-} from "./message-action-test-fixtures.js";
+} from "./message-action-runner.test-support.js";
 
 describe("runMessageAction reply-type plugin actions", () => {
   afterEach(() => {

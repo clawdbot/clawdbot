@@ -24,7 +24,7 @@ export async function resolveApiKeyForProvider(
  * Resolve request-ready auth for a runtime model, applying any provider-owned
  * `prepareRuntimeAuth` exchange on top of the standard credential lookup.
  */
-export async function getRuntimeAuthForModel(params: {
+export async function getRuntimeAuthForModelCore(params: {
   model: Model;
   cfg?: OpenClawConfig;
   workspaceDir?: string;

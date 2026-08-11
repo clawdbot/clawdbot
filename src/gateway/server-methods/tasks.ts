@@ -161,20 +161,24 @@ export const tasksHandlers: GatewayRequestHandlers = {
     }
     respond(true, { results });
   },
-  "tasks.dismiss": ({ params, respond }) => {
+  "tasks.dismiss": async ({ params, respond }) => {
     if (!assertValidParams(params, validateTasksRecoveryParams, "tasks.dismiss", respond)) {
       return;
     }
-    respond(true, {
-      results: params.taskIds.map((taskId) => {
-        const result = dismissSubagentCompletionDelivery(taskId);
-        return {
-          taskId,
-          ok: result.ok,
-          ...(result.reason ? { reason: result.reason } : {}),
-          ...(result.task ? { task: mapTaskSummary(result.task, { includePrompt: true }) } : {}),
-        };
-      }),
-    });
+    const { discardSubagentTerminalDelivery } =
+      await import("../../agents/subagents/registry/subagent-registry.js");
+    const results = [];
+    for (const taskId of params.taskIds) {
+      const result = await dismissSubagentCompletionDelivery(taskId, {
+        discardTerminalDelivery: discardSubagentTerminalDelivery,
+      });
+      results.push({
+        taskId,
+        ok: result.ok,
+        ...(result.reason ? { reason: result.reason } : {}),
+        ...(result.task ? { task: mapTaskSummary(result.task, { includePrompt: true }) } : {}),
+      });
+    }
+    respond(true, { results });
   },
 };

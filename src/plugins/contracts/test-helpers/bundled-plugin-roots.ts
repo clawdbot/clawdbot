@@ -34,7 +34,7 @@ export function resolveBundledPluginFile(params: {
 }
 
 /** Resolves a bundled plugin file as a path relative to a contract test root. */
-export function bundledPluginFile(params: {
+export function contractPluginPath(params: {
   rootDir: string;
   pluginId: string;
   relativePath: string;

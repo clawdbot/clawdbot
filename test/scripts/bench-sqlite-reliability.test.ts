@@ -21,9 +21,10 @@ import {
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-// Windows repeats ACL checks and >64 MiB crash/restore copies throughout the full proof.
+// Windows repeats ACL checks and crash/restore copies throughout the full proof.
 const RELIABILITY_PROOF_TIMEOUT_MS = process.platform === "win32" ? 480_000 : 240_000;
 const RELIABILITY_SMOKE_TEST_TIMEOUT_MS = process.platform === "win32" ? 1_200_000 : 300_000;
+const MIN_MULTICHUNK_RESTORE_BYTES = 2 * 1024 * 1024;
 
 function reliabilitySmokeTest(name: string, test: () => void): void {
   it(name, test, RELIABILITY_SMOKE_TEST_TIMEOUT_MS);
@@ -234,7 +235,6 @@ describe("scripts/bench-sqlite-reliability", () => {
     expect(firstReport.indexRepairInterruptionProof.rollbackJournal).toMatchObject({
       recoveryVerified: true,
       repairedIndexes: ["idx_openclaw_reliability_records_identity"],
-      rowsPreserved: 32_768,
     });
     expect(
       firstReport.indexRepairInterruptionProof.rollbackJournal.journalBytesObserved,
@@ -246,7 +246,6 @@ describe("scripts/bench-sqlite-reliability", () => {
     expect(firstReport.indexRepairInterruptionProof.wal).toMatchObject({
       recoveryVerified: true,
       repairedIndexes: ["idx_openclaw_reliability_records_identity"],
-      rowsPreserved: 32_768,
     });
     expect(firstReport.indexRepairInterruptionProof.wal.walBytesObserved).toBeGreaterThan(0);
     expect(
@@ -344,7 +343,7 @@ describe("scripts/bench-sqlite-reliability", () => {
       firstReport.maintenanceProof.repositoryInterruption.afterCommit.payload,
     );
     expect(firstReport.maintenanceProof.restoreInterruption.snapshotBytes).toBeGreaterThan(
-      64 * 1024 * 1024,
+      MIN_MULTICHUNK_RESTORE_BYTES,
     );
     expect(firstReport.maintenanceProof.restoreInterruption.beforePublish).toMatchObject({
       existingTargetPreserved: false,

@@ -55,6 +55,15 @@ describe("worker placement dispatch coordinator", () => {
     await expect(
       coordinated.dispatch({ ...REQUEST, profileId: "another-profile" }),
     ).rejects.toThrow(`Session ${REQUEST.sessionKey} is already dispatching another request`);
+    await expect(
+      coordinated.dispatch({
+        ...REQUEST,
+        inheritedProfile: {
+          providerId: "fake",
+          profileSnapshot: { settings: { region: "parent" } },
+        },
+      }),
+    ).rejects.toThrow(`Session ${REQUEST.sessionKey} is already dispatching another request`);
     const retry = coordinated.dispatch(REQUEST);
     releaseDispatch.resolve();
 

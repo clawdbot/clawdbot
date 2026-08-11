@@ -66,7 +66,7 @@ import {
   agentCommand,
   cronIsolatedRun,
   embeddedRunMock,
-  getReplyFromConfig,
+  gatewayReplyMock,
   agentDiscoveryMock,
   sendWhatsAppMock,
   setTestConfigRoot,
@@ -443,8 +443,8 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "ok" });
   agentCommand.mockReset();
   agentCommand.mockResolvedValue(undefined);
-  getReplyFromConfig.mockReset();
-  getReplyFromConfig.mockResolvedValue(undefined);
+  gatewayReplyMock.mockReset();
+  gatewayReplyMock.mockResolvedValue(undefined);
   sendWhatsAppMock.mockReset();
   sendWhatsAppMock.mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" });
   embeddedRunMock.activeIds.clear();
@@ -540,8 +540,8 @@ async function resetGatewayTestRuntimeOnly() {
   cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "ok" });
   agentCommand.mockReset();
   agentCommand.mockResolvedValue(undefined);
-  getReplyFromConfig.mockReset();
-  getReplyFromConfig.mockResolvedValue(undefined);
+  gatewayReplyMock.mockReset();
+  gatewayReplyMock.mockResolvedValue(undefined);
   sendWhatsAppMock.mockReset();
   sendWhatsAppMock.mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" });
   embeddedRunMock.activeIds.clear();

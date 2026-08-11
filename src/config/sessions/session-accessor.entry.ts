@@ -17,24 +17,24 @@ import {
   rehomeSqliteSessionDeliveryReferencesForCanonicalRepairBatch as rehomeSessionDeliveryReferencesForCanonicalRepairBatch,
 } from "./session-accessor.sqlite-canonical-repair.js";
 import {
-  countSqliteSessionEntryRowsReadOnly as countSessionEntryRowsReadOnly,
-  ensureSqliteSessionEntrySync as ensureSessionEntrySync,
-  hasSqliteSessionEntriesByStatusReadOnly as hasSessionEntriesByStatusReadOnly,
-  listSqliteSessionChildEntriesReadOnly as listSessionChildEntriesReadOnly,
-  listSqliteSessionEntries,
-  listSqliteSessionEntriesReadOnly as listSessionEntriesReadOnly,
-  listSqliteSessionEntryKeysReadOnly as listSessionEntryKeysReadOnly,
-  loadExactSqliteSessionEntry as loadExactSessionEntry,
-  loadExactSqliteSessionEntryReadOnly as loadExactSessionEntryReadOnly,
-  loadSqliteSessionEntry as loadSessionEntry,
-  loadSqliteSessionEntryReadOnly as loadSessionEntryReadOnly,
-  patchSqliteSessionEntry as patchSessionEntry,
-  patchSqliteSessionEntryTarget as patchSessionEntryTarget,
-  readSqliteSessionUpdatedAt as readSessionUpdatedAt,
-  replaceSqliteSessionEntry as replaceSessionEntry,
-  replaceSqliteSessionEntrySync as replaceSessionEntrySync,
-  resolveSqliteSessionEntry,
-  upsertSqliteSessionEntry as upsertSessionEntry,
+  countSessionEntryRowsReadOnly,
+  ensureSessionEntrySync,
+  hasSessionEntriesByStatusReadOnly,
+  listSessionChildEntriesReadOnly,
+  listSessionEntryRows,
+  listSessionEntriesReadOnly,
+  listSessionEntryKeysReadOnly,
+  loadExactSessionEntry,
+  loadExactSessionEntryReadOnly,
+  loadSessionEntry,
+  loadSessionEntryReadOnly,
+  patchSessionEntry,
+  patchSessionEntryTarget,
+  readSessionUpdatedAt,
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+  resolveSessionEntry,
+  upsertSessionEntry,
 } from "./session-accessor.sqlite-entry.js";
 import type {
   SessionAccessScope,
@@ -54,7 +54,10 @@ import type {
 } from "./session-accessor.types.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
-import { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
+import {
+  normalizeStoreSessionKey,
+  resolveSessionStoreEntry as resolveSessionEntryFromStore,
+} from "./store-entry.js";
 import { resolveAllAgentSessionStoreTargetsSync, type SessionStoreTarget } from "./targets.js";
 import type { SessionEntry } from "./types.js";
 
@@ -81,24 +84,19 @@ export {
   patchSessionEntryTarget,
   readSessionUpdatedAt,
   replaceSessionEntry,
+  // Intentionally unfenced: branching owns session-identity freshness; worker transcript commit
+  // fresh-reads and checks sessionId inside its locked commit, and void/entry has no rebound signal.
   replaceSessionEntrySync,
+  resolveSessionEntryFromStore,
   upsertSessionEntry,
 };
-
-/** Keeps legacy store-key alias resolution behind the entry owner boundary. */
-export function resolveSessionEntryFromStore(params: {
-  store: Record<string, SessionEntry>;
-  sessionKey: string;
-}): ReturnType<typeof resolveSessionStoreEntry> {
-  return resolveSessionStoreEntry(params);
-}
 
 /** Resolves a session directly through canonical SQLite row and alias ownership. */
 export function resolveSessionEntrySelection(
   scope: SessionAccessScope,
   options: { readOnly?: boolean } = {},
-): ReturnType<typeof resolveSessionStoreEntry> {
-  return resolveSqliteSessionEntry(scope, options);
+): ReturnType<typeof resolveSessionEntryFromStore> {
+  return resolveSessionEntry(scope, options);
 }
 
 export function resolveAccessStorePath(scope: SessionAccessScope): string {
@@ -382,7 +380,7 @@ export function listSessionEntries(scope: SessionEntryListScope = {}): SessionEn
   if (scope.clone === false) {
     return openSessionEntryReadView(scope).entries();
   }
-  return listSqliteSessionEntries(scope);
+  return listSessionEntryRows(scope);
 }
 
 /**
@@ -402,7 +400,7 @@ export function openSessionEntryReadView(
         clone: false,
         sessionKey,
       })?.entry,
-    entries: () => listSqliteSessionEntries({ ...scope, clone: false }),
+    entries: () => listSessionEntryRows({ ...scope, clone: false }),
   };
 }
 

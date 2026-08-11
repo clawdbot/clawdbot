@@ -136,6 +136,7 @@ export function createGatewayInstanceRuntime(
       if (result.deliveryStatus === "failed" || result.deliveryStatus === "partial_failed") {
         throw new Error(result.error ?? "recovery notice delivery failed");
       }
+      return { suppressed: result.deliveryStatus === "suppressed" };
     },
   };
   const releaseRecoveryRuntime = registerGatewayRecoveryRuntime(recovery);

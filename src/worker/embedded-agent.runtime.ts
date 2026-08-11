@@ -38,9 +38,12 @@ import type { WorkerBrowserLaunchDescriptor } from "./launch-descriptor.js";
 import {
   WORKER_LOCAL_TOOL_NAMES,
   WORKER_REQUIRED_LOCAL_TOOL_NAMES,
-  type WorkerLocalToolName,
+  WORKER_SESSION_TOOL_NAMES,
+  WORKER_TOOL_NAMES,
+  type WorkerToolName,
 } from "./tool-authority.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
+import { createWorkerSessionTools } from "./worker-session-tools.js";
 
 function toWorkerAgentError(value: unknown, fallback: string): Error {
   return value instanceof Error ? value : new Error(fallback, { cause: value });
@@ -81,11 +84,12 @@ type RunWorkerEmbeddedTurnParams = {
   inference: WorkerEmbeddedInferenceClient;
   transcript: WorkerEmbeddedTranscriptClient;
   live: WorkerEmbeddedLiveClient;
+  sessions?: Parameters<typeof createWorkerSessionTools>[0];
   initialMessages?: WorkerTranscriptMessage[];
   suppressPromptTranscript?: boolean;
   systemPrompt?: string;
   inferenceOptions?: WorkerInferenceOptions;
-  allowedToolNames: readonly WorkerLocalToolName[];
+  allowedToolNames: readonly WorkerToolName[];
   browser?: WorkerBrowserLaunchDescriptor;
   signal?: AbortSignal;
 };
@@ -140,7 +144,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
   });
 
   const allowedToolNameSet = new Set<string>(params.allowedToolNames);
-  const activeToolNames = WORKER_LOCAL_TOOL_NAMES.filter((name) => allowedToolNameSet.has(name));
+  const activeToolNames = WORKER_TOOL_NAMES.filter((name) => allowedToolNameSet.has(name));
   const localToolNameSet = new Set<string>(WORKER_LOCAL_TOOL_NAMES);
   const coreTools = createCoreCodingTools({
     codingRoot: params.cwd,
@@ -215,6 +219,17 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
           throw new Error(`Worker coding tool unavailable: ${toolName}`);
         }
       }
+      const activeSessionToolNames = WORKER_SESSION_TOOL_NAMES.filter((name) =>
+        allowedToolNameSet.has(name),
+      );
+      if (activeSessionToolNames.length > 0 && !params.sessions) {
+        throw new Error("Worker session tool client unavailable");
+      }
+      const sessionTools = params.sessions
+        ? createWorkerSessionTools(params.sessions).filter((tool) =>
+            allowedToolNameSet.has(tool.name),
+          )
+        : [];
 
       return await createAgentSession({
         cwd: params.cwd,
@@ -224,9 +239,10 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
         model,
         thinkingLevel: "medium",
         tools: [...activeToolNames],
-        customTools: toToolDefinitions(
-          localTools.filter((tool) => allowedToolNameSet.has(tool.name)),
-        ),
+        customTools: toToolDefinitions([
+          ...localTools.filter((tool) => allowedToolNameSet.has(tool.name)),
+          ...sessionTools,
+        ]),
         noTools: "all",
         sessionManager,
         settingsManager,

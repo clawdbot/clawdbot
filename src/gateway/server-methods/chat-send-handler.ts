@@ -447,13 +447,13 @@ export async function handleChatSend(
                 ctx,
                 cfg,
                 dispatcherOptions: replyDispatch.dispatcherOptions,
-                onSessionMetadataChanges: (changes) => {
-                  for (const change of changes) {
-                    emitSessionsChanged(context, change);
-                  }
-                },
+                onSessionMetadataChanges: (changes) =>
+                  changes.forEach((change) => emitSessionsChanged(context, change)),
                 replyOptions: {
                   runId: clientRunId,
+                  ...(cronCreatorAuthority
+                    ? { cronCreatorAuthorityCapability: cronCreatorAuthority }
+                    : {}),
                   ...(isOperatorUiClient(clientInfo)
                     ? {
                         promptCacheKey: resolveWebchatPromptCacheKey({
