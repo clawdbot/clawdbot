@@ -2,6 +2,7 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   dispatchChannelInboundTurn,
+  readAgentRunTerminalOutcome,
   type InboundReplyRecordOptions,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { hasVisibleInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
@@ -354,6 +355,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   };
   let dispatchError: unknown;
+  let agentRunFailed = false;
   let queuedFinal = false;
   let counts: Partial<Record<ReplyDispatchKind, number>> = {};
   try {
@@ -490,6 +492,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       const result = turnResult.dispatchResult;
       queuedFinal = result.queuedFinal;
       counts = result.counts;
+      agentRunFailed = readAgentRunTerminalOutcome(result) === "failed";
     }
   } catch (err) {
     dispatchError = err;
@@ -508,7 +511,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       const completionChunks =
         progress.useNativeProgressStreaming && !progress.nativeProgressCompletionSent
           ? progress.buildNativeProgressCompletionChunks(
-              dispatchError ? "error" : progress.nativeProgressTerminalStatus,
+              dispatchError || agentRunFailed ? "error" : progress.nativeProgressTerminalStatus,
             )
           : undefined;
       if (completionChunks?.length) {
@@ -567,7 +570,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   );
 
   if (statusReactionsEnabled) {
-    if (dispatchError) {
+    if (dispatchError || agentRunFailed) {
       await statusReactions.setError();
     } else if (anyReplyDelivered) {
       await statusReactions.setDone();
