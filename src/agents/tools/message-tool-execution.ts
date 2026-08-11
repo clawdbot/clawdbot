@@ -359,9 +359,17 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         typeof params.final === "boolean" ? params.final : undefined;
       delete params.final;
 
+      // HEARTBEAT_OK is a send-only silence sentinel. Broadcast fans out to
+      // send actions, and reply is a sibling visible delivery action, so all
+      // three must receive the same token-only suppression decision before
+      // dispatch. Other actions can use the same parameter names for
+      // channel-owned values and must preserve them.
+      const shouldStripHeartbeatToken =
+        action === "send" || action === "broadcast" || action === "reply";
       const suppressedVisiblePayloadReason = sanitizeMessageToolVisiblePayload(
         params,
         options?.agentSessionKey,
+        { stripHeartbeatToken: shouldStripHeartbeatToken },
       );
       if (options?.sourceReplyOnly) {
         enforceSourceReplyOnlyTextDirectives(params);
@@ -369,16 +377,19 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
 
       if (
         suppressedVisiblePayloadReason &&
-        action === "send" &&
+        (action === "send" || action === "broadcast" || action === "reply") &&
         !hasSanitizedSendPayloadContent(params)
       ) {
+        const suppressedReason = suppressedVisiblePayloadReason;
         return jsonResult({
           status: "suppressed",
-          reason: suppressedVisiblePayloadReason,
+          reason: suppressedReason,
           message:
-            suppressedVisiblePayloadReason === "inbound_metadata_echo"
-              ? "Suppressed outbound message text because it matched inbound runtime metadata."
-              : "Suppressed outbound message text because it matched internal runtime context.",
+            suppressedReason === "heartbeat_token"
+              ? "Suppressed outbound message text because it was a heartbeat acknowledgement (HEARTBEAT_OK)."
+              : suppressedReason === "inbound_metadata_echo"
+                ? "Suppressed outbound message text because it matched inbound runtime metadata."
+                : "Suppressed outbound message text because it matched internal runtime context.",
         });
       }
       const requireExplicitTarget = options?.requireExplicitTarget === true;

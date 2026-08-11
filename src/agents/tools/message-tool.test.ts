@@ -4525,6 +4525,265 @@ describe("message tool internal-runtime-context sanitization", () => {
     expect(call?.params?.text).toBe("");
     expect(call?.params?.message).toBe("Visible");
   });
+
+  it("suppresses a send whose text is only the heartbeat token", async () => {
+    const { call, result } = await executeSendWithResult({
+      action: {
+        channel: "telegram",
+        target: "telegram:123",
+        text: "HEARTBEAT_OK",
+      },
+    });
+
+    expect(call).toBeUndefined();
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      status: "suppressed",
+      reason: "heartbeat_token",
+    });
+  });
+
+  it("suppresses heartbeat-only sends through text aliases", async () => {
+    const { call, result } = await executeSendWithResult({
+      action: {
+        channel: "telegram",
+        target: "telegram:123",
+        content: "HEARTBEAT_OK",
+      },
+    });
+
+    expect(call).toBeUndefined();
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      status: "suppressed",
+      reason: "heartbeat_token",
+    });
+  });
+
+  it("strips the heartbeat token but still sends real content", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const call = await executeSend({
+      action: {
+        channel: "telegram",
+        target: "telegram:123",
+        text: "All checks passed. HEARTBEAT_OK",
+      },
+    });
+
+    expect(call?.params?.text).toBe("All checks passed.");
+  });
+
+  it("suppresses heartbeat-only presentation sends", async () => {
+    const { call, result } = await executeSendWithResult({
+      action: {
+        channel: "slack",
+        target: "slack:C123",
+        presentation: {
+          title: "HEARTBEAT_OK",
+          blocks: [{ type: "text", text: "HEARTBEAT_OK" }],
+        },
+      },
+    });
+
+    expect(call).toBeUndefined();
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      status: "suppressed",
+      reason: "heartbeat_token",
+    });
+  });
+
+  it("suppresses heartbeat-only interactive sends", async () => {
+    const { call, result } = await executeSendWithResult({
+      action: {
+        channel: "slack",
+        target: "slack:C123",
+        interactive: {
+          blocks: [{ type: "text", text: "HEARTBEAT_OK" }],
+        },
+      },
+    });
+
+    expect(call).toBeUndefined();
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      status: "suppressed",
+      reason: "heartbeat_token",
+    });
+  });
+
+  it("suppresses heartbeat-only sends through legacy button and option label aliases", async () => {
+    const { call, result } = await executeSendWithResult({
+      action: {
+        channel: "slack",
+        target: "slack:C123",
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ text: "HEARTBEAT_OK", value: "run" }],
+            },
+            {
+              type: "select",
+              options: [{ text: "HEARTBEAT_OK", value: "pick" }],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(call).toBeUndefined();
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      status: "suppressed",
+      reason: "heartbeat_token",
+    });
+  });
+
+  it("strips heartbeat tokens from legacy button and option label aliases with real content", async () => {
+    mockSendResult({ channel: "slack", to: "slack:C123" });
+
+    const call = await executeSend({
+      action: {
+        channel: "slack",
+        target: "slack:C123",
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ text: "Run now HEARTBEAT_OK", value: "run" }],
+            },
+            {
+              type: "select",
+              options: [{ text: "Pick me HEARTBEAT_OK", value: "pick" }],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(call?.params?.interactive).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [{ text: "Run now", value: "run" }],
+        },
+        {
+          type: "select",
+          options: [{ text: "Pick me", value: "pick" }],
+        },
+      ],
+    });
+  });
+
+  it("strips heartbeat tokens across mixed flat and structured send text", async () => {
+    mockSendResult({ channel: "slack", to: "slack:C123" });
+
+    const call = await executeSend({
+      action: {
+        channel: "slack",
+        target: "slack:C123",
+        text: "Flat content HEARTBEAT_OK",
+        presentation: {
+          blocks: [{ type: "text", text: "Presentation content HEARTBEAT_OK" }],
+        },
+        interactive: {
+          blocks: [{ type: "text", text: "Interactive content HEARTBEAT_OK" }],
+        },
+      },
+    });
+
+    expect(call?.params?.text).toBe("Flat content");
+    expect(call?.params?.presentation).toEqual({
+      blocks: [{ type: "text", text: "Presentation content" }],
+    });
+    expect(call?.params?.interactive).toEqual({
+      blocks: [{ type: "text", text: "Interactive content" }],
+    });
+  });
+
+  it("preserves heartbeat-token text for non-send actions", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const call = await executeSend({
+      action: {
+        action: "poll",
+        channel: "telegram",
+        target: "telegram:123",
+        pollQuestion: "HEARTBEAT_OK",
+        pollOption: ["Yes", "No"],
+      },
+    });
+
+    expect(call?.params?.pollQuestion).toBe("HEARTBEAT_OK");
+  });
+
+  it("suppresses a heartbeat-only broadcast before fan-out", async () => {
+    const { call, result } = await executeSendWithResult({
+      action: {
+        action: "broadcast",
+        targets: ["telegram:123", "slack:C123"],
+        text: "HEARTBEAT_OK",
+      },
+    });
+
+    expect(call).toBeUndefined();
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      status: "suppressed",
+      reason: "heartbeat_token",
+    });
+  });
+
+  it("strips the heartbeat token from broadcast text with real content", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const call = await executeSend({
+      action: {
+        action: "broadcast",
+        targets: ["telegram:123", "slack:C123"],
+        text: "Broadcast update HEARTBEAT_OK",
+      },
+    });
+
+    expect(call?.params?.text).toBe("Broadcast update");
+    expect(call?.action).toBe("broadcast");
+  });
+
+  it("suppresses a heartbeat-only reply", async () => {
+    const { call, result } = await executeSendWithResult({
+      action: {
+        action: "reply",
+        channel: "telegram",
+        target: "telegram:123",
+        text: "HEARTBEAT_OK",
+      },
+    });
+
+    expect(call).toBeUndefined();
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      status: "suppressed",
+      reason: "heartbeat_token",
+    });
+  });
+
+  it("strips the heartbeat token from reply text with real content", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const call = await executeSend({
+      action: {
+        action: "reply",
+        channel: "telegram",
+        target: "telegram:123",
+        text: "All checks passed. HEARTBEAT_OK",
+      },
+    });
+
+    expect(call?.params?.text).toBe("All checks passed.");
+    expect(call?.action).toBe("reply");
+  });
 });
 
 describe("message tool sandbox passthrough", () => {
