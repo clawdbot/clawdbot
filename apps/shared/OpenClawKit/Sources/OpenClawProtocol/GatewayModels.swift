@@ -13009,15 +13009,19 @@ public struct ModelsListParams: Codable, Sendable {
 
 public struct ModelsListResult: Codable, Sendable {
     public let models: [ModelChoice]
+    public let provideroutcomes: [[String: AnyCodable]]?
 
     public init(
-        models: [ModelChoice])
+        models: [ModelChoice],
+        provideroutcomes: [[String: AnyCodable]]? = nil)
     {
         self.models = models
+        self.provideroutcomes = provideroutcomes
     }
 
     private enum CodingKeys: String, CodingKey {
         case models
+        case provideroutcomes = "providerOutcomes"
     }
 }
 
