@@ -142,7 +142,7 @@ describe("prepared model runtime snapshots", () => {
       provenance: "configured",
       generation: 7,
       needsRefresh: false,
-      pending: Promise.resolve() as Promise<PreparedModelRuntimeSnapshot>,
+      pending: Promise.resolve() as unknown as Promise<PreparedModelRuntimeSnapshot>,
       buildCompletion: Promise.resolve(),
     };
     const owners = new Map([["free", pendingOwner]]);
