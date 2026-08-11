@@ -345,80 +345,92 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
       ? [
           ...queuedPlan.authorized.map(({ runId }) => runId),
           ...authorizedRuns.map(({ runId }) => runId),
-          ...authorizedPendingAgentRuns.map(({ runId }) => runId),
-          ...authorizedPendingChatRuns.map(({ runId }) => runId),
+          ...pendingAgent.authorizedRuns.map(({ runId }) => runId),
+          ...pendingChat.authorizedRuns.map(({ runId }) => runId),
         ]
       : [];
   const cancellationReservation =
     params.abortOrigin === "stop-command"
       ? agentEndCancellation.reserve(cancellationSessionKey, reservedRunIds)
       : undefined;
-  // Abort queued owners before any active-work signal can promote a successor.
-  // Keep them first in the response to preserve the established runIds ordering.
-  const runIds: string[] = abortQueuedChatTurns(
-    params.context.chatQueuedTurns,
-    queuedPlan.authorized,
-    params.stopReason,
-  );
-  // Hidden and preserved side runs must also block broad cleanup: authorization
-  // alone must not let the callback abort work intentionally excluded above.
-  const additionalAborted = canRunLifecycleCleanup
-    ? (params.onAuthorizedAfterQueuedAbort?.() ?? false)
-    : false;
-  for (const { runId, sessionKey } of authorizedRuns) {
-    const res = abortChatRunById(params.ops, {
-      runId,
-      sessionKey,
-      stopReason: params.stopReason,
-    });
-    if (res.aborted) {
-      runIds.push(runId);
-    }
-  }
-  const endedAt = Date.now();
-  const stopReason = params.stopReason ?? "rpc";
-  for (const { runId, sessionKey, payload } of pendingAgent.authorizedRuns) {
-    writePreRegisteredAgentAbort({
-      context: params.context,
-      runId,
-      sessionKey,
-      payload,
-      stopReason,
-      endedAt,
-    });
-    runIds.push(runId);
-  }
-  for (const { runId, payload } of pendingChat.authorizedRuns) {
-    writePreRegisteredChatAbort({
-      context: params.context,
-      runId,
-      stopReason,
-      endedAt,
-      attemptId: normalizeUnknownText(payload.attemptId),
-    });
-    runIds.push(runId);
-  }
-  if (params.requester.isAdmin && canCancelWorkerSession) {
-    for (const runId of cancelWorkerInferenceForSession({
-      context: params.context,
-      sessionId: params.sessionId,
-    })) {
-      if (!runIds.includes(runId)) {
+  const runIds: string[] = [];
+  let didAbort = false;
+  try {
+    // Abort queued owners before any active-work signal can promote a successor.
+    // Keep them first in the response to preserve the established runIds ordering.
+    const queuedRunIds = abortQueuedChatTurns(
+      params.context.chatQueuedTurns,
+      queuedPlan.authorized,
+      params.stopReason,
+    );
+    runIds.push(...queuedRunIds);
+    didAbort = queuedRunIds.length > 0;
+    // Hidden and preserved side runs must also block broad cleanup: authorization
+    // alone must not let the callback abort work intentionally excluded above.
+    const additionalAborted = canRunLifecycleCleanup
+      ? (params.onAuthorizedAfterQueuedAbort?.() ?? false)
+      : false;
+    didAbort = additionalAborted || didAbort;
+    for (const { runId, sessionKey } of authorizedRuns) {
+      const res = abortChatRunById(params.ops, {
+        runId,
+        sessionKey,
+        stopReason: params.stopReason,
+      });
+      if (res.aborted) {
         runIds.push(runId);
+        didAbort = true;
       }
     }
+    const endedAt = Date.now();
+    const stopReason = params.stopReason ?? "rpc";
+    for (const { runId, sessionKey, payload } of pendingAgent.authorizedRuns) {
+      writePreRegisteredAgentAbort({
+        context: params.context,
+        runId,
+        sessionKey,
+        payload,
+        stopReason,
+        endedAt,
+      });
+      runIds.push(runId);
+      didAbort = true;
+    }
+    for (const { runId, payload } of pendingChat.authorizedRuns) {
+      writePreRegisteredChatAbort({
+        context: params.context,
+        runId,
+        stopReason,
+        endedAt,
+        attemptId: normalizeUnknownText(payload.attemptId),
+      });
+      runIds.push(runId);
+      didAbort = true;
+    }
+    if (params.requester.isAdmin && canCancelWorkerSession) {
+      for (const runId of cancelWorkerInferenceForSession({
+        context: params.context,
+        sessionId: params.sessionId,
+      })) {
+        if (!runIds.includes(runId)) {
+          runIds.push(runId);
+        }
+        didAbort = true;
+      }
+    }
+    const res = { aborted: didAbort, runIds, unauthorized: false };
+    if (res.aborted && snapshots.length > 0) {
+      const abortedRunIds = new Set(runIds);
+      await persistAbortedPartials({
+        context: params.context,
+        sessionKey: params.persistSessionKey ?? params.sessionKey,
+        snapshots: snapshots.filter((snapshot) => abortedRunIds.has(snapshot.runId)),
+      });
+    }
+    return res;
+  } finally {
+    if (cancellationReservation) {
+      agentEndCancellation.reconcile(cancellationReservation, runIds, didAbort);
+    }
   }
-  const res = { aborted: additionalAborted || runIds.length > 0, runIds, unauthorized: false };
-  if (cancellationReservation) {
-    agentEndCancellation.reconcile(cancellationReservation, runIds, res.aborted);
-  }
-  if (res.aborted && snapshots.length > 0) {
-    const abortedRunIds = new Set(runIds);
-    await persistAbortedPartials({
-      context: params.context,
-      sessionKey: params.persistSessionKey ?? params.sessionKey,
-      snapshots: snapshots.filter((snapshot) => abortedRunIds.has(snapshot.runId)),
-    });
-  }
-  return res;
 }

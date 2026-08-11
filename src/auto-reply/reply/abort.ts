@@ -151,20 +151,24 @@ export function abortSessionRunTargetWithOutcome(params: { key?: string; session
   const cancellationReservation = key
     ? agentEndCancellation.reserve(key, reservedRunIds)
     : undefined;
-  let aborted = key ? replyRunRegistry.abort(key) : false;
-  if (aborted && replyRunId) {
-    abortedRunIds.add(replyRunId);
-  }
-  for (const sessionId of sessionIds) {
-    const embeddedRunId = embeddedRunIds.get(sessionId);
-    const embeddedAborted = abortDeps.abortEmbeddedAgentRun(sessionId);
-    if (embeddedAborted && embeddedRunId) {
-      abortedRunIds.add(embeddedRunId);
+  let aborted = false;
+  try {
+    aborted = key ? replyRunRegistry.abort(key) : false;
+    if (aborted && replyRunId) {
+      abortedRunIds.add(replyRunId);
     }
-    aborted = embeddedAborted || aborted;
-  }
-  if (cancellationReservation) {
-    agentEndCancellation.reconcile(cancellationReservation, [...abortedRunIds], aborted);
+    for (const sessionId of sessionIds) {
+      const embeddedRunId = embeddedRunIds.get(sessionId);
+      const embeddedAborted = abortDeps.abortEmbeddedAgentRun(sessionId);
+      if (embeddedAborted && embeddedRunId) {
+        abortedRunIds.add(embeddedRunId);
+      }
+      aborted = embeddedAborted || aborted;
+    }
+  } finally {
+    if (cancellationReservation) {
+      agentEndCancellation.reconcile(cancellationReservation, [...abortedRunIds], aborted);
+    }
   }
   return { active, aborted, abortedRunIds: [...abortedRunIds] };
 }

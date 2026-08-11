@@ -571,6 +571,101 @@ describe("chat abort transcript persistence", () => {
     expect(reviewScheduler.schedule).toHaveBeenCalledWith(terminalParams);
   });
 
+  it("releases a reserved Gateway terminal when abort inspection throws", async () => {
+    reviewScheduler.cancel.mockClear();
+    reviewScheduler.schedule.mockClear();
+    const { sessionId } = await createTranscriptFixture("openclaw-chat-stop-throw-");
+    const terminalParams = {
+      event: { success: false, messages: [] },
+      ctx: { sessionKey: "main", runId: "run-stop-throw" },
+    } as Parameters<typeof scheduleSkillExperienceReview>[0];
+    let terminalScheduling: Promise<void> | undefined;
+    const active = {
+      ...createActiveRun("main", { sessionId }),
+      isAbortable: () => {
+        terminalScheduling = scheduleSkillExperienceReview(terminalParams);
+        throw new Error("abort inspection failed");
+      },
+    };
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["run-stop-throw", active]]),
+    });
+    const respond = vi.fn();
+
+    await expectDefined(
+      chatHandlers["chat.send"],
+      "chat.send test invariant",
+    )({
+      params: { sessionKey: "main", message: "/stop", idempotencyKey: "idem-stop-throw" },
+      respond,
+      context: context as never,
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+    await terminalScheduling;
+
+    const [ok] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expect(reviewScheduler.cancel).not.toHaveBeenCalled();
+    expect(reviewScheduler.schedule).toHaveBeenCalledWith(terminalParams);
+  });
+
+  it("confirms an earlier Gateway abort when a later sibling throws", async () => {
+    reviewScheduler.cancel.mockClear();
+    reviewScheduler.schedule.mockClear();
+    const { sessionId } = await createTranscriptFixture("openclaw-chat-stop-partial-throw-");
+    const firstTerminal = {
+      event: { success: false, messages: [] },
+      ctx: { sessionKey: "main", runId: "run-stop-partial-first" },
+    } as Parameters<typeof scheduleSkillExperienceReview>[0];
+    const secondTerminal = {
+      event: { success: false, messages: [] },
+      ctx: { sessionKey: "main", runId: "run-stop-partial-second" },
+    } as Parameters<typeof scheduleSkillExperienceReview>[0];
+    let terminalScheduling: Promise<void> | undefined;
+    const second = {
+      ...createActiveRun("main", { sessionId }),
+      isAbortable: () => {
+        terminalScheduling = Promise.all([
+          scheduleSkillExperienceReview(firstTerminal),
+          scheduleSkillExperienceReview(secondTerminal),
+        ]).then(() => undefined);
+        throw new Error("second abort inspection failed");
+      },
+    };
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([
+        ["run-stop-partial-first", createActiveRun("main", { sessionId })],
+        ["run-stop-partial-second", second],
+      ]),
+    });
+    const respond = vi.fn();
+
+    await expectDefined(
+      chatHandlers["chat.send"],
+      "chat.send test invariant",
+    )({
+      params: {
+        sessionKey: "main",
+        message: "/stop",
+        idempotencyKey: "idem-stop-partial-throw",
+      },
+      respond,
+      context: context as never,
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+    await terminalScheduling;
+
+    const [ok] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expect(reviewScheduler.cancel).toHaveBeenCalledWith("main");
+    expect(reviewScheduler.schedule).not.toHaveBeenCalledWith(firstTerminal);
+    expect(reviewScheduler.schedule).toHaveBeenCalledWith(secondTerminal);
+  });
+
   it.each([
     [
       "plain stop aborts runs tracked under the canonical session key",
