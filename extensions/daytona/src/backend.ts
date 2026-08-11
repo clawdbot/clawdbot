@@ -58,7 +58,11 @@ function resolveConfiguredBaseLabel(pluginConfig: ResolvedDaytonaPluginConfig): 
 }
 
 // Sandboxes in these states cannot be started again; adoption skips them so a
-// fresh sandbox replaces the retired runtime id in the registry.
+// fresh sandbox replaces the retired runtime id in the registry. Stopped,
+// archived, paused, transitional, and unknown states stay adoptable on
+// purpose: start() either recovers them or fails loudly, while skipping
+// unknown states would silently mint a new sandbox per run on SDK/server
+// version skew.
 const UNUSABLE_SANDBOX_STATES = new Set(["destroyed", "destroying", "error", "build_failed"]);
 
 // Seeded sandbox ids for this process. Skips one remote existence probe per
@@ -383,6 +387,7 @@ class DaytonaSandboxBackendImpl {
           buildRemoteCommand(["/bin/sh", "-c", script, "openclaw-sandbox-upload", ...(args ?? [])]),
           {},
         ),
+      runRemoteOperation: async (run) => await this.withStartedSandbox(sandbox, run),
     });
   }
 
@@ -494,9 +499,12 @@ class DaytonaSandboxBackendImpl {
   }
 
   /**
-   * Run a shell command via the Daytona toolbox exec API with separated,
-   * binary-safe streams. The toolbox merges stdout and stderr into one string,
-   * so the command redirects both to files and emits them base64-encoded.
+   * Run a shell command through a per-call Daytona session with separated,
+   * binary-safe streams. The session transport exists for cancellation:
+   * deleting the session kills the running remote command, so an abort stops
+   * the mutation before the caller is told it stopped. Session output is not
+   * binary-safe, so the command redirects both streams to files and emits
+   * them base64-encoded on stdout.
    */
   private async runWrappedRemoteCommand(
     sandbox: Sandbox,
@@ -517,34 +525,46 @@ class DaytonaSandboxBackendImpl {
       `printf '%s' '${separator}'`,
       `base64 < ${errPath}`,
       `rm -f ${outPath} ${errPath}${stdinPath ? ` ${stdinPath}` : ""}`,
-      "exit $oc_ec",
+      // Subshell exit reports the command status without killing the session
+      // shell; a top-level exit hangs the synchronous session response.
+      "( exit $oc_ec )",
     ].join("; ");
-    let response: Awaited<ReturnType<typeof sandbox.process.executeCommand>>;
+    const sessionId = `openclaw-fs-${token}`;
+    let response: { stdout?: string; exitCode?: number | null };
     try {
       if (stdinPath) {
         const data =
           typeof options.stdin === "string" ? Buffer.from(options.stdin, "utf8") : options.stdin;
-        await sandbox.fs.uploadFile(data ?? Buffer.alloc(0), stdinPath, this.timeoutSeconds);
+        await this.withStartedSandbox(sandbox, () =>
+          sandbox.fs.uploadFile(data ?? Buffer.alloc(0), stdinPath, this.timeoutSeconds),
+        );
       }
-      response = await this.raceWithAbort(
-        sandbox.process.executeCommand(wrapped, undefined, undefined, this.timeoutSeconds),
+      await this.withStartedSandbox(sandbox, () => sandbox.process.createSession(sessionId));
+      response = await this.runCancellableSessionCommand(
+        sandbox,
+        sessionId,
+        wrapped,
         options.signal,
       );
     } catch (error) {
-      // The sandbox persists per scope, so staged transport files must not
-      // outlive a failed or aborted operation. The command removes its own
-      // staging on the success path; missing files are ignored here.
+      // Deleting the session terminates a still-running remote command, and
+      // the sandbox persists per scope, so staged transport files must not
+      // outlive a failed or aborted operation. Missing files are ignored.
+      await sandbox.process.deleteSession(sessionId).catch(() => {});
       await this.removeRemoteStagingFiles(sandbox, stagedPaths);
       throw error;
     }
-    const separatorIndex = response.result.indexOf(separator);
+    // Per-call sessions are single use; release the daemon-side shell.
+    await sandbox.process.deleteSession(sessionId).catch(() => {});
+    const merged = response.stdout ?? "";
+    const separatorIndex = merged.indexOf(separator);
     if (separatorIndex < 0) {
       throw new Error(
-        `Daytona sandbox command transport produced unexpected output: ${response.result.slice(0, 200)}`,
+        `Daytona sandbox command transport produced unexpected output: ${merged.slice(0, 200)}`,
       );
     }
-    const stdout = Buffer.from(response.result.slice(0, separatorIndex), "base64");
-    const stderr = Buffer.from(response.result.slice(separatorIndex + separator.length), "base64");
+    const stdout = Buffer.from(merged.slice(0, separatorIndex), "base64");
+    const stderr = Buffer.from(merged.slice(separatorIndex + separator.length), "base64");
     const code = response.exitCode ?? 1;
     if (code !== 0 && !options.allowFailure) {
       throw new Error(
@@ -555,32 +575,73 @@ class DaytonaSandboxBackendImpl {
   }
 
   /**
-   * Reject promptly when the caller aborts. The in-flight toolbox call cannot
-   * be cancelled remotely; it stays bounded by the configured API timeout and
-   * the wrapped command still removes its own staging when it completes.
+   * Execute one session command synchronously; on abort, kill the remote
+   * command by deleting its session and only then report the abort, so a
+   * cancelled mutation cannot keep changing sandbox state after rejection.
    */
-  private async raceWithAbort<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
+  private async runCancellableSessionCommand(
+    sandbox: Sandbox,
+    sessionId: string,
+    command: string,
+    signal?: AbortSignal,
+  ): Promise<{ stdout?: string; exitCode?: number | null }> {
+    const execution = sandbox.process.executeSessionCommand(
+      sessionId,
+      { command, runAsync: false, suppressInputEcho: true },
+      this.timeoutSeconds,
+    );
     if (!signal) {
-      return await operation;
+      return await execution;
     }
-    signal.throwIfAborted();
     let removeAbortListener: (() => void) | undefined;
     const aborted = new Promise<never>((_, reject) => {
-      const onAbort = () =>
-        reject(
-          signal.reason instanceof Error
-            ? signal.reason
-            : new Error("Daytona sandbox command aborted"),
-        );
+      const onAbort = () => {
+        void sandbox.process
+          .deleteSession(sessionId)
+          .catch(() => {})
+          .then(() => {
+            reject(
+              signal.reason instanceof Error
+                ? signal.reason
+                : new Error("Daytona sandbox command aborted"),
+            );
+          });
+      };
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
       signal.addEventListener("abort", onAbort, { once: true });
       removeAbortListener = () => signal.removeEventListener("abort", onAbort);
     });
     try {
-      return await Promise.race([operation, aborted]);
+      return await Promise.race([execution, aborted]);
     } finally {
       removeAbortListener?.();
       // Silence rejections from the losing branch after settle.
-      operation.catch(() => {});
+      execution.catch(() => {});
+    }
+  }
+
+  /**
+   * Daytona auto-stops idle sandboxes, and a cached handle can outlive that.
+   * First-touch failures get one refresh-start-retry so a sandbox stopped
+   * between tool calls restarts on next use, matching the documented model.
+   */
+  private async withStartedSandbox<T>(sandbox: Sandbox, run: () => Promise<T>): Promise<T> {
+    try {
+      return await run();
+    } catch (error) {
+      if (isDaytonaNotFoundError(error)) {
+        throw error;
+      }
+      await sandbox.refreshData().catch(() => {});
+      const state: string | undefined = sandbox.state;
+      if (state === "started" || (state && UNUSABLE_SANDBOX_STATES.has(state))) {
+        throw error;
+      }
+      await sandbox.start(this.timeoutSeconds);
+      return await run();
     }
   }
 

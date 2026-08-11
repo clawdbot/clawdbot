@@ -79,6 +79,8 @@ export async function uploadDirectoryToDaytonaSandbox(params: {
     script: string;
     args?: string[];
   }) => Promise<{ stdout: Buffer; stderr: Buffer; code: number }>;
+  /** Wraps direct toolbox calls so auto-stopped sandboxes restart first. */
+  runRemoteOperation?: <T>(run: () => Promise<T>) => Promise<T>;
 }): Promise<void> {
   await assertSafeDaytonaUploadSymlinks(params.localDir);
   await withTempWorkspace(
@@ -87,10 +89,9 @@ export async function uploadDirectoryToDaytonaSandbox(params: {
       const tarPath = workspace.path("openclaw-seed.tar");
       await createLocalTarFile(params.localDir, tarPath);
       const remoteTarPath = `/tmp/openclaw-seed-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.tar`;
-      await params.sandbox.fs.uploadFile(
-        tarPath,
-        remoteTarPath,
-        Math.ceil(params.timeoutMs / 1000),
+      const runRemoteOperation = params.runRemoteOperation ?? (async (run) => await run());
+      await runRemoteOperation(() =>
+        params.sandbox.fs.uploadFile(tarPath, remoteTarPath, Math.ceil(params.timeoutMs / 1000)),
       );
       try {
         await params.runRemoteShellScript({

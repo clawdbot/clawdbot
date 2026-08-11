@@ -288,7 +288,7 @@
     },
     "networkBlockAll": {
       "label": "Block Network",
-      "help": "Block all sandbox network egress at creation. Defaults to Daytona's network policy.",
+      "help": "Block all sandbox network egress at creation. Unset uses the Daytona default, which allows outbound network access.",
       "advanced": true
     },
     "networkAllowList": {

@@ -201,6 +201,11 @@ export async function main() {
       target: payload.target,
     });
     const sandbox = await client.get(payload.sandboxId);
+    if (sandbox.state !== "started") {
+      // Daytona auto-stops idle sandboxes; restart before running so an exec
+      // after an idle gap works instead of failing on a stopped sandbox.
+      await sandbox.start();
+    }
     exitCode = payload.usePty
       ? await runPtyExec(sandbox, payload)
       : await runSessionExec(sandbox, payload);

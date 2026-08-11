@@ -29,7 +29,11 @@ type FakeSandbox = {
   refreshData: ReturnType<typeof vi.fn>;
   delete: ReturnType<typeof vi.fn>;
   fs: { uploadFile: ReturnType<typeof vi.fn>; deleteFile: ReturnType<typeof vi.fn> };
-  process: { executeCommand: ReturnType<typeof vi.fn> };
+  process: {
+    createSession: ReturnType<typeof vi.fn>;
+    executeSessionCommand: ReturnType<typeof vi.fn>;
+    deleteSession: ReturnType<typeof vi.fn>;
+  };
 };
 
 type FakeClient = {
@@ -105,16 +109,24 @@ function createFakeSandbox(overrides?: Partial<Pick<FakeSandbox, "id" | "state" 
       }),
     },
     process: {
-      executeCommand: vi.fn(async (command: string) => {
-        const result = spawnSync("/bin/sh", ["-c", command], {
+      createSession: vi.fn(async () => {
+        // The real toolbox refuses session creation on a stopped sandbox.
+        if (sandbox.state !== "started") {
+          throw new Error("sandbox is not running");
+        }
+      }),
+      executeSessionCommand: vi.fn(async (_sessionId: string, request: { command: string }) => {
+        const result = spawnSync("/bin/sh", ["-c", request.command], {
           maxBuffer: 64 * 1024 * 1024,
         });
-        // The Daytona daemon merges stdout and stderr into one result string.
         return {
+          cmdId: `cmd-${randomBytes(4).toString("hex")}`,
+          stdout: result.stdout.toString("utf8"),
+          stderr: result.stderr.toString("utf8"),
           exitCode: result.status ?? 1,
-          result: `${result.stdout.toString("utf8")}${result.stderr.toString("utf8")}`,
         };
       }),
+      deleteSession: vi.fn(async () => {}),
     },
   };
   sandbox.name = `name-${sandbox.id}`;
@@ -355,7 +367,7 @@ describe("daytona backend provisioning", () => {
     const setup = await createTestSetup({ workspaceFiles: { "seed.txt": "data" } });
     const created = createFakeSandbox();
     installFakeClient({ created });
-    created.process.executeCommand.mockRejectedValue(new Error("api 502"));
+    created.process.executeSessionCommand.mockRejectedValue(new Error("api 502"));
 
     await expect(createFactory(setup.pluginConfig)(setup.createParams)).rejects.toThrow("api 502");
     const deletedPaths = created.fs.deleteFile.mock.calls.map((call) => call[0] as string);
@@ -502,25 +514,28 @@ describe("daytona backend shell transport", () => {
     const created = createFakeSandbox();
     installFakeClient({ created });
     const handle = await createFactory(setup.pluginConfig)(setup.createParams);
-    created.process.executeCommand.mockClear();
+    created.process.createSession.mockClear();
+    created.process.executeSessionCommand.mockClear();
 
     const controller = new AbortController();
     controller.abort(new Error("caller cancelled"));
     await expect(
       handle.runShellCommand({ script: "true", signal: controller.signal }),
     ).rejects.toThrow("caller cancelled");
-    expect(created.process.executeCommand).not.toHaveBeenCalled();
+    expect(created.process.createSession).not.toHaveBeenCalled();
+    expect(created.process.executeSessionCommand).not.toHaveBeenCalled();
   });
 
-  it("rejects promptly on abort and removes staged transport files", async () => {
+  it("kills the remote session before reporting an abort and scrubs staging", async () => {
     const setup = await createTestSetup();
     const created = createFakeSandbox();
     installFakeClient({ created });
     const handle = await createFactory(setup.pluginConfig)(setup.createParams);
-    // The in-flight toolbox call hangs; the abort fires only once the command
-    // is actually running so the staged stdin/out/err files already exist.
+    // The in-flight session command hangs; the abort fires only once the
+    // command is running so the staged stdin/out/err files already exist.
     const controller = new AbortController();
-    created.process.executeCommand.mockReturnValue(new Promise(() => {}));
+    created.process.deleteSession.mockClear();
+    created.process.executeSessionCommand.mockReturnValue(new Promise(() => {}));
 
     const pending = handle.runShellCommand({
       script: "cat",
@@ -530,8 +545,13 @@ describe("daytona backend shell transport", () => {
     await new Promise((resolve) => {
       setTimeout(resolve, 25);
     });
+    expect(created.process.deleteSession).not.toHaveBeenCalled();
     controller.abort(new Error("caller cancelled"));
     await expect(pending).rejects.toThrow("caller cancelled");
+    // The rejection only travels through the abort path after the session
+    // delete settled, so the remote command is dead before callers observe
+    // the abort.
+    expect(created.process.deleteSession).toHaveBeenCalled();
     const deletedPaths = created.fs.deleteFile.mock.calls.map((call) => call[0] as string);
     expect(deletedPaths.some((deletedPath) => deletedPath.startsWith("/tmp/openclaw-in-"))).toBe(
       true,
@@ -549,7 +569,7 @@ describe("daytona backend shell transport", () => {
     const created = createFakeSandbox();
     installFakeClient({ created });
     const handle = await createFactory(setup.pluginConfig)(setup.createParams);
-    created.process.executeCommand.mockRejectedValue(new Error("api 502"));
+    created.process.executeSessionCommand.mockRejectedValue(new Error("api 502"));
 
     await expect(
       handle.runShellCommand({ script: "cat", stdin: Buffer.from("data") }),
@@ -558,6 +578,21 @@ describe("daytona backend shell transport", () => {
     expect(deletedPaths.some((deletedPath) => deletedPath.startsWith("/tmp/openclaw-in-"))).toBe(
       true,
     );
+  });
+
+  it("restarts an auto-stopped sandbox on the next filesystem operation", async () => {
+    const setup = await createTestSetup();
+    const created = createFakeSandbox();
+    installFakeClient({ created });
+    const handle = await createFactory(setup.pluginConfig)(setup.createParams);
+    created.start.mockClear();
+    // Simulate the Daytona idle auto-stop between two tool calls.
+    created.state = "stopped";
+
+    const result = await handle.runShellCommand({ script: "printf restarted" });
+
+    expect(created.start).toHaveBeenCalledTimes(1);
+    expect(result.stdout.toString("utf8")).toBe("restarted");
   });
 
   it("throws stderr text for failed commands unless allowFailure is set", async () => {

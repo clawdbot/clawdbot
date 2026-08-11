@@ -19,6 +19,7 @@ import {
   createDaytonaSandboxBackendFactory,
   createDaytonaSandboxBackendManager,
 } from "./backend.js";
+import { createDaytonaClient, resolveDaytonaConnection } from "./client.js";
 import { resolveDaytonaPluginConfig } from "./config.js";
 
 type SandboxFsBridgeContext = Parameters<
@@ -247,6 +248,39 @@ describe("daytona backend live e2e", () => {
       ).rejects.toThrow();
       const stat = await bridge.stat({ filePath: "bridge/binary.bin" });
       expect(stat).toMatchObject({ type: "file", size: binary.length });
+
+      // An aborted mutation is killed remotely before the abort is reported:
+      // the marker survives because the guarded rm never ran.
+      await bridge.writeFile({ filePath: "abort-marker.txt", data: "survives" });
+      const abortController = new AbortController();
+      const abortedMutation = handle.runShellCommand({
+        script: `sleep 5 && rm -f ${pluginConfig.remoteWorkspaceDir}/abort-marker.txt`,
+        signal: abortController.signal,
+      });
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1000);
+      });
+      abortController.abort(new Error("live abort probe"));
+      await expect(abortedMutation).rejects.toThrow("live abort probe");
+      // Wait past the sleep window; if the remote command had survived the
+      // abort, the marker would be gone by now.
+      await new Promise((resolve) => {
+        setTimeout(resolve, 6000);
+      });
+      const survivingMarker = await bridge.readFile({ filePath: "abort-marker.txt" });
+      expect(survivingMarker.toString("utf8")).toBe("survives");
+
+      // An auto-stopped sandbox restarts on the next use for both transports.
+      const connection = await resolveDaytonaConnection({ config: hostConfig, pluginConfig });
+      const client = await createDaytonaClient(connection);
+      const liveSandbox = await client.get(handle.runtimeId);
+      await liveSandbox.stop();
+      const fsAfterStop = await handle.runShellCommand({ script: "printf fs-restarted" });
+      expect(fsAfterStop.stdout.toString("utf8")).toBe("fs-restarted");
+      await liveSandbox.stop();
+      const execAfterStop = await runBackendExec(handle, { command: "printf exec-restarted" });
+      expect(execAfterStop.exitCode).toBe(0);
+      expect(execAfterStop.stdout).toContain("exec-restarted");
 
       // A fresh factory adopts the registered runtime instead of re-creating.
       const adopted = await factory({
