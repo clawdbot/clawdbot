@@ -3985,6 +3985,18 @@ describe("chat slash menu accessibility", () => {
     expect(listbox?.querySelector(`#${activeId}`)?.getAttribute("role")).toBe("option");
   });
 
+  it("removes instant implementation badges without hiding option counts", () => {
+    const harness = createSlashRerenderHarness();
+    const container = harness.inputAndRender(harness.container, "/");
+    const stopOption = Array.from(
+      container.querySelectorAll<HTMLElement>(".slash-menu [role='option']"),
+    ).find((option) => option.querySelector(".slash-menu-name")?.textContent?.trim() === "/stop");
+
+    expect(stopOption).toBeDefined();
+    expect(stopOption?.querySelector(".slash-menu-badge")).toBeNull();
+    expect(container.querySelector(".slash-menu-badge")).not.toBeNull();
+  });
+
   it("keeps filtered command DOM and keyboard order aligned with relevance", () => {
     replaceSlashCommands([
       {

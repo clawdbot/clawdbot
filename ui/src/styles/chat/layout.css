@@ -3829,14 +3829,12 @@ openclaw-chat-video-player {
   gap: 8px;
   padding: 7px 10px;
   border-radius: var(--radius-sm);
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
+  transition: background var(--duration-fast) ease;
 }
 
 .slash-menu-item:hover,
 .slash-menu-item--active {
-  background: color-mix(in srgb, var(--accent) 10%, var(--bg-hover));
+  background: var(--bg-hover);
 }
 
 .slash-menu-icon {
@@ -3846,8 +3844,7 @@ openclaw-chat-video-player {
   width: 20px;
   height: 20px;
   flex-shrink: 0;
-  color: var(--accent);
-  opacity: 0.7;
+  color: var(--muted);
 }
 
 .slash-menu-icon svg {
@@ -3860,16 +3857,11 @@ openclaw-chat-video-player {
   stroke-linejoin: round;
 }
 
-.slash-menu-item--active .slash-menu-icon,
-.slash-menu-item:hover .slash-menu-icon {
-  opacity: 1;
-}
-
 .slash-menu-name {
   font-size: 0.82rem;
   font-weight: 600;
   font-family: var(--mono);
-  color: var(--accent);
+  color: var(--text);
   white-space: nowrap;
 }
 
@@ -3890,21 +3882,13 @@ openclaw-chat-video-player {
   color: var(--muted);
 }
 
-.slash-menu-item--active .slash-menu-name {
-  color: var(--accent-hover);
-}
-
-.slash-menu-item--active .slash-menu-desc {
-  color: var(--text);
-}
-
 .slash-menu-badge {
   font-size: 0.65rem;
   font-weight: 600;
   padding: 1px 6px;
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--accent);
+  background: var(--bg-muted);
+  color: var(--muted);
   white-space: nowrap;
   flex-shrink: 0;
 }
@@ -3919,7 +3903,7 @@ openclaw-chat-video-player {
   margin-top: 4px;
   font-size: 0.75rem;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--muted);
   background: none;
   border: none;
   border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
@@ -3929,8 +3913,8 @@ openclaw-chat-video-player {
 }
 
 .slash-menu-show-more:hover {
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  color: var(--accent-hover);
+  background: var(--bg-hover);
+  color: var(--text);
 }
 
 .slash-menu-footer {

@@ -408,9 +408,7 @@ export function renderSlashMenu(
                       count: String(cmd.argOptions.length),
                     })}</span
                   >`
-                : cmd.executeLocal && !cmd.args
-                  ? html` <span class="slash-menu-badge">${t("chat.commands.instant")}</span> `
-                  : nothing}
+                : nothing}
             </div>
           `,
         )}

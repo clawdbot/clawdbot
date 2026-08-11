@@ -4813,7 +4813,6 @@ export const en: TranslationMap = {
     commands: {
       arguments: "Command arguments",
       menu: "Slash commands",
-      instant: "instant",
       optionCount: "{count} options",
       showMoreOne: "Show 1 more command",
       showMoreMany: "Show {count} more commands",
