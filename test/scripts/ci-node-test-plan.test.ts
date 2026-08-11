@@ -210,7 +210,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     });
 
     // Rebalancing may change ownership but must not add CI workers.
-    expect(compact).toHaveLength(24);
+    expect(compact).toHaveLength(23);
     expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
     expect(compact.every((shard) => shard.groups.length <= 10)).toBe(true);
     expect(compact.some((shard) => shard.requiresDist)).toBe(true);
@@ -238,6 +238,15 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "core-unit-fast-2",
     ];
     expect(new Set(refreshedOutliers.map(jobOf)).size).toBe(refreshedOutliers.length);
+    const smallRunnerOutliers = [
+      "agentic-cli",
+      "agentic-control-plane-auth-node",
+      "agentic-control-plane-agent-chat",
+      "core-runtime-infra-heartbeat-runner",
+      "core-runtime-infra-process",
+      "agentic-commands-doctor-config-state",
+    ];
+    expect(new Set(smallRunnerOutliers.map(jobOf)).size).toBe(smallRunnerOutliers.length);
     // Spawn/signal-timing suites never mix with regular groups, and every
     // compact bin runs serially: overlapping Vitest runs flake timing-
     // sensitive tests on both runner classes.
