@@ -16,3 +16,12 @@ describe("isPromiseLike", () => {
     expect(isPromiseLike(null)).toBe(false);
   });
 });
+
+it("classifies objects with throwing then getters as non-thenable", () => {
+  const hostile = Object.defineProperty({}, "then", {
+    get() {
+      throw new Error("trap");
+    },
+  });
+  expect(isPromiseLike(hostile)).toBe(false);
+});
