@@ -2115,6 +2115,7 @@ jobs:
       - name: Run channel contract shard
         env:
           OPENCLAW_CONTRACT_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
+          OPENCLAW_TEST_PROJECTS_PARALLEL: "4"
         shell: bash
         run: |
           set -euo pipefail
