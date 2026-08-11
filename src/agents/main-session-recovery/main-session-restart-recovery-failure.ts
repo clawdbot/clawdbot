@@ -13,7 +13,10 @@ import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { MainSessionRecoveryObservation } from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import { resolveRestartRecoveryDeliveryContext } from "./main-session-restart-dispatch.js";
-import { buildRestartRecoveryExpectedState, log } from "./main-session-restart-recovery-shared.js";
+import {
+  buildRestartRecoveryExpectedState,
+  mainSessionRecoveryLog,
+} from "./main-session-restart-recovery-shared.js";
 
 const TOMBSTONED_SESSION_NOTICE =
   "I couldn't continue this session after a gateway restart. " +
@@ -43,9 +46,11 @@ async function sendRestartRecoveryTombstoneNotice(params: {
       text: TOMBSTONED_SESSION_NOTICE,
       idempotencyKey: buildRestartRecoveryTombstoneNoticeKey(params.entry),
     });
-    log.info(`sent restart recovery tombstone notice: ${params.sessionKey} (${params.reason})`);
+    mainSessionRecoveryLog.info(
+      `sent restart recovery tombstone notice: ${params.sessionKey} (${params.reason})`,
+    );
   } catch (error) {
-    log.warn(
+    mainSessionRecoveryLog.warn(
       `failed to send restart recovery tombstone notice ${params.sessionKey}: ${String(error)}`,
     );
   }
@@ -70,7 +75,7 @@ async function writeRestartRecoveryTombstoneNotice(params: {
     idempotencyKey: buildRestartRecoveryTombstoneNoticeKey(params.entry),
   }).catch((error: unknown) => ({ ok: false as const, reason: String(error) }));
   if (!result.ok) {
-    log.warn(
+    mainSessionRecoveryLog.warn(
       `failed to write restart recovery tombstone notice ${params.sessionKey}: ${result.reason}`,
     );
   }
@@ -100,7 +105,9 @@ async function claimMainRestartRecoveryTombstone(params: {
   if (claim.transition.kind !== "tombstoned" || !claim.entry) {
     return null;
   }
-  log.warn(`tombstoned main-session restart recovery: ${params.sessionKey} (${params.reason})`);
+  mainSessionRecoveryLog.warn(
+    `tombstoned main-session restart recovery: ${params.sessionKey} (${params.reason})`,
+  );
   return claim.entry;
 }
 

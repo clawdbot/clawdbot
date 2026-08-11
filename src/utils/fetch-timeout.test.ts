@@ -10,8 +10,8 @@ vi.mock("../logging/subsystem.js", () => ({
   })),
 }));
 
+import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../../packages/gateway-client/src/timeouts.js";
 import { buildTimeoutAbortSignal, fetchWithTimeout } from "./fetch-timeout.js";
-import { MAX_SAFE_TIMEOUT_DELAY_MS } from "./timer-delay.js";
 
 function captureTimeoutLogUrl(url: string): Promise<Record<string, unknown>> {
   const { cleanup } = buildTimeoutAbortSignal({ timeoutMs: 25, operation: "unit-test", url });

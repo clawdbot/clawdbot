@@ -27,7 +27,7 @@ function createSetupDeps(home: string) {
         dir: params?.dir ?? path.join(home, ".openclaw", "workspace"),
       }),
     ),
-    formatConfigPath: (value: string) => value,
+    formatConfigFilePath: (value: string) => value,
     logConfigUpdated: vi.fn(
       (runtime: { log: (message: string) => void }, opts: { path?: string; suffix?: string }) => {
         const suffix = opts.suffix ? ` ${opts.suffix}` : "";
@@ -202,7 +202,7 @@ describe("setupCommand", () => {
       );
       const deps = {
         ensureAgentWorkspace: vi.fn(async () => ({ dir: workspace })),
-        formatConfigPath: (value: string) => value,
+        formatConfigFilePath: (value: string) => value,
         mkdir: vi.fn(async () => {}),
         resolveSessionTranscriptsDir: vi.fn(() => path.join(home, "sessions")),
       };
@@ -276,7 +276,7 @@ describe("setupCommand", () => {
       );
       const deps = {
         ensureAgentWorkspace: vi.fn(async () => ({ dir: workspace })),
-        formatConfigPath: (value: string) => value,
+        formatConfigFilePath: (value: string) => value,
         mkdir: vi.fn(async () => {}),
         resolveSessionTranscriptsDir: vi.fn(() => path.join(home, "ops-sessions")),
       };
@@ -308,7 +308,7 @@ describe("setupCommand", () => {
       await fs.writeFile(includePath, JSON.stringify(included));
       const deps = {
         ensureAgentWorkspace: vi.fn(async () => ({ dir: nextWorkspace })),
-        formatConfigPath: (value: string) => value,
+        formatConfigFilePath: (value: string) => value,
         mkdir: vi.fn(async () => {}),
         resolveSessionTranscriptsDir: vi.fn(() => path.join(home, "ops-sessions")),
       };
@@ -346,7 +346,7 @@ describe("setupCommand", () => {
 
       await setupCommand({ workspace: nextWorkspace }, runtime, {
         ensureAgentWorkspace: vi.fn(async () => ({ dir: nextWorkspace })),
-        formatConfigPath: (value: string) => value,
+        formatConfigFilePath: (value: string) => value,
         mkdir: vi.fn(async () => {}),
         resolveSessionTranscriptsDir: vi.fn(() => path.join(home, "ops-sessions")),
       });
@@ -383,7 +383,7 @@ describe("setupCommand", () => {
       );
       const deps = {
         ensureAgentWorkspace: vi.fn(async () => ({ dir: workspace })),
-        formatConfigPath: (value: string) => value,
+        formatConfigFilePath: (value: string) => value,
         mkdir: vi.fn(async () => {}),
         resolveSessionTranscriptsDir: vi.fn(() => path.join(home, "sessions")),
       };

@@ -11,7 +11,7 @@ import { parseDurationMs } from "../parse-duration.js";
 import { runNodesCommand } from "./cli-utils.js";
 import {
   buildNodeInvokeParams,
-  callGatewayCli,
+  callNodesGatewayCli,
   nodesCallOpts,
   parseOptionalNodeFiniteNumber,
   parseOptionalNodeNonNegativeInteger,
@@ -63,7 +63,7 @@ export function registerNodesScreenCommands(nodes: Command) {
             timeoutMs,
           });
 
-          const raw = await callGatewayCli("node.invoke", opts, invokeParams);
+          const raw = await callNodesGatewayCli("node.invoke", opts, invokeParams);
           const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
           const parsed = parseScreenRecordPayload(res.payload);
           const filePath = opts.out ?? screenRecordTempPath({ ext: parsed.format || "mp4" });

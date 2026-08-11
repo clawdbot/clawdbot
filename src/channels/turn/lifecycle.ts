@@ -23,7 +23,10 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveMessageReceiptPrimaryId } from "../message/receipt.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
 import { recordInboundSession } from "../session.js";
-import { isChannelPartialDeliveryError } from "./delivery-result.js";
+import {
+  createSuppressedChannelDeliveryResult,
+  isChannelPartialDeliveryError,
+} from "./delivery-result.js";
 import {
   createDirectPendingFinalCustody,
   NO_PENDING_FINAL_CUSTODY,
@@ -316,21 +319,6 @@ async function settleChannelDeliveryAttempt(params: {
   return finalized;
 }
 
-function createSuppressedChannelDeliveryResult(params: {
-  reason: NonNullable<ChannelDeliveryResult["suppression"]>["reason"];
-  cancelReason?: string;
-  metadata?: Record<string, unknown>;
-}): ChannelDeliveryResult {
-  return {
-    visibleReplySent: false,
-    suppression: {
-      reason: params.reason,
-      ...(params.cancelReason ? { cancelReason: params.cancelReason } : {}),
-      ...(params.metadata ? { metadata: params.metadata } : {}),
-    },
-  };
-}
-
 async function applyRoutedDirectMessageSending(params: {
   turn: RoutedAssembledChannelTurn;
   payload: ReplyPayload;
@@ -412,6 +400,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
   const delivery =
     params.admission?.kind === "observeOnly" ? createObserveOnlyDeliveryAdapter() : params.delivery;
   const pendingDeliveryAttempts: PendingChannelDeliveryAttempt[] = [];
+  const normalizationSuppressionAttempts: PendingChannelDeliveryAttempt[] = [];
   const nonVisibleDeliveryCounts: Record<ReplyDispatchKind, number> = {
     tool: 0,
     block: 0,
@@ -518,6 +507,18 @@ async function dispatchChannelTurnWithDeliveryOwner(
                   : {}),
                 dispatcherOptions: {
                   ...replyPipeline.dispatcherOptions,
+                  onSkip: (payload, info) => {
+                    replyPipeline.dispatcherOptions?.onSkip?.(payload, info);
+                    if (info.reason !== "channel_transform") {
+                      return;
+                    }
+                    const { reason: _reason, ...deliveryInfo } = info;
+                    normalizationSuppressionAttempts.push({
+                      payload,
+                      info: deliveryInfo,
+                      result: createSuppressedChannelDeliveryResult({ reason: info.reason }),
+                    });
+                  },
                   deliver: async (payload: ReplyPayload, info: ChannelDeliveryInfo) => {
                     const preparedPayloadResult = delivery.preparePayload
                       ? await delivery.preparePayload(payload, info)
@@ -677,6 +678,10 @@ async function dispatchChannelTurnWithDeliveryOwner(
 
         let settlementError: unknown;
         try {
+          await settleChannelDeliveryAttempts({
+            attempts: normalizationSuppressionAttempts,
+            delivery,
+          });
           await settleChannelDeliveryAttempts({
             attempts: pendingDeliveryAttempts,
             delivery,

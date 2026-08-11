@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
-  buildPluginRegistrySnapshotReport,
+  buildPluginRegistrySnapshotReportMock,
   enablePluginInConfigMock,
   loadConfig,
   replaceConfigFile,
@@ -35,7 +35,7 @@ describe("plugins cli policy mutations", () => {
   });
 
   function mockPluginRegistry(ids: string[]) {
-    buildPluginRegistrySnapshotReport.mockReturnValue({
+    buildPluginRegistrySnapshotReportMock.mockReturnValue({
       plugins: ids.map((id) => ({ id })),
       diagnostics: [],
       registrySource: "derived",

@@ -13,7 +13,7 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import {
   extractMessageRole,
-  extractMessageText,
+  extractSessionTranscriptText,
   resolveTranscriptReadTarget,
   sqliteMessageEventWithSeq,
   toTranscriptReadScope,
@@ -96,8 +96,11 @@ function findFirstTitleUserMessage(
 
 function findLastMessageText(entries: readonly SessionTranscriptMessageEvent[]): string | null {
   return (
-    entries.toReversed().map(sqliteMessageEventWithSeq).map(extractMessageText).find(Boolean) ??
-    null
+    entries
+      .toReversed()
+      .map(sqliteMessageEventWithSeq)
+      .map(extractSessionTranscriptText)
+      .find(Boolean) ?? null
   );
 }
 
@@ -158,7 +161,7 @@ function readSqliteTitleFields(
       );
     }
     fields = {
-      firstUserMessage: firstUser ? extractMessageText(firstUser) : null,
+      firstUserMessage: firstUser ? extractSessionTranscriptText(firstUser) : null,
       lastMessagePreview: lastText,
     };
   } catch (error) {
@@ -277,7 +280,7 @@ function readSessionTitleFieldsFromTranscriptBatchCurrent(
       continue;
     }
     const fields = {
-      firstUserMessage: firstUser ? extractMessageText(firstUser) : null,
+      firstUserMessage: firstUser ? extractSessionTranscriptText(firstUser) : null,
       lastMessagePreview: lastText,
     };
     const fieldsByVariant =
