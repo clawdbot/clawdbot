@@ -509,8 +509,16 @@ export async function executeSystemAgentOperation(
       });
       const session = agentId ? buildAgentMainSessionKey({ agentId }) : undefined;
       const runTui = opts.deps?.runTui ?? (await import("../tui/tui.js")).runTui;
+      const readActiveGatewayLockIdentity =
+        opts.deps?.readActiveGatewayLockIdentity ??
+        (await import("../infra/gateway-lock.js")).readActiveGatewayLockIdentity;
+      // A Gateway already running for this state directory (for example, one
+      // that setup just started) refuses a second local TUI lock holder with
+      // GatewayLockError. Connect to it instead of forcing embedded local mode,
+      // mirroring the setup finalizer's own bound-vs-local handoff choice.
+      const activeGateway = await readActiveGatewayLockIdentity();
       const result = await runTui({
-        local: true,
+        local: activeGateway === undefined,
         session,
         deliver: false,
         historyLimit: 200,
