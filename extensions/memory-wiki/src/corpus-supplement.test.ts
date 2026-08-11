@@ -104,4 +104,22 @@ describe("memory-wiki corpus supplement", () => {
     );
     expect(queryMocks.searchMemoryWiki).not.toHaveBeenCalled();
   });
+
+  it("does not read a legacy wiki after the memory cut-over", async () => {
+    const supplement = createWikiCorpusSupplement({
+      resolveConfig: (agentId, currentAppConfig) =>
+        resolveMemoryWikiAgentConfig({ config, appConfig: currentAppConfig, agentId }),
+      getAppConfig: () => appConfig,
+    });
+
+    await expect(
+      supplement.search({ query: "private wiki", agentId: "support", memoryReadEnforced: true }),
+    ).resolves.toEqual([]);
+    await expect(
+      supplement.get({ lookup: "private wiki", agentId: "support", memoryReadEnforced: true }),
+    ).resolves.toBeNull();
+
+    expect(queryMocks.searchMemoryWiki).not.toHaveBeenCalled();
+    expect(queryMocks.getMemoryWikiPage).not.toHaveBeenCalled();
+  });
 });

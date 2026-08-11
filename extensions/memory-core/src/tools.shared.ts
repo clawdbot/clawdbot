@@ -9,6 +9,7 @@ import {
   type AnyAgentTool,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
@@ -22,6 +23,8 @@ type MemoryToolOptions = {
   agentSessionKey?: string;
   sandboxed?: boolean;
   oneShotCliRun?: boolean;
+  memoryReadEnforced?: OpenClawPluginToolContext["memoryReadEnforced"];
+  authorizedMemoryRead?: OpenClawPluginToolContext["authorizedMemoryRead"];
   acquireLocalService?: MemoryCoreAcquireLocalService;
 };
 
@@ -35,7 +38,10 @@ export const MemorySearchSchema = Type.Object({
 });
 
 export const MemoryGetSchema = Type.Object({
-  path: Type.String(),
+  // Legacy paths stay optional for non-enforced agents. Cut-over agents must
+  // pass the opaque continuation returned by memory_search.
+  path: Type.Optional(Type.String()),
+  handleId: Type.Optional(Type.String()),
   from: Type.Optional(Type.Integer()),
   lines: Type.Optional(Type.Integer()),
   corpus: Type.Optional(stringEnum(["memory", "wiki", "all"])),

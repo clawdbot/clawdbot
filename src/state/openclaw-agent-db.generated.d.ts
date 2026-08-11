@@ -243,6 +243,14 @@ export interface MemoryPolicyRevisions {
   revocation_epoch: number;
 }
 
+export interface MemoryPolicySets {
+  agent_id: string;
+  created_at: number;
+  member_policy_set_ids_json: string;
+  memory_policy_revision: string;
+  policy_set_id: string;
+}
+
 export interface MemoryResourceRevisions {
   activated_at: number | null;
   actor_id: string | null;
@@ -278,6 +286,25 @@ export interface MemoryResources {
   resource_id: string;
   source: Generated<string>;
   store_id: string;
+}
+
+export interface MemoryRunExposures {
+  agent_id: string;
+  context_fingerprint: string;
+  created_at: number;
+  delivery_audiences_json: string;
+  delivery_revision: string;
+  effective_source_policy_set_id: string;
+  egress_receipt_ids_json: string;
+  egress_registry_revision: string;
+  exposed_resource_revisions_json: string;
+  exposure_receipt_ids_json: string;
+  exposure_set_id: string;
+  plan_id: string;
+  previous_exposure_set_id: string | null;
+  revision_number: number;
+  run_id: string;
+  source_policy_set_ids_json: string;
 }
 
 export interface MemoryScopedChunkVectors {
@@ -602,6 +629,21 @@ export interface TranscriptEventIdentities {
   session_id: string;
 }
 
+export interface TranscriptEventMemoryPolicies {
+  authorization_status: string;
+  context_fingerprint: string | null;
+  created_at: number;
+  delivery_audiences_json: string | null;
+  event_seq: number;
+  run_exposure_revision: number | null;
+  run_exposure_set_id: string | null;
+  run_id: string | null;
+  session_id: string;
+  session_identity_revision: string | null;
+  source_policy_set_id: string | null;
+  subject_revision: string | null;
+}
+
 export interface TranscriptEvents {
   created_at: number;
   event_json: string;
@@ -637,9 +679,11 @@ export interface DB {
   memory_policies: MemoryPolicies;
   memory_policy_entries: MemoryPolicyEntries;
   memory_policy_revisions: MemoryPolicyRevisions;
+  memory_policy_sets: MemoryPolicySets;
   memory_resource_revisions: MemoryResourceRevisions;
   memory_resource_subjects: MemoryResourceSubjects;
   memory_resources: MemoryResources;
+  memory_run_exposures: MemoryRunExposures;
   memory_scoped_chunk_vectors: MemoryScopedChunkVectors;
   memory_scoped_chunks: MemoryScopedChunks;
   memory_scoped_chunks_fts: MemoryScopedChunksFts;
@@ -675,6 +719,7 @@ export interface DB {
   standing_intents_fts_idx: StandingIntentsFtsIdx;
   trajectory_runtime_events: TrajectoryRuntimeEvents;
   transcript_event_identities: TranscriptEventIdentities;
+  transcript_event_memory_policies: TranscriptEventMemoryPolicies;
   transcript_events: TranscriptEvents;
   transcript_rewrite_watermarks: TranscriptRewriteWatermarks;
 }

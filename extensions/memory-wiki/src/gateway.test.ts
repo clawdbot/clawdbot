@@ -6,11 +6,17 @@ import { registerMemoryWikiGatewayMethods } from "./gateway.js";
 import { listMemoryWikiImportInsights } from "./import-insights.js";
 import { listMemoryWikiImportRuns } from "./import-runs.js";
 import { ingestMemoryWikiSource } from "./ingest.js";
-import { searchMemoryWiki } from "./query.js";
+import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { resolveMemoryWikiStatus } from "./status.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 import { listMemoryWikiOverview } from "./wiki-overview.js";
+
+const isLegacyMemorySurfaceDisabledMock = vi.hoisted(() => vi.fn(() => false));
+
+vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", () => ({
+  isLegacyMemorySurfaceDisabled: isLegacyMemorySurfaceDisabledMock,
+}));
 
 type ApplyMemoryWikiMutation = ReturnType<typeof normalizeMemoryWikiMutationInput>;
 
@@ -128,6 +134,7 @@ const VAULT_BACKED_GATEWAY_CASES = [
 describe("memory-wiki gateway methods", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    isLegacyMemorySurfaceDisabledMock.mockReset().mockReturnValue(false);
     vi.mocked(syncMemoryWikiImportedSources).mockResolvedValue({
       importedCount: 0,
       updatedCount: 0,
@@ -239,6 +246,46 @@ describe("memory-wiki gateway methods", () => {
 
       expect(resolveConfig).toHaveBeenCalledOnce();
       expect(resolveConfig).toHaveBeenCalledWith("marketing", appConfig);
+    },
+  );
+
+  it.each(VAULT_BACKED_GATEWAY_CASES)(
+    "%s is unavailable before raw vault access after cut-over",
+    async (method, methodParams) => {
+      const { config, rootDir } = await createVault({
+        prefix: "memory-wiki-gateway-cutover-",
+        config: { vault: { scope: "agent" } },
+      });
+      const { api, registerGatewayMethod } = createPluginApi();
+      const agentConfig = {
+        ...config,
+        agentId: "main",
+        vault: { ...config.vault, path: path.join(rootDir, "main") },
+      };
+      registerMemoryWikiGatewayMethods({
+        api,
+        config,
+        appConfig: { agents: { list: [{ id: "main", default: true }] } },
+        resolveConfig: () => agentConfig,
+      });
+      const handler = findGatewayHandler(registerGatewayMethod, method);
+      if (!handler) {
+        throw new Error(`${method} handler missing`);
+      }
+
+      isLegacyMemorySurfaceDisabledMock.mockReturnValueOnce(true);
+      const respond = vi.fn();
+      await handler({ params: { ...methodParams, agentId: "main" }, respond });
+
+      expect(readRespondError(respond)).toEqual({
+        code: "internal_error",
+        message: "Memory Wiki is unavailable after scoped-memory cutover.",
+      });
+      expect(syncMemoryWikiImportedSources).not.toHaveBeenCalled();
+      expect(resolveMemoryWikiStatus).not.toHaveBeenCalled();
+      expect(searchMemoryWiki).not.toHaveBeenCalled();
+      expect(getMemoryWikiPage).not.toHaveBeenCalled();
+      expect(applyMemoryWikiMutation).not.toHaveBeenCalled();
     },
   );
 

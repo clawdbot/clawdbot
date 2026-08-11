@@ -1,6 +1,7 @@
 // Memory Core tests cover dreaming plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isLegacyMemorySurfaceDisabled } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   DEFAULT_MEMORY_DEEP_DREAMING_LIMIT,
   DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
@@ -24,6 +25,8 @@ import {
   resolveShortTermPromotionDreamingConfig,
 } from "./dreaming.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
+
+vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", { spy: true });
 
 // `runDreamingSweepPhases` is the only binding the dreaming trigger imports from this module.
 const runDreamingSweepPhasesMock = vi.hoisted(() =>
@@ -55,9 +58,14 @@ const constants = {
   STARTUP_CRON_RETRY_MAX_ATTEMPTS: 12,
 };
 const { createTempWorkspace } = createMemoryCoreTestHarness();
+const isLegacyMemorySurfaceDisabledMock = vi.mocked(isLegacyMemorySurfaceDisabled);
+
+isLegacyMemorySurfaceDisabledMock.mockReturnValue(false);
 
 afterEach(() => {
   resetSystemEventsForTest();
+  isLegacyMemorySurfaceDisabledMock.mockReset();
+  isLegacyMemorySurfaceDisabledMock.mockReturnValue(false);
 });
 
 function clearInternalHooks(): void {}
@@ -1677,6 +1685,38 @@ describe("gateway startup reconciliation", () => {
     }
   });
 
+  it("does not reconcile or sweep legacy dreaming for a cut-over trigger", async () => {
+    clearInternalHooks();
+    isLegacyMemorySurfaceDisabledMock.mockImplementation((agentId) => agentId === "main");
+    runDreamingSweepPhasesMock.mockClear();
+    const { api, harness, onMock } = createDreamingTestContext();
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      await triggerGatewayStart(onMock, {
+        config: api.config,
+        getCron: () => harness.cron,
+      });
+      const cronCallsBeforeTrigger = harness.listCalls;
+
+      const result = await getBeforeAgentReplyHandler(onMock)(
+        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+        { trigger: "cron", agentId: "main", workspaceDir: "." },
+      );
+
+      expect(result).toEqual({
+        handled: true,
+        reason: "memory-core: short-term dreaming unavailable for isolated memory",
+      });
+      expect(harness.addCalls).toHaveLength(0);
+      expect(harness.listCalls).toBe(cronCallsBeforeTrigger);
+      expect(runDreamingSweepPhasesMock).not.toHaveBeenCalled();
+    } finally {
+      await triggerGatewayStop(onMock).catch(() => undefined);
+      clearInternalHooks();
+    }
+  });
+
   // Regression: the sweep dropped the agent id entirely, so narrative subagent sessions used
   // unscoped keys that no per-agent SQLite store could resolve and every phase failed.
   it("sweeps each workspace as its owning agent rather than the roster default", async () => {
@@ -1720,6 +1760,57 @@ describe("gateway startup reconciliation", () => {
       expect(sweepArgs.agentId).toBe("researcher");
       expect(sweepArgs.workspaceDir).toBe(workspaceDir);
     } finally {
+      clearInternalHooks();
+    }
+  });
+
+  it("fails closed for a shared workspace when any owner has cut over", async () => {
+    clearInternalHooks();
+    const sharedWorkspaceDir = await createTempWorkspace("openclaw-dreaming-shared-");
+    const researcherWorkspaceDir = await createTempWorkspace("openclaw-dreaming-researcher-");
+    isLegacyMemorySurfaceDisabledMock.mockImplementation((agentId) => agentId === "alpha");
+    runDreamingSweepPhasesMock.mockClear();
+    const { api, harness, onMock } = createDreamingTestContext({
+      config: createDreamingConfig(
+        {
+          enabled: true,
+          limit: 1,
+          phases: { light: { enabled: false }, rem: { enabled: false } },
+        },
+        {
+          agents: {
+            list: [
+              { id: "alpha", default: true, workspace: sharedWorkspaceDir },
+              { id: "beta", workspace: sharedWorkspaceDir },
+              { id: "researcher", workspace: researcherWorkspaceDir },
+            ],
+          },
+        },
+      ),
+    });
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      await triggerGatewayStart(onMock, {
+        config: api.config,
+        getCron: () => harness.cron,
+      });
+
+      const result = await getBeforeAgentReplyHandler(onMock)(
+        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+        { trigger: "cron", agentId: "beta", workspaceDir: sharedWorkspaceDir },
+      );
+
+      expect(result).toEqual({
+        handled: true,
+        reason: "memory-core: short-term dreaming processed",
+      });
+      expect(runDreamingSweepPhasesMock).toHaveBeenCalledOnce();
+      expect(runDreamingSweepPhasesMock).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "researcher", workspaceDir: researcherWorkspaceDir }),
+      );
+    } finally {
+      await triggerGatewayStop(onMock).catch(() => undefined);
       clearInternalHooks();
     }
   });

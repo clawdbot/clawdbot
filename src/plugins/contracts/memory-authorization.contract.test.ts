@@ -884,6 +884,47 @@ describe("memory authorization conformance suite", () => {
     }
   });
 
+  it("requires every handle field to be an enumerable own data property", async () => {
+    const requiredFields = [
+      "version",
+      "handleId",
+      "planId",
+      "contextFingerprint",
+      "resourceRevision",
+      "policyRevision",
+      "expiresAt",
+    ] as const;
+
+    for (const field of requiredFields) {
+      for (const defineField of [
+        (handle: AuthorizedResourceHandle) => {
+          const decorated = { ...handle };
+          Object.defineProperty(decorated, field, {
+            enumerable: false,
+            value: decorated[field],
+          });
+          return decorated;
+        },
+        (handle: AuthorizedResourceHandle) => {
+          const decorated = { ...handle };
+          const value = decorated[field];
+          Object.defineProperty(decorated, field, {
+            enumerable: true,
+            get: () => value,
+          });
+          return decorated;
+        },
+      ]) {
+        const report = await runMemoryAuthorizationConformanceSuite(
+          createAllowedHandleAdapter(defineField),
+        );
+        expect(report.failures).toContainEqual(
+          expect.objectContaining({ invariant: "authorized-handle" }),
+        );
+      }
+    }
+  });
+
   it("rejects an empty opaque handle ID", async () => {
     const adapter = createAllowedHandleAdapter((handle) => ({ ...handle, handleId: "" }));
     const report = await runMemoryAuthorizationConformanceSuite(adapter);

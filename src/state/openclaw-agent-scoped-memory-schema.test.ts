@@ -111,4 +111,37 @@ describe("scoped memory additive agent schema", () => {
         .get(),
     ).toBeUndefined();
   });
+
+  it("installs immutable policy and transcript companion storage with the scoped group", () => {
+    const database = createDatabase();
+    ensureOpenClawAgentScopedMemorySchema(database);
+    database
+      .prepare(
+        `INSERT INTO memory_policy_sets
+          (policy_set_id, agent_id, memory_policy_revision, member_policy_set_ids_json, created_at)
+         VALUES ('policy-set-1', 'main', 'policy-revision-1', '[]', 1)`,
+      )
+      .run();
+    expect(() =>
+      database
+        .prepare(
+          "UPDATE memory_policy_sets SET created_at = 2 WHERE policy_set_id = 'policy-set-1'",
+        )
+        .run(),
+    ).toThrow(/immutable/u);
+    const companionColumns = database
+      .prepare(
+        "SELECT name FROM pragma_table_info('transcript_event_memory_policies') ORDER BY cid",
+      )
+      .all() as Array<{ name: string }>;
+    expect(companionColumns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "authorization_status",
+        "source_policy_set_id",
+        "run_exposure_set_id",
+        "session_identity_revision",
+        "subject_revision",
+      ]),
+    );
+  });
 });

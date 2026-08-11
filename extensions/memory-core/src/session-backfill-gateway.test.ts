@@ -4,6 +4,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSessionBackfillGatewayMethods } from "./session-backfill-gateway.js";
 import { executeSessionBackfill, executeSessionBackfillBatch } from "./session-backfill.js";
 
+const isLegacyMemorySurfaceDisabled = vi.hoisted(() => vi.fn(() => false));
+
+vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-core")>()),
+  isLegacyMemorySurfaceDisabled,
+}));
+
 vi.mock("./session-backfill.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-backfill.js")>()),
   executeSessionBackfill: vi.fn(),
@@ -63,6 +70,7 @@ async function invoke(method: RegisteredMethod, params: unknown) {
 describe("session backfill gateway methods", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    isLegacyMemorySurfaceDisabled.mockReturnValue(false);
   });
 
   it("registers read preview and admin mutation methods", () => {
@@ -151,6 +159,23 @@ describe("session backfill gateway methods", () => {
     expect(respond.mock.calls[0]?.[2]).toMatchObject({
       code: "INVALID_REQUEST",
       message: 'Unknown agent id "missing".',
+    });
+  });
+
+  it("does not resolve a workspace or load backfill execution for a cut-over agent", async () => {
+    isLegacyMemorySurfaceDisabled.mockReturnValue(true);
+    const { api, methods } = createHarness();
+
+    const respond = await invoke(methods.get(SESSION_BACKFILL_GATEWAY_METHODS.preview)!, {
+      agentId: "main",
+    });
+
+    expect(isLegacyMemorySurfaceDisabled).toHaveBeenCalledWith("main");
+    expect(api.runtime.agent.resolveAgentWorkspaceDir).not.toHaveBeenCalled();
+    expect(executeBatchMock).not.toHaveBeenCalled();
+    expect(respond.mock.calls[0]?.[2]).toMatchObject({
+      code: "UNAVAILABLE",
+      message: "Session backfill is unavailable after scoped-memory cutover.",
     });
   });
 

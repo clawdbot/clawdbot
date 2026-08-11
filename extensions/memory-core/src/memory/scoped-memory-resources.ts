@@ -40,6 +40,7 @@ export type BuiltinScopedMemoryRevisionSnapshot = Readonly<{
   revisionId: string;
   storeId: string;
   logicalLocator: string;
+  source: "memory" | "sessions";
   content: string;
   contentHash: string;
   contentBytes: number;
@@ -183,6 +184,7 @@ export function readBuiltinScopedMemoryRevisionSnapshot(params: {
           "resource.resource_id",
           "resource.store_id",
           "resource.logical_locator",
+          "resource.source",
           "revision.revision_id",
           "revision.artifact_locator",
           "revision.content_hash",
@@ -249,6 +251,7 @@ export function readBuiltinScopedMemoryRevisionSnapshot(params: {
       revisionId: revision.revision_id,
       storeId: revision.store_id,
       logicalLocator: revision.logical_locator,
+      source: revision.source,
       content,
       contentHash: revision.content_hash,
       contentBytes: revision.content_bytes,

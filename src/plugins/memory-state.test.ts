@@ -1,5 +1,12 @@
 // Covers plugin-backed memory state registration and reset behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const isMemoryIsolationCutoverAgentMock = vi.hoisted(() => vi.fn(() => false));
+
+vi.mock("./memory-cutover.js", () => ({
+  isMemoryIsolationCutoverAgent: isMemoryIsolationCutoverAgentMock,
+}));
+
 import {
   COMPLETE_MEMORY_AUTHORIZATION_CAPABILITIES,
   LEGACY_MEMORY_AUTHORIZATION_CAPABILITIES,
@@ -77,6 +84,7 @@ describe("memory plugin state", () => {
   afterEach(() => {
     clearMemoryPluginState();
     resetPluginRuntimeStateForTest();
+    isMemoryIsolationCutoverAgentMock.mockReset().mockReturnValue(false);
   });
 
   it("returns empty defaults when no memory plugin state is registered", () => {
@@ -161,6 +169,38 @@ describe("memory plugin state", () => {
         contentType: "markdown",
       },
     ]);
+  });
+
+  it("fails closed before a public-artifact provider can inspect cut-over memory", async () => {
+    const listArtifacts = vi.fn(async () => [
+      {
+        kind: "memory-root" as const,
+        workspaceDir: "/private/workspace",
+        relativePath: "MEMORY.md",
+        absolutePath: "/private/workspace/MEMORY.md",
+        agentIds: ["cutover"],
+        contentType: "markdown" as const,
+      },
+    ]);
+    registerMemoryCapability("memory-core", {
+      publicArtifacts: { listArtifacts },
+    });
+    isMemoryIsolationCutoverAgentMock.mockImplementation((agentId: string) => agentId === "cutover");
+
+    await expect(
+      listActiveMemoryPublicArtifacts({
+        cfg: {
+          agents: {
+            list: [
+              { id: "legacy", default: true },
+              { id: "cutover" },
+            ],
+          },
+        } as never,
+      }),
+    ).rejects.toThrow("Memory public artifacts are unavailable after scoped-memory cutover.");
+
+    expect(listArtifacts).not.toHaveBeenCalled();
   });
 
   it("normalizes public memory artifacts without agent ids", async () => {

@@ -6,6 +6,7 @@ import {
   type RefreshMemoryWikiIndexesResult,
 } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
+import { assertLegacyMemoryWikiAccessAvailable } from "./legacy-memory-access.js";
 import {
   resolveMemoryWikiVaultMutationKey,
   withMemoryWikiVaultMutation,
@@ -78,6 +79,11 @@ async function syncMemoryWikiImportedSourcesOnce(
 export async function syncMemoryWikiImportedSources(
   params: SyncMemoryWikiImportedSourcesParams,
 ): Promise<MemoryWikiImportedSourceSyncResult> {
+  assertLegacyMemoryWikiAccessAvailable({
+    config: params.config,
+    appConfig: params.appConfig,
+    agentId: params.config.agentId,
+  });
   const vaultKey = await resolveMemoryWikiVaultMutationKey(params.config.vault.path);
   const requestKey = resolveImportedSourceSyncRequestKey(params, vaultKey);
   const active = activeImportedSourceSyncs.get(vaultKey) ?? [];

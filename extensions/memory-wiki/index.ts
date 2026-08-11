@@ -169,6 +169,9 @@ export default definePluginEntry({
     });
     api.registerTool(
       (ctx) => {
+        if (ctx.memoryReadEnforced) {
+          return null;
+        }
         const resolved = resolveToolContext(ctx.agentId);
         return resolved
           ? createWikiStatusTool(resolved.config, resolved.appConfig, {
@@ -180,6 +183,9 @@ export default definePluginEntry({
     );
     api.registerTool(
       (ctx) => {
+        if (ctx.memoryReadEnforced) {
+          return null;
+        }
         const resolved = resolveToolContext(ctx.agentId);
         return resolved ? createWikiLintTool(resolved.config, resolved.appConfig) : null;
       },
@@ -187,6 +193,9 @@ export default definePluginEntry({
     );
     api.registerTool(
       (ctx) => {
+        if (ctx.memoryReadEnforced) {
+          return null;
+        }
         const resolved = resolveToolContext(ctx.agentId);
         return resolved ? createWikiApplyTool(resolved.config, resolved.appConfig) : null;
       },
@@ -194,6 +203,9 @@ export default definePluginEntry({
     );
     api.registerTool(
       (ctx) => {
+        if (ctx.memoryReadEnforced) {
+          return null;
+        }
         const resolved = resolveToolContext(ctx.agentId);
         if (!resolved) {
           return null;
@@ -209,6 +221,9 @@ export default definePluginEntry({
     );
     api.registerTool(
       (ctx) => {
+        if (ctx.memoryReadEnforced) {
+          return null;
+        }
         const resolved = resolveToolContext(ctx.agentId);
         if (!resolved) {
           return null;

@@ -16,6 +16,7 @@ import {
   clearMemoryPluginState,
   registerMemoryPromptPreparation,
   registerTestMemoryPromptBuilder,
+  runWithPreparedMemoryPromptSection,
 } from "../plugins/memory-state.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -575,6 +576,31 @@ describe("Engine contract tests", () => {
       }),
     ).toBe(
       "## Agent Memory\nagent=marketing-agent session=agent:marketing-agent:main sandboxed=true",
+    );
+  });
+
+  it("keeps cut-over prompt isolation when a prepared section is rendered by a context engine", async () => {
+    registerTestMemoryPromptBuilder(({ memoryReadEnforced }) =>
+      memoryReadEnforced ? [] : ["legacy supplemental memory"],
+    );
+
+    await runWithPreparedMemoryPromptSection(
+      {
+        availableTools: new Set(["memory_search"]),
+        agentId: "main",
+        agentSessionKey: "agent:main:main",
+        memoryReadEnforced: true,
+      },
+      async () => {
+        expect(
+          buildMemorySystemPromptAddition({
+            availableTools: new Set(["memory_search"]),
+            agentId: "main",
+            agentSessionKey: "agent:main:main",
+            memoryReadEnforced: true,
+          }),
+        ).toBeUndefined();
+      },
     );
   });
 

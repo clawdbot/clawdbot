@@ -19,6 +19,8 @@ export function createMemorySearchToolOrThrow(params?: {
   agentSessionKey?: string;
   oneShotCliRun?: boolean;
   conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
+  memoryReadEnforced?: OpenClawPluginToolContext["memoryReadEnforced"];
+  authorizedMemoryRead?: OpenClawPluginToolContext["authorizedMemoryRead"];
   activeProjectKeys?: readonly string[];
 }) {
   const tool = createMemorySearchTool({
@@ -27,6 +29,8 @@ export function createMemorySearchToolOrThrow(params?: {
     ...(params?.agentSessionKey ? { agentSessionKey: params.agentSessionKey } : {}),
     ...(params?.oneShotCliRun ? { oneShotCliRun: params.oneShotCliRun } : {}),
     ...(params?.conversationRecall ? { conversationRecall: params.conversationRecall } : {}),
+    ...(params?.memoryReadEnforced ? { memoryReadEnforced: params.memoryReadEnforced } : {}),
+    ...(params?.authorizedMemoryRead ? { authorizedMemoryRead: params.authorizedMemoryRead } : {}),
     ...(params?.activeProjectKeys ? { activeProjectKeys: params.activeProjectKeys } : {}),
   });
   if (!tool) {

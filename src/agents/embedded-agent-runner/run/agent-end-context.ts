@@ -2,6 +2,7 @@ import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
 } from "../../../plugins/hook-agent-context.js";
+import { isMemoryIsolationCutoverAgent } from "../../../plugins/memory-cutover.js";
 import type { runAgentEndSideEffects } from "../../harness/agent-end-side-effects.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -21,6 +22,9 @@ export function buildEmbeddedAgentEndContext(params: {
     agentId: params.agentId,
     sessionKey: run.sessionKey,
     sessionId: run.sessionId,
+    ...(params.agentId && isMemoryIsolationCutoverAgent(params.agentId)
+      ? { memoryReadEnforced: true as const }
+      : {}),
     workspaceDir: run.workspaceDir,
     modelProviderId: run.provider,
     modelId: run.modelId,

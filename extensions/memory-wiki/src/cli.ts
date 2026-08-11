@@ -27,6 +27,7 @@ import {
   type ResolvedMemoryWikiConfig,
 } from "./config.js";
 import { ingestMemoryWikiSource } from "./ingest.js";
+import { assertLegacyMemoryWikiAccessAvailable } from "./legacy-memory-access.js";
 import { lintMemoryWikiVault } from "./lint.js";
 import {
   probeObsidianCli,
@@ -1009,6 +1010,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     }
     const config = needsAgent ? resolveConfig(agentId, currentAppConfig) : registration.config;
     agentId = config.agentId ?? agentId;
+    assertLegacyMemoryWikiAccessAvailable({ config, appConfig: currentAppConfig, agentId });
     commandContext = {
       config,
       ...(currentAppConfig ? { appConfig: currentAppConfig } : {}),

@@ -14,6 +14,7 @@ import {
   formatErrorMessage,
   getMemorySearchManager,
   getRuntimeConfig,
+  isLegacyMemorySurfaceDisabled,
   listMemoryFiles,
   normalizeExtraMemoryPaths,
   resolveCommandSecretRefsViaGateway,
@@ -31,6 +32,13 @@ export type MemoryManager = NonNullable<
   Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]
 >;
 type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpose"];
+
+const LEGACY_MEMORY_OPERATOR_UNAVAILABLE =
+  "Legacy memory CLI access is unavailable after scoped-memory cutover.";
+
+function legacyMemoryOperatorUnavailable(agentId: string): boolean {
+  return isLegacyMemorySurfaceDisabled(agentId);
+}
 function getMemoryCommandSecretTargetIds(): Set<string> {
   return new Set(["memory.search.remote.apiKey", "agents.entries.*.memory.search.remote.apiKey"]);
 }
@@ -205,6 +213,11 @@ export async function withMemoryCommand(params: {
   const agentIds = params.allAgents
     ? resolveAgentIds(cfg, params.agent)
     : [resolveAgent(cfg, params.agent)];
+  if (agentIds.some(legacyMemoryOperatorUnavailable)) {
+    defaultRuntime.error(LEGACY_MEMORY_OPERATOR_UNAVAILABLE);
+    process.exitCode = 1;
+    return cfg;
+  }
   for (const agentId of agentIds) {
     await withMemoryManagerForAgent({
       cfg,
@@ -349,6 +362,13 @@ export async function scanMemorySources(params: {
   sources: MemorySourceName[];
   extraPaths?: MemoryExtraPath[];
 }): Promise<MemorySourceScan> {
+  if (legacyMemoryOperatorUnavailable(params.agentId)) {
+    return {
+      sources: [],
+      totalFiles: null,
+      issues: [LEGACY_MEMORY_OPERATOR_UNAVAILABLE],
+    };
+  }
   const scans: SourceScan[] = [];
   const extraPaths = params.extraPaths ?? [];
   for (const source of params.sources) {

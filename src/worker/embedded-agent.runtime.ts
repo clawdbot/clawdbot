@@ -14,6 +14,7 @@ import { isApplyPatchAllowedForModel } from "../agents/apply-patch-model-policy.
 import { buildBootstrapContextForFiles } from "../agents/bootstrap-files.js";
 import { createCoreCodingTools } from "../agents/core-coding-tools.js";
 import { createNativeModelOwnedRuntimeModel } from "../agents/embedded-agent-runner/run/setup.js";
+import { createMemoryFileMutationGuard } from "../agents/memory-file-mutation-guard.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { AuthStorage } from "../agents/sessions/auth-storage.js";
 import { ModelRegistry } from "../agents/sessions/model-registry.js";
@@ -26,6 +27,7 @@ import { wrapToolWithGatewayCallerIdentity } from "../agents/tools/gateway-calle
 import { DEFAULT_AGENTS_FILENAME, loadWorkspaceBootstrapFiles } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AssistantMessage, AssistantMessageEventStreamLike } from "../llm/types.js";
+import { isMemoryIsolationCutoverAgent } from "../plugins/memory-cutover.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { createWorkerBrowserToolRuntime } from "./browser-runtime.js";
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
@@ -154,6 +156,9 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     workspaceOnly: false,
     modelContextWindowTokens: model.contextWindow,
     imageSanitization: {},
+    memoryFileMutationGuard: isMemoryIsolationCutoverAgent(DEFAULT_AGENT_ID)
+      ? createMemoryFileMutationGuard({ mutationRoot: params.cwd })
+      : undefined,
     applyPatchEnabled: isApplyPatchAllowedForModel({
       modelProvider: params.modelRef.provider,
       modelId: params.modelRef.model,

@@ -148,6 +148,8 @@ export type MemoryPromptSectionParams = {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  /** True when supplemental legacy memory reads are unavailable for this agent. */
+  memoryReadEnforced?: true;
 };
 
 export type MemoryPromptSectionBuilder = (params: MemoryPromptSectionParams) => string[];
@@ -163,6 +165,7 @@ export type PreparedMemoryPromptSection = Readonly<{
     agentId?: string;
     agentSessionKey?: string;
     sandboxed: boolean;
+    memoryReadEnforced: boolean;
   }>;
   lines: readonly string[];
 }>;
@@ -207,6 +210,7 @@ export type MemoryCorpusSupplement = {
     agentId?: string;
     agentSessionKey?: string;
     sandboxed?: boolean;
+    memoryReadEnforced?: true;
   }): Promise<MemoryCorpusSearchResult[]>;
   get(params: {
     lookup: string;
@@ -215,6 +219,7 @@ export type MemoryCorpusSupplement = {
     agentId?: string;
     agentSessionKey?: string;
     sandboxed?: boolean;
+    memoryReadEnforced?: true;
   }): Promise<MemoryCorpusGetResult | null>;
 };
 
@@ -254,6 +259,7 @@ export type MemoryFlushPlan = {
 
 export type MemoryFlushPlanResolver = (params: {
   cfg?: OpenClawConfig;
+  agentId?: string;
   nowMs?: number;
 }) => MemoryFlushPlan | null;
 

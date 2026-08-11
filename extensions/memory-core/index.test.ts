@@ -203,6 +203,30 @@ describe("memory-core plugin runtime registration", () => {
     expect(intentFactory({ config: {}, senderIsOwner: false })).toBeNull();
     expect(intentFactory({ config: {} })).toBeNull();
     expect(intentFactory({ config: {}, senderIsOwner: true })).toMatchObject({ name: "intent" });
+    expect(intentFactory({ config: {}, senderIsOwner: true, memoryReadEnforced: true })).toBeNull();
+  });
+
+  it("describes only the authorized opaque-handle flow for cut-over memory tools", () => {
+    const factories = new Map<string, (ctx: never) => unknown>();
+    plugin.register(
+      createTestPluginApi({
+        config: {},
+        runtime: hostRuntime,
+        registerTool(factory, options) {
+          for (const name of options?.names ?? []) {
+            factories.set(name, factory as (ctx: never) => unknown);
+          }
+        },
+      }),
+    );
+    const context = { config: {}, agentId: "main", memoryReadEnforced: true } as never;
+    const search = factories.get("memory_search")?.(context) as { description?: string } | null;
+    const get = factories.get("memory_get")?.(context) as { description?: string } | null;
+
+    expect(search?.description).toContain("opaque handleId");
+    expect(search?.description).not.toContain("corpus=wiki");
+    expect(get?.description).toContain("opaque handleId");
+    expect(get?.description).not.toContain("MEMORY.md");
   });
 
   it("keeps memory manager initialization demand-driven", () => {

@@ -22,6 +22,7 @@ import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import type { MemoryCoreAcquireLocalService } from "./src/memory/embedding-local-service.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
 import { builtinScopedMemoryConformanceAdapter } from "./src/memory/scoped-memory-policy.js";
+import { builtinScopedMemoryAuthorizedRuntime } from "./src/memory/scoped-memory-runtime.js";
 import { buildPromptSection } from "./src/prompt-section.js";
 import { registerSessionBackfillGatewayMethods } from "./src/session-backfill-gateway.js";
 
@@ -36,6 +37,8 @@ type MemoryToolOptions = {
   sandboxed?: boolean;
   oneShotCliRun?: boolean;
   conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
+  memoryReadEnforced?: OpenClawPluginToolContext["memoryReadEnforced"];
+  authorizedMemoryRead?: OpenClawPluginToolContext["authorizedMemoryRead"];
   activeProjectKeys?: readonly string[];
   acquireLocalService?: MemoryCoreAcquireLocalService;
 };
@@ -85,11 +88,12 @@ const MemoryGetSchema = {
   type: "object",
   properties: {
     path: { type: "string" },
+    handleId: { type: "string" },
     from: { type: "integer", minimum: 1 },
     lines: { type: "integer", minimum: 1 },
     corpus: { type: "string", enum: ["memory", "wiki", "all"] },
   },
-  required: ["path"],
+  required: [],
   additionalProperties: false,
 } as const satisfies TSchema;
 
@@ -135,8 +139,9 @@ function createLazyMemorySearchTool(options: MemoryToolOptions): AnyAgentTool | 
     options,
     label: "Memory Search",
     name: "memory_search",
-    description:
-      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos. Optional `corpus=wiki` or `corpus=all` also searches registered compiled-wiki supplements. `corpus=memory` restricts hits to indexed memory files (excludes session transcript chunks from ranking). `corpus=sessions` restricts hits to indexed session transcripts (same visibility rules as session history tools). If response has disabled=true, memory retrieval is unavailable and should be surfaced to the user.",
+    description: options.memoryReadEnforced
+      ? "Mandatory recall step: search only the scoped memory and session resources authorized for this turn before answering questions about prior work, decisions, dates, people, preferences, or todos. Results return opaque handleId continuations; use that handleId with memory_get. If response has disabled=true, memory retrieval is unavailable and should be surfaced to the user."
+      : "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos. Optional `corpus=wiki` or `corpus=all` also searches registered compiled-wiki supplements. `corpus=memory` restricts hits to indexed memory files (excludes session transcript chunks from ranking). `corpus=sessions` restricts hits to indexed session transcripts (same visibility rules as session history tools). If response has disabled=true, memory retrieval is unavailable and should be surfaced to the user.",
     parameters: MemorySearchSchema,
     load: (module, loadOptions) => module.createMemorySearchTool(loadOptions),
   });
@@ -147,15 +152,16 @@ function createLazyMemoryGetTool(options: MemoryToolOptions): AnyAgentTool | nul
     options,
     label: "Memory Get",
     name: "memory_get",
-    description:
-      "Safe exact excerpt read from MEMORY.md or memory/*.md. Defaults to a bounded excerpt when lines are omitted, includes truncation/continuation info when more content exists, and `corpus=wiki` reads from registered compiled-wiki supplements.",
+    description: options.memoryReadEnforced
+      ? "Read the exact scoped-memory excerpt referenced by an opaque handleId returned from memory_search. Do not supply a filesystem path; the handle is valid only for the current authorized turn."
+      : "Safe exact excerpt read from MEMORY.md or memory/*.md. Defaults to a bounded excerpt when lines are omitted, includes truncation/continuation info when more content exists, and `corpus=wiki` reads from registered compiled-wiki supplements.",
     parameters: MemoryGetSchema,
     load: (module, loadOptions) => module.createMemoryGetTool(loadOptions),
   });
 }
 
 function createLazyStandingIntentTool(ctx: OpenClawPluginToolContext): AnyAgentTool | null {
-  if (ctx.senderIsOwner !== true) {
+  if (ctx.memoryReadEnforced || ctx.senderIsOwner !== true) {
     return null;
   }
   const cfg = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
@@ -236,6 +242,8 @@ function resolveMemoryToolOptions(
     sandboxed: ctx.sandboxed,
     oneShotCliRun: ctx.oneShotCliRun,
     conversationRecall: ctx.conversationRecall,
+    memoryReadEnforced: ctx.memoryReadEnforced,
+    authorizedMemoryRead: ctx.authorizedMemoryRead,
     activeProjectKeys: ctx.activeProjectKeys,
     ...(host.acquireLocalService ? { acquireLocalService: host.acquireLocalService } : {}),
   };
@@ -243,6 +251,9 @@ function resolveMemoryToolOptions(
 
 function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRuntime {
   return {
+    authorize: builtinScopedMemoryAuthorizedRuntime.authorize,
+    searchAuthorized: builtinScopedMemoryAuthorizedRuntime.searchAuthorized,
+    readAuthorized: builtinScopedMemoryAuthorizedRuntime.readAuthorized,
     async getMemorySearchManager(params) {
       const { createMemoryRuntime } = await loadRuntimeProviderModule();
       return await createMemoryRuntime(host).getMemorySearchManager(params);
@@ -312,6 +323,9 @@ export default definePluginEntry({
     });
 
     api.on("before_prompt_build", async (event, ctx) => {
+      if (ctx.memoryReadEnforced) {
+        return undefined;
+      }
       if (ctx.trigger !== "user") {
         return undefined;
       }
@@ -351,6 +365,9 @@ export default definePluginEntry({
     api.on(
       "before_agent_reply",
       async (_event, ctx) => {
+        if (ctx.memoryReadEnforced) {
+          return undefined;
+        }
         if (ctx.trigger !== "heartbeat" && ctx.trigger !== "cron") {
           return undefined;
         }
