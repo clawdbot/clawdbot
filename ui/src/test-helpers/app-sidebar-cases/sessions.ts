@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { confirmDangerous } from "../../components/confirm-dialog.ts";
 import {
   createContext,
   createGateway,
@@ -488,13 +489,13 @@ describe("AppSidebar session mutation feedback", () => {
     };
     harness.publishList({ result: state.result, agentId: state.agentId });
     await sidebar.updateComplete;
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(confirmDangerous).mockResolvedValueOnce(true);
 
     const menu = await openSessionMenu(sidebar, row.key);
     menu.querySelector<HTMLElement>('[value="stop-cloud-worker"]')?.click();
 
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-    expect(confirm).toHaveBeenCalledWith('Stop the cloud worker for "a"?');
+    expect(vi.mocked(confirmDangerous).mock.calls[0]?.[0]).toBe('Stop the cloud worker for "a"?');
     expect(request).toHaveBeenCalledWith(
       "sessions.reclaim",
       { key: "agent:main:a", agentId: "main" },
@@ -532,13 +533,13 @@ describe("AppSidebar session mutation feedback", () => {
     harness.publishList({ result: state.result, agentId: state.agentId });
     const toast = await mountToastHost();
     await sidebar.updateComplete;
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(confirmDangerous).mockResolvedValueOnce(true);
 
     const menu = await openSessionMenu(sidebar, row.key);
     menu.querySelector<HTMLElement>('[value="stop-cloud-worker"]')?.click();
 
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-    expect(confirm).toHaveBeenCalledWith('Stop the cloud worker for "a"?');
+    expect(vi.mocked(confirmDangerous).mock.calls[0]?.[0]).toBe('Stop the cloud worker for "a"?');
     expect(request).toHaveBeenCalledWith("environments.destroy", {
       environmentId: "environment-1",
     });
@@ -582,26 +583,22 @@ describe("AppSidebar session mutation feedback", () => {
       errors: ["agent:main:b: permission denied"],
       preservedWorktrees: [],
     });
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
-    try {
-      selectSession(sidebar, "agent:main:a");
-      selectSession(sidebar, "agent:main:b");
-      await sidebar.updateComplete;
-      const row = sidebar.querySelector('[data-session-key="agent:main:b"]');
-      row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
-      await sidebar.updateComplete;
-      const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
-      await menu?.updateComplete;
-      menu?.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();
+    vi.mocked(confirmDangerous).mockResolvedValueOnce(true);
+    selectSession(sidebar, "agent:main:a");
+    selectSession(sidebar, "agent:main:b");
+    await sidebar.updateComplete;
+    const row = sidebar.querySelector('[data-session-key="agent:main:b"]');
+    row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    await sidebar.updateComplete;
+    const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
+    await menu?.updateComplete;
+    menu?.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();
 
-      await waitForFast(() => {
-        expect(sidebar.querySelector("[data-sidebar-session-error]")?.textContent).toContain(
-          "agent:main:b: permission denied",
-        );
-      });
-    } finally {
-      confirmSpy.mockRestore();
-    }
+    await waitForFast(() => {
+      expect(sidebar.querySelector("[data-sidebar-session-error]")?.textContent).toContain(
+        "agent:main:b: permission denied",
+      );
+    });
   });
 
   it("surfaces ordered partial batch-archive errors", async () => {
@@ -734,22 +731,21 @@ describe("AppSidebar session mutation feedback", () => {
       worktreePreserved: { id: "wt-1", branch: "feature", path: "/tmp/worktree" },
     });
     let confirmations = 0;
-    const confirmSpy = vi.spyOn(window, "confirm").mockImplementation(() => {
-      confirmations += 1;
-      if (confirmations === 2) {
+    vi.mocked(confirmDangerous)
+      .mockImplementationOnce(async () => {
+        confirmations += 1;
+        return true;
+      })
+      .mockImplementationOnce(async () => {
+        confirmations += 1;
         gateway.publish({ phase: "reconnecting" });
         gateway.publish({ phase: "connected" });
-      }
-      return true;
-    });
-    try {
-      const menu = await openSessionMenu(sidebar, "agent:main:a");
-      menu.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();
-      await waitForFast(() => expect(confirmations).toBe(2));
+        return true;
+      });
+    const menu = await openSessionMenu(sidebar, "agent:main:a");
+    menu.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();
+    await waitForFast(() => expect(confirmations).toBe(2));
 
-      expect(request).not.toHaveBeenCalled();
-    } finally {
-      confirmSpy.mockRestore();
-    }
+    expect(request).not.toHaveBeenCalled();
   });
 });

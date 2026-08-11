@@ -9,6 +9,7 @@ import {
   loadStoredHiddenSessionCatalogIds,
   setStoredSessionCatalogHidden,
 } from "../../components/app-sidebar-session-types.ts";
+import { confirmDangerous } from "../../components/confirm-dialog.ts";
 import { TERMINAL_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import { CATALOG_SESSION_CONTINUED_EVENT } from "../../lib/sessions/catalog-key.ts";
 import {
@@ -239,29 +240,25 @@ describe("AppSidebar multi-select", () => {
   });
 
   it("deletes the selection in one batch after a single confirm", async () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
-    try {
-      const { sidebar, harness } = await mountMultiSelect();
+    vi.mocked(confirmDangerous).mockResolvedValueOnce(true);
+    const { sidebar, harness } = await mountMultiSelect();
 
-      click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
-      click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
-      await sidebar.updateComplete;
-      openContextMenu(sidebar, "agent:main:b");
-      await sidebar.updateComplete;
+    click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
+    click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+    await sidebar.updateComplete;
+    openContextMenu(sidebar, "agent:main:b");
+    await sidebar.updateComplete;
 
-      const menu = await sessionMenu(sidebar);
-      menu.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();
+    const menu = await sessionMenu(sidebar);
+    menu.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();
 
-      await waitForFast(() => expect(harness.deleteMany).toHaveBeenCalledOnce());
-      expect(confirmSpy).toHaveBeenCalledOnce();
-      expect(confirmSpy.mock.calls[0]?.[0]).toContain("2");
-      expect(harness.deleteMany).toHaveBeenCalledWith([
-        { key: "agent:main:a", agentId: "main", deleteTranscript: true },
-        { key: "agent:main:b", agentId: "main", deleteTranscript: true },
-      ]);
-    } finally {
-      confirmSpy.mockRestore();
-    }
+    await waitForFast(() => expect(harness.deleteMany).toHaveBeenCalledOnce());
+    expect(confirmDangerous).toHaveBeenCalledOnce();
+    expect(vi.mocked(confirmDangerous).mock.calls[0]?.[0]).toContain("2");
+    expect(harness.deleteMany).toHaveBeenCalledWith([
+      { key: "agent:main:a", agentId: "main", deleteTranscript: true },
+      { key: "agent:main:b", agentId: "main", deleteTranscript: true },
+    ]);
   });
 
   it("retargets the menu to an unselected row and drops the selection", async () => {

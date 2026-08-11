@@ -15,7 +15,7 @@ import type {
   SidebarSessionPatch,
 } from "./app-sidebar-session-types.ts";
 import { requestCloudWorkerStop } from "./cloud-worker-stop.ts";
-import { showConfirmDialog } from "./confirm-dialog.ts";
+import { confirmDangerous, showConfirmDialog } from "./confirm-dialog.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 import {
   patchSessionRows,
@@ -246,7 +246,11 @@ export async function deleteSessionsBatch(
   if (rows.length === 0) {
     return;
   }
-  if (!window.confirm(t("sessionsView.deleteSessionsConfirm", { count: String(rows.length) }))) {
+  if (
+    !(await confirmDangerous(
+      t("sessionsView.deleteSessionsConfirm", { count: String(rows.length) }),
+    ))
+  ) {
     return;
   }
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
@@ -610,7 +614,10 @@ export async function stopCloudWorker(
   if (
     !stopAction ||
     (stopAction.method === "sessions.reclaim" && session.hasActiveRun) ||
-    !window.confirm(t("sessionsView.stopCloudWorkerConfirm", { session: session.label }))
+    !(await confirmDangerous(
+      t("sessionsView.stopCloudWorkerConfirm", { session: session.label }),
+      t("sessionsView.stopCloudWorkerConfirmAction"),
+    ))
   ) {
     return;
   }
@@ -648,7 +655,9 @@ export async function deleteSession(
   session: SessionActionRow,
   scope: SidebarSessionMutationScope,
 ) {
-  if (!window.confirm(t("sessionsView.deleteSessionConfirm", { session: session.label }))) {
+  if (
+    !(await confirmDangerous(t("sessionsView.deleteSessionConfirm", { session: session.label })))
+  ) {
     return;
   }
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
@@ -696,11 +705,14 @@ export async function deleteSession(
         if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
           return;
         }
-      } else if (
-        window.confirm(
-          t("sessionsView.deletePreservedWorktreeConfirm", { branch: preserved.branch }),
-        )
-      ) {
+      } else {
+        if (
+          !(await confirmDangerous(
+            t("sessionsView.deletePreservedWorktreeConfirm", { branch: preserved.branch }),
+          ))
+        ) {
+          return;
+        }
         if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
           return;
         }

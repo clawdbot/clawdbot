@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { confirmDangerous } from "../../components/confirm-dialog.ts";
 import {
   createGatewayHarness,
   createSessionsHarness,
@@ -59,7 +60,7 @@ describe("AppSidebar session delete access", () => {
       deleted: true,
       worktreePreserved: { id: "wt-1", branch: "feature", path: "/tmp/worktree" },
     });
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(confirmDangerous).mockResolvedValueOnce(true);
     const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
     try {
       const menu = await openSessionMenu(sidebar, archived.key);
@@ -67,10 +68,9 @@ describe("AppSidebar session delete access", () => {
       await waitForFast(() => expect(harness.deleteSession).toHaveBeenCalledOnce());
       await waitForFast(() => expect(alertSpy).toHaveBeenCalledOnce());
 
-      expect(confirmSpy).toHaveBeenCalledOnce();
+      expect(confirmDangerous).toHaveBeenCalledOnce();
       expect(request).not.toHaveBeenCalledWith("worktrees.remove", expect.anything());
     } finally {
-      confirmSpy.mockRestore();
       alertSpy.mockRestore();
     }
   });

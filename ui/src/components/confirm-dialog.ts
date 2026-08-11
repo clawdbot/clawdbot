@@ -85,3 +85,11 @@ export function showConfirmDialog(options: ConfirmDialogOptions): Promise<boolea
     confirmationActive = false;
   });
 }
+
+/** Danger-styled confirm for destructive session mutations (no browser chrome). */
+export function confirmDangerous(
+  message: string,
+  confirmLabel: string = t("common.delete"),
+): Promise<boolean> {
+  return showConfirmDialog({ message, confirmLabel, danger: true });
+}
