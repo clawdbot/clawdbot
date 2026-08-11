@@ -119,31 +119,6 @@ function normalizeChatModelAvailabilityKey(value: string): string {
   )}`;
 }
 
-function buildUnavailableChatModelValues(
-  catalog: ModelCatalogEntry[],
-  displayLookup: ReturnType<typeof buildCatalogDisplayLookup>,
-): Set<string> {
-  const availableValues = new Set(
-    catalog
-      .filter((entry) => entry.available !== false)
-      .map((entry) =>
-        normalizeChatModelAvailabilityKey(
-          buildChatModelOptionFromLookup(entry, displayLookup).value,
-        ),
-      ),
-  );
-  return new Set(
-    catalog
-      .filter((entry) => entry.available === false)
-      .map((entry) =>
-        normalizeChatModelAvailabilityKey(
-          buildChatModelOptionFromLookup(entry, displayLookup).value,
-        ),
-      )
-      .filter((value) => !availableValues.has(value)),
-  );
-}
-
 function resolveAvailableChatModelValue(
   value: string,
   catalog: ModelCatalogEntry[],
