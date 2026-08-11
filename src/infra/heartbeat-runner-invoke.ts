@@ -13,6 +13,7 @@ import {
   resolveHeartbeatScratchProposalFromReplyResult,
   resolveHeartbeatToolResponseFromReplyResult,
 } from "../auto-reply/heartbeat-tool-response.js";
+import { resolveReplyOperationAgentTurn } from "../auto-reply/reply/reply-operation-agent-turn-state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -29,7 +30,6 @@ import type {
   StageResult,
 } from "./heartbeat-runner-execution.js";
 import { getHeartbeatWakeAbortSignal } from "./heartbeat-wake.js";
-import { resolveReplyOperationAgentTurn } from "../auto-reply/reply/reply-operation-agent-turn-state.js";
 
 const log = heartbeatLog;
 
