@@ -661,7 +661,6 @@ export async function runExecProcess(opts: {
     notifyOnExit: opts.notifyOnExit,
     notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
     exitNotified: false,
-    child: undefined,
     stdin: undefined,
     pid: undefined,
     startedAt,
