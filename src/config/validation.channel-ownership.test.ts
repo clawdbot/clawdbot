@@ -379,3 +379,74 @@ describe("default removal settles on schemas built from the accepted record", ()
     }
   });
 });
+
+// #120332 round 52 (P1): a bundled special setup's auto-enable decision reaches probe-less
+// ownership planning. The acpx probe fires on `acp.*` config alone — no manifest fact, no
+// plugins entry — and its catalog-level preference kills the incumbent only while it is live,
+// so the surviving claimant's schema must govern exactly when the setup config is authored.
+// Pins the end-to-end contract around the declarative setup candidates the detector now emits
+// in skip mode (the red-first observable for those is the exact-plan accounting beside them).
+describe("declared special setups decide probe-less ownership", () => {
+  const schemaOf = (property: string) => ({
+    type: "object",
+    properties: { [property]: { type: "string" } },
+    additionalProperties: false,
+  });
+  const setupClaimants = () => {
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        createPluginManifestRecord({
+          id: "acme-a",
+          origin: "global",
+          enabledByDefault: true,
+          channels: ["xch"],
+          channelConfigs: { xch: { schema: schemaOf("aOpt") } },
+        }),
+        // Setup-only plugin: activated by nothing but its (declaratively mirrored) probe — it
+        // never claims the channel, so channel candidacy cannot enable it — and its
+        // catalog-level preference kills the incumbent only while it is live.
+        createPluginManifestRecord({
+          id: "acpx",
+          origin: "global",
+          channels: [],
+          channelCatalogMeta: { id: "xch", preferOver: ["acme-a"] },
+          setup: {},
+        }),
+        createPluginManifestRecord({
+          id: "acme-c",
+          origin: "global",
+          enabledByDefault: true,
+          channels: ["xch"],
+          channelConfigs: { xch: { schema: schemaOf("cOpt") } },
+        }),
+      ],
+    });
+  };
+
+  it("accepts the surviving claimant's keys when the setup config is declared", () => {
+    setupClaimants();
+    const result = validateConfigObjectWithPlugins({
+      channels: { xch: { cOpt: "z" } },
+      acp: { enabled: true },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects the killed incumbent's keys when the setup config is declared", () => {
+    setupClaimants();
+    const result = validateConfigObjectWithPlugins({
+      channels: { xch: { aOpt: "v" } },
+      acp: { enabled: true },
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("keeps the incumbent without the setup config", () => {
+    setupClaimants();
+    const result = validateConfigObjectWithPlugins({
+      channels: { xch: { aOpt: "v" } },
+    });
+    expect(result.ok).toBe(true);
+  });
+});

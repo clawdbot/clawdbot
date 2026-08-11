@@ -695,6 +695,31 @@ describe("exact plans survive unrelated plugin entries", () => {
     expect(owner?.schemaPluginId).toBe("acme-cc-plain2");
   });
 
+  // #120332 round 52 (P1): a bundled special setup's decision is carried DECLARATIVELY into
+  // probe-less plans (its relevance predicate mirrors the probe), so the plan already contains
+  // the decision the runtime's probe produces — the special config no longer flips the
+  // ownership projection off exact load-order accounting.
+  it("keeps the plan exact when a declared special setup's decision is carried", () => {
+    const ACPX_SETUP: RegistryPlugins[number] = {
+      id: "acpx",
+      origin: "global",
+      channels: [],
+      setup: {},
+    };
+    const registry = makeRegistry([PLAIN_C2, EDGE_A3, EDGE_B3, ACPX_SETUP]);
+    const config: OpenClawConfig = {
+      channels: { "acme-x": { token: "x" } },
+      acp: { enabled: true },
+    };
+    const env = makeIsolatedEnv();
+    applyPluginAutoEnable({ config, env, manifestRegistry: registry });
+
+    const owner = collectChannelSchemaMetadataWithOwnership(registry, config, env).find(
+      (entry) => entry.id === "acme-x",
+    );
+    expect(owner?.schemaPluginId).toBe("acme-cc-plain2");
+  });
+
   // #120332 round 43 (P1): a runtime-disabled setup descriptor (`setup.requiresRuntime: false`)
   // is categorically skipped before any probe resolves, so a configured entry for such a plugin
   // can no more produce a probe-derived candidate than a setup-less one — the plan stays exact.

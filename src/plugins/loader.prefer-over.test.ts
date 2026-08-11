@@ -420,6 +420,54 @@ describe("plugin loader preferOver activation", () => {
     );
   });
 
+  // #120332 round 52 (P2): the keep contract holds across alias-equivalent spellings. Two
+  // explicitly selected plugins can register the same logical channel under variant ids (case
+  // variant, built-in alias); the conflict lookup compares canonical identity like the restore
+  // path, or both implementations start with neither the duplicate diagnostic nor first-wins.
+  it("keeps first-wins registration across alias-equivalent channel spellings", () => {
+    const bundledRoot = makePluginLoaderTempDir();
+    writeChannelToolPlugin({
+      rootDir: bundledRoot,
+      id: "qqbot",
+      channelId: "qqbot",
+      enabledByDefault: true,
+      toolName: "qqbot_remind_legacy",
+    });
+    const externalRoot = makePluginLoaderTempDir();
+    const externalPluginDir = writeChannelToolPlugin({
+      rootDir: externalRoot,
+      id: "openclaw-qqbot",
+      channelId: "QQBot",
+      preferOver: ["qqbot"],
+    });
+    const env = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+    };
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        channels: { qqbot: { appId: "app", clientSecret: "secret" } },
+        plugins: {
+          load: { paths: [externalPluginDir] },
+          entries: {
+            qqbot: { enabled: true },
+            "openclaw-qqbot": { enabled: true },
+          },
+        },
+      },
+      env,
+    });
+
+    // The replacement registered the variant spelling first: the incumbent's raw-spelled
+    // registration is the SAME logical channel and must lose first-wins with the diagnostic.
+    expect(registry.channels.map((entry) => entry.pluginId)).toEqual(["openclaw-qqbot"]);
+    expect(registry.diagnostics.map((diag) => diag.message).join("\n")).toContain(
+      "channel already registered",
+    );
+  });
+
   // #120332 round 40 (P1): suppression is reconciled against the registrations that actually
   // landed. A planned replacement whose registration throws is tolerated and rolled back, so
   // the suppressed incumbent's claim must be restored — the configured channel keeps an owner.

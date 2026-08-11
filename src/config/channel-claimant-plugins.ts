@@ -426,7 +426,10 @@ export function createChannelClaimantResolution(params: {
       frame.tainted = true;
       return true;
     }
-    const memoKey = `${policyId}\0${groupOf(other)}`;
+    // JSON tuple like `channelClaimSuppressionKey`: ids admit any nonempty string, so a bare
+    // delimiter would let distinct (plugin, group) pairs share a memo slot and reuse a stale
+    // liveness verdict for the wrong superseder.
+    const memoKey = JSON.stringify([policyId, groupOf(other)]);
     const memoized = liveMemo.get(memoKey);
     if (memoized !== undefined) {
       return memoized;

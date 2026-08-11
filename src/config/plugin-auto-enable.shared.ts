@@ -842,6 +842,31 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
         reason: entry.reason,
       });
     }
+  } else if (params.setupProbes === "skip") {
+    // Probe-less plans still carry the bundled special setups' DECLARATIVE decisions: these
+    // relevance predicates are conservative mirrors of the plugins' own auto-enable probes (a
+    // mirror must never fire when its probe declines, or projections kill claimants the runtime
+    // keeps), so ownership, suppression, and fingerprints rank the same setup-derived claimant
+    // fates the applied pass produces — without executing plugin code here.
+    const manifestMatchedPluginIds = new Set(changes.map((entry) => entry.pluginId));
+    const declaredSpecialSetups: ReadonlyArray<readonly [string, boolean]> = [
+      ["browser", hasBrowserSetupAutoEnableRelevantConfig(params.config)],
+      ["acpx", hasAcpxSetupAutoEnableRelevantConfig(params.config)],
+      ["xai", hasXaiSetupAutoEnableRelevantConfig(params.config)],
+    ];
+    for (const [pluginId, declared] of declaredSpecialSetups) {
+      if (
+        declared &&
+        !manifestMatchedPluginIds.has(pluginId) &&
+        params.registry.plugins.some((record) => normalizePluginPolicyId(record.id) === pluginId)
+      ) {
+        changes.push({
+          pluginId,
+          kind: "setup-auto-enable",
+          reason: "declared setup configuration",
+        });
+      }
+    }
   }
 
   return changes;

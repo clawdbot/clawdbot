@@ -357,7 +357,15 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       stashedSuppressedChannelClaims.push({ record, registration, mode, channelId: id });
       return;
     }
-    const existingRuntime = registry.channels.find((entry) => entry.plugin.id === id);
+    // Conflicts compare by CANONICAL channel identity like the restore path below: two plugins
+    // kept by an explicit supersede-keep plan can register the same logical channel under
+    // alias-equivalent spellings (built-in alias, case variant), and a raw-id lookup would let
+    // both implementations start instead of first-registration-wins plus the duplicate
+    // diagnostic the keep contract promises.
+    const canonicalId = normalizeManifestChannelId(id);
+    const existingRuntime = registry.channels.find(
+      (entry) => normalizeManifestChannelId(entry.plugin.id) === canonicalId,
+    );
     if (registrationCapabilities.runtimeChannel && existingRuntime) {
       if (existingRuntime.pluginId === record.id) {
         existingRuntime.plugin = plugin;
@@ -366,7 +374,9 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
         existingRuntime.origin = record.origin;
         existingRuntime.source = record.source;
         existingRuntime.rootDir = record.rootDir;
-        const existingSetup = registry.channelSetups.find((entry) => entry.plugin.id === id);
+        const existingSetup = registry.channelSetups.find(
+          (entry) => normalizeManifestChannelId(entry.plugin.id) === canonicalId,
+        );
         if (existingSetup) {
           existingSetup.plugin = plugin;
           existingSetup.pluginName = record.name;
@@ -386,7 +396,9 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       pluginsWithChannelRegistrationConflict.add(record.id);
       return;
     }
-    const existingSetup = registry.channelSetups.find((entry) => entry.plugin.id === id);
+    const existingSetup = registry.channelSetups.find(
+      (entry) => normalizeManifestChannelId(entry.plugin.id) === canonicalId,
+    );
     if (existingSetup) {
       if (existingSetup.pluginId === record.id) {
         existingSetup.plugin = plugin;

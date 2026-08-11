@@ -326,10 +326,12 @@ function planChannelClaimantDecisions(params: {
         ...(params.ambientEnvTriggers ? { ambientEnvTriggers: params.ambientEnvTriggers } : {}),
         // Validation, preflights, and schema builds read this projection, so it must never load
         // plugin setup modules or run their probes: plugin code must not execute inside
-        // `config validate`, and a throwing probe must never abort it. Setup-derived candidates
-        // exist only for plugins no manifest fact triggers; dropping them can diverge only for
-        // such a plugin's catalog-level preferOver claim, or its default-off claim on a channel
-        // it is not a candidate for — an accepted, named tradeoff over running plugin code here.
+        // `config validate`, and a throwing probe must never abort it. The bundled special
+        // setups' decisions are still carried DECLARATIVELY (conservative config mirrors of
+        // their probes, emitted by the detector in skip mode), so their claimant fates rank
+        // here. The residual divergence is an EXTERNAL setup plugin whose opaque probe is its
+        // only activation fact — an accepted, named tradeoff over running plugin code here,
+        // and the exactness gate keeps such plans un-exact.
         setupProbes: "skip",
       });
   const plan = inert
