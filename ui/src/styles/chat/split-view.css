@@ -170,7 +170,9 @@ openclaw-chat-pane {
   flex: 0 1 auto;
   min-width: 0;
   align-items: center;
-  gap: 8px;
+  /* Tight: both interactive segments carry their own 5px padding, so the gap
+     only has to keep their hover tints from touching. */
+  gap: 4px;
 }
 
 /* Renaming needs the row's spare width, which the trail must pass through:
@@ -433,28 +435,37 @@ openclaw-chat-pane {
   color: var(--accent);
 }
 
+/* A breadcrumb segment, not a badge: flat and inline, sharing the title's type
+   size so the two read as one trail and the hierarchy comes from colour alone —
+   the project is --muted, the session --text. Hover and focus reuse the sibling
+   title button's tint, which keeps a visible focus indicator without a border. */
 .chat-pane__workspace-chip {
   display: inline-flex;
   max-width: 180px;
-  /* Same 28px control height as .chat-icon-btn, so every hit/hover surface in
-     the row starts and ends on the same two lines. */
-  height: 28px;
   align-items: center;
-  gap: 5px;
-  padding: 0 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  background: var(--panel);
+  gap: 6px;
+  padding: 3px 5px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   cursor: var(--cursor-action);
 }
 
 .chat-pane__workspace-chip:hover,
 .chat-pane__workspace-chip:focus-visible {
-  border-color: var(--muted-strong);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
   color: var(--text);
   outline: none;
+}
+
+/* Same optical correction as .chat-pane__session-title-text: both trail labels
+   are Inter at 12px, so they must take the same shift or the project would sit
+   a pixel above the session title it sits beside. */
+.chat-pane__workspace-chip span,
+.chat-pane__crumb-sep {
+  transform: translateY(1px);
 }
 
 .chat-pane__workspace-chip span {
@@ -543,9 +554,7 @@ openclaw-chat-pane {
 
 @container (max-width: 480px) {
   .chat-pane__workspace-chip {
-    width: 28px;
-    padding: 0 6px;
-    justify-content: center;
+    max-width: none;
   }
 
   .chat-pane__workspace-chip span {
