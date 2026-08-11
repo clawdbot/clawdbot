@@ -603,7 +603,8 @@ describe("workboard gateway methods", () => {
       ),
     } as unknown as OpenClawPluginApi;
 
-    registerWorkboardGatewayMethods({ api, store: new WorkboardStore(createMemoryStore()) });
+    const store = new WorkboardStore(createMemoryStore());
+    registerWorkboardGatewayMethods({ api, store });
 
     const createRespond = vi.fn();
     await methods.get("workboard.cards.create")?.handler({
@@ -614,13 +615,14 @@ describe("workboard gateway methods", () => {
 
     const claimRespond = vi.fn();
     await methods.get("workboard.cards.claim")?.handler({
-      params: { id: cardId, ownerId: "main" },
+      params: { id: cardId, ownerId: "main", sessionKey: "agent:main:session:forged" },
       respond: claimRespond,
     } as never);
     expect(claimRespond.mock.calls[0]?.[1]).toMatchObject({
       card: { status: "running", metadata: { claim: { ownerId: "main" } } },
       token: expect.any(String),
     });
+    expect((await store.get(cardId))?.metadata?.claim).not.toHaveProperty("sessionKey");
 
     const heartbeatRespond = vi.fn();
     await methods.get("workboard.cards.heartbeat")?.handler({

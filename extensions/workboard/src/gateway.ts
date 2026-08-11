@@ -162,7 +162,13 @@ export function registerWorkboardGatewayMethods(params: {
     "workboard.cards.claim",
     async ({ params: requestParams, respond }) => {
       try {
-        const claimed = await store.claim(readId(requestParams), requestParams);
+        // Gateway operators have no authoritative agent session context; only
+        // the agent tool may persist claim provenance from its trusted context.
+        const claimed = await store.claim(readId(requestParams), {
+          ownerId: requestParams.ownerId,
+          token: requestParams.token,
+          ttlSeconds: requestParams.ttlSeconds,
+        });
         respond(true, { ...claimed, card: redactClaimToken(claimed.card) });
       } catch (error) {
         respondError(respond, error);
