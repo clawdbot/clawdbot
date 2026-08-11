@@ -52,6 +52,12 @@ function backgroundTasksToggleProps(): BackgroundTasksProps {
     loading: false,
     error: null,
     tasks: null,
+    subagentActivity: {
+      rows: [],
+      overflowWorking: 0,
+      taskIds: new Set<string>(),
+      nextExpiryAt: null,
+    },
     view: { kind: "list" },
     taskDetails: new Map(),
     taskDetailErrors: new Map(),

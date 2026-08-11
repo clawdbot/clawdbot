@@ -777,6 +777,12 @@ function createBackgroundTasks(
     loading: false,
     error: null,
     tasks: [],
+    subagentActivity: {
+      rows: [],
+      overflowWorking: 0,
+      taskIds: new Set<string>(),
+      nextExpiryAt: null,
+    },
     view: { kind: "list" },
     cancellingTaskIds: new Set<string>(),
     finishedCollapsed: false,

@@ -196,6 +196,8 @@ export type ToolCard = {
   outputText?: string;
   /** Structured tool result details (e.g. the edit tool's precomputed diff). */
   details?: unknown;
+  /** Monotonic edit counts while a live tool call is still receiving input. */
+  liveDiffStat?: { added: number; removed: number };
   isError?: boolean;
   /** True when the card comes from the live tool stream of the current run. */
   live?: boolean;

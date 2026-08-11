@@ -5351,6 +5351,14 @@ export const en: TranslationMap = {
       output: "Output",
       promptUnavailable: "Prompt unavailable.",
       outputPending: "No output yet.",
+      subagentActivity: {
+        label: "Subagent activity",
+        working: "Subagent working",
+        finished: "Subagent finished",
+        failed: "Subagent failed",
+        cancelled: "Subagent cancelled",
+        moreWorking: "+{count} more working",
+      },
     },
     sessionDiff: {
       title: "Changes",

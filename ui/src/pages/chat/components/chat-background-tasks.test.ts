@@ -11,6 +11,7 @@ import {
   type BackgroundTasksHost,
 } from "./chat-background-tasks.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
+import { deriveSubagentActivity } from "./chat-subagent-activity.ts";
 
 function flushAsync() {
   return new Promise((resolve) => {
@@ -23,6 +24,8 @@ function flushAnimationFrame() {
     window.requestAnimationFrame(() => resolve());
   });
 }
+
+const SUBAGENT_ACTIVITY_TERMINAL_RETENTION_MS = 60_000;
 
 function makeTask(overrides: Partial<TaskSummary> & { id: string }): TaskSummary {
   return {
@@ -78,6 +81,12 @@ function makeProps(overrides: Partial<BackgroundTasksProps> = {}): BackgroundTas
     loading: false,
     error: null,
     tasks: null,
+    subagentActivity: deriveSubagentActivity({
+      tasks: [],
+      sessionKey: "agent:main:current",
+      terminalObservedAtByTask: new Map(),
+      canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
+    }),
     view: { kind: "list" },
     cancellingTaskIds: new Set(),
     finishedCollapsed: false,
@@ -114,7 +123,16 @@ function renderTaskRail(overrides: Partial<BackgroundTasksProps>) {
 function renderStatusRow(overrides: Partial<BackgroundTasksProps>) {
   const container = document.createElement("div");
   document.body.append(container);
-  render(html`${renderBackgroundTasksStatusRow(makeProps(overrides))}`, container);
+  const props = makeProps(overrides);
+  if (!overrides.subagentActivity) {
+    props.subagentActivity = deriveSubagentActivity({
+      tasks: props.tasks ?? [],
+      sessionKey: props.sessionKey,
+      terminalObservedAtByTask: new Map(),
+      canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
+    });
+  }
+  render(html`${renderBackgroundTasksStatusRow(props)}`, container);
   return container;
 }
 
@@ -871,13 +889,179 @@ describe("background tasks rail rendering", () => {
   });
 });
 
+describe("subagent activity rows", () => {
+  it("filters by requester, runtime, and retention while leaving other work in the aggregate", () => {
+    const now = 100_000;
+    const current = makeTask({
+      id: "current-subagent",
+      lastActivity: "Reviewing the current session",
+      updatedAt: now,
+    });
+    const recent = makeTask({
+      id: "recent-subagent",
+      status: "completed",
+      updatedAt: now - 1_000,
+      endedAt: now - 1_000,
+      terminalSummary: "Review complete",
+    });
+    const otherRuntime = makeTask({
+      id: "other-runtime",
+      runtime: "cli",
+      lastActivity: "CLI task",
+    });
+    const tasks = [
+      current,
+      recent,
+      makeTask({
+        id: "other-session",
+        sessionKey: "agent:main:other",
+        lastActivity: "Wrong requester",
+      }),
+      otherRuntime,
+      makeTask({
+        id: "expired-subagent",
+        status: "completed",
+        updatedAt: now - SUBAGENT_ACTIVITY_TERMINAL_RETENTION_MS - 1,
+        endedAt: now - SUBAGENT_ACTIVITY_TERMINAL_RETENTION_MS - 1,
+        terminalSummary: "Too old",
+      }),
+    ];
+    const subagentActivity = deriveSubagentActivity({
+      tasks,
+      sessionKey: "agent:main:current",
+      terminalObservedAtByTask: new Map(),
+      canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
+      now,
+    });
+
+    expect(subagentActivity.rows.map((task) => task.id)).toEqual([
+      "current-subagent",
+      "recent-subagent",
+    ]);
+    expect([...subagentActivity.taskIds]).toEqual(["current-subagent", "recent-subagent"]);
+
+    const container = renderStatusRow({
+      tasks: [current, recent, otherRuntime],
+      subagentActivity,
+    });
+    expect(container.querySelectorAll(".chat-subagent-activity__row")).toHaveLength(2);
+    expect(container.textContent).toContain("Reviewing the current session");
+    expect(container.textContent).toContain("Subagent finished");
+    expect(container.textContent).not.toContain("Wrong requester");
+    expect(container.textContent).not.toContain("Too old");
+    expect(container.querySelector(".chat-tasks-status__link")?.textContent?.trim()).toBe(
+      "1 running task",
+    );
+  });
+
+  it("caps visible rows at five and counts only hidden running work", () => {
+    const running = Array.from({ length: 7 }, (_, index) =>
+      makeTask({
+        id: `running-${index}`,
+        lastActivity: `Running child ${index}`,
+        updatedAt: 10_000 - index,
+      }),
+    );
+    const queued = Array.from({ length: 2 }, (_, index) =>
+      makeTask({
+        id: `queued-${index}`,
+        status: "queued",
+        updatedAt: 1_000 - index,
+      }),
+    );
+    const subagentActivity = deriveSubagentActivity({
+      tasks: [...running, ...queued],
+      sessionKey: "agent:main:current",
+      terminalObservedAtByTask: new Map(),
+      canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
+      now: 20_000,
+    });
+    const container = renderStatusRow({
+      tasks: [...running, ...queued],
+      subagentActivity,
+    });
+
+    expect(container.querySelectorAll(".chat-subagent-activity__row")).toHaveLength(5);
+    expect(container.querySelector(".chat-subagent-activity__overflow")?.textContent?.trim()).toBe(
+      "+2 more working",
+    );
+    expect(container.querySelector(".chat-tasks-status")).toBeNull();
+  });
+
+  it("retains streaming fields on a terminal event and expires the finished row after 60 seconds", async () => {
+    const running = makeTask({
+      id: "retained-subagent",
+      lastActivity: "Editing the final report",
+      diffStat: { files: 2, added: 12, removed: 3 },
+    });
+    const { host, requestUpdate } = createHost({
+      request: () => Promise.resolve({ tasks: [running] }),
+    });
+    createBackgroundTasksProps(host);
+    await flushAsync();
+
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(100_000);
+    try {
+      handleBackgroundTasksEvent(host, {
+        action: "upserted",
+        task: makeTask({
+          id: "retained-subagent",
+          status: "completed",
+          updatedAt: 100_000,
+          endedAt: 100_000,
+          terminalSummary: "Final report complete",
+        }),
+      });
+      const props = createBackgroundTasksProps(host);
+      expect(props.tasks?.[0]).toMatchObject({
+        status: "completed",
+        lastActivity: "Editing the final report",
+        diffStat: { files: 2, added: 12, removed: 3 },
+      });
+
+      const container = document.createElement("div");
+      document.body.append(container);
+      const renderCurrent = () =>
+        render(
+          html`${renderBackgroundTasksStatusRow(createBackgroundTasksProps(host))}`,
+          container,
+        );
+      renderCurrent();
+      expect(container.textContent).toContain("Subagent finished");
+      expect(container.textContent).toContain("Final report complete");
+      expect(container.querySelector(".chat-diffstat__add")?.textContent).toBe("+12");
+      expect(container.querySelector(".chat-diffstat__del")?.textContent).toBe("-3");
+
+      requestUpdate.mockClear();
+      vi.advanceTimersByTime(SUBAGENT_ACTIVITY_TERMINAL_RETENTION_MS - 1);
+      renderCurrent();
+      expect(container.querySelector(".chat-subagent-activity__row")).not.toBeNull();
+      vi.advanceTimersByTime(1);
+      expect(requestUpdate).toHaveBeenCalledOnce();
+      renderCurrent();
+      expect(container.querySelector(".chat-subagent-activity__row")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("running-tasks status row", () => {
+  const makeAggregateTask = (overrides: Partial<TaskSummary> & { id: string }) =>
+    makeTask({ ...overrides, runtime: "cli" });
+
   it("ticks from the oldest active start and counts only active tasks", () => {
     const container = renderStatusRow({
       tasks: [
-        makeTask({ id: "t1", startedAt: 9_000 }),
-        makeTask({ id: "t2", status: "queued", startedAt: undefined, createdAt: 4_000 }),
-        makeTask({ id: "t3", status: "completed", startedAt: 100 }),
+        makeAggregateTask({ id: "t1", startedAt: 9_000 }),
+        makeAggregateTask({
+          id: "t2",
+          status: "queued",
+          startedAt: undefined,
+          createdAt: 4_000,
+        }),
+        makeAggregateTask({ id: "t3", status: "completed", startedAt: 100 }),
       ],
     });
 
@@ -893,7 +1077,7 @@ describe("running-tasks status row", () => {
   it("renders count, ticking elapsed time, and opens the collapsed rail", () => {
     const onToggleCollapsed = vi.fn();
     const container = renderStatusRow({
-      tasks: [makeTask({ id: "t1", startedAt: 9_000 })],
+      tasks: [makeAggregateTask({ id: "t1", startedAt: 9_000 })],
       onToggleCollapsed,
     });
 
@@ -913,7 +1097,7 @@ describe("running-tasks status row", () => {
     const onToggleCollapsed = vi.fn();
     const container = renderStatusRow({
       collapsed: false,
-      tasks: [makeTask({ id: "t1" }), makeTask({ id: "t2", status: "queued" })],
+      tasks: [makeAggregateTask({ id: "t1" }), makeAggregateTask({ id: "t2", status: "queued" })],
       onToggleCollapsed,
     });
 
@@ -926,12 +1110,37 @@ describe("running-tasks status row", () => {
   it("anchors a hover preview of the latest tasks, active first, capped at five", () => {
     const container = renderStatusRow({
       tasks: [
-        makeTask({ id: "a1", title: "Active one", updatedAt: 9_000 }),
-        makeTask({ id: "a2", status: "queued", title: "Queued two", updatedAt: 8_000 }),
-        makeTask({ id: "f1", status: "completed", title: "Finished one", updatedAt: 7_000 }),
-        makeTask({ id: "f2", status: "failed", title: "Finished two", updatedAt: 6_000 }),
-        makeTask({ id: "f3", status: "completed", title: "Finished three", updatedAt: 5_000 }),
-        makeTask({ id: "f4", status: "completed", title: "Finished four", updatedAt: 4_000 }),
+        makeAggregateTask({ id: "a1", title: "Active one", updatedAt: 9_000 }),
+        makeAggregateTask({
+          id: "a2",
+          status: "queued",
+          title: "Queued two",
+          updatedAt: 8_000,
+        }),
+        makeAggregateTask({
+          id: "f1",
+          status: "completed",
+          title: "Finished one",
+          updatedAt: 7_000,
+        }),
+        makeAggregateTask({
+          id: "f2",
+          status: "failed",
+          title: "Finished two",
+          updatedAt: 6_000,
+        }),
+        makeAggregateTask({
+          id: "f3",
+          status: "completed",
+          title: "Finished three",
+          updatedAt: 5_000,
+        }),
+        makeAggregateTask({
+          id: "f4",
+          status: "completed",
+          title: "Finished four",
+          updatedAt: 4_000,
+        }),
       ],
     });
 
@@ -956,7 +1165,7 @@ describe("running-tasks status row", () => {
 
   it("sizes the preview to the task list without an overflow line", () => {
     const container = renderStatusRow({
-      tasks: [makeTask({ id: "t1", title: "Only task" })],
+      tasks: [makeAggregateTask({ id: "t1", title: "Only task" })],
     });
 
     expect(container.querySelectorAll(".chat-tasks-preview__row").length).toBe(1);
@@ -965,7 +1174,7 @@ describe("running-tasks status row", () => {
 
   it("renders nothing without active tasks", () => {
     const container = renderStatusRow({
-      tasks: [makeTask({ id: "t1", status: "completed" })],
+      tasks: [makeAggregateTask({ id: "t1", status: "completed" })],
     });
     expect(container.querySelector(".chat-tasks-status")).toBeNull();
   });
@@ -973,7 +1182,7 @@ describe("running-tasks status row", () => {
   it("hides the stale snapshot while disconnected", () => {
     const container = renderStatusRow({
       connected: false,
-      tasks: [makeTask({ id: "t1" })],
+      tasks: [makeAggregateTask({ id: "t1" })],
     });
     expect(container.querySelector(".chat-tasks-status")).toBeNull();
   });

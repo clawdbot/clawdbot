@@ -1,3 +1,4 @@
+import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI chat domain owns pure tool-card extraction rules.
 import {
@@ -298,6 +299,16 @@ function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
   const content = normalizeContent(m.content);
   const messageIsError = readToolErrorFlag(m);
   const isLiveToolStream = m["__openclawToolStreamLive"] === true;
+  const liveDiff = readRecord(m["__openclawToolStreamDiffStat"]);
+  const liveDiffStat =
+    typeof liveDiff?.added === "number" &&
+    Number.isInteger(liveDiff.added) &&
+    liveDiff.added >= 0 &&
+    typeof liveDiff.removed === "number" &&
+    Number.isInteger(liveDiff.removed) &&
+    liveDiff.removed >= 0
+      ? { added: liveDiff.added, removed: liveDiff.removed }
+      : undefined;
   const cards: ToolCard[] = [];
   const fallbackMatchedCards = new WeakSet<ToolCard>();
   const transcriptMessageId = resolveTranscriptMessageId(m);
@@ -320,6 +331,7 @@ function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
         ...(isLiveToolStream
           ? { live: true, completed: m["__openclawToolStreamResultReceived"] === true }
           : {}),
+        ...(liveDiffStat ? { liveDiffStat } : {}),
         messageId: transcriptMessageId,
       });
       continue;
