@@ -2,6 +2,9 @@
   "id": "longcat",
   "name": "LongCat",
   "description": "OpenClaw LongCat provider plugin.",
+  "doctorContract": {
+    "configRepair": true
+  },
   "activation": {
     "onStartup": false
   },
