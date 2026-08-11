@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   createDirectOutboundTestAdapter,
@@ -13,10 +13,16 @@ import { getStatusSummary } from "./summary.js";
 describe("getStatusSummary read-only session access", () => {
   const previousRegistry = getActivePluginRegistry();
 
-  beforeAll(() => {
+  beforeEach(() => {
     const telegram = createOutboundTestPlugin({
       id: "telegram",
       outbound: createDirectOutboundTestAdapter({ channel: "telegram" }),
+      messaging: {
+        targetPrefixes: ["telegram"],
+        inferTargetChatType: ({ to }) => {
+          return /^(?:telegram:)?\d+$/.test(to) ? "direct" : undefined;
+        },
+      },
     });
     telegram.config = {
       ...telegram.config,

@@ -664,6 +664,26 @@ describe("resolveSessionDeliveryTarget", () => {
     });
   });
 
+  it("uses the first owner entry compatible with a configured channel", () => {
+    const telegram = createOwnerAllowlistTargetTestPlugin({
+      id: "telegram",
+      label: "Telegram",
+      ownerId: "789",
+      inferTargetChatType: ({ to }) => (/^\d+$/.test(to) ? "direct" : undefined),
+    });
+    setActivePluginRegistry(createTargetsTestRegistry([telegram]));
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {
+        commands: { ownerAllowFrom: ["discord:123", "456"] },
+        channels: { telegram: { allowFrom: ["789"] } },
+      } as OpenClawConfig,
+      heartbeat: { target: "owner" },
+    });
+
+    expect(resolved).toMatchObject({ channel: "telegram", to: "456", chatType: "direct" });
+  });
+
   it("falls back to the channel allowFrom owner", () => {
     const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
     alpha.config = { ...alpha.config, resolveAllowFrom: () => ["", "*", "user:channel-owner"] };
@@ -691,6 +711,26 @@ describe("resolveSessionDeliveryTarget", () => {
         commands: { ownerAllowFrom: ["", "*"] },
         channels: { alpha: { allowFrom: ["*"] } },
       } as OpenClawConfig,
+    });
+
+    expect(resolved).toMatchObject({ channel: "none", reason: "no-route" });
+  });
+
+  it("reports no route for channel-scoped wildcard owner allowlists", () => {
+    const telegram = createOwnerAllowlistTargetTestPlugin({
+      id: "telegram",
+      label: "Telegram",
+      ownerId: "telegram:*",
+      inferTargetChatType: () => "direct",
+    });
+    setActivePluginRegistry(createTargetsTestRegistry([telegram]));
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {
+        commands: { ownerAllowFrom: ["telegram:*"] },
+        channels: { telegram: { allowFrom: ["telegram:*"] } },
+      } as OpenClawConfig,
+      heartbeat: { target: "owner" },
     });
 
     expect(resolved).toMatchObject({ channel: "none", reason: "no-route" });
@@ -1377,6 +1417,27 @@ describe("resolveSessionDeliveryTarget", () => {
 
     expect(resolved).toMatchObject({ channel: "none", reason: "no-route" });
   });
+
+  it.each(["@shared", "user:shared"])(
+    "rejects classifier-proven group owner id %s",
+    async (ownerId) => {
+      const telegram = createOwnerAllowlistTargetTestPlugin({
+        id: "telegram",
+        label: "Telegram",
+        ownerId,
+        inferTargetChatType: () => "group",
+      });
+      setActivePluginRegistry(createTargetsTestRegistry([telegram]));
+
+      const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+        cfg: { channels: { telegram: { allowFrom: [ownerId] } } } as OpenClawConfig,
+        agentId: "main",
+        heartbeat: { target: "owner" },
+      });
+
+      expect(resolved).toMatchObject({ channel: "none", reason: "no-route" });
+    },
+  );
 
   it("rejects an unclassified plugin owner id", async () => {
     const external = createOwnerAllowlistTargetTestPlugin({
