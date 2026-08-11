@@ -106,14 +106,16 @@ export function showToast(options: ToastOptions): boolean {
   const modal = activeModalToastLayer();
   if (modal && host.parentElement !== modal) {
     modal.moveBefore(host, null);
-    modal.addEventListener(
-      "wa-after-hide",
-      () =>
-        queueMicrotask(() =>
-          (activeModalToastLayer() ?? document.querySelector(".shell"))?.moveBefore(host, null),
-        ),
-      { once: true },
-    );
+    const handoff = (event: Event) => {
+      if (event.target !== modal) {
+        return;
+      }
+      modal.removeEventListener("wa-after-hide", handoff);
+      queueMicrotask(() =>
+        (activeModalToastLayer() ?? document.querySelector(".shell"))?.moveBefore(host, null),
+      );
+    };
+    modal.addEventListener("wa-after-hide", handoff);
   }
   host.show(options);
   return true;
