@@ -35,9 +35,17 @@ describe("resolveSessionNavigation", () => {
   });
 
   it("hides cron sessions unless showCron opts in", () => {
+    // Cron creation stamps a system actor; the automation toggle alone must
+    // reveal cron rows without also enabling showSystem.
     const rows: GatewaySessionRow[] = [
       { key: "agent:main:chat", kind: "direct", updatedAt: 300 },
-      { key: "agent:main:cron:job", kind: "cron" as never, updatedAt: 200 },
+      {
+        key: "agent:main:cron:job",
+        kind: "cron" as never,
+        updatedAt: 200,
+        createdVia: "cron",
+        createdActor: { type: "system" },
+      },
     ];
 
     const hidden = resolveSessionNavigation({
@@ -420,6 +428,11 @@ describe("isSystemCreatedSessionRow", () => {
     ],
     ["operator creation stays visible", { createdVia: "operator" }, false],
     ["legacy row without provenance stays visible", {}, false],
+    [
+      "cron row with system actor is owned by the automation toggle",
+      { key: "agent:main:cron:job", createdVia: "cron", createdActor: { type: "system" } },
+      false,
+    ],
   ] as const)("%s", (_name, fields, expected) => {
     expect(isSystemCreatedSessionRow({ ...base, ...fields } as GatewaySessionRow)).toBe(expected);
   });
