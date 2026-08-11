@@ -6,6 +6,7 @@ import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { runtimeForLogger } from "../logging/subsystem.js";
 import { isGatewayDraining } from "../process/command-queue.js";
@@ -29,7 +30,6 @@ import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.js";
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
 import { createReadinessChecker } from "./server/readiness.js";
-import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
 type GatewayBootstrap = Awaited<ReturnType<typeof prepareGatewayServerBootstrap>>;
