@@ -157,6 +157,7 @@ function openEditDraft(card: WorkboardCard, status: WorkboardCard["status"] = "r
   state.draftAgentId = card.agentId ?? "";
   state.draftSessionKey = card.sessionKey ?? "";
   state.draftOriginalSessionKey = state.draftSessionKey;
+  state.draftSessionKeyDirty = false;
 }
 
 function makeMovedCard(card: WorkboardCard, overrides: Partial<WorkboardCard> = {}) {
@@ -2636,6 +2637,35 @@ describe("workboard controller", () => {
 
     expect(requestPatch(client, 0)).toMatchObject({ sessionKey: "" });
     expect(state.cards[0]?.sessionKey).toBeUndefined();
+  });
+
+  it("sends an explicitly reselected original binding after a concurrent rebind", async () => {
+    const original = createWorkboardCard({
+      status: "todo",
+      sessionKey: "agent:main:chat:original",
+    });
+    const concurrentlyRebound = {
+      ...original,
+      sessionKey: "agent:main:chat:concurrent",
+      updatedAt: original.updatedAt + 1,
+    };
+    state.cards = [original];
+    openEditDraft(original, original.status);
+    state.draftSessionKey = "agent:main:chat:temporary";
+    state.draftSessionKey = original.sessionKey ?? "";
+    state.draftSessionKeyDirty = true;
+    const client = createClient((method, params) => {
+      if (method !== "workboard.cards.update") {
+        return {};
+      }
+      const patch = (params as { patch: Partial<WorkboardCard> }).patch;
+      return { card: { ...concurrentlyRebound, ...patch } };
+    });
+
+    await saveDraft(client);
+
+    expect(requestPatch(client, 0)).toMatchObject({ sessionKey: original.sessionKey });
+    expect(state.cards[0]?.sessionKey).toBe(original.sessionKey);
   });
 
   it("keeps the existing binding when the atomic card update fails", async () => {

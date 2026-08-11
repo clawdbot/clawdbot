@@ -243,9 +243,9 @@ export class WorkboardStore extends WorkboardNotificationStore {
           ...latest,
           metadata: metadataIsEmpty(metadata) ? undefined : metadata,
         });
-        await this.store.register(next.id, { version: 1, card: next });
+        const persisted = await this.persistCardMutation(latest, next);
         if (diagnostics.length > 0) {
-          rows.push({ card: next, diagnostics });
+          rows.push({ card: persisted, diagnostics });
         }
       }
       return {

@@ -107,7 +107,9 @@ export async function saveWorkboardCardDraft(params: {
   try {
     const { sessionKey: _sessionKey, ...cardPatch } = draftPayload(state);
     const sessionPatch =
-      requestedSessionKey === originalSessionKey ? {} : { sessionKey: requestedSessionKey ?? "" };
+      !state.draftSessionKeyDirty && requestedSessionKey === originalSessionKey
+        ? {}
+        : { sessionKey: requestedSessionKey ?? "" };
     const payload = await params.client.request("workboard.cards.update", {
       id: cardId,
       patch: { ...cardPatch, ...sessionPatch },

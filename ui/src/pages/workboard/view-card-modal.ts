@@ -112,6 +112,7 @@ export function openEditModal(state: WorkboardUiState, card: WorkboardCard) {
   state.draftAgentId = card.agentId ?? "";
   state.draftSessionKey = card.sessionKey ?? "";
   state.draftOriginalSessionKey = state.draftSessionKey;
+  state.draftSessionKeyDirty = false;
   state.draftTemplateId = card.metadata?.templateId ?? "";
   state.draftCommentBody = "";
 }
@@ -332,6 +333,7 @@ export function renderCardModal(props: WorkboardProps) {
               label: t("workboard.fieldSession"),
               onChange: (value) => {
                 state.draftSessionKey = value;
+                state.draftSessionKeyDirty = true;
               },
               requestUpdate: props.onRequestUpdate,
               disabled: draftActionsBusy,

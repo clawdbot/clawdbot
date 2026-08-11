@@ -1149,6 +1149,75 @@ describe("WorkboardStore", () => {
     }
   });
 
+  it("rejects a diagnostics write that races a bind across independent SQLite stores", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-diagnostics-bind-race-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const diagnosticsStores = createWorkboardSqliteStores({ dbPath });
+    const bindStores = createWorkboardSqliteStores({ dbPath });
+    try {
+      const setupStore = new WorkboardStore(diagnosticsStores.cards);
+      const bindStore = new WorkboardStore(bindStores.cards);
+      const card = await setupStore.create({
+        title: "Diagnose then bind",
+        status: "ready",
+        agentId: "main",
+      });
+      const originalRegister = diagnosticsStores.cards.register.bind(diagnosticsStores.cards);
+      const originalReservedRegister =
+        diagnosticsStores.cards.registerWithPrimarySessionReservation?.bind(
+          diagnosticsStores.cards,
+        );
+      let markWriteStarted!: () => void;
+      let releaseWrite!: () => void;
+      const writeStarted = new Promise<void>((resolve) => {
+        markWriteStarted = resolve;
+      });
+      const writeReleased = new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+      let pauseNextWrite = true;
+      const pauseBeforeWrite = async () => {
+        if (!pauseNextWrite) {
+          return;
+        }
+        pauseNextWrite = false;
+        markWriteStarted();
+        await writeReleased;
+      };
+      diagnosticsStores.cards.register = async (key, value) => {
+        await pauseBeforeWrite();
+        await originalRegister(key, value);
+      };
+      if (originalReservedRegister) {
+        diagnosticsStores.cards.registerWithPrimarySessionReservation = async (
+          key,
+          value,
+          expected,
+        ) => {
+          await pauseBeforeWrite();
+          await originalReservedRegister(key, value, expected);
+        };
+      }
+      const diagnosticsStore = new WorkboardStore(diagnosticsStores.cards);
+
+      const refreshing = diagnosticsStore.refreshDiagnostics(Date.now() + 2 * 24 * 60 * 60 * 1000);
+      await writeStarted;
+      const bound = await bindStore.bindSession(card.id, {
+        sessionKey: "agent:main:operator-during-diagnostics",
+      });
+      releaseWrite();
+
+      await expect(refreshing).rejects.toThrow("changed before persistence");
+      await expect(bindStore.get(card.id)).resolves.toMatchObject({
+        sessionKey: bound.sessionKey,
+      });
+    } finally {
+      bindStores.close();
+      diagnosticsStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("reserves normalized execution-only session bindings and ignores terminal cards", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const sessionKey = "agent:main:execution-only";

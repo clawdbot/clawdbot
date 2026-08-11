@@ -2533,6 +2533,36 @@ describe("renderWorkboard", () => {
     expect(container.querySelector("openclaw-workboard-card-dashboard")).not.toBeNull();
   });
 
+  it("marks an explicitly reselected original session as dirty", () => {
+    const originalSessionKey = "agent:main:chat:original";
+    const temporarySessionKey = "agent:main:chat:temporary";
+    const card = createWorkboardCard({ sessionKey: originalSessionKey });
+    const { state, container, renderView } = createWorkboardView({
+      sessions: [
+        { key: originalSessionKey, kind: "direct", updatedAt: 2 },
+        { key: temporarySessionKey, kind: "direct", updatedAt: 1 },
+      ],
+    });
+    state.cards = [card];
+    state.detailCardId = card.id;
+
+    renderView();
+    buttonByLabel(container, "Edit card")?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true }),
+    );
+    renderView();
+
+    const sessionSelect = () =>
+      [...(container.querySelector(".workboard-draft")?.querySelectorAll("wa-select") ?? [])].at(2);
+    expect(state.draftSessionKeyDirty).toBe(false);
+    changeWorkboardSelect(sessionSelect(), temporarySessionKey);
+    renderView();
+    changeWorkboardSelect(sessionSelect(), originalSessionKey);
+
+    expect(state.draftSessionKey).toBe(originalSessionKey);
+    expect(state.draftSessionKeyDirty).toBe(true);
+  });
+
   it("opens an edit modal and submits card updates", async () => {
     const { host, state } = createLoadedWorkboardState();
     state.cards = [

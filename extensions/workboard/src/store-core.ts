@@ -314,7 +314,7 @@ export class WorkboardCoreStore {
     }
   }
 
-  private async registerCard(
+  protected async registerCard(
     card: WorkboardCard,
     knownCards?: readonly WorkboardCard[],
     expected?: WorkboardCardRegistrationExpectation,
@@ -328,6 +328,47 @@ export class WorkboardCoreStore {
       this.assertPrimarySessionAvailable(knownCards ?? (await this.list()), card);
     }
     await this.store.register(card.id, value);
+  }
+
+  protected async persistCardMutation(
+    previous: WorkboardCard,
+    next: WorkboardCard,
+  ): Promise<WorkboardCard> {
+    const persisted = removeUndefinedCardFields(next);
+    await this.registerCard(persisted, undefined, {
+      updatedAt: previous.updatedAt,
+      claimToken: previous.metadata?.claim?.token,
+    });
+    return persisted;
+  }
+
+  protected async restoreCardSnapshot(snapshot: WorkboardCard): Promise<void> {
+    const current = await this.get(snapshot.id);
+    if (!current) {
+      return;
+    }
+    const { claim: _snapshotClaim, ...snapshotMetadata } = snapshot.metadata ?? {};
+    const currentClaim = current.metadata?.claim;
+    const metadata = trimMetadataToBudget({
+      ...snapshotMetadata,
+      ...(currentClaim ? { claim: currentClaim } : {}),
+    });
+    const restored = removeUndefinedCardFields({
+      ...snapshot,
+      ...(currentClaim
+        ? {
+            status: current.status,
+            startedAt: current.startedAt,
+            completedAt: current.completedAt,
+          }
+        : {}),
+      sessionKey: current.sessionKey,
+      execution: current.execution,
+      events: current.events,
+      metadata: metadataIsEmpty(metadata) ? undefined : metadata,
+      updatedAt: current.updatedAt,
+    });
+    await this.persistCardMutation(current, restored);
   }
 
   private async removeReferencesToCard(cardId: string): Promise<void> {
@@ -965,8 +1006,7 @@ export class WorkboardCoreStore {
       ...(!metadataIsEmpty(metadata) ? { metadata } : { metadata: undefined }),
       events: appendEvent(card, { kind: "dispatch" }, now),
     });
-    await this.store.register(card.id, { version: 1, card: next });
-    return next;
+    return await this.persistCardMutation(card, next);
   }
 
   protected async recordOrchestrationCandidate(
@@ -995,8 +1035,7 @@ export class WorkboardCoreStore {
       ...(!metadataIsEmpty(metadata) ? { metadata } : { metadata: undefined }),
       events: appendEvent(card, { kind: "orchestration" }, now),
     });
-    await this.store.register(card.id, { version: 1, card: next });
-    return next;
+    return await this.persistCardMutation(card, next);
   }
 
   protected async promoteDependencyReady(id: string, now = Date.now()): Promise<WorkboardCard> {
