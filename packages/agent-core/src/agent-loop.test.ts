@@ -1144,7 +1144,8 @@ describe("agentLoop tool termination", () => {
     expect(requestMessages[1]).not.toContain(secondSteer);
     expect(requestMessages[2]?.at(-1)).toBe(secondSteer);
     const queuedMessageStarts = events.filter(
-      (event) => event.type === "message_start" && event.message.role === "user",
+      (event): event is Extract<AgentEvent, { type: "message_start" }> =>
+        event.type === "message_start" && event.message.role === "user",
     );
     expect(queuedMessageStarts.at(-2)?.message).toBe(firstSteer);
     expect(queuedMessageStarts.at(-1)?.message).toBe(secondSteer);
