@@ -1,4 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import {
   MAX_DIFF_RENDER_LINES,
   type DiffLine,
@@ -35,10 +36,6 @@ type PatchViewData = {
   stat: DiffStat;
   move?: { from: string; to: string };
 };
-
-function readNonBlankString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
 
 function splitLines(text: string): string[] {
   if (text === "") {

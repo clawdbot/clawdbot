@@ -13,11 +13,11 @@ import {
   buildPluginRegistrySnapshotReportMock,
   buildPluginSnapshotReportMock,
   inspectPluginRegistryMock,
-  loadConfig,
-  loadPluginManifestRegistry,
-  readConfigFileSnapshot,
+  pluginCliConfigMock,
+  loadPluginManifestRegistryMock,
+  readConfigFileSnapshotMock,
   resetPluginsCliTestState,
-  refreshPluginRegistry,
+  refreshPluginRegistryMock,
   runPluginsCommand,
   runtimeErrors,
   pluginsCliRuntimeLogs,
@@ -39,10 +39,10 @@ async function mockPluginDoctorValidationWarnings(warnings: ConfigValidationIssu
       entries: { google: { config: { apiKey: "test-google-key" } } },
     },
   };
-  loadConfig.mockReturnValue(config);
-  const snapshot = (await readConfigFileSnapshot()) as ConfigFileSnapshot;
-  readConfigFileSnapshot.mockResolvedValueOnce({ ...snapshot, valid: true, warnings });
-  loadPluginManifestRegistry.mockReturnValue({
+  pluginCliConfigMock.mockReturnValue(config);
+  const snapshot = (await readConfigFileSnapshotMock()) as ConfigFileSnapshot;
+  readConfigFileSnapshotMock.mockResolvedValueOnce({ ...snapshot, valid: true, warnings });
+  loadPluginManifestRegistryMock.mockReturnValue({
     plugins: ["google", "imessage", "memory-core"].map((id) => ({
       id,
       channels: [],
@@ -383,8 +383,8 @@ describe("plugins cli list", () => {
         },
       },
     };
-    loadConfig.mockReturnValue({});
-    readConfigFileSnapshot.mockResolvedValueOnce({
+    pluginCliConfigMock.mockReturnValue({});
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
       path: "/tmp/openclaw-config.json5",
       exists: true,
       raw: "{}",
@@ -435,8 +435,8 @@ describe("plugins cli list", () => {
         },
       },
     };
-    loadConfig.mockReturnValue(sourceConfig);
-    readConfigFileSnapshot.mockResolvedValueOnce({
+    pluginCliConfigMock.mockReturnValue(sourceConfig);
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
       path: "/tmp/openclaw-config.json5",
       exists: true,
       raw: "{}",
@@ -475,7 +475,7 @@ describe("plugins cli list", () => {
         backend: "acpx",
       },
     };
-    loadConfig.mockReturnValue(sourceConfig);
+    pluginCliConfigMock.mockReturnValue(sourceConfig);
     buildPluginDiagnosticsReportMock.mockReturnValue({
       plugins: [],
       diagnostics: [],
@@ -502,7 +502,7 @@ describe("plugins cli list", () => {
         },
       },
     };
-    loadConfig.mockReturnValue(sourceConfig);
+    pluginCliConfigMock.mockReturnValue(sourceConfig);
     buildPluginDiagnosticsReportMock.mockReturnValue({
       plugins: [],
       diagnostics: [],
@@ -525,7 +525,7 @@ describe("plugins cli list", () => {
         backend: "acpx",
       },
     };
-    loadConfig.mockReturnValue(sourceConfig);
+    pluginCliConfigMock.mockReturnValue(sourceConfig);
     buildPluginDiagnosticsReportMock.mockReturnValue({
       plugins: [createPluginRecord({ id: "acpx", enabled: false, status: "disabled" })],
       diagnostics: [],
@@ -550,7 +550,7 @@ describe("plugins cli list", () => {
         },
       },
     };
-    loadConfig.mockReturnValue(sourceConfig);
+    pluginCliConfigMock.mockReturnValue(sourceConfig);
     buildPluginDiagnosticsReportMock.mockReturnValue({
       plugins: [],
       diagnostics: [],
@@ -575,7 +575,7 @@ describe("plugins cli list", () => {
         },
       },
     };
-    loadConfig.mockReturnValue(sourceConfig);
+    pluginCliConfigMock.mockReturnValue(sourceConfig);
     buildPluginDiagnosticsReportMock.mockReturnValue({
       plugins: [createPluginRecord({ id: "codex" })],
       diagnostics: [],
@@ -598,7 +598,7 @@ describe("plugins cli list", () => {
         },
       },
     };
-    loadConfig.mockReturnValue(sourceConfig);
+    pluginCliConfigMock.mockReturnValue(sourceConfig);
     buildPluginDiagnosticsReportMock.mockReturnValue({
       plugins: [createPluginRecord({ id: "codex", enabled: false, status: "disabled" })],
       diagnostics: [],
@@ -629,7 +629,7 @@ describe("plugins cli list", () => {
         },
       },
     };
-    loadConfig.mockReturnValue(sourceConfig);
+    pluginCliConfigMock.mockReturnValue(sourceConfig);
     buildPluginDiagnosticsReportMock.mockReturnValue({
       plugins: [],
       diagnostics: [],
@@ -663,7 +663,7 @@ describe("plugins cli list", () => {
         },
       },
     };
-    loadConfig.mockReturnValue(sourceConfig);
+    pluginCliConfigMock.mockReturnValue(sourceConfig);
     buildPluginDiagnosticsReportMock.mockReturnValue({
       plugins: [],
       diagnostics: [],
@@ -758,7 +758,7 @@ describe("plugins cli list", () => {
     await runPluginsCommand(["plugins", "registry"]);
 
     expect(inspectPluginRegistryMock).toHaveBeenCalledWith({ config: {} });
-    expect(refreshPluginRegistry).not.toHaveBeenCalled();
+    expect(refreshPluginRegistryMock).not.toHaveBeenCalled();
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("State:");
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("stale");
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("Refresh reasons:");
@@ -766,7 +766,7 @@ describe("plugins cli list", () => {
   });
 
   it("refreshes the persisted plugin registry on request", async () => {
-    refreshPluginRegistry.mockResolvedValue({
+    refreshPluginRegistryMock.mockResolvedValue({
       plugins: [
         { pluginId: "demo", enabled: true },
         { pluginId: "off", enabled: false },
@@ -775,7 +775,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "registry", "--refresh"]);
 
-    expect(refreshPluginRegistry).toHaveBeenCalledWith({
+    expect(refreshPluginRegistryMock).toHaveBeenCalledWith({
       config: {},
       reason: "manual",
     });
@@ -916,7 +916,7 @@ describe("plugins cli list", () => {
     const config: OpenClawConfig = {
       tools: { profile: "messaging" },
     };
-    loadConfig.mockReturnValue(config);
+    pluginCliConfigMock.mockReturnValue(config);
     workshopMocks.detectToolPolicyDiagnostic.mockReturnValue({
       agentId: "main",
       source: "tools.profile",

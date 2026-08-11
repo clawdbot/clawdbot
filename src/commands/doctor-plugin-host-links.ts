@@ -1,4 +1,5 @@
 import path from "node:path";
+import { coerceErrorMessage as formatPackageReadFailure } from "@openclaw/normalization-core/error-coercion";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
@@ -34,9 +35,6 @@ type PluginHostLinkAudit = {
   registeredPeerLinkIssues: OpenClawPeerLinkAuditIssue[];
   registeredPackageReadFailures: PluginPackageReadFailure[];
 };
-
-const formatPackageReadFailure = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 function resolveRegisteredPluginExtensionsRoot(
   params: InstalledPluginIndexRecordStoreOptions,

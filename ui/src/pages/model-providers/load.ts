@@ -10,7 +10,7 @@ import type {
   ModelCatalogEntry,
   ModelCatalogProviderOutcome,
 } from "../../api/types.ts";
-import { resolveEditableSnapshotConfig } from "../../lib/config/index.ts";
+import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,

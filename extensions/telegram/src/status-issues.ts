@@ -41,7 +41,7 @@ type TelegramGroupMembershipAuditSummary = {
   }>;
 };
 
-function asFiniteNumber(value: unknown): number | null {
+function asFiniteNumberOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
@@ -69,8 +69,8 @@ function collectTelegramPollingRuntimeIssues(params: {
     return;
   }
 
-  const lastStartAt = asFiniteNumber(account.lastStartAt);
-  const lastTransportActivityAt = asFiniteNumber(account.lastTransportActivityAt);
+  const lastStartAt = asFiniteNumberOrNull(account.lastStartAt);
+  const lastTransportActivityAt = asFiniteNumberOrNull(account.lastTransportActivityAt);
   const fix = `Run: ${formatCliCommand("openclaw channels status --probe")} (or restart the gateway). Check the bot token, proxy/network settings, and logs if it persists.`;
 
   if (account.connected === false) {
@@ -129,7 +129,7 @@ function collectTelegramWebhookRuntimeIssues(params: {
     return;
   }
 
-  const lastStartAt = asFiniteNumber(account.lastStartAt);
+  const lastStartAt = asFiniteNumberOrNull(account.lastStartAt);
   const withinStartupGrace =
     lastStartAt != null && now - lastStartAt < TELEGRAM_WEBHOOK_CONNECT_GRACE_MS;
   if (withinStartupGrace) {

@@ -4,14 +4,14 @@ import { buildContextEngineCompactionSessionTarget } from "./session-bootstrap.j
 import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
 const sessionAccessorMocks = vi.hoisted(() => ({
-  listSessionEntries: vi.fn(() => []),
+  listSessionEntriesCore: vi.fn(() => []),
   loadSessionEntry: vi.fn(),
 }));
 
 vi.mock("../../../config/sessions/session-accessor.js", () => sessionAccessorMocks);
 
 beforeEach(() => {
-  sessionAccessorMocks.listSessionEntries.mockReset().mockReturnValue([]);
+  sessionAccessorMocks.listSessionEntriesCore.mockReset().mockReturnValue([]);
   sessionAccessorMocks.loadSessionEntry.mockReset();
 });
 
@@ -178,7 +178,7 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
       sessionId: "session-before",
       updatedAt: 1,
     });
-    sessionAccessorMocks.listSessionEntries.mockReturnValue([
+    sessionAccessorMocks.listSessionEntriesCore.mockReturnValue([
       {
         sessionKey: "agent:main:other",
         entry: { sessionId: "session-after", updatedAt: 2 },

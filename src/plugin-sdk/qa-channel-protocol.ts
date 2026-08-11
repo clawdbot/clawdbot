@@ -26,7 +26,7 @@ function buildQaTargetCore(params: {
 export { buildQaTargetCore as buildQaTarget };
 
 /** Parse the lowercase, prefix-scoped target grammar shared by QA Channel and QA Lab. */
-export function parseQaTarget(
+function parseQaTargetCore(
   raw: string,
   options?: { defaultChatType?: QaBusConversationKind },
 ): QaTargetParts {
@@ -73,6 +73,8 @@ export function parseQaTarget(
     conversationId: normalized,
   };
 }
+
+export { parseQaTargetCore as parseQaTarget };
 
 /** Addressable conversation used by QA bus messages and thread state. */
 export type QaBusConversation = {

@@ -9,7 +9,7 @@ import {
 } from "../../config/sessions/conversation-registry.js";
 import {
   loadExactSessionEntry,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
@@ -33,7 +33,7 @@ describe("outbound session persistence", () => {
 
   it("binds a discovered canonical peer through a different delivery alias", async () => {
     const sessionKey = "agent:main:main";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       {
         sessionId: "shared-main-session",

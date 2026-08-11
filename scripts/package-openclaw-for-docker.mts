@@ -27,6 +27,20 @@ const DEFAULT_CAPTURED_STDOUT_MAX_BYTES = 1024 * 1024;
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const AI_RUNTIME_PACKAGE = "@openclaw/ai";
 const AI_RUNTIME_BACKUP_DIR = ".openclaw-ai-package-backup";
+
+function coercePackageError(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}
 type KillChild = (signal: NodeJS.Signals) => void;
 type RunOptions = {
   captureStdout?: boolean;
@@ -356,7 +370,7 @@ function run(command: string, args: string[], cwd: string, options: RunOptions =
         process.exit(forwardedSignalExitCode);
       }
       if (error) {
-        reject(toLintErrorObject(error, "Non-Error rejection"));
+        reject(coercePackageError(error, "Non-Error rejection"));
         return;
       }
       resolve(value);
@@ -711,7 +725,7 @@ export async function prepareBundledAiRuntimePackage(
     originalAiRuntimeMoved = false;
     packedAiTarballs = [];
     if (cleanupError) {
-      throw toLintErrorObject(cleanupError, "Package cleanup failed.");
+      throw coercePackageError(cleanupError, "Package cleanup failed.");
     }
   };
 
@@ -764,11 +778,16 @@ export async function prepareBundledAiRuntimePackage(
       if (typeof version !== "string") {
         throw new Error(`packed @openclaw/ai dependency ${name} must declare a string version`);
       }
-      if (packageJson.dependencies?.[name] !== version) {
+      if (version === "0.0.0-private") {
+        continue;
+      }
+      const rootVersion = packageJson.dependencies?.[name];
+      if (rootVersion !== version && rootVersion !== `workspace:${version}`) {
         throw new Error(
           `root package.json must declare ${name}@${version} to bundle @openclaw/ai without duplicate dependencies`,
         );
       }
+      packageJson.dependencies![name] = version;
     }
     // Root owns these exact dependencies. Removing them from the staged copy keeps npm from
     // recursively bundling duplicate packages alongside the one private workspace runtime.
@@ -1030,18 +1049,4 @@ if (
       error && typeof error === "object" && "exitCode" in error ? error.exitCode : undefined;
     process.exit(typeof exitCode === "number" && Number.isInteger(exitCode) ? exitCode : 1);
   });
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string) {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

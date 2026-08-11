@@ -14,6 +14,7 @@ const DOCKER_ALL_SCHEDULER_PATH = "scripts/test-docker-all.mts";
 const DOCKER_E2E_PACKAGE_HELPER_PATH = "scripts/lib/docker-e2e-package.sh";
 const DOCKER_E2E_IMAGE_HELPER_PATH = "scripts/lib/docker-e2e-image.sh";
 const DOCKER_E2E_SCENARIOS_PATH = "scripts/lib/docker-e2e-scenarios.mts";
+const OPENCLAW_E2E_INSTANCE_HELPER_PATH = "scripts/lib/openclaw-e2e-instance.sh";
 const COMPOSE_SETUP_E2E_PATH = "scripts/e2e/compose-setup.sh";
 const CLI_INSTALLER_DISTRIBUTION_E2E_PATH = "scripts/e2e/cli-installer-distribution-docker.sh";
 const DOCKER_PACKAGE_INSTALL_E2E_PATH = "scripts/e2e/docker-package-install.sh";
@@ -565,6 +566,72 @@ print_log_tail "$LOG_PATH"
     const compiledResult = resolveEntrypoint(compiledRoot);
     expect(compiledResult.status, compiledResult.stderr).toBe(0);
     expect(compiledResult.stdout.trim()).toBe(compiledEntrypoint);
+  });
+
+  it("runs current TypeScript and frozen JavaScript Docker harness entrypoints", () => {
+    const fixtureRoot = tempDirs.make("openclaw-docker-script-entrypoint-");
+    const scriptStem = join(fixtureRoot, "fixture");
+    const runFixture = (value: string) =>
+      spawnSync(
+        "bash",
+        [
+          "-c",
+          `source "${OPENCLAW_E2E_INSTANCE_HELPER_PATH}"; openclaw_e2e_run_script_entrypoint "$1" "$2"`,
+          "openclaw-docker-script-entrypoint",
+          scriptStem,
+          value,
+        ],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${join(process.cwd(), "node_modules/.bin")}:${process.env.PATH ?? ""}`,
+          },
+        },
+      );
+
+    writeFileSync(
+      `${scriptStem}.mts`,
+      'enum Choice { Current = "current" }\nconst value: Choice = process.argv[2] as Choice; process.stdout.write(`mts:${value}`);\n',
+      "utf8",
+    );
+    const sourceResult = runFixture("current");
+    expect(sourceResult.status, sourceResult.stderr).toBe(0);
+    expect(sourceResult.stdout).toBe("mts:current");
+
+    rmSync(`${scriptStem}.mts`);
+    writeFileSync(
+      `${scriptStem}.mjs`,
+      'process.stdout.write(`mjs:${process.argv[2] ?? ""}`);\n',
+      "utf8",
+    );
+    const compiledResult = runFixture("frozen");
+    expect(compiledResult.status, compiledResult.stderr).toBe(0);
+    expect(compiledResult.stdout).toBe("mjs:frozen");
+
+    rmSync(`${scriptStem}.mjs`);
+    const missingResult = runFixture("missing");
+    expect(missingResult.status).toBe(1);
+    expect(missingResult.stderr).toContain("script entrypoint not found");
+  });
+
+  it("routes package-only Docker TypeScript entrypoints through their required runtime", () => {
+    const gatewayRunner = readFileSync(GATEWAY_NETWORK_DOCKER_E2E_PATH, "utf8");
+    const imageHelper = readFileSync(DOCKER_E2E_IMAGE_HELPER_PATH, "utf8");
+    const kitchenSinkRunner = readFileSync(KITCHEN_SINK_RPC_DOCKER_E2E_PATH, "utf8");
+    const releaseUpgradeScenario = readFileSync(RELEASE_UPGRADE_USER_JOURNEY_SCENARIO_PATH, "utf8");
+    expect(gatewayRunner).toContain("node scripts/e2e/lib/gateway-network/client.mts");
+    expect(kitchenSinkRunner).toContain(
+      "openclaw_e2e_run_script_entrypoint scripts/e2e/kitchen-sink-rpc-walk",
+    );
+    expect(releaseUpgradeScenario).toContain(
+      "openclaw_e2e_run_script_entrypoint \\\n      scripts/lib/release-upgrade-baseline",
+    );
+    expect(gatewayRunner).not.toContain("node --import tsx");
+    expect(imageHelper).not.toContain('node --import tsx "$entrypoint"');
+    expect(kitchenSinkRunner).not.toContain("node --import tsx");
+    expect(releaseUpgradeScenario).not.toContain("node --import tsx");
   });
 
   it("rejects malformed Docker E2E resource limits before a suite starts", () => {
@@ -4315,7 +4382,10 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
       "--allow-unreleased-changelog",
       'local harness_root="${DOCKER_E2E_HARNESS_ROOT_DIR:-$ROOT_DIR}"',
       '-v "$harness_root/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"',
+      '-v "$harness_root/packages/gateway-client/src:/app/packages/gateway-client/src:ro"',
+      '-v "$harness_root/packages/normalization-core/package.json:/app/packages/normalization-core/package.json:ro"',
       '-v "$harness_root/packages/normalization-core/src:/app/packages/normalization-core/src:ro"',
+      '-v "$harness_root/tsconfig.json:/app/tsconfig.json:ro"',
       '-v "$harness_root/test/e2e/qa-lab:/app/test/e2e/qa-lab:ro"',
       '-v "$harness_root/test/helpers:/app/test/helpers:ro"',
     ]);

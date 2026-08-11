@@ -870,12 +870,17 @@ vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
   resolvePinnedMainDmOwnerFromAllowlist: () => mockedPinnedMainDmOwner,
 }));
 
-vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
-  isRecord: (value: unknown): value is Record<string, unknown> =>
-    typeof value === "object" && value !== null && !Array.isArray(value),
-  normalizeOptionalLowercaseString: (value?: string) => value?.toLowerCase(),
-  normalizeOptionalString: (value?: string) => value,
-}));
+vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => {
+  const isMockRecord = (value: unknown): value is Record<string, unknown> =>
+    typeof value === "object" && value !== null && !Array.isArray(value);
+  const normalizeMockLowercaseString = (value?: string) => value?.toLowerCase();
+  const readMockOptionalString = (value?: string) => value;
+  return {
+    isRecord: isMockRecord,
+    normalizeOptionalLowercaseString: normalizeMockLowercaseString,
+    normalizeOptionalString: readMockOptionalString,
+  };
+});
 
 vi.mock("../../actions.js", () => ({
   reactSlackMessage: reactSlackMessageMock,

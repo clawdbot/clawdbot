@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import type { MsgContext } from "../templating.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
@@ -32,7 +32,7 @@ describe("resolveCurrentTurnImages", () => {
   });
 
   it("hydrates Telegram-style state-relative media into native prompt images", async () => {
-    await withTempDir({ prefix: "openclaw-current-turn-images-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-current-turn-images-" }, async (base) => {
       const stateDir = path.join(base, "state");
       const cwd = path.join(base, "cwd");
       const relativePath = "media/inbound/telegram.jpg";
@@ -91,7 +91,7 @@ describe("resolveCurrentTurnImages", () => {
       expectedMime: "image/png",
     },
   ])("hydrates $name using the verified byte MIME", async (testCase) => {
-    await withTempDir({ prefix: "openclaw-current-turn-canonical-kind-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-current-turn-canonical-kind-" }, async (base) => {
       const imagePath = path.join(base, testCase.fileName);
       await fs.writeFile(imagePath, testCase.imageBytes);
 
@@ -126,7 +126,7 @@ describe("resolveCurrentTurnImages", () => {
   it.each([undefined, "application/pdf", "application/octet-stream", "image/png"] as const)(
     "never hydrates valid image bytes when the authoritative document MIME is %s",
     async (contentType) => {
-      await withTempDir({ prefix: "openclaw-current-turn-document-image-" }, async (base) => {
+      await withTestDir({ prefix: "openclaw-current-turn-document-image-" }, async (base) => {
         const documentPath = path.join(base, "report.png");
         await fs.writeFile(documentPath, PNG_IMAGE_BYTES);
 
@@ -146,7 +146,7 @@ describe("resolveCurrentTurnImages", () => {
   it.each([undefined, "application/octet-stream", "binary/octet-stream"] as const)(
     "hydrates unknown-kind filename images when MIME %s has no concrete category",
     async (contentType) => {
-      await withTempDir({ prefix: "openclaw-current-turn-unknown-image-" }, async (base) => {
+      await withTestDir({ prefix: "openclaw-current-turn-unknown-image-" }, async (base) => {
         const imagePath = path.join(base, "upload.png");
         await fs.writeFile(imagePath, PNG_IMAGE_BYTES);
 
@@ -172,7 +172,7 @@ describe("resolveCurrentTurnImages", () => {
   it.each(["application/pdf", "application/zip", "text/plain"] as const)(
     "never hydrates valid PNG bytes when unknown-kind MIME %s declares a document",
     async (contentType) => {
-      await withTempDir({ prefix: "openclaw-current-turn-unknown-document-" }, async (base) => {
+      await withTestDir({ prefix: "openclaw-current-turn-unknown-document-" }, async (base) => {
         const documentPath = path.join(base, "report.png");
         await fs.writeFile(documentPath, PNG_IMAGE_BYTES);
 
@@ -193,7 +193,7 @@ describe("resolveCurrentTurnImages", () => {
     { name: "PDF", bytes: PDF_BYTES },
     { name: "ZIP", bytes: ZIP_BYTES },
   ])("rejects $name bytes despite a spoofed image kind, MIME, and filename", async (testCase) => {
-    await withTempDir({ prefix: "openclaw-current-turn-spoofed-image-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-current-turn-spoofed-image-" }, async (base) => {
       const imagePath = path.join(base, "spoofed.png");
       await fs.writeFile(imagePath, testCase.bytes);
 
@@ -217,7 +217,7 @@ describe("resolveCurrentTurnImages", () => {
   });
 
   it("hydrates AVIF attachments when transport metadata only declares generic bytes", async () => {
-    await withTempDir({ prefix: "openclaw-current-turn-avif-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-current-turn-avif-" }, async (base) => {
       const imagePath = path.join(base, "photo.avif");
       const imageBytes = Buffer.from("avif-image");
       await fs.writeFile(imagePath, imageBytes);
@@ -242,7 +242,7 @@ describe("resolveCurrentTurnImages", () => {
   });
 
   it("does not duplicate a prepared host-staged image during runner hydration", async () => {
-    await withTempDir({ prefix: "openclaw-current-turn-staged-image-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-current-turn-staged-image-" }, async (base) => {
       const stagingRoot = path.join(base, "media", "inbound", "staged");
       const imagePath = path.join(stagingRoot, "photo.png");
       const imageBytes = Buffer.from("host-staged-image");
@@ -274,7 +274,7 @@ describe("resolveCurrentTurnImages", () => {
   });
 
   it("does not let a staging root expose sibling workspace images", async () => {
-    await withTempDir({ prefix: "openclaw-current-turn-staged-image-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-current-turn-staged-image-" }, async (base) => {
       const stagingRoot = path.join(base, "media", "inbound", "staged");
       const rejectedPath = path.join(base, "private.png");
       await fs.mkdir(stagingRoot, { recursive: true });
@@ -346,7 +346,7 @@ describe("resolveCurrentTurnImages", () => {
   });
 
   it("appends extracted PDF page images without dropping current image attachments", async () => {
-    await withTempDir({ prefix: "openclaw-current-turn-pdf-images-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-current-turn-pdf-images-" }, async (base) => {
       const imagePath = path.join(base, "photo.png");
       const imageBytes = Buffer.from("current-photo");
       await fs.writeFile(imagePath, imageBytes);
@@ -391,7 +391,7 @@ describe("resolveCurrentTurnImages", () => {
   });
 
   it("orders extracted PDF page images before later current image attachments", async () => {
-    await withTempDir({ prefix: "openclaw-current-turn-pdf-order-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-current-turn-pdf-order-" }, async (base) => {
       const imagePath = path.join(base, "photo.png");
       await fs.writeFile(imagePath, "current-photo");
       const pdfPage = {

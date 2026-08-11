@@ -1,6 +1,6 @@
 import { performance } from "node:perf_hooks";
 import pLimit from "p-limit";
-import { withTimeout } from "../node-host/with-timeout.js";
+import { runAbortableTimeout } from "../node-host/with-timeout.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
 import { getPreparedRuntimeAuthMaterializations } from "./auth-profiles/runtime-materializations.js";
@@ -528,7 +528,7 @@ export function startSerializedSnapshotBuildBatch(
     });
   }
   return {
-    pending: withTimeout(
+    pending: runAbortableTimeout(
       async () => {
         const { actualBuild } = await startBuild;
         return await actualBuild;

@@ -216,7 +216,7 @@ vi.mock("./directive-handling.parse.js", async () => {
   const { parseInlineDirectivesForTargetSessionTest } =
     await import("./get-reply-directives.target-session.test-helpers.js");
   return {
-    parseInlineDirectives: vi.fn(parseInlineDirectivesForTargetSessionTest),
+    parseInlineSessionDirectives: vi.fn(parseInlineDirectivesForTargetSessionTest),
   };
 });
 

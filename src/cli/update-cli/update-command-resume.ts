@@ -77,6 +77,7 @@ async function resumePostCoreUpdateUnlocked(params: ResumePostCoreUpdateParams):
   });
   await createUpdateConfigSnapshot();
   await runUpdateFinalizationDoctorInFreshProcess({
+    phase: "pre-plugin",
     root: params.root,
     yes: params.opts.yes === true,
     json: params.opts.json === true,

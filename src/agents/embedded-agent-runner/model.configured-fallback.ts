@@ -38,7 +38,7 @@ import {
   type ManifestModelCatalogProviderAliasMetadata,
 } from "./model.static-catalog.js";
 
-export function resolveConfiguredFallbackModel(params: {
+export function buildConfiguredFallbackModel(params: {
   provider: string;
   modelId: string;
   cfg?: OpenClawConfig;

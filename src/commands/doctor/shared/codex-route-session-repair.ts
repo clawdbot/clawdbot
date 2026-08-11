@@ -19,7 +19,7 @@ import {
 import { resolveAllAgentSessionStoreTargetsSync } from "../../../config/sessions/targets.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { loadJsonFile } from "../../../infra/json-file.js";
+import { loadJsonFileThroughSymlink } from "../../../infra/json-file.js";
 import {
   loadLegacySessionStore,
   updateLegacySessionStore,
@@ -335,7 +335,9 @@ function resolveVerifiedSessionAuthProfileIdMap(params: {
     loadPersistedAuthProfileStore(resolveSharedMainAuthAgentDir(params.env))?.profiles ?? {};
   const localLegacyAuthPath = resolveLegacyAuthProfilesPath(agentDir);
   const localLegacySourceExists = fs.existsSync(localLegacyAuthPath);
-  const localLegacySource = localLegacySourceExists ? loadJsonFile(localLegacyAuthPath) : null;
+  const localLegacySource = localLegacySourceExists
+    ? loadJsonFileThroughSymlink(localLegacyAuthPath)
+    : null;
   const localLegacyProfiles =
     isRecord(localLegacySource) && isRecord(localLegacySource.profiles)
       ? localLegacySource.profiles

@@ -74,8 +74,8 @@ vi.mock("./agent-bundle-mcp-runtime.js", async (importOriginal) => {
 });
 
 import {
-  materializeRequesterScopedMcpToolsForHarnessRun,
-  materializeStaticMcpToolsForScheduledHarnessRun,
+  materializeRequesterScopedMcpToolsForHarnessRunCore,
+  materializeStaticMcpToolsForScheduledHarnessRunCore,
 } from "./agent-bundle-mcp-harness.js";
 
 function makeRuntime(params: { sessionId: string; requesterSenderId: string }): SessionMcpRuntime {
@@ -152,14 +152,14 @@ beforeEach(() => {
   mocks.getAdvertisedScopedMcpCatalog.mockClear();
 });
 
-describe("materializeStaticMcpToolsForScheduledHarnessRun", () => {
+describe("materializeStaticMcpToolsForScheduledHarnessRunCore", () => {
   it("materializes static tools without carrying requester identity and applies the stored cap", async () => {
     const runtime = makeRuntime({ sessionId: "scheduled", requesterSenderId: "unused" });
     delete runtime.requesterScope;
     runtime.peekCatalog()!.servers["user-mail"]!.codexApprovalMode = "approve";
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
 
-    const result = await materializeStaticMcpToolsForScheduledHarnessRun({
+    const result = await materializeStaticMcpToolsForScheduledHarnessRunCore({
       sessionId: "scheduled",
       workspaceDir: "/workspace",
       toolsAllow: ["user-mail__inbox"],
@@ -181,7 +181,7 @@ describe("materializeStaticMcpToolsForScheduledHarnessRun", () => {
     delete runtime.requesterScope;
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
 
-    const result = await materializeStaticMcpToolsForScheduledHarnessRun({
+    const result = await materializeStaticMcpToolsForScheduledHarnessRunCore({
       sessionId: "scheduled-denied",
       workspaceDir: "/workspace",
       toolsAllow: ["read"],
@@ -228,7 +228,7 @@ describe("materializeStaticMcpToolsForScheduledHarnessRun", () => {
     const callTool = vi.spyOn(runtime, "callTool");
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
 
-    const result = await materializeStaticMcpToolsForScheduledHarnessRun({
+    const result = await materializeStaticMcpToolsForScheduledHarnessRunCore({
       sessionId: "scheduled-app",
       workspaceDir: "/workspace",
       toolsAllow: ["user-mail__show", "user-mail__app-only"],
@@ -299,7 +299,7 @@ describe("materializeStaticMcpToolsForScheduledHarnessRun", () => {
     const callTool = vi.spyOn(runtime, "callTool");
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
 
-    const result = await materializeStaticMcpToolsForScheduledHarnessRun({
+    const result = await materializeStaticMcpToolsForScheduledHarnessRunCore({
       sessionId: "scheduled-app-approval",
       workspaceDir: "/workspace",
       toolsAllow: ["*"],
@@ -363,7 +363,7 @@ describe("materializeStaticMcpToolsForScheduledHarnessRun", () => {
     });
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
 
-    const result = await materializeStaticMcpToolsForScheduledHarnessRun({
+    const result = await materializeStaticMcpToolsForScheduledHarnessRunCore({
       sessionId: "scheduled-app-yolo",
       workspaceDir: "/workspace",
       toolsAllow: ["*"],
@@ -386,7 +386,7 @@ describe("materializeStaticMcpToolsForScheduledHarnessRun", () => {
     runtime.getCatalog = async () => emptyCatalog;
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
 
-    const result = await materializeStaticMcpToolsForScheduledHarnessRun({
+    const result = await materializeStaticMcpToolsForScheduledHarnessRunCore({
       sessionId: "scheduled-empty",
       workspaceDir: "/workspace",
       toolsAllow: ["*"],
@@ -417,7 +417,7 @@ describe("materializeStaticMcpToolsForScheduledHarnessRun", () => {
     runtime.getCatalog = async () => failedCatalog;
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
 
-    const result = await materializeStaticMcpToolsForScheduledHarnessRun({
+    const result = await materializeStaticMcpToolsForScheduledHarnessRunCore({
       sessionId: "scheduled-diagnostic",
       workspaceDir: "/workspace",
       toolsAllow: ["*"],
@@ -436,7 +436,7 @@ describe("materializeStaticMcpToolsForScheduledHarnessRun", () => {
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
     const callTool = vi.spyOn(runtime, "callTool");
 
-    const result = await materializeStaticMcpToolsForScheduledHarnessRun({
+    const result = await materializeStaticMcpToolsForScheduledHarnessRunCore({
       sessionId: "scheduled-prompt",
       workspaceDir: "/workspace",
       toolsAllow: ["user-mail__inbox"],
@@ -456,7 +456,7 @@ describe("materializeStaticMcpToolsForScheduledHarnessRun", () => {
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
     const callTool = vi.spyOn(runtime, "callTool");
 
-    const result = await materializeStaticMcpToolsForScheduledHarnessRun({
+    const result = await materializeStaticMcpToolsForScheduledHarnessRunCore({
       sessionId: "scheduled-yolo",
       workspaceDir: "/workspace",
       toolsAllow: ["user-mail__inbox"],
@@ -482,7 +482,7 @@ describe("materializeStaticMcpToolsForScheduledHarnessRun", () => {
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
     const callTool = vi.spyOn(runtime, "callTool");
 
-    const result = await materializeStaticMcpToolsForScheduledHarnessRun({
+    const result = await materializeStaticMcpToolsForScheduledHarnessRunCore({
       sessionId: `scheduled-${mode}`,
       workspaceDir: "/workspace",
       toolsAllow: ["user-mail__inbox"],
@@ -499,7 +499,7 @@ describe("materializeStaticMcpToolsForScheduledHarnessRun", () => {
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
     const callTool = vi.spyOn(runtime, "callTool");
 
-    const result = await materializeStaticMcpToolsForScheduledHarnessRun({
+    const result = await materializeStaticMcpToolsForScheduledHarnessRunCore({
       sessionId: "scheduled-unknown",
       workspaceDir: "/workspace",
       toolsAllow: ["user-mail__inbox"],
@@ -518,10 +518,10 @@ afterEach(() => {
   mcpUiResourceTesting.clearViewStore();
 });
 
-describe("materializeRequesterScopedMcpToolsForHarnessRun", () => {
+describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
   it("returns undefined before any requester resolves", async () => {
     mocks.setResolveImpl(async () => undefined);
-    const result = await materializeRequesterScopedMcpToolsForHarnessRun({
+    const result = await materializeRequesterScopedMcpToolsForHarnessRunCore({
       sessionId: "session-empty",
       workspaceDir: "/workspace",
       requesterSenderId: "guest",
@@ -538,7 +538,7 @@ describe("materializeRequesterScopedMcpToolsForHarnessRun", () => {
     });
 
     await expect(
-      materializeRequesterScopedMcpToolsForHarnessRun({
+      materializeRequesterScopedMcpToolsForHarnessRunCore({
         sessionId: "session-cleanup",
         workspaceDir: "/workspace",
         requesterSenderId: "authed",
@@ -559,7 +559,7 @@ describe("materializeRequesterScopedMcpToolsForHarnessRun", () => {
       });
     });
 
-    const authed = await materializeRequesterScopedMcpToolsForHarnessRun({
+    const authed = await materializeRequesterScopedMcpToolsForHarnessRunCore({
       sessionId: "session-stable",
       workspaceDir: "/workspace",
       requesterSenderId: "authed",
@@ -575,7 +575,7 @@ describe("materializeRequesterScopedMcpToolsForHarnessRun", () => {
     });
     await authed!.dispose();
 
-    const guest = await materializeRequesterScopedMcpToolsForHarnessRun({
+    const guest = await materializeRequesterScopedMcpToolsForHarnessRunCore({
       sessionId: "session-stable",
       workspaceDir: "/workspace",
       requesterSenderId: "guest",
@@ -602,7 +602,7 @@ describe("materializeRequesterScopedMcpToolsForHarnessRun", () => {
       }),
     );
 
-    const result = await materializeRequesterScopedMcpToolsForHarnessRun({
+    const result = await materializeRequesterScopedMcpToolsForHarnessRunCore({
       sessionId: "session-policy",
       workspaceDir: "/workspace",
       requesterSenderId: "authed",
@@ -630,12 +630,12 @@ describe("materializeRequesterScopedMcpToolsForHarnessRun", () => {
       });
     });
 
-    const alice = await materializeRequesterScopedMcpToolsForHarnessRun({
+    const alice = await materializeRequesterScopedMcpToolsForHarnessRunCore({
       sessionId: "session-route",
       workspaceDir: "/workspace",
       requesterSenderId: "alice",
     });
-    const bob = await materializeRequesterScopedMcpToolsForHarnessRun({
+    const bob = await materializeRequesterScopedMcpToolsForHarnessRunCore({
       sessionId: "session-route",
       workspaceDir: "/workspace",
       requesterSenderId: "bob",

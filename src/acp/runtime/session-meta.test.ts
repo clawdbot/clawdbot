@@ -7,7 +7,7 @@ import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/ses
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import {
   listAcpSessionEntries,
   readAcpSessionEntry,
@@ -52,7 +52,7 @@ describe("ACP session metadata SQLite store", () => {
   });
 
   it("persists ACP metadata in SQLite without writing sessions.json acp blocks", async () => {
-    await withTempDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const databasePath = path.join(dir, "state", "openclaw.sqlite");
       const cfg = { session: { store: storePath } } as OpenClawConfig;
@@ -102,7 +102,7 @@ describe("ACP session metadata SQLite store", () => {
   });
 
   it("clears legacy embedded ACP metadata through the session accessor", async () => {
-    await withTempDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const databasePath = path.join(dir, "state", "openclaw.sqlite");
       const cfg = { session: { store: storePath } } as OpenClawConfig;
@@ -151,7 +151,7 @@ describe("ACP session metadata SQLite store", () => {
   });
 
   it("creates a session-store row for new SQLite ACP sessions without embedding ACP metadata", async () => {
-    await withTempDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const databasePath = path.join(dir, "state", "openclaw.sqlite");
       const cfg = { session: { store: storePath } } as OpenClawConfig;
@@ -182,7 +182,7 @@ describe("ACP session metadata SQLite store", () => {
   });
 
   it("normalizes ACP metadata lookups and writes to the resolved session-store key", async () => {
-    await withTempDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const databasePath = path.join(dir, "state", "openclaw.sqlite");
       const cfg = { session: { store: storePath } } as OpenClawConfig;
@@ -275,7 +275,7 @@ describe("ACP session metadata SQLite store", () => {
   });
 
   it("keeps SQLite ACP metadata visible when legacy store keys are canonicalized", async () => {
-    await withTempDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const databasePath = path.join(dir, "state", "openclaw.sqlite");
       const cfg = { session: { store: storePath } } as OpenClawConfig;
@@ -320,7 +320,7 @@ describe("ACP session metadata SQLite store", () => {
   });
 
   it("binds ACP metadata to the final accessor-selected entry for alias writes", async () => {
-    await withTempDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const databasePath = path.join(dir, "state", "openclaw.sqlite");
       const cfg = { session: { store: storePath } } as OpenClawConfig;
@@ -373,7 +373,7 @@ describe("ACP session metadata SQLite store", () => {
   });
 
   it("ignores SQLite ACP metadata rows from an older lifecycle revision", async () => {
-    await withTempDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const databasePath = path.join(dir, "state", "openclaw.sqlite");
       const cfg = { session: { store: storePath } } as OpenClawConfig;
@@ -427,7 +427,7 @@ describe("ACP session metadata SQLite store", () => {
   });
 
   it("reads ACP metadata rows written with the legacy session-id binding", async () => {
-    await withTempDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const databasePath = path.join(dir, "state", "openclaw.sqlite");
       const cfg = { session: { store: storePath } } as OpenClawConfig;
@@ -504,7 +504,7 @@ describe("ACP session metadata SQLite store", () => {
   });
 
   it("keeps a session-id fence when ACP metadata is written before a lifecycle revision", async () => {
-    await withTempDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
       const databasePath = path.join(dir, "state", "openclaw.sqlite");
       const sessionKey = "agent:codex:acp:pre-revision";
       writeAcpSessionMetaForMigration({
@@ -548,7 +548,7 @@ describe("ACP session metadata SQLite store", () => {
   });
 
   it("repairs ACP metadata rows when session-store keys are canonicalized", async () => {
-    await withTempDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const databasePath = path.join(dir, "state", "openclaw.sqlite");
       const cfg = { session: { store: storePath } } as OpenClawConfig;
@@ -601,7 +601,7 @@ describe("ACP session metadata SQLite store", () => {
   });
 
   it("lists SQLite ACP rows while joining current session-store entries", async () => {
-    await withTempDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const databasePath = path.join(dir, "state", "openclaw.sqlite");
       const cfg = { session: { store: storePath } } as OpenClawConfig;
@@ -652,7 +652,7 @@ describe("ACP session metadata SQLite store", () => {
   });
 
   it("honors OPENCLAW_STATE_DIR when joining listed SQLite rows to session stores", async () => {
-    await withTempDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: dir } as NodeJS.ProcessEnv;
       const cfg = {} as OpenClawConfig;
       const sessionKey = "agent:codex:acp:s1";

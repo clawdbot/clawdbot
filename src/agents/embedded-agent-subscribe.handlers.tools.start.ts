@@ -34,7 +34,7 @@ import type { AgentEvent } from "./runtime/index.js";
 import { inferToolMetaFromArgsCore, isCommandBearingToolCall } from "./tool-display.js";
 import { resolveFileMutationToolName } from "./tool-mutation-names.js";
 import { buildToolMutationState } from "./tool-mutation.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 import {
   cancelAskUserPromptDelivery,
   normalizeAskUserParams,
@@ -322,7 +322,7 @@ export function handleToolExecutionStart(
     hideFromChannelProgress?: boolean;
   },
 ): void | Promise<void> {
-  const startToolName = normalizeToolName(evt.toolName);
+  const startToolName = normalizeToolPolicyName(evt.toolName);
   ctx.state.liveEditDiffStateById.delete(evt.toolCallId);
   const askUserPromptReservation =
     startToolName === "ask_user" && ctx.params.onToolResult
@@ -358,7 +358,7 @@ export function handleToolExecutionStart(
 
   const continueToolExecutionStart = (): void | Promise<void> => {
     const rawToolName = evt.toolName;
-    const toolName = normalizeToolName(rawToolName);
+    const toolName = normalizeToolPolicyName(rawToolName);
     const hideFromChannelProgress = evt.hideFromChannelProgress === true;
     const toolCallId = evt.toolCallId;
     const args = evt.args;

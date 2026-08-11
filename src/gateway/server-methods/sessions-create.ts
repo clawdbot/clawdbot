@@ -40,7 +40,7 @@ import { loadSessionEntryReadOnly, resolveGatewaySessionStoreTarget } from "../s
 import { resolveSessionPatchModelSelection } from "../sessions-patch.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { chatHandlers } from "./chat.js";
-import { resolveSessionCatalogCreateTarget } from "./session-catalog.js";
+import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { captureCreatedSessionDiffBaseline } from "./session-create-diff-baseline.js";
 import {
@@ -95,7 +95,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     const catalogTarget =
       catalogId && catalogAgentId
-        ? resolveSessionCatalogCreateTarget(catalogId, catalogAgentId, cfg)
+        ? resolveRegisteredCatalogCreateTarget(catalogId, catalogAgentId, cfg)
         : undefined;
     if (catalogTarget && !catalogTarget.ok) {
       respond(

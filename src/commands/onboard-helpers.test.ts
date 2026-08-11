@@ -82,7 +82,7 @@ const mocks = vi.hoisted(() => ({
     termination: "exit",
   })),
   pickPrimaryTailnetIPv4: vi.fn<() => string | undefined>(() => undefined),
-  resolveAdvertisedLanHost: vi.fn<() => Promise<string | null>>(async () => null),
+  resolveAdvertisedLanHostCore: vi.fn<() => Promise<string | null>>(async () => null),
   probeGateway: vi.fn(),
   deleteWorkspaceState: vi.fn(),
   prepareWorkspaceStateDeletion: vi.fn((workspaceDir: string) => ({ workspaceDir })),
@@ -109,7 +109,7 @@ vi.mock("../infra/tailnet.js", () => ({
 }));
 
 vi.mock("../infra/advertised-lan-host.js", () => ({
-  resolveAdvertisedLanHost: mocks.resolveAdvertisedLanHost,
+  resolveAdvertisedLanHostCore: mocks.resolveAdvertisedLanHostCore,
 }));
 
 vi.mock("../gateway/probe.js", () => ({
@@ -1069,7 +1069,7 @@ describe("resolveControlUiLinks", () => {
   });
 
   it("uses route-aware advertised LAN host for display links", async () => {
-    mocks.resolveAdvertisedLanHost.mockResolvedValueOnce("10.211.55.3");
+    mocks.resolveAdvertisedLanHostCore.mockResolvedValueOnce("10.211.55.3");
 
     const links = await resolveAdvertisedControlUiLinks({
       port: 18789,
@@ -1088,7 +1088,7 @@ describe("resolveControlUiLinks", () => {
 
     expect(links.httpUrl).toBe("http://127.0.0.1:18789/");
     expect(links.wsUrl).toBe("ws://127.0.0.1:18789");
-    expect(mocks.resolveAdvertisedLanHost).not.toHaveBeenCalled();
+    expect(mocks.resolveAdvertisedLanHostCore).not.toHaveBeenCalled();
   });
 });
 

@@ -233,6 +233,10 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs native port diagnostics coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain("src/infra/ports.test.ts");
+  });
+
   it("keeps the native Scheduled Task lifecycle proof opt-in", () => {
     const scripts = readPackageJson().scripts;
 

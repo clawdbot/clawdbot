@@ -352,7 +352,8 @@ export async function detectAndLoadAgentHarnessPromptImages(params: {
 export async function loadCodexBundleMcpThreadConfig(
   params: LoadCodexBundleMcpThreadConfigParams,
 ): Promise<CodexBundleMcpThreadConfig> {
-  const { loadCodexBundleMcpThreadConfig: load } = await import("../agents/codex-mcp-config.js");
+  const { loadCodexBundleMcpThreadConfigCore: load } =
+    await import("../agents/codex-mcp-config.js");
   return load(params);
 }
 
@@ -407,12 +408,12 @@ export async function prepareHarnessNativeMcpAppPreview(params: {
  */
 export async function materializeRequesterScopedMcpToolsForHarnessRun(
   params: Parameters<
-    typeof import("../agents/agent-bundle-mcp-harness.js").materializeRequesterScopedMcpToolsForHarnessRun
+    typeof import("../agents/agent-bundle-mcp-harness.js").materializeRequesterScopedMcpToolsForHarnessRunCore
   >[0],
 ): Promise<
   Awaited<
     ReturnType<
-      typeof import("../agents/agent-bundle-mcp-harness.js").materializeRequesterScopedMcpToolsForHarnessRun
+      typeof import("../agents/agent-bundle-mcp-harness.js").materializeRequesterScopedMcpToolsForHarnessRunCore
     >
   >
 > {
@@ -420,7 +421,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRun(
   if (!shouldLoad) {
     return undefined;
   }
-  const { materializeRequesterScopedMcpToolsForHarnessRun: materialize } =
+  const { materializeRequesterScopedMcpToolsForHarnessRunCore: materialize } =
     await import("../agents/agent-bundle-mcp-harness.js");
   return materialize(params);
 }

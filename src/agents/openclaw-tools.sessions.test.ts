@@ -8,7 +8,7 @@ import type { ChannelMessagingAdapter } from "../channels/plugins/types.public.j
 import type { OpenClawConfig } from "../config/config.js";
 import {
   appendTranscriptMessage,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { createSessionVisibilityChecker } from "../plugin-sdk/session-visibility.js";
 import {
@@ -569,7 +569,7 @@ describe("sessions tools", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-list-preview-"));
     const storePath = path.join(tmpDir, "sessions.json");
     try {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:main", storePath },
         { sessionId: "visible", updatedAt: 20 },
       );
@@ -581,7 +581,7 @@ describe("sessions tools", () => {
         { agentId: "main", sessionId: "visible", sessionKey: "agent:main:main", storePath },
         { cwd: tmpDir, message: { role: "assistant", content: "Visible latest reply" } },
       );
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "other", sessionKey: "agent:other:main", storePath },
         { sessionId: "hidden", updatedAt: 21 },
       );
@@ -1149,7 +1149,7 @@ describe("sessions tools", () => {
     const requesterSessionKey = "agent:main:clickclack:discussion-proof";
     const targetSessionKey = "agent:main:main";
     const expectedSessionId = "scoped-main-incarnation";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey: targetSessionKey, storePath },
       { sessionId: expectedSessionId, updatedAt: 1 },
     );
@@ -1799,7 +1799,7 @@ describe("sessions tools", () => {
     const targetSessionId = "exact-cron-run-incarnation";
     const queueMessage = vi.fn(async () => {});
     try {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "leasing-ops", sessionKey: runScopedTargetKey, storePath },
         { sessionId: targetSessionId, updatedAt: 1 },
       );

@@ -18,7 +18,7 @@ import {
 
 const hoisted = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
-  patchSessionEntry: vi.fn(),
+  patchSessionEntryCore: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
 }));
@@ -34,7 +34,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  patchSessionEntry: hoisted.patchSessionEntry,
+  patchSessionEntryCore: hoisted.patchSessionEntryCore,
 }));
 
 function git(cwd: string, ...args: string[]): string {
@@ -396,6 +396,6 @@ describe("ensureSessionDiffBaseline", () => {
     });
 
     expect(result).toBe(entry);
-    expect(hoisted.patchSessionEntry).not.toHaveBeenCalled();
+    expect(hoisted.patchSessionEntryCore).not.toHaveBeenCalled();
   });
 });

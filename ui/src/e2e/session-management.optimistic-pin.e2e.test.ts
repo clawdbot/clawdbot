@@ -1,7 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
-  activateMenuItem,
+  activateSelfRemovingControl,
   captureUiProof,
   captureUiProofEnabled,
   createSessionManagementE2eSuite,
@@ -112,7 +112,7 @@ suite.define(() => {
       await pinnedRow.hover();
       await pinnedRow.getByRole("button", { name: "Open session menu: Pin me" }).click();
       const menuHost = page.locator("openclaw-session-menu");
-      await activateMenuItem(menuHost.getByRole("menuitem", { name: "Unpin session" }));
+      await activateSelfRemovingControl(menuHost.getByRole("menuitem", { name: "Unpin session" }));
 
       await expect.poll(() => zoneEntry.count()).toBe(0);
       await expect.poll(() => row.count()).toBe(1);

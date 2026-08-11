@@ -1,6 +1,7 @@
 // Qqbot plugin module implements group behavior.
 import { resolveScopeRequireMention, type ScopeTree } from "openclaw/plugin-sdk/channel-policy";
-import { asBoolean, asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readQqbotObjectRecord as asOptionalObjectRecord } from "../object-record.js";
 import { resolveAccountBase } from "./resolve.js";
 
 interface GroupConfig {

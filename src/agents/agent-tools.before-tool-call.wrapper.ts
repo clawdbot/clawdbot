@@ -73,7 +73,7 @@ import {
 } from "./code-mode-control-tools.js";
 import { attachInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 import { buildToolMutationState } from "./tool-mutation.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 import {
   formatToolExecutionErrorMessage,
   isTrustedToolExecutionPreflightError,
@@ -303,7 +303,7 @@ export function wrapToolWithBeforeToolCallHook(
       }
       const toolCallOrdinal = ctx?.allocateToolOutcomeOrdinal?.(toolCallId);
       const preExecutionStartedAt = Date.now();
-      const normalizedToolName = normalizeToolName(toolName || "tool");
+      const normalizedToolName = normalizeToolPolicyName(toolName || "tool");
       const trace =
         hookOptions.emitDiagnostics && ctx?.trace
           ? freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(ctx.trace))

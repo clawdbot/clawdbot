@@ -333,7 +333,7 @@ export type PluginRuntimeCore = {
     resolveAgentWorkspaceDir: typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir;
     resolveAgentIdentity: typeof import("../../agents/identity.js").resolveAgentIdentity;
     /** Resolve an allowed catalog create target through canonical agent model/runtime policy. */
-    resolveSessionCatalogCreateTarget: typeof import("./runtime-agent-session-catalog.js").resolveSessionCatalogCreateTarget;
+    resolveSessionCatalogCreateTarget: typeof import("./runtime-agent-session-catalog.js").resolveAgentCatalogCreateTarget;
     resolveThinkingDefault: (params: {
       cfg: import("../../config/types.openclaw.js").OpenClawConfig;
       provider: string;
@@ -358,7 +358,7 @@ export type PluginRuntimeCore = {
     resolveCliBackendDispatchEligibility: typeof import("../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js").resolveEmbeddedCliBackendDispatchEligibility;
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {
-      resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
+      resolveStorePath: typeof import("../../config/sessions/paths.js").resolveSessionStorePathCore;
       createSessionEntry: (
         params: RuntimeCreateSessionEntryParams,
       ) => Promise<RuntimeCreateSessionEntryResult>;

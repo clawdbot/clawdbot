@@ -14,12 +14,12 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  listSessionEntries: (scope?: { storePath?: string; clone?: boolean }) =>
+  listSessionEntriesCore: (scope?: { storePath?: string; clone?: boolean }) =>
     hoisted.listSessionEntriesMock(scope),
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
-  resolveStorePath: (_store?: string, params?: { agentId?: string }) =>
+  resolveSessionStorePathCore: (_store?: string, params?: { agentId?: string }) =>
     `/stores/${params?.agentId ?? "main"}.json`,
 }));
 

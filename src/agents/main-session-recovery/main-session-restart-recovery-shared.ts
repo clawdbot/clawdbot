@@ -2,7 +2,7 @@ import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import {
   listConfiguredSessionStoreAgentIds,
-  resolveStorePath,
+  resolveSessionStorePathCore,
   type InternalSessionEntry as SessionEntry,
   resolveAllAgentSessionStoreTargetsSync,
 } from "../../config/sessions.js";
@@ -94,7 +94,7 @@ export async function resolveRestartRecoveryStorePaths(params: {
     const configuredAgentIds = listConfiguredSessionStoreAgentIds(params.cfg);
     const configuredStorePaths = new Set(
       configuredAgentIds.map((agentId) =>
-        path.resolve(resolveStorePath(params.cfg?.session?.store, { agentId, env })),
+        path.resolve(resolveSessionStorePathCore(params.cfg?.session?.store, { agentId, env })),
       ),
     );
     const configuredAgentIdSet = new Set(configuredAgentIds);

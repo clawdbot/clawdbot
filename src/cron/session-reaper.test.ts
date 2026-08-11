@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
-import { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
+import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
   listKnownSessionStoreAgentIds,
@@ -26,7 +26,7 @@ import type { Logger } from "./service/state.js";
 import { sweepCronRunSessions as sweepCronRunSessionsImpl } from "./session-reaper.js";
 import { resetReaperThrottle } from "./session-reaper.test-support.js";
 
-const { listSessionEntries, patchSessionEntry, replaceSessionEntry } = sessionAccessor;
+const { listSessionEntriesCore, patchSessionEntryCore, replaceSessionEntry } = sessionAccessor;
 
 const taskStatusMocks = vi.hoisted(() => ({
   buildPendingSet: vi.fn<() => Set<string>>(() => new Set()),
@@ -62,7 +62,7 @@ async function seedSessionEntries(
 
 function readSessionEntries(storePath: string): Record<string, SessionEntry> {
   return Object.fromEntries(
-    listSessionEntries({ agentId: "main", storePath }).map(({ sessionKey, entry }) => [
+    listSessionEntriesCore({ agentId: "main", storePath }).map(({ sessionKey, entry }) => [
       sessionKey,
       entry,
     ]),
@@ -266,7 +266,7 @@ describe("sweepCronRunSessions", () => {
     expect(resolveExistingAgentSessionStoreTargetsSync(cfg, "ops")).toEqual([
       { agentId: "ops", storePath: exactStorePath },
     ]);
-    expect(Object.keys(loadCombinedSessionStoreForGateway(cfg).store).toSorted()).toEqual([
+    expect(Object.keys(loadCombinedSessionStoreForGatewayCore(cfg).store).toSorted()).toEqual([
       mainKey,
       opsKey,
     ]);
@@ -444,7 +444,7 @@ describe("sweepCronRunSessions", () => {
     const writerStarted = createDeferred();
     const releaseWriter = createDeferred();
     const firstValidation = createDeferred();
-    const writer = patchSessionEntry({ storePath, sessionKey }, async () => {
+    const writer = patchSessionEntryCore({ storePath, sessionKey }, async () => {
       writerStarted.resolve();
       await releaseWriter.promise;
       return {};
@@ -687,7 +687,7 @@ describe("sweepCronRunSessions", () => {
     const eacces = Object.assign(new Error("EACCES: permission denied, open 'sessions.json'"), {
       code: "EACCES",
     });
-    const listSpy = vi.spyOn(sessionAccessor, "listSessionEntries").mockImplementation(() => {
+    const listSpy = vi.spyOn(sessionAccessor, "listSessionEntriesCore").mockImplementation(() => {
       throw eacces;
     });
 

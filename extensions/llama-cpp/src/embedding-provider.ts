@@ -14,6 +14,7 @@ import {
   type MemoryEmbeddingProviderCreateOptions,
   type MemoryEmbeddingProviderCreateResult,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatLlamaCppSetupError, resolveNodeLlamaCppImportUrl } from "./node-llama.runtime.js";
 
 type LlamaCppLocalOptions = {
@@ -41,10 +42,6 @@ type LlamaCppModelIdentity = {
     cacheKeyData: Record<string, unknown>;
   }>;
 };
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 function readLocalOptions(options: { local?: unknown }): LlamaCppLocalOptions {
   const local = options.local as LlamaCppLocalOptions | undefined;

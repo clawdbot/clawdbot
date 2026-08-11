@@ -472,7 +472,7 @@ describe("package-openclaw-for-docker", () => {
     const packageJsonPath = path.join(sourceDir, "package.json");
     const originalPackageJson = `${JSON.stringify(
       {
-        dependencies: { "@openclaw/ai": "workspace:*", "dep-a": "1.2.3" },
+        dependencies: { "@openclaw/ai": "workspace:*", "dep-a": "workspace:1.2.3" },
         devDependencies: { "@openclaw/session-url-contract": "workspace:*" },
         files: ["dist"],
         name: "openclaw",
@@ -506,7 +506,10 @@ describe("package-openclaw-for-docker", () => {
             fs.writeFileSync(
               path.join(destination, "package.json"),
               `${JSON.stringify({
-                dependencies: { "dep-a": "1.2.3" },
+                dependencies: {
+                  "@openclaw/private-runtime": "0.0.0-private",
+                  "dep-a": "1.2.3",
+                },
                 name: "@openclaw/ai",
                 version: "2026.6.17",
               })}\n`,
@@ -522,6 +525,8 @@ describe("package-openclaw-for-docker", () => {
         devDependencies?: Record<string, string>;
       };
       expect(packageJson.dependencies["@openclaw/ai"]).toBe("2026.6.17");
+      expect(packageJson.dependencies["@openclaw/private-runtime"]).toBeUndefined();
+      expect(packageJson.dependencies["dep-a"]).toBe("1.2.3");
       expect(packageJson.devDependencies?.["@openclaw/session-url-contract"]).toBe("workspace:*");
       expect(packageJson.bundleDependencies).toContain("@openclaw/ai");
       expect(fs.existsSync(path.join(installedAiPath, "original-marker"))).toBe(false);

@@ -13,10 +13,10 @@ import {
 import {
   addSessionMember,
   listSessionMembers,
-  loadCombinedSessionStoreForGateway,
+  loadCombinedSessionStoreForGatewayCore,
   removeSessionMember,
 } from "../../config/sessions.js";
-import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { listProfiles } from "../../state/user-profiles.js";
 import {
@@ -131,7 +131,7 @@ function knownSessionIdentities(params: {
     });
   };
   remember(params.actor);
-  for (const entry of Object.values(loadCombinedSessionStoreForGateway(params.cfg).store)) {
+  for (const entry of Object.values(loadCombinedSessionStoreForGatewayCore(params.cfg).store)) {
     remember(entry.createdActor ?? null);
   }
   for (const profile of listProfiles()) {
@@ -216,7 +216,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       // session-id check at the storage boundary so an out-of-band row
       // replacement still cannot inherit this visibility change.
       let sessionChanged = false;
-      await patchSessionEntry(scope, (entry) => {
+      await patchSessionEntryCore(scope, (entry) => {
         if (entry.sessionId !== current.entry.sessionId) {
           sessionChanged = true;
           return null;
@@ -239,7 +239,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       } catch (error) {
         // Roll back only the exact instance and value we patched; an unexpected
         // storage-owner replacement must not inherit the old visibility.
-        await patchSessionEntry(scope, (entry) =>
+        await patchSessionEntryCore(scope, (entry) =>
           entry.sessionId === current.entry.sessionId &&
           resolveSessionVisibility(entry) === visibility
             ? { visibility: previous }

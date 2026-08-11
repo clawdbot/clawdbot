@@ -1,7 +1,7 @@
 // QA channel tests cover QA channel runtime behavior and mocked message delivery.
 import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
-const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
+const loadBundledPluginPublicSurfaceModuleSyncCore = vi.hoisted(() => vi.fn());
 const buildQaTargetImpl = vi.hoisted(() => vi.fn());
 const pollQaBusImpl = vi.hoisted(() => vi.fn());
 
@@ -9,7 +9,7 @@ vi.mock("./facade-loader.js", async () => {
   const actual = await vi.importActual<typeof import("./facade-loader.js")>("./facade-loader.js");
   return {
     ...actual,
-    loadBundledPluginPublicSurfaceModuleSync,
+    loadBundledPluginPublicSurfaceModuleSyncCore,
   };
 });
 
@@ -17,10 +17,10 @@ describe("plugin-sdk qa-channel", () => {
   beforeEach(() => {
     buildQaTargetImpl.mockReset();
     pollQaBusImpl.mockReset();
-    loadBundledPluginPublicSurfaceModuleSync.mockReset();
+    loadBundledPluginPublicSurfaceModuleSyncCore.mockReset();
     buildQaTargetImpl.mockReturnValue("qa://main");
     pollQaBusImpl.mockResolvedValue({ cursor: 1, events: [] });
-    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+    loadBundledPluginPublicSurfaceModuleSyncCore.mockReturnValue({
       buildQaTarget: buildQaTargetImpl,
       pollQaBus: pollQaBusImpl,
       qaChannelPlugin: { id: "qa-channel" },
@@ -30,9 +30,9 @@ describe("plugin-sdk qa-channel", () => {
   it("keeps the qa facade cold until a value is used", async () => {
     const module = await import("./qa-channel.js");
 
-    expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
+    expect(loadBundledPluginPublicSurfaceModuleSyncCore).not.toHaveBeenCalled();
     expect(module.qaChannelPlugin.id).toBe("qa-channel");
-    expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledTimes(1);
+    expect(loadBundledPluginPublicSurfaceModuleSyncCore).toHaveBeenCalledTimes(1);
   });
 
   it("delegates qa helpers through the bundled public surface", async () => {
@@ -42,7 +42,7 @@ describe("plugin-sdk qa-channel", () => {
     expect(buildQaTarget(input)).toBe("qa://main");
     expect(formatQaTarget(input)).toBe("qa://main");
     expect(buildQaTargetImpl).toHaveBeenCalledTimes(2);
-    expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
+    expect(loadBundledPluginPublicSurfaceModuleSyncCore).toHaveBeenCalledWith({
       dirName: "qa-channel",
       artifactBasename: "api.js",
     });

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadBundledPluginPublicSurfaceModuleSync } from "../plugin-sdk/facade-loader.js";
+import { loadBundledPluginPublicSurfaceModuleSyncCore } from "../plugin-sdk/facade-loader.js";
 import { resolveConfigDir } from "../utils.js";
 
 type BrowserDoctorDeps = {
@@ -52,7 +52,7 @@ type BrowserDoctorSurface = {
 };
 
 function loadBrowserDoctorSurface(): BrowserDoctorSurface {
-  return loadBundledPluginPublicSurfaceModuleSync<BrowserDoctorSurface>({
+  return loadBundledPluginPublicSurfaceModuleSyncCore<BrowserDoctorSurface>({
     dirName: "browser",
     artifactBasename: "browser-doctor.js",
   });

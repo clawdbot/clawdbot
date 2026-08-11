@@ -3,14 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
-  patchSessionEntry,
-  upsertSessionEntry,
+  patchSessionEntryCore,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isAgentSessionModelPatchOrigin } from "../../gateway/session-model-patch-origin.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createAgentPatchedSessionModelRunGuard } from "../session-model-auto-revert.js";
 import { createSessionsTool } from "./sessions-tool.js";
 
@@ -272,14 +272,14 @@ describe("sessions tool", () => {
   });
 
   it("patches its session, then reverts a failed agent-selected model", async () => {
-    await withTempDir({ prefix: "openclaw-sessions-tool-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-sessions-tool-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const sessionKey = "agent:main:main";
       const cfg: OpenClawConfig = {
         session: { store: storePath },
         agents: { defaults: { model: { primary: "openai/good" } } },
       };
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey, storePath },
         {
           sessionId: "session-main",
@@ -300,7 +300,7 @@ describe("sessions tool", () => {
         async (request: { method: string; params: Record<string, unknown> }) => {
           expect(request.method).toBe("sessions.patch");
           expect(isAgentSessionModelPatchOrigin()).toBe(true);
-          await patchSessionEntry({ agentId: "main", sessionKey, storePath }, () => ({
+          await patchSessionEntryCore({ agentId: "main", sessionKey, storePath }, () => ({
             label: request.params.label as string,
             model: "bad",
             modelProvider: "broken",
@@ -411,10 +411,10 @@ describe("sessions tool", () => {
   });
 
   it("clears the model fallback marker after a successful run", async () => {
-    await withTempDir({ prefix: "openclaw-sessions-tool-success-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-sessions-tool-success-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const sessionKey = "agent:main:main";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey, storePath },
         {
           sessionId: "session-main",
@@ -462,10 +462,10 @@ describe("sessions tool", () => {
   });
 
   it("reverts when the patched model fails but a fallback completes the run", async () => {
-    await withTempDir({ prefix: "openclaw-sessions-tool-fallback-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-sessions-tool-fallback-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const sessionKey = "agent:main:main";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey, storePath },
         {
           sessionId: "session-main",
@@ -509,13 +509,13 @@ describe("sessions tool", () => {
   });
 
   it("promotes the newest validated model across overlapping patches", async () => {
-    await withTempDir({ prefix: "openclaw-sessions-tool-overlap-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-sessions-tool-overlap-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const sessionKey = "agent:main:main";
       const cfg: OpenClawConfig = {
         agents: { defaults: { model: { primary: "openai/a" } } },
       };
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey, storePath },
         {
           sessionId: "session-main",
@@ -538,7 +538,7 @@ describe("sessions tool", () => {
         sessionKey,
         storePath,
       });
-      await patchSessionEntry({ agentId: "main", sessionKey, storePath }, () => ({
+      await patchSessionEntryCore({ agentId: "main", sessionKey, storePath }, () => ({
         model: "c",
         modelOverride: "c",
         modelFallback: {
@@ -554,7 +554,7 @@ describe("sessions tool", () => {
         sessionKey,
         storePath,
       });
-      await patchSessionEntry({ agentId: "main", sessionKey, storePath }, () => ({
+      await patchSessionEntryCore({ agentId: "main", sessionKey, storePath }, () => ({
         model: "d",
         modelOverride: "d",
         modelFallback: {
@@ -801,11 +801,11 @@ describe("sessions tool", () => {
   });
 
   it("keeps resolved model and thinking metadata when self-archive is deferred", async () => {
-    await withTempDir({ prefix: "openclaw-sessions-tool-archive-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-sessions-tool-archive-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const sessionKey = "agent:main:subagent:archive-me";
       const sessionId = "archive-me-session";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey, storePath },
         { sessionId, updatedAt: 1 },
       );

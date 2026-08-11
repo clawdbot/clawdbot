@@ -8,7 +8,7 @@ import {
 } from "../../../../src/config/sessions/legacy-sqlite-marker.js";
 import {
   persistSessionTranscriptTurn,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../../../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { READ_SCOPE } from "../../../../src/gateway/method-scopes.js";
@@ -92,7 +92,7 @@ async function seedCompletedUsageSession(state: OpenClawTestState): Promise<{
     storePath,
   };
 
-  await upsertSessionEntry(scope, {
+  await upsertSessionEntryCore(scope, {
     sessionId: FIXTURE_SESSION_ID,
     sessionFile,
     startedAt: FIXTURE_STARTED_AT,
@@ -125,7 +125,7 @@ async function seedCompletedUsageSession(state: OpenClawTestState): Promise<{
   });
   expect(turn.appendedCount).toBe(2);
 
-  await upsertSessionEntry(scope, {
+  await upsertSessionEntryCore(scope, {
     sessionId: FIXTURE_SESSION_ID,
     sessionFile,
     startedAt: FIXTURE_STARTED_AT,

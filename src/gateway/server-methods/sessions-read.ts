@@ -17,7 +17,7 @@ import {
   isPerAgentSessionStoreConfig,
   listSessionMembershipKeys,
   resolveExistingAgentSessionStoreTargetsSync,
-  resolveStorePath,
+  resolveSessionStorePathCore,
   runSessionsCleanup,
   serializeSessionCleanupResult,
   type SessionEntry,
@@ -60,7 +60,7 @@ import type {
 import {
   buildGatewaySessionRow,
   listSessionsFromStoreAsync,
-  loadCombinedSessionStoreForGateway,
+  loadCombinedSessionStoreForGatewayCore,
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
@@ -162,7 +162,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         restrictIncognito && configured && scopedSessionKeys === undefined
           ? listSessionEntriesReadOnly({
               agentId,
-              storePath: resolveStorePath(cfg.session?.store, { agentId }),
+              storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
             })
               .map((entry) => entry.sessionKey)
               .filter(canSearchSessionKey)
@@ -267,7 +267,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             const { durableStorePath, storePath, store } = measureDiagnosticsTimelineSpanSync(
               "gateway.sessions.list.store_load",
               () =>
-                loadCombinedSessionStoreForGateway(cfg, {
+                loadCombinedSessionStoreForGatewayCore(cfg, {
                   agentId: p.agentId,
                   projection: "list",
                 }),

@@ -114,7 +114,7 @@ const hoisted = vi.hoisted(() => {
       listSessionEntriesReadOnly: listMockEntries,
       loadSessionEntry: loadMockEntry,
       loadSessionEntryReadOnly: loadMockEntry,
-      upsertSessionEntry: async (scope: unknown, patch: SessionEntry) =>
+      upsertSessionEntryCore: async (scope: unknown, patch: SessionEntry) =>
         await upsertSessionEntryMock(scope, patch),
       resolveSessionTranscriptRuntimeTarget: async (scope: {
         agentId: string;
@@ -197,7 +197,7 @@ vi.mock("../../../channels/plugins/registry.js", () => ({
 }));
 
 vi.mock("../../../config/sessions/paths.js", () => ({
-  resolveStorePath: hoisted.resolveStorePathMock,
+  resolveSessionStorePathCore: hoisted.resolveStorePathMock,
 }));
 
 vi.mock("../../../config/sessions/session-accessor.js", () => hoisted.createSessionAccessorMock());
@@ -206,7 +206,7 @@ vi.mock("../../../config/sessions.js", () => ({
   loadSessionStore: hoisted.loadSessionStoreMock,
   resolveAgentIdFromSessionKey: (sessionKey: string) =>
     sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main",
-  resolveStorePath: hoisted.resolveStorePathMock,
+  resolveSessionStorePathCore: hoisted.resolveStorePathMock,
 }));
 
 vi.mock("../../../config/config.js", () => ({
