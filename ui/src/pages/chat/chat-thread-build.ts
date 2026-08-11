@@ -5,6 +5,7 @@ import {
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
+import { t } from "../../i18n/index.ts";
 import type { ChatItem, ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import {
   streamSegmentHasItemId,
@@ -274,7 +275,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         items.push({
           kind: "notice",
           key: itemKey,
-          label: "System",
+          label: t("common.system"),
           startsTurn: true,
           text,
           timestamp: normalized.timestamp,
