@@ -2064,7 +2064,10 @@ describe("projectRecentChatDisplayMessages", () => {
           model: "delivery-mirror",
           content: [{ type: "text", text: "All Amazon crons ran fine." }],
           idempotencyKey: "channel-final:telegram-final:old:1:0",
-          openclawDeliveryMirror: { kind: "channel-final", sourceMessageId: "telegram-final:old:1" },
+          openclawDeliveryMirror: {
+            kind: "channel-final",
+            sourceMessageId: "telegram-final:old:1",
+          },
         },
       });
 
@@ -2090,12 +2093,20 @@ describe("projectRecentChatDisplayMessages", () => {
       expect(mirror).toMatchObject({ ok: true, messageId: expect.any(String) });
 
       const { messages: rawMessages } = await readRecentSessionMessagesWithStatsAsync(
-        { agentId: scope.agentId, sessionId: scope.sessionId, sessionKey: scope.sessionKey, storePath },
+        {
+          agentId: scope.agentId,
+          sessionId: scope.sessionId,
+          sessionKey: scope.sessionKey,
+          storePath,
+        },
         { maxMessages: 20 },
       );
-      const displayed = projectRecentChatDisplayMessages(rawMessages as Array<Record<string, unknown>>, {
-        maxMessages: 20,
-      });
+      const displayed = projectRecentChatDisplayMessages(
+        rawMessages as Array<Record<string, unknown>>,
+        {
+          maxMessages: 20,
+        },
+      );
 
       expect(
         displayed.map((message) => ({
