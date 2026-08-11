@@ -115,6 +115,22 @@ public enum OpenClawChatGatewayRequests {
         OpenClawChatGatewayRequest(method: "question.list", timeoutMs: self.defaultTimeoutMs)
     }
 
+    public static func tasksList(
+        sessionKey: String,
+        agentID: String?,
+        limit: Int = 200) -> OpenClawChatGatewayRequest
+    {
+        var params: [String: AnyCodable] = [
+            "sessionKey": AnyCodable(sessionKey),
+            "limit": AnyCodable(limit),
+        ]
+        self.add(agentID, to: &params, key: "agentId")
+        return OpenClawChatGatewayRequest(
+            method: "tasks.list",
+            params: params,
+            timeoutMs: self.defaultTimeoutMs)
+    }
+
     public static func questionGet(id: String) -> OpenClawChatGatewayRequest {
         OpenClawChatGatewayRequest(
             method: "question.get",

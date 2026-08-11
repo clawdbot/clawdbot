@@ -7,9 +7,11 @@ import {
   validateEnvironmentsDestroyParams,
   validateEnvironmentsListParams,
   validateEnvironmentsStatusParams,
+  validateWorkerDesktopObserveParams,
+  validateWorkerDesktopLaunchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing, resolveNodePairingState } from "../../infra/device-pairing.js";
-import { listNodePairing } from "../../infra/node-pairing.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
@@ -79,6 +81,11 @@ export function summarizeWorkerEnvironment(
         : {}),
       attachedSessionIds: uniqueSortedStrings(record.attachedSessionIds),
       tunnelStatus: record.tunnelStatus,
+      ...((record.state === "failed" || record.state === "orphaned") && record.error
+        ? { error: record.error }
+        : {}),
+      ...(record.desktopAvailable ? { desktop: true } : {}),
+      ...(record.desktopApps.length > 0 ? { desktopApps: [...record.desktopApps] } : {}),
     },
   };
 }
@@ -109,7 +116,7 @@ function listWorkerEnvironments(context: GatewayRequestContext): WorkerEnvironme
     return [];
   }
 }
-function listWorkerProfiles(context: GatewayRequestContext) {
+export function listWorkerProfiles(context: GatewayRequestContext) {
   if (!context.workerEnvironmentService || !context.workerPlacementDispatchService) {
     return [];
   }
@@ -245,5 +252,74 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       ["environment_not_found", "invalid_state"],
       "worker environment destruction failed",
     );
+  },
+  "worker.desktop.observe": async ({ params, respond, context }) => {
+    if (!validateWorkerDesktopObserveParams(params)) {
+      return rejectInvalid(respond, "worker.desktop.observe", validateWorkerDesktopObserveParams);
+    }
+    const service = context.workerEnvironmentService;
+    if (!service) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown environmentId"));
+      return;
+    }
+    try {
+      respond(
+        true,
+        await service.observeDesktop({
+          environmentId: params.environmentId,
+          control: params.control ?? false,
+        }),
+        undefined,
+      );
+    } catch (error) {
+      const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+      const invalid = code === "environment_not_found" || code === "invalid_state";
+      respond(
+        false,
+        undefined,
+        errorShape(
+          invalid ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
+          invalid && error instanceof Error ? error.message : "worker desktop observe unavailable",
+        ),
+      );
+    }
+  },
+  "worker.desktop.launch": async ({ params, respond, context }) => {
+    if (!validateWorkerDesktopLaunchParams(params)) {
+      return rejectInvalid(respond, "worker.desktop.launch", validateWorkerDesktopLaunchParams);
+    }
+    const service = context.workerEnvironmentService;
+    if (!service) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown environmentId"));
+      return;
+    }
+    try {
+      respond(
+        true,
+        await service.launchDesktopApp({
+          environmentId: params.environmentId,
+          app: params.app,
+        }),
+        undefined,
+      );
+    } catch (error) {
+      const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+      const invalid =
+        code === "environment_not_found" ||
+        code === "invalid_state" ||
+        code === "desktop_app_not_found" ||
+        code === "unsupported_platform";
+      const actionable = invalid || code === "launcher_failure";
+      respond(
+        false,
+        undefined,
+        errorShape(
+          invalid ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
+          actionable && error instanceof Error
+            ? error.message
+            : "worker desktop app launch unavailable; try again",
+        ),
+      );
+    }
   },
 };

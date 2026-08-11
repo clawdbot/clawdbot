@@ -8,6 +8,7 @@ import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admi
 export async function runWithScopedSessionAccess<T>(params: {
   cfg: OpenClawConfig;
   expectedSessionId?: string;
+  signal?: AbortSignal;
   targetSessionKey: string;
   run: () => Promise<T>;
 }): Promise<T> {
@@ -28,6 +29,7 @@ export async function runWithScopedSessionAccess<T>(params: {
     identities: [params.targetSessionKey, expectedSessionId],
     assertAllowed: assertExpectedIncarnation,
     revalidateAllowed: assertExpectedIncarnation,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
   try {
     return await admission.run(params.run);

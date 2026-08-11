@@ -4,7 +4,8 @@ import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
 import { buildWorkspaceSkillCommandSpecs } from "../discovery/command-specs.js";
 import { buildWorkspaceSkillStatus } from "../discovery/status.js";
-import { buildWorkspaceSkillSnapshot, loadWorkspaceSkillEntries } from "../loading/workspace.js";
+import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
+import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
 import type { SkillEntry } from "../types.js";
 import { getSkillsSnapshotVersion } from "./refresh-state.js";
 import {
@@ -78,11 +79,11 @@ describe("node-hosted skill snapshots", () => {
       ],
     });
 
-    const entries = loadWorkspaceSkillEntries("/workspace", {
+    const entries = loadWorkspaceSkills("/workspace", {
       workspaceOnly: true,
       eligibility: { nodeSkills: { canExec: true } },
     });
-    const snapshot = buildWorkspaceSkillSnapshot("/workspace", { entries });
+    const snapshot = buildSkillSnapshot("/workspace", { entries });
     expect(snapshot.skills.map((skill) => skill.name)).toEqual(["release-helper"]);
     expect(snapshot.prompt).toContain("Build Mac (node-1)");
     expect(snapshot.prompt).toContain(

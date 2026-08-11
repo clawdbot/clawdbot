@@ -25,7 +25,7 @@ import {
   type SetupInferenceDetection,
   type SetupInferenceUnavailableCandidate,
   invalidSetupConfigError,
-  log,
+  setupInferenceLog,
   resolveCandidatePresentation,
   resolveSetupInferenceWorkspace,
   toProviderAutoSetupKind,
@@ -223,7 +223,7 @@ export async function detectSetupInference(
             !ref.model ||
             normalizeProviderId(ref.provider) !== normalizeProviderId(choice.providerId)
           ) {
-            log.warn(
+            setupInferenceLog.warn(
               `Ignoring invalid app-guided model ${candidate.modelRef} from ${choice.choiceId}.`,
             );
             return null;
@@ -242,7 +242,7 @@ export async function detectSetupInference(
             choice.website ? { website: choice.website } : {},
           );
         } catch (error) {
-          log.debug(
+          setupInferenceLog.debug(
             `App-guided discovery failed for ${choice.choiceId}: ${formatErrorMessage(error)}`,
           );
           return null;

@@ -15,32 +15,22 @@ import {
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
-import {
-  listImportedBundledPluginFacadeIds,
-  resetFacadeRuntimeStateForTest,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearIMessageApprovalReactionTargetsForTest,
   resolveIMessageApprovalReactionTargetWithPersistence,
 } from "./approval-reactions.js";
 import { imessagePlugin } from "./channel.js";
 import type { IMessageRpcClient } from "./client.js";
-import { createIMessageTestPlugin } from "./imessage.test-plugin.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
 import { sendMessageIMessage } from "./send.js";
 
 beforeEach(() => {
-  resetFacadeRuntimeStateForTest();
   clearIMessageApprovalReactionTargetsForTest();
 });
 
-afterEach(() => {
-  resetFacadeRuntimeStateForTest();
-});
-
-type IMessageOutbound = NonNullable<ReturnType<typeof createIMessageTestPlugin>["outbound"]>;
+type IMessageOutbound = NonNullable<typeof imessagePlugin.outbound>;
 type IMessageMessageAdapter = NonNullable<typeof imessagePlugin.message>;
 type IMessageMessageSender = NonNullable<IMessageMessageAdapter["send"]>;
 const IMESSAGE_WORKSPACE_PNG = Buffer.from(
@@ -49,7 +39,7 @@ const IMESSAGE_WORKSPACE_PNG = Buffer.from(
 );
 
 function requireOutbound(): IMessageOutbound {
-  const outbound = createIMessageTestPlugin().outbound;
+  const outbound = imessagePlugin.outbound;
   if (!outbound) {
     throw new Error("Expected iMessage test plugin outbound adapter");
   }
@@ -104,30 +94,9 @@ function requireMessageSendMedia(
   return media;
 }
 
-describe("createIMessageTestPlugin", () => {
-  it("does not load the bundled iMessage facade by default", () => {
-    expect(listImportedBundledPluginFacadeIds()).toStrictEqual([]);
-
-    createIMessageTestPlugin();
-
-    expect(listImportedBundledPluginFacadeIds()).toStrictEqual([]);
-  });
-
-  it("normalizes repeated transport prefixes without recursive stack growth", () => {
-    const plugin = createIMessageTestPlugin();
-    const prefixedHandle = `${"imessage:".repeat(5000)}+44 20 7946 0958`;
-
-    expect(plugin.messaging?.normalizeTarget?.(prefixedHandle)).toBe("+442079460958");
-  });
-
+describe("imessagePlugin contracts", () => {
   it("declares durable final delivery capabilities", () => {
     expect(imessagePlugin.outbound?.deliveryCapabilities?.durableFinal).toStrictEqual({
-      text: true,
-      media: true,
-      replyTo: true,
-      messageSendingHooks: true,
-    });
-    expect(createIMessageTestPlugin().outbound?.deliveryCapabilities?.durableFinal).toStrictEqual({
       text: true,
       media: true,
       replyTo: true,
@@ -598,7 +567,7 @@ describe("createIMessageTestPlugin", () => {
         const result = await sendDurableMessageBatch({
           cfg,
           channel: "imessage",
-          to: "imessage:+15550004567",
+          to: "+15550004567",
           durability: "required",
           mediaAccess,
           deps: { imessage: nativeSend },
@@ -678,7 +647,7 @@ describe("createIMessageTestPlugin", () => {
         const result = await sendDurableMessageBatch({
           cfg,
           channel: "imessage",
-          to: "imessage:+15550004567",
+          to: "+15550004567",
           durability: "required",
           mediaAccess: { localRoots: [workspaceDir], workspaceDir, readFile },
           deps: { imessage: nativeSend },
@@ -704,23 +673,5 @@ describe("createIMessageTestPlugin", () => {
     } finally {
       resetPluginRuntimeStateForTest();
     }
-  });
-
-  it("exposes seeded private API actions for binding contract tests", () => {
-    const plugin = createIMessageTestPlugin();
-
-    expect(plugin.actions?.describeMessageTool({} as never)?.actions).toStrictEqual([
-      "react",
-      "edit",
-      "unsend",
-      "reply",
-      "sendWithEffect",
-      "upload-file",
-      "renameGroup",
-      "setGroupIcon",
-      "addParticipant",
-      "removeParticipant",
-      "leaveGroup",
-    ]);
   });
 });

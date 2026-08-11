@@ -19,6 +19,7 @@ import {
 import { normalizeOpenAIStrictToolParameters } from "../providers/openai-tool-schema.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { resolveOpenAIStrictToolSetting } from "./host-policy.js";
+import type { OpenAIResponsesReplayMode } from "./openai-responses-compaction-replay.js";
 import {
   OPENAI_CODEX_RESPONSES_DEFAULT_INSTRUCTIONS,
   OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT,
@@ -45,6 +46,13 @@ import {
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
 import { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
+
+const OPENAI_RESPONSES_TOOL_CALL_PROVIDERS = new Set([
+  "openai",
+  "opencode",
+  "azure-openai-responses",
+  "github-copilot",
+]);
 
 function convertResponsesTools(
   tools: NonNullable<Context["tools"]>,
@@ -225,12 +233,12 @@ function resolveOpenAIResponsesTextFormat(
   return responseFormat as unknown as ResponseFormatTextConfig;
 }
 
-export function buildOpenAIResponsesParams(
+function convertOpenAIResponsesMessagesForRequest(
   model: Model,
   context: Context,
   options: OpenAIResponsesOptions | undefined,
-  metadata?: Record<string, string>,
-) {
+  replayMode: OpenAIResponsesReplayMode,
+): ResponseInput {
   const isCodexResponses = isOpenAICodexResponsesModel(model);
   const isNativeCodexResponses = usesNativeOpenAICodexResponsesBackend(model);
   const compat = getCompat(model as OpenAIModeModel);
@@ -243,19 +251,29 @@ export function buildOpenAIResponsesParams(
     payloadPolicy.explicitStore !== false && !payloadPolicy.shouldStripStore;
   const replayResponsesItemIds =
     !isNativeCodexResponses && (options?.replayResponsesItemIds ?? policyAllowsReplayIds);
-  const messages = convertResponsesMessages(
-    model,
-    context,
-    new Set(["openai", "opencode", "azure-openai-responses", "github-copilot"]),
-    {
-      includeSystemPrompt: !isCodexResponses,
-      supportsDeveloperRole,
-      replayReasoningItems: true,
-      replayResponsesItemIds,
-      authProfileId: options?.authProfileId,
-      sessionId: options?.sessionId,
-    },
-  );
+  return convertResponsesMessages(model, context, OPENAI_RESPONSES_TOOL_CALL_PROVIDERS, {
+    includeSystemPrompt: !isCodexResponses,
+    supportsDeveloperRole,
+    replayReasoningItems: true,
+    replayResponsesItemIds,
+    authProfileId: options?.authProfileId,
+    sessionId: options?.sessionId,
+    replayMode,
+  });
+}
+
+export function buildOpenAIResponsesParams(
+  model: Model,
+  context: Context,
+  options: OpenAIResponsesOptions | undefined,
+  metadata?: Record<string, string>,
+  replayMode: OpenAIResponsesReplayMode = "checkpoint",
+) {
+  const isCodexResponses = isOpenAICodexResponsesModel(model);
+  const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
+    storeMode: "disable",
+  });
+  const messages = convertOpenAIResponsesMessagesForRequest(model, context, options, replayMode);
   if (isCodexResponses) {
     ensureOpenAICodexResponsesInput(messages, context);
   }

@@ -3,7 +3,7 @@ import { isImplicitSameChatApprovalAuthorization } from "openclaw/plugin-sdk/app
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerPlatformAdapter, type PlatformAdapter } from "./engine/adapter/index.js";
-import { authorizeQQBotApprovalAction } from "./exec-approvals.js";
+import { authorizeQQBotApprovalAction, matchesQQBotApprovalAccount } from "./exec-approvals.js";
 
 describe("authorizeQQBotApprovalAction", () => {
   beforeEach(() => {
@@ -65,5 +65,33 @@ describe("authorizeQQBotApprovalAction", () => {
 
     expect(result).toEqual({ authorized: true });
     expect(isImplicitSameChatApprovalAuthorization(result)).toBe(false);
+  });
+
+  it("reports each configured account as a raw route candidate", () => {
+    const cfg = {
+      channels: {
+        qqbot: {
+          accounts: {
+            default: {
+              appId: "default-app",
+              clientSecret: "default-secret",
+              execApprovals: { enabled: true, approvers: ["OWNER"] },
+            },
+            ops: {
+              appId: "ops-app",
+              clientSecret: "ops-secret",
+              execApprovals: { enabled: true, approvers: ["OWNER"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const request = {
+      id: "req-unbound",
+      request: { command: "echo hi", turnSourceChannel: "qqbot" },
+    };
+
+    expect(matchesQQBotApprovalAccount({ cfg, accountId: "default", request })).toBe(true);
+    expect(matchesQQBotApprovalAccount({ cfg, accountId: "ops", request })).toBe(true);
   });
 });

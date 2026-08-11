@@ -651,13 +651,13 @@ function createPdfScreenshotter(
   return { screenshotHtml };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+function isObjectValue(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
 function readDetails(result: unknown): Record<string, unknown> {
   const details = (result as { details?: unknown } | null | undefined)?.details;
-  if (!isRecord(details)) {
+  if (!isObjectValue(details)) {
     throw new Error("expected diffs tool result details");
   }
   return details;
@@ -688,7 +688,7 @@ function extractViewerArtifactToken(viewerPath: string): string {
 }
 
 function readParametersProperties(parameters: unknown): Record<string, unknown> {
-  if (isRecord(parameters) && isRecord(parameters.properties)) {
+  if (isObjectValue(parameters) && isObjectValue(parameters.properties)) {
     return parameters.properties;
   }
   throw new Error("expected diffs tool parameter properties");

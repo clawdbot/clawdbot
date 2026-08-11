@@ -2,12 +2,8 @@
 
 Official OpenClaw provider plugin for the OpenCode Go model catalog.
 
-Install from OpenClaw:
-
-```bash
-openclaw plugins install @openclaw/opencode-go-provider
-openclaw gateway restart
-```
+OpenCode Go is bundled with OpenClaw for this release; no separate plugin
+installation is required.
 
 Configure `OPENCODE_API_KEY` or `OPENCODE_ZEN_API_KEY`, then select an
 `opencode-go/...` model.

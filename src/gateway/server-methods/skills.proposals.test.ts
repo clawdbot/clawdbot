@@ -54,7 +54,7 @@ vi.mock("../../skills/lifecycle/upload-install.js", () => ({
   installUploadedSkillArchive: vi.fn(),
 }));
 
-vi.mock("../../infra/clawhub.js", () => ({
+vi.mock("../../infra/clawhub-skills.js", () => ({
   fetchClawHubSkillDetail: vi.fn(),
 }));
 
@@ -84,6 +84,10 @@ vi.mock("./chat.js", () => ({
   chatHandlers: {
     "chat.send": mocks.chatSend,
   },
+}));
+
+vi.mock("./chat-send-handler.js", () => ({
+  handleChatSend: mocks.chatSend,
 }));
 
 const { skillsHandlers } = await import("./skills.js");

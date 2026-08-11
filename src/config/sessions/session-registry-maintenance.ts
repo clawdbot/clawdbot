@@ -79,7 +79,11 @@ function pruneSessionRegistryStore(params: {
     log: false,
     onPruned: params.removals
       ? ({ key, entry }) => {
-          params.removals?.push({ sessionKey: key, expectedEntry: entry });
+          params.removals?.push({
+            sessionKey: key,
+            expectedEntry: entry,
+            archiveRemovedTranscript: true,
+          });
         }
       : undefined,
     preserveKeys,

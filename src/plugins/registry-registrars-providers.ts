@@ -85,6 +85,15 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       });
       return;
     }
+    if (id === "openclaw") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: 'agent harness id "openclaw" is reserved for the built-in runtime',
+      });
+      return;
+    }
     if (typeof harness.supports !== "function" || typeof harness.runAttempt !== "function") {
       pushDiagnostic({
         level: "error",

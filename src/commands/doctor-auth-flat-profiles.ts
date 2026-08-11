@@ -17,6 +17,7 @@ import {
   areOAuthCredentialsEquivalent,
   hasMatchingOAuthIdentity,
 } from "../agents/auth-profiles/oauth-shared.js";
+import { isInheritedMainOAuthCredentialFromStores } from "../agents/auth-profiles/ownership.js";
 import {
   applyLegacyAuthStore,
   coerceLegacyAuthStore,
@@ -24,6 +25,7 @@ import {
   loadPersistedAuthProfileStore,
   parseLegacyCredentialEntry,
 } from "../agents/auth-profiles/persisted.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
   inspectPersistedAuthProfileStateRaw,
@@ -33,11 +35,7 @@ import {
   runAuthProfileWriteTransaction,
 } from "../agents/auth-profiles/sqlite.js";
 import { coerceAuthProfileState } from "../agents/auth-profiles/state.js";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  isInheritedMainOAuthCredential,
-  saveAuthProfileStore,
-} from "../agents/auth-profiles/store.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import type {
   AuthProfileCredential,
   AuthProfileState,
@@ -1263,6 +1261,18 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
               database,
             );
             const loaded = loadMigratedStore(candidate.agentDir, { database });
+            const mainAgentDir = resolveSharedMainAuthAgentDir(params.env);
+            const persistedStores = {
+              isMainStore:
+                resolveAuthProfileDatabasePath(candidate.agentDir) ===
+                resolveAuthProfileDatabasePath(mainAgentDir),
+              localStore: loaded,
+              mainStore:
+                resolveAuthProfileDatabasePath(candidate.agentDir) ===
+                resolveAuthProfileDatabasePath(mainAgentDir)
+                  ? loaded
+                  : loadPersistedAuthProfileStore(mainAgentDir),
+            };
             // A non-main store drops an OAuth credential the main store already
             // owns at the same or newer expiry. That dedup is intentional, so
             // verifying it as missing would abort a migration that lost nothing
@@ -1273,10 +1283,10 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
                 return (
                   credential !== undefined &&
                   !loaded?.profiles[profileId] &&
-                  isInheritedMainOAuthCredential({
-                    agentDir: candidate.agentDir,
+                  isInheritedMainOAuthCredentialFromStores({
                     profileId,
                     credential,
+                    persistedStores,
                   })
                 );
               }),

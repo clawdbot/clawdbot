@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readRemoteMediaBufferSpy, telegramBotDepsForTest } from "./bot.media.e2e-harness.js";
+import { readRemoteMediaBufferSpy, telegramBotDepsForTest } from "./bot.media.e2e.test-harness.js";
 import {
   TELEGRAM_TEST_TIMINGS,
   cacheStickerSpy,

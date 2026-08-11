@@ -302,6 +302,69 @@ describe("ensureGatewayReadyForOperation", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
+  it("uses the projected connect failure when the daemon error text is generic", async () => {
+    const status = createStatus({
+      service: {
+        label: "systemd user",
+        loaded: true,
+        loadedText: "enabled",
+        notLoadedText: "disabled",
+        command: { programArguments: ["openclaw", "gateway", "run", "--port", "18789"] },
+        runtime: { status: "running" },
+      },
+      port: { port: 18789, status: "busy", listeners: [], hints: [] },
+      rpc: {
+        ok: false,
+        error: "connect failed",
+        connectFailure: { kind: "pairing-required", detailCode: "PAIRING_REQUIRED" },
+        url: "ws://127.0.0.1:18789",
+      },
+    });
+    const confirm = vi.fn();
+
+    const result = await ensureGatewayReadyForOperation({
+      runtime,
+      operation: "open the dashboard",
+      readyWhenReachable: true,
+      interactive: true,
+      deps: { gatherStatus: vi.fn().mockResolvedValue(status), confirm },
+    });
+
+    expect(result).toMatchObject({ ready: true, recovered: false });
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("accepts a rate-limited Gateway as reachable without starting the service", async () => {
+    const status = createStatus({
+      service: {
+        label: "systemd user",
+        loaded: true,
+        loadedText: "enabled",
+        notLoadedText: "disabled",
+        command: { programArguments: ["openclaw", "gateway", "run", "--port", "18789"] },
+        runtime: { status: "running" },
+      },
+      port: { port: 18789, status: "busy", listeners: [], hints: [] },
+      rpc: {
+        ok: false,
+        error: "connect failed",
+        connectFailure: { kind: "rate-limited", detailCode: "AUTH_RATE_LIMITED" },
+        url: "ws://127.0.0.1:18789",
+      },
+    });
+    const startGateway = vi.fn();
+
+    const result = await ensureGatewayReadyForOperation({
+      runtime,
+      operation: "open the dashboard",
+      readyWhenReachable: true,
+      deps: { gatherStatus: vi.fn().mockResolvedValue(status), startGateway },
+    });
+
+    expect(result).toMatchObject({ ready: true, recovered: false });
+    expect(startGateway).not.toHaveBeenCalled();
+  });
+
   it("still treats a timeout on the target port as not ready", async () => {
     const status = createStatus({
       service: {

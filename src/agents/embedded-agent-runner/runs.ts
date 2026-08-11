@@ -16,6 +16,7 @@ import {
   resolveActiveReplyRunSessionId,
   resolveReplyBackendQueueMessageMismatch,
   resolveReplyRunPhaseForSessionId,
+  supersedeReplyRunByRunId,
   type ReplyOperation,
   type ReplyOperationPhase,
   waitForReplyOperationOwnerSettlement,
@@ -415,6 +416,25 @@ export function isEmbeddedAgentRunAbortableForRunId(runId: string): boolean {
   return handle ? isEmbeddedRunHandleAbortable(normalizedRunId, handle) : true;
 }
 
+/** Cancels one exact process-local run after recording its superseded terminal owner. */
+export function supersedeEmbeddedAgentRunByRunId(runId: string, beforeCancel: () => void): boolean {
+  const normalizedRunId = runId.trim();
+  if (!normalizedRunId) {
+    return false;
+  }
+  const handle = ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(normalizedRunId);
+  if (handle) {
+    beforeCancel();
+    if (handle.cancel) {
+      handle.cancel("superseded");
+    } else {
+      handle.abort();
+    }
+    return true;
+  }
+  return supersedeReplyRunByRunId(normalizedRunId, beforeCancel);
+}
+
 export function clearEmbeddedAgentRunAbortabilityForRunId(runId: string): void {
   const normalizedRunId = runId.trim();
   if (normalizedRunId) {
@@ -749,8 +769,8 @@ export function getActiveEmbeddedRunSnapshot(
 /**
  * Wait for active embedded runs to drain.
  *
- * Used during restarts so in-flight runs can release session write locks before
- * the next lifecycle starts. If no timeout is passed, waits indefinitely.
+ * Used during restarts so in-flight runs can finish transcript writes before the
+ * next lifecycle starts. If no timeout is passed, waits indefinitely.
  */
 export async function waitForActiveEmbeddedRuns(
   timeoutMs?: number,

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import type { CronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import {
   beginSessionWorkAdmission,
@@ -68,6 +69,36 @@ describe("gateway agent handler", () => {
         maxEntries: 42,
       },
     });
+  });
+
+  it("carries exact cron creator authority through direct local agent RPC", async () => {
+    const runId = "direct-agent-cron-authority";
+    let capability: CronCreatorAuthorityCapability | undefined;
+    primeMainAgentRun();
+    mocks.agentCommand.mockImplementation(async (opts: AgentCommandCall) => {
+      capability = opts.cronCreatorAuthorityCapability as
+        | CronCreatorAuthorityCapability
+        | undefined;
+      expect(capability).toMatchObject({ active: true, runId });
+      return { payloads: [{ text: "ok" }], meta: { durationMs: 100 } };
+    });
+
+    await invokeAgent(
+      {
+        message: "create an automation",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      {
+        client: {
+          connect: { scopes: ["operator.admin"] },
+          internal: { isLocalClient: true },
+        } as AgentHandlerArgs["client"],
+      },
+    );
+
+    await waitForAssertion(() => expect(capability?.active).toBe(false));
   });
 
   it("resolves explicit recipient sessions before Gateway admission", async () => {
@@ -342,6 +373,27 @@ describe("gateway agent handler", () => {
     expectRespondError(respond, {
       code: ErrorCodes.INVALID_REQUEST,
       message: "ambiguous recipient",
+    });
+    expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+  });
+
+  it("clears a sessionless reservation when content validation fails", async () => {
+    const runId = "sessionless-invalid-reply-channel";
+    const context = makeContext();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "hi",
+        replyChannel: "unknown-channel",
+        idempotencyKey: runId,
+      },
+      { context, respond, reqId: runId, flushDispatch: false },
+    );
+
+    expectRespondError(respond, {
+      message: "invalid agent params: unknown channel: unknown-channel",
     });
     expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
     expect(mocks.agentCommand).not.toHaveBeenCalled();

@@ -12,14 +12,15 @@ import {
   getSubagentSessionStartedAt,
   isSubagentRunLive,
   resolveSubagentSessionStatus,
-} from "../agents/subagent-registry-read.js";
-import { resolveQueueSettings } from "../auto-reply/reply/queue/settings.js";
+} from "../agents/subagents/registry/subagent-registry-read.js";
+import { resolveQueueSettingsCore } from "../auto-reply/reply/queue/settings.js";
 import { resolveEffectiveResponseUsage } from "../auto-reply/thinking.js";
 import {
   buildGroupDisplayName,
   buildGroupDisplayTitle,
   resolveFreshSessionTotalTokens,
   resolveSessionGoalDisplayState,
+  SESSION_TOTAL_TOKENS_VERSION,
   type SessionEntry,
 } from "../config/sessions.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
@@ -285,6 +286,7 @@ export function buildGatewaySessionRow(params: {
           goal: entry.goal,
           totalTokens,
           totalTokensFresh,
+          totalTokensVersion: totalTokensFresh ? SESSION_TOTAL_TOKENS_VERSION : undefined,
         },
         now,
         // Session listing is read-only; stale goal baselines are adopted only
@@ -440,7 +442,6 @@ export function buildGatewaySessionRow(params: {
     archivedBy: projectSessionActor(entry?.archivedBy, rowContext?.userProfileIdentityById),
     pinned: entry?.pinnedAt !== undefined,
     pinnedAt: entry?.pinnedAt,
-    icon: entry?.icon,
     unread: deriveSessionUnread(entry),
     lastReadAt: entry?.lastReadAt,
     agentStatus,
@@ -497,7 +498,7 @@ export function buildGatewaySessionRow(params: {
       channel,
     ),
     queueMode: entry?.queueMode,
-    effectiveQueueMode: resolveQueueSettings({
+    effectiveQueueMode: resolveQueueSettingsCore({
       cfg,
       channel: INTERNAL_MESSAGE_CHANNEL,
       sessionEntry: entry,

@@ -1,6 +1,6 @@
 // Gateway plugin startup bootstrap and adjacent startup maintenance.
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { initSubagentRegistry } from "../agents/subagent-registry.js";
+import { initSubagentRegistry } from "../agents/subagents/registry/subagent-registry.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {

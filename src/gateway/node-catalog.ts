@@ -5,12 +5,12 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import type { NodePairingPendingRequest, PairedDeviceNode } from "../infra/device-pairing-node.js";
 import { hasEffectivePairedDeviceRole, type PairedDevice } from "../infra/device-pairing.js";
 import {
   sameNodeApprovalSurfaceSet,
   sameNodePermissionSurface,
 } from "../infra/node-pairing-surface.js";
-import type { NodePairingPairedNode, NodePairingPendingRequest } from "../infra/node-pairing.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
 import type { NodeSession } from "./node-registry.js";
 
@@ -116,7 +116,7 @@ function buildDevicePairingSource(entry: PairedDevice): KnownNodeDevicePairingSo
   };
 }
 
-function buildApprovedNodeSource(entry: NodePairingPairedNode): KnownNodeApprovedSource {
+function buildApprovedNodeSource(entry: PairedDeviceNode): KnownNodeApprovedSource {
   return {
     nodeId: entry.nodeId,
     displayName: entry.displayName,
@@ -324,7 +324,7 @@ function compareKnownNodes(left: NodeListNode, right: NodeListNode): number {
 /** Builds a node catalog keyed by node id from pairing stores and live sessions. */
 export function createKnownNodeCatalog(params: {
   pairedDevices: readonly PairedDevice[];
-  pairedNodes?: readonly NodePairingPairedNode[];
+  pairedNodes?: readonly PairedDeviceNode[];
   pendingNodes?: readonly NodePairingPendingRequest[];
   connectedNodes: readonly NodeSession[];
 }): KnownNodeCatalog {

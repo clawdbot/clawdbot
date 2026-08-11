@@ -46,11 +46,14 @@ const appliedApprovalResult = {
 const resolveApprovalMock = vi.fn(
   async (): Promise<ApprovalResolveResult> => appliedApprovalResult,
 );
-const expectedApprovalResolve = {
-  approvalId: "exec:abc12345",
-  approvalKind: "exec",
-  decision: "allow-once",
-} as const;
+const expectedApprovalResolve = (senderId = "ATTACKER_OPENID") =>
+  ({
+    approvalId: "exec:abc12345",
+    approvalKind: "exec",
+    decision: "allow-once",
+    accountId: "default",
+    senderId,
+  }) as const;
 
 function makeAccount(config: GatewayAccount["config"] = {}): GatewayAccount {
   return {
@@ -190,7 +193,7 @@ describe("createInteractionHandler approval buttons", () => {
     handler(makeApprovalEvent({ group_member_openid: "OWNER_OPENID" }));
 
     await waitForQqInteraction(() =>
-      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve),
+      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve("OWNER_OPENID")),
     );
   });
 
@@ -217,6 +220,8 @@ describe("createInteractionHandler approval buttons", () => {
         approvalId: "exec:looks-like-exec/1",
         approvalKind: "plugin",
         decision: "deny",
+        accountId: "default",
+        senderId: "OWNER_OPENID",
       }),
     );
   });
@@ -340,7 +345,7 @@ describe("createInteractionHandler approval buttons", () => {
     );
 
     await waitForQqInteraction(() =>
-      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve),
+      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve("OWNER_OPENID")),
     );
   });
 
@@ -352,7 +357,7 @@ describe("createInteractionHandler approval buttons", () => {
     handler(makeApprovalEvent());
 
     await waitForQqInteraction(() =>
-      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve),
+      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve()),
     );
   });
 
@@ -418,7 +423,10 @@ describe("createInteractionHandler approval buttons", () => {
     handler(makeApprovalEvent());
 
     await waitForQqInteraction(() =>
-      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve),
+      expect(resolveApprovalMock).toHaveBeenCalledWith({
+        ...expectedApprovalResolve(),
+        accountId: "bot2",
+      }),
     );
   });
 
@@ -449,7 +457,7 @@ describe("createInteractionHandler approval buttons", () => {
     handler(makeApprovalEvent());
 
     await waitForQqInteraction(() =>
-      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve),
+      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve()),
     );
   });
 
@@ -474,7 +482,7 @@ describe("createInteractionHandler approval buttons", () => {
     handler(makeApprovalEvent());
 
     await waitForQqInteraction(() =>
-      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve),
+      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve()),
     );
   });
 

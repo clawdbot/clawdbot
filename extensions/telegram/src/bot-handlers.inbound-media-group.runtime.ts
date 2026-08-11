@@ -33,8 +33,8 @@ import {
   buildTelegramThreadParams,
   getTelegramTextParts,
   hasBotMention,
+  resolveTelegramMessageThreadSpec,
   resolveTelegramPrimaryMedia,
-  resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
@@ -97,7 +97,8 @@ export function createTelegramInboundMediaGroupRuntime(
     resolveGroupRequireMention,
   } = params;
   const {
-    mediaRuntimeWithAbort,
+    resolveMediaRuntime,
+    recordMessageResolvedMedia,
     promptContextBoundaryOptions,
     latestPromptContextMinTimestampMs,
     latestPromptContextAmbientWatermark,
@@ -318,6 +319,9 @@ export function createTelegramInboundMediaGroupRuntime(
       }
       const allMedia: TelegramMediaRef[] = [];
       const selection = new Map<string, "include" | "exclude">();
+      const mediaRuntime = resolveMediaRuntime(
+        ...entry.spooledReplayParticipants.map((participant) => participant.abortSignal),
+      );
       let materializedCount = 0;
       let skippedCount = 0;
       for (const { ctx, msg } of entry.messages) {
@@ -325,12 +329,11 @@ export function createTelegramInboundMediaGroupRuntime(
         const nativeKind = resolveTelegramPrimaryMedia(msg)?.kind ?? "document";
         let media;
         try {
-          media = await resolveMedia({ ctx, maxBytes: mediaMaxBytes, ...mediaRuntimeWithAbort });
+          media = await resolveMedia({ ctx, maxBytes: mediaMaxBytes, ...mediaRuntime });
         } catch (error) {
           if (
             entry.spooledReplayParticipants.length > 0 &&
-            (mediaRuntimeWithAbort.abortSignal?.aborted ||
-              isDurablyRetryableInboundMediaError(error))
+            (mediaRuntime.abortSignal?.aborted || isDurablyRetryableInboundMediaError(error))
           ) {
             throw error;
           }
@@ -345,6 +348,7 @@ export function createTelegramInboundMediaGroupRuntime(
           continue;
         }
         if (media) {
+          await recordMessageResolvedMedia({ msg, media, botUserId: ctx.me?.id });
           allMedia.push({
             path: media.path,
             contentType: media.contentType,
@@ -371,11 +375,7 @@ export function createTelegramInboundMediaGroupRuntime(
               `⚠️ Received ${materializedCount} of ${entry.messages.length} images — ${skippedCount} could not be fetched and ${verb} skipped.`,
               {
                 ...buildTelegramThreadParams(
-                  resolveTelegramThreadSpec({
-                    isGroup: entry.isGroup,
-                    isForum: entry.isForum,
-                    messageThreadId: entry.resolvedThreadId ?? entry.dmThreadId,
-                  }),
+                  resolveTelegramMessageThreadSpec(primary.msg, entry.isForum),
                 ),
                 reply_parameters: {
                   message_id: primary.msg.message_id,

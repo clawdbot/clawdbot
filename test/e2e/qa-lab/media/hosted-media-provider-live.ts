@@ -6,7 +6,7 @@ import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/api.js";
-import { spawnPnpmRunner as _spawnPnpmRunner } from "../../../../scripts/pnpm-runner.mjs";
+import { spawnPnpmRunner as _spawnPnpmRunner } from "../../../../scripts/pnpm-runner.mts";
 import {
   createQaScriptBlockedStatusTracker,
   createQaScriptEvidenceWriter,
@@ -491,7 +491,7 @@ Defaults:
   - auto-loads missing provider env vars from ~/.profile
   - narrows each suite to providers that currently have usable auth
   - skips the slow fal video smoke by default; pass --video-providers fal to run it
-  - forwards extra args to scripts/test-live.mjs
+  - forwards extra args to scripts/test-live.mts
 
 Flags:
   --providers <csv>         global provider filter

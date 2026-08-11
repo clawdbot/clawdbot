@@ -11,7 +11,10 @@ import {
 import { setPathExistingStrict } from "./path-utils.js";
 import { resolveSecretRefValue } from "./resolve.js";
 import { createResolverContext } from "./runtime-shared.js";
-import { getActiveSecretsRuntimeEnv, getActiveSecretsRuntimeSnapshot } from "./runtime-state.js";
+import {
+  getActiveSecretsRuntimeEnvState,
+  getActiveSecretsRuntimeSnapshotState,
+} from "./runtime-state.js";
 import { resolveRuntimeWebTools } from "./runtime-web-tools.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { discoverConfigSecretTargetsByIds } from "./target-registry.js";
@@ -204,7 +207,7 @@ async function resolveForcedActiveCommandSecretTargets(params: {
   }
   const context = createResolverContext({
     sourceConfig: params.sourceConfig,
-    env: getActiveSecretsRuntimeEnv(),
+    env: getActiveSecretsRuntimeEnvState(),
   });
   const defaults = params.sourceConfig.secrets?.defaults;
   for (const target of discoverConfigSecretTargetsByIds(params.sourceConfig, params.targetIds)) {
@@ -265,7 +268,7 @@ export function resolveCommandSecretsFromActiveRuntimeSnapshot(params: {
   diagnostics: string[];
   inactiveRefPaths: string[];
 }> {
-  const activeSnapshot = getActiveSecretsRuntimeSnapshot();
+  const activeSnapshot = getActiveSecretsRuntimeSnapshotState();
   if (!activeSnapshot) {
     throw new Error("Secrets runtime snapshot is not active.");
   }
@@ -284,7 +287,7 @@ export function resolveCommandSecretsFromActiveRuntimeSnapshot(params: {
 }
 
 async function resolveCommandSecretsFromSnapshot(params: {
-  activeSnapshot: NonNullable<ReturnType<typeof getActiveSecretsRuntimeSnapshot>>;
+  activeSnapshot: NonNullable<ReturnType<typeof getActiveSecretsRuntimeSnapshotState>>;
   commandName: string;
   targetIds: ReadonlySet<string>;
   allowedPaths?: ReadonlySet<string>;
@@ -308,7 +311,7 @@ async function resolveCommandSecretsFromSnapshot(params: {
   const context = hasOverrides
     ? createResolverContext({
         sourceConfig,
-        env: getActiveSecretsRuntimeEnv(),
+        env: getActiveSecretsRuntimeEnvState(),
       })
     : undefined;
   if (context) {

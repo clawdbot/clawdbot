@@ -5,7 +5,7 @@
  */
 import { Type } from "typebox";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringParam } from "./common.js";
+import { jsonResult, readToolStringParam } from "./common.js";
 
 const SessionsYieldToolSchema = Type.Object({
   message: Type.Optional(Type.String()),
@@ -27,7 +27,7 @@ export function createSessionsYieldTool(opts?: {
     parameters: SessionsYieldToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const message = readStringParam(params, "message") || "Turn yielded.";
+      const message = readToolStringParam(params, "message") || "Turn yielded.";
       if (!opts?.sessionId) {
         return jsonResult({ status: "error", error: "No session context" });
       }

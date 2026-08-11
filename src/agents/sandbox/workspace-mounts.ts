@@ -9,7 +9,7 @@ import { isPathInside } from "../../infra/path-guards.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
-import { normalizeContainerPath } from "./path-utils.js";
+import { normalizeContainerPathCore } from "./path-utils.js";
 import type { SandboxWorkspaceAccess } from "./types.js";
 
 export const SANDBOX_MOUNT_FORMAT_VERSION = 3;
@@ -39,7 +39,7 @@ function containerJoin(root: string, ...parts: string[]): string {
 }
 
 function normalizeMountContainerPath(containerPath: string): string {
-  return normalizeContainerPath(containerPath).replace(/\/+$/, "") || "/";
+  return normalizeContainerPathCore(containerPath).replace(/\/+$/, "") || "/";
 }
 
 /** Hidden workspace used to materialize non-workspace skills for rw sandboxes. */

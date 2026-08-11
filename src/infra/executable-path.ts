@@ -4,27 +4,10 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { expandHomePrefix } from "./home-dir.js";
 import { pruneMapToMaxSize } from "./map-size.js";
+import { resolveEnvironmentValue } from "./process-env.js";
 
 function isDriveLessWindowsRootedPath(value: string): boolean {
   return process.platform === "win32" && /^:[\\/]/.test(value);
-}
-
-function resolveEnvironmentValue(
-  env: NodeJS.ProcessEnv | undefined,
-  name: string,
-): string | undefined {
-  if (!env) {
-    return undefined;
-  }
-  const exactValue = env[name] ?? (name === "PATH" ? env.Path : undefined);
-  if (exactValue !== undefined) {
-    return exactValue;
-  }
-  if (process.platform !== "win32") {
-    return undefined;
-  }
-  const normalizedName = name.toLowerCase();
-  return Object.entries(env).find(([key]) => key.toLowerCase() === normalizedName)?.[1];
 }
 
 export function resolveExecutablePathCandidate(
@@ -93,6 +76,8 @@ export function isRegularFile(filePath: string): boolean {
   }
 }
 
+const WINDOWS_NATIVE_EXECUTABLE_EXTENSIONS = new Set([".com", ".exe", ".bat", ".cmd"]);
+
 function isExecutableFile(filePath: string, options?: { env?: NodeJS.ProcessEnv }): boolean {
   if (!isRegularFile(filePath)) {
     return false;
@@ -100,7 +85,8 @@ function isExecutableFile(filePath: string, options?: { env?: NodeJS.ProcessEnv 
   try {
     if (process.platform === "win32") {
       const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
-      if (!ext) {
+      // PATHEXT controls suffix probing, not an explicitly named native file.
+      if (!ext || WINDOWS_NATIVE_EXECUTABLE_EXTENSIONS.has(ext)) {
         return true;
       }
       return resolveWindowsExecutableExtSet(options?.env).has(ext);
@@ -112,7 +98,6 @@ function isExecutableFile(filePath: string, options?: { env?: NodeJS.ProcessEnv 
   }
 }
 
-const WINDOWS_NATIVE_EXECUTABLE_EXTENSIONS = new Set([".com", ".exe", ".bat", ".cmd"]);
 const EXECUTABLE_PATH_CACHE_TTL_MS = 60_000;
 const EXECUTABLE_PATH_CACHE_MAX_ENTRIES = 128;
 
@@ -184,17 +169,10 @@ export function resolveExecutableFromPathEnv(
     env,
     options?.includeExtensionless,
   );
-  const hasNativeWindowsExtension =
-    process.platform === "win32" &&
-    WINDOWS_NATIVE_EXECUTABLE_EXTENSIONS.has(
-      normalizeLowercaseStringOrEmpty(path.extname(executable)),
-    );
   for (const entry of entries) {
     for (const ext of extensions) {
       const candidate = path.join(entry, executable + ext);
-      if (
-        hasNativeWindowsExtension ? isRegularFile(candidate) : isExecutableFile(candidate, { env })
-      ) {
+      if (isExecutableFile(candidate, { env })) {
         cacheExecutablePath(cacheKey, candidate);
         return candidate;
       }

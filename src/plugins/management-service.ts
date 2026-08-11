@@ -1,5 +1,6 @@
 // Structured plugin catalog and lifecycle operations shared by Gateway-facing surfaces.
 import path from "node:path";
+import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
@@ -415,7 +416,7 @@ function normalizeCatalogMetadata(
 }
 
 function normalizeFeaturedAt(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  return asSafeIntegerInRange(value, { min: 0 });
 }
 
 function resolveCatalogInstallAction(params: {
@@ -1077,6 +1078,7 @@ async function persistManagedSourceInstall(params: {
   extensionsDir: string;
   invalidateRuntimeCache?: boolean;
   runtime?: RuntimeEnv;
+  persistenceLogger?: PluginInstallLogger;
   successMessage?: string;
   cleanupOnPersistenceFailure?: boolean;
 }): Promise<OpenClawConfig> {
@@ -1087,6 +1089,7 @@ async function persistManagedSourceInstall(params: {
       install: params.install,
       invalidateRuntimeCache: params.invalidateRuntimeCache,
       runtime: params.runtime,
+      ...(params.persistenceLogger ? { persistenceLogger: params.persistenceLogger } : {}),
       ...(params.successMessage ? { successMessage: params.successMessage } : {}),
     });
   if (!params.cleanupOnPersistenceFailure) {
@@ -1106,6 +1109,8 @@ export async function installManagedPluginSource(params: {
   snapshot: ConfigSnapshotForInstallPersist;
   env?: NodeJS.ProcessEnv;
   logger?: PluginInstallLogger & { terminalLinks?: boolean };
+  // Source loggers can feed chat replies; management diagnostics require explicit private opt-in.
+  persistenceLogger?: PluginInstallLogger;
   safetyOverrides?: InstallSafetyOverrides;
   runtime?: RuntimeEnv;
   invalidateRuntimeCache?: boolean;
@@ -1402,6 +1407,7 @@ export async function installManagedPlugin(params: {
     const snapshot = await readPluginMutationSnapshot(env);
     const officialCatalog = await loadOfficialCatalog();
     const warnings: string[] = [];
+    const installLogger = createInstallLogger(warnings);
     const request =
       params.request.source === "clawhub"
         ? resolveManagedClawHubInstallRequest({
@@ -1416,7 +1422,8 @@ export async function installManagedPlugin(params: {
       request,
       snapshot,
       env,
-      logger: createInstallLogger(warnings),
+      logger: installLogger,
+      persistenceLogger: installLogger,
       cleanupOnPersistenceFailure: true,
       invalidateRuntimeCache: false,
       runtime: createSilentRuntime(),

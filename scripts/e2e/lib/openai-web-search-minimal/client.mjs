@@ -194,7 +194,6 @@ export const testing = {
   DEFAULT_GATEWAY_SCHEMA_ERROR,
   DEFAULT_RAW_SCHEMA_ERROR,
   SUCCESS_MARKER,
-  extractSuccessReplyTexts,
   resolveGatewayPort,
   validateSuccessResult,
   validateRejectResult,

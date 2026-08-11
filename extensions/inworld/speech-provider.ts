@@ -7,12 +7,11 @@ import type {
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
 import {
-  asObject,
   parseSpeechDirectiveNumberOverride,
   resolveSpeechProviderApiKey,
   trimToUndefined,
 } from "openclaw/plugin-sdk/speech-core";
-import { asFiniteNumberInRange } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asFiniteNumberInRange, asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_INWORLD_MODEL_ID,
   DEFAULT_INWORLD_VOICE_ID,
@@ -42,8 +41,8 @@ function normalizeInworldTemperature(value: unknown): number | undefined {
 }
 
 function normalizeInworldProviderConfig(rawConfig: Record<string, unknown>): InworldProviderConfig {
-  const providers = asObject(rawConfig.providers);
-  const raw = asObject(providers?.inworld) ?? asObject(rawConfig.inworld);
+  const providers = asOptionalRecord(rawConfig.providers);
+  const raw = asOptionalRecord(providers?.inworld) ?? asOptionalRecord(rawConfig.inworld);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,

@@ -7,7 +7,7 @@ import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
   discoverStaticExtensionAssets,
-} from "../../scripts/lib/static-extension-assets.mjs";
+} from "../../scripts/lib/static-extension-assets.mts";
 import {
   listStaticExtensionAssetOutputs,
   rewriteRootRuntimeImportsToStableAliases,
@@ -15,7 +15,7 @@ import {
   writeLegacyCliExitCompatChunks,
   writeLegacyRootRuntimeCompatAliases,
   writeStableRootRuntimeAliases,
-} from "../../scripts/runtime-postbuild.mjs";
+} from "../../scripts/runtime-postbuild.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -89,7 +89,7 @@ describe("runtime postbuild static assets", () => {
       outputs: string[];
       sources: string[];
     }>(`
-      const assets = await import("./scripts/lib/static-extension-assets.mjs");
+      const assets = await import("./scripts/lib/static-extension-assets.mts");
       return {
         outputs: assets.listStaticExtensionAssetOutputs(),
         sources: assets.listStaticExtensionAssetSources(),

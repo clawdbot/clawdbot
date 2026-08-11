@@ -528,10 +528,10 @@ function resolveAgentDatabasePathIdentity(pathname: string): AgentDatabasePathId
   }
 }
 
-/** Compare two database locators by canonical filesystem identity when available. */
-export function isSameOpenClawAgentDatabasePath(left: string, right: string): boolean {
-  const leftIdentity = resolveAgentDatabasePathIdentity(left);
-  const rightIdentity = resolveAgentDatabasePathIdentity(right);
+function areSameAgentDatabasePathIdentities(
+  leftIdentity: AgentDatabasePathIdentity,
+  rightIdentity: AgentDatabasePathIdentity,
+): boolean {
   if (leftIdentity.lexicalPath === rightIdentity.lexicalPath) {
     return true;
   }
@@ -564,6 +564,32 @@ export function isSameOpenClawAgentDatabasePath(left: string, right: string): bo
       leftIdentity.device === rightIdentity.device &&
       leftIdentity.inode === rightIdentity.inode) ||
     (sameMissingParent && sameMissingSuffix)
+  );
+}
+
+/** Create a synchronous-operation matcher that prepares each exact locator once. */
+export function createOpenClawAgentDatabasePathMatcher(): (left: string, right: string) => boolean {
+  const identities = new Map<string, AgentDatabasePathIdentity>();
+  const resolveIdentity = (pathname: string): AgentDatabasePathIdentity => {
+    const lexicalPath = anchorDatabasePathWithoutNormalizing(pathname);
+    const cached = identities.get(lexicalPath);
+    if (cached) {
+      return cached;
+    }
+    // Cache successes only. Filesystem errors must be retried if the caller recovers.
+    const identity = resolveAgentDatabasePathIdentity(lexicalPath);
+    identities.set(lexicalPath, identity);
+    return identity;
+  };
+  return (left, right) =>
+    areSameAgentDatabasePathIdentities(resolveIdentity(left), resolveIdentity(right));
+}
+
+/** Compare two database locators by canonical filesystem identity when available. */
+export function isSameOpenClawAgentDatabasePath(left: string, right: string): boolean {
+  return areSameAgentDatabasePathIdentities(
+    resolveAgentDatabasePathIdentity(left),
+    resolveAgentDatabasePathIdentity(right),
   );
 }
 

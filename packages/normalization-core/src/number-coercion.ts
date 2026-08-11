@@ -117,6 +117,18 @@ export function asDateTimestampMs(value: unknown): number | undefined {
   });
 }
 
+/** Parses Date-valid timestamps; numeric values and tokens are always milliseconds. */
+export function parseDateTimestampMs(value: unknown): number | undefined {
+  const numeric = parseFiniteNumber(value);
+  if (numeric !== undefined) {
+    return asDateTimestampMs(numeric);
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  return asDateTimestampMs(Date.parse(value));
+}
+
 /** Checks whether a Date-valid timestamp is after the supplied/current time. */
 export function isFutureDateTimestampMs(
   value: unknown,

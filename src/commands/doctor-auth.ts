@@ -136,12 +136,6 @@ function legacyCodexProviderOverrideToHealthFinding(providerOverride: unknown): 
   };
 }
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.doctorAuthTestApi")] = {
-    legacyCodexProviderOverrideToHealthFinding,
-  };
-}
-
 /** Emits a warning when legacy Codex transport overrides can shadow configured Codex OAuth. */
 export function noteLegacyCodexProviderOverride(cfg: OpenClawConfig): void {
   const providerOverride = cfg.models?.providers?.[LEGACY_CODEX_PROVIDER_ID];

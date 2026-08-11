@@ -4,6 +4,7 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { build } from "esbuild";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 
@@ -15,6 +16,29 @@ async function makeLauncherFixture(fixtureRoots: string[]): Promise<string> {
   );
   await fs.mkdir(path.join(fixtureRoot, "dist"), { recursive: true });
   return fixtureRoot;
+}
+
+async function addCompiledMjsEntryFixture(fixtureRoot: string): Promise<void> {
+  const sourceRoot = path.resolve(process.cwd(), "src");
+  await build({
+    bundle: true,
+    entryPoints: [path.join(sourceRoot, "entry.ts")],
+    format: "esm",
+    outfile: path.join(fixtureRoot, "dist", "entry.mjs"),
+    platform: "node",
+    plugins: [
+      {
+        name: "external-source-imports",
+        setup(build) {
+          build.onResolve({ filter: /^\./ }, ({ path: specifier, resolveDir }) => ({
+            external: true,
+            path: path.resolve(resolveDir, specifier.replace(/\.js$/u, ".ts")),
+          }));
+        },
+      },
+    ],
+    target: "node22",
+  });
 }
 
 async function makeLauncherProbeFixture(
@@ -327,6 +351,25 @@ describe("openclaw launcher", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("missing dist/entry.(m)js");
+  });
+
+  it("executes an entry.mjs-only compiled entry through the root launcher", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    await addCompiledMjsEntryFixture(fixtureRoot);
+
+    const result = spawnSync(
+      process.execPath,
+      ["--import", import.meta.resolve("tsx"), path.join(fixtureRoot, "openclaw.mjs"), "--profile"],
+      {
+        cwd: process.cwd(),
+        env: launcherEnv({ OPENCLAW_NO_RESPAWN: "1" }),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("--profile requires a value");
   });
 
   it("treats Bun direct optional import misses as direct launcher misses", async () => {

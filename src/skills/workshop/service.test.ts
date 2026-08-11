@@ -40,6 +40,7 @@ import {
   readSkillProposalRollback,
   updateSkillProposalRecord,
 } from "./store.js";
+import { withSkillCollectionLock } from "./target-lock.js";
 import { SKILL_WORKSHOP_ROLLBACK_SCHEMA, type SkillProposalRollback } from "./types.js";
 
 const tempDirs = createTrackedTempDirs();
@@ -1007,7 +1008,33 @@ describe("skill workshop proposals", () => {
     await fs.writeFile(supportFile, "Partial support.\n", "utf8");
 
     closeOpenClawStateDatabaseForTest();
-    await expect(listSkillProposals({ workspaceDir })).resolves.toMatchObject({
+    let releaseLock: (() => void) | undefined;
+    let markAcquired: (() => void) | undefined;
+    const acquired = new Promise<void>((resolve) => {
+      markAcquired = resolve;
+    });
+    const heldLock = withSkillCollectionLock(
+      workspaceDir,
+      async () => {
+        markAcquired?.();
+        await new Promise<void>((resolve) => {
+          releaseLock = resolve;
+        });
+      },
+      { env: testState.env },
+    );
+    await acquired;
+    let settled = false;
+    const listing = listSkillProposals({ workspaceDir }).finally(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+    expect(settled).toBe(false);
+    releaseLock?.();
+    await heldLock;
+    await expect(listing).resolves.toMatchObject({
       proposals: [expect.objectContaining({ id: proposal.record.id, status: "pending" })],
     });
     await expect(fs.access(supportFile)).rejects.toThrow();

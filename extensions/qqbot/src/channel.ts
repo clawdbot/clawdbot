@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Register the PlatformAdapter before any core/ module is used.
 import "./bridge/bootstrap.js";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
@@ -36,7 +37,6 @@ import {
   looksLikeQQBotTarget,
   parseTarget,
 } from "./engine/messaging/target-parser.js";
-import { normalizeOptionalString } from "./engine/utils/string-normalize.js";
 import { resolveQQBotGroupToolPolicy } from "./group-policy.js";
 import type { ResolvedQQBotAccount } from "./types.js";
 
@@ -326,6 +326,13 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     targetPrefixes: ["qqbot"],
     /** Normalize common QQ Bot target formats into the canonical qqbot:... form. */
     normalizeTarget: coreNormalizeTarget,
+    inferTargetChatType: ({ to }) => {
+      try {
+        return parseTarget(to).type === "c2c" ? "direct" : "group";
+      } catch {
+        return undefined;
+      }
+    },
     resolveOutboundSessionRoute: (params) => resolveQQBotOutboundSessionRoute(params),
     targetResolver: {
       /** Return true when the id looks like a QQ Bot target. */

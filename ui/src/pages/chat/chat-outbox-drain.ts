@@ -27,6 +27,7 @@ import {
   type StoredChatOutbox,
   type StoredChatOutboxScope,
 } from "./composer-persistence.ts";
+import { isQueuedMessageBeingEdited } from "./queued-message-edit.ts";
 import { isChatBusy } from "./run-lifecycle.ts";
 import {
   chatMessagesContainQueuedSend,
@@ -285,7 +286,11 @@ async function drainStoredChatOutbox(
     }
     if (
       item.sendState === "unconfirmed" ||
-      (item.sendState === "waiting-model" && !lane.pendingOptions.has(item.id))
+      (item.sendState === "waiting-model" && !lane.pendingOptions.has(item.id)) ||
+      // An open edit owns this row: sending the superseded text would deliver a
+      // message the operator is visibly rewriting. The queue behind it waits,
+      // which is the same contract the row's held position promises.
+      isQueuedMessageBeingEdited(host, item.id)
     ) {
       syncVisibleChatQueueProjection(host);
       return "blocked";

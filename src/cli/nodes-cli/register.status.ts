@@ -18,7 +18,7 @@ import { formatConnectionFlagReminder, getNodesTheme, runNodesCommand } from "./
 import { formatPermissions, parseNodeList, parsePairingList } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 import {
-  callGatewayCli,
+  callNodesGatewayCli,
   callNodeDiagnosticsGatewayCli,
   nodesCallOpts,
   resolveNodeDiagnosticsId,
@@ -231,7 +231,7 @@ function mergePairedNodesWithEffectiveNodes(
 
 async function tryReadNodeList(opts: NodesRpcOpts): Promise<NodeListNode[] | null> {
   try {
-    return parseNodeList(await callGatewayCli("node.list", opts, {}));
+    return parseNodeList(await callNodesGatewayCli("node.list", opts, {}));
   } catch {
     return null;
   }
@@ -259,9 +259,9 @@ export function registerNodesStatusCommands(nodes: Command) {
           const lastConnectedById =
             sinceMs !== undefined
               ? new Map(
-                  parsePairingList(await callGatewayCli("node.pair.list", opts, {})).paired.map(
-                    (entry) => [entry.nodeId, entry],
-                  ),
+                  parsePairingList(
+                    await callNodesGatewayCli("node.pair.list", opts, {}),
+                  ).paired.map((entry) => [entry.nodeId, entry]),
                 )
               : null;
           const filtered = nodesLocal.filter((n) => {
@@ -526,7 +526,7 @@ export function registerNodesStatusCommands(nodes: Command) {
         await runNodesCommand("list", async () => {
           const connectedOnly = Boolean(opts.connected);
           const sinceMs = parseSinceMs(opts.lastConnected, "Invalid --last-connected");
-          const result = await callGatewayCli("node.pair.list", opts, {});
+          const result = await callNodesGatewayCli("node.pair.list", opts, {});
           const { pending, paired } = parsePairingList(result);
           const { heading, muted, warn } = getNodesTheme();
           const tableWidth = getTerminalTableWidth();
@@ -534,7 +534,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           const hasFilters = connectedOnly || sinceMs !== undefined;
           const pendingRows = hasFilters ? [] : pending;
           const effectiveNodes = hasFilters
-            ? parseNodeList(await callGatewayCli("node.list", opts, {}))
+            ? parseNodeList(await callNodesGatewayCli("node.list", opts, {}))
             : await tryReadNodeList(opts);
           const effectivePairedRows = mergePairedNodesWithEffectiveNodes(paired, effectiveNodes);
           const filteredPaired = effectivePairedRows.filter((node) => {

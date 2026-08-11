@@ -1,11 +1,27 @@
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { requireActivePluginChannelRegistry } from "../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
 import type { GatewayReloadHandlerParams } from "./server-reload-contracts.js";
 import { collectChannelOperationFailures } from "./server-reload-utils.js";
+
+export function startGatewayChannelFromActiveRegistry(
+  params: Pick<GatewayReloadHandlerParams, "startChannel">,
+  channel: ChannelKind,
+  accountId?: string,
+): Promise<void> {
+  return withPluginRuntimeRegistryScope(requireActivePluginChannelRegistry(), () =>
+    runOutsideGatewayRootWorkAdmission(() =>
+      accountId === undefined
+        ? params.startChannel(channel)
+        : params.startChannel(channel, accountId),
+    ),
+  );
+}
 
 export async function restartGatewayChannels(options: {
   params: GatewayReloadHandlerParams;
@@ -15,6 +31,7 @@ export async function restartGatewayChannels(options: {
   restartChannelAccounts: ReadonlyMap<ChannelKind, Set<string>>;
   activePluginChannelsAfterReload: ReadonlySet<ChannelKind> | null;
   channelsStoppedBeforePluginReload: Set<ChannelKind>;
+  accountsStoppedBeforePluginReload: ReadonlyMap<ChannelKind, ReadonlySet<string>>;
   shouldSkipChannelRestart: boolean;
   skipChannelRestartLogMessage: string;
   pluginReloadAborted: boolean;
@@ -32,6 +49,7 @@ export async function restartGatewayChannels(options: {
     restartChannelAccounts,
     activePluginChannelsAfterReload,
     channelsStoppedBeforePluginReload,
+    accountsStoppedBeforePluginReload,
     shouldSkipChannelRestart,
     skipChannelRestartLogMessage,
     pluginReloadAborted,
@@ -41,6 +59,8 @@ export async function restartGatewayChannels(options: {
     logSuppressedChannelRestart,
     scheduleRecoveryRestart,
   } = options;
+  const wasStoppedBeforePluginReload = (channel: ChannelKind, accountId: string) =>
+    accountsStoppedBeforePluginReload.get(channel)?.has(accountId) === true;
   // Suppressed and normal reloads share fallback selection so stale account
   // ids always reach the wholesale path that evicts their old runtime.
   const collectChannelAccountTargets = (): Array<[ChannelKind, string]> => {
@@ -97,7 +117,9 @@ export async function restartGatewayChannels(options: {
             params.logChannels.info(
               `stopping ${channel} account ${accountId} before suppressed hot reload`,
             );
-            await params.stopChannel(channel, accountId, { manual: false });
+            if (!wasStoppedBeforePluginReload(channel, accountId)) {
+              await params.stopChannel(channel, accountId, { manual: false });
+            }
           } catch (err) {
             accountStopFailures.push(`${channel}[${accountId}]`);
             params.logChannels.error(
@@ -141,11 +163,13 @@ export async function restartGatewayChannels(options: {
         for (const [channel, accountId] of accountRestarts) {
           try {
             params.logChannels.info(`restarting ${channel} account ${accountId}`);
-            await params.stopChannel(channel, accountId, { manual: false });
+            if (!wasStoppedBeforePluginReload(channel, accountId)) {
+              await params.stopChannel(channel, accountId, { manual: false });
+            }
             if (isLifecycleReloadAborted()) {
               continue;
             }
-            await runOutsideGatewayRootWorkAdmission(() => params.startChannel(channel, accountId));
+            await startGatewayChannelFromActiveRegistry(params, channel, accountId);
           } catch (err) {
             accountRestartFailures.push(`${channel}[${accountId}]`);
             params.logChannels.error(
@@ -164,7 +188,7 @@ export async function restartGatewayChannels(options: {
           if (isLifecycleReloadAborted()) {
             return;
           }
-          await runOutsideGatewayRootWorkAdmission(() => params.startChannel(name));
+          await startGatewayChannelFromActiveRegistry(params, name);
         };
         const restartFailures = await collectChannelOperationFailures({
           channels: channelsToRestart,

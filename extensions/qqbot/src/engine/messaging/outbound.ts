@@ -34,6 +34,10 @@ export {
 } from "./outbound-media-send.js";
 
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { qqbotNotConfiguredMessage } from "../config/setup-guidance.js";
 import type { GatewayAccount } from "../types.js";
@@ -41,10 +45,6 @@ import type { EngineLogger } from "../types.js";
 import { debugError, debugLog, debugWarn } from "../utils/log.js";
 import { normalizeMediaTags } from "../utils/media-tags.js";
 import { decodeCronPayload } from "../utils/payload.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../utils/string-normalize.js";
 import { decodeMediaPath } from "./decode-media-path.js";
 import {
   isImageFile as coreIsImageFile,

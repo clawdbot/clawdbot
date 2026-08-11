@@ -38,7 +38,7 @@ vi.mock("./command-execution-startup.js", () => ({
 
 vi.mock("../commands/channels/shared.js", () => ({
   formatChannelAccountLabel: vi.fn(),
-  requireValidConfig: vi.fn(async () => testState.config),
+  requireValidChannelConfig: vi.fn(async () => testState.config),
 }));
 
 vi.mock("../commands/channel-setup/trusted-catalog.js", () => ({

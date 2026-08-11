@@ -1,14 +1,12 @@
 /** Scheduling state and next-run computation for cron jobs. */
 import crypto from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isCronJobActive } from "../active-jobs.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
-import {
-  coerceFiniteScheduleNumber,
-  computeNextRunAtMs,
-  computePreviousRunAtMs,
-} from "../schedule.js";
+import { coerceFiniteScheduleNumber } from "../schedule-number.js";
+import { computeNextRunAtMs, computePreviousRunAtMs } from "../schedule.js";
 import { resolveCronStaggerMs } from "../stagger.js";
 import { createCronStreamSourceIdentity, resolveCronStreamBatching } from "../stream-schedule.js";
 import type { CronJob, CronSchedule } from "../types.js";
@@ -56,7 +54,7 @@ export const DEFAULT_ERROR_BACKOFF_SCHEDULE_MS = [
 ];
 
 function isFiniteTimestamp(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
+  return asDateTimestampMs(value) !== undefined;
 }
 
 /** Returns whether a stored next-run timestamp is finite and schedulable. */
@@ -99,7 +97,7 @@ export function resolveJobErrorBackoffUntilMs(
       ? Math.max(0, Math.floor(job.state.lastDurationMs))
       : 0;
   const lastEndedAtMs = job.state.lastRunAtMs + lastDurationMs;
-  return lastEndedAtMs + errorBackoffMs(consecutiveErrors, scheduleMs);
+  return asDateTimestampMs(lastEndedAtMs + errorBackoffMs(consecutiveErrors, scheduleMs));
 }
 
 function resolveStableCronOffsetMs(jobId: string, staggerMs: number) {
@@ -139,7 +137,7 @@ function computeStaggeredCronNextRunAtMs(job: CronJob, nowMs: number) {
       return undefined;
     }
     const shifted = baseNext + offsetMs;
-    if (shifted > nowMs) {
+    if (isFiniteTimestamp(shifted) && shifted > nowMs) {
       return shifted;
     }
     cursorMs = Math.max(cursorMs + 1, baseNext + 1_000);
@@ -167,7 +165,7 @@ function computeStaggeredCronPreviousRunAtMs(job: CronJob, nowMs: number) {
       return undefined;
     }
     const shifted = basePrevious + offsetMs;
-    if (shifted <= nowMs) {
+    if (isFiniteTimestamp(shifted) && shifted <= nowMs) {
       return shifted;
     }
     cursorMs = Math.max(0, basePrevious - 1_000);
@@ -178,7 +176,7 @@ function computeStaggeredCronPreviousRunAtMs(job: CronJob, nowMs: number) {
 function computeStaggeredCronPreviousRunAtOrBeforeMs(job: CronJob, nowMs: number) {
   const previous = computeStaggeredCronPreviousRunAtMs(job, nowMs);
   const probeMs = nowMs + 1_000;
-  if (!Number.isFinite(probeMs)) {
+  if (!isFiniteTimestamp(probeMs)) {
     return previous;
   }
 
@@ -205,7 +203,6 @@ function isStaggeredCronRunAtMs(job: CronJob, runAtMs: number): boolean {
 }
 
 function isPendingErrorBackoffSlot(params: {
-  state: CronServiceState;
   job: CronJob;
   nextRunAtMs: number;
   nowMs: number;
@@ -215,12 +212,8 @@ function isPendingErrorBackoffSlot(params: {
   return backoffUntilMs !== undefined && nowMs < backoffUntilMs && nextRunAtMs <= backoffUntilMs;
 }
 
-function shouldRepairFutureCronNextRunAtMs(params: {
-  state: CronServiceState;
-  job: CronJob;
-  nowMs: number;
-}): boolean {
-  const { state, job, nowMs } = params;
+function shouldRepairFutureCronNextRunAtMs(params: { job: CronJob; nowMs: number }): boolean {
+  const { job, nowMs } = params;
   const nextRun = job.state.nextRunAtMs;
   if (
     job.schedule.kind !== "cron" ||
@@ -235,7 +228,7 @@ function shouldRepairFutureCronNextRunAtMs(params: {
   // Error retries may intentionally use a non-cron future timestamp while
   // backoff is pending. Once the retry window has elapsed, stale future cron
   // slots should be eligible for the same repair as ordinary schedule state.
-  if (isPendingErrorBackoffSlot({ state, job, nextRunAtMs: nextRun, nowMs })) {
+  if (isPendingErrorBackoffSlot({ job, nextRunAtMs: nextRun, nowMs })) {
     return false;
   }
   let naturalNext: number | undefined;
@@ -290,6 +283,14 @@ export function resolveEveryAnchorMs(params: {
   return 0;
 }
 
+function hasInvalidExplicitEveryAnchor(schedule: { anchorMs?: number }): boolean {
+  if (schedule.anchorMs === undefined) {
+    return false;
+  }
+  const coerced = coerceFiniteScheduleNumber(schedule.anchorMs);
+  return coerced === undefined || coerced < 0;
+}
+
 /** Finds an in-memory cron job or throws the public unknown-id error. */
 export function findJobOrThrow(state: CronServiceState, id: string) {
   const job = state.store?.jobs.find((j) => j.id === id);
@@ -310,14 +311,23 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
     return undefined;
   }
   if (job.schedule.kind === "every") {
+    if (hasInvalidExplicitEveryAnchor(job.schedule)) {
+      return undefined;
+    }
     const everyMsRaw = coerceFiniteScheduleNumber(job.schedule.everyMs);
     if (everyMsRaw === undefined) {
       return undefined;
     }
-    const everyMs = Math.max(1, Math.floor(everyMsRaw));
+    const everyMs = Math.floor(everyMsRaw);
+    if (everyMs < 1) {
+      return undefined;
+    }
     const lastRunAtMs = job.state.lastRunAtMs;
-    if (typeof lastRunAtMs === "number" && Number.isFinite(lastRunAtMs)) {
+    if (isFiniteTimestamp(lastRunAtMs)) {
       const nextFromLastRun = Math.floor(lastRunAtMs) + everyMs;
+      if (!isFiniteTimestamp(nextFromLastRun)) {
+        return undefined;
+      }
       if (nextFromLastRun > nowMs) {
         return nextFromLastRun;
       }
@@ -384,7 +394,6 @@ export function recordScheduleComputeError(params: {
       reason: "schedule-errors",
       atMs: state.deps.nowMs(),
       consecutiveErrors: errorCount,
-      error: errText,
       deferredNotifications: params.deferredNotifications,
     });
     state.deps.log.error(
@@ -422,7 +431,7 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
     changed = true;
   }
 
-  if (job.schedule.kind === "every") {
+  if (job.schedule.kind === "every" && !hasInvalidExplicitEveryAnchor(job.schedule)) {
     const normalizedAnchorMs = resolveEveryAnchorMs({
       schedule: job.schedule,
       fallbackAnchorMs: isFiniteTimestamp(job.createdAtMs) ? job.createdAtMs : nowMs,
@@ -607,7 +616,7 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
     const isDueOrMissing = !hasScheduledNextRunAtMs(nextRun) || now >= nextRun;
     return (
       !hasForcePreservedNextRun &&
-      (isDueOrMissing || shouldRepairFutureCronNextRunAtMs({ state, job, nowMs: now })) &&
+      (isDueOrMissing || shouldRepairFutureCronNextRunAtMs({ job, nowMs: now })) &&
       recomputeJobNextRunAtMs({ state, job, nowMs: now })
     );
   });
@@ -681,7 +690,7 @@ export function recomputeNextRunsForMaintenance(
         !hasPendingStartupCatchup &&
         !hasPendingPacedNextRun &&
         !hasForcePreservedNextRun &&
-        shouldRepairFutureCronNextRunAtMs({ state, job, nowMs: now })
+        shouldRepairFutureCronNextRunAtMs({ job, nowMs: now })
       ) {
         changed = recomputeJob(job, now) || changed;
       } else if (

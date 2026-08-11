@@ -1,10 +1,7 @@
 // Runtime bridge for plugin-provided migration hooks.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
-import {
-  withBundledPluginEnablementCompat,
-  withBundledPluginVitestCompat,
-} from "./bundled-compat.js";
+import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 import { loadPluginRegistryHandle } from "./loader.js";
 import { resolveManifestContractRuntimePluginResolution } from "./manifest-contract-runtime.js";
@@ -56,21 +53,6 @@ function bindMigrationProviderToRegistry(
     plan: (ctx) => withPluginRuntimeRegistryScope(registry, () => provider.plan(ctx)),
     apply: (ctx, plan) => withPluginRuntimeRegistryScope(registry, () => provider.apply(ctx, plan)),
   };
-}
-
-function resolveMigrationProviderConfig(params: {
-  cfg?: OpenClawConfig;
-  bundledCompatPluginIds: readonly string[];
-}): OpenClawConfig | undefined {
-  const enablementCompat = withBundledPluginEnablementCompat({
-    config: params.cfg,
-    pluginIds: [...params.bundledCompatPluginIds],
-  });
-  return withBundledPluginVitestCompat({
-    config: enablementCompat,
-    pluginIds: [...params.bundledCompatPluginIds],
-    env: process.env,
-  });
 }
 
 function resolveMigrationProviderRegistry(params: { cfg?: OpenClawConfig; pluginIds: string[] }) {
@@ -143,9 +125,9 @@ export function ensureStandaloneMigrationProviderRegistryLoaded(
   if (resolution.pluginIds.length === 0) {
     return;
   }
-  const compatConfig = resolveMigrationProviderConfig({
-    cfg: params.cfg,
-    bundledCompatPluginIds: resolution.bundledCompatPluginIds,
+  const compatConfig = withBundledPluginEnablementCompat({
+    config: params.cfg,
+    pluginIds: resolution.bundledCompatPluginIds,
   });
   const registry = loadPluginRegistryHandle({
     ...(compatConfig === undefined ? {} : { config: compatConfig }),

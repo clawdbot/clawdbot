@@ -9,6 +9,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveLocalPathFromRootsSync } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { MediaFileType, type GatewayAccount } from "../types.js";
 import { formatFileSize, getImageMimeType, getMaxUploadSize } from "../utils/file-utils.js";
@@ -20,7 +21,6 @@ import {
   type MediaPayload,
 } from "../utils/payload.js";
 import { normalizePath } from "../utils/platform.js";
-import { normalizeLowercaseStringOrEmpty } from "../utils/string-normalize.js";
 import { sanitizeFileName } from "../utils/string-normalize.js";
 import { openLocalFile } from "./media-source.js";
 import {

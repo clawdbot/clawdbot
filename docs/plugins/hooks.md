@@ -67,10 +67,9 @@ observation side effects.
 
 Trigger eligibility is enforced by the host before it invokes the handler. A
 hook registered with `eligibleTriggers: ["heartbeat", "cron"]` is therefore
-inactive for user turns and does not block recovery of an interrupted user
-turn. Omitted, empty, malformed, or partly unknown lists remain unrestricted
-so dispatch and recovery fail closed. Other hook kinds do not accept this
-option.
+inactive for user turns, including a recovered user turn. Omitted, empty,
+malformed, or partly unknown lists remain unrestricted, so the hook runs for
+those turns. Other hook kinds do not accept this option.
 
 Operators can set hook budgets without patching plugin code:
 
@@ -454,12 +453,12 @@ Load the file directly and restart the Gateway:
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "maintenance-agent",
+    entries: {
+      "maintenance-agent": {
+        default: true,
         workspace: "~/.openclaw/workspace-maintenance",
       },
-    ],
+    },
   },
   bindings: [
     {

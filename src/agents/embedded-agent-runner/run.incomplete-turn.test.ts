@@ -1,6 +1,7 @@
 // Coverage for incomplete-turn safety, retry instructions, and liveness states.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE } from "../../llm/types.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
   hasOutboundDeliveryEvidence,
@@ -20,6 +21,7 @@ import {
   runIncompleteTurnOwnerHarness,
 } from "./run.incomplete-turn.test-support.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
+import { recoverEmbeddedRunAttempt } from "./run/attempt-recovery.js";
 import {
   buildAttemptReplayMetadata,
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
@@ -37,7 +39,9 @@ import {
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn.js";
 import { normalizeEmbeddedRunAttemptResult } from "./run/run-attempt-result.js";
+import { resolveEmbeddedRunAttemptTerminalState } from "./run/terminal-outcome.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
+import { createUsageAccumulator } from "./usage-accumulator.js";
 
 const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
@@ -262,6 +266,69 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       message: "Blocked by before-run policy.",
     });
     expect(result.meta?.livenessState).toBe("blocked");
+  });
+
+  it("keeps carried usage ahead of transcript history on before_agent_run hook blocks", async () => {
+    const historicalAssistant = makeLastAssistant({
+      usage: { input: 128_814, output: 3_000, total: 131_814 },
+    });
+    const carriedUsage = { input: 42_000, output: 1_000, total: 43_000 };
+    const attempt = makeAttemptResult({
+      assistantTexts: [],
+      promptError: new Error("Blocked by before-run policy."),
+      promptErrorSource: "hook:before_agent_run",
+      lastAssistant: historicalAssistant,
+      currentAttemptAssistant: undefined,
+    });
+    const terminalState = resolveEmbeddedRunAttemptTerminalState({
+      attempt,
+      assistant: historicalAssistant,
+    });
+
+    const recovery = await recoverEmbeddedRunAttempt({
+      runInput: {
+        runParams: makeBaseRunParams("run-before-agent-run-hook-block-usage"),
+        resolvedSessionKey: "agent:main:test-key",
+        startedAtMs: Date.now(),
+      },
+      preparedRuntime: {
+        provider: "openai",
+        modelId: "gpt-5.6-luna",
+        model: { id: "gpt-5.6-luna" },
+        genericCompactionRecoveryAllowed: false,
+        snapshot: () => ({
+          thinkLevel: "off",
+          agentHarness: { id: "codex" },
+          outerContextTokenMeta: {},
+        }),
+      },
+      normalizedAttempt: {
+        attempt,
+        sessionIdUsed: attempt.sessionIdUsed,
+        attemptAssistant: historicalAssistant,
+        currentAttemptAssistant: undefined,
+        currentAttemptCompletedAssistant: undefined,
+        terminalState,
+        setTerminalLifecycleMeta: vi.fn(),
+        attemptCompactionCount: 0,
+        activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
+        resolveReplayInvalidForAttempt: () => false,
+        canRestartForLiveSwitch: false,
+      },
+      runtimePlan: { auth: {} },
+      sessionPromptState: { sessionFile: "/tmp/session.jsonl" },
+      usageAccumulator: createUsageAccumulator(),
+      lastRunPromptUsage: carriedUsage,
+    } as never);
+
+    expect(recovery).toMatchObject({
+      action: "complete",
+      result: {
+        meta: {
+          agentMeta: { lastCallUsage: carriedUsage, promptTokens: 42_000 },
+        },
+      },
+    });
   });
 
   it("warns before retrying when an incomplete turn already sent a message", async () => {
@@ -1253,7 +1320,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expectNoWarnMessageWith("settled post-tool turn lacked a final answer");
   });
 
-  it("keeps the original failed-tool warning if finalization fails (#118274)", async () => {
+  it("keeps the original failed-tool warning if finalization completes empty (#118274)", async () => {
     const toolUseAssistant = makeLastAssistant({
       stopReason: "toolUse",
       content: [{ type: "toolCall", id: "tool_1", name: "exec", arguments: {} }],
@@ -1278,8 +1345,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       .mockResolvedValueOnce(
         makeAttemptResult({
           assistantTexts: [],
-          promptError: new Error("finalizer provider failure"),
-          promptErrorSource: "prompt",
+          lastAssistant: makeLastAssistant(),
+          currentAttemptAssistant: makeLastAssistant(),
+          currentAttemptCompletedAssistant: makeLastAssistant(),
         }),
       );
     mockedBuildEmbeddedRunPayloads.mockReturnValue([warning]);
@@ -1288,7 +1356,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.payloads?.[0]).toEqual(warning);
-    expectWarnMessageWith("settled-turn finalization failed closed");
+    expectWarnMessageWith("settled-turn finalization completed without a visible answer");
   });
 
   it("preserves the incomplete-turn failure when the selected harness cannot finalize safely", async () => {
@@ -1345,6 +1413,17 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         assistantTexts: [],
         toolMetas: [{ toolName: "write", meta: "path=note.txt" }],
         itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["Writing note.txt…"],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "telegram",
+            to: "chat:123",
+            text: "Writing note.txt…",
+            sourceReplyFinal: false,
+          },
+        ],
         lastAssistant: emptyStopAssistant,
         currentAttemptAssistant: emptyStopAssistant,
       });
@@ -1417,7 +1496,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expectNoWarnMessageWith("settled post-tool turn lacked a final answer");
   });
 
-  it("surfaces failure without cascading when the settled-tool continuation is also empty", async () => {
+  it("records silent success when the settled-tool finalization completes empty", async () => {
     const emptyStopAssistant = makeLastAssistant();
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
@@ -1446,12 +1525,14 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     );
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(result.payloads?.[0]).toMatchObject({ isError: true });
-    expect(result.payloads?.[0]?.text).toContain(
-      "some tool actions may have already been executed",
-    );
+    expect(result.payloads).toBeUndefined();
+    expect(result.meta.error).toBeUndefined();
+    expect(result.meta.terminalReplyKind).toBeUndefined();
+    expect(result.meta.finalAssistantVisibleText).toBeUndefined();
+    expect(result.meta.finalAssistantRawText).toBeUndefined();
+    expect(result.meta.stopReason).toBe("stop");
     expectNoWarnMessageWith("empty response detected");
-    expectWarnMessageWith("settled-turn finalization failed closed");
+    expectWarnMessageWith("settled-turn finalization completed without a visible answer");
   });
 
   it.each([
@@ -2517,6 +2598,44 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       expect(instruction).toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
       expect(instruction).toContain(
         "If any tool failed, state that failure plainly and do not claim it succeeded.",
+      );
+    },
+  );
+
+  it.each([
+    { label: "progress", sourceReplyFinal: false, expectedFinalization: true },
+    { label: "final reply", sourceReplyFinal: true, expectedFinalization: false },
+    { label: "legacy unmarked send", sourceReplyFinal: undefined, expectedFinalization: false },
+  ])(
+    "handles $label delivery evidence before settled finalization",
+    ({ sourceReplyFinal, expectedFinalization }) => {
+      const emptyStopAssistant = makeLastAssistant();
+      const instruction = resolveSettledToolTerminalContinuationInstruction(
+        makeSettledContinuationParams(
+          {
+            assistantTexts: [],
+            toolMetas: [{ toolName: "write" }],
+            itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+            didSendViaMessagingTool: true,
+            messagingToolSentTexts: ["Writing note.txt…"],
+            messagingToolSentTargets: [
+              {
+                tool: "message",
+                provider: "telegram",
+                to: "chat:123",
+                text: "Writing note.txt…",
+                sourceReplyFinal,
+              },
+            ],
+            lastAssistant: emptyStopAssistant,
+            currentAttemptAssistant: emptyStopAssistant,
+          },
+          { allowEmptyStopContinuation: true },
+        ),
+      );
+
+      expect(instruction).toBe(
+        expectedFinalization ? SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION : null,
       );
     },
   );
@@ -3953,6 +4072,21 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         assistant,
       }),
     ).toBe(true);
+  });
+
+  it("does not retry an ambiguous post-dispatch provider outcome", () => {
+    const assistant = makeLastAssistant({
+      stopReason: "error",
+      errorCode: PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
+      errorMessage: "The WebSocket closed after dispatch",
+      usage: { input: 100, output: 0, totalTokens: 100 },
+    });
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({ assistantTexts: [], lastAssistant: assistant }),
+        assistant,
+      }),
+    ).toBe(false);
   });
 
   it("does not retry errored empty turns when non-zero output may indicate progress", () => {

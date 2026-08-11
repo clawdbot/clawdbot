@@ -149,7 +149,7 @@ suite.define(() => {
         await expectMessagesNotToOverlap(page);
         await page.screenshot({ path: path.join(artifactDir, "01-background-tasks.png") });
 
-        await page.getByRole("button", { name: "Show thread files", exact: true }).click();
+        await page.getByRole("button", { name: "Show session files", exact: true }).click();
         await page.locator(".chat-workspace-rail").waitFor({ state: "visible" });
         await expectMessagesNotToOverlap(page);
         await page.screenshot({ path: path.join(artifactDir, "02-thread-files.png") });

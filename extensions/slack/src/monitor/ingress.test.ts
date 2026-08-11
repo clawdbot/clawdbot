@@ -3,26 +3,37 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { App, Receiver, ReceiverEvent } from "@slack/bolt";
+import { App, type Receiver, type ReceiverEvent } from "@slack/bolt";
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
+import type { PluginJsonValue } from "openclaw/plugin-sdk/plugin-entry";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  peekSystemEventEntries,
+  resetSystemEventsForTest,
+} from "openclaw/plugin-sdk/system-event-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { registerSlackMemberEvents } from "./events/members.js";
+import { createSlackSystemEventTestHarness } from "./events/system-event-test-harness.js";
 import { createSlackDurableIngress, resolveSlackIngressTurnLifecycle } from "./ingress.js";
 
 type SlackIngressQueue = NonNullable<Parameters<typeof createSlackDurableIngress>[0]["queue"]>;
 type SlackIngressPayload = Parameters<SlackIngressQueue["enqueue"]>[1];
 
-function createSlackEnvelope(eventId: string, ts = "1700000000.000100") {
+function createSlackEnvelope(
+  eventId: string,
+  ts = "1700000000.000100",
+  event?: Record<string, PluginJsonValue>,
+) {
   return {
     team_id: "T_TEST",
     api_app_id: "A_TEST",
     type: "event_callback",
     event_id: eventId,
     event_time: 1_700_000_000,
-    event: {
+    event: event ?? {
       type: "message",
       channel: "C_TEST",
       user: "U_TEST",
@@ -75,13 +86,56 @@ function createReceiverHarness() {
 function createReceiverEvent(
   eventId: string,
   ack = vi.fn(async () => {}),
-  options: { retryNum?: number; ts?: string } = {},
+  options: { retryNum?: number; ts?: string; event?: Record<string, PluginJsonValue> } = {},
 ): ReceiverEvent {
   return {
-    body: createSlackEnvelope(eventId, options.ts),
+    body: createSlackEnvelope(eventId, options.ts, options.event),
     ack,
     ...(options.retryNum === undefined ? {} : { retryNum: options.retryNum }),
   };
+}
+
+function createMemberEvent(type: "member_joined_channel" | "member_left_channel", eventTs: string) {
+  return {
+    type,
+    user: "U_TEST",
+    channel: "C_TEST",
+    channel_type: "channel",
+    event_ts: eventTs,
+  };
+}
+
+function attachBoltMemberIngress(params: {
+  queue: ChannelIngressQueue<SlackIngressPayload>;
+  trackEvent: () => void;
+  resolveUserName?: (userId: string) => Promise<{ name?: string }>;
+  pollIntervalMs?: number;
+}) {
+  const ingress = createSlackDurableIngress({
+    accountId: "default",
+    queue: params.queue,
+    pollIntervalMs: params.pollIntervalMs ?? 60_000,
+    adoptionStallTimeoutMs: 5_000,
+  });
+  const receiverHarness = createReceiverHarness();
+  const app = new App({
+    receiver: ingress.wrapReceiver(receiverHarness.receiver),
+    authorize: async () => ({
+      botToken: "xoxb-test",
+      botId: "B_BOT",
+      botUserId: "U_BOT",
+      teamId: "T_TEST",
+    }),
+    convoStore: false,
+    ignoreSelf: false,
+  });
+  const memberHarness = createSlackSystemEventTestHarness({ channelType: "channel" });
+  memberHarness.ctx.app = app;
+  if (params.resolveUserName) {
+    memberHarness.ctx.resolveUserName = params.resolveUserName;
+  }
+  registerSlackMemberEvents({ ctx: memberHarness.ctx, trackEvent: params.trackEvent });
+  return { ingress, receive: receiverHarness.receive };
 }
 
 function createReceiverEventWithBody(body: Record<string, unknown>): ReceiverEvent {
@@ -126,6 +180,7 @@ async function withQueue(
 describe("Slack durable ingress", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
+    resetSystemEventsForTest();
   });
 
   it("does not acknowledge when the durable append fails", async () => {
@@ -359,6 +414,90 @@ describe("Slack durable ingress", () => {
       expect(retryAck).toHaveBeenCalledTimes(1);
       expect(replayDispatch).not.toHaveBeenCalled();
       await restarted.ingress.stop();
+    });
+  });
+
+  it("preserves repeated member occurrences through Bolt while deduping Slack retries", async () => {
+    await withQueue(async (queue) => {
+      const trackEvent = vi.fn();
+      const { ingress, receive } = attachBoltMemberIngress({ queue, trackEvent });
+      ingress.start();
+      try {
+        for (const [eventId, event] of [
+          ["Ev-member-join-1", createMemberEvent("member_joined_channel", "100.001")],
+          ["Ev-member-left", createMemberEvent("member_left_channel", "100.002")],
+          ["Ev-member-join-2", createMemberEvent("member_joined_channel", "100.003")],
+        ] as const) {
+          await receive(createReceiverEvent(eventId, undefined, { event }));
+          await ingress.waitForIdle();
+        }
+        await receive(
+          createReceiverEvent("Ev-member-join-2", undefined, {
+            retryNum: 1,
+            event: createMemberEvent("member_joined_channel", "100.003"),
+          }),
+        );
+        await ingress.waitForIdle();
+
+        expect(trackEvent).toHaveBeenCalledTimes(3);
+        expect(peekSystemEventEntries("agent:main:main").map((entry) => entry.contextKey)).toEqual([
+          "slack:member:joined:c_test:u_test:ev-member-join-1",
+          "slack:member:left:c_test:u_test:ev-member-left",
+          "slack:member:joined:c_test:u_test:ev-member-join-2",
+        ]);
+      } finally {
+        await ingress.stop();
+      }
+    });
+  });
+
+  it("retries transient member failures through Bolt after restart", async () => {
+    await withQueue(async (queue) => {
+      const trackEvent = vi.fn();
+      let userLookupCount = 0;
+      const resolveUserName = async () => {
+        userLookupCount += 1;
+        if (userLookupCount === 2) {
+          throw new Error("users.info temporarily unavailable");
+        }
+        return { name: "alice" };
+      };
+      const first = attachBoltMemberIngress({ queue, trackEvent, resolveUserName });
+      first.ingress.start();
+      let restarted: ReturnType<typeof attachBoltMemberIngress> | undefined;
+      try {
+        await first.receive(
+          createReceiverEvent("Ev-member-retry", undefined, {
+            event: createMemberEvent("member_joined_channel", "200.001"),
+          }),
+        );
+        await first.ingress.waitForIdle();
+        await first.ingress.stop();
+
+        expect(trackEvent).toHaveBeenCalledTimes(1);
+        expect(peekSystemEventEntries("agent:main:main")).toHaveLength(0);
+        expect((await queue.listPending()).map((entry) => entry.id)).toContain("Ev-member-retry");
+
+        restarted = attachBoltMemberIngress({
+          queue,
+          trackEvent,
+          resolveUserName,
+          pollIntervalMs: 25,
+        });
+        restarted.ingress.start();
+        await vi.waitFor(
+          async () => {
+            await restarted?.ingress.waitForIdle();
+            expect(trackEvent).toHaveBeenCalledTimes(2);
+          },
+          { timeout: 15_000, interval: 100 },
+        );
+
+        expect(peekSystemEventEntries("agent:main:main")).toHaveLength(1);
+      } finally {
+        await first.ingress.stop();
+        await restarted?.ingress.stop();
+      }
     });
   });
 });

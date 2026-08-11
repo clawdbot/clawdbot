@@ -10,7 +10,13 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
-import { matchPluginCommand, executePluginCommand } from "../../plugins/commands.js";
+import {
+  createPluginCommandRuntime,
+  executePluginCommandDispatch,
+  matchPluginCommandInvocation,
+  PLUGIN_COMMAND_DISPATCH,
+  type PluginCommandExecutionReplyOptions,
+} from "../../plugins/plugin-command-runtime.js";
 import { DEFAULT_AGENT_ID, isUnscopedSessionKeySentinel } from "../../routing/session-key.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 
@@ -49,16 +55,26 @@ export const handlePluginCommand: CommandHandler = async (
     return null;
   }
 
-  // Try to match a plugin command
-  const match = matchPluginCommand(command.commandBodyNormalized, { channel: command.channel });
-  if (!match) {
+  const planned = (params.opts as PluginCommandExecutionReplyOptions | undefined)?.[
+    PLUGIN_COMMAND_DISPATCH
+  ];
+  if (planned?.kind === "non-plugin") {
+    return null;
+  }
+  if (!planned && !command.commandBodyNormalized.trim().startsWith("/")) {
+    return null;
+  }
+  const dispatch =
+    planned?.kind === "plugin"
+      ? planned
+      : matchPluginCommandInvocation(createPluginCommandRuntime(), command.commandBodyNormalized, {
+          channel: command.channel,
+        })?.dispatch;
+  if (!dispatch) {
     return null;
   }
 
-  // Execute the plugin command (always returns a result)
-  const result = await executePluginCommand({
-    command: match.command,
-    args: match.args,
+  const result = await executePluginCommandDispatch(dispatch, {
     senderId: command.senderId,
     channel: command.channel,
     channelId: command.channelId,

@@ -405,8 +405,10 @@ export const DEFAULT_GATEWAY_PORT = 18789;
  * Gateway lock directory inside the selected state tree.
  * Default: $OPENCLAW_STATE_DIR/tmp/openclaw-<uid> (uid suffix when available).
  */
-export function resolveGatewayLockDir(stateDir: string = resolveStateDir()): string {
-  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+export function resolveGatewayLockDir(
+  stateDir: string = resolveStateDir(),
+  uid: number | undefined = typeof process.getuid === "function" ? process.getuid() : undefined,
+): string {
   const suffix = uid != null ? `openclaw-${uid}` : "openclaw";
   // Clean break: older binaries still use process temp and do not exclude a
   // state-local binary during a mixed-version upgrade.

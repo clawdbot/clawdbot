@@ -1,7 +1,8 @@
 // Tlon plugin module implements discovery behavior.
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { asNullableRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Foreigns } from "../urbit/foreigns.js";
-import { asRecord, formatErrorMessage } from "./utils.js";
+import { formatErrorMessage } from "./utils.js";
 
 interface InitData {
   channels: string[];

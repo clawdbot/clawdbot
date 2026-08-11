@@ -201,14 +201,14 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
         },
       },
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
+            default: true,
             groupChat: {
               mentionPatterns: ["@openclaw", "openclaw"],
             },
           },
-        ],
+        },
       },
       channels: {
         whatsapp: {
@@ -235,11 +235,11 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
         defaults: {
           skills: ["github", "weather"],
         },
-        list: [
-          { id: "writer" }, // inherits github, weather
-          { id: "docs", skills: ["docs-search"] }, // replaces defaults
-          { id: "locked-down", skills: [] }, // no skills
-        ],
+        entries: {
+          writer: { default: true }, // inherits github, weather
+          docs: { skills: ["docs-search"] }, // replaces defaults
+          "locked-down": { skills: [] }, // no skills
+        },
       },
     }
     ```
@@ -390,7 +390,7 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
         defaults: {
           heartbeat: {
             every: "30m",
-            target: "last",
+            target: "owner",
           },
         },
       },
@@ -398,7 +398,7 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     ```
 
     - `every`: duration string (`30m`, `2h`). Set `0m` to disable. Default: `30m`.
-    - `target`: `last` | `none` | `<channel-id>` (for example `discord`, `matrix`, `telegram`, or `whatsapp`)
+    - `target`: `owner` (default operator DM) | `last` (latest conversation, including groups) | `none` (internal only) | `<channel-id>`
     - `directPolicy`: `allow` (default) or `block` for DM-style heartbeat targets
     - See [Heartbeat](/gateway/heartbeat) for the full guide.
 
@@ -466,10 +466,10 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     ```json5
     {
       agents: {
-        list: [
-          { id: "home", default: true, workspace: "~/.openclaw/workspace-home" },
-          { id: "work", workspace: "~/.openclaw/workspace-work" },
-        ],
+        entries: {
+          home: { default: true, workspace: "~/.openclaw/workspace-home" },
+          work: { workspace: "~/.openclaw/workspace-work" },
+        },
       },
       bindings: [
         { agentId: "home", match: { channel: "whatsapp", accountId: "personal" } },
@@ -643,8 +643,10 @@ Neither file overrides existing env vars. You can also set inline env vars in co
 ```json5
 {
   env: {
-    OPENROUTER_API_KEY: "sk-or-...",
-    vars: { GROQ_API_KEY: "gsk-..." },
+    vars: {
+      OPENROUTER_API_KEY: "sk-or-...",
+      GROQ_API_KEY: "gsk-...",
+    },
   },
 }
 ```
@@ -683,7 +685,7 @@ Rules:
 
 </Accordion>
 
-<Accordion title="Secret refs (env, file, exec)">
+<Accordion title="Secret refs (env, file, exec, store)">
   For fields that support SecretRef objects, you can use:
 
 ```json5
@@ -716,7 +718,7 @@ Rules:
 }
 ```
 
-SecretRef details (including `secrets.providers` for `env`/`file`/`exec`) are in [Secrets Management](/gateway/secrets).
+SecretRef details (including `secrets.providers` for `env`/`file`/`exec`/`store`) are in [Secrets Management](/gateway/secrets).
 Supported credential paths are listed in [SecretRef Credential Surface](/reference/secretref-credential-surface).
 </Accordion>
 

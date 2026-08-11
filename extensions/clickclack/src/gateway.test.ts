@@ -567,6 +567,39 @@ describe("ClickClack gateway", () => {
     await run;
   });
 
+  it("passes other bot-authored messages to ClickClack access policy", async () => {
+    const socket = new FakeSocket();
+    mocks.client.websocket.mockReturnValue(socket);
+    mocks.client.message.mockResolvedValueOnce({
+      id: "msg-1",
+      workspace_id: "workspace-1",
+      channel_id: "chan-1",
+      author_id: "other-bot",
+      thread_root_id: "msg-1",
+      body: "coordinate",
+      body_format: "markdown",
+      created_at: "2026-01-01T00:00:00.000Z",
+      author: {
+        id: "other-bot",
+        kind: "bot",
+        display_name: "Other bot",
+        handle: "other-bot",
+        avatar_url: "",
+        created_at: "2026-01-01T00:00:00.000Z",
+      },
+    });
+    const abort = new AbortController();
+    const run = startClickClackGatewayAccount(createGatewayContext(abort.signal));
+
+    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+    emitMessageEvent(socket, 1, { author_id: "other-bot" });
+
+    await waitForGatewayState(() => expect(mocks.handleClickClackInbound).toHaveBeenCalledTimes(1));
+    expect(mocks.resolveClickClackInboundAccess).toHaveBeenCalledTimes(1);
+    abort.abort();
+    await run;
+  });
+
   it("carries validated event correlation through the authoritative fetch and inbound turn", async () => {
     const socket = new FakeSocket();
     mocks.client.websocket.mockReturnValue(socket);

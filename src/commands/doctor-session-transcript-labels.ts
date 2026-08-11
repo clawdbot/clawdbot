@@ -3,7 +3,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { INBOUND_CONTEXT_MARKER } from "../auto-reply/reply/inbound-context-marker.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
 import {
-  readSqliteTranscriptEventRows,
+  readTranscriptEventRows,
   type SqliteTranscriptSnapshotRow,
 } from "../config/sessions/session-accessor.sqlite-read.js";
 import { updateSqliteTranscriptEventJsonInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
@@ -252,7 +252,7 @@ export async function noteSessionTranscriptLabelHealth(params: {
             runOpenClawAgentWriteTransaction(
               (writeDatabase) => {
                 // Use rows-only guard (tolerant of malformed JSON in sibling rows).
-                const currentRows = readSqliteTranscriptEventRows(writeDatabase, sessionId);
+                const currentRows = readTranscriptEventRows(writeDatabase, sessionId);
                 if (!snapshotsMatch(readResult.rows, currentRows)) {
                   throw new Error(`transcript changed while preparing rewrite for ${sessionId}`);
                 }

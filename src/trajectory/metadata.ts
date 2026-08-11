@@ -62,6 +62,7 @@ type BuildTrajectoryArtifactsParams = {
   promptCache?: unknown;
   compactionCount: number;
   assistantTexts: string[];
+  stopReason?: string;
   finalPromptText?: string;
   itemLifecycle: {
     startedCount: number;
@@ -340,6 +341,7 @@ export function buildTrajectoryArtifacts(
     promptCache: params.promptCache,
     compactionCount: params.compactionCount,
     assistantTexts: params.assistantTexts,
+    stopReason: params.stopReason,
     finalPromptText: params.finalPromptText,
     itemLifecycle: params.itemLifecycle,
     toolMetas: params.toolMetas,

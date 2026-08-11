@@ -44,7 +44,7 @@
   gap: var(--space-1);
   color: var(--text);
   font-size: var(--control-ui-text-sm);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .activity-status-filter input {

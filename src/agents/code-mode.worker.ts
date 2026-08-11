@@ -44,13 +44,6 @@ class CodeModeWorkerFailureWithOutput extends CodeModeWorkerFailure {
   }
 }
 
-class CodeModeGuestError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "CodeModeGuestError";
-  }
-}
-
 function isQuickJsInterruptedError(error: unknown): boolean {
   return error instanceof JSException && error.message === "interrupted";
 }
@@ -325,7 +318,7 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
         dumped instanceof Error
           ? formatQuickJsError(dumped.name, dumped.message, dumped.stack)
           : errorMessage(dumped);
-      throw new CodeModeGuestError(text);
+      throw new Error(text);
     });
   }
   return settled.value.consume((value) => toJsonSafe(vm.dump(value)));
