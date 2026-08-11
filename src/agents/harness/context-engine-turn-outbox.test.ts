@@ -396,7 +396,6 @@ describe("context-engine turn outbox", () => {
       database,
       engineId: "test",
       isHeartbeat: false,
-      turnAdvancementIdempotency: "atomic-idempotent-v1",
     });
     const warn = vi.fn();
 
