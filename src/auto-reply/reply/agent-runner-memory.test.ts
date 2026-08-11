@@ -220,6 +220,7 @@ type CompactEmbeddedAgentSessionParams = {
   modelSelectionLocked?: boolean;
   preflightRequired?: boolean;
   preflightCompactionTrigger?: string;
+  preflightTokenPressure?: boolean;
   sessionFile?: string;
   sessionId?: string;
   trigger?: string;
