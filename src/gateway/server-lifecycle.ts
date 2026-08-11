@@ -33,7 +33,7 @@ import {
   type GatewayCloseOptions,
   shouldRetainControlUiDeviceAuthMigrationSession,
 } from "./server-public.js";
-import type { prepareGatewayRuntimeState } from "./server-runtime-state-prepare.js";
+import type { prepareGatewayKernelState } from "./server-runtime-state-prepare.js";
 import {
   getHealthVersion,
   incrementPresenceVersion,
@@ -42,7 +42,7 @@ import {
 import { broadcastPresenceSnapshot } from "./server/presence-events.js";
 import { createSessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
 
-type GatewayRuntimePreparation = Awaited<ReturnType<typeof prepareGatewayRuntimeState>>;
+type GatewayRuntimePreparation = Awaited<ReturnType<typeof prepareGatewayKernelState>>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 
 export async function prepareGatewayLifecycle(params: {
@@ -70,7 +70,7 @@ export async function prepareGatewayLifecycle(params: {
     controlUiDeviceAuthMigration,
     completeControlUiDeviceAuthMigration,
     workerGatewayEndpoint,
-    getWorkerIngressEndpoint,
+    transportBridge,
     sessionMessageSubscribers,
     clients,
     broadcast,
@@ -87,9 +87,6 @@ export async function prepareGatewayLifecycle(params: {
     startupState,
     readinessEventLoopHealth,
     browserAuthRateLimiter,
-    wss,
-    httpServer,
-    httpServers,
     chatRunState,
     chatAbortControllers,
     chatQueuedTurns,
@@ -147,7 +144,7 @@ export async function prepareGatewayLifecycle(params: {
   const unsubscribeEffectiveOperatorPairing = onEffectiveOperatorDevicePaired(
     completeControlUiDeviceAuthMigrationForEffectiveOperator,
   );
-  workerGatewayEndpoint.resolve = getWorkerIngressEndpoint;
+  workerGatewayEndpoint.resolve = transportBridge.getWorkerIngressEndpoint;
   const subscribeSessionMessageEvents: GatewayRequestContext["subscribeSessionMessageEvents"] = (
     connId,
     sessionKey,
@@ -422,6 +419,7 @@ export async function prepareGatewayLifecycle(params: {
     const channelIds = listLoadedChannelPlugins().map((plugin) => plugin.id as ChannelId);
     const { createGatewayCloseHandler, drainActiveSessionsForShutdown } =
       await loadGatewayCloseModule();
+    const transport = transportBridge.current();
     await createGatewayCloseHandler({
       bonjourStop: runtimeState.bonjourStop,
       tailscaleCleanup: runtimeState.tailscaleCleanup,
@@ -479,9 +477,13 @@ export async function prepareGatewayLifecycle(params: {
       getPendingReplyCount: getTotalPendingReplies,
       clients,
       configReloader: { stop: stopConfigReloaderForClose },
-      wss,
-      httpServer,
-      httpServers,
+      ...(transport
+        ? {
+            wss: transport.wss,
+            httpServer: transport.httpServer,
+            httpServers: transport.httpServers,
+          }
+        : {}),
       drainActiveSessionsForShutdown,
     })(optsValue);
   };

@@ -24,6 +24,7 @@ import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createGatewayHttpTransport } from "./server-runtime-state.js";
 import type { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import type { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
+import { createGatewayTransportBridge } from "./server-transport-bridge.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.js";
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
@@ -61,7 +62,7 @@ function listGatewayStartupChannelPlugins(): GatewayStartupChannelPlugin[] {
   return listLoadedChannelPlugins() as GatewayStartupChannelPlugin[];
 }
 
-export async function prepareGatewayRuntimeState(params: {
+export async function prepareGatewayKernelState(params: {
   bootstrap: GatewayBootstrap;
   port: number;
   opts: GatewayBootstrap["opts"];
@@ -298,9 +299,6 @@ export async function prepareGatewayRuntimeState(params: {
   const gatewayTls = await startupTrace.measure("tls.runtime", () =>
     loadGatewayTlsRuntime(cfgAtStart.gateway?.tls, log.child("tls")),
   );
-  if (cfgAtStart.gateway?.tls?.enabled && !gatewayTls.enabled) {
-    throw new Error(gatewayTls.error ?? "gateway tls: failed to enable");
-  }
   const serverStartedAt = Date.now();
   const readinessEventLoopHealth = createGatewayEventLoopHealthMonitor();
   const startupState = {
@@ -352,59 +350,61 @@ export async function prepareGatewayRuntimeState(params: {
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
   });
-  log.info("starting HTTP server...");
   const pluginGatewayContext: { current: GatewayRequestContext | undefined } = {
     current: undefined,
   };
   const watchNodeRequestHandler: {
     current?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   } = {};
-  const { connectionState, httpTransport } = await startupTrace.measure(
-    "runtime.state",
-    async () => {
-      const createdConnectionState = createGatewayConnectionState({
-        cfg: cfgAtStart,
-        getRuntimeConfig,
-      });
-      const createdHttpTransport = await createGatewayHttpTransport({
-        cfg: cfgAtStart,
-        getRuntimeConfig,
-        bindHost,
-        port,
-        controlUiEnabled,
-        controlUiBasePath,
-        controlUiRoot: controlUiRootLifecycle.state,
-        openAiChatCompletionsEnabled,
-        openAiChatCompletionsConfig,
-        openResponsesEnabled,
-        openResponsesConfig,
-        strictTransportSecurityHeader,
-        resolvedAuth,
-        rateLimiter: authRateLimiter,
-        isTerminalEnabled: terminalLaunchPolicy.isEnabled,
-        gatewayTls,
-        getResolvedAuth,
-        hooksConfig: () => runtimeStateRef.current?.hooksConfig ?? initialHooksConfig,
-        getHookClientIpConfig: () =>
-          runtimeStateRef.current?.hookClientIpConfig ?? initialHookClientIpConfig,
-        pluginRegistry: pluginRuntime.registry,
-        getPluginRouteRegistry: () => pluginRuntime.registry,
-        isStartupPluginRuntimeReady: () => startupState.sidecarsReady,
-        getGatewayRequestContext: () => pluginGatewayContext.current,
-        deps,
-        log,
-        logHooks,
-        logPlugins,
-        getReadiness,
-        handleWatchNodeRequest: async (req, res) =>
-          (await watchNodeRequestHandler.current?.(req, res)) ?? false,
-        workerIngressEnabled: Boolean(workerEnvironmentService),
-        workerDesktopTunnels: workerTunnelManager?.desktop,
-        clients: createdConnectionState.clients,
-      });
-      return { connectionState: createdConnectionState, httpTransport: createdHttpTransport };
-    },
+  // Preserve the operator-visible startup log order even though transport binds later.
+  log.info("starting HTTP server...");
+  const connectionState = await startupTrace.measure("runtime.state", () =>
+    createGatewayConnectionState({
+      cfg: cfgAtStart,
+      getRuntimeConfig,
+    }),
   );
+  const transportBridge = createGatewayTransportBridge();
+  const createHttpTransport = async () => {
+    const transport = await createGatewayHttpTransport({
+      cfg: cfgAtStart,
+      getRuntimeConfig,
+      bindHost,
+      port,
+      controlUiEnabled,
+      controlUiBasePath,
+      controlUiRoot: controlUiRootLifecycle.state,
+      openAiChatCompletionsEnabled,
+      openAiChatCompletionsConfig,
+      openResponsesEnabled,
+      openResponsesConfig,
+      strictTransportSecurityHeader,
+      resolvedAuth,
+      rateLimiter: authRateLimiter,
+      isTerminalEnabled: terminalLaunchPolicy.isEnabled,
+      gatewayTls,
+      getResolvedAuth,
+      hooksConfig: () => runtimeStateRef.current?.hooksConfig ?? initialHooksConfig,
+      getHookClientIpConfig: () =>
+        runtimeStateRef.current?.hookClientIpConfig ?? initialHookClientIpConfig,
+      pluginRegistry: pluginRuntime.registry,
+      getPluginRouteRegistry: () => pluginRuntime.registry,
+      isStartupPluginRuntimeReady: () => startupState.sidecarsReady,
+      getGatewayRequestContext: () => pluginGatewayContext.current,
+      deps,
+      log,
+      logHooks,
+      logPlugins,
+      getReadiness,
+      handleWatchNodeRequest: async (req, res) =>
+        (await watchNodeRequestHandler.current?.(req, res)) ?? false,
+      workerIngressEnabled: Boolean(workerEnvironmentService),
+      workerDesktopTunnels: workerTunnelManager?.desktop,
+      clients: connectionState.clients,
+    });
+    transportBridge.attach(transport);
+    return transport;
+  };
   const {
     clients,
     broadcast,
@@ -422,17 +422,6 @@ export async function prepareGatewayRuntimeState(params: {
     sessionEventSubscribers,
     sessionMessageSubscribers,
   } = connectionState;
-  const {
-    httpServer,
-    httpServers,
-    httpBindHosts,
-    startListening,
-    wss,
-    preauthConnectionBudget,
-    getWorkerIngressEndpoint,
-    getMcpAppSandboxPort,
-    ensureSandboxHostPort,
-  } = httpTransport;
 
   return {
     ...bootstrap,
@@ -491,12 +480,8 @@ export async function prepareGatewayRuntimeState(params: {
     isGatewayStartupPending,
     pluginGatewayContext,
     watchNodeRequestHandler,
-    httpServer,
-    httpServers,
-    httpBindHosts,
-    startListening,
-    wss,
-    preauthConnectionBudget,
+    createHttpTransport,
+    transportBridge,
     clients,
     broadcast,
     broadcastToConnIds,
@@ -512,9 +497,9 @@ export async function prepareGatewayRuntimeState(params: {
     toolEventRecipients,
     sessionEventSubscribers,
     sessionMessageSubscribers,
-    getWorkerIngressEndpoint,
-    getMcpAppSandboxPort,
-    ensureSandboxHostPort,
+    getWorkerIngressEndpoint: transportBridge.getWorkerIngressEndpoint,
+    getMcpAppSandboxPort: transportBridge.getMcpAppSandboxPort,
+    ensureSandboxHostPort: transportBridge.ensureSandboxHostPort,
     workerGatewayEndpoint,
   };
 }
