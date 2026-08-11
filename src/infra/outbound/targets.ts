@@ -172,7 +172,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
 
   if (!resolvedTarget.channel || !resolvedTarget.to) {
     return buildNoHeartbeatDeliveryTarget({
-      reason: "no-target",
+      reason: target === "last" ? "no-route" : "no-target",
       accountId: effectiveAccountId,
       lastChannel: resolvedTarget.lastChannel,
       lastAccountId: resolvedTarget.lastAccountId,

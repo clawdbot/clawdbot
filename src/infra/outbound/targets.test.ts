@@ -590,7 +590,7 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.to).toBe("chat:one");
   });
 
-  it("reports no target when unset heartbeat config has no session route", () => {
+  it("reports no route when unset heartbeat config has no session route", () => {
     const resolved = resolveHeartbeatDeliveryTarget({
       cfg: {},
       entry: {
@@ -599,7 +599,7 @@ describe("resolveSessionDeliveryTarget", () => {
       },
     });
     expect(resolved.channel).toBe("none");
-    expect(resolved.reason).toBe("no-target");
+    expect(resolved.reason).toBe("no-route");
   });
 
   const resolveHeartbeatTarget = (entry: LegacyDeliveryFixture, directPolicy?: "allow" | "block") =>
@@ -929,7 +929,7 @@ describe("resolveSessionDeliveryTarget", () => {
     ).toHaveLength(1);
   });
 
-  it("does not bootstrap plugin-channel heartbeat routes without a concrete target", () => {
+  it("reports no route without a concrete last target", () => {
     setActivePluginRegistry(createTargetsTestRegistry([]));
 
     const resolved = resolveHeartbeatDeliveryTarget({
@@ -946,7 +946,7 @@ describe("resolveSessionDeliveryTarget", () => {
     });
 
     expect(resolved.channel).toBe("none");
-    expect(resolved.reason).toBe("no-target");
+    expect(resolved.reason).toBe("no-route");
     expect(mocks.resolveOutboundChannelPlugin).not.toHaveBeenCalled();
   });
 

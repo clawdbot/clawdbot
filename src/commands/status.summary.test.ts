@@ -138,6 +138,9 @@ vi.mock("../config/sessions/paths.js", () => ({
 }));
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
+  loadSessionEntry: ({ sessionKey }: { sessionKey: string }) =>
+    statusSummaryMocks.listSessionEntries().find((candidate) => candidate.sessionKey === sessionKey)
+      ?.entry,
   listSessionEntries: statusSummaryMocks.listSessionEntries,
   listSessionEntriesReadOnly: statusSummaryMocks.listSessionEntries,
 }));
@@ -151,15 +154,6 @@ vi.mock("../gateway/agent-list.js", () => ({
 
 vi.mock("../infra/channel-summary.js", () => ({
   buildChannelSummary: statusSummaryMocks.buildChannelSummary,
-}));
-
-vi.mock("../infra/heartbeat-summary.js", () => ({
-  resolveHeartbeatSummaryForAgent: vi.fn(() => ({
-    enabled: true,
-    every: "5m",
-    everyMs: 300_000,
-    target: "last",
-  })),
 }));
 
 vi.mock("../infra/system-events.js", () => ({
@@ -288,8 +282,8 @@ describe("getStatusSummary", () => {
       {
         agentId: "main",
         enabled: true,
-        every: "5m",
-        everyMs: 300_000,
+        every: "30m",
+        everyMs: 1_800_000,
         waitingForRoute: true,
       },
     ]);
@@ -298,21 +292,50 @@ describe("getStatusSummary", () => {
     expect(summary.taskAudit.warnings).toBe(1);
   });
 
-  it("does not report a route wait when the main session has a delivery route", async () => {
+  // waitingForRoute must follow the session the runner actually reads
+  // (heartbeat.session when set), not always the agent main session.
+  it.each([
+    {
+      name: "main routed, no configured session",
+      routedKeys: ["agent:main:main"],
+      emptyKeys: [],
+      heartbeatSession: undefined,
+      waitingForRoute: false,
+    },
+    {
+      name: "configured session routed while main is empty",
+      routedKeys: ["agent:main:telegram:alerts"],
+      emptyKeys: ["agent:main:main"],
+      heartbeatSession: "telegram:alerts",
+      waitingForRoute: false,
+    },
+    {
+      name: "configured session empty while main is routed",
+      routedKeys: ["agent:main:main"],
+      emptyKeys: ["agent:main:telegram:alerts"],
+      heartbeatSession: "telegram:alerts",
+      waitingForRoute: true,
+    },
+  ])("route wait: $name", async ({ routedKeys, emptyKeys, heartbeatSession, waitingForRoute }) => {
     statusSummaryMocks.listSessionEntries.mockReturnValue([
-      {
-        sessionKey: "agent:main:main",
+      ...routedKeys.map((sessionKey) => ({
+        sessionKey,
         entry: {
           delivery: normalizeSessionDeliveryState({
             context: { channel: "telegram", to: "123" },
           }),
         },
-      },
+      })),
+      ...emptyKeys.map((sessionKey) => ({ sessionKey, entry: {} })),
     ]);
 
-    const summary = await getStatusSummary();
+    const summary = await getStatusSummary(
+      heartbeatSession === undefined
+        ? undefined
+        : { config: { agents: { defaults: { heartbeat: { session: heartbeatSession } } } } },
+    );
 
-    expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(false);
+    expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(waitingForRoute);
   });
 
   it("redacts collected session details when sensitive output is disabled", async () => {

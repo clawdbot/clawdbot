@@ -99,7 +99,8 @@ describe("describeHeartbeatSessionTargetIssues", () => {
 
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("resolved to agent:ops:slack:channel:c123");
-    expect(warnings[0]).toContain('reason="no-route"');
+    expect(warnings[0]).toContain('reason="no-target"');
+    expect(warnings[0]).toContain("Heartbeats will run");
   });
 
   it("does not warn when an explicit heartbeat recipient does not need session history", () => {

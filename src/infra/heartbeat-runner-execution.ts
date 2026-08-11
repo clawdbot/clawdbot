@@ -410,7 +410,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     // to stale channels/threads because that base-session event context remains queued.
     turnSource: useIsolatedSession ? undefined : preflight.turnSourceDeliveryContext,
   });
-  if (delivery.channel === "none" && delivery.reason === "no-target") {
+  if (delivery.channel === "none" && delivery.reason === "no-route") {
     emitHeartbeatEvent({
       status: "skipped",
       reason: "no-route",

@@ -356,6 +356,17 @@ describe("resolveHeartbeatIntervalMs", () => {
     expect(resolveHeartbeatSummaryForAgent({}).target).toBe("last");
   });
 
+  it("reports the merged per-agent heartbeat session", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { heartbeat: { session: "telegram:default" } },
+        list: [{ id: "main", heartbeat: { session: "telegram:alerts" } }],
+      },
+    };
+
+    expect(resolveHeartbeatSummaryForAgent(cfg, "main").session).toBe("telegram:alerts");
+  });
+
   it("returns default when unset", () => {
     expect(resolveHeartbeatIntervalMs({})).toBe(30 * 60_000);
   });
@@ -498,7 +509,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
         entry: baseEntry,
         expected: {
           channel: "none",
-          reason: "no-target",
+          reason: "no-route",
           accountId: undefined,
           lastChannel: undefined,
           lastAccountId: undefined,
@@ -527,7 +538,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
         entry: entryWithDelivery("webchat", "web"),
         expected: {
           channel: "none",
-          reason: "no-target",
+          reason: "no-route",
           accountId: undefined,
           lastChannel: undefined,
           lastAccountId: undefined,
@@ -858,6 +869,45 @@ describe("runHeartbeatOnce", () => {
     expect(result).toEqual({ status: "skipped", reason: "no-route" });
     expect(replySpy).not.toHaveBeenCalled();
     expect(peekSystemEvents(sessionKey)).toEqual(["Cron: route this later"]);
+  });
+
+  it("runs the agent when an explicit heartbeat target is rejected", async () => {
+    const tmpDir = await createCaseDir("hb-rejected-explicit-target");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: {
+            every: "5m",
+            target: "whatsapp",
+            to: "+15555550199",
+          },
+        },
+      },
+      channels: { whatsapp: { allowFrom: ["+15555550166"] } },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await seedSessionStore(storePath, sessionKey, {
+      sessionId: "sid-rejected-explicit-target",
+      updatedAt: Date.now(),
+    });
+    enqueueSystemEvent("Cron: inspect explicit delivery", {
+      sessionKey,
+      contextKey: "cron:rejected-explicit-target",
+    });
+    const replySpy = vi.fn().mockResolvedValue({ text: "agent ran" });
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+    const result = await runHeartbeatOnce({
+      cfg,
+      deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
+    });
+
+    expect(result.status).toBe("ran");
+    expect(replySpy).toHaveBeenCalledOnce();
+    expect(sendWhatsApp).not.toHaveBeenCalled();
   });
 
   it("keeps active-hours protection for cron-carried heartbeat tasks", async () => {

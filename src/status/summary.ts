@@ -19,6 +19,7 @@ import {
 } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
+import { resolveHeartbeatSession } from "../infra/heartbeat-runner-session.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import {
@@ -325,28 +326,15 @@ export async function getStatusSummary(
         resolveLinkChannelContext(cfg, { sourceConfig: options.sourceConfig }),
       )
     : null;
-  const candidateCache = new Map<string, SessionCandidate[]>();
-  const loadSessionCandidates = (storePath: string, agentId?: string) => {
-    const cacheKey = `${storePath}\0${agentId ?? ""}`;
-    const cached = candidateCache.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-    const candidates = listSessionCandidates(storePath, agentId);
-    candidateCache.set(cacheKey, candidates);
-    return candidates;
-  };
   const agentList = listGatewayAgentsBasic(cfg);
   const heartbeatAgents: HeartbeatStatus[] = agentList.agents.map((agent) => {
     const summary = resolveHeartbeatSummaryForAgent(cfg, agent.id);
-    const mainSessionKey =
-      agentList.scope === "global" ? "global" : `agent:${agent.id}:${agentList.mainKey}`;
-    const route = deliveryContextFromSession(
-      loadSessionCandidates(
-        resolveStorePath(cfg.session?.store, { agentId: agent.id }),
-        agent.id,
-      ).find((candidate) => candidate.key === mainSessionKey)?.entry,
+    const { entry } = resolveHeartbeatSession(
+      cfg,
+      agent.id,
+      summary.session === undefined ? undefined : { session: summary.session },
     );
+    const route = deliveryContextFromSession(entry);
     return {
       agentId: agent.id,
       enabled: summary.enabled,
@@ -541,7 +529,7 @@ export async function getStatusSummary(
   const byAgent = await Promise.all(
     agentList.agents.map(async (agent) => {
       const storePath = resolveStorePath(cfg.session?.store, { agentId: agent.id });
-      const candidates = loadSessionCandidates(storePath, agent.id);
+      const candidates = listSessionCandidates(storePath, agent.id);
       const sessions = await buildSessionRows(
         selectRecentSessionCandidates(candidates, RECENT_SESSION_LIMIT),
         { agentIdOverride: agent.id },
@@ -560,7 +548,7 @@ export async function getStatusSummary(
       return sources.findIndex((candidate) => candidate.storePath === source.storePath) === index;
     })
     .flatMap((source) =>
-      loadSessionCandidates(
+      listSessionCandidates(
         source.storePath,
         pathCounts.get(source.storePath) === 1 ? source.agentId : undefined,
       ),
