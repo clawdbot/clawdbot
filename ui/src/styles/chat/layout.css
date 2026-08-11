@@ -2358,8 +2358,12 @@ openclaw-chat-video-player {
 }
 
 .agent-chat__input:focus-within {
-  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
-  box-shadow: 0 0 0 3px var(--accent-subtle);
+  /* Focus is a neutral state, not an accent/status signal. This mix clears 3:1
+     against the composer surface in both claw themes; the halo keeps it legible. */
+  border-color: color-mix(in srgb, var(--muted) 72%, var(--border));
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--muted) 14%, transparent),
+    var(--shadow-sm);
 }
 
 .agent-chat__input--prefill-attention {
