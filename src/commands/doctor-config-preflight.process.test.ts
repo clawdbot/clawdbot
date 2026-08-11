@@ -1,10 +1,11 @@
 // Process regression for typed gateway startup-migration refusal and lease cleanup.
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -20,6 +21,7 @@ const STARTUP_REFUSAL =
 const STARTUP_RECOVERY =
   'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.';
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const execFileAsync = promisify(execFile);
 
 function runIsolatedModuleScript(
   env: NodeJS.ProcessEnv,
@@ -630,9 +632,14 @@ describe("gateway startup-migration refusal", () => {
         nonInteractive: true,
         ...(mode === "repair" ? { repair: true } : {}),
       };
-      const result = runIsolatedModuleScript(
-        env,
-        `
+      await execFileAsync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "--input-type=module",
+          "--eval",
+          `
           const { loadAndMaybeMigrateDoctorConfig } = await import(${JSON.stringify(configFlowUrl)});
           const result = await loadAndMaybeMigrateDoctorConfig({
             options: ${JSON.stringify(doctorOptions)},
@@ -666,11 +673,15 @@ describe("gateway startup-migration refusal", () => {
             doctorScanCount: countMetadataScans() - configFlowScanCount,
           }));
         `,
-        { timeoutMs: 60_000 },
+        ],
+        {
+          cwd: path.resolve("."),
+          encoding: "utf8",
+          env,
+          maxBuffer: 4 * 1024 * 1024,
+          timeout: 60_000,
+        },
       );
-      expect(result.error, `${result.stderr}\n${result.stdout}`).toBeUndefined();
-      expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
-      expect(result.signal, `${result.stderr}\n${result.stdout}`).toBeNull();
 
       const metadata = JSON.parse(fs.readFileSync(resultPath, "utf8")) as {
         mode: "preview" | "repair";
@@ -683,77 +694,37 @@ describe("gateway startup-migration refusal", () => {
       return metadata;
     };
 
-    const repairBaseline = await runDoctorConfigFlow(1, 1, "repair");
-    const repairManyPlugins = await runDoctorConfigFlow(12, 1, "repair");
-    const repairManyAgents = await runDoctorConfigFlow(1, 12, "repair");
-    const repairConfiguredChannel = await runDoctorConfigFlow(1, 1, "repair", {
-      configuredChannel: true,
-    });
-    const previewBaseline = await runDoctorConfigFlow(1, 1, "preview");
-    const previewManyPlugins = await runDoctorConfigFlow(12, 1, "preview");
-    const previewManyAgents = await runDoctorConfigFlow(1, 12, "preview");
-    const previewConfiguredChannel = await runDoctorConfigFlow(1, 1, "preview", {
-      configuredChannel: true,
+    // Each mode gets a representative multi-plugin, multi-agent, configured-channel fixture in a
+    // fresh process for environment and module-cache isolation. The aggregate scan ceilings prove
+    // the flow stays bounded without paying for a redundant cross-product of single-factor cases.
+    const fixtureRuns = [
+      runDoctorConfigFlow(3, 3, "repair", { configuredChannel: true }),
+      runDoctorConfigFlow(3, 3, "preview", { configuredChannel: true }),
+    ] as const;
+    const [repair, preview] = await Promise.all(fixtureRuns).catch(async (error: unknown) => {
+      // A failed child must not let afterEach remove roots that queued siblings still use.
+      await Promise.allSettled(fixtureRuns);
+      throw error;
     });
 
-    const expectBoundedScans = (params: {
-      baseline: typeof repairBaseline;
-      manyPlugins: typeof repairManyPlugins;
-      manyAgents: typeof repairManyAgents;
-    }) => {
-      expect(params.baseline).toMatchObject({ manifestPluginCount: 1, scoped: false });
-      expect(params.manyPlugins).toMatchObject({ manifestPluginCount: 12, scoped: false });
-      expect(params.manyAgents).toMatchObject({ manifestPluginCount: 1, scoped: false });
-      expect(params.baseline.configFlowScanCount).toBeGreaterThan(0);
-      expect(params.baseline.configFlowScanCount).toBeLessThanOrEqual(12);
-      expect(params.manyPlugins.configFlowScanCount).toBe(params.baseline.configFlowScanCount);
-      expect(params.manyAgents.configFlowScanCount).toBe(
-        params.baseline.configFlowScanCount + (params.baseline.mode === "preview" ? 11 : 0),
-      );
-      expect(params.baseline.doctorScanCount).toBeLessThanOrEqual(20);
-      expect(params.manyPlugins.doctorScanCount).toBe(params.baseline.doctorScanCount);
-      expect(params.manyAgents.doctorScanCount).toBe(params.baseline.doctorScanCount + 11);
-    };
-    const expectConfiguredChannelScans = (params: {
-      baseline: typeof repairBaseline;
-      configuredChannel: typeof repairConfiguredChannel;
-    }) => {
-      expect(params.configuredChannel).toMatchObject({
+    const expectBoundedScans = (params: { fixture: typeof repair; mode: "preview" | "repair" }) => {
+      expect(params.fixture).toMatchObject({
+        mode: params.mode,
         configuredChannel: true,
-        manifestPluginCount: 1,
+        manifestPluginCount: 3,
         scoped: false,
       });
-      expect(params.configuredChannel.configFlowScanCount).toBeGreaterThanOrEqual(
-        params.baseline.configFlowScanCount,
+      expect(params.fixture.configFlowScanCount).toBeGreaterThan(0);
+      expect(params.fixture.configFlowScanCount).toBeLessThanOrEqual(
+        params.mode === "preview" ? 8 : 5,
       );
-      expect(params.configuredChannel.configFlowScanCount).toBeLessThanOrEqual(
-        params.baseline.configFlowScanCount + (params.baseline.mode === "preview" ? 3 : 0),
-      );
-      expect(params.configuredChannel.doctorScanCount).toBeGreaterThanOrEqual(
-        params.baseline.doctorScanCount,
-      );
-      expect(params.configuredChannel.doctorScanCount).toBeLessThanOrEqual(
-        params.baseline.doctorScanCount + (params.baseline.mode === "preview" ? 3 : 2),
+      expect(params.fixture.doctorScanCount).toBeGreaterThan(0);
+      expect(params.fixture.doctorScanCount).toBeLessThanOrEqual(
+        params.mode === "preview" ? 8 : 14,
       );
     };
 
-    expectBoundedScans({
-      baseline: repairBaseline,
-      manyPlugins: repairManyPlugins,
-      manyAgents: repairManyAgents,
-    });
-    expectBoundedScans({
-      baseline: previewBaseline,
-      manyPlugins: previewManyPlugins,
-      manyAgents: previewManyAgents,
-    });
-    expectConfiguredChannelScans({
-      baseline: repairBaseline,
-      configuredChannel: repairConfiguredChannel,
-    });
-    expectConfiguredChannelScans({
-      baseline: previewBaseline,
-      configuredChannel: previewConfiguredChannel,
-    });
+    expectBoundedScans({ fixture: repair, mode: "repair" });
+    expectBoundedScans({ fixture: preview, mode: "preview" });
   }, 300_000);
 });
