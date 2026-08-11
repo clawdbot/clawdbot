@@ -65,7 +65,7 @@ vi.mock("./auth-choice.plugin-providers.runtime.js", () => ({
   authChoicePluginProvidersRuntime: {
     resolveOwningPluginIdsForProviderRef: resolveOwningPluginIdsForProvider,
     resolveProviderPluginChoice,
-    resolvePluginProvidersCore,
+    resolvePluginProviders: resolvePluginProvidersCore,
   },
 }));
 

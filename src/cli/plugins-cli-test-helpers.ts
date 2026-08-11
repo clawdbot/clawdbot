@@ -418,7 +418,7 @@ vi.mock("../plugins/installed-plugin-index-store.js", async (importOriginal) => 
 });
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: ((...args: unknown[]) =>
+  loadPluginManifestRegistryCore: ((...args: unknown[]) =>
     invokeMock<unknown[], unknown>(loadPluginManifestRegistryMock, ...args)) as (
     ...args: unknown[]
   ) => unknown,
