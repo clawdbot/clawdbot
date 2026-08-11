@@ -237,8 +237,13 @@ type VisibleSessionRowOptions = {
  * Machine-created probe/system rows (health-check turns, internal effect
  * sessions), classified from recorded creation provenance only — never from
  * message text, which rots and false-positives real chats. Rows without
- * recorded provenance (legacy stores) stay visible so a real conversation is
- * never hidden by a guess.
+ * recorded provenance (legacy stores) stay visible.
+ *
+ * Accepted tradeoff: a profile-less client's unnamed `run` session (e.g. an
+ * explicit `--session-key` CLI conversation without an operator profile) is
+ * indistinguishable from a probe and hides by default too. It stays fully
+ * reachable: the selected session always renders in the sidebar, the Sessions
+ * page never applies this filter, and the sort-menu toggle reveals all rows.
  */
 export function isSystemCreatedSessionRow(row: GatewaySessionRow): boolean {
   if (row.createdActor?.type === "system") {

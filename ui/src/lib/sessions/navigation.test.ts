@@ -89,6 +89,31 @@ describe("resolveSessionNavigation", () => {
     ]);
   });
 
+  it("keeps a selected system-classified session visible with showSystem off", () => {
+    // Accepted-tradeoff escape hatch: a profile-less explicit CLI session
+    // matches the system classifier, but selecting it must always surface it.
+    const rows: GatewaySessionRow[] = [
+      { key: "agent:main:chat", kind: "direct", updatedAt: 300 },
+      {
+        key: "agent:main:explicit:incident-debug",
+        kind: "direct",
+        updatedAt: 200,
+        createdVia: "run",
+      },
+    ];
+
+    const navigation = resolveSessionNavigation({
+      result: sessionsResult(rows),
+      resultAgentId: "main",
+      sessionKey: "agent:main:explicit:incident-debug",
+    });
+    expect(navigation.visibleSessions.map((row) => row.key)).toEqual([
+      "agent:main:chat",
+      "agent:main:explicit:incident-debug",
+    ]);
+    expect(navigation.activeRowKey).toBe("agent:main:explicit:incident-debug");
+  });
+
   it("uses the caller's sort order before applying the recent-session projection", () => {
     const navigation = resolveSessionNavigation({
       result: sessionsResult([
