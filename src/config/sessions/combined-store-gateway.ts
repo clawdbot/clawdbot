@@ -18,7 +18,7 @@ import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveStorePath } from "./paths.js";
 import {
   countSessionEntryRowsReadOnly,
-  listSessionEntries,
+  listSessionEntriesCore,
   listSessionEntriesReadOnly,
 } from "./session-accessor.js";
 import type { SessionEntryListScope } from "./session-accessor.types.js";
@@ -72,7 +72,9 @@ function loadGatewayStoreEntries(params: {
   projection: GatewaySessionEntryProjection;
   storePath: string;
 }) {
-  const listEntries = params.includeOpenDatabases ? listSessionEntries : listSessionEntriesReadOnly;
+  const listEntries = params.includeOpenDatabases
+    ? listSessionEntriesCore
+    : listSessionEntriesReadOnly;
   return listEntries({
     agentId: params.agentId,
     clone: false,
@@ -248,7 +250,7 @@ export function canPrewarmCombinedSessionStoresForGateway(
 }
 
 /** Loads and canonicalizes session entries for gateway views across one or more agent stores. */
-export function loadCombinedSessionStoreForGateway(
+export function loadCombinedSessionStoreForGatewayCore(
   cfg: OpenClawConfig,
   opts: GatewaySessionStoreOptions = {},
 ): {

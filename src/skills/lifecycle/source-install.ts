@@ -11,7 +11,7 @@ import { writeJson } from "../../infra/json-files.js";
 import { isImmutableGitCommitRef, parseGitPluginSpec } from "../../plugins/git-install.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { resolveUserPath } from "../../utils.js";
-import { parseFrontmatter } from "../loading/frontmatter.js";
+import { parseSkillFrontmatter } from "../loading/frontmatter.js";
 import { installExtractedSkillRoot, validateRequestedSkillSlug } from "./archive-install.js";
 import { untrackClawHubSkill } from "./clawhub.js";
 
@@ -131,7 +131,7 @@ async function resolveGitCommitish(params: {
 async function readSkillNameFromFrontmatter(skillDir: string): Promise<string | null> {
   try {
     const raw = await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8");
-    const frontmatter = parseFrontmatter(raw);
+    const frontmatter = parseSkillFrontmatter(raw);
     return normalizeOptionalString(frontmatter.name) ?? null;
   } catch {
     return null;

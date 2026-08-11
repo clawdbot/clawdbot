@@ -28,9 +28,9 @@ import {
   loadExactSessionEntryReadOnly,
   loadSessionEntry,
   loadSessionEntryReadOnly,
-  patchSessionEntry,
+  patchSessionEntryCore,
   patchSessionEntryTarget,
-  readSessionUpdatedAt,
+  readSessionUpdatedAtCore,
   replaceSessionEntry,
   replaceSessionEntrySync,
   resolveSessionEntry,
@@ -80,9 +80,9 @@ export {
   loadExactSessionEntryReadOnly,
   loadSessionEntry,
   loadSessionEntryReadOnly,
-  patchSessionEntry,
+  patchSessionEntryCore,
   patchSessionEntryTarget,
-  readSessionUpdatedAt,
+  readSessionUpdatedAtCore,
   replaceSessionEntry,
   // Intentionally unfenced: branching owns session-identity freshness; worker transcript commit
   // fresh-reads and checks sessionId inside its locked commit, and void/entry has no rebound signal.
@@ -345,7 +345,7 @@ export async function updateResolvedSessionEntry<T>(
     return { canonicalKey: target.canonicalKey, found: false };
   }
   let updateResult: T | undefined;
-  const updated = await patchSessionEntry(
+  const updated = await patchSessionEntryCore(
     { sessionKey: target.storeKey, storePath: target.storePath },
     async (entry) => {
       const context: ResolvedSessionEntryUpdateContext = {
@@ -376,7 +376,7 @@ export async function updateResolvedSessionEntry<T>(
 }
 
 /** Lists entries from the resolved store, preserving the persisted key for each row. */
-export function listSessionEntries(scope: SessionEntryListScope = {}): SessionEntrySummary[] {
+export function listSessionEntriesCore(scope: SessionEntryListScope = {}): SessionEntrySummary[] {
   if (scope.clone === false) {
     return openSessionEntryReadView(scope).entries();
   }
@@ -416,7 +416,7 @@ export async function patchSessionEntryWithKey(
   ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
   options: SessionEntryPatchOptions = {},
 ): Promise<SessionEntryPatchResult | null> {
-  const entry = await patchSessionEntry(scope, update, options);
+  const entry = await patchSessionEntryCore(scope, update, options);
   return entry ? { sessionKey: normalizeStoreSessionKey(scope.sessionKey), entry } : null;
 }
 

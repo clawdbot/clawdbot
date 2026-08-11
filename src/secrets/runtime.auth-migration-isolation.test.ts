@@ -4,7 +4,7 @@ let resolveApiKeyForProvider: typeof import("../agents/model-auth.js").resolveAp
 let closeOpenClawAgentDatabasesForTest: typeof import("../state/openclaw-agent-db.js").closeOpenClawAgentDatabasesForTest;
 let withOpenClawTestState: typeof import("../test-utils/openclaw-test-state.js").withOpenClawTestState;
 let activateSecretsRuntimeSnapshot: typeof import("./runtime.js").activateSecretsRuntimeSnapshot;
-let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
+let clearSecretsRuntimeSnapshot: typeof import("./runtime-state.js").clearSecretsRuntimeSnapshot;
 let prepareSecretsRuntimeSnapshot: typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
 
 describe("auth profile migration isolation", () => {
@@ -12,11 +12,9 @@ describe("auth profile migration isolation", () => {
     // This shard is non-isolated, so load the singleton-backed runtime and auth helpers
     // from one fresh graph after neighboring tests reset the module cache.
     vi.resetModules();
-    ({
-      activateSecretsRuntimeSnapshot,
-      clearSecretsRuntimeSnapshot,
-      prepareSecretsRuntimeSnapshot,
-    } = await import("./runtime.js"));
+    ({ activateSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } =
+      await import("./runtime.js"));
+    ({ clearSecretsRuntimeSnapshot } = await import("./runtime-state.js"));
     ({ resolveApiKeyForProvider } = await import("../agents/model-auth.js"));
     ({ closeOpenClawAgentDatabasesForTest } = await import("../state/openclaw-agent-db.js"));
     ({ withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js"));

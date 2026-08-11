@@ -4,7 +4,7 @@
 import { setReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { patchSessionEntry } from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import { buildGenericCliContextEngineHostSupport } from "../context-engine/host-compat.js";
 import {
@@ -1108,7 +1108,7 @@ export async function runPreparedCliAgent(
               agentId,
             }),
         };
-        const persistedEntry = await patchSessionEntry(
+        const persistedEntry = await patchSessionEntryCore(
           sessionTarget,
           (entry, patchContext) => {
             if (patchContext.existingEntry && entry.sessionId !== sessionTarget.sessionId) {

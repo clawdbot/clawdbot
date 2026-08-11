@@ -178,7 +178,7 @@ export function readSessionTranscriptActiveStats(scope: SessionTranscriptReadSco
 }
 
 /** Reads one append-stable forward page from the materialized active-message projection. */
-export function readSessionTranscriptVisibleMessageDelta(
+export function readSessionTranscriptVisibleMessageDeltaCore(
   scope: SessionTranscriptReadScope,
   limits: SessionTranscriptVisibleMessageDeltaLimits = {},
 ): SessionTranscriptVisibleMessageDeltaResult {

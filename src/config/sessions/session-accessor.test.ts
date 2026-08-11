@@ -40,7 +40,7 @@ import {
   deleteSessionEntryLifecycle,
   findTranscriptEvent,
   ensureSessionEntrySync,
-  listSessionEntries,
+  listSessionEntriesCore,
   listSessionEntriesByStatus,
   listSessionTranscriptInstances,
   loadReplySessionInitializationSnapshot,
@@ -50,11 +50,11 @@ import {
   markSessionAbortTarget,
   onSessionIdentityMutation,
   openSessionEntryReadView,
-  patchSessionEntry,
+  patchSessionEntryCore,
   patchSessionEntryTarget,
   persistSessionTranscriptTurn,
   readTranscriptStatsSync,
-  readSessionUpdatedAt,
+  readSessionUpdatedAtCore,
   recordInboundSessionMeta,
   replaceSessionEntry,
   replaceTranscriptEventsSync,
@@ -225,8 +225,8 @@ describe("session accessor seam", () => {
       sessionId: "session-1",
       updatedAt: expect.any(Number),
     });
-    expect(readSessionUpdatedAt(scope)).toEqual(expect.any(Number));
-    expect(listSessionEntries({ storePath })).toEqual([
+    expect(readSessionUpdatedAtCore(scope)).toEqual(expect.any(Number));
+    expect(listSessionEntriesCore({ storePath })).toEqual([
       {
         sessionKey: "agent:main:main",
         entry: expect.objectContaining({
@@ -658,7 +658,7 @@ describe("session accessor seam", () => {
     expect(loadSessionEntry({ sessionKey: mixedKey, storePath })?.sessionId).toBe("mixed-session");
     expect(loadSessionEntry({ sessionKey: lowerKey, storePath })?.sessionId).toBe("lower-session");
     expect(
-      listSessionEntries({ agentId: "voice", storePath }).map((entry) => entry.sessionKey),
+      listSessionEntriesCore({ agentId: "voice", storePath }).map((entry) => entry.sessionKey),
     ).toEqual([mixedKey, lowerKey]);
   });
 
@@ -844,7 +844,7 @@ describe("session accessor seam", () => {
     const sessionKey = "agent:main:other";
     const scope = { sessionKey, storePath };
     await replaceSessionEntry(scope, { sessionId: "created", updatedAt: 10 });
-    await patchSessionEntry(scope, () => ({ label: "same identity" }));
+    await patchSessionEntryCore(scope, () => ({ label: "same identity" }));
     await replaceSessionEntry(scope, { sessionId: "replaced", updatedAt: 20 });
     const target = { canonicalKey: sessionKey, storeKeys: [sessionKey] };
     await resetSessionEntryLifecycle({
@@ -1431,7 +1431,7 @@ describe("session accessor seam", () => {
       phase: "entry",
     });
     expect(loadSessionEntry(scope)).toBeUndefined();
-    expect(listSessionEntries({ storePath })).toEqual([]);
+    expect(listSessionEntriesCore({ storePath })).toEqual([]);
   });
 
   it("does not write the session database when entry preparation is rejected", async () => {
@@ -1779,7 +1779,7 @@ describe("session accessor seam", () => {
     );
 
     expect(
-      listSessionEntries({ agentId: "main", storePath: sharedStorePath }).map(
+      listSessionEntriesCore({ agentId: "main", storePath: sharedStorePath }).map(
         ({ sessionKey }) => sessionKey,
       ),
     ).toEqual(["agent:main:shared", "agent:ops:shared"]);
@@ -1829,7 +1829,7 @@ describe("session accessor seam", () => {
     };
 
     await expect(updateSessionEntry(scope, () => ({ model: "gpt-5.5" }))).resolves.toBeNull();
-    expect(listSessionEntries({ storePath })).toEqual([]);
+    expect(listSessionEntriesCore({ storePath })).toEqual([]);
 
     await upsertSessionEntry(scope, {
       sessionId: "session-1",
@@ -1884,7 +1884,7 @@ describe("session accessor seam", () => {
     let missingContextEntry: SessionEntry | undefined;
     let existingContextEntry: SessionEntry | undefined;
 
-    await patchSessionEntry(
+    await patchSessionEntryCore(
       scope,
       (entry, context) => {
         missingContextEntry = context.existingEntry;
@@ -1902,7 +1902,7 @@ describe("session accessor seam", () => {
       },
     );
 
-    await patchSessionEntry(
+    await patchSessionEntryCore(
       scope,
       (entry, context) => {
         existingContextEntry = context.existingEntry;
@@ -1935,7 +1935,7 @@ describe("session accessor seam", () => {
     });
 
     await expect(
-      patchSessionEntry(scope, () => ({ model: "gpt-5.5" }), {
+      patchSessionEntryCore(scope, () => ({ model: "gpt-5.5" }), {
         assertCommitAllowed: () => {
           throw new Error("owner retired");
         },
@@ -1957,7 +1957,7 @@ describe("session accessor seam", () => {
     });
     const beforePatch = loadSessionEntry(scope);
 
-    await patchSessionEntry(
+    await patchSessionEntryCore(
       scope,
       () => ({
         model: "gpt-5.5",

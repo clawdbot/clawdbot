@@ -33,7 +33,7 @@ import { processSchema } from "./bash-tools.schemas.js";
 import {
   clampWithDefault,
   deriveSessionName,
-  pad,
+  padProcessStatus,
   readEnvInt,
   sliceLogLines,
   truncateMiddle,
@@ -356,7 +356,7 @@ export function createProcessTool(
           .map((s) => {
             const label = s.name ? truncateMiddle(s.name, 80) : truncateMiddle(s.command, 120);
             const marker = "waitingForInput" in s && s.waitingForInput ? " [input-wait]" : "";
-            return `${s.sessionId} ${pad(s.status, 9)} ${
+            return `${s.sessionId} ${padProcessStatus(s.status, 9)} ${
               formatDurationCompact(s.runtimeMs) ?? "n/a"
             }${marker} :: ${label}`;
           });

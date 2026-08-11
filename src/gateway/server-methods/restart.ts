@@ -5,7 +5,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import {
   createSafeGatewayRestartPreflight,
-  requestSafeGatewayRestart,
+  scheduleSafeGatewayRestart,
 } from "../../infra/restart-coordinator.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { requestGatewayRestartWithSignalAdmission } from "../../infra/restart.js";
@@ -155,7 +155,7 @@ export const restartHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const result = requestSafeGatewayRestart({
+    const result = scheduleSafeGatewayRestart({
       reason,
       delayMs: 0,
       skipDeferral: normalizeSkipDeferral(params.skipDeferral),

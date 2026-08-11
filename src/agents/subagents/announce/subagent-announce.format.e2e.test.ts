@@ -430,7 +430,7 @@ describe("subagent announce formatting", () => {
         req: Parameters<typeof gatewayCall.callGateway>[0],
       ) => (await callGatewaySpy(req)) as T,
       getRuntimeConfig: () => configOverride,
-      readSessionEntry: (_storePath, sessionKey) => loadSessionStoreFixture()[sessionKey],
+      readSubagentSessionEntry: (_storePath, sessionKey) => loadSessionStoreFixture()[sessionKey],
       resolveAgentIdFromSessionKey: () => "main",
       resolveStorePath: () => "/tmp/sessions.json",
     });

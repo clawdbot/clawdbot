@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
-  patchSessionEntry,
+  patchSessionEntryCore,
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -300,7 +300,7 @@ describe("sessions tool", () => {
         async (request: { method: string; params: Record<string, unknown> }) => {
           expect(request.method).toBe("sessions.patch");
           expect(isAgentSessionModelPatchOrigin()).toBe(true);
-          await patchSessionEntry({ agentId: "main", sessionKey, storePath }, () => ({
+          await patchSessionEntryCore({ agentId: "main", sessionKey, storePath }, () => ({
             label: request.params.label as string,
             model: "bad",
             modelProvider: "broken",
@@ -538,7 +538,7 @@ describe("sessions tool", () => {
         sessionKey,
         storePath,
       });
-      await patchSessionEntry({ agentId: "main", sessionKey, storePath }, () => ({
+      await patchSessionEntryCore({ agentId: "main", sessionKey, storePath }, () => ({
         model: "c",
         modelOverride: "c",
         modelFallback: {
@@ -554,7 +554,7 @@ describe("sessions tool", () => {
         sessionKey,
         storePath,
       });
-      await patchSessionEntry({ agentId: "main", sessionKey, storePath }, () => ({
+      await patchSessionEntryCore({ agentId: "main", sessionKey, storePath }, () => ({
         model: "d",
         modelOverride: "d",
         modelFallback: {

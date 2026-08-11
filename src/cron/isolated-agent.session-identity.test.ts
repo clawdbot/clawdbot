@@ -18,7 +18,7 @@ import {
   DEFAULT_MESSAGE,
   makeDeps,
   mockEmbeddedOk,
-  readSessionEntry,
+  readCronSessionEntry,
   runCronTurn,
   withTempHome,
 } from "./isolated-agent.turn-test-helpers.js";
@@ -47,7 +47,7 @@ async function useRealCronSessionState(): Promise<void> {
   ]);
   resolveCronSessionMock.mockImplementation(sessionRuntime.resolveCronSession);
   loadSessionEntryMock.mockImplementation(sessionRuntime.loadCronSessionEntryLatest);
-  patchSessionEntryMock.mockImplementation(sessionAccessor.patchSessionEntry);
+  patchSessionEntryMock.mockImplementation(sessionAccessor.patchSessionEntryCore);
 }
 
 function lastEmbeddedAgentCall(): {
@@ -314,12 +314,12 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         expect.objectContaining({ sessionId: "bound-session-rotated" }),
       );
 
-      await expect(readSessionEntry(storePath, executionSessionKey)).resolves.toEqual(
+      await expect(readCronSessionEntry(storePath, executionSessionKey)).resolves.toEqual(
         expect.objectContaining({
           sessionId: "bound-session-rotated",
         }),
       );
-      await expect(readSessionEntry(storePath, boundSessionKey)).resolves.toEqual(
+      await expect(readCronSessionEntry(storePath, boundSessionKey)).resolves.toEqual(
         expect.objectContaining({
           sessionId: "bound-session",
         }),
@@ -408,7 +408,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         message: "ping",
         storePath,
       });
-      const entry = await readSessionEntry(storePath, "agent:main:cron:job-1");
+      const entry = await readCronSessionEntry(storePath, "agent:main:cron:job-1");
 
       expect(entry?.label).toBe("Nightly digest");
     });

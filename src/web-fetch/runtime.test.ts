@@ -100,12 +100,12 @@ function requireResolvedWebFetch(
 describe("web fetch runtime", () => {
   let resolveWebFetchDefinition: typeof import("./runtime.js").resolveWebFetchDefinition;
   let clearWebFetchRuntimeCachesForTest: typeof import("./runtime.js").clearWebFetchRuntimeCachesForTest;
-  let clearSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").clearSecretsRuntimeSnapshot;
+  let clearSecretsRuntimeSnapshot: typeof import("../secrets/runtime-state.js").clearSecretsRuntimeSnapshot;
 
   beforeAll(async () => {
     ({ clearWebFetchRuntimeCachesForTest, resolveWebFetchDefinition } =
       await import("./runtime.js"));
-    ({ clearSecretsRuntimeSnapshot } = await import("../secrets/runtime.js"));
+    ({ clearSecretsRuntimeSnapshot } = await import("../secrets/runtime-state.js"));
   });
 
   beforeEach(() => {

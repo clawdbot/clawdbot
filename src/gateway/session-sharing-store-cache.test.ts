@@ -166,8 +166,8 @@ describe("session mutation authorization store caches", () => {
       }
 
       const materializations = new Map<string, number>();
-      const originalListSessionEntries = sessionAccessor.listSessionEntries;
-      vi.spyOn(sessionAccessor, "listSessionEntries").mockImplementation((scope) => {
+      const originalListSessionEntries = sessionAccessor.listSessionEntriesCore;
+      vi.spyOn(sessionAccessor, "listSessionEntriesCore").mockImplementation((scope) => {
         const entries = originalListSessionEntries(scope);
         if (scope?.clone === false) {
           const storePath = scope.storePath ?? "default";

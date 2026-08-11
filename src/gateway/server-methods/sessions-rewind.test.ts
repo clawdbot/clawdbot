@@ -33,7 +33,7 @@ vi.mock("../../media/store.js", async (importOriginal) => {
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
-  listSessionEntries,
+  listSessionEntriesCore,
   loadSessionEntry,
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -528,7 +528,7 @@ describe("session message-cut methods", () => {
       message: "Codex is offline. Try again.",
     });
 
-    const entryCount = listSessionEntries({ agentId: "main" }).length;
+    const entryCount = listSessionEntriesCore({ agentId: "main" }).length;
     const respond = await invoke("sessions.fork", "user-entry");
 
     expect(respond).toHaveBeenCalledWith(
@@ -539,7 +539,7 @@ describe("session message-cut methods", () => {
         details: { reason: "upstream-unavailable" },
       }),
     );
-    expect(listSessionEntries({ agentId: "main" })).toHaveLength(entryCount);
+    expect(listSessionEntriesCore({ agentId: "main" })).toHaveLength(entryCount);
   });
 
   it.each(["steer-message", "in-progress-turn", "drift-mismatch"] as const)(

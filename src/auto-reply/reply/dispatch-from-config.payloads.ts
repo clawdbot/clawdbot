@@ -47,15 +47,6 @@ export function shouldDeliverDespiteSourceReplySuppression(
   );
 }
 
-export function readAskUserQuestionId(payload: ReplyPayload): string | undefined {
-  const askUser = payload.channelData?.askUser;
-  if (!isRecord(askUser)) {
-    return undefined;
-  }
-  const questionId = askUser.questionId;
-  return typeof questionId === "string" ? questionId : undefined;
-}
-
 export function hasExecApprovalPayload(payload: ReplyPayload): boolean {
   return isRecord(payload.channelData?.execApproval);
 }

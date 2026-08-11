@@ -12,7 +12,7 @@ export {
   loadAuthStoreWithProfiles,
 } from "./runtime-openai-file-fixture.test-helper.js";
 export type { SecretsRuntimeEnvSnapshot } from "./runtime-openai-file-fixture.test-helper.js";
-import { clearSecretsRuntimeSnapshot } from "./runtime.js";
+import { clearSecretsRuntimeSnapshot } from "./runtime-state.js";
 
 /** Slow integration timeout used by plugin-origin and gateway-auth runtime tests. */
 export const SECRETS_RUNTIME_INTEGRATION_TIMEOUT_MS = 300_000;

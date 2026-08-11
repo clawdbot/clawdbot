@@ -2760,7 +2760,7 @@ describe("gateway startup config secret preflight", () => {
       const { createRuntimeSecretsActivator: createImportedRuntimeSecretsActivator } =
         await import("./server-startup-config.js");
       const secretsRuntime = await import("../secrets/runtime.js");
-      clearImportedSecretsRuntimeSnapshot = secretsRuntime.clearSecretsRuntimeSnapshot;
+      clearImportedSecretsRuntimeSnapshot = clearSecretsRuntimeSnapshot;
       const activateRuntimeSecrets = createImportedRuntimeSecretsActivator(
         runtimeSecretsActivatorOptionsForTest(),
       );
@@ -2947,7 +2947,7 @@ describe("gateway startup config secret preflight", () => {
             ],
           ).toMatchObject({ key: "fake-persisted-key" });
         } finally {
-          secretsRuntime.clearSecretsRuntimeSnapshot();
+          clearSecretsRuntimeSnapshot();
         }
       },
     );
@@ -2992,7 +2992,7 @@ describe("gateway startup config secret preflight", () => {
             key: "fake-activation-env-key",
           });
         } finally {
-          secretsRuntime.clearSecretsRuntimeSnapshot();
+          clearSecretsRuntimeSnapshot();
         }
       },
     );

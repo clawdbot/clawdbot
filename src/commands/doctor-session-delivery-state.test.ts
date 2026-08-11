@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { listSessionEntries } from "../config/sessions/session-accessor.js";
+import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -173,7 +173,7 @@ describe("doctor canonical session delivery state", () => {
     });
     expect(readEntryValidity(env, sessionKey)).toBe(1);
     closeOpenClawAgentDatabasesForTest();
-    expect(listSessionEntries({ agentId: "main", env })).toMatchObject([
+    expect(listSessionEntriesCore({ agentId: "main", env })).toMatchObject([
       { sessionKey, entry: { sessionId: "delivery-validity-session", updatedAt: 10 } },
     ]);
     expect(repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env })).toEqual({
@@ -195,7 +195,7 @@ describe("doctor canonical session delivery state", () => {
       lastAccountId: "stale-slack-bot",
     });
 
-    expect(listSessionEntries({ agentId: "main", env })[0]?.entry).toMatchObject({
+    expect(listSessionEntriesCore({ agentId: "main", env })[0]?.entry).toMatchObject({
       updatedAt: 10,
       lastAccountId: "stale-slack-bot",
     });
@@ -209,7 +209,7 @@ describe("doctor canonical session delivery state", () => {
       delivery: { context: { accountId: "current-bot" } },
     });
 
-    const repaired = listSessionEntries({ agentId: "main", env })[0]?.entry;
+    const repaired = listSessionEntriesCore({ agentId: "main", env })[0]?.entry;
     expect(repaired).toMatchObject({
       updatedAt: 10,
       delivery: { context: { accountId: "current-bot" } },
@@ -227,7 +227,7 @@ describe("doctor canonical session delivery state", () => {
       label: "committed",
     });
     const originalJson = readEntryJson(env, sessionKey);
-    const cached = listSessionEntries({ agentId: "main", env, clone: false })[0]?.entry;
+    const cached = listSessionEntriesCore({ agentId: "main", env, clone: false })[0]?.entry;
     expect(cached?.label).toBe("committed");
 
     expect(() =>
@@ -250,7 +250,7 @@ describe("doctor canonical session delivery state", () => {
     ).toThrow("roll back Doctor session rewrite");
 
     expect(readEntryJson(env, sessionKey)).toBe(originalJson);
-    expect(listSessionEntries({ agentId: "main", env, clone: false })[0]?.entry).toBe(cached);
+    expect(listSessionEntriesCore({ agentId: "main", env, clone: false })[0]?.entry).toBe(cached);
   });
 
   it("publishes cross-agent incognito parent rewrites to each existing SQLite connection", () => {
@@ -275,7 +275,7 @@ describe("doctor canonical session delivery state", () => {
       "work",
     );
 
-    expect(listSessionEntries({ agentId: "work", env })[0]?.entry).toMatchObject({
+    expect(listSessionEntriesCore({ agentId: "work", env })[0]?.entry).toMatchObject({
       updatedAt: 20,
       parentSessionKey: oldParentKey,
     });
@@ -284,7 +284,7 @@ describe("doctor canonical session delivery state", () => {
       repaired: 1,
     });
 
-    expect(listSessionEntries({ agentId: "work", env })[0]?.entry).toMatchObject({
+    expect(listSessionEntriesCore({ agentId: "work", env })[0]?.entry).toMatchObject({
       updatedAt: 20,
       parentSessionKey: newParentKey,
       spawnedBy: newParentKey,
@@ -444,7 +444,7 @@ describe("doctor canonical session delivery state", () => {
     expect(readEntryJson(env, "agent:main:invalid-object")).toBe(invalidObjectJson);
     expect(readEntryValidity(env, "agent:main:invalid-object")).toBe(0);
     closeOpenClawAgentDatabasesForTest();
-    expect(() => listSessionEntries({ agentId: "main", env })).toThrow(
+    expect(() => listSessionEntriesCore({ agentId: "main", env })).toThrow(
       /invalid persisted session row requires repair/u,
     );
   });
@@ -526,7 +526,7 @@ describe("doctor canonical session delivery state", () => {
       scannedStores: 1,
     });
     closeOpenClawAgentDatabasesForTest();
-    expect(listSessionEntries({ agentId: "main", env: copiedEnv })).toHaveLength(4);
+    expect(listSessionEntriesCore({ agentId: "main", env: copiedEnv })).toHaveLength(4);
     expect(repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env: copiedEnv })).toEqual({
       found: 0,
       repaired: 0,

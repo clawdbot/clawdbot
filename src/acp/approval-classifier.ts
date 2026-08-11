@@ -63,7 +63,7 @@ function readFirstStringValue(
   return readTrimmedStringAlias(source, keys);
 }
 
-function normalizeToolName(value: string): string | undefined {
+function normalizeToolPolicyName(value: string): string | undefined {
   const normalized = normalizeLowercaseStringOrEmpty(value);
   if (!normalized || normalized.length > 128) {
     return undefined;
@@ -76,7 +76,7 @@ function parseToolNameFromTitle(title: string | undefined | null): string | unde
     return undefined;
   }
   const head = normalizeOptionalString(title.split(":", 1)[0]);
-  return head ? normalizeToolName(head) : undefined;
+  return head ? normalizeToolPolicyName(head) : undefined;
 }
 
 function resolveToolNameForPermission(params: {
@@ -93,8 +93,8 @@ function resolveToolNameForPermission(params: {
   const fromMeta = readFirstStringValue(toolMeta, ["toolName", "tool_name", "name"]);
   const fromRawInput = readFirstStringValue(rawInput, ["tool", "toolName", "tool_name", "name"]);
   const fromTitle = parseToolNameFromTitle(toolCall?.title);
-  const metaName = fromMeta ? normalizeToolName(fromMeta) : undefined;
-  const rawInputName = fromRawInput ? normalizeToolName(fromRawInput) : undefined;
+  const metaName = fromMeta ? normalizeToolPolicyName(fromMeta) : undefined;
+  const rawInputName = fromRawInput ? normalizeToolPolicyName(fromRawInput) : undefined;
   const titleName = fromTitle;
   if ((fromMeta && !metaName) || (fromRawInput && !rawInputName)) {
     return undefined;

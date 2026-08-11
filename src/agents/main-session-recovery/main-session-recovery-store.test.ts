@@ -5,7 +5,7 @@ import type { InternalSessionEntry as SessionEntry } from "../../config/sessions
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   applySessionEntryLifecycleMutation,
-  listSessionEntries,
+  listSessionEntriesCore,
 } from "../../config/sessions/session-accessor.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -58,7 +58,7 @@ describe("main session recovery store", () => {
 
   function readStore(): Record<string, SessionEntry> {
     return Object.fromEntries(
-      listSessionEntries({ storePath }).map(({ sessionKey: key, entry }) => [key, entry]),
+      listSessionEntriesCore({ storePath }).map(({ sessionKey: key, entry }) => [key, entry]),
     );
   }
 

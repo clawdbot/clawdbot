@@ -8,10 +8,8 @@ import {
 } from "../agents/auth-profiles/sqlite.js";
 import { writeConfigFile, type OpenClawConfig } from "../config/config.js";
 import { resolveAuthProfileSecretOwnerId } from "../secrets/runtime-auth-profile-owner.js";
-import {
-  clearSecretsRuntimeSnapshot,
-  getActiveSecretsRuntimeSnapshot,
-} from "../secrets/runtime.js";
+import { clearSecretsRuntimeSnapshot } from "../secrets/runtime-state.js";
+import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import {
   getGatewayTestPort,
   installGatewayTestHooks,
