@@ -3009,7 +3009,7 @@ describe("gateway server chat", () => {
       });
       expect(stored?.restartRecoveryDeliveryContext).toBeUndefined();
       if (retryable) {
-        expect(stored?.restartRecoveryBeforeAgentReplyState).toBe("admitted");
+        expect(stored?.restartRecoveryBeforeAgentReplyState).toBeUndefined();
         expect(stored?.restartRecoveryDeliveryRequestFingerprint).toEqual(
           expect.stringMatching(/^hmac-sha256:v1:/u),
         );

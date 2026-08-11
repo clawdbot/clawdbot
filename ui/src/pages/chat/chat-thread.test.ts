@@ -796,6 +796,28 @@ describe("collapseCompletedTurnWork", () => {
     expect(new Set(workGroups.map((item) => item.key)).size).toBe(2);
   });
 
+  it("keeps recovery work separate when a system notice starts the next turn", () => {
+    const items = collapsedItems({
+      messages: [
+        userMessage("first", 1_000),
+        toolResult("call-1", 2_000),
+        assistantMessage("First done.", 3_000),
+        userMessage("[System] Continue the interrupted turn.", 4_000, {
+          provenance: { kind: "internal_system", sourceTool: "main-session-restart-recovery" },
+        }),
+        toolResult("call-2", 5_000),
+        assistantMessage("Recovery done.", 6_000),
+      ],
+    });
+
+    const workGroups = items.filter((item) => item.kind === "work-group");
+    expect(workGroups).toHaveLength(2);
+    expect(workGroups.map((item) => messageRecord(groupAt(item.groups, 0)).toolCallId)).toEqual([
+      "call-1",
+      "call-2",
+    ]);
+  });
+
   it("collapses hidden-input runs independently without changing duration arithmetic", () => {
     const items = collapsedItems({
       messages: [
@@ -1532,6 +1554,30 @@ describe("buildCachedChatItems", () => {
         timestamp: 1000,
       },
     ]);
+  });
+
+  it("renders internal system user messages as labeled notices without changing search visibility", () => {
+    const messages = [
+      userMessage("before", 999),
+      userMessage("[System] Continue the interrupted turn.", 1000, {
+        provenance: { kind: "internal_system", sourceTool: "main-session-restart-recovery" },
+      }),
+      userMessage("after", 1001),
+    ];
+    const items = buildCachedChatItems(createProps({ messages }));
+
+    expect(items.map((item) => item.kind)).toEqual(["group", "notice", "group"]);
+    expect(items[1]).toMatchObject({
+      kind: "notice",
+      label: "System",
+      text: "Continue the interrupted turn.",
+      timestamp: 1000,
+    });
+
+    const filtered = buildCachedChatItems(
+      createProps({ messages, searchOpen: true, searchQuery: "after" }),
+    );
+    expect(filtered.some((item) => item.kind === "notice")).toBe(false);
   });
 
   it("attributes assistant groups to the latest user in multi-sender threads", () => {
@@ -3116,6 +3162,34 @@ describe("buildCachedChatItems", () => {
     expect(canvasBlocksIn(groupAt(groups, 3))).toHaveLength(1);
   });
 
+  it("keeps a live App preview in the recovery turn after a system notice", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        messages: [
+          userMessage("Interrupted request", 1_000),
+          assistantMessage("Interrupted reply", 2_000),
+          userMessage("[System] Continue the interrupted turn.", 3_000, {
+            provenance: { kind: "internal_system", sourceTool: "main-session-restart-recovery" },
+          }),
+        ],
+        toolMessages: [mcpAppResult("mcp-app-recovery", "call-recovery", 3_001)],
+        showToolCalls: false,
+      }),
+    );
+
+    expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
+      "user",
+      "assistant",
+      "notice",
+      "assistant",
+    ]);
+    const assistantGroups = items.filter(
+      (item): item is MessageGroup => item.kind === "group" && item.role === "assistant",
+    );
+    expect(canvasBlocksIn(groupAt(assistantGroups, 0))).toStrictEqual([]);
+    expect(canvasBlocksIn(groupAt(assistantGroups, 1))).toHaveLength(1);
+  });
+
   it("keeps a live App preview on an assistant search match", () => {
     const groups = messageGroups({
       messages: [assistantMessage("Matching preview", 1_000)],
@@ -4253,6 +4327,18 @@ describe("tool turn outcome annotation (#89683)", () => {
       failedTool(5),
     ]);
     expect(tools.map((group) => group.turnSucceeded)).toEqual([true, false]);
+  });
+
+  it("keeps internal system notices as semantic user-turn boundaries", () => {
+    const tools = toolGroups([
+      failedTool(1),
+      userMessage("[System] Continue the interrupted turn.", 2, {
+        provenance: { kind: "internal_system", sourceTool: "main-session-restart-recovery" },
+      }),
+      failedTool(3),
+      assistantReply("Recovered on the next turn.", 4),
+    ]);
+    expect(tools.map((group) => group.turnSucceeded)).toEqual([false, true]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

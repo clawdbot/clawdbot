@@ -26,13 +26,8 @@ import {
 import { isMainRestartRecoveryCandidate } from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import {
-  loadExpectedRestartRecoveryClaim,
-  type ExpectedRestartRecoveryClaim,
-} from "./main-session-restart-claim.js";
-import {
   hasRestartRecoveryMessageActionAuthority,
   requiresRestartRecoveryMessageActionAuthority,
-  resolveRestartRecoveryResumeBlockReason,
   resumeMainSession,
 } from "./main-session-restart-dispatch.js";
 import {
@@ -42,7 +37,6 @@ import {
   reconcileInterruptedCompletionReport,
 } from "./main-session-restart-recovery-checkpoint.js";
 import { tombstoneMainRestartRecoveryWithNotice } from "./main-session-restart-recovery-failure.js";
-import { failUnresumableMainSession } from "./main-session-restart-recovery-notice.js";
 import {
   hasReplaySafeCodeModeCheckpointInCurrentTurn,
   resolveMainSessionResumePolicy,
@@ -139,6 +133,34 @@ async function completePendingFinalRecoveryWithNotice(
     { skipMaintenance: true, takeCacheOwnership: true },
   );
   return completed;
+}
+
+export type ExpectedRestartRecoveryClaim = {
+  canonicalSessionKey?: string;
+  recoveryRunId: string;
+  recoverySourceRunId: string;
+  sessionId: string;
+  sessionKey: string;
+};
+
+export function loadExpectedRestartRecoveryClaim(params: {
+  expected: ExpectedRestartRecoveryClaim;
+  storePath: string;
+}): SessionEntry | undefined {
+  const exact = loadExactSessionEntry({
+    readConsistency: "latest",
+    sessionKey: params.expected.sessionKey,
+    storePath: params.storePath,
+  });
+  const entry = exact?.sessionKey === params.expected.sessionKey ? exact.entry : undefined;
+  return entry?.sessionId === params.expected.sessionId &&
+    entry.status === "running" &&
+    entry.abortedLastRun === true &&
+    normalizeOptionalString(entry.restartRecoveryDeliveryRunId) === params.expected.recoveryRunId &&
+    normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) ===
+      params.expected.recoverySourceRunId
+    ? entry
+    : undefined;
 }
 
 export function loadExpectedRestartRecoveryTarget(params: {
@@ -382,30 +404,26 @@ export async function recoverStore(params: {
         }
       }
     };
-    const failCurrent = async (reason: string, noticeText?: string) => {
-      if (stopped()) {
-        return false;
-      }
-      const disposition = await failUnresumableMainSession({
-        cfg: params.cfg,
-        entry,
-        gatewayRuntime: params.gatewayRuntime,
-        observation: recoveryView.observation,
-        reason,
-        ...(noticeText ? { noticeText } : {}),
-        sessionKey,
-        storePath: params.storePath,
-      });
-      result[disposition]++;
-      return true;
-    };
-
     if (
       requiresRestartRecoveryMessageActionAuthority(entry) &&
       !hasRestartRecoveryMessageActionAuthority(entry)
     ) {
-      if (!(await failCurrent("message-tool-only recovery authority is unavailable"))) {
+      if (stopped()) {
         return result;
+      }
+      const tombstone = await tombstoneMainRestartRecoveryWithNotice({
+        cfg: params.cfg,
+        entry,
+        gatewayRuntime: params.gatewayRuntime,
+        observation: recoveryView.observation,
+        reason: "message-tool-only recovery authority is unavailable",
+        sessionKey,
+        storePath: params.storePath,
+      });
+      if (tombstone === "notice_failed") {
+        result.failed++;
+      } else {
+        result.skipped++;
       }
       continue;
     }
@@ -413,30 +431,12 @@ export async function recoverStore(params: {
     const expectedRecoverySourceRunId = normalizeOptionalString(
       entry.restartRecoveryDeliverySourceRunId,
     );
-    const failBlockedResume = async (): Promise<boolean> => {
-      const resumeBlockReason = resolveRestartRecoveryResumeBlockReason({
-        cfg: params.cfg,
-        entry,
-        sessionKey,
-      });
-      if (!resumeBlockReason) {
-        return false;
-      }
-      if (!shouldContinue()) {
-        return true;
-      }
-      await failCurrent(resumeBlockReason);
-      return true;
-    };
     const resumeCurrent = async (
       options: Pick<
         Parameters<typeof resumeMainSession>[0],
         "forceCodeModeTools" | "forceRestartSafeTools" | "pendingFinalDeliveryText"
       > = {},
     ) => {
-      if (await failBlockedResume()) {
-        return;
-      }
       recordResumeResult(
         await resumeIfCurrent({
           canonicalSessionKey: dispatchSessionKey,
@@ -457,7 +457,9 @@ export async function recoverStore(params: {
       ? pendingFinalRecoveryAction(entry.pendingFinalDelivery, params.stateDir)
       : undefined;
     if (pendingAction === "defer") {
-      result.failed++;
+      // The exact durable queue owner is still responsible for settlement.
+      // Dispatching a second recovery turn would duplicate that delivery.
+      result.skipped++;
       continue;
     }
     if (pendingAction === "complete") {
@@ -488,15 +490,12 @@ export async function recoverStore(params: {
       continue;
     }
     if (pendingAction === "fail") {
-      if (
-        !(await failCurrent(
-          "pending final delivery outcome is unknown",
-          "My previous response was interrupted during delivery. " +
-            "Please ask for any missing remainder; I won't rerun your previous request automatically.",
-        ))
-      ) {
-        return result;
-      }
+      await resumeCurrent({
+        ...(entry.pendingFinalDelivery?.kind === "replayable"
+          ? { pendingFinalDeliveryText: entry.pendingFinalDelivery.text }
+          : {}),
+        forceRestartSafeTools: true,
+      });
       continue;
     }
 
@@ -621,15 +620,7 @@ export async function recoverStore(params: {
       } else if (completion.outcome === "changed") {
         result.skipped++;
       } else {
-        if (!(await failCurrent(completion.reason))) {
-          return result;
-        }
-      }
-      continue;
-    }
-    if (resumePolicy.action === "fail") {
-      if (!(await failCurrent(resumePolicy.reason))) {
-        return result;
+        await resumeCurrent({ forceRestartSafeTools: true });
       }
       continue;
     }
