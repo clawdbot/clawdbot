@@ -298,7 +298,7 @@ export async function handleFeishuMessage(params: {
   turnAdoptionLifecycle?: FeishuIngressLifecycle;
 }): Promise<void> {
   const {
-    cfg,
+    cfg: accountStartCfg,
     event,
     botOpenId,
     botName,
@@ -310,6 +310,12 @@ export async function handleFeishuMessage(params: {
     messageDedupeKey: messageDedupeKeyOverride,
     turnAdoptionLifecycle,
   } = params;
+
+  // One assembled turn owns one config identity. `startAccount` captures config
+  // once for the account's lifetime, so account resolution, admission, model, and
+  // tool policy must read the same live snapshot; otherwise a hot reload reaches
+  // DMs only and group turns keep the startup config until the channel restarts.
+  const cfg = (getFeishuRuntime().config?.current() as ClawdbotConfig) ?? accountStartCfg;
 
   // Resolve account with merged config
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
@@ -782,22 +788,6 @@ export async function handleFeishuMessage(params: {
     let effectiveShouldComputeCommandAuthorized =
       directAuthorization?.shouldComputeCommandAuthorized ?? shouldComputeCommandAuthorized;
     let effectiveCfg = cfg;
-    if (isDirect) {
-      const currentCfg = getFeishuRuntime().config.current() as ClawdbotConfig;
-      if (currentCfg !== effectiveCfg) {
-        const currentAuthorization = await resolveDirectAuthorization(currentCfg, true);
-        if (currentAuthorization.ingress.ingress.admission !== "dispatch") {
-          await rejectDirectAuthorization(currentAuthorization);
-          return;
-        }
-        effectiveCfg = currentCfg;
-        effectiveDmPolicy = currentAuthorization.dmPolicy;
-        effectiveConfigAllowFrom = currentAuthorization.configAllowFrom;
-        effectiveDmIngress = currentAuthorization.ingress;
-        effectiveShouldComputeCommandAuthorized =
-          currentAuthorization.shouldComputeCommandAuthorized;
-      }
-    }
 
     // In group chats, the session is scoped to the group, but the *speaker* is the sender.
     // Using a group-scoped From causes the agent to treat different users as the same person.

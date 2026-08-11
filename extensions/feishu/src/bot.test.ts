@@ -3664,4 +3664,47 @@ describe("createFeishuMessageReceiveHandler media dedupe", () => {
     expect(secondCall.processingClaim?.commit).toBeTypeOf("function");
   });
 });
+describe("inbound runtime config freshness", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function freshnessCfg(model: string): ClawdbotConfig {
+    return {
+      channels: {
+        feishu: {
+          enabled: true,
+          allowFrom: ["*"],
+          dmPolicy: "open",
+          groups: { "oc-freshness-group": { requireMention: false } },
+        },
+      },
+      agents: { list: [{ id: "main", model: { primary: model } }] },
+    } as ClawdbotConfig;
+  }
+
+  it.each([
+    ["group", "oc-freshness-group"],
+    ["p2p", "p2p:ou-sender"],
+  ] as const)("dispatches %s turns with the live runtime config", async (chatType, chatId) => {
+    setFeishuRuntime(createFeishuBotRuntime());
+    await dispatchMessage({
+      cfg: freshnessCfg("startup-model"),
+      currentCfg: freshnessCfg("live-model"),
+      event: {
+        sender: { sender_id: { open_id: "ou-sender" } },
+        message: {
+          message_id: `msg-freshness-${chatType}`,
+          chat_id: chatId,
+          chat_type: chatType,
+          message_type: "text",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+    });
+    const arg = mockCallArg<{ cfg?: ClawdbotConfig }>(mockDispatchInboundMessage, 0, 0);
+    const model = arg.cfg?.agents?.list?.[0]?.model;
+    expect(typeof model === "string" ? model : model?.primary).toBe("live-model");
+  });
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
