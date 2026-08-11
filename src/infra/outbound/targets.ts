@@ -135,6 +135,20 @@ function resolveHeartbeatOwnerRoute(params: {
     }
   }
 
+  const buildRoute = (plugin: ChannelPlugin, ownerId: string) => ({
+    plugin,
+    ownerId,
+    reuseSessionRoute:
+      session?.channel === plugin.id &&
+      Boolean(session.to) &&
+      normalizeChatType(params.entry?.chatType) === "direct" &&
+      ownerIdMatchesRoute(plugin, ownerId, session.to ?? ""),
+  });
+
+  // commands.ownerAllowFrom is the documented higher-priority owner identity:
+  // exhaust it across every eligible channel before any channel-local
+  // allowFrom fallback, or a session channel's fallback shadows a prefixed
+  // configured owner on a later channel.
   const configuredOwners = concreteAllowFromEntries(params.cfg.commands?.ownerAllowFrom);
   for (const plugin of plugins) {
     const configuredOwner = configuredOwners.find((ownerId) => {
@@ -144,28 +158,22 @@ function resolveHeartbeatOwnerRoute(params: {
         isPositivelyDirectHeartbeatOwnerTarget({ plugin, to: ownerId })
       );
     });
-    const ownerId =
-      configuredOwner ??
-      concreteAllowFromEntries(
-        plugin.config.resolveAllowFrom?.({
-          cfg: params.cfg,
-          accountId:
-            params.heartbeat?.accountId ??
-            (session?.channel === plugin.id ? session.accountId : undefined),
-        }),
-      )[0];
-    if (!ownerId) {
-      continue;
+    if (configuredOwner) {
+      return buildRoute(plugin, configuredOwner);
     }
-    return {
-      plugin,
-      ownerId,
-      reuseSessionRoute:
-        session?.channel === plugin.id &&
-        Boolean(session.to) &&
-        normalizeChatType(params.entry?.chatType) === "direct" &&
-        ownerIdMatchesRoute(plugin, ownerId, session.to ?? ""),
-    };
+  }
+  for (const plugin of plugins) {
+    const ownerId = concreteAllowFromEntries(
+      plugin.config.resolveAllowFrom?.({
+        cfg: params.cfg,
+        accountId:
+          params.heartbeat?.accountId ??
+          (session?.channel === plugin.id ? session.accountId : undefined),
+      }),
+    )[0];
+    if (ownerId) {
+      return buildRoute(plugin, ownerId);
+    }
   }
   return undefined;
 }
@@ -441,9 +449,10 @@ function isPositivelyDirectHeartbeatOwnerTarget(params: {
     : params.to.trim();
   const chatType =
     normalizeChatType(params.chatType) ?? params.plugin?.messaging?.inferTargetChatType?.({ to });
-  // Implicit delivery must prove a direct destination; unclassified shapes fail
-  // closed to no-route so operator alerts cannot escape into a shared chat.
-  return chatType === undefined ? /^user:/i.test(to) : chatType === "direct";
+  // Implicit delivery must prove a direct destination via the channel's own
+  // classifier; syntax alone (even `user:`) never admits, so unclassified
+  // shapes fail closed and operator alerts cannot escape into a shared chat.
+  return chatType === "direct";
 }
 
 function hasDeliverableHeartbeatTurnSource(turnSource: DeliveryContext | undefined): boolean {

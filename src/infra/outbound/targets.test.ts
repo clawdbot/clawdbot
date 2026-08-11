@@ -95,6 +95,9 @@ function createOwnerAllowlistTargetTestPlugin(params: {
     },
     messaging: {
       ...(params.inferTargetChatType ? { inferTargetChatType: params.inferTargetChatType } : {}),
+      // Real channel plugins declare their id as a target prefix; prefixed
+      // configured-owner entries rely on it to bind to the right channel.
+      targetPrefixes: [String(params.id)],
       targetResolver: { looksLikeId: () => true },
     },
   });
@@ -1456,6 +1459,61 @@ describe("resolveSessionDeliveryTarget", () => {
     });
 
     expect(resolved).toMatchObject({ channel: "none", reason: "no-route" });
+  });
+
+  it("rejects a user-prefixed owner id on a classifier-less plugin", async () => {
+    const external = createOwnerAllowlistTargetTestPlugin({
+      id: "external-channel",
+      label: "External",
+      ownerId: "user:shared",
+    });
+    setActivePluginRegistry(createTargetsTestRegistry([external]));
+
+    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+      cfg: {} as OpenClawConfig,
+      agentId: "main",
+      heartbeat: { target: "owner" },
+    });
+
+    expect(resolved).toMatchObject({ channel: "none", reason: "no-route" });
+  });
+
+  it("prefers a prefixed configured owner on a later channel over session-channel allowFrom", () => {
+    const slack = createOwnerAllowlistTargetTestPlugin({
+      id: "slack",
+      label: "Slack",
+      ownerId: "user:slack-local",
+      inferTargetChatType: ({ to }) => (/^user:/i.test(to) ? "direct" : undefined),
+    });
+    const telegram = createOwnerAllowlistTargetTestPlugin({
+      id: "telegram",
+      label: "Telegram",
+      ownerId: "999",
+      inferTargetChatType: ({ to }) => (/^\d+$/.test(to) ? "direct" : undefined),
+    });
+    setActivePluginRegistry(createTargetsTestRegistry([slack, telegram]));
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {
+        commands: { ownerAllowFrom: ["telegram:456"] },
+        channels: {
+          slack: { allowFrom: ["user:slack-local"] },
+          telegram: { allowFrom: ["999"] },
+        },
+      } as OpenClawConfig,
+      entry: {
+        sessionId: "sess-slack-first",
+        updatedAt: 1,
+        lastChannel: "slack",
+        lastTo: "user:someone",
+        chatType: "direct",
+      },
+      heartbeat: { target: "owner" },
+    });
+
+    // Precedence and channel binding are under test; the passthrough fixture
+    // resolveTarget keeps the raw prefixed form (stripping is covered elsewhere).
+    expect(resolved).toMatchObject({ channel: "telegram", to: "telegram:456" });
   });
 
   it("delivers a classifier-proven WhatsApp E.164 owner route", async () => {
