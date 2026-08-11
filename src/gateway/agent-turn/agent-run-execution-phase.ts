@@ -66,6 +66,7 @@ import {
   resolveAbortedAgentStopReason,
   dispatchAgentRunFromGateway,
 } from "./agent-run-dispatch.js";
+import { resolvePluginSubagentDisableTools } from "./plugin-subagent-run-policy.js";
 import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
 export function startAgentRunExecution(params: {
@@ -332,6 +333,7 @@ export function startAgentRunExecution(params: {
           params.client.internal.runtimePluginToolGrant?.pluginId
           ? params.client.internal.runtimePluginToolGrant
           : undefined;
+      const pluginSubagentDisableTools = resolvePluginSubagentDisableTools(params.client);
       const executionIdentityAdmission = resolveAgentRestartRecoveryExecutionIdentityAdmission({
         collectionEnabled: isExecutionIdentityCollectionEnabled(params.cfg),
         isRestartRecoveryResumeRun: params.isRestartRecoveryResumeRun,
@@ -408,6 +410,7 @@ export function startAgentRunExecution(params: {
           bootstrapContextMode: params.request.bootstrapContextMode,
           bootstrapContextRunKind: params.effectiveBootstrapContextRunKind,
           toolsAllow: params.restoredCronContinuation?.toolsAllow,
+          disableTools: pluginSubagentDisableTools,
           runtimePluginToolGrant,
           trustedInternalHandoff: prepared.trustedInternalHandoff,
           toolsAllowIsDefault: params.restoredCronContinuation?.toolsAllowIsDefault,

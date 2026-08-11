@@ -293,6 +293,7 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
         {
           allowSyntheticModelOverride,
           agentRunTracking: "plugin_subagent",
+          ...(params.disableTools === true ? { pluginSubagentDisableTools: true } : {}),
           ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
           ...(pluginSubagentRequester ? { pluginSubagentRequester } : {}),
           ...(runtimePluginToolGrant ? { runtimePluginToolGrant } : {}),

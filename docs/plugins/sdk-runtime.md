@@ -413,6 +413,8 @@ two-party event loops that do not go through the shared inbound reply runner.
     Model overrides (`provider`/`model`) require operator opt-in via `plugins.entries.<id>.subagent.allowModelOverride: true` in config. Untrusted plugins can still run subagents, but override requests are rejected.
     </Warning>
 
+    `disableTools: true` keeps the normal durable subagent lifecycle while exposing no tools. It takes precedence over `toolsAlsoAllow`. Use it for model-only planning, classification, and synthesis runs that still need session persistence, waiting, and completion delivery.
+
     `toolsAlsoAllow` adds exact, uniquely owned tools registered by the calling plugin to the worker's normal tool surface. The runtime rejects core tools and names shared with another plugin. Profiles and operator tool policies still apply, including explicit allowlists and denies.
 
     `completionDelivery: "current-requester"` is default-off and is only available while a `before_dispatch` hook is handling an authenticated inbound request. OpenClaw captures the canonical requester session and delivery route before invoking the plugin, then delivers the subagent completion through the normal announce path. Plugins cannot provide or override requester lineage or destination fields. Calls outside that requester-bound hook context are rejected.

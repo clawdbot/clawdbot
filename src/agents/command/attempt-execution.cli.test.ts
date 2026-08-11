@@ -2713,6 +2713,31 @@ describe("CLI attempt execution", () => {
     });
   });
 
+  it("forwards trusted tool suppression into CLI attempts", async () => {
+    const sessionKey = "agent:main:direct:claude-disable-tools";
+    const sessionEntry = makeSessionEntry("openclaw-session-cli-disable-tools");
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("model-only cli"));
+
+    await runStoredAttempt({
+      providerOverride: "claude-cli",
+      modelOverride: "opus",
+      sessionEntry,
+      sessionKey,
+      body: "plan without tools",
+      runId: "run-cli-disable-tools",
+      opts: { disableTools: true },
+      messageChannel: "discord",
+      sessionStore,
+    });
+
+    expectMockArgFields(runCliAgentMock, {
+      provider: "claude-cli",
+      disableTools: true,
+    });
+  });
+
   it.each(SUBAGENT_ANNOUNCE_DELIVERY_CASES)(
     "bounds CLI subagent completion handoff tools for $name",
     async ({
@@ -3856,6 +3881,22 @@ describe("embedded attempt harness pinning", () => {
     });
 
     expectMockArgFields(runEmbeddedAgentMock, { toolsAllow: ["read", "web_search"] });
+  });
+
+  it("forwards trusted tool suppression into embedded attempts", async () => {
+    const sessionEntry = makeSessionEntry("disable-tools-session");
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedAgentRunResult);
+
+    await runHarnessAttempt({
+      sessionEntry,
+      body: "plan without tools",
+      runId: "run-disable-tools",
+      opts: { disableTools: true },
+    });
+
+    expectMockArgFields(runEmbeddedAgentMock, { disableTools: true });
   });
 
   it("lets provider/model runtime policy choose Codex without storing a session harness pin", async () => {
