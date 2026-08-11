@@ -11,7 +11,6 @@ import {
 import { prependAgentSteeringPrompt } from "../../agent-steering-queue.js";
 import { terminateAcceptedCollectorRun } from "../spawn/subagent-spawn-cleanup.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
-import { countPendingDescendantRuns } from "./subagent-registry-announce-read.js";
 import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { emitSubagentProgressEndedHook } from "./subagent-registry-completion.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
@@ -30,7 +29,10 @@ import {
   subagentRuns,
 } from "./subagent-registry-memory.js";
 import { createSubagentRegistryPublicApi } from "./subagent-registry-public-api.js";
-import { getLatestLiveSubagentRunByChildSessionKey } from "./subagent-registry-read.js";
+import {
+  countPendingDescendantRuns,
+  getLatestLiveSubagentRunByChildSessionKey,
+} from "./subagent-registry-read.js";
 import { createSubagentRegistryRestorer } from "./subagent-registry-restore.js";
 import {
   createSubagentRunManager,
@@ -590,7 +592,6 @@ export const recordSwarmStructuredOutput = publicApi.recordSwarmStructuredOutput
 export const listSwarmRunsForGroup = publicApi.listSwarmRunsForGroup;
 export const getSwarmRunByLaunchReplayKey = publicApi.getSwarmRunByLaunchReplayKey;
 export const countActiveRunsForSession = publicApi.countActiveRunsForSession;
-export const getSubagentRunByChildSessionKey = publicApi.getSubagentRunByChildSessionKey;
 export function initSubagentRegistry() {
   const state = getSubagentRegistryBootstrapState();
   if (!state.ready || !state.restorer) {
