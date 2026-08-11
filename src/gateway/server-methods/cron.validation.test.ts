@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import type { CronDelivery, CronJob } from "../../cron/types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -132,6 +133,7 @@ function setCronValidationTestRegistry(): void {
 function createCronContext(currentJobs?: CronJob | CronJob[]) {
   const jobs = currentJobs ? (Array.isArray(currentJobs) ? currentJobs : [currentJobs]) : [];
   const committedAdds: Partial<CronJob>[] = [];
+  const committedRuntimeAuthorities: Array<CronRuntimeAuthority | undefined> = [];
   const committedUpdates: Array<{ id: string; patch: Partial<CronJob> }> = [];
   const update = vi.fn(async (id: string, patch: Partial<CronJob>) => {
     committedUpdates.push({ id, patch });
@@ -143,13 +145,19 @@ function createCronContext(currentJobs?: CronJob | CronJob[]) {
   });
   return {
     committedAdds,
+    committedRuntimeAuthorities,
     committedUpdates,
     cron: {
-      add: vi.fn(async (input: Partial<CronJob>, opts?: { commitGuard?: () => void }) => {
-        opts?.commitGuard?.();
-        committedAdds.push(input);
-        return createCronJob({ ...input, id: "cron-1" });
-      }),
+      add: vi.fn(
+        async (
+          input: Partial<CronJob>,
+          opts?: { commitGuard?: () => CronRuntimeAuthority | undefined },
+        ) => {
+          committedRuntimeAuthorities.push(opts?.commitGuard?.());
+          committedAdds.push(input);
+          return createCronJob({ ...input, id: "cron-1" });
+        },
+      ),
       update,
       updateWithPrecondition: vi.fn(
         async (
@@ -1323,6 +1331,28 @@ describe("cron method validation", () => {
       messageIncludes: "Configured MCP cron authority is no longer active",
     });
     expect(context.committedAdds).toHaveLength(1);
+    revokeCronCreatorAuthorityRunScope(scope);
+  });
+
+  it("preserves creator runtime authority while revalidating delegated authority at commit", async () => {
+    const runtimeAuthority = {
+      version: 1 as const,
+      runtimeId: "codex",
+      namespace: "codex.apps",
+      payload: { apps: [{ id: "calendar" }] },
+    };
+    const scope = createCronCreatorAuthorityRunScope("run-add-authority");
+    const grant = mintCronCreatorAuthorityGrant(scope, undefined, runtimeAuthority);
+    const context = createCronContext();
+    context.validateAgentRuntimeApprovalAuthority = () => true;
+
+    const result = await invokeCron("cron.add", agentTurnCronParams(), {
+      context,
+      client: callerClientWithCronCreatorAuthority(grant),
+    });
+
+    expectCronSuccess(result.respond);
+    expect(context.committedRuntimeAuthorities).toEqual([runtimeAuthority]);
     revokeCronCreatorAuthorityRunScope(scope);
   });
 

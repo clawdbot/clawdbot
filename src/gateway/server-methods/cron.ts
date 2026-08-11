@@ -105,14 +105,26 @@ function resolveAgentRuntimeAuthorityCommitGuard(
 }
 
 function combineCronCommitGuards(
-  ...guards: Array<(() => void) | undefined>
-): (() => void) | undefined {
-  const active = guards.filter((guard): guard is () => void => guard !== undefined);
+  ...guards: Array<(() => void | CronRuntimeAuthority) | undefined>
+): (() => CronRuntimeAuthority | undefined) | undefined {
+  const active = guards.filter(
+    (guard): guard is () => void | CronRuntimeAuthority => guard !== undefined,
+  );
   return active.length > 0
     ? () => {
+        let runtimeAuthority: CronRuntimeAuthority | undefined;
         for (const guard of active) {
-          guard();
+          const candidate = guard();
+          if (candidate !== undefined) {
+            // A mutation has one runtime-authority owner. Combining validation
+            // guards must not silently choose between competing authority caps.
+            if (runtimeAuthority !== undefined) {
+              throw new TypeError("multiple cron runtime authorities resolved at commit");
+            }
+            runtimeAuthority = candidate;
+          }
         }
+        return runtimeAuthority;
       }
     : undefined;
 }
