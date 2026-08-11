@@ -194,10 +194,15 @@ Google roll out gradually, so a catalog model may not be enabled for your projec
 
   <Accordion title="Models that require the Responses API">
     Neon exposes the [OpenAI Responses API](https://neon.com/docs/ai-gateway/openai-responses) under
-    `/openai/v1` rather than `/v1`. Most OpenAI models answer on both endpoints, but `gpt-5-3-codex`
-    and `gpt-5-5-pro` are served only through Responses and are rejected by chat completions. Reach
-    them with a second provider entry using the `openai-responses` API and that base URL, which is the
-    same branch host you substituted above with `/openai/v1` on the end:
+    `/openai/v1` rather than `/v1`. Most OpenAI models answer on both endpoints, but a few are served
+    only through Responses and are rejected by chat completions. The Endpoints column in Neon's
+    [model catalog](https://neon.com/docs/ai-gateway/models) is what marks them: a model listed only
+    as `openai/responses` needs the configuration below. That set changes as Neon adds and retires
+    models, so read the column rather than trusting a list copied into a page; at the time of writing
+    it is `gpt-5-3-codex` and `gpt-5-5-pro`.
+
+    Reach them with a second provider entry using the `openai-responses` API and that base URL, which
+    is the same branch host you substituted above with `/openai/v1` on the end:
 
     ```json5
     {
