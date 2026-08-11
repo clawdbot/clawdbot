@@ -73,8 +73,8 @@ const WINDOWS_MEDIA_UNDERSTANDING_FILE_URL_SCOPE_RE =
   /^src\/media-understanding\/attachments\.(?:cache(?:\.test)?|file-url\.windows\.test|normalize(?:\.test)?)\.ts$/;
 const WINDOWS_HOME_DISPLAY_SCOPE_RE =
   /^(?:src\/(?:utils(?:\.test)?|infra\/(?:home-display|path-guards)|commands\/agents\.commands\.list(?:\.test)?|cli\/daemon-cli\/status\.print(?:\.test)?|agents\/(?:sandbox\/fs-paths|sessions\/tools\/render-utils)(?:\.test)?)|packages\/terminal-core\/src\/display-string(?:\.test)?)\.ts$/;
-const WINDOWS_MCP_ENV_SCOPE_RE =
-  /^src\/(?:cli\/mcp-cli(?:\.path-case\.windows)?\.test|cli\/mcp-cli|infra\/process-env(?:\.test)?)\.ts$/;
+const WINDOWS_CHILD_ENV_SCOPE_RE =
+  /^src\/(?:agents\/provider-local-service(?:\.env-case\.test)?|cli\/mcp-cli(?:\.path-case\.windows)?\.test|cli\/mcp-cli|infra\/process-env(?:\.test)?)\.ts$/;
 const WINDOWS_MEMORY_EXTRA_FILE_SCOPE_RE =
   /^(?:packages\/memory-host-sdk\/src\/host\/(?:(?:internal|read-file)(?:\.test)?|explicit-extra-markdown)|extensions\/memory-core\/src\/(?:cli-runtime-common|memory-extra-file-path\.windows\.test))\.ts$/;
 const CONTROL_UI_I18N_SCOPE_RE =
@@ -188,7 +188,7 @@ export function detectChangedScope(changedPaths) {
         WINDOWS_USAGE_TEMPLATE_SCOPE_RE.test(path) ||
         WINDOWS_MEDIA_UNDERSTANDING_FILE_URL_SCOPE_RE.test(path) ||
         WINDOWS_HOME_DISPLAY_SCOPE_RE.test(path) ||
-        WINDOWS_MCP_ENV_SCOPE_RE.test(path) ||
+        WINDOWS_CHILD_ENV_SCOPE_RE.test(path) ||
         WINDOWS_MEMORY_EXTRA_FILE_SCOPE_RE.test(path)) &&
       (!facts.isTestOnly ||
         WINDOWS_TEST_SCOPE_RE.test(path) ||
@@ -198,7 +198,7 @@ export function detectChangedScope(changedPaths) {
         WINDOWS_USAGE_TEMPLATE_SCOPE_RE.test(path) ||
         WINDOWS_MEDIA_UNDERSTANDING_FILE_URL_SCOPE_RE.test(path) ||
         WINDOWS_HOME_DISPLAY_SCOPE_RE.test(path) ||
-        WINDOWS_MCP_ENV_SCOPE_RE.test(path) ||
+        WINDOWS_CHILD_ENV_SCOPE_RE.test(path) ||
         WINDOWS_MEMORY_EXTRA_FILE_SCOPE_RE.test(path))
     ) {
       runWindows = true;

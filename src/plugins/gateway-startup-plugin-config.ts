@@ -380,7 +380,7 @@ function collectValidationHeartbeatTargetChannelIds(config: OpenClawConfig): str
       return;
     }
     const normalized = normalizeOptionalLowercaseString(target);
-    if (!normalized || normalized === "last" || normalized === "none") {
+    if (!normalized || normalized === "owner" || normalized === "last" || normalized === "none") {
       return;
     }
     channelIds.push(normalized);

@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
+import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -528,6 +529,54 @@ describe("channel turn pipeline", () => {
 
     expect(transformReplyPayload).toHaveBeenCalledWith({ text: "reply" });
     expect(deliver).toHaveBeenCalledWith({ text: "reply from pipeline" }, { kind: "final" });
+  });
+
+  it("records transform suppression without blocking a later visible channel payload", async () => {
+    const deliver = vi.fn(async (payload: ReplyPayload) => ({
+      messageIds: [`local:${payload.text}`],
+      visibleReplySent: true,
+      content: payload.text,
+    }));
+    const onDelivered = vi.fn();
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (params) => {
+      const dispatcher = createReplyDispatcher(params.dispatcherOptions);
+      expect(dispatcher.sendFinalReply({ text: "private reply" })).toBe(false);
+      expect(dispatcher.sendFinalReply({ text: "public reply" })).toBe(true);
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+      return {
+        queuedFinal: dispatcher.getQueuedCounts().final > 0,
+        counts: dispatcher.getQueuedCounts(),
+      };
+    }) as DispatchReplyWithBufferedBlockDispatcher;
+
+    const result = await dispatchTestAssembledTurn({
+      channel: "test",
+      routeSessionKey: "agent:main:test:peer",
+      ctxPayload: createCtx(),
+      recordInboundSession: createRecordInboundSession(),
+      dispatchReplyWithBufferedBlockDispatcher,
+      delivery: { deliver, onDelivered, observeMessageSent: true },
+      replyPipeline: {
+        transformReplyPayload: (payload) => (payload.text === "private reply" ? null : payload),
+      },
+    });
+
+    expect(deliver).toHaveBeenCalledExactlyOnceWith({ text: "public reply" }, { kind: "final" });
+    expect(onDelivered).toHaveBeenCalledWith(
+      { text: "private reply" },
+      { kind: "final" },
+      {
+        visibleReplySent: false,
+        suppression: { reason: "channel_transform" },
+      },
+    );
+    expect(emitMessageSent).toHaveBeenCalledTimes(1);
+    expectDispatched(result);
+    expect(result.dispatchResult).toMatchObject({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
   });
 
   it("records inbound session before dispatching delivery", async () => {

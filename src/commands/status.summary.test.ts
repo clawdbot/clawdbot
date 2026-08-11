@@ -332,11 +332,10 @@ describe("getStatusSummary", () => {
       ...emptyKeys.map((sessionKey) => ({ sessionKey, entry: {} })),
     ]);
 
-    const summary = await getStatusSummary(
-      heartbeatSession === undefined
-        ? undefined
-        : { config: { agents: { defaults: { heartbeat: { session: heartbeatSession } } } } },
-    );
+    const config = {
+      agents: { defaults: { heartbeat: { target: "last", session: heartbeatSession } } },
+    };
+    const summary = await getStatusSummary({ config });
 
     expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(waitingForRoute);
   });
