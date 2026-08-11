@@ -88,7 +88,7 @@ function observeComposerPopoverAnchor(el: HTMLElement) {
   viewport?.addEventListener("resize", state.scheduleUpdate);
   viewport?.addEventListener("scroll", state.scheduleUpdate);
   composerPopoverAnchorObservers.set(el, state);
-  state.scheduleUpdate();
+  updateComposerPopoverAnchor(el);
 }
 
 export function disconnectComposerPopoverAnchorObserver(el: HTMLElement) {

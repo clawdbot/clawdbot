@@ -3603,38 +3603,41 @@ openclaw-chat-video-player {
     justify-content: flex-end;
     flex: 1 1 0;
     width: auto;
-    min-width: 187px;
     margin-left: 0;
     gap: 0;
   }
 
-  .agent-chat__composer-run-status,
-  .agent-chat__session-overrides-pill {
+  .agent-chat__input .agent-chat__composer-controls {
+    min-width: 187px;
+  }
+
+  .agent-chat__input .agent-chat__composer-run-status,
+  .agent-chat__input .agent-chat__session-overrides-pill {
     flex: 1 1 auto;
   }
 
-  .agent-chat__composer-run-status {
+  .agent-chat__input .agent-chat__composer-run-status {
     min-width: 23px;
     overflow: hidden;
   }
 
-  .agent-chat__session-overrides-pill {
+  .agent-chat__input .agent-chat__session-overrides-pill {
     min-width: 26px;
   }
 
-  .agent-chat__composer-run-status .agent-chat__run-status {
+  .agent-chat__input .agent-chat__composer-run-status .agent-chat__run-status {
     min-width: 0;
     flex-shrink: 1;
   }
 
-  .agent-chat__session-overrides-open {
+  .agent-chat__input .agent-chat__session-overrides-open {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .agent-chat__session-overrides-clear {
+  .agent-chat__input .agent-chat__session-overrides-clear {
     flex: 0 0 26px;
   }
 
@@ -3653,28 +3656,28 @@ openclaw-chat-video-player {
   /* Reserve the readable model trigger, 44px effort target, and their gap;
      keep the picker cluster right-aligned like desktop while transient status
      text yields before either picker does. */
-  .agent-chat__composer-controls .chat-composer-model-control {
+  .agent-chat__input .agent-chat__composer-controls .chat-composer-model-control {
     flex: 0 1 auto;
     min-width: 138px;
   }
 
-  .agent-chat__composer-controls .chat-controls__model-picker {
+  .agent-chat__input .agent-chat__composer-controls .chat-controls__model-picker {
     flex: 1 1 auto;
   }
 
-  .agent-chat__composer-controls .chat-controls__effort-picker {
+  .agent-chat__input .agent-chat__composer-controls .chat-controls__effort-picker {
     flex: 0 0 auto;
     min-width: 44px;
   }
 
-  .agent-chat__typing-indicator {
+  .agent-chat__input .agent-chat__typing-indicator {
     flex: 1 1 auto;
     overflow: hidden;
   }
 
   /* The borderless trigger is 30px on desktop; keep a >=44px touch target
      inside the mobile composer row. */
-  .agent-chat__composer-controls .chat-controls__inline-select-trigger {
+  .agent-chat__input .agent-chat__composer-controls .chat-controls__inline-select-trigger {
     width: fit-content;
     max-width: 100%;
     min-width: 44px;
