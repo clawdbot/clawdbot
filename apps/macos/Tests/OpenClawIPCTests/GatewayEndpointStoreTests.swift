@@ -1078,11 +1078,43 @@ extension GatewayEndpointStoreTests {
         #expect(resolution.directURL?.absoluteString == "ws://192.168.0.202:18789")
     }
 
+    @Test func `new remote configuration defaults to direct transport`() {
+        let resolution = GatewayRemoteConfig.resolveTransportResolution(root: ["gateway": ["mode": "remote"]])
+
+        #expect(resolution.transport == .direct)
+        #expect(resolution.source == .defaultDirect)
+        #expect(resolution.directURL == nil)
+    }
+
+    @Test func `unknown transport does not enable SSH`() {
+        let root: [String: Any] = ["gateway": ["remote": ["transport": "legacy"]]]
+        let resolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
+
+        #expect(resolution.transport == .direct)
+        #expect(resolution.source == .explicit)
+    }
+
     @Test func `legacy loopback URL keeps SSH even with trusted SSH target`() {
         let root: [String: Any] = [
             "gateway": [
                 "remote": [
                     "url": "ws://127.0.0.1:18789",
+                    "sshTarget": "steipete@192.168.0.202",
+                ],
+            ],
+        ]
+
+        let resolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
+        #expect(resolution.transport == .ssh)
+        #expect(resolution.source == .legacySSH)
+        #expect(resolution.directURL == nil)
+    }
+
+    @Test func `legacy SSH target takes precedence over a non-loopback URL`() {
+        let root: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "url": "wss://gateway.example.ts.net",
                     "sshTarget": "steipete@192.168.0.202",
                 ],
             ],

@@ -75,7 +75,7 @@ struct GatewayDiscoverySelectionSupportTests {
         }
     }
 
-    @Test func `legacy tailnet discovery without reachability flags still switches to direct transport`() async {
+    @Test func `plaintext Tailnet discovery falls back to SSH`() async {
         let tailnetHost = "gateway-host.tailnet-example.ts.net"
         let configPath = TestIsolation.tempConfigPath()
         await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath]) {
@@ -90,16 +90,16 @@ struct GatewayDiscoverySelectionSupportTests {
                     stableID: "wide-area|openclaw.internal.|gateway-host"),
                 state: state)
 
-            #expect(state.remoteTransport == .direct)
-            #expect(state.remoteUrl == "ws://\(tailnetHost):18789")
+            #expect(state.remoteTransport == .ssh)
+            #expect(state.remoteUrl == "ws://127.0.0.1:18789")
         }
     }
 
-    @Test func `selecting nearby lan gateway keeps ssh without direct reachability signal`() async {
+    @Test func `selecting SSH-only gateway falls back from direct transport`() async {
         let configPath = TestIsolation.tempConfigPath()
         await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath]) {
             let state = AppState(preview: true)
-            state.remoteTransport = .ssh
+            state.remoteTransport = .direct
             state.remoteTarget = "user@old-host"
             state.remoteUrl = "ws://localhost:29876"
 
@@ -116,7 +116,7 @@ struct GatewayDiscoverySelectionSupportTests {
         }
     }
 
-    @Test func `selecting direct reachable lan gateway ignores stale local tunnel port`() async {
+    @Test func `selecting secure LAN gateway ignores stale local tunnel port`() async {
         let configPath = TestIsolation.tempConfigPath()
         await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath]) {
             let state = AppState(preview: true)
@@ -126,13 +126,14 @@ struct GatewayDiscoverySelectionSupportTests {
             GatewayDiscoverySelectionSupport.applyRemoteSelection(
                 gateway: self.makeGateway(
                     serviceHost: "nearby-gateway.local",
-                    servicePort: 19999,
+                    servicePort: 443,
+                    gatewayTls: true,
                     gatewayDirectReachable: true,
                     stableID: "bonjour|nearby-gateway-custom"),
                 state: state)
 
             #expect(state.remoteTransport == .direct)
-            #expect(state.remoteUrl == "ws://nearby-gateway.local:19999")
+            #expect(state.remoteUrl == "wss://nearby-gateway.local")
         }
     }
 }

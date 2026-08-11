@@ -1545,7 +1545,7 @@ extension AppState {
         state.iconOverride = .system
         state.heartbeatsEnabled = true
         state.connectionMode = .local
-        state.remoteTransport = .ssh
+        state.remoteTransport = .direct
         state.canvasEnabled = true
         state.quickChatEnabled = true
         state.remoteTarget = "user@example.com"

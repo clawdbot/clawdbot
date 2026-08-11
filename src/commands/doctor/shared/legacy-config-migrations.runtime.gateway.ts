@@ -65,8 +65,39 @@ function escapeControlForLog(value: string): string {
   return value.replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t");
 }
 
+function hasLegacySshRoute(remote: Record<string, unknown>): boolean {
+  if (typeof remote.sshTarget === "string" && remote.sshTarget.trim()) {
+    return true;
+  }
+  if (typeof remote.url !== "string") {
+    return false;
+  }
+  try {
+    const host = new URL(remote.url).hostname.toLowerCase();
+    return host === "localhost" || host === "::1" || host === "[::1]" || host.startsWith("127.");
+  } catch {
+    return false;
+  }
+}
+
 /** Legacy config migration specs for gateway runtime config. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "gateway.remote.transport-default",
+    describe: "Make the macOS remote Gateway transport explicit",
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      const remote = getRecord(gateway?.remote);
+      if (!gateway || !remote || Object.hasOwn(remote, "transport")) {
+        return;
+      }
+      const transport = hasLegacySshRoute(remote) ? "ssh" : "direct";
+      remote.transport = transport;
+      gateway.remote = remote;
+      raw.gateway = gateway;
+      changes.push(`Set gateway.remote.transport to ${transport}.`);
+    },
+  }),
   defineLegacyConfigMigration({
     id: "gateway.control-ui-device-auth-bypass->pairing-migration",
     describe: "Convert the retired Control UI device-auth bypass into explicit pairing",
