@@ -1,5 +1,5 @@
 // Builds CI node/Vitest shard plans from the full suite configuration.
-import { relative } from "node:path";
+import { matchesGlob, relative } from "node:path";
 import {
   agentVitestProjectOwners,
   embeddedAgentVitestProjectOwners,
@@ -49,6 +49,66 @@ type NodeTestPlanOptions = {
   compactGroupCount?: number;
   compactWholeGroupCount?: number;
 };
+
+type PolicyTestWatch = {
+  ownerGlobs?: readonly string[];
+  testFile: string;
+  watchGlobs: readonly string[];
+};
+
+// These tests read source trees instead of importing every file whose policy
+// they enforce. Boundary and contract suites have dedicated always-on lanes;
+// this inventory covers the remaining tests that changed targeting cannot
+// discover from imports alone.
+export const policyTestWatches = [
+  {
+    testFile: "ui/src/components/web-awesome-migration.node.test.ts",
+    watchGlobs: ["ui/src/**/*.ts"],
+  },
+  {
+    testFile: "ui/src/styles/base-theme-tokens.node.test.ts",
+    ownerGlobs: ["ui/src/**/*.css"],
+    watchGlobs: ["ui/src/**/*.css", "ui/src/**/*.ts"],
+  },
+  {
+    testFile: "ui/src/styles/cursor-policy.node.test.ts",
+    ownerGlobs: ["ui/index.html", "ui/src/**/*.css"],
+    watchGlobs: ["ui/index.html", "ui/src/**/*.css", "ui/src/**/*.ts"],
+  },
+  ...[
+    "src/cron/service.stream-trigger.test.ts",
+    "src/cron/service.stream-validation.test.ts",
+    "src/cron/service/timer.timeout-watchdog.test.ts",
+  ].map((testFile) => ({
+    testFile,
+    ownerGlobs: ["src/cron/failure-notification-text.ts"],
+    watchGlobs: ["src/cron/failure-notification-text.ts"],
+  })),
+] satisfies readonly PolicyTestWatch[];
+
+function normalizeChangedPath(changedPath: string): string {
+  return changedPath.replaceAll("\\", "/").replace(/^\.\//u, "");
+}
+
+/** Resolve policy tests whose scanned source surface intersects this diff. */
+export function resolvePolicyTestTargets(changedPaths: readonly string[]): string[] {
+  const normalizedPaths = changedPaths.map(normalizeChangedPath);
+  return policyTestWatches
+    .filter(({ watchGlobs }) =>
+      normalizedPaths.some((changedPath) =>
+        watchGlobs.some((watchGlob) => matchesGlob(changedPath, watchGlob)),
+      ),
+    )
+    .map(({ testFile }) => testFile);
+}
+
+/** True when the policy tests are the complete bounded owner for this path. */
+export function isPolicyTestOwnedPath(changedPath: string): boolean {
+  const normalizedPath = normalizeChangedPath(changedPath);
+  return policyTestWatches.some(({ ownerGlobs }) =>
+    ownerGlobs?.some((ownerGlob) => matchesGlob(normalizedPath, ownerGlob)),
+  );
+}
 
 type CompactNodeTestShard = Omit<NodeTestShard, "configs" | "groups"> & {
   groups: NodeTestShardGroup[];

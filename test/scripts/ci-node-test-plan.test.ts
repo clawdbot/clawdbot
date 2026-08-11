@@ -6,6 +6,7 @@ import {
   assignVitestFsCacheWriter,
   createNodeTestShardBundles,
   createNodeTestShards,
+  resolvePolicyTestTargets,
   type NodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
@@ -91,6 +92,15 @@ function listAllToolingTestFiles(): string[] {
 }
 
 describe("scripts/lib/ci-node-test-plan.mts", () => {
+  it("inventories source-scanning Control UI policy tests", () => {
+    expect(resolvePolicyTestTargets(["ui/src/pages/chat/view.ts"])).toEqual([
+      "ui/src/components/web-awesome-migration.node.test.ts",
+      "ui/src/styles/base-theme-tokens.node.test.ts",
+      "ui/src/styles/cursor-policy.node.test.ts",
+    ]);
+    expect(resolvePolicyTestTargets(["docs/web/control-ui.md"])).toEqual([]);
+  });
+
   it("assigns one semantic Vitest cache writer without changing shard order", () => {
     const full = createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false });
     const compact = createNodeTestShardBundles({
