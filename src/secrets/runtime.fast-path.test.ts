@@ -10,7 +10,7 @@ import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.j
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { clearSecretsRuntimeSnapshot } from "./runtime-state.js";
+import { clearSecretsRuntimeSnapshot } from "./runtime.js";
 import { asConfig } from "./runtime.test-support.js";
 
 const { resolveRuntimeWebToolsMock, runtimePrepareImportMock } = vi.hoisted(() => ({

@@ -16,7 +16,7 @@ export {
   OPENAI_FILE_KEY_REF,
 } from "./runtime-openai-file-fixture.test-helper.js";
 export type { SecretsRuntimeEnvSnapshot } from "./runtime-openai-file-fixture.test-helper.js";
-import { clearSecretsRuntimeSnapshot } from "./runtime-state.js";
+import { clearSecretsRuntimeSnapshot } from "./runtime.js";
 
 const secretsRuntimePluginMocks = vi.hoisted(() => ({
   resolveExternalAuthProfilesWithPluginsMock: vi.fn(() => []),

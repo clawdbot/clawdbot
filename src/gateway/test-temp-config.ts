@@ -10,7 +10,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { clearSecretsRuntimeSnapshot } from "../secrets/runtime-state.js";
+import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 
 function canonicalizeTempConfigForTest(cfg: unknown): unknown {
   if (!isRecord(cfg)) {

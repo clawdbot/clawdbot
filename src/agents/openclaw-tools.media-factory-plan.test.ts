@@ -12,7 +12,7 @@ import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-ind
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
-import { clearSecretsRuntimeSnapshot } from "../secrets/runtime-state.js";
+import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   resolveImageToolFactoryAvailable,

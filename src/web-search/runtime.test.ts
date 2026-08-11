@@ -164,15 +164,15 @@ describe("web search runtime", () => {
   let hasUsableWebSearchProvider: typeof import("./runtime.js").hasUsableWebSearchProvider;
   let runWebSearch: typeof import("./runtime.js").runWebSearch;
   let activateSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").activateSecretsRuntimeSnapshot;
-  let clearSecretsRuntimeSnapshot: typeof import("../secrets/runtime-state.js").clearSecretsRuntimeSnapshot;
+  let clearSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").clearSecretsRuntimeSnapshot;
   let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
   let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
   const tempDirs: string[] = [];
 
   beforeAll(async () => {
     ({ hasUsableWebSearchProvider, runWebSearch } = await import("./runtime.js"));
-    ({ activateSecretsRuntimeSnapshot } = await import("../secrets/runtime.js"));
-    ({ clearSecretsRuntimeSnapshot } = await import("../secrets/runtime-state.js"));
+    ({ activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } =
+      await import("../secrets/runtime.js"));
     ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
       await import("../config/config.js"));
   });

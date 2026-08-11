@@ -8,8 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCommandSecretsFromActiveRuntimeSnapshot } from "./runtime-command-secrets.js";
 import { createEmptyRuntimeWebToolsMetadata } from "./runtime-fast-path.js";
 import { activateSecretsRuntimeSnapshotState } from "./runtime-state.js";
-import { clearSecretsRuntimeSnapshot } from "./runtime-state.js";
-import { activateSecretsRuntimeSnapshot } from "./runtime.js";
+import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "./runtime.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 import { discoverConfigSecretTargetsByIds } from "./target-registry.js";
 

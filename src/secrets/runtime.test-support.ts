@@ -116,14 +116,15 @@ export function setupSecretsRuntimeSnapshotTestHooks(): {
 } {
   let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
   let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
-  let clearSecretsRuntimeSnapshot: typeof import("./runtime-state.js").clearSecretsRuntimeSnapshot;
+  let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
   let prepareSecretsRuntimeSnapshotImpl: PrepareSecretsRuntimeSnapshot;
 
   beforeAll(async () => {
     ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
-    ({ prepareSecretsRuntimeSnapshot: prepareSecretsRuntimeSnapshotImpl } =
-      await import("./runtime.js"));
-    ({ clearSecretsRuntimeSnapshot } = await import("./runtime-state.js"));
+    ({
+      clearSecretsRuntimeSnapshot,
+      prepareSecretsRuntimeSnapshot: prepareSecretsRuntimeSnapshotImpl,
+    } = await import("./runtime.js"));
   });
 
   beforeEach(() => {

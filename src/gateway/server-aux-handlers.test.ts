@@ -33,9 +33,9 @@ import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
-import { clearSecretsRuntimeSnapshot } from "../secrets/runtime-state.js";
 import {
   activateSecretsRuntimeSnapshot,
+  clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshotRevision,
   type PreparedSecretsRuntimeSnapshot,

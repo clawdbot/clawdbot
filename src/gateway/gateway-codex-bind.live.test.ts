@@ -19,7 +19,7 @@ import { getCurrentPluginConversationBinding } from "../plugins/conversation-bin
 import { seedPluginConversationBindingApprovalForTest } from "../plugins/conversation-binding.test-fixtures.js";
 import { clearPluginLoaderCache } from "../plugins/loader.test-fixtures.js";
 import { getActivePluginRegistry, resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
-import { clearSecretsRuntimeSnapshot } from "../secrets/runtime-state.js";
+import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";

@@ -9,8 +9,11 @@ import {
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
-import { clearSecretsRuntimeSnapshot } from "./runtime-state.js";
-import { activateSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } from "./runtime.js";
+import {
+  activateSecretsRuntimeSnapshot,
+  clearSecretsRuntimeSnapshot,
+  prepareSecretsRuntimeSnapshot,
+} from "./runtime.js";
 import {
   asConfig,
   buildTestWebSearchProviders,

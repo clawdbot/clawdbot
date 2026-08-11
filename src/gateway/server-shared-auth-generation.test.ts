@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import { createEmptyRuntimeWebToolsMetadata } from "../secrets/runtime-fast-path.js";
-import { clearSecretsRuntimeSnapshot } from "../secrets/runtime-state.js";
 import {
   activateSecretsRuntimeSnapshot,
+  clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshotRevision,
 } from "../secrets/runtime.js";
 import {

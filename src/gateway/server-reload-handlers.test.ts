@@ -62,10 +62,10 @@ import { resolveAuthProfileSecretOwnerId } from "../secrets/runtime-auth-profile
 import { listActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import { createEmptyRuntimeWebToolsMetadata } from "../secrets/runtime-fast-path.js";
 import { classifySecretOwnerDegradationState } from "../secrets/runtime-owner-assignments.js";
-import { clearSecretsRuntimeSnapshot } from "../secrets/runtime-state.js";
 import {
   activateSecretsRuntimeSnapshot,
   activateSecretsRuntimeSnapshotIfCurrent,
+  clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshotRevision,
   type PreparedSecretsRuntimeSnapshot,

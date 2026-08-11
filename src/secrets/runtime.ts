@@ -44,6 +44,7 @@ import { mergeProviderAuthRuntimeWarnings } from "./runtime-provider-auth-warnin
 import {
   activateSecretsRuntimeSnapshotState,
   activateSecretsRuntimeSnapshotStateIfCurrent,
+  clearSecretsRuntimeSnapshotState,
   getActiveSecretsRuntimeEnvState,
   getActiveSecretsRuntimeRefreshContext,
   getActiveSecretsRuntimeSnapshotState,
@@ -718,4 +719,8 @@ export function getActiveSecretsRuntimeEnv(): NodeJS.ProcessEnv {
 
 export function getActiveRuntimeWebToolsMetadata(): RuntimeWebToolsMetadata | null {
   return getActiveRuntimeWebToolsMetadataFromState();
+}
+
+export function clearSecretsRuntimeSnapshot(): void {
+  clearSecretsRuntimeSnapshotState();
 }

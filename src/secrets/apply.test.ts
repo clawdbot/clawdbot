@@ -41,15 +41,13 @@ const { clearSecretsRuntimeSnapshotMock, prepareSecretsRuntimeSnapshotMock } = v
 }));
 
 vi.mock("./runtime.js", () => ({
-  prepareSecretsRuntimeSnapshot: prepareSecretsRuntimeSnapshotMock,
-}));
-vi.mock("./runtime-state.js", () => ({
   clearSecretsRuntimeSnapshot: clearSecretsRuntimeSnapshotMock,
+  prepareSecretsRuntimeSnapshot: prepareSecretsRuntimeSnapshotMock,
 }));
 
 let runSecretsApply: typeof import("./apply.js").runSecretsApply;
 let applyTesting: typeof import("./apply.js").testing;
-let clearSecretsRuntimeSnapshot: typeof import("./runtime-state.js").clearSecretsRuntimeSnapshot;
+let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const OPENAI_API_KEY_ENV_REF = {
@@ -293,7 +291,7 @@ describe("secrets apply", () => {
 
   beforeAll(async () => {
     ({ testing: applyTesting, runSecretsApply } = await import("./apply.js"));
-    ({ clearSecretsRuntimeSnapshot } = await import("./runtime-state.js"));
+    ({ clearSecretsRuntimeSnapshot } = await import("./runtime.js"));
   });
 
   beforeEach(async () => {
