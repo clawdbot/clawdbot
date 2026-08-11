@@ -13,6 +13,7 @@ export {
   normalizeOptionalStringifiedId,
   normalizeStringifiedEntries,
   normalizeStringifiedOptionalString,
+  readNonBlankString,
   readNonEmptyStringPreservingWhitespace,
   readStringValue,
 } from "../../packages/normalization-core/src/string-coerce.js";
@@ -26,6 +27,9 @@ export {
   parseStrictInteger,
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
+  resolveIntegerOption,
+  resolveNonNegativeIntegerOption,
+  resolveOptionalIntegerOption,
 } from "../../packages/normalization-core/src/number-coercion.js";
 export { asBoolean, parseBooleanValue } from "../utils/boolean.js";
 export {
@@ -35,10 +39,12 @@ export {
   asNullableRecord,
   asOptionalObjectRecord,
   asOptionalRecord,
+  filterStringRecord,
   isRecord,
   readStringField,
 } from "../../packages/normalization-core/src/record-coerce.js";
 export {
+  filterStringEntries,
   normalizeAtHashSlug,
   normalizeHyphenSlug,
   normalizeOptionalTrimmedStringList,

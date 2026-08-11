@@ -11,12 +11,11 @@ import type {
 } from "openclaw/plugin-sdk/speech";
 import {
   asBoolean,
-  asFiniteNumber,
   parseSpeechDirectiveNumberOverride,
   resolveSpeechProviderApiKey,
   trimToUndefined,
 } from "openclaw/plugin-sdk/speech-core";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asFiniteNumberInRange, asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   FISH_AUDIO_STREAM_MAX_BYTES,
   type FishAudioFormat,
@@ -71,8 +70,7 @@ function normalizeLatency(value: unknown): FishAudioLatency {
 }
 
 function normalizeNumber(value: unknown, min: number, max: number): number | undefined {
-  const number = asFiniteNumber(value);
-  return number != null && number >= min && number <= max ? number : undefined;
+  return asFiniteNumberInRange(value, { min, max });
 }
 
 function resolveReferenceId(raw: Record<string, unknown> | undefined): string | undefined {

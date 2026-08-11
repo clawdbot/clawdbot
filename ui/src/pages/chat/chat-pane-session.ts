@@ -1,3 +1,4 @@
+import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
@@ -283,8 +284,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   }
 
   protected catalogItemMessage(item: SessionCatalogTranscriptItem): Record<string, unknown> | null {
-    const parsedTimestamp = item.timestamp ? Date.parse(item.timestamp) : Number.NaN;
-    const timestamp = Number.isFinite(parsedTimestamp) ? parsedTimestamp : null;
+    const timestamp = parseDateStringTimestampMs(item.timestamp) ?? null;
     const text = item.text?.trim() ? item.text : null;
     if (item.type === "userMessage") {
       return text

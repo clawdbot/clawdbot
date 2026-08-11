@@ -9,7 +9,10 @@ import {
   resolveSiteName,
   wrapWebContent,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  resolveIntegerOption,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 // Internal-only bounds (the model-facing tool schema declares its own copies).
@@ -53,7 +56,10 @@ export function resolveParallelSearchCount(
   const value =
     requestedCount ??
     (typeof configuredCount === "number" ? configuredCount : DEFAULT_SEARCH_COUNT);
-  return Math.max(1, Math.min(PARALLEL_MAX_SEARCH_COUNT, Math.floor(value)));
+  return resolveIntegerOption(value, DEFAULT_SEARCH_COUNT, {
+    min: 1,
+    max: PARALLEL_MAX_SEARCH_COUNT,
+  });
 }
 
 export function normalizeParallelSessionId(

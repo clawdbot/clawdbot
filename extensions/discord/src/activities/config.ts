@@ -1,4 +1,5 @@
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import { normalizeOptionalString as readNonEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type DiscordActivitiesConfigResolution =
   | {
@@ -10,11 +11,6 @@ type DiscordActivitiesConfigResolution =
       enabled: false;
       reason: "not-configured" | "missing-client-secret";
     };
-
-function readNonEmpty(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed || undefined;
-}
 
 export function resolveDiscordActivitiesConfig(
   account: DiscordAccountConfig,

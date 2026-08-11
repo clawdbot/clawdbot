@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { resolveIntegerOption } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getIMessageRuntime } from "../runtime.js";
 
 // iMessage inbound catchup. When the gateway is offline (crash, restart, mac
@@ -246,10 +247,7 @@ export type ResolvedCatchupConfig = {
 };
 
 function clampInt(value: number | undefined, min: number, max: number, fallback: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.min(max, Math.max(min, Math.floor(value)));
+  return resolveIntegerOption(value, fallback, { min, max });
 }
 
 export function resolveCatchupConfig(

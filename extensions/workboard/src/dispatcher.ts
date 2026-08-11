@@ -9,6 +9,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { canonicalPathFromExistingAncestor } from "openclaw/plugin-sdk/security-runtime";
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   assertRestrictedWorkboardTarget,
   managedWorktreeName,
@@ -70,12 +71,6 @@ type WorkboardDispatchStartParams = {
 };
 
 const pendingWorkboardDispatches = new WeakMap<WorkboardStore, Promise<void>>();
-
-function normalizePositiveInteger(value: number | undefined, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value)
-    ? Math.max(0, Math.trunc(value))
-    : fallback;
-}
 
 function sanitizeSessionSegment(value: string | undefined, fallback: string): string {
   const sanitized = (value ?? fallback)
@@ -327,7 +322,7 @@ async function runWorkboardDispatch(
   const now = params.options?.now ?? Date.now();
   const boardId = params.options?.boardId;
   const dispatch = await params.store.dispatch({ now, boardId });
-  const maxStarts = normalizePositiveInteger(
+  const maxStarts = resolveNonNegativeIntegerOption(
     params.options?.maxStarts,
     DEFAULT_DISPATCH_MAX_STARTS,
   );

@@ -9,6 +9,7 @@ import type {
   ToolResultMessage,
 } from "@openclaw/llm-core";
 import type { EventStream as SourceEventStream } from "@openclaw/llm-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { TranscriptNotContinuableError } from "./errors.js";
 import { uuidv7 } from "./harness/session/uuid.js";
 import {
@@ -1879,9 +1880,7 @@ type TurnTaintMetadata = {
 
 function readTurnTaintMetadata(message: AgentMessage): TurnTaintMetadata | undefined {
   const metadata = (message as unknown as Record<string, unknown>)["__openclaw"];
-  return metadata && typeof metadata === "object" && !Array.isArray(metadata)
-    ? (metadata as TurnTaintMetadata)
-    : undefined;
+  return asOptionalRecord(metadata) as TurnTaintMetadata | undefined;
 }
 
 function toolResultTaintsTurn(message: ToolResultMessage): boolean {

@@ -5,6 +5,7 @@ import {
   asSafeIntegerInRange,
   MAX_DATE_TIMESTAMP_MS,
 } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   FAILOVER_REASONS,
@@ -29,7 +30,7 @@ function toJsonValue(value: unknown): JsonValue | undefined {
 }
 
 function isJsonObject(value: unknown): value is { [key: string]: JsonValue } {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
+  return isRecord(value);
 }
 
 function normalizeTimestamp(value: unknown): number | undefined {

@@ -2,14 +2,13 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createPayloadPatchStreamWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
+import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const META_REASONING_ENCRYPTED_CONTENT_INCLUDE = "reasoning.encrypted_content";
 
 function ensureMetaResponsesReplayFields(payloadObj: Record<string, unknown>): void {
   const existing = payloadObj.include;
-  const include = Array.isArray(existing)
-    ? existing.filter((entry): entry is string => typeof entry === "string")
-    : [];
+  const include = filterStringEntries(existing);
   if (!include.includes(META_REASONING_ENCRYPTED_CONTENT_INCLUDE)) {
     include.push(META_REASONING_ENCRYPTED_CONTENT_INCLUDE);
   }

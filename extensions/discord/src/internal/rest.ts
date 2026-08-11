@@ -1,12 +1,9 @@
 // Discord plugin module implements rest behavior.
 import { inspect } from "node:util";
 import { gunzipSync } from "node:zlib";
-import {
-  clampTimerTimeoutMs,
-  parseFiniteNumber,
-  resolveTimerTimeoutMs,
-} from "openclaw/plugin-sdk/number-runtime";
+import { clampTimerTimeoutMs, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { resolveIntegerOption as normalizeIntegerOption } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { serializeRequestBody } from "./rest-body.js";
 import {
   DiscordError,
@@ -305,15 +302,6 @@ export class RequestClient {
     }
     this.requestControllers.clear();
   }
-}
-
-function normalizeIntegerOption(
-  value: number | undefined,
-  fallback: number,
-  params: { min: number },
-): number {
-  const candidate = parseFiniteNumber(value) ?? fallback;
-  return Math.max(params.min, Math.floor(candidate));
 }
 
 function normalizeRequestClientOptions(

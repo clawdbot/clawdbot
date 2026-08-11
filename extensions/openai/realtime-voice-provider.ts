@@ -2,6 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -41,6 +42,8 @@ import {
 } from "openclaw/plugin-sdk/secret-input";
 import {
   asFiniteNumber,
+  asFiniteNumberInRange,
+  asSafeIntegerInRange,
   isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -294,13 +297,11 @@ function normalizeProviderConfig(
 }
 
 function asNonNegativeInteger(value: unknown): number | undefined {
-  const number = asFiniteNumber(value);
-  return number !== undefined && Number.isSafeInteger(number) && number >= 0 ? number : undefined;
+  return asSafeIntegerInRange(value, { min: 0 });
 }
 
 function asUnitInterval(value: unknown): number | undefined {
-  const number = asFiniteNumber(value);
-  return number !== undefined && number >= 0 && number <= 1 ? number : undefined;
+  return asFiniteNumberInRange(value, { min: 0, max: 1 });
 }
 
 type OpenAIRealtimeApiKeyResolution =
@@ -995,7 +996,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
             try {
               this.handleEvent(event, lifecycleConnection);
             } catch (error) {
-              const readyError = error instanceof Error ? error : new Error(String(error));
+              const readyError = toStringifiedError(error);
               attempt.reject(readyError);
               this.failConnection(readyError, ws, lifecycleConnection, {
                 code: 1011,
@@ -1036,7 +1037,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           },
         });
         if (!attempt.ready) {
-          const startupError = error instanceof Error ? error : new Error(String(error));
+          const startupError = toStringifiedError(error);
           rejectStartup(
             isDirectOpenAIRealtimeWebSocketUrl(url) &&
               isOpenAIRealtimeStartupAuthFailure(startupError)
@@ -1045,7 +1046,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           );
           return;
         }
-        this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
+        this.config.onError?.(toStringifiedError(error));
       });
 
       ws.on("close", (code, reasonBuffer) => {
@@ -1091,7 +1092,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     try {
       connectionOrPromise = this.resolveConnectionParams();
     } catch (error) {
-      attempt.reject(error instanceof Error ? error : new Error(String(error)));
+      attempt.reject(toStringifiedError(error));
       return attempt.promise;
     }
     if (connectionOrPromise instanceof Promise) {
@@ -1103,13 +1104,13 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           attempt.resolve();
           return;
         }
-        attempt.reject(error instanceof Error ? error : new Error(String(error)));
+        attempt.reject(toStringifiedError(error));
       });
     } else {
       try {
         openWebSocket(connectionOrPromise);
       } catch (error) {
-        attempt.reject(error instanceof Error ? error : new Error(String(error)));
+        attempt.reject(toStringifiedError(error));
       }
     }
     await attempt.promise;
@@ -1277,7 +1278,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       if (!this.lifecycle.acceptsEvents(nextConnection)) {
         return;
       }
-      this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
+      this.config.onError?.(toStringifiedError(error));
       await this.attemptReconnect(reason, nextConnection);
     }
   }

@@ -7,6 +7,7 @@ import {
   asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
+  resolveIntegerOption,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW,
@@ -52,10 +53,7 @@ function parseOptionalPositiveInt(value: unknown, fallback: number): number {
 }
 
 function clampInt(value: number | undefined, fallback: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.max(min, Math.min(max, Math.floor(value as number)));
+  return resolveIntegerOption(value, fallback, { min, max });
 }
 
 function normalizeTranscriptDir(value: unknown): string {

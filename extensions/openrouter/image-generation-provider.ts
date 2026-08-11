@@ -20,7 +20,11 @@ import {
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeOptionalString,
+  resolveIntegerOption,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
 
 const DEFAULT_MODEL = "google/gemini-3.1-flash-image-preview";
@@ -171,10 +175,7 @@ function extractOpenRouterImagesFromResponse(body: unknown): GeneratedImageAsset
 }
 
 function resolveImageCount(count: number | undefined): number {
-  if (typeof count !== "number" || !Number.isFinite(count)) {
-    return 1;
-  }
-  return Math.max(1, Math.min(MAX_IMAGE_RESULTS, Math.trunc(count)));
+  return resolveIntegerOption(count, 1, { min: 1, max: MAX_IMAGE_RESULTS });
 }
 
 function isGeminiImageModel(model: string): boolean {
