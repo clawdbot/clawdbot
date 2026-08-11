@@ -338,9 +338,11 @@ export function registerDefaultAuthTokenSuite(): void {
         expect(auth?.scopes).toEqual(["operator.admin"]);
         expect(typeof auth?.deviceToken).toBe("string");
         expect(auth?.recoveryScope).toMatch(/^[A-Za-z0-9_-]+$/u);
+        expect(auth?.recoveryMigrationAllowed).toBe(true);
         expect(Object.keys(auth ?? {}).toSorted()).toEqual([
           "deviceToken",
           "issuedAtMs",
+          "recoveryMigrationAllowed",
           "recoveryScope",
           "role",
           "scopes",
@@ -363,10 +365,12 @@ export function registerDefaultAuthTokenSuite(): void {
         expect(auth?.role).toBe("operator");
         expect(auth?.deviceToken).toBe(pairedDeviceToken);
         expect(auth?.recoveryScope).toBe(recoveryScope);
+        expect(auth?.recoveryMigrationAllowed).toBe(true);
         expect(auth?.scopes).toEqual(["operator.read"]);
         expect(Object.keys(auth ?? {}).toSorted()).toEqual([
           "deviceToken",
           "issuedAtMs",
+          "recoveryMigrationAllowed",
           "recoveryScope",
           "role",
           "scopes",
