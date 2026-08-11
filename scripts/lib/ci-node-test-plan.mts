@@ -60,7 +60,7 @@ type PolicyTestWatch = {
 // they enforce. Boundary and contract suites have dedicated always-on lanes;
 // this inventory covers the remaining tests that changed targeting cannot
 // discover from imports alone.
-export const policyTestWatches = [
+const policyTestWatches = [
   {
     testFile: "ui/src/components/web-awesome-migration.node.test.ts",
     watchGlobs: ["ui/src/**/*.ts"],
