@@ -179,8 +179,8 @@ describe("persistPluginInstall", () => {
         },
       },
     } as OpenClawConfig;
-  enablePluginInConfigMock.mockReturnValue({ config: enabledConfig });
-  clearPluginRegistryLoadCacheMock.mockImplementation(() => {
+    enablePluginInConfigMock.mockReturnValue({ config: enabledConfig });
+    clearPluginRegistryLoadCacheMock.mockImplementation(() => {
       throw new Error("cache unavailable");
     });
 
@@ -448,8 +448,8 @@ describe("persistPluginInstall", () => {
         },
       },
     } as OpenClawConfig;
-  enablePluginInConfigMock.mockReturnValue({ config: enabledConfig });
-  buildPluginSnapshotReportMock.mockReturnValue({
+    enablePluginInConfigMock.mockReturnValue({ config: enabledConfig });
+    buildPluginSnapshotReportMock.mockReturnValue({
       plugins: [
         {
           id: "discord",
@@ -507,8 +507,8 @@ describe("persistPluginInstall", () => {
         },
       },
     } as OpenClawConfig;
-  enablePluginInConfigMock.mockReturnValue({ config: enabledConfig });
-  buildPluginSnapshotReportMock.mockReturnValue({
+    enablePluginInConfigMock.mockReturnValue({ config: enabledConfig });
+    buildPluginSnapshotReportMock.mockReturnValue({
       plugins: [
         {
           id: "discord",
@@ -897,8 +897,8 @@ describe("persistPluginInstall", () => {
         },
       },
     });
-  expect(enablePluginInConfigMock).not.toHaveBeenCalled();
-  expect(applyExclusiveSlotSelectionMock).not.toHaveBeenCalled();
+    expect(enablePluginInConfigMock).not.toHaveBeenCalled();
+    expect(applyExclusiveSlotSelectionMock).not.toHaveBeenCalled();
     expectRuntimeLogIncludes(
       'Installed plugin "needs-config" without enabling it because it requires configuration first.',
     );
@@ -988,8 +988,8 @@ describe("persistPluginInstall", () => {
     });
 
     expect(next).toEqual(baseConfig);
-  expect(enablePluginInConfigMock).not.toHaveBeenCalled();
-  expect(applyExclusiveSlotSelectionMock).not.toHaveBeenCalled();
+    expect(enablePluginInConfigMock).not.toHaveBeenCalled();
+    expect(applyExclusiveSlotSelectionMock).not.toHaveBeenCalled();
     const persistedRecords = requireMockCallArg(
       writePersistedInstalledPluginIndexInstallRecordsWithLease,
       "writePersistedInstalledPluginIndexInstallRecordsWithLease",

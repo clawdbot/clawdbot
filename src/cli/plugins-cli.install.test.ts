@@ -1268,8 +1268,8 @@ describe("plugins cli install", () => {
       marketplaceSource: "local/repo",
       marketplacePlugin: "alpha",
     });
-  enablePluginInConfigMock.mockReturnValue({ config: enabledCfg });
-  buildPluginSnapshotReportMock.mockReturnValue({
+    enablePluginInConfigMock.mockReturnValue({ config: enabledCfg });
+    buildPluginSnapshotReportMock.mockReturnValue({
       plugins: [{ id: "alpha", kind: "provider" }],
       diagnostics: [],
     });
@@ -1753,8 +1753,8 @@ describe("plugins cli install", () => {
     expect(record.source).toBe("path");
     expect(String(record.sourcePath)).toContain(pluginId);
     expect(String(record.installPath)).toContain(pluginId);
-  expect(enablePluginInConfigMock).not.toHaveBeenCalled();
-  expect(applyExclusiveSlotSelectionMock).not.toHaveBeenCalled();
+    expect(enablePluginInConfigMock).not.toHaveBeenCalled();
+    expect(applyExclusiveSlotSelectionMock).not.toHaveBeenCalled();
     expect(runtimeLogsContain("requires configuration first")).toBe(true);
   });
 
