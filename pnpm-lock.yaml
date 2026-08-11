@@ -1406,9 +1406,6 @@ importers:
       '@microsoft/mxc-sdk':
         specifier: 0.7.0
         version: 0.7.0
-      '@openclaw/fs-safe':
-        specifier: 0.5.4
-        version: 0.5.4
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -1545,9 +1542,6 @@ importers:
 
   extensions/openshell:
     dependencies:
-      '@openclaw/fs-safe':
-        specifier: 0.5.4
-        version: 0.5.4
       p-limit:
         specifier: 7.3.1
         version: 7.3.1

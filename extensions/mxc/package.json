@@ -12,7 +12,6 @@
   },
   "dependencies": {
     "@microsoft/mxc-sdk": "0.7.0",
-    "@openclaw/fs-safe": "0.5.4",
     "zod": "4.4.3"
   },
   "openclaw": {
