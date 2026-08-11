@@ -969,26 +969,7 @@ private struct MacChatSurface: View {
             title: String(localized: "Catch me up"),
             prompt: String(localized: "Summarize what happened in my threads since yesterday.")),
     ]
-
-    #if DEBUG
-    var _testCapabilities: MacChatSurfaceCapabilities {
-        MacChatSurfaceCapabilities(
-            hasTalkControl: true,
-            hasSpeech: true,
-            hasVoiceNoteControl: true,
-            displayOptions: self.displayOptions)
-    }
-    #endif
 }
-
-#if DEBUG
-struct MacChatSurfaceCapabilities: Equatable {
-    let hasTalkControl: Bool
-    let hasSpeech: Bool
-    let hasVoiceNoteControl: Bool
-    let displayOptions: OpenClawChatDisplayOptions
-}
-#endif
 
 /// Bridges the view model's session switches out of the controller. The view
 /// model is constructed before `self`, so the closure targets this box and the
@@ -1317,15 +1298,6 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
 
     var _testSceneBridgingOptions: NSHostingSceneBridgingOptions? {
         (self.contentController as? NSHostingController<MacChatSurface>)?.sceneBridgingOptions
-    }
-
-    var _testChatCapabilities: MacChatSurfaceCapabilities? {
-        if let hosting = contentController as? NSHostingController<MacChatSurface> {
-            return hosting.rootView._testCapabilities
-        }
-        return self.contentController.children
-            .compactMap { $0 as? NSHostingController<MacChatSurface> }
-            .first?.rootView._testCapabilities
     }
 
     var _testActiveAgentID: String? {

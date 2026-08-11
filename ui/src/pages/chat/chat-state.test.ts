@@ -1625,8 +1625,14 @@ describe("refreshChatMetadata", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
-  it("does not load unscoped compatibility models for a non-default agent", async () => {
-    const request = vi.fn(async (method: string) => {
+  it("loads agent-scoped compatibility models for a non-default agent", async () => {
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "models.list") {
+        expect(params).toEqual({ view: "configured", agentId: "work" });
+        return {
+          models: [{ id: "work-model", name: "Work Model", provider: "openai" }],
+        };
+      }
       expect(method).toBe("commands.list");
       return { commands: [] };
     });
@@ -1638,9 +1644,11 @@ describe("refreshChatMetadata", () => {
 
     await refreshChatMetadata(state);
 
-    expect(state.chatModelCatalog).toEqual([]);
+    expect(state.chatModelCatalog).toEqual([
+      { id: "work-model", name: "Work Model", provider: "openai" },
+    ]);
     expect(state.chatModelsLoading).toBe(false);
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("does not apply compatibility commands after switching agents", async () => {

@@ -244,7 +244,7 @@ vi.mock("../../../tasks/runtime-internal.js", () => ({
   listTasksForOwnerKey: hoisted.listTasksForOwnerKeyMock,
 }));
 
-const { isSpawnAcpAcceptedResult, spawnAcpDirect } = await import("./acp-spawn.js");
+const { spawnAcpDirect } = await import("./acp-spawn.js");
 type SpawnRequest = Parameters<typeof spawnAcpDirect>[0];
 type SpawnContext = Parameters<typeof spawnAcpDirect>[1];
 type SpawnResult = Awaited<ReturnType<typeof spawnAcpDirect>>;
@@ -405,7 +405,7 @@ function expectFailedSpawn(
 
 function expectAcceptedSpawn(result: SpawnResult): Extract<SpawnResult, { status: "accepted" }> {
   expect(result.status).toBe("accepted");
-  if (!isSpawnAcpAcceptedResult(result)) {
+  if (result.status !== "accepted") {
     throw new Error("Expected ACP spawn to be accepted");
   }
   return result;
@@ -3323,15 +3323,24 @@ describe("spawnAcpDirect", () => {
 
     const accepted = expectAcceptedSpawn(result);
     expect(accepted.mode).toBe("session");
-    expectBindingCallFields({
+    const binding = expectBindingCallFields({
       placement: "current",
       conversation: {
         channel: "telegram",
         accountId: "default",
-        conversationId: "2",
-        parentConversationId: "-1003342490704",
       },
     });
+    const conversation = expectRecordFields(binding.conversation, {});
+    const conversationId =
+      typeof conversation.conversationId === "string" ? conversation.conversationId : "";
+    const parentConversationId =
+      typeof conversation.parentConversationId === "string"
+        ? conversation.parentConversationId
+        : undefined;
+    const canonicalTopicId = parentConversationId
+      ? `${parentConversationId}:topic:${conversationId}`
+      : conversationId;
+    expect(canonicalTopicId).toBe("-1003342490704:topic:2");
     const agentCall = hoisted.callGatewayMock.mock.calls
       .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
       .find((request) => request.method === "agent");
