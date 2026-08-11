@@ -33,6 +33,7 @@ import { createTestPreparedRunAdmission } from "../admitted-run-context.test-sup
 import { clearRuntimeAuthProfileStoreSnapshots } from "../auth-profiles/runtime-snapshots.js";
 import { saveAuthProfileStore } from "../auth-profiles/store.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
+import { createCronCreatorAuthorityCapability } from "../cron-creator-authority-context.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
 import { attachToolAllowlistIntersection } from "../tool-policy.js";
@@ -3101,6 +3102,21 @@ describe("CLI attempt execution", () => {
     });
 
     expect(embeddedArg.suppressLiveStreamOutput).toBe(false);
+  });
+
+  it("forwards exact cron creator authority into embedded execution", async () => {
+    const runId = "embedded-cron-creator-authority";
+    const capability = createCronCreatorAuthorityCapability(runId);
+    if (!capability) {
+      throw new Error("expected cron creator authority capability");
+    }
+
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      runId,
+      opts: { cronCreatorAuthorityCapability: capability },
+    });
+
+    expect(embeddedArg.cronCreatorAuthorityCapability).toBe(capability);
   });
 
   it("forwards Gateway plugin runtime binding to embedded runs", async () => {

@@ -312,18 +312,18 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
     const persistedRunRows = await Promise.all(
       patchSessionEntryMock.mock.calls.flatMap((call, index) => {
         const scope = call[0] as { sessionKey?: string };
-        const result = patchSessionEntryMock.mock.results[index];
-        return scope.sessionKey?.includes(":run:") && result?.type === "return"
-          ? [result.value]
+        const callResult = patchSessionEntryMock.mock.results[index];
+        return scope.sessionKey?.includes(":run:") && callResult?.type === "return"
+          ? [callResult.value]
           : [];
       }),
     );
     expect(persistedRunRows).not.toHaveLength(0);
-    expect(persistedRunRows).toEqual(
-      persistedRunRows.map((row) =>
+    for (const persistedRunRow of persistedRunRows) {
+      expect(persistedRunRow).toEqual(
         expect.objectContaining({ modelProvider: "openai", model: "gpt-5.4" }),
-      ),
-    );
+      );
+    }
   });
 
   it("forwards subagent fallbacks into the embedded runner for internal failover decisions", async () => {
