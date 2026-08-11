@@ -155,12 +155,13 @@ Flags:
   <Accordion title="Config and migrations">
     - Config normalization for legacy value shapes.
     - Talk config migration from legacy flat `talk.*` fields into `talk.provider` + `talk.providers.<provider>`.
-    - Browser migration checks for legacy Chrome extension configs and Chrome MCP readiness.
+    - Browser migration checks for legacy Chrome extension configs, owned native-bootstrap registration drift, and Chrome MCP readiness.
     - OpenCode provider override warnings (`models.providers.opencode` / `opencode-zen` / `opencode-go`).
     - Legacy OpenAI Codex provider/profile migration (`openai-codex` → `openai`) and shadowing warnings for stale `models.providers.openai-codex`.
     - OAuth TLS prerequisites check for OpenAI Codex OAuth profiles.
     - Plugin/tool allowlist warnings when `plugins.allow` is restrictive but tool policy still asks for wildcard or plugin-owned tools.
     - Legacy on-disk state migration (sessions/agent dir/WhatsApp auth).
+    - Retired QMD memory config and derived workspace cleanup; see [Migrating from QMD](/concepts/memory-builtin#migrating-from-qmd).
     - Legacy plugin manifest contract key migration (`speechProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`, `videoGenerationProviders`, `webFetchProviders`, `webSearchProviders` → `contracts`).
     - Legacy cron store migration (`jobId`, `schedule.cron`, top-level delivery/payload fields, payload `provider`, `notify: true` webhook fallback jobs).
     - Legacy workspace `TOOLS.md` migration into the `## Tools` section of `AGENTS.md`, with the original archived under the state directory before removal.
@@ -203,7 +204,7 @@ Flags:
     - Workspace bootstrap file size check (truncation/near-limit warnings for context files).
     - Skills readiness check for the default agent; reports allowed skills with missing bins, env, config, or OS requirements, and `--fix` can disable unavailable skills in `skills.entries`.
     - Shell completion status check and auto-install/upgrade.
-    - Memory search embedding provider readiness check (local model, remote API key, or QMD binary).
+    - Memory search embedding provider readiness check (local model or remote API key).
     - Source install checks (pnpm workspace mismatch, missing UI assets, missing tsx binary).
     - Writes updated config + wizard metadata.
 
@@ -358,6 +359,12 @@ That stages grounded durable candidates into the short-term dreaming store while
     If an extension-driver profile still carries a retired relay `cdpUrl`, doctor removes that URL while preserving `driver: "extension"`; the current extension relay owns its endpoint. Doctor also removes the retired `browser.relayBindHost` setting.
 
     Doctor warns while `browser.extensionRelay.allowLegacyAuth` is enabled. Upgrade paired Chrome extensions and external CDP clients to Browser Relay Authentication v2, then set the flag to `false`. V2 clients do not downgrade to legacy authentication.
+
+    When a stable Chrome extension copy and owned native-host registration already
+    exist, doctor reports registration drift. `openclaw doctor --fix` may repair
+    that owned registration, but it never installs the host for every OpenClaw
+    user and never overwrites a foreign same-name manifest or launcher. Use
+    `openclaw browser extension install` for the initial setup.
 
     Doctor also audits the host-local Chrome MCP path when you use `defaultProfile: "user"` or a configured `existing-session` profile:
 
@@ -561,9 +568,8 @@ That stages grounded durable candidates into the short-term dreaming store while
     Doctor runs a health check and offers to restart the gateway when it looks unhealthy.
   </Accordion>
   <Accordion title="13b. Memory search readiness">
-    Doctor checks whether the configured memory search embedding provider is ready for the default agent. The behavior depends on the configured backend and provider:
+    Doctor checks whether the configured memory search embedding provider is ready for the default agent. The behavior depends on the configured provider:
 
-    - **QMD backend**: probes whether the `qmd` binary is available and startable. If not, prints fix guidance including `npm install -g @tobilu/qmd` (or the Bun equivalent) and a manual binary path option.
     - **Explicit local provider**: checks for a local model file or a recognized remote/downloadable model URL. If missing, suggests switching to a remote provider.
     - **Explicit remote provider** (`openai`, `voyage`, etc.): verifies an API key is present in the environment or auth store. Prints actionable fix hints if missing.
     - **Legacy auto provider**: treats `memorySearch.provider: "auto"` as OpenAI, checks OpenAI readiness, and `doctor --fix` rewrites it to `provider: "openai"`.

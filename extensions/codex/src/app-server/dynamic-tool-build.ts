@@ -15,22 +15,21 @@ import {
   resolveModelAuthMode,
   resolveSandboxContext,
   supportsModelTools,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type RuntimeToolSchemaDiagnostic,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
-import { runWithCronCreatorAuthorityResolver } from "openclaw/plugin-sdk/codex-mcp-projection";
+import { runWithCronCreatorAuthorityCapabilityResolver } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
 import { readCodexPluginConfig, type CodexPluginConfig } from "./config.js";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
   filterCodexDynamicTools,
-  filterCodexDynamicToolsWithOpenClawShell,
-  isSystemAgentOnlyCodexDynamicToolAllowlist,
+  filterCodexDynamicToolsForDisabledNativeSurface,
   isForcedPrivateQaCodexRuntime,
+  isSystemAgentOnlyCodexDynamicToolAllowlist,
   normalizeCodexDynamicToolName,
 } from "./dynamic-tool-profile.js";
-import { addCodexMessageToolOnlyFinalControl } from "./message-tool-final-control.js";
 import {
   resolveCodexNodeExecToolOverrides,
   resolveCodexNativeExecutionPolicy,
@@ -99,7 +98,7 @@ type DynamicToolBuildParams = {
   cronCreatorToolAllowlistRef?: OpenClawCodingToolsOptions["cronCreatorToolAllowlistRef"];
   cronCreatorToolAllowlistCaptureRef?: OpenClawCodingToolsOptions["cronCreatorToolAllowlistCaptureRef"];
   resolveCronCreatorToolAuthority?: Parameters<
-    typeof runWithCronCreatorAuthorityResolver
+    typeof runWithCronCreatorAuthorityCapabilityResolver
   >[0]["resolve"];
   cronCreatorAuthorityUnavailableReason?: OpenClawCodingToolsOptions["cronCreatorAuthorityUnavailableReason"];
   forceHeartbeatTool?: boolean;
@@ -245,124 +244,127 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   const sessionKeys = resolveOpenClawCodingToolsSessionKeys(params, input.sandboxSessionKey);
   const nativeExecutionPolicy = resolveCodexNativeExecutionPolicyForDynamicTools(input);
   const buildOpenClawCodingTools = () =>
-    createOpenClawCodingTools({
-      agentId: input.sessionAgentId,
-      ...buildEmbeddedAttemptToolRunContext(params),
-      exec: {
-        ...params.execOverrides,
-        ...resolveCodexNodeExecToolOverrides(nativeExecutionPolicy),
-        config: params.config,
-        elevated: params.bashElevated,
-      },
-      sandbox: input.sandbox,
-      messageProvider: resolveCodexMessageToolProvider(params),
-      toolPolicyMessageProvider: params.messageProvider ?? params.messageChannel,
-      // Capability-gated tools (requiredClientCaps) need the originating client's
-      // declared caps in this sibling harness too, not only the embedded runner.
-      clientCaps: params.clientCaps,
-      chatType: params.chatType,
-      agentAccountId: params.agentAccountId,
-      messageTo: params.messageTo,
-      messageThreadId: params.messageThreadId,
-      nativeChannelId: params.chatId,
-      messageActionTurnCapability: params.messageActionTurnCapability,
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      spawnedBy: params.spawnedBy,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-      senderIsOwner: params.senderIsOwner,
-      inputProvenance: params.inputProvenance,
-      trustedInternalHandoff: params.trustedInternalHandoff,
-      scheduledToolPolicy: params.scheduledToolPolicy,
-      allowGatewaySubagentBinding:
-        params.allowGatewaySubagentBinding || isForcedPrivateQaCodexRuntime(),
-      ...sessionKeys,
-      sessionId: params.sessionId,
-      runId: params.runId,
-      approvalReviewerDeviceId: params.approvalReviewerDeviceId,
-      agentDir,
-      cwd: input.effectiveCwd ?? input.effectiveWorkspace,
-      workspaceDir: input.effectiveWorkspace,
-      spawnWorkspaceDir:
-        input.effectiveCwd && input.effectiveCwd !== input.effectiveWorkspace
-          ? input.resolvedWorkspace
-          : resolveAttemptSpawnWorkspaceDir({
-              sandbox: input.sandbox,
-              resolvedWorkspace: input.resolvedWorkspace,
-            }),
-      config: params.config,
-      authProfileStore: params.toolAuthProfileStore ?? params.authProfileStore,
-      abortSignal: input.runAbortController.signal,
-      emitBeforeToolCallDiagnostics: false,
-      modelProvider: params.model.provider,
-      modelId: params.modelId,
-      modelCompat:
-        params.model.compat && typeof params.model.compat === "object"
-          ? (params.model.compat as OpenClawCodingToolsOptions["modelCompat"])
-          : undefined,
-      modelApi: params.model.api,
-      modelContextWindowTokens: params.model.contextWindow,
-      delegationCapability: params.delegationCapability,
-      modelAuthMode: resolveModelAuthMode(
-        params.model.provider,
-        params.config,
-        params.toolAuthProfileStore ?? params.authProfileStore,
-        {
-          workspaceDir: input.effectiveWorkspace,
+    params.hostCapabilities.bindToolSurface(
+      createOpenClawCodingTools({
+        agentId: input.sessionAgentId,
+        ...buildEmbeddedAttemptToolRunContext(params),
+        exec: {
+          ...params.execOverrides,
+          ...resolveCodexNodeExecToolOverrides(nativeExecutionPolicy),
+          config: params.config,
+          elevated: params.bashElevated,
         },
-      ),
-      suppressManagedWebSearch: false,
-      currentChannelId: params.currentChannelId,
-      currentMessagingTarget: params.currentMessagingTarget,
-      hookChannelId: resolveCodexAppServerHookChannelId(params, input.sandboxSessionKey),
-      currentThreadTs: params.currentThreadTs,
-      currentMessageId: params.currentMessageId,
-      replyToMode: params.replyToMode,
-      hasRepliedRef: params.hasRepliedRef,
-      modelHasVision,
-      computerContextEpoch: input.computerContextEpoch,
-      requireExplicitMessageTarget:
-        params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
-      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-      disableMessageTool: input.ignoreDisableMessageTool ? false : params.disableMessageTool,
-      forceMessageTool: shouldForceMessageTool(messagePolicyParams),
-      enableHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
-      forceHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
-      onYield: (message) => {
-        input.onYieldDetected();
-        input.onCodexAppServerEvent?.({
-          stream: "codex_app_server.tool",
-          data: { name: "sessions_yield", message },
-        });
-      },
-      recordToolPrepStage: (name) => {
-        toolBuildStages.mark(name);
-      },
-      onToolOutcome: params.onToolOutcome,
-      isTurnTainted: params.isTurnTainted,
-      allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
-      cronCreatorToolAllowlistRef: input.cronCreatorToolAllowlistRef,
-      cronCreatorToolAllowlistCaptureRef: input.cronCreatorToolAllowlistCaptureRef,
-      cronCreatorAuthorityUnavailableReason: input.cronCreatorAuthorityUnavailableReason,
-    });
+        sandbox: input.sandbox,
+        messageProvider: resolveCodexMessageToolProvider(params),
+        toolPolicyMessageProvider: params.messageProvider ?? params.messageChannel,
+        // Capability-gated tools (requiredClientCaps) need the originating client's
+        // declared caps in this sibling harness too, not only the embedded runner.
+        clientCaps: params.clientCaps,
+        chatType: params.chatType,
+        agentAccountId: params.agentAccountId,
+        messageTo: params.messageTo,
+        messageThreadId: params.messageThreadId,
+        nativeChannelId: params.chatId,
+        messageActionTurnCapability: params.messageActionTurnCapability,
+        groupId: params.groupId,
+        groupChannel: params.groupChannel,
+        groupSpace: params.groupSpace,
+        spawnedBy: params.spawnedBy,
+        senderId: params.senderId,
+        senderName: params.senderName,
+        senderUsername: params.senderUsername,
+        senderE164: params.senderE164,
+        senderIsOwner: params.senderIsOwner,
+        inputProvenance: params.inputProvenance,
+        trustedInternalHandoff: params.trustedInternalHandoff,
+        scheduledToolPolicy: params.scheduledToolPolicy,
+        allowGatewaySubagentBinding:
+          params.allowGatewaySubagentBinding || isForcedPrivateQaCodexRuntime(),
+        ...sessionKeys,
+        sessionId: params.sessionId,
+        runId: params.runId,
+        approvalReviewerDeviceId: params.approvalReviewerDeviceId,
+        agentDir,
+        cwd: input.effectiveCwd ?? input.effectiveWorkspace,
+        workspaceDir: input.effectiveWorkspace,
+        spawnWorkspaceDir:
+          input.effectiveCwd && input.effectiveCwd !== input.effectiveWorkspace
+            ? input.resolvedWorkspace
+            : resolveAttemptSpawnWorkspaceDir({
+                sandbox: input.sandbox,
+                resolvedWorkspace: input.resolvedWorkspace,
+              }),
+        config: params.config,
+        authProfileStore: params.toolAuthProfileStore ?? params.authProfileStore,
+        abortSignal: input.runAbortController.signal,
+        emitBeforeToolCallDiagnostics: false,
+        modelProvider: params.model.provider,
+        modelId: params.modelId,
+        modelCompat:
+          params.model.compat && typeof params.model.compat === "object"
+            ? (params.model.compat as OpenClawCodingToolsOptions["modelCompat"])
+            : undefined,
+        modelApi: params.model.api,
+        modelContextWindowTokens: params.model.contextWindow,
+        delegationCapability: params.delegationCapability,
+        modelAuthMode: resolveModelAuthMode(
+          params.model.provider,
+          params.config,
+          params.toolAuthProfileStore ?? params.authProfileStore,
+          {
+            workspaceDir: input.effectiveWorkspace,
+          },
+        ),
+        suppressManagedWebSearch: false,
+        currentChannelId: params.currentChannelId,
+        currentMessagingTarget: params.currentMessagingTarget,
+        hookChannelId: resolveCodexAppServerHookChannelId(params, input.sandboxSessionKey),
+        currentThreadTs: params.currentThreadTs,
+        currentMessageId: params.currentMessageId,
+        replyToMode: params.replyToMode,
+        hasRepliedRef: params.hasRepliedRef,
+        modelHasVision,
+        computerContextEpoch: input.computerContextEpoch,
+        requireExplicitMessageTarget:
+          params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
+        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+        // Same sibling-harness rule as clientCaps above: without this forward,
+        // suggest_task/dismiss_task silently never exist for Codex-harness runs.
+        taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
+        disableMessageTool: input.ignoreDisableMessageTool ? false : params.disableMessageTool,
+        forceMessageTool: shouldForceMessageTool(messagePolicyParams),
+        enableHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
+        forceHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
+        onYield: (message) => {
+          input.onYieldDetected();
+          input.onCodexAppServerEvent?.({
+            stream: "codex_app_server.tool",
+            data: { name: "sessions_yield", message },
+          });
+        },
+        recordToolPrepStage: (name) => {
+          toolBuildStages.mark(name);
+        },
+        onToolOutcome: params.onToolOutcome,
+        isTurnTainted: params.isTurnTainted,
+        allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
+        cronCreatorToolAllowlistRef: input.cronCreatorToolAllowlistRef,
+        cronCreatorToolAllowlistCaptureRef: input.cronCreatorToolAllowlistCaptureRef,
+        cronCreatorAuthorityUnavailableReason: input.cronCreatorAuthorityUnavailableReason,
+      }),
+      { cwd: input.effectiveCwd ?? input.effectiveWorkspace },
+    );
   const allTools = input.resolveCronCreatorToolAuthority
-    ? runWithCronCreatorAuthorityResolver({
+    ? runWithCronCreatorAuthorityCapabilityResolver({
+        capability: params.cronCreatorAuthorityCapability,
         runId: params.runId,
         resolve: input.resolveCronCreatorToolAuthority,
         run: buildOpenClawCodingTools,
       })
     : buildOpenClawCodingTools();
-  const codexScopedTools = addCodexMessageToolOnlyFinalControl(
-    allTools,
-    params.sourceReplyDeliveryMode,
-  );
   toolBuildStages.mark("create-openclaw-coding-tools");
   const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [];
-  const readableAllToolProjection = filterProviderNormalizableTools(codexScopedTools);
+  const readableAllToolProjection = filterProviderNormalizableTools(allTools);
   preNormalizationDiagnostics.push(...readableAllToolProjection.diagnostics);
   const webSearchPlan = resolveCodexWebSearchPlan({
     config: params.config,
@@ -371,9 +373,12 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
   });
   const readableAllTools = [...readableAllToolProjection.tools];
-  const normallyProfiledTools = shouldKeepOpenClawShellDynamicTools(input, nativeExecutionPolicy)
-    ? filterCodexDynamicToolsWithOpenClawShell(readableAllTools, input.pluginConfig)
-    : filterCodexDynamicTools(readableAllTools, input.pluginConfig);
+  const normallyProfiledTools =
+    input.nativeToolSurfaceEnabled === false
+      ? filterCodexDynamicToolsForDisabledNativeSurface(readableAllTools, input.pluginConfig, {
+          preserveShell: shouldKeepOpenClawShellDynamicTools(input, nativeExecutionPolicy),
+        })
+      : filterCodexDynamicTools(readableAllTools, input.pluginConfig);
   const hostSystemAgentActive =
     input.isHostScopedToolActive?.("openclaw") ?? isHostScopedAgentToolActive("openclaw");
   const profileFilteredTools =
@@ -536,6 +541,9 @@ export function shouldEnableCodexAppServerNativeToolSurface(
     sandboxExecServerEnabled?: boolean;
   } = {},
 ): boolean {
+  if (params.pluginHarnessToolPolicyRestricted === true) {
+    return false;
+  }
   if (isCodexMemoryFlushRun(params)) {
     return false;
   }

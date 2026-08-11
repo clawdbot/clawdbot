@@ -122,7 +122,7 @@ Notes:
 | `check --agent <id>`             | Checks the selected agent's workspace and reports which ready skills are actually visible to that agent's prompt or command surface.                                                                                                                                             |
 | `list`                           | Default action when no subcommand is provided.                                                                                                                                                                                                                                   |
 | `list`/`info`/`check` output     | Rendered output goes to stdout. With `--json`, the machine-readable payload stays on stdout for pipes and scripts.                                                                                                                                                               |
-| `curator status --json`          | Returns the current curator run and skill lifecycle status as one JSON object.                                                                                                                                                                                                   |
+| `curator status --json`          | Returns legacy age-based lifecycle state written by older releases. Daily collection review does not use this state.                                                                                                                                                             |
 
 Community ClawHub skill installs and updates check trust before downloading.
 Versioned community archive releases use exact-release trust metadata.

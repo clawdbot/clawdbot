@@ -7,6 +7,7 @@ import {
   createCustomMessage,
 } from "../messages.js";
 import type { CompactionEntry, ResetEntry, SessionContext, SessionTreeEntry } from "../types.js";
+import { selectResetKeptEntries } from "./tool-result-pairing.js";
 
 type ContextBoundary = CompactionEntry | ResetEntry;
 const SESSION_HISTORY_PRELUDE = Symbol.for("openclaw.sessionHistoryPrelude");
@@ -15,7 +16,10 @@ const SESSION_HISTORY_PRELUDE = Symbol.for("openclaw.sessionHistoryPrelude");
 export function projectSessionEntryMessage(entry: SessionTreeEntry): AgentMessage | undefined {
   switch (entry.type) {
     case "message":
-      return entry.message;
+      // Private shell history stays persisted but never enters replay or summarization.
+      return entry.message.role === "bashExecution" && entry.message.excludeFromContext === true
+        ? undefined
+        : entry.message;
     case "custom_message":
       return asAgentMessage(
         createCustomMessage(
@@ -60,10 +64,10 @@ function appendContextMessage(
 }
 
 function appendResetKeptMessage(messages: AgentMessage[], entry: SessionTreeEntry): void {
-  if (
-    entry.type === "message" &&
-    (entry.message.role === "user" || entry.message.role === "assistant")
-  ) {
+  if (entry.type !== "message") {
+    return;
+  }
+  if (entry.message.role === "user" || entry.message.role === "assistant") {
     const message = { ...stripStalePrefixReplay(entry.message) } as AgentMessage & {
       [SESSION_HISTORY_PRELUDE]?: true;
     };
@@ -73,6 +77,8 @@ function appendResetKeptMessage(messages: AgentMessage[], entry: SessionTreeEntr
       value: true,
     });
     messages.push(message);
+  } else if (entry.message.role === "toolResult") {
+    messages.push(entry.message);
   }
 }
 
@@ -103,20 +109,19 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
       }
     }
     const boundaryIdx = pathEntries.findIndex((entry) => entry.id === boundary.id);
-    // A reset kept tail mirrors the old cross-log replay contract: only user/assistant
-    // rows survive. Both retained-tail forms now follow rewritten prefixes, so
-    // prefix-bound checkpoints are stale.
-    let foundFirstKept = false;
-    for (const entry of pathEntries.slice(0, boundaryIdx)) {
-      if (entry.id === boundary.firstKeptEntryId) {
-        foundFirstKept = true;
-      }
-      if (foundFirstKept) {
-        if (boundary.type === "reset") {
-          appendResetKeptMessage(messages, entry);
-        } else {
-          appendContextMessage(messages, entry, { prefixWasRewritten: true });
-        }
+    const firstKeptIdx = pathEntries.findIndex((entry) => entry.id === boundary.firstKeptEntryId);
+    const keptEntries =
+      firstKeptIdx >= 0 && firstKeptIdx < boundaryIdx
+        ? pathEntries.slice(firstKeptIdx, boundaryIdx)
+        : [];
+    const replayEntries =
+      boundary.type === "reset" ? selectResetKeptEntries(keptEntries) : keptEntries;
+    // Both retained-tail forms follow rewritten prefixes, so prefix-bound checkpoints are stale.
+    for (const entry of replayEntries) {
+      if (boundary.type === "reset") {
+        appendResetKeptMessage(messages, entry);
+      } else {
+        appendContextMessage(messages, entry, { prefixWasRewritten: true });
       }
     }
     for (const entry of pathEntries.slice(boundaryIdx + 1)) {

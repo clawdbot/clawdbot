@@ -15,6 +15,8 @@ import type { ChatType } from "../../../channels/chat-type.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { SessionToolOverrides } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
+import type { CronRuntimeAuthority } from "../../../cron/runtime-authority.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
@@ -29,11 +31,13 @@ import type {
   SkillWorkshopProposalMutationBudget,
   SkillWorkshopRunOptions,
 } from "../../../skills/workshop/types.js";
+import type { AdmittedRunContext, PreparedAgentRunAdmission } from "../../admitted-run-context.js";
 import type { ExecApprovalContinuationPromptRange } from "../../bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../../bootstrap-mode.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
 import type { ConversationRecallContext } from "../../conversation-recall.types.js";
+import type { CronCreatorAuthorityCapability } from "../../cron-creator-authority-context.js";
 import type { BlockReplyPayload } from "../../embedded-agent-payloads.js";
 import type {
   BlockReplyChunking,
@@ -49,7 +53,7 @@ import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { ScheduledToolPolicyContext } from "../../scheduled-tool-policy.js";
 import type { SessionManager } from "../../sessions/index.js";
-import type { TrustedSubagentCompletionHandoff } from "../../subagent-announce-handoff.js";
+import type { TrustedSubagentCompletionHandoff } from "../../subagents/announce/subagent-announce-handoff.js";
 import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
 import type { PromptMode } from "../../system-prompt.types.js";
 import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
@@ -80,6 +84,10 @@ export type CurrentInboundPromptContext = {
 };
 
 export type RunEmbeddedAgentParams = {
+  /** Already-admitted internal execution; mutually exclusive with preparedRunAdmission. */
+  admittedRunContext?: AdmittedRunContext;
+  /** Host-only post-prepare continuation, removed before plugin invocation. */
+  preparedRunAdmission?: PreparedAgentRunAdmission;
   /** Caller-owned in-memory transcript for ephemeral helper runs. */
   sessionManager?: SessionManager;
   sessionId: string;
@@ -105,12 +113,18 @@ export type RunEmbeddedAgentParams = {
   trigger?: EmbeddedRunTrigger;
   /** Stable cron job identifier populated for cron-triggered runs. */
   jobId?: string;
+  /** Store-private runtime authority forwarded only by the cron execution owner. */
+  scheduledRuntimeAuthority?: CronRuntimeAuthority;
+  /** A known runtime-specific authority envelope was explicitly cleared. */
+  scheduledRuntimeAuthorityRecoveryRequired?: boolean;
   /** Relative workspace path that memory-triggered writes are allowed to append to. */
   memoryFlushWritePath?: string;
   /** Delivery target for topic/thread routing. */
   messageTo?: string;
   /** Thread/topic identifier for routing replies to the originating thread. */
   messageThreadId?: string | number;
+  /** Trusted channel-configured policy for the admitted conversation turn. */
+  conversationToolPolicy?: GroupToolPolicyConfig;
   /** Group id for channel-level tool policy resolution. */
   groupId?: string | null;
   /** Group channel label (e.g. #general) for channel-level tool policy resolution. */
@@ -178,6 +192,8 @@ export type RunEmbeddedAgentParams = {
   skillWorkshopProposalEnv?: NodeJS.ProcessEnv;
   /** Shared completion latch for proposal-only review runs that checkpoint their batch. */
   skillWorkshopProposalReviewCompletion?: SkillWorkshopRunOptions["proposalReviewCompletion"];
+  /** Restrict Skill Workshop to one atomic collection reconciliation. */
+  skillWorkshopCollectionReconcile?: SkillWorkshopRunOptions["collectionReconcile"];
   /** Explicit system prompt mode override for trusted callers. */
   promptMode?: PromptMode;
   /** Keep the message tool available even when a narrow profile would omit it. */
@@ -260,6 +276,8 @@ export type RunEmbeddedAgentParams = {
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
+  /** Host-stamped exact-run capability for late Codex creator-authority capture. */
+  cronCreatorAuthorityCapability?: CronCreatorAuthorityCapability;
   /** Ephemeral reason fresh local-operator cron authority cannot survive this queued turn. */
   cronCreatorAuthorityUnavailableReason?: "queued-local-operator";
   /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */

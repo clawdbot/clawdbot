@@ -9,7 +9,7 @@ import {
   getSubagentRunByChildSessionKey,
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
-} from "../../agents/subagent-registry.test-helpers.js";
+} from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
 import {
   findTaskByRunId,
@@ -18,7 +18,8 @@ import {
 } from "../../tasks/task-registry.js";
 import { setDetachedTaskLifecycleRuntime } from "../../tasks/task-runtime.test-helpers.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
-import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
+import { dispatchAgentRunFromGateway } from "../agent-turn/agent-run-dispatch.js";
+import { createAgentTurnIo } from "../agent-turn/io.js";
 import { registerPluginSubagentRunFromGateway } from "./agent-task-tracking.js";
 import {
   applyGatewaySubagentRegistryTestDeps,
@@ -736,7 +737,7 @@ describe("gateway agent handler", () => {
       dedupeKeys: ["agent:agent-run-tool-use-deadline"],
       abortController,
       cleanupAbortController: vi.fn(),
-      respond,
+      io: createAgentTurnIo(respond),
       context,
       taskTrackingMode: "none",
       onSettled,
@@ -795,7 +796,7 @@ describe("gateway agent handler", () => {
       dedupeKeys: ["agent:agent-run-provider-timeout-result"],
       abortController: new AbortController(),
       cleanupAbortController: vi.fn(),
-      respond,
+      io: createAgentTurnIo(respond),
       context,
       taskTrackingMode: "none",
       onSettled,
@@ -849,7 +850,7 @@ describe("gateway agent handler", () => {
       dedupeKeys: ["agent:agent-run-resolved-error"],
       abortController: new AbortController(),
       cleanupAbortController: vi.fn(),
-      respond,
+      io: createAgentTurnIo(respond),
       context,
       taskTrackingMode: "none",
       onSettled,
@@ -952,7 +953,7 @@ describe("gateway agent handler", () => {
       dedupeKeys: [`agent:deadline-control-${stopReason}-${durationMs}`],
       abortController,
       cleanupAbortController: vi.fn(),
-      respond,
+      io: createAgentTurnIo(respond),
       context,
       taskTrackingMode: "none",
     });
@@ -1312,7 +1313,7 @@ describe("gateway agent handler", () => {
       dedupeKeys: [`agent:${runId}`],
       abortController: new AbortController(),
       cleanupAbortController: vi.fn(),
-      respond,
+      io: createAgentTurnIo(respond),
       context,
       taskTrackingMode: "none",
       onSettled,
@@ -1349,7 +1350,7 @@ describe("gateway agent handler", () => {
       dedupeKeys: ["agent:agent-run-provider-error-settlement"],
       abortController: new AbortController(),
       cleanupAbortController: vi.fn(),
-      respond,
+      io: createAgentTurnIo(respond),
       context,
       taskTrackingMode: "none",
       onSettled,
@@ -2568,6 +2569,38 @@ describe("gateway agent handler", () => {
 
         expect(createRunningTaskRunSpy).not.toHaveBeenCalled();
         expect(findTaskByRunId("acp-manual-spawn-confirmed")).toBeUndefined();
+      });
+    });
+
+    it("keeps a host-owned subagent run to its pre-registered task row", async () => {
+      await withTempDir({ prefix: "openclaw-gateway-subagent-owner-" }, async (root) => {
+        useTestStateDir(root);
+        resetAgentTaskRegistryForTests();
+        const childSessionKey = "agent:main:subagent:owned";
+        const runId = "host-owned-subagent-run";
+        mockAcpChildSessionEntry(childSessionKey);
+        getDetachedTaskLifecycleRuntime().createRunningTaskRun({
+          runtime: "subagent",
+          requesterSessionKey: "agent:main:main",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          childSessionKey,
+          runId,
+          task: "Run one owned subagent",
+          deliveryStatus: "pending",
+        });
+        const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
+
+        await invokeAgent(
+          { message: "host-owned child turn", sessionKey: childSessionKey, idempotencyKey: runId },
+          { reqId: runId, client: backendGatewayClient() },
+        );
+        await waitForAgentCommandCall();
+
+        expect(createRunningTaskRunSpy).not.toHaveBeenCalled();
+        expect(listTaskRecords().filter((task) => task.runId === runId)).toEqual([
+          expect.objectContaining({ runtime: "subagent", childSessionKey }),
+        ]);
       });
     });
 

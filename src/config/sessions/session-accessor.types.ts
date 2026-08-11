@@ -167,6 +167,10 @@ export interface SessionTranscriptReadTarget {
 export type SessionTranscriptWriteScope = Omit<SessionTranscriptAccessScope, "sessionId"> & {
   /** Optional for appenders that resolve it from the session entry. */
   sessionId?: string;
+  /** Optional run-owned fence checked inside the transcript write transaction. */
+  expectedWriterRunId?: string;
+  /** Optional lifecycle fence paired with sessionId for run-owned writes. */
+  expectedLifecycleRevision?: string;
 };
 
 export type SessionEntrySummary = {
@@ -391,6 +395,8 @@ export type SessionTranscriptTurnPersistOptions = {
   expectedSessionId?: string;
   /** Rejects the turn when lifecycle ownership changed without rotating the session id. */
   expectedLifecycleRevision?: string;
+  /** Rejects the turn when another admitted run owns transcript writes. */
+  expectedWriterRunId?: SessionTranscriptTurnExpectedState["expectedWriterRunId"];
   /** Rejects the turn unless the persisted row still has this exact lifecycle owner state. */
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   /** Lifecycle metadata committed when the guarded turn inserts or idempotently matches a message. */
@@ -822,12 +828,11 @@ export type SessionEntryCreateWithTranscriptOptions = {
   cwd?: string;
   /** SQLite commits are authoritative; retained for the shared caller contract. */
   requireWriteSuccess?: boolean;
+  /** Synchronous caller-authority guard checked by the storage owner before commits. */
+  commitGuard?: () => void;
 };
 
-export type SessionPatchProjectionSnapshot = {
-  /** Mutable-owner view exposed read-only so target lookup never rebuilds the whole store. */
-  store: Readonly<Record<string, SessionEntry>>;
-};
+export type SessionPatchProjectionSnapshot = { store: Readonly<Record<string, SessionEntry>> };
 
 export type SessionPatchProjectionTarget = {
   candidateKeys?: readonly string[];
@@ -837,7 +842,6 @@ export type SessionPatchProjectionTarget = {
 export type SessionPatchProjectionContext = SessionPatchProjectionSnapshot &
   SessionPatchProjectionTarget & {
     existingEntry?: SessionEntry;
-    /** Store-indexed label conflict check excluding this target's canonical aliases. */
     isLabelInUse: (label: string) => boolean;
   };
 

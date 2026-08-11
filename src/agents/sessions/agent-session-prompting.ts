@@ -338,6 +338,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
     queueIdentity?: string,
+    canInject?: () => boolean,
   ): Promise<void> {
     // Check for extension commands (cannot be queued)
     if (text.startsWith("/")) {
@@ -349,6 +350,11 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 
     const preparedMessage = await userTurnTranscriptRecorder?.resolveMessage();
+    // Transcript preparation may outlive the captured attempt. Recheck its owner
+    // fence immediately before enqueue so a successor cannot inherit this steer.
+    if (canInject && !canInject()) {
+      throw new Error("active session is finalizing");
+    }
     await this.queueSteer(
       expandedText,
       images,
@@ -395,13 +401,12 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     imageOrder?: PromptImageOrderEntry[],
     queueIdentity?: string,
   ): Promise<void> {
-    this.steeringMessages.push(text);
-    this.emitQueueUpdate();
     const runtimeMessage = this.createUserMessage(text, images);
     const promptMessage = media?.length
       ? attachRuntimePromptMediaFacts(runtimeMessage, media, imageOrder)
       : runtimeMessage;
     setSteeringMessageIdentity(promptMessage, queueIdentity);
+    this.trackQueuedUserMessage(promptMessage, "steering", text);
     this.agent.steer(
       transcriptContext
         ? attachRuntimeUserTurnTranscriptContext(promptMessage, transcriptContext)
@@ -413,13 +418,13 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
    * Internal: Queue a follow-up message (already expanded, no extension command check).
    */
   private async queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
-    this.followUpMessages.push(text);
-    this.emitQueueUpdate();
-    this.agent.followUp({
+    const message = {
       role: "user",
       content: this.createUserContent(text, images),
       timestamp: Date.now(),
-    });
+    } satisfies AgentMessage;
+    this.trackQueuedUserMessage(message, "followUp", text);
+    this.agent.followUp(message);
   }
 
   /**
@@ -532,8 +537,8 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
    * @returns Object with steering and followUp arrays
    */
   clearQueue(): { steering: string[]; followUp: string[] } {
-    const steering = [...this.steeringMessages];
-    const followUp = [...this.followUpMessages];
+    const steering = this.steeringMessages.map((entry) => entry.text);
+    const followUp = this.followUpMessages.map((entry) => entry.text);
     this.steeringMessages = [];
     this.followUpMessages = [];
     this.agent.clearAllQueues();
@@ -548,12 +553,12 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
 
   /** Get pending steering messages (read-only) */
   getSteeringMessages(): readonly string[] {
-    return this.steeringMessages;
+    return this.steeringMessages.map((entry) => entry.text);
   }
 
   /** Get pending follow-up messages (read-only) */
   getFollowUpMessages(): readonly string[] {
-    return this.followUpMessages;
+    return this.followUpMessages.map((entry) => entry.text);
   }
 
   get resourceLoader(): ResourceLoader {

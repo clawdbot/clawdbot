@@ -18,6 +18,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createGatewayResidentRegistry } from "./server-resident-registry.js";
 import "./server-startup-outcomes.test-support.js";
 
 const hoisted = vi.hoisted(() => {
@@ -29,7 +30,6 @@ const hoisted = vi.hoisted(() => {
   const startupHookEvent = { type: "gateway", action: "startup", sessionKey: "gateway:startup" };
   const createInternalHookEvent = vi.fn(() => startupHookEvent);
   const triggerInternalHook = vi.fn(async () => {});
-  const startGatewayMemoryBackend = vi.fn(async () => {});
   const scheduleGatewayUpdateCheck = vi.fn(() => () => {});
   const startGatewayTailscaleExposure = vi.fn(async () => null);
   const logGatewayStartup = vi.fn();
@@ -88,7 +88,6 @@ const hoisted = vi.hoisted(() => {
     startupHookEvent,
     createInternalHookEvent,
     triggerInternalHook,
-    startGatewayMemoryBackend,
     scheduleGatewayUpdateCheck,
     startGatewayTailscaleExposure,
     logGatewayStartup,
@@ -121,15 +120,15 @@ vi.mock("../agents/session-dirs.js", () => ({
   resolveAgentSessionDirs: vi.fn(async () => []),
 }));
 
-vi.mock("../agents/subagent-registry.js", () => ({
+vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({
   scheduleSubagentRegistrySweep: hoisted.scheduleSubagentRegistrySweep,
 }));
 
-vi.mock("../agents/main-session-restart-recovery-marking.js", () => ({
+vi.mock("../agents/main-session-recovery/main-session-restart-recovery-marking.js", () => ({
   markStartupOrphanedMainSessionsForRecovery: hoisted.markStartupOrphanedMainSessionsForRecovery,
 }));
 
-vi.mock("../agents/main-session-restart-recovery.js", () => ({
+vi.mock("../agents/main-session-recovery/main-session-restart-recovery.js", () => ({
   scheduleRestartAbortedMainSessionRecovery: hoisted.scheduleRestartAbortedMainSessionRecovery,
 }));
 
@@ -175,6 +174,10 @@ vi.mock("../acp/control-plane/manager.js", () => ({
   })),
 }));
 
+vi.mock("../acp/control-plane/manager.lifecycle.js", () => ({
+  disposeAcpSessionManagerInstance: vi.fn(async () => undefined),
+}));
+
 vi.mock("../acp/runtime/registry.js", () => ({
   getAcpRuntimeBackend: hoisted.getAcpRuntimeBackend,
 }));
@@ -182,10 +185,6 @@ vi.mock("../acp/runtime/registry.js", () => ({
 vi.mock("./server-restart-sentinel.js", () => ({
   refreshLatestUpdateRestartSentinel: hoisted.refreshLatestUpdateRestartSentinel,
   scheduleRestartSentinelWake: hoisted.scheduleRestartSentinelWake,
-}));
-
-vi.mock("./server-startup-memory.js", () => ({
-  startGatewayMemoryBackend: hoisted.startGatewayMemoryBackend,
 }));
 
 vi.mock("./server-startup-log.js", () => ({
@@ -406,6 +405,14 @@ function firstStartupLog(): { loadedPluginIds?: string[] } {
   return mockCallArg(hoisted.logGatewayStartup) as { loadedPluginIds?: string[] };
 }
 
+function createStartupMethodUnlocker(unavailableGatewayMethods: Set<string>): () => void {
+  return () => {
+    for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
+      unavailableGatewayMethods.delete(method);
+    }
+  };
+}
+
 function createStartupTraceRecorder() {
   const details: Array<{
     name: string;
@@ -456,7 +463,6 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.hasInternalHookListeners.mockReturnValue(false);
     hoisted.createInternalHookEvent.mockClear();
     hoisted.triggerInternalHook.mockClear();
-    hoisted.startGatewayMemoryBackend.mockClear();
     hoisted.scheduleGatewayUpdateCheck.mockClear();
     hoisted.startGatewayTailscaleExposure.mockClear();
     hoisted.logGatewayStartup.mockClear();
@@ -564,7 +570,7 @@ describe("startGatewayPostAttachRuntime", () => {
       ...createPostAttachParams(),
       getConfig: () => currentConfig,
       log,
-      unavailableGatewayMethods,
+      unlockStartupMethods: createStartupMethodUnlocker(unavailableGatewayMethods),
       onSidecarsReady,
     });
 
@@ -592,7 +598,6 @@ describe("startGatewayPostAttachRuntime", () => {
     });
     expect(hoisted.scheduleSubagentRegistrySweep).toHaveBeenCalledWith();
     expect(methodsAtRecoveryRegistration).toStrictEqual([["chat.history", "models.list"]]);
-    expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
   });
 
   it("fences startup recovery as soon as its gateway close prelude begins", async () => {
@@ -714,7 +719,6 @@ describe("startGatewayPostAttachRuntime", () => {
       "gateway startup outcomes: internal-hooks=skipped (hooks-disabled); " +
         "internal-startup-hook=skipped (hooks-disabled); " +
         "gateway-start-hooks=skipped (no-handlers-loaded); " +
-        "memory-qmd=skipped (not-configured); " +
         "gmail-watcher=skipped (hooks-disabled); gmail-model=skipped (not-configured)",
     );
     expect(events).toEqual([
@@ -1330,26 +1334,6 @@ describe("startGatewayPostAttachRuntime", () => {
     await runtimePromise;
 
     expect(events).toEqual(["startup-loaded-start", "startup-loaded-end", "sidecars"]);
-  });
-
-  it("keeps the qmd memory backend lazy by default", async () => {
-    const log = { info: vi.fn(), warn: vi.fn() };
-    await startGatewayPostAttachRuntime({
-      ...createPostAttachParams(),
-      log,
-      gatewayPluginConfigAtStart: {
-        hooks: { internal: { enabled: false } },
-        memory: { backend: "qmd" },
-      } as never,
-    });
-
-    expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
-    expect(log.info).toHaveBeenCalledWith(
-      expect.stringContaining("memory-qmd=skipped (startup-disabled)"),
-    );
-    expect(
-      testing.resolveGatewayMemoryStartupPolicy({ memory: { backend: "qmd" } } as never),
-    ).toEqual({ mode: "off" });
   });
 
   it("waits for sidecars by default before returning", async () => {
@@ -2609,7 +2593,7 @@ describe("startGatewayPostAttachRuntime", () => {
     await startGatewayPostAttachRuntime(
       {
         ...createPostAttachParams(),
-        unavailableGatewayMethods,
+        unlockStartupMethods: createStartupMethodUnlocker(unavailableGatewayMethods),
         sidecarStartup: "defer",
       },
       createPostAttachRuntimeDeps({ startGatewaySidecars: startGatewaySidecarsValue }),
@@ -2671,7 +2655,7 @@ describe("startGatewayPostAttachRuntime", () => {
     const runtimePromise = startGatewayPostAttachRuntime(
       {
         ...createPostAttachParams(),
-        unavailableGatewayMethods,
+        unlockStartupMethods: createStartupMethodUnlocker(unavailableGatewayMethods),
         sidecarStartup: "defer",
         startWorkerEnvironmentRuntime,
         onGatewayLifetimeSidecars,
@@ -3140,7 +3124,8 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
       info: vi.fn(),
       error: vi.fn(),
     },
-    unavailableGatewayMethods: new Set<string>(),
+    unlockStartupMethods: vi.fn(),
+    residentRegistry: createGatewayResidentRegistry(),
     providerAuthPrewarm: { enabled: false },
     ...overrides,
   };

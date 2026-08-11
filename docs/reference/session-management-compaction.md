@@ -76,11 +76,9 @@ Normal Gateway writes flow through the session accessor, which serializes per-ag
 
 OpenClaw no longer creates automatic `sessions.json.bak.*` rotation backups during Gateway writes. The current schema rejects the legacy `session.maintenance.rotateBytes` key, and `openclaw doctor --fix` removes it from older configs.
 
-Transcript mutations use the session write queue for the SQLite transcript target:
-
-Session write locks use fixed production defaults. The corresponding
-`OPENCLAW_SESSION_WRITE_LOCK_*` environment variables remain available for
-process-level diagnostics and emergency overrides.
+Transcript mutations pass through the session accessor and SQLite writer queue.
+Each mutation verifies the active run's durable writer claim inside its commit
+transaction, so a superseded run cannot write to the transcript.
 
 ### Downgrading After The SQLite Flip
 

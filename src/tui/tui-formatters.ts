@@ -7,7 +7,7 @@ import type { SessionGoal } from "../config/sessions/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
-import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
+import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
 import { formatTokenCount } from "../utils/usage-format.js";
 import type { SessionInfo } from "./tui-types.js";
@@ -545,7 +545,7 @@ export function extractContentFromMessage(message: unknown): string {
 }
 
 function extractAssistantRenderableContent(record: Record<string, unknown>): string {
-  const visible = sanitizeRenderableText(extractAssistantVisibleText(record) ?? "").trim();
+  const visible = sanitizeRenderableText(extractAssistantPhaseText(record) ?? "").trim();
   const pairingQr = extractPairingQrTerminalText(record);
   const content = [visible, pairingQr].filter(Boolean).join("\n\n").trim();
   if (content) {
@@ -680,7 +680,7 @@ export function extractTuiAbortedText(message: unknown, includeThinking: boolean
   return extractTextFromMessage(message, { includeThinking, includeAttachments: false });
 }
 
-export function isCommandMessage(message: unknown): boolean {
+export function isCommandMarkedMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
   }
@@ -748,7 +748,7 @@ export function formatContextUsageLine(params: {
   return `tokens ${totalLabel}/${ctxLabel}${extra ? ` (${extra})` : ""}`;
 }
 
-export function asString(value: unknown, fallback = ""): string {
+export function formatPrimitiveString(value: unknown, fallback = ""): string {
   if (typeof value === "string") {
     return value;
   }

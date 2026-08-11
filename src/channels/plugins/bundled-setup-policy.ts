@@ -1,17 +1,16 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { BundledChannelPluginMetadata } from "../../plugins/bundled-channel-runtime.js";
 import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import { passesManifestOwnerBasePolicy } from "../../plugins/manifest-owner-policy.js";
 
-export function shouldIncludeBundledChannelSetupFeatureForConfig(params: {
-  metadata: BundledChannelPluginMetadata;
+export function shouldIncludeChannelSetupFeatureForConfig(params: {
+  plugin: { id: string; channels?: readonly string[] };
   config?: OpenClawConfig;
 }): boolean {
   if (!params.config) {
     return true;
   }
-  const pluginId = params.metadata.manifest.id;
+  const pluginId = params.plugin.id;
   if (
     !passesManifestOwnerBasePolicy({
       plugin: { id: pluginId },
@@ -23,7 +22,7 @@ export function shouldIncludeBundledChannelSetupFeatureForConfig(params: {
   }
 
   let hasExplicitChannelDisable = false;
-  for (const channelId of params.metadata.manifest.channels ?? [pluginId]) {
+  for (const channelId of params.plugin.channels ?? [pluginId]) {
     const normalizedChannelId = normalizeOptionalLowercaseString(channelId);
     if (!normalizedChannelId) {
       continue;

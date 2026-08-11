@@ -27,7 +27,7 @@ const importSource = async (relativePath: string) =>
 const { upsertSessionEntry } = (await importSource(
   "src/config/sessions/session-accessor.js",
 )) as SessionAccessorModule;
-const { readSqliteSessionEntryCache } = (await importSource(
+const { readSessionEntryCache } = (await importSource(
   "src/config/sessions/session-accessor.sqlite-entry-cache.js",
 )) as EntryCacheModule;
 const {
@@ -87,7 +87,7 @@ try {
 
   for (const scope of readOnlyScopes) {
     const result = withOpenClawAgentDatabaseReadOnly((database) => {
-      const snapshot = readSqliteSessionEntryCache(database, { cache: true });
+      const snapshot = readSessionEntryCache(database, { cache: true });
       assert.deepEqual(snapshot.keys, [scope.sessionKey]);
       readOnlyConnectionRefs.push(new WeakRef(database.db));
       return snapshot.keys.length;
@@ -112,7 +112,7 @@ try {
       updatedAt: index + 1,
     });
     const database = openOpenClawAgentDatabase(scope);
-    const snapshot = readSqliteSessionEntryCache(database, { cache: true });
+    const snapshot = readSessionEntryCache(database, { cache: true });
     assert.deepEqual(snapshot.keys, [scope.sessionKey]);
     lruConnectionRefs.push(new WeakRef(database.db));
     lruPaths.push(database.path);
@@ -149,7 +149,7 @@ try {
         database: "real-node-sqlite",
         read_only_lifecycle: "withOpenClawAgentDatabaseReadOnly",
         writable_lifecycle: "openOpenClawAgentDatabase LRU",
-        cache: "readSqliteSessionEntryCache",
+        cache: "readSessionEntryCache",
       },
       read_only_entry_count: readOnlyEntryCount,
       read_only_payload_bytes_per_entry: readOnlyPayloadBytes,

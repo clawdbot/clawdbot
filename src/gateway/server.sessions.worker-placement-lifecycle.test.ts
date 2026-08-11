@@ -55,6 +55,8 @@ function placementRecord(
       lastTranscriptAckCursor: null,
       lastLiveEventAckCursor: null,
       recoveryError: null,
+      terminalReason: null,
+      terminalAtMs: null,
     };
   }
   return {
@@ -69,6 +71,8 @@ function placementRecord(
     lastTranscriptAckCursor: null,
     lastLiveEventAckCursor: null,
     recoveryError: null,
+    terminalReason: null,
+    terminalAtMs: null,
   };
 }
 
@@ -101,6 +105,8 @@ function terminalPlacementRecord(
       ...terminalMetadata,
       state,
       recoveryError: "worker recovery stopped",
+      terminalReason: "worker recovery stopped",
+      terminalAtMs: 2,
     };
   }
   return {
@@ -108,6 +114,8 @@ function terminalPlacementRecord(
     ...terminalMetadata,
     state,
     recoveryError: null,
+    terminalReason: null,
+    terminalAtMs: null,
   };
 }
 
@@ -319,6 +327,10 @@ test.each([
     name: "failed before acquiring a worker",
     state: "failed" as const,
     withoutEnvironment: true,
+  },
+  {
+    name: "failed after missing durable environment",
+    state: "failed" as const,
   },
 ])("sessions.delete retires a $name placement before deleting its session", async (testCase) => {
   await createSessionStoreDir();

@@ -67,10 +67,6 @@ export function withFullRuntimeReplyConfig<T extends OpenClawConfig>(config: T):
   return markReplyConfigRuntimeMode(config, "full");
 }
 
-export function withPublishedRuntimeReplyConfig<T extends OpenClawConfig>(config: T): T {
-  return markReplyConfigRuntimeMode(config, "published");
-}
-
 export function resolveGetReplyConfig(params: {
   getRuntimeConfig: () => OpenClawConfig;
   isFastTestEnv: boolean;
@@ -239,6 +235,7 @@ export function initFastReplySessionState(params: {
           spawnedWorkspaceDir: existingEntry.spawnedWorkspaceDir,
           spawnedCwd: existingEntry.spawnedCwd,
           parentSessionKey: existingEntry.parentSessionKey,
+          parentSessionId: existingEntry.parentSessionId,
           forkedFromParent: existingEntry.forkedFromParent,
           forkSource: existingEntry.forkSource,
           createdVia: existingEntry.createdVia,

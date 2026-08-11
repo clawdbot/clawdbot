@@ -335,7 +335,7 @@ function renderSkillsToolbar(
         })),
         onChange: (value) => props.onStatusFilterChange(value),
       })}
-      ${agents.length > 0
+      ${agents.length > 1
         ? html`
             <div class="plugins-field skills-toolbar__agent">
               <span>${t("usage.filters.agent")}</span>
@@ -355,7 +355,7 @@ function renderSkillsToolbar(
                 })}
                 .value=${selectedAgentId}
                 .accessibleLabel=${t("usage.filters.agent")}
-                .disabled=${skillControlsLocked(props) || !props.connected || agents.length < 2}
+                .disabled=${skillControlsLocked(props) || !props.connected}
                 .onSelect=${props.onAgentChange}
               ></openclaw-agent-select>
             </div>

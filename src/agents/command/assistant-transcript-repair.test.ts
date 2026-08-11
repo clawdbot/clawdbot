@@ -15,14 +15,14 @@ import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import type { loadManifestModelCatalog } from "../model-catalog.js";
 import type { persistCliTurnTranscript } from "./attempt-execution.js";
 import type { runAgentAttempt } from "./attempt-execution.runtime.js";
-import type { persistSessionEntry } from "./session-helpers.js";
+import type { persistAgentSession } from "./attempt-execution.shared.js";
 
 type ProviderModelNormalizationParams = { provider: string; context: { modelId: string } };
 type LoadManifestModelCatalogParams = Parameters<typeof loadManifestModelCatalog>[0];
 type RunAgentAttempt = typeof runAgentAttempt;
 type PersistCliTurnTranscript = typeof persistCliTurnTranscript;
 type AppendExactAssistantMessage = typeof appendExactAssistantMessageToSessionTranscript;
-type PersistSessionEntry = typeof persistSessionEntry;
+type PersistSessionEntry = typeof persistAgentSession;
 type CliCompactionParams = {
   sessionEntry?: SessionEntry;
   sessionKey: string;
@@ -205,13 +205,14 @@ vi.mock("../../config/sessions/transcript.runtime.js", async () => {
   };
 });
 
-vi.mock("./session-helpers.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./session-helpers.js")>("./session-helpers.js");
+vi.mock("./attempt-execution.shared.js", async () => {
+  const actual = await vi.importActual<typeof import("./attempt-execution.shared.js")>(
+    "./attempt-execution.shared.js",
+  );
   return {
     ...actual,
-    persistSessionEntry: (...args: Parameters<typeof actual.persistSessionEntry>) => {
-      state.persistSessionEntryReal = actual.persistSessionEntry;
+    persistAgentSession: (...args: Parameters<typeof actual.persistAgentSession>) => {
+      state.persistSessionEntryReal = actual.persistAgentSession;
       return state.persistSessionEntryMock(...args);
     },
   };
@@ -247,6 +248,15 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  state.runAgentAttemptMock.mockReset();
+  state.loadManifestModelCatalogMock.mockReset();
+  state.normalizeProviderModelIdWithRuntimeMock.mockReset();
+  state.runCliTurnCompactionLifecycleMock.mockReset();
+  state.deliverAgentCommandResultMock.mockReset();
+  state.emitAgentEventMock.mockReset();
+  state.persistCliTurnTranscriptMock.mockReset();
+  state.appendExactAssistantMessageMock.mockReset();
+  state.persistSessionEntryMock.mockReset();
   state.loadManifestModelCatalogMock.mockReturnValue([]);
   state.normalizeProviderModelIdWithRuntimeMock.mockImplementation(() => undefined);
   state.runCliTurnCompactionLifecycleMock.mockImplementation(
@@ -474,11 +484,24 @@ describe("assistant transcript repair", () => {
     );
     await agentCommand({ message: "user one", sessionId, sessionKey, cwd: state.workspaceDir });
 
-    state.persistSessionEntryMock.mockRejectedValueOnce(new Error("simulated cleanup failure"));
+    let cleanupFailureInjected = false;
+    state.persistSessionEntryMock.mockImplementation(async (...args) => {
+      const [params] = args;
+      if (
+        !cleanupFailureInjected &&
+        params.initialEntry.pendingTranscriptRepair?.length &&
+        params.entry.pendingTranscriptRepair === undefined
+      ) {
+        cleanupFailureInjected = true;
+        throw new Error("simulated cleanup failure");
+      }
+      return state.persistSessionEntryReal?.(...args);
+    });
     state.runAgentAttemptMock.mockResolvedValueOnce(
       makeResult({ sessionId, text: "assistant two", runner: "cli" }),
     );
     await agentCommand({ message: "user two", sessionId, sessionKey, cwd: state.workspaceDir });
+    expect(cleanupFailureInjected).toBe(true);
     expect(findStoredSessionEntry(sessionKey)?.pendingTranscriptRepair).toHaveLength(1);
 
     state.runAgentAttemptMock.mockResolvedValueOnce(

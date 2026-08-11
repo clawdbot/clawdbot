@@ -1,3 +1,4 @@
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 // Setup command registration: system-agent chat for configured systems, onboarding otherwise.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
@@ -25,9 +26,6 @@ import {
 
 const SYSTEM_AGENT_OPTION_NAMES = new Set(["message", "yes", "json"]);
 const BASELINE_OPTION_NAMES = new Set(["baseline", "workspace", "json"]);
-
-const optionalString = (value: unknown): string | undefined =>
-  typeof value === "string" ? value : undefined;
 
 type SetupRoute = "onboarding" | "system-agent";
 
@@ -104,7 +102,7 @@ async function runSystemAgentEntry(
     await import("../../commands/system-agent-with-inference.js");
   await runSystemAgentWithInference(
     {
-      message: optionalString(options.message),
+      message: readStringValue(options.message),
       yes: Boolean(options.yes),
       json: Boolean(options.json),
     },
@@ -126,7 +124,7 @@ async function runOnboardingEntry(
     }
     const { setupCommand } = await import("../../commands/setup.js");
     await setupCommand(
-      { workspace: optionalString(options.workspace), json: Boolean(options.json) },
+      { workspace: readStringValue(options.workspace), json: Boolean(options.json) },
       runtime,
     );
     return;
@@ -140,7 +138,7 @@ async function runOnboardingEntry(
   const { setupWizardCommand } = await import("../../commands/onboard.js");
   await setupWizardCommand(
     {
-      workspace: optionalString(options.workspace),
+      workspace: readStringValue(options.workspace),
       nonInteractive: Boolean(options.nonInteractive),
       acceptRisk: Boolean(options.acceptRisk),
       classic: Boolean(options.classic),
@@ -153,9 +151,9 @@ async function runOnboardingEntry(
       gatewayPort,
       gatewayBind: options.gatewayBind as GatewayBind | undefined,
       gatewayAuth: options.gatewayAuth as GatewayAuthChoice | undefined,
-      gatewayToken: optionalString(options.gatewayToken),
-      gatewayTokenRefEnv: optionalString(options.gatewayTokenRefEnv),
-      gatewayPassword: optionalString(options.gatewayPassword),
+      gatewayToken: readStringValue(options.gatewayToken),
+      gatewayTokenRefEnv: readStringValue(options.gatewayTokenRefEnv),
+      gatewayPassword: readStringValue(options.gatewayPassword),
       tailscale: options.tailscale as TailscaleMode | undefined,
       tailscaleResetOnExit,
       installDaemon,
@@ -169,11 +167,11 @@ async function runOnboardingEntry(
       suppressGatewayTokenOutput: Boolean(options.suppressGatewayTokenOutput),
       skipHooks: Boolean(options.skipHooks),
       nodeManager: options.nodeManager as NodeManagerChoice | undefined,
-      importFrom: optionalString(options.importFrom),
-      importSource: optionalString(options.importSource),
+      importFrom: readStringValue(options.importFrom),
+      importSource: readStringValue(options.importSource),
       importSecrets: Boolean(options.importSecrets),
-      remoteUrl: optionalString(options.remoteUrl),
-      remoteToken: optionalString(options.remoteToken),
+      remoteUrl: readStringValue(options.remoteUrl),
+      remoteToken: readStringValue(options.remoteToken),
       json: Boolean(options.json),
     },
     runtime,

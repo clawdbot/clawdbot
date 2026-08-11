@@ -1,11 +1,11 @@
 // Qqbot plugin module implements inbound attachments behavior.
 
 import { normalizeMimeType } from "openclaw/plugin-sdk/media-mime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { AudioConvertPort } from "../adapter/audio.port.js";
 import { downloadFile } from "../utils/file-utils.js";
 import { getQQBotMediaDir } from "../utils/platform.js";
-import { normalizeOptionalString } from "../utils/string-normalize.js";
 import { transcribeAudio, resolveSTTConfig } from "../utils/stt.js";
 
 interface RawAttachment {

@@ -63,7 +63,7 @@ describe("UpdateCampaignController", () => {
     expect(apply).toHaveBeenCalledWith({ forced: false });
   });
 
-  it("resets the countdown when work appears, then forces at the hard deadline", async () => {
+  it("keeps an announced countdown stable when active work begins", async () => {
     const controller = createController();
     let busy = 0;
     const apply = vi.fn(async () => "applied" as const);
@@ -74,14 +74,14 @@ describe("UpdateCampaignController", () => {
       apply,
       onChange: vi.fn(),
     });
+    const applyAtMs = controller.getState()?.applyAtMs;
     busy = 1;
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(controller.getState()).toMatchObject({ state: "waiting-for-idle" });
-    expect(controller.getState()?.applyAtMs).toBeUndefined();
+    expect(controller.getState()).toMatchObject({ state: "countdown", applyAtMs });
 
-    await vi.advanceTimersByTimeAsync(895_000);
+    await vi.advanceTimersByTimeAsync(55_000);
     expect(controller.getState()?.state).toBe("applying");
-    expect(apply).toHaveBeenCalledWith({ forced: true });
+    expect(apply).toHaveBeenCalledWith({ forced: false });
   });
 
   it("starts a fresh campaign for a newer target and clears availability", () => {

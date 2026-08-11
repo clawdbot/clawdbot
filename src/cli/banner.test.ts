@@ -128,32 +128,33 @@ describe("emitCliBanner", () => {
     expect(written).toContain("( o.o )");
   });
 
-  it("keeps lobster day out of plain terminals and pinned tagline modes", async () => {
-    const { emitCliBanner, testing } = await importFreshBannerModule();
+  it.each([
+    { label: "plain terminals", mode: "random" as const, richTty: false },
+    { label: "pinned tagline modes", mode: "off" as const, richTty: true },
+  ])("keeps lobster day out of $label", async ({ mode, richTty }) => {
+    const { emitCliBanner } = await importFreshBannerModule();
     setStdoutIsTty(true);
     const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    const base = {
+
+    emitCliBanner("2026.3.7", {
       argv: ["node", "openclaw"],
       commit: "abc1234",
       env: { LANG: "en_US.UTF-8" },
       isTty: true,
+      mode,
       now: () => new Date(2026, 1, 26),
-      platform: "darwin" as const,
-    };
-
-    emitCliBanner("2026.3.7", { ...base, mode: "random", richTty: false });
-    testing.resetBannerEmittedForTests();
-    emitCliBanner("2026.3.7", { ...base, mode: "off", richTty: true });
+      platform: "darwin",
+      richTty,
+    });
 
     const written = writeSpy.mock.calls.map(([chunk]) => String(chunk)).join("");
     expect(written).not.toContain("( o.o )");
   });
 
-  it("can reset banner emission state for same-module tests", async () => {
-    const { emitCliBanner, hasEmittedCliBanner, testing } = await importFreshBannerModule();
+  it("emits only once per module instance", async () => {
+    const { emitCliBanner, hasEmittedCliBanner } = await importFreshBannerModule();
     setStdoutIsTty(true);
     const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-
     const options = {
       argv: ["node", "openclaw"],
       commit: "abc1234",
@@ -165,12 +166,9 @@ describe("emitCliBanner", () => {
     };
 
     emitCliBanner("2026.3.7", options);
-    expect(hasEmittedCliBanner()).toBe(true);
-
-    testing.resetBannerEmittedForTests();
-    expect(hasEmittedCliBanner()).toBe(false);
-
     emitCliBanner("2026.3.7", options);
-    expect(writeSpy).toHaveBeenCalledTimes(2);
+
+    expect(hasEmittedCliBanner()).toBe(true);
+    expect(writeSpy).toHaveBeenCalledTimes(1);
   });
 });

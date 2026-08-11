@@ -7,6 +7,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
+import { wrapRunWithTestAdmission } from "./admitted-run-context.test-support.js";
 import {
   resolveInlineProviderApiKeyUsageId,
   type AuthProfileFailureReason,
@@ -93,7 +94,11 @@ const installRunEmbeddedMocks = () => {
   });
 };
 
-let runEmbeddedAgent: typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
+type ProductionRunEmbeddedAgent = typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
+type TestRunEmbeddedAgent = (
+  params: Omit<Parameters<ProductionRunEmbeddedAgent>[0], "admittedRunContext">,
+) => ReturnType<ProductionRunEmbeddedAgent>;
+let runEmbeddedAgent: TestRunEmbeddedAgent;
 let createDiagnosticLogRecordCaptureFn: typeof import("../logging/test-helpers/diagnostic-log-capture.js").createDiagnosticLogRecordCapture;
 let cleanupLogCapture: (() => void) | undefined;
 let resetLoggerFn: typeof import("../logging/logger.js").resetLogger;
@@ -103,7 +108,9 @@ const originalFetch = globalThis.fetch;
 beforeAll(async () => {
   vi.resetModules();
   installRunEmbeddedMocks();
-  ({ runEmbeddedAgent } = await import("./embedded-agent-runner/run.js"));
+  runEmbeddedAgent = wrapRunWithTestAdmission(
+    (await import("./embedded-agent-runner/run.js")).runEmbeddedAgent,
+  );
   ({ createDiagnosticLogRecordCapture: createDiagnosticLogRecordCaptureFn } =
     await import("../logging/test-helpers/diagnostic-log-capture.js"));
   ({ resetLogger: resetLoggerFn, setLoggerOverride: setLoggerOverrideFn } =

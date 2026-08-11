@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 // Coverage for model-call diagnostic events around attempt stream functions.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
@@ -109,10 +110,6 @@ async function drain(stream: AsyncIterable<unknown>): Promise<void> {
   for await (const _ of stream) {
     // drain
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");

@@ -10,7 +10,7 @@ import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/lo
 import type { SessionRow } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { PresenceEntry as ProtocolPresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
-import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-icon.js";
+import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { SessionGoal } from "../../../src/config/sessions/types.js";
 import type { CronJobBase } from "../../../src/cron/types-shared.js";
 import type { CronPayload as CoreCronPayload } from "../../../src/cron/types.js";
@@ -696,11 +696,12 @@ export type CronRunLogEntry = {
 
 export type CronJobsListResult = {
   jobs: CronJob[];
-  total?: number;
-  limit?: number;
-  offset?: number;
-  nextOffset?: number | null;
-  hasMore?: boolean;
+  snapshotRevision: string;
+  total: number;
+  limit: number;
+  offset: number;
+  nextOffset: number | null;
+  hasMore: boolean;
 };
 
 export type CronRunsResult = {

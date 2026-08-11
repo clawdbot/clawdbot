@@ -21,6 +21,7 @@ import {
   moveVoice,
   stripRetiredTuningKnobs,
 } from "./legacy-config-migrations.runtime.retired-media.js";
+import { LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD } from "./legacy-config-migrations.runtime.retired-memory-qmd.js";
 import { migrateTierEvalTranche } from "./legacy-config-migrations.runtime.tier-eval.js";
 import { visitChannelEntries } from "./legacy-config-record-shared.js";
 
@@ -222,8 +223,29 @@ function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string
 
 function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]): void {
   const defaults = getRecord(getRecord(raw.agents)?.defaults);
+  if (defaults && Object.hasOwn(defaults, "promptOverlays")) {
+    const personality = getRecord(getRecord(defaults.promptOverlays)?.gpt5)?.personality;
+    if (personality !== undefined) {
+      const openaiConfig = ensureRecord(
+        ensureRecord(ensureRecord(ensureRecord(raw, "plugins"), "entries"), "openai"),
+        "config",
+      );
+      if (openaiConfig.personality === undefined) {
+        openaiConfig.personality = personality;
+        changes.push(
+          "Moved agents.defaults.promptOverlays.gpt5.personality → plugins.entries.openai.config.personality.",
+        );
+      } else {
+        changes.push(
+          "Removed agents.defaults.promptOverlays.gpt5.personality (plugins.entries.openai.config.personality already set).",
+        );
+      }
+    } else {
+      changes.push("Removed agents.defaults.promptOverlays; built-in behavior now applies.");
+    }
+    delete defaults.promptOverlays;
+  }
   for (const key of [
-    "promptOverlays",
     "envelopeTimestamp",
     "envelopeElapsed",
     "envelopeTimezone",
@@ -419,6 +441,7 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
 }
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec[] = [
+  LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD,
   defineLegacyConfigMigration({
     id: "runtime.retired-internal-hook-handlers",
     describe: "Remove retired internal hook handler registrations",

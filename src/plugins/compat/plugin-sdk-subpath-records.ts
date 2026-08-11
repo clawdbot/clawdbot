@@ -1,6 +1,6 @@
 import type { PluginCompatRecord } from "./types.js";
 
-type SeedFields = "code" | "owner" | "removeAfter" | "replacement";
+type SeedFields = "code" | "owner" | "removeAfter" | "removalGate" | "replacement";
 type DeprecatedPluginSdkSubpathSeed = Pick<PluginCompatRecord, SeedFields> &
   Record<"subpath", string>;
 
@@ -24,7 +24,7 @@ const DEPRECATED_PLUGIN_SDK_SUBPATH_SEEDS = [
     code: "plugin-sdk-inbound-reply-dispatch-subpath",
     subpath: "inbound-reply-dispatch",
     owner: "channel",
-    removeAfter: "2026-08-15",
+    removalGate: "next-plugin-sdk-major",
     replacement: "`openclaw/plugin-sdk/channel-inbound` and `openclaw/plugin-sdk/channel-outbound`",
   },
   {
@@ -110,18 +110,19 @@ const DEPRECATED_PLUGIN_SDK_SUBPATH_SEEDS = [
 ] as const satisfies readonly DeprecatedPluginSdkSubpathSeed[];
 
 export const DEPRECATED_PLUGIN_SDK_SUBPATH_RECORDS = DEPRECATED_PLUGIN_SDK_SUBPATH_SEEDS.map(
-  ({ code, subpath, owner, removeAfter, replacement }) =>
+  (seed) =>
     ({
-      code,
+      code: seed.code,
       status: "deprecated" as const,
-      owner,
+      owner: seed.owner,
       introduced: "2026-07-06",
       deprecated: "2026-07-06",
       warningStarts: "2026-07-06",
-      removeAfter,
-      replacement,
+      removeAfter: "removeAfter" in seed ? seed.removeAfter : undefined,
+      removalGate: "removalGate" in seed ? seed.removalGate : undefined,
+      replacement: seed.replacement,
       docsPath: "/plugins/sdk-migration",
-      surfaces: [`openclaw/plugin-sdk/${subpath}`],
+      surfaces: [`openclaw/plugin-sdk/${seed.subpath}`],
       diagnostics: [
         "repository deprecated API usage guard for core and bundled plugins; no external runtime import warning",
       ],

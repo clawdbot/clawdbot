@@ -72,6 +72,7 @@ function parseLease(raw, expectedNonce, options = {}) {
     !lease ||
     lease.version !== 1 ||
     lease.nonce !== expectedNonce ||
+    (lease.sharedHost !== undefined && typeof lease.sharedHost !== "boolean") ||
     !Array.isArray(lease.processes) ||
     lease.processes.length > 4096 ||
     lease.processes.some((entry) => !validProcessReference(entry)) ||
@@ -114,6 +115,9 @@ const nonce = crypto.randomBytes(16).toString("hex");
 const leasePath = path.join(leaseDirectory, workspaceKey + "." + nonce + ".json");
 const watchdogTimeoutMs = Number(process.argv[2] || 12 * 60 * 1000);
 if (!Number.isSafeInteger(watchdogTimeoutMs) || watchdogTimeoutMs < 1) throw new Error("invalid watchdog timeout");
+const isolationMode = process.argv[3] || "dedicated";
+if (isolationMode !== "dedicated" && isolationMode !== "shared-host") throw new Error("invalid workspace quiescence isolation mode");
+const sharedHost = isolationMode === "shared-host";
 ${REMOTE_QUIESCENCE_PS_JS}
 ${REMOTE_QUIESCENCE_LEASE_JS}
 const frozen = new Map();
@@ -122,6 +126,7 @@ function writeLease(expiresAtMs = Date.now() + watchdogTimeoutMs) {
   persistLease(leasePath, {
     version: 1,
     nonce,
+    sharedHost,
     processes: [...frozen].map(([pid, start]) => ({ pid, start })),
     watchdog: watchdogReference,
     expiresAtMs,
@@ -179,7 +184,14 @@ watchdogReference = { pid: watchdog.pid, start: watchdogStart };
 writeLease();
 let quietScans = 0;
 try {
-  for (let attempt = 0; attempt < 250 && quietScans < 3; attempt += 1) {
+  if (sharedHost) {
+    // The worker has already published its terminal result. Manifest stability fences around
+    // transfer, apply, renewal, and publication reject later writes; only the uid-wide SIGSTOP
+    // sweep is skipped because this provider explicitly declared processes the lease does not own.
+    process.stderr.write("workspace quiescence: shared host declared; skipping process freeze sweep\n");
+    quietScans = 3;
+  }
+  for (let attempt = 0; !sharedHost && attempt < 250 && quietScans < 3; attempt += 1) {
     const candidates = quiescenceCandidates(
       processes(),
       uid,
@@ -286,11 +298,14 @@ const root = fs.realpathSync(process.argv[1]);
 const nonce = process.argv[2];
 const timeoutMs = Number(process.argv[3] || 12 * 60 * 1000);
 const validationMode = process.argv[4] || "final";
+const isolationMode = process.argv[5] || "dedicated";
 if (typeof process.getuid !== "function") throw new Error("workspace quiescence requires POSIX");
 const uid = process.getuid();
 if (!/^[a-f0-9]{32}$/.test(nonce || "")) throw new Error("invalid workspace quiescence nonce");
 if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 10 * 1000) throw new Error("invalid watchdog timeout");
 if (validationMode !== "heartbeat" && validationMode !== "final") throw new Error("invalid workspace quiescence validation mode");
+if (isolationMode !== "dedicated" && isolationMode !== "shared-host") throw new Error("invalid workspace quiescence isolation mode");
+const sharedHost = isolationMode === "shared-host";
 const leasePath = path.join(os.homedir(), ".openclaw-worker", "quiescence", crypto.createHash("sha256").update(root).digest("hex") + "." + nonce + ".json");
 ${REMOTE_QUIESCENCE_PS_JS}
 ${REMOTE_QUIESCENCE_LEASE_JS}
@@ -299,6 +314,7 @@ const input = parseLease(fs.readFileSync(leasePath, "utf8"), nonce, {
   minimumRemainingMs: 5000,
   errorMessage: "workspace quiescence lease is no longer active",
 });
+if ((input.sharedHost === true) !== sharedHost) throw new Error("workspace quiescence isolation mode changed");
 function writeLease(processes, expiresAtMs) {
   // renewalQueue is the nonce's only writer; the watchdog only reads this lease.
   persistLease(leasePath, { ...input, processes, expiresAtMs }, (current) => {
@@ -328,7 +344,7 @@ for (const entry of input.processes) {
   if (status.state && !status.state.startsWith("T")) throw new Error("workspace quiescence process resumed unexpectedly");
 }
 refreshLease(input.processes);
-if (validationMode === "final") {
+if (validationMode === "final" && !sharedHost) {
   const frozen = new Map(input.processes.map((entry) => [entry.pid, entry.start]));
   let quietScans = 0;
   const sleeper = new Int32Array(new SharedArrayBuffer(4));

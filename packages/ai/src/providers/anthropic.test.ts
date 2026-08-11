@@ -1782,10 +1782,54 @@ describe("Anthropic provider", () => {
     expect(result.errorMessage).toBe('{"code":"ECONNRESET","self":"[Circular]"}');
   });
 
+  it("terminates the stream when provider terminal accessors throw", async () => {
+    const hostile = Object.create(null) as Record<string, unknown>;
+    Object.defineProperties(hostile, {
+      code: { enumerable: true, value: "ECONNRESET" },
+      safe: { enumerable: true, value: "socket failed" },
+      status: {
+        enumerable: true,
+        get: () => {
+          throw new Error("status getter");
+        },
+      },
+      body: {
+        enumerable: true,
+        get: () => {
+          throw new Error("body getter");
+        },
+      },
+      message: {
+        enumerable: true,
+        get: () => {
+          throw new Error("message getter");
+        },
+      },
+    });
+    const asResponse = vi.fn().mockRejectedValue(hostile);
+    const client = { messages: { create: vi.fn(() => ({ asResponse })) } };
+    const stream = streamAnthropic(
+      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    );
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(eventTypes).toEqual(["error"]);
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorCode: "ECONNRESET",
+    });
+    expect(result.errorMessage).toContain("socket failed");
+  });
+
   it("keeps the message for Anthropic errors that carry no HTTP body", async () => {
-    // formatProviderError only substitutes status+body when a body is present, so
-    // ordinary Error rejections must still surface error.message — retry
-    // classification in src/llm/utils/retry.ts parses this string.
+    // Ordinary Error rejections with no body must still surface error.message;
+    // retry classification in src/llm/utils/retry.ts parses this string.
     const asResponse = vi
       .fn()
       .mockRejectedValue(Object.assign(new Error("Overloaded"), { status: 529 }));
@@ -1806,7 +1850,7 @@ describe("Anthropic provider", () => {
     const result = await stream.result();
 
     expect(eventTypes).toEqual(["error"]);
-    expect(result.errorMessage).toBe("Overloaded");
+    expect(result.errorMessage).toBe("529: Overloaded");
   });
 
   it("strips Fable thinking when replay targets Anthropic Vertex", async () => {

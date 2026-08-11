@@ -1,4 +1,5 @@
 import type { UpdateChannel } from "../../infra/update-channels.js";
+import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
 import {
   createGlobalInstallEnv,
   globalInstallArgs,
@@ -127,7 +128,7 @@ export async function runGitUpdate(params: {
   showProgress: boolean;
   opts: UpdateCommandOptions;
   stop: () => void;
-  devTargetRef?: string;
+  devTarget?: DevUpdateTarget;
   beforeGitMutation?: BeforeGitMutation;
   allowGatewayServiceRepair: boolean;
   allowGatewayActivation: boolean;
@@ -167,7 +168,7 @@ export async function runGitUpdate(params: {
     progress: params.progress,
     channel: params.channel,
     tag: params.tag,
-    devTargetRef: params.devTargetRef,
+    devTarget: params.devTarget,
     deferConfiguredPluginInstallRepair: true,
     allowGatewayServiceRepair: params.allowGatewayServiceRepair,
     allowGatewayActivation: params.allowGatewayActivation,

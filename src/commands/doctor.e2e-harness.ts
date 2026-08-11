@@ -303,10 +303,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sourcePath: "/tmp/state/tui/last-session.json",
       hasLegacy: false,
     },
-    commitments: {
-      sourcePath: "/tmp/state/commitments/commitments.json",
-      hasLegacy: false,
-    },
     auditLogs: {
       sources: [],
       hasLegacy: false,
@@ -506,6 +502,10 @@ vi.mock("./doctor/shared/active-tool-schema-warnings.js", () => ({
 vi.mock("./doctor-browser.js", () => ({
   detectLegacyClawdBrowserProfileResidue: vi.fn().mockResolvedValue(null),
   maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn().mockResolvedValue({
+    changes: [],
+    warnings: [],
+  }),
+  maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
     changes: [],
     warnings: [],
   }),

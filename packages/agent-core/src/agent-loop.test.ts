@@ -2,6 +2,7 @@
 import { EventStream } from "@openclaw/ai/event-stream";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { agentLoop, agentLoopContinue, runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
 import { Agent } from "./agent.js";
 import { TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE, TranscriptNotContinuableError } from "./errors.js";
@@ -1025,14 +1026,6 @@ describe("agentLoop tool termination", () => {
     };
   }
 
-  function createDeferred() {
-    let resolve!: () => void;
-    const promise = new Promise<void>((done) => {
-      resolve = done;
-    });
-    return { promise, resolve };
-  }
-
   function createTurnSequenceStream(
     turns: AssistantMessage["content"][],
     requestMessages: Message[][],
@@ -1150,6 +1143,12 @@ describe("agentLoop tool termination", () => {
     expect(requestMessages[1]?.at(-1)).toBe(firstSteer);
     expect(requestMessages[1]).not.toContain(secondSteer);
     expect(requestMessages[2]?.at(-1)).toBe(secondSteer);
+    const queuedMessageStarts = events.filter(
+      (event): event is Extract<AgentEvent, { type: "message_start" }> =>
+        event.type === "message_start" && event.message.role === "user",
+    );
+    expect(queuedMessageStarts.at(-2)?.message).toBe(firstSteer);
+    expect(queuedMessageStarts.at(-1)?.message).toBe(secondSteer);
     expect(
       requestMessages[1]?.find((message) => message.role === "toolResult" && message.isError),
     ).not.toHaveProperty("__openclaw");

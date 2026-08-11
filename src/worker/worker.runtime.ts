@@ -13,12 +13,17 @@ import {
 // gateway worker turn launcher.
 export type WorkerRuntimeResult =
   | { status: "completed"; transcriptLeafId: string | null; transcriptNextSeq: number }
-  | { status: "failed"; reason: "turn-failed" }
+  | {
+      status: "failed";
+      reason: "turn-failed";
+      transcriptLeafId: string | null;
+      transcriptNextSeq: number;
+    }
   | { status: "fenced"; reason: "credential-replaced" | "owner-epoch-mismatch" };
 
 const WORKER_REMOTE_CANCEL_GRACE_MS = 1_000;
 
-function toError(value: unknown, fallback: string): Error {
+function toWorkerRuntimeError(value: unknown, fallback: string): Error {
   return value instanceof Error ? value : new Error(fallback, { cause: value });
 }
 
@@ -55,7 +60,7 @@ export async function runWorkerDescriptor(
 
   const abortController = new AbortController();
   let turnStarted = false;
-  let terminalLiveAcked = false;
+  let resultFenceAcked = false;
   let forcedStopTimer: NodeJS.Timeout | undefined;
   const connection = createWorkerConnection({
     socketPath: descriptor.socketPath,
@@ -119,6 +124,9 @@ export async function runWorkerDescriptor(
     try {
       turnStarted = true;
       await runWorkerEmbeddedTurn({
+        agentId: descriptor.assignment.agentId,
+        operationalRunInstance: descriptor.assignment.operationalRunInstance,
+        agentRuntimeIdentityToken: descriptor.assignment.agentRuntimeIdentityToken,
         cwd: workspaceDir,
         stateDir,
         sessionId: descriptor.admission.sessionId,
@@ -133,6 +141,7 @@ export async function runWorkerDescriptor(
           : { systemPrompt: descriptor.assignment.systemPrompt }),
         inferenceOptions: descriptor.assignment.inferenceOptions,
         allowedToolNames: descriptor.assignment.toolAuthority.allowedToolNames,
+        ...(descriptor.assignment.browser ? { browser: descriptor.assignment.browser } : {}),
         inference: { stream },
         transcript: {
           commit: async (messages) => {
@@ -144,16 +153,19 @@ export async function runWorkerDescriptor(
             await live.emit(descriptor.assignment.runId, event);
             if (
               event.kind === "lifecycle" &&
-              (event.payload.phase === "end" || event.payload.phase === "error")
+              (event.payload.phase === "finishing" ||
+                event.payload.phase === "end" ||
+                event.payload.phase === "error")
             ) {
-              terminalLiveAcked = true;
+              resultFenceAcked = true;
             }
           },
         },
+        sessions: connection,
         signal: abortController.signal,
       });
       if (options.signal?.aborted) {
-        throw toError(options.signal.reason, "worker interrupted");
+        throw toWorkerRuntimeError(options.signal.reason, "worker interrupted");
       }
     } catch (error) {
       const fenced = fencedResult(connection.state);
@@ -161,12 +173,17 @@ export async function runWorkerDescriptor(
         return fenced;
       }
       if (options.signal?.aborted) {
-        throw toError(options.signal.reason, "worker interrupted");
+        throw toWorkerRuntimeError(options.signal.reason, "worker interrupted");
       }
-      if (terminalLiveAcked && connection.state.kind === "ready") {
-        return { status: "failed", reason: "turn-failed" };
+      if (resultFenceAcked && connection.state.kind === "ready") {
+        return {
+          status: "failed",
+          reason: "turn-failed",
+          transcriptLeafId: transcript.baseLeafId,
+          transcriptNextSeq: transcript.nextSeq,
+        };
       }
-      throw toError(error, "worker session failed");
+      throw toWorkerRuntimeError(error, "worker session failed");
     }
     const fenced = fencedResult(connection.state);
     if (fenced) {

@@ -30,6 +30,7 @@ import { normalizePluginConfigId } from "../plugins/plugin-config-trust.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
+import { listAuthProfileStoreAgentDirs } from "./auth-store-paths.js";
 import { createSecretsConfigIO } from "./config-io.js";
 import { getSkippedExecRefStaticError } from "./exec-resolution-policy.js";
 import { deletePathStrict, getPath, setPathCreateStrict } from "./path-utils.js";
@@ -44,11 +45,7 @@ import { resolveSecretRefValue } from "./resolve.js";
 import { prepareSecretsRuntimeSnapshot } from "./runtime.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { isNonEmptyString, isRecord, writeTextFileAtomic } from "./shared.js";
-import {
-  listAuthProfileStoreAgentDirs,
-  listSecretsDotEnvPaths,
-  parseEnvAssignmentValue,
-} from "./storage-scan.js";
+import { listSecretsDotEnvPaths, parseEnvAssignmentValue } from "./storage-scan.js";
 
 type FileSnapshot = {
   existed: boolean;
@@ -989,5 +986,4 @@ export const testing = {
     return projected.nextConfig;
   },
 };
-export { testing as __testing };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

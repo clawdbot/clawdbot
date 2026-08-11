@@ -4,6 +4,7 @@ import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { applyAccountNameToChannelSection } from "openclaw/plugin-sdk/core";
 import type { ChannelSetupInput } from "openclaw/plugin-sdk/setup";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   describeAccount as engineDescribeAccount,
   formatAllowFrom as engineFormatAllowFrom,
@@ -13,7 +14,6 @@ import {
   applySetupAccountConfig as engineApplySetupAccountConfig,
   validateSetupInput as engineValidateSetupInput,
 } from "../engine/config/setup-logic.js";
-import { normalizeLowercaseStringOrEmpty } from "../engine/utils/string-normalize.js";
 import type { ResolvedQQBotAccount } from "../types.js";
 import {
   listQQBotAccountIds,

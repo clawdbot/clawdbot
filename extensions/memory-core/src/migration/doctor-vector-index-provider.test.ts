@@ -64,12 +64,6 @@ describe("memory vector index provider doctor diagnostic", () => {
     await expect(
       vectorIndexProviderDiagnostic.detectLegacyState({
         ...params,
-        config: { ...config, memory: { backend: "qmd" } },
-      }),
-    ).resolves.toBeNull();
-    await expect(
-      vectorIndexProviderDiagnostic.detectLegacyState({
-        ...params,
         config: {
           ...config,
           memory: {

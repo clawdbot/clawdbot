@@ -16,6 +16,7 @@ import {
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
+import { registerPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot.runtime.js";
 import type {
   LoadPluginMetadataSnapshotParams,
   PluginMetadataSnapshot,
@@ -425,3 +426,8 @@ function loadPluginMetadataSnapshotImpl(
     discovery: registryResult.discovery,
   };
 }
+
+// Light bridges (plugin-metadata-snapshot.runtime.ts) serve loads through this
+// instance whenever the metadata system is loaded; the require fallback only
+// covers cold processes.
+registerPluginMetadataSnapshotReaders({ resolvePluginMetadataSnapshot });

@@ -283,6 +283,18 @@ Throws, timeouts, exhausted tool budgets, invalid results, and `nextCheck` witho
 
 ## Execution styles
 
+### Codex apps in scheduled automations
+
+Codex-created automations can retain the app IDs and permission ceiling
+available to the authenticated creator thread. At execution, OpenClaw requires
+the same prepared Codex profile and account, then narrows the stored cap against
+current app policy. Revoked apps, account/runtime changes, and interactive
+approval requirements fail closed with a recovery message; they never fall
+back to broader or different credentials. Older jobs without a captured app
+envelope continue their ordinary non-app behavior; recreate or reauthorize one
+only when it needs Codex app access. See
+[Native Codex plugins](/plugins/codex-native-plugins#scheduled-automations).
+
 | Style           | `--session` value   | Runs in                   | Best for                        |
 | --------------- | ------------------- | ------------------------- | ------------------------------- |
 | Main session    | `main`              | Dedicated automation lane | Reminders, system events        |
@@ -371,8 +383,9 @@ Failure notifications follow a separate destination path:
 - `openclaw automations edit` exposes per-job alert tuning: `--failure-alert`/`--no-failure-alert`, `--failure-alert-after <n>`, `--failure-alert-channel`, `--failure-alert-to`, `--failure-alert-cooldown`, `--failure-alert-include-skipped`/`--failure-alert-exclude-skipped`, `--failure-alert-mode`, and `--failure-alert-account-id`.
 
 Chat failure notifications include the run start time in the agent's configured user timezone. Webhook message text stays stable; integrations can read the same instant from the structured `runAtMs` field.
+Chat notifications show the normalized failure cause when one is available and keep raw commands, paths, and provider errors in automation history. Failure webhooks retain the structured raw error for diagnostic integrations.
 
-Failure alerts are opt-in, but the scheduler also provides an unconditional safety backstop. A time-based recurring job is auto-disabled after 10 consecutive execution failures; a successful run resets that streak. Repeated schedule-computation failures auto-disable after 3 errors. The job records `state.autoDisabled.reason` as `consecutive-failures` or `schedule-errors`, and the owning agent receives a notification with the last error and recovery command. After fixing the cause, run `openclaw automations enable <jobId>`; enabling clears the recorded reason and failure streaks. Because disabled jobs are hidden by the default list, use `openclaw automations list --all` to inspect them.
+Failure alerts are opt-in, but the scheduler also provides an unconditional safety backstop. A time-based recurring job is auto-disabled after 10 consecutive execution failures; a successful run resets that streak. Repeated schedule-computation failures auto-disable after 3 errors. The job records `state.autoDisabled.reason` as `consecutive-failures` or `schedule-errors`, and the owning agent receives a notification with a safe cause and recovery command. Raw errors stay in automation history. After fixing the cause, run `openclaw automations enable <jobId>`; enabling clears the recorded reason and failure streaks. Because disabled jobs are hidden by the default list, use `openclaw automations list --all` to inspect them.
 
 ### Output language
 

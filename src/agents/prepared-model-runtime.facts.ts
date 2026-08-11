@@ -2,17 +2,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { ConfiguredModelRef } from "@openclaw/model-catalog-core/configured-model-refs";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import { stableStringify } from "@openclaw/normalization-core";
-import type { PreparedMessageToolCatalog } from "../channels/plugins/message-action-discovery.js";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   getPreparedMessageToolCatalog,
   getPreparedMessageToolCatalogForRegistry,
 } from "../plugins/prepared-message-tool-catalog.js";
-import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
+import { resolveLoadedProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
@@ -32,7 +33,7 @@ import {
   loadBundledProviderStaticCatalogContextModels,
 } from "./embedded-agent-runner/model.static-catalog.js";
 import { createStaticModelIdMatcher } from "./embedded-agent-runner/model.static-id.js";
-import { buildPreparedModelCatalogSnapshot, type ModelCatalogEntry } from "./model-catalog.js";
+import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models-config.js";
@@ -42,6 +43,11 @@ import {
   resolvePluginModelCatalogOwnerPluginId,
   type PersistedPluginModelCatalog,
 } from "./plugin-model-catalog.js";
+import {
+  modelCatalogEntryKey,
+  prepareConfiguredRuntimeFacts,
+} from "./prepared-model-runtime.configured-catalog.js";
+import { completeConfiguredRuntimeModels } from "./prepared-model-runtime.configured-completion.js";
 import {
   collectPreparedModelRuntimeConfiguredRefs,
   collectConfiguredProviderIdsNeedingStaticCatalog,
@@ -64,6 +70,7 @@ import type {
   PreparedModelRuntimeBuildStats,
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimeInput,
+  PreparedModelRuntimePluginGeneration,
 } from "./prepared-model-runtime.types.js";
 import type { AuthStorage, AuthStorageData } from "./sessions/auth-storage.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
@@ -83,19 +90,6 @@ type PreparedModelRuntimeAgentBaseFacts = {
 export type PreparedModelRuntimeAgentFacts = PreparedModelRuntimeAgentBaseFacts & {
   configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
   configuredGeneratedCatalogPluginIds: readonly string[];
-};
-
-export type PreparedModelRuntimeWorkspaceFacts = {
-  pluginMetadataSnapshot: PluginMetadataSnapshot;
-  messageToolCatalog?: PreparedMessageToolCatalog;
-  mediaCapabilityProviders?: ReturnType<typeof prepareMediaCapabilityProviders>;
-  preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
-  providerStaticModels?: readonly ProviderRuntimeModel[];
-  providerStaticModelsComplete: boolean;
-  inlineProviderModels: readonly InlineModelEntry[];
-  configuredCatalogEntries: readonly ModelCatalogEntry[];
-  pluginRegistry?: import("../plugins/registry-types.js").PluginRegistry;
-  inboundPluginRegistry?: import("../plugins/registry-types.js").PluginRegistry;
 };
 
 export type PreparedModelRuntimeCatalogFacts = {
@@ -126,8 +120,8 @@ function prepareAgentFacts(
   const env = input.env ?? process.env;
   const templateAuthStorage = discoverAuthStorage(input.agentDir, {
     config: input.config,
-    // Snapshot construction never initializes, migrates, or externally syncs auth. ModelRegistry
-    // discovery only parses the credential generation captured here.
+    // Prepared owners consume only the already-published runtime auth generation. External CLI
+    // hydration belongs to startup/control-plane and turn-time producers, never rebuilds.
     readOnly: true,
     ambientCredentials,
     ...(input.skipCredentials ? { skipCredentials: true } : {}),
@@ -167,9 +161,10 @@ export async function prepareWorkspaceBuildGroup(
   catalogMode: PreparedModelRuntimeCatalogMode,
   options: { providerDiscoveryProviderIds?: readonly string[] } = {},
   loadInboundPluginRegistry?: PreparedInboundRegistryLoader,
+  reusablePluginGeneration?: PreparedModelRuntimePluginGeneration,
 ): Promise<{
   agentFacts: PreparedModelRuntimeAgentFacts[];
-  workspaceFacts: PreparedModelRuntimeWorkspaceFacts;
+  pluginGeneration: PreparedModelRuntimePluginGeneration;
   buildStats: Pick<
     PreparedModelRuntimeBuildStats,
     | "runtimePluginMs"
@@ -186,31 +181,40 @@ export async function prepareWorkspaceBuildGroup(
   }
   const env = input.env ?? process.env;
   const runtimePluginStartedAt = performance.now();
-  const { inboundPluginRegistry, runtimePluginRegistry } = prepareWorkspacePluginRegistries(
-    input,
-    loadInboundPluginRegistry,
-  );
-  const runtimePluginMs = performance.now() - runtimePluginStartedAt;
+  const { inboundPluginRegistry, runtimePluginRegistry } = reusablePluginGeneration
+    ? {
+        inboundPluginRegistry: reusablePluginGeneration.inboundPluginRegistry,
+        runtimePluginRegistry: reusablePluginGeneration.pluginRegistry,
+      }
+    : prepareWorkspacePluginRegistries(input, loadInboundPluginRegistry);
+  const runtimePluginMs = reusablePluginGeneration ? 0 : performance.now() - runtimePluginStartedAt;
   return await withPluginRuntimeRegistryScope(runtimePluginRegistry, async () => {
     const pluginMetadataStartedAt = performance.now();
-    const pluginMetadataSnapshot = prepareOwnedPluginLoadContext(input, env, runtimePluginRegistry);
-    const pluginMetadataMs = performance.now() - pluginMetadataStartedAt;
+    const pluginMetadataSnapshot =
+      reusablePluginGeneration?.pluginMetadataSnapshot ??
+      prepareOwnedPluginLoadContext(input, env, runtimePluginRegistry);
+    const pluginMetadataMs = reusablePluginGeneration
+      ? 0
+      : performance.now() - pluginMetadataStartedAt;
     const matchesStaticModelId = createStaticModelIdMatcher({
       manifestPlugins: pluginMetadataSnapshot.plugins,
     });
-    const mediaCapabilityProviders =
-      input.readOnly || !runtimePluginRegistry
+    const mediaCapabilityProviders = reusablePluginGeneration
+      ? reusablePluginGeneration.mediaCapabilityProviders
+      : input.readOnly || !runtimePluginRegistry
         ? undefined
         : prepareMediaCapabilityProviders({
             cfg: input.config,
             pluginMetadataSnapshot,
             registry: runtimePluginRegistry,
           });
-    const messageToolCatalog = runtimePluginRegistry
-      ? getPreparedMessageToolCatalogForRegistry(runtimePluginRegistry)
-      : catalogMode === "live"
-        ? getPreparedMessageToolCatalog()
-        : undefined;
+    const messageToolCatalog = reusablePluginGeneration
+      ? reusablePluginGeneration.messageToolCatalog
+      : runtimePluginRegistry
+        ? getPreparedMessageToolCatalogForRegistry(runtimePluginRegistry)
+        : catalogMode === "live"
+          ? getPreparedMessageToolCatalog()
+          : undefined;
     const resolveManifestStaticCatalogModel = createBundledStaticCatalogModelResolver({
       cfg: input.config,
       env,
@@ -245,8 +249,9 @@ export async function prepareWorkspaceBuildGroup(
       ]),
     ].toSorted((left, right) => left.localeCompare(right));
     const staticProviderCatalogStartedAt = performance.now();
-    const preparedStaticProviderCatalog =
-      catalogMode === "static"
+    const preparedStaticProviderCatalog = reusablePluginGeneration
+      ? reusablePluginGeneration.preparedStaticProviderCatalog
+      : catalogMode === "static"
         ? await prepareImplicitProviderStaticCatalog({
             config: input.config,
             env,
@@ -256,7 +261,9 @@ export async function prepareWorkspaceBuildGroup(
             ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
           })
         : undefined;
-    const staticProviderCatalogMs = performance.now() - staticProviderCatalogStartedAt;
+    const staticProviderCatalogMs = reusablePluginGeneration
+      ? 0
+      : performance.now() - staticProviderCatalogStartedAt;
     const preparedSyntheticAuthProviders = preparedStaticProviderCatalog?.providers ?? [];
     // Static Gateway publication consumes provider discovery entrypoints without activating plugin
     // runtimes. The run boundary already owns runtime activation for its exact workspace.
@@ -302,23 +309,28 @@ export async function prepareWorkspaceBuildGroup(
     const agentFactsMs = performance.now() - agentFactsStartedAt;
     const configuredProjectionStartedAt = performance.now();
     const providerStaticModels =
-      catalogMode === "static"
+      reusablePluginGeneration?.providerStaticModels ??
+      (catalogMode === "static"
         ? []
         : await loadBundledProviderStaticCatalogContextModels({
             cfg: input.config,
             env,
             metadataSnapshot: pluginMetadataSnapshot,
             ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-          });
+          }));
     // Provider definitions are process/config facts. Which refs are admitted remains agent-owned.
-    const inlineProviderModels = buildInlineProviderModels(input.config.models?.providers ?? {}, {
-      providerMetadataOwners: pluginMetadataSnapshot.owners,
-    });
-    const configuredCatalogEntries = buildConfiguredModelCatalog({
-      cfg: input.config,
-      manifestPlugins: pluginMetadataSnapshot.plugins,
-      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-    });
+    const inlineProviderModels =
+      reusablePluginGeneration?.inlineProviderModels ??
+      buildInlineProviderModels(input.config.models?.providers ?? {}, {
+        providerMetadataOwners: pluginMetadataSnapshot.owners,
+      });
+    const configuredCatalogEntries =
+      reusablePluginGeneration?.configuredCatalogEntries ??
+      buildConfiguredModelCatalog({
+        cfg: input.config,
+        manifestPlugins: pluginMetadataSnapshot.plugins,
+        ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+      });
     const agentFacts: PreparedModelRuntimeAgentFacts[] = [];
     for (const facts of agentBaseFacts) {
       const configuredRuntimeModels = prepareConfiguredRuntimeModels({
@@ -367,6 +379,21 @@ export async function prepareWorkspaceBuildGroup(
       });
     }
     const configuredProjectionMs = performance.now() - configuredProjectionStartedAt;
+    const pluginGeneration =
+      reusablePluginGeneration ??
+      Object.freeze({
+        pluginMetadataSnapshot,
+        messageToolCatalog,
+        inlineProviderModels: Object.freeze([...inlineProviderModels]),
+        configuredCatalogEntries: Object.freeze([...configuredCatalogEntries]),
+        ...(runtimePluginRegistry ? { pluginRegistry: runtimePluginRegistry } : {}),
+        ...(inboundPluginRegistry ? { inboundPluginRegistry } : {}),
+        ...(mediaCapabilityProviders ? { mediaCapabilityProviders } : {}),
+        ...(preparedStaticProviderCatalog ? { preparedStaticProviderCatalog } : {}),
+        ...(catalogMode === "live"
+          ? { providerStaticModels: Object.freeze([...providerStaticModels]) }
+          : {}),
+      });
     return {
       agentFacts,
       buildStats: {
@@ -377,30 +404,19 @@ export async function prepareWorkspaceBuildGroup(
         agentFactsMs,
         configuredProjectionMs,
       },
-      workspaceFacts: {
-        pluginMetadataSnapshot,
-        messageToolCatalog,
-        providerStaticModelsComplete: catalogMode === "live",
-        inlineProviderModels,
-        configuredCatalogEntries,
-        ...(runtimePluginRegistry ? { pluginRegistry: runtimePluginRegistry } : {}),
-        ...(inboundPluginRegistry ? { inboundPluginRegistry } : {}),
-        ...(mediaCapabilityProviders ? { mediaCapabilityProviders } : {}),
-        ...(preparedStaticProviderCatalog ? { preparedStaticProviderCatalog } : {}),
-        ...(providerStaticModels ? { providerStaticModels } : {}),
-      },
+      pluginGeneration,
     };
   });
 }
 
 export async function prepareFullCatalogFacts(
   agentFacts: PreparedModelRuntimeAgentFacts,
-  workspaceFacts: PreparedModelRuntimeWorkspaceFacts,
+  pluginGeneration: PreparedModelRuntimePluginGeneration,
   catalogMode: PreparedModelRuntimeCatalogMode,
   catalogSource?: PreparedModelRuntimeCatalogSource,
 ): Promise<PreparedModelRuntimeCatalogFacts> {
   const { credentials, env, input, templateAuthStorage } = agentFacts;
-  const { pluginMetadataSnapshot, preparedStaticProviderCatalog } = workspaceFacts;
+  const { pluginMetadataSnapshot, preparedStaticProviderCatalog } = pluginGeneration;
   const templateModelRegistry = discoverModels(templateAuthStorage, input.agentDir, {
     config: input.config,
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
@@ -426,9 +442,7 @@ export async function prepareFullCatalogFacts(
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
   });
   const providerStaticModels =
-    (workspaceFacts.providerStaticModelsComplete
-      ? workspaceFacts.providerStaticModels
-      : undefined) ??
+    pluginGeneration.providerStaticModels ??
     (await loadBundledProviderStaticCatalogContextModels({
       cfg: input.config,
       env,
@@ -456,83 +470,13 @@ export async function prepareFullCatalogFacts(
     templateModelRegistry,
     modelCatalog: completeModelCatalog,
     configuredRuntimeModels,
-    inlineProviderModels: workspaceFacts.inlineProviderModels,
+    inlineProviderModels: pluginGeneration.inlineProviderModels,
   };
 }
 
 /** Reports whether a catalog came from the complete prepared-catalog build path. */
 export function isPreparedModelCatalogFull(snapshot: ModelCatalogSnapshot): boolean {
   return fullModelCatalogSnapshots.has(snapshot);
-}
-
-function modelCatalogEntryKey(entry: Pick<ModelCatalogEntry, "id" | "provider">): string {
-  return `${normalizeProviderId(entry.provider)}\0${entry.id.trim().toLowerCase()}`;
-}
-
-function createConfiguredModelCatalogSnapshot(params: {
-  agentFacts: PreparedModelRuntimeAgentFacts;
-  workspaceFacts: PreparedModelRuntimeWorkspaceFacts;
-  templateModelRegistry: ModelRegistry;
-  configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
-}): ModelCatalogSnapshot {
-  const entries = new Map<string, ModelCatalogEntry>();
-  const addEntry = (entry: ModelCatalogEntry) => {
-    const key = modelCatalogEntryKey(entry);
-    if (!entries.has(key)) {
-      entries.set(key, entry);
-    }
-  };
-  for (const entry of params.workspaceFacts.configuredCatalogEntries) {
-    addEntry(entry);
-  }
-  for (const configured of params.configuredRuntimeModels) {
-    addEntry(toStaticCatalogEntry(configured.model));
-  }
-  for (const { value } of params.agentFacts.configuredModelRefs) {
-    const separator = value.indexOf("/");
-    if (separator <= 0 || separator >= value.length - 1) {
-      continue;
-    }
-    const provider = normalizeProviderId(value.slice(0, separator));
-    const modelId = value.slice(separator + 1).trim();
-    if (!provider || !modelId) {
-      continue;
-    }
-    const model = params.templateModelRegistry.find(provider, modelId);
-    if (model) {
-      addEntry(toStaticCatalogEntry(model));
-    }
-  }
-  const configuredEntries = [...entries.values()];
-  const staticEntries = params.configuredRuntimeModels.map(({ model }) =>
-    toStaticCatalogEntry(model),
-  );
-  return {
-    entries: configuredEntries,
-    routeVariants: configuredEntries,
-    ...(staticEntries.length > 0 ? { staticEntries } : {}),
-  };
-}
-
-function prepareConfiguredRuntimeFacts(
-  agentFacts: PreparedModelRuntimeAgentFacts,
-  workspaceFacts: PreparedModelRuntimeWorkspaceFacts,
-  sharedTemplateModelRegistry: ModelRegistry,
-): PreparedModelRuntimeCatalogFacts {
-  const { configuredRuntimeModels } = agentFacts;
-  const { inlineProviderModels } = workspaceFacts;
-  const templateModelRegistry = sharedTemplateModelRegistry;
-  return {
-    templateModelRegistry,
-    modelCatalog: createConfiguredModelCatalogSnapshot({
-      agentFacts,
-      workspaceFacts,
-      templateModelRegistry,
-      configuredRuntimeModels,
-    }),
-    configuredRuntimeModels,
-    inlineProviderModels,
-  };
 }
 
 function captureModelsJsonContents(agentDir: string): string | null {
@@ -613,7 +557,7 @@ function groupConfiguredRegistrySources(
 
 export function prepareConfiguredRuntimeFactsBatch(params: {
   agentFacts: readonly PreparedModelRuntimeAgentFacts[];
-  workspaceFacts: PreparedModelRuntimeWorkspaceFacts;
+  pluginGeneration: PreparedModelRuntimePluginGeneration;
 }): {
   catalogs: Map<PreparedModelRuntimeInput, PreparedModelRuntimeCatalogFacts>;
   registryCount: number;
@@ -634,35 +578,73 @@ export function prepareConfiguredRuntimeFactsBatch(params: {
         includePluginCatalogs: true,
         modelsJsonContents: group.modelsJsonContents,
         pluginCatalogs: group.pluginCatalogs,
-        pluginMetadataSnapshot: params.workspaceFacts.pluginMetadataSnapshot,
+        pluginMetadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
         ...(representative.input.workspaceDir
           ? { workspaceDir: representative.input.workspaceDir }
           : {}),
       },
     );
     registryCount += 1;
-    for (const facts of group.agentFacts) {
-      catalogs.set(
-        facts.input,
-        prepareConfiguredRuntimeFacts(facts, params.workspaceFacts, templateModelRegistry),
-      );
-    }
+    // The captured registry exists only after agent-owned catalog parsing. Complete static misses
+    // here so turn facts stay within this lifecycle generation without starting live discovery.
+    withPluginRuntimeRegistryScope(params.pluginGeneration.pluginRegistry, () => {
+      for (const facts of group.agentFacts) {
+        const { input } = facts;
+        const configuredRuntimeModels = params.pluginGeneration.pluginRegistry
+          ? completeConfiguredRuntimeModels({
+              configuredModelRefs: facts.configuredModelRefs,
+              configuredRuntimeModels: facts.configuredRuntimeModels,
+              resolveDynamicModel: ({ provider, modelId }) => {
+                const providerConfig =
+                  input.config.models?.providers?.[provider] ??
+                  findNormalizedProviderValue(input.config.models?.providers, provider);
+                return (
+                  resolveLoadedProviderRuntimePlugin({
+                    provider,
+                    modelId,
+                    config: input.config,
+                    workspaceDir: input.workspaceDir,
+                    env: facts.env,
+                  })?.resolveDynamicModel?.({
+                    config: input.config,
+                    agentDir: input.agentDir,
+                    workspaceDir: input.workspaceDir,
+                    provider,
+                    modelId,
+                    modelRegistry: templateModelRegistry,
+                    providerConfig,
+                  }) ?? undefined
+                );
+              },
+            })
+          : facts.configuredRuntimeModels;
+        catalogs.set(
+          input,
+          prepareConfiguredRuntimeFacts({
+            agentFacts: facts,
+            workspaceFacts: params.pluginGeneration,
+            templateModelRegistry,
+            configuredRuntimeModels,
+          }),
+        );
+      }
+    });
   }
   return { catalogs, registryCount };
 }
 
 export async function prepareAgentCatalogSource(
   agentFacts: PreparedModelRuntimeAgentFacts,
-  workspaceFacts: PreparedModelRuntimeWorkspaceFacts,
+  pluginGeneration: PreparedModelRuntimePluginGeneration,
   catalogMode: PreparedModelRuntimeCatalogMode,
   persist = true,
   sourceOptions: { providerDiscoveryProviderIds?: readonly string[] } = {},
 ): Promise<PreparedModelRuntimeCatalogSource> {
   const { env, input, providerIds } = agentFacts;
   const options = {
-    pluginMetadataSnapshot: workspaceFacts.pluginMetadataSnapshot,
-    ...(workspaceFacts.preparedStaticProviderCatalog
-      ? { preparedStaticProviderCatalog: workspaceFacts.preparedStaticProviderCatalog }
+    pluginMetadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
+    ...(pluginGeneration.preparedStaticProviderCatalog
+      ? { preparedStaticProviderCatalog: pluginGeneration.preparedStaticProviderCatalog }
       : {}),
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     ...(input.env ? { env } : {}),

@@ -28,7 +28,10 @@ import {
 } from "../../sessions/session-lifecycle-admission.js";
 import { recordSessionCompacted } from "../../sessions/session-state-events.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
-import { resolveCanonicalGatewaySessionStoreKey } from "../session-utils.js";
+import {
+  resolveCanonicalGatewaySessionStoreKey,
+  resolveGatewaySessionStoreTargetWithStore,
+} from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import { hasVisibleActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -40,7 +43,6 @@ import {
   emitSessionOperation,
   loadAccessorSessionEntryForGatewayTarget,
   requireSessionKey,
-  resolveGatewaySessionTargetFromKey,
 } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -67,15 +69,20 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
       return;
     }
     const requestedAgentId = requestedAgent.agentId;
-    const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg, {
-      agentId: requestedAgentId,
+    const target = resolveGatewaySessionStoreTargetWithStore({
+      cfg,
+      key,
+      exactRead: true,
+      ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
     });
+    const storePath = target.storePath;
     // Lock + read in a short critical section; transcript work happens outside.
     // The projection resolver re-runs gateway key migration on the writer
     // snapshot so alias promotion/pruning persists through the accessor.
     let compactPrimaryKey = target.canonicalKey;
     const compactRead = await applySessionPatchProjection({
       agentId: target.agentId,
+      sessionKeys: target.storeKeys,
       storePath,
       resolveTarget: ({ store }) => {
         const { target: migratedTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({
@@ -403,6 +410,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               // while compaction ran (sessionId/lifecycleRevision/work-start).
               const persistProjection = await applySessionPatchProjection({
                 agentId: target.agentId,
+                sessionKeys: [compactTarget.primaryKey],
                 storePath,
                 resolveTarget: () => ({ primaryKey: compactTarget.primaryKey }),
                 project: ({ existingEntry }) => {

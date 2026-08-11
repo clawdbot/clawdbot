@@ -17,6 +17,7 @@ export function renderTerminalPanelToolbar(
   uploadController: TerminalPanelUploadController,
   sessionPicker: TemplateResult,
   setDock: (dock: TerminalDock) => void,
+  openFullscreen: () => void,
   hidePanel: () => void,
 ): TemplateResult {
   return renderTerminalPanelActions({
@@ -25,6 +26,7 @@ export function renderTerminalPanelToolbar(
     upload: uploadController,
     sessionPicker,
     onDock: setDock,
+    onOpenFullscreen: openFullscreen,
     onHide: hidePanel,
   });
 }

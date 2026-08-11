@@ -46,7 +46,10 @@ export const UsersSetAvatarParamsSchema = closedObject({
   mime: UserProfileAvatarMimeSchema,
   avatarBase64: Type.String({ minLength: 1, maxLength: 700_000 }),
 });
-export const UsersSetAvatarResultSchema = closedObject({ profile: UserProfileSchema });
+export const UsersSetAvatarResultSchema = closedObject({
+  profile: UserProfileSchema,
+  avatarRevision: NonEmptyString,
+});
 
 export type UserProfile = Static<typeof UserProfileSchema>;
 export type UsersListParams = Static<typeof UsersListParamsSchema>;

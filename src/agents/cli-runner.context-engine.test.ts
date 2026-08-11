@@ -2,6 +2,7 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../context-engine/types.js";
+import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 
 const {
@@ -91,6 +92,7 @@ function buildPreparedContext(contextEngine: ContextEngine): PreparedCliRunConte
 
   return {
     params: {
+      admittedRunContext: createTestAdmittedRunContext("run-1"),
       sessionId: "openclaw-session-1",
       sessionKey: "agent:main:main",
       agentId: "main",
@@ -233,7 +235,6 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     const dispose = vi.fn(async () => {});
     const contextEngine = createContextEngine({ bootstrap, afterTurn, maintain, dispose });
     const context = buildPreparedContext(contextEngine);
-    context.params.bootstrapContextRunKind = "commitment-only";
     const result = await runPreparedCliAgent(context);
 
     expect(result.meta.agentMeta?.sessionId).toBe("external-cli-session-1");
@@ -281,7 +282,7 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
       sessionKey: "agent:main:main",
       sessionFile: "session.jsonl",
       prePromptMessageCount: 2,
-      isHeartbeat: true,
+      isHeartbeat: false,
       tokenBudget: undefined,
       runtimeContext: undefined,
     });

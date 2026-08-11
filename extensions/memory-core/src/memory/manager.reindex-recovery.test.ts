@@ -61,7 +61,6 @@ describe("memory manager reindex recovery", () => {
   }): OpenClawConfig {
     return {
       memory: {
-        backend: "builtin",
         search: {
           provider: params.provider ?? "openai",
           model: "mock-embed",

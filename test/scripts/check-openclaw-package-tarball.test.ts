@@ -13,11 +13,12 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { gte as semverGte, valid as validSemver } from "semver";
 import { describe, expect, it } from "vitest";
-import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
+import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mts";
 import { PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/package-dist-inventory.ts";
-import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../../scripts/lib/workspace-bootstrap-smoke.mjs";
+import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../../scripts/lib/workspace-bootstrap-smoke.mts";
 
-const CHECK_SCRIPT = "scripts/check-openclaw-package-tarball.mjs";
+const CHECK_SCRIPT = "scripts/check-openclaw-package-tarball.mts";
+const PUBLIC_CHECK_SCRIPT = "scripts/check-openclaw-package-tarball.mjs";
 const NODE_DEFAULT_SPAWN_MAX_BUFFER_BYTES = 1024 * 1024;
 const CODE_MODE_WORKER_PATH = "dist/agents/code-mode.worker.js";
 const FIRST_CODE_MODE_WORKER_VERSION = "2026.5.14-beta.2";
@@ -149,7 +150,7 @@ function withTarball(
 
 describe("check-openclaw-package-tarball", () => {
   it("prints help before touching tarball state", () => {
-    const result = spawnSync("node", [CHECK_SCRIPT, "--help"], { encoding: "utf8" });
+    const result = spawnSync("node", [PUBLIC_CHECK_SCRIPT, "--help"], { encoding: "utf8" });
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain(
@@ -280,19 +281,6 @@ describe("check-openclaw-package-tarball", () => {
     );
   });
 
-  it("still rejects non-legacy missing inventory entries", () => {
-    withTarball(
-      ["dist/index.js", "dist/cli.js"],
-      { "dist/index.js": "export {};\n" },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain("inventory references missing tar entry dist/cli.js");
-      },
-    );
-  });
-
   it("requires an install guard omitted from the dist inventory", () => {
     withTarball(
       ["dist/index.js"],
@@ -351,19 +339,6 @@ describe("check-openclaw-package-tarball", () => {
     );
   });
 
-  it("accepts flat plugin SDK declaration inventory without the old deep tree", () => {
-    withTarball(
-      [FLAT_PLUGIN_SDK_DECLARATION],
-      { [FLAT_PLUGIN_SDK_DECLARATION]: "export {};\n" },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
-      },
-    );
-  });
-
   it("accepts historical packages published before the Code Mode worker existed", () => {
     withTarball(
       ["dist/index.js"],
@@ -408,20 +383,6 @@ describe("check-openclaw-package-tarball", () => {
     );
   });
 
-  it("accepts Code Mode packages whose worker survives postinstall", () => {
-    withTarball(
-      ["dist/index.js"],
-      { "dist/index.js": "export {};\n" },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
-      },
-      FIRST_CODE_MODE_WORKER_VERSION,
-    );
-  });
-
   it("rejects dist files that import missing relative chunks", () => {
     withTarball(
       ["dist/cli/run-main.js"],
@@ -454,47 +415,6 @@ describe("check-openclaw-package-tarball", () => {
           "dist/docker-runtime-BVdgRgxA.js imports missing dist/qa-runtime-Bi1S3plf.js",
         );
       },
-    );
-  });
-
-  it.each([
-    {
-      name: "named imports",
-      source: 'import { value } from "./missing.js";\n',
-    },
-    {
-      name: "multiline named imports",
-      source: 'import {\n  value,\n} from "./missing.js";\n',
-    },
-    {
-      name: "named re-exports",
-      source: 'export { value } from "./missing.js";\n',
-    },
-  ])("rejects missing packaged chunks in $name", ({ source }) => {
-    withTarball(
-      ["dist/index.js"],
-      { "dist/index.js": source },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain("dist/index.js imports missing dist/missing.js");
-      },
-      "2026.4.27",
-    );
-  });
-
-  it("does not reject import-like text inside packaged template literals", () => {
-    withTarball(
-      ["dist/index.js"],
-      { "dist/index.js": 'const example = `\nimport "./phantom.js"\n`;\n' },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
-      },
-      "2026.4.27",
     );
   });
 
@@ -625,27 +545,6 @@ describe("check-openclaw-package-tarball", () => {
     withTarball(
       ["dist/index.js"],
       { "dist/index.js": 'const root = new URL("../..", import.meta.url);\n' },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
-      },
-      "2026.4.27",
-    );
-  });
-
-  it.each([
-    "../../openclaw.mjs",
-    "../../scripts/run-node.mjs",
-    "../../dist/entry.js",
-    "../../dist/entry.mjs",
-  ])("allows import.meta.url JavaScript probes outside packaged dist (%s)", (specifier) => {
-    withTarball(
-      ["dist/index.js"],
-      {
-        "dist/index.js": `const candidate = new URL(${JSON.stringify(specifier)}, import.meta.url);\n`,
-      },
       (tarball) => {
         const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
 

@@ -171,6 +171,25 @@ describe("buildDraftSessionCreateParams", () => {
     });
   });
 
+  it("submits a selected project by id without leaking its host path", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "work in the recorded repo",
+        projectId: "openclaw",
+        worktree: true,
+        cwd: "/recorded/openclaw",
+        workspace: "/workspace",
+        execNode: "ignored-node",
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "work in the recorded repo",
+      projectId: "openclaw",
+      worktree: true,
+    });
+  });
+
   it("sends a custom Gateway checkout with an explicit worktree", () => {
     expect(
       buildDraftSessionCreateParams({

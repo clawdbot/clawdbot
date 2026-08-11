@@ -1,6 +1,6 @@
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import type { SqliteSessionStateDeleteSnapshot } from "./session-accessor.sqlite-archive.js";
+import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-archive.js";
 
 type SessionStateDeleteSnapshotDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -16,10 +16,10 @@ function normalizeOptionalSqliteNumber(value: number | bigint | null | undefined
 }
 
 /** Captures the owner window and canonical child state writable outside the lifecycle queue. */
-export function readSqliteSessionStateDeleteSnapshot(
+export function readSessionStateDeleteSnapshot(
   database: import("node:sqlite").DatabaseSync,
   sessionId: string,
-): SqliteSessionStateDeleteSnapshot {
+): SessionStateDeleteSnapshot {
   const db = getNodeSqliteKysely<SessionStateDeleteSnapshotDatabase>(database);
   const window = executeSqliteQueryTakeFirstSync(
     database,

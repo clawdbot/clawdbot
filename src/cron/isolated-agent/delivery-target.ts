@@ -45,10 +45,6 @@ const targetsRuntimeLoader = createLazyImportLoader(
   () => import("../../infra/outbound/targets.runtime.js"),
 );
 
-async function loadTargetsRuntime() {
-  return await targetsRuntimeLoader.load();
-}
-
 async function resolveOutboundTargetWithRuntime(
   params: Parameters<typeof tryResolveLoadedOutboundTarget>[0],
 ) {
@@ -57,7 +53,7 @@ async function resolveOutboundTargetWithRuntime(
     if (loaded) {
       return loaded;
     }
-    const { resolveOutboundTarget } = await loadTargetsRuntime();
+    const { resolveOutboundTarget } = await targetsRuntimeLoader.load();
     return resolveOutboundTarget({ ...params, allowBootstrap: true });
   } catch (err) {
     return {
@@ -73,14 +69,6 @@ const channelSelectionRuntimeLoader = createLazyImportLoader(
 const deliveryTargetRuntimeLoader = createLazyImportLoader(
   () => import("./delivery-target.runtime.js"),
 );
-
-async function loadChannelSelectionRuntime() {
-  return await channelSelectionRuntimeLoader.load();
-}
-
-async function loadDeliveryTargetRuntime() {
-  return await deliveryTargetRuntimeLoader.load();
-}
 
 function isNonEmptyThreadId(value: string | number | undefined | null): value is string | number {
   return value != null && value !== "";
@@ -146,7 +134,7 @@ export async function resolveDeliveryTarget(
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
   const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
   const allowMismatchedLastTo = requestedChannel === "last";
-  const deliveryTargetRuntime = await loadDeliveryTargetRuntime();
+  const deliveryTargetRuntime = await deliveryTargetRuntimeLoader.load();
 
   const sessionCfg = cfg.session;
   const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
@@ -199,7 +187,7 @@ export async function resolveDeliveryTarget(
       fallbackChannel = preliminary.lastChannel;
     } else {
       try {
-        const { resolveMessageChannelSelection } = await loadChannelSelectionRuntime();
+        const { resolveMessageChannelSelection } = await channelSelectionRuntimeLoader.load();
         const selection = await resolveMessageChannelSelection({ cfg });
         fallbackChannel = selection.channel;
       } catch (err) {

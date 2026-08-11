@@ -503,7 +503,8 @@ private struct ChatMessageBody: View {
                 details: self.message.details,
                 resultText: self.primaryText,
                 isError: self.message.isError ?? false,
-                isPending: false)]
+                isPending: false,
+                liveDiffStat: nil)]
         }
         guard self.message.role.lowercased() == "assistant" else { return [] }
         return ChatToolActivity.items(calls: self.toolCalls, results: self.inlineToolResults)
@@ -1012,7 +1013,8 @@ struct ChatPendingToolsBubble: View {
                 details: nil,
                 resultText: nil,
                 isError: false,
-                isPending: true)
+                isPending: true,
+                liveDiffStat: call.diffStat)
         }
     }
 }

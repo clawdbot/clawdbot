@@ -16,6 +16,7 @@ export type AgentItemEventData = {
   status: AgentItemEventStatus;
   name?: string;
   meta?: string;
+  commandBearing?: boolean;
   toolCallId?: string;
   startedAt?: number;
   endedAt?: number;

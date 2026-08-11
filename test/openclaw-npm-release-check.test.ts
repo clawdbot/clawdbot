@@ -8,7 +8,7 @@ import {
   LOCAL_BUILD_METADATA_DIST_PATHS,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
 } from "../scripts/lib/package-dist-inventory.ts";
-import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../scripts/lib/workspace-bootstrap-smoke.mjs";
+import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../scripts/lib/workspace-bootstrap-smoke.mts";
 import { assertPreparedOpenClawAiDependency } from "../scripts/openclaw-npm-prepublish-verify.ts";
 import {
   compareReleaseVersions,

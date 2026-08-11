@@ -13,8 +13,9 @@ import {
   getPreparedModelCatalogOwnerSnapshot,
   type LoadPreparedModelCatalogParams,
 } from "../../agents/prepared-model-catalog.js";
+import { getPreparedModelRuntimeAuthMaterializations } from "../../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
-import { resolveSwarmConfig } from "../../agents/swarm-config.js";
+import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -117,7 +118,7 @@ function createMetadataReplacement(): MetadataReplacement {
   return { promise, reject, resolve };
 }
 
-class ChatMetadataSnapshotUnavailableError extends Error {
+export class ChatMetadataSnapshotUnavailableError extends Error {
   constructor(message = "prepared chat metadata snapshot is unavailable") {
     super(message);
     this.name = "ChatMetadataSnapshotUnavailableError";
@@ -240,6 +241,11 @@ async function defaultBuildProjection(params: {
     snapshot: params.facts.owner.modelCatalog,
     metadataSnapshot: params.facts.owner.metadataSnapshot,
     preparedAuthStore: params.facts.authStore,
+    // The owner records usable auth at discovery; metadata must share that exact generation fact.
+    preparedRuntimeAuthModes: params.facts.owner.authModes,
+    preparedRuntimeAuthMaterializations: getPreparedModelRuntimeAuthMaterializations(
+      params.facts.owner,
+    ),
     ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
     ...(params.lockedProfileId ? { lockedProfileId: params.lockedProfileId } : {}),
   });

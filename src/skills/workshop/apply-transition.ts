@@ -33,7 +33,7 @@ import {
   readCommittedSkillProposalTransition,
   type PendingSkillProposalTransitionCommit,
 } from "./store-sqlite-transition.js";
-import { withSkillProposalTargetLock } from "./target-lock.js";
+import { withSkillProposalCommitLock, withSkillProposalTargetLock } from "./target-lock.js";
 import {
   SKILL_WORKSHOP_ROLLBACK_SCHEMA,
   type SkillProposalActionInput,
@@ -193,7 +193,8 @@ export async function applySkillProposalTransition(
     );
   }
 
-  const application = withSkillProposalTargetLock(
+  const application = withSkillProposalCommitLock(
+    input.workspaceDir,
     evaluated.record,
     async () => {
       const read = await dependencies.readRequiredProposal(

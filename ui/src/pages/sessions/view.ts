@@ -32,6 +32,7 @@ import {
   formatRelativeTimestamp,
   formatTokens,
 } from "../../lib/format.ts";
+import { handleContextMenuEvent } from "../../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { formatSessionTokens } from "../../lib/presenter.ts";
 import { isCronSessionKey } from "../../lib/session-display.ts";
@@ -131,7 +132,6 @@ export type SessionsProps = {
     patch: {
       label?: string | null;
       category?: string | null;
-      icon?: string | null;
       archived?: boolean;
       pinned?: boolean;
       unread?: boolean;
@@ -683,7 +683,7 @@ function formatRuntimeMs(runtimeMs: number | undefined): string | null {
   if (typeof runtimeMs !== "number" || !Number.isFinite(runtimeMs) || runtimeMs < 0) {
     return null;
   }
-  return formatDurationCompact(runtimeMs, { spaced: true }) ?? "0ms";
+  return formatDurationCompact(runtimeMs) ?? "0ms";
 }
 
 // Goal state is a dot + summary; the tooltip carries the objective detail.
@@ -1421,6 +1421,14 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const categoryMode = props.groupBy === "category";
   // Dropping on a row targets that row's group so the whole section area accepts drops.
   const rowDrop = categoryDropHandlers(props, normalizeOptionalString(row.category) ?? null);
+  const openMenuFromEvent = (event: MouseEvent | KeyboardEvent) =>
+    handleContextMenuEvent(
+      event,
+      event instanceof KeyboardEvent
+        ? (event.currentTarget as HTMLElement).querySelector('button[aria-haspopup="menu"]')
+        : null,
+      (trigger, x, y) => props.onOpenSessionMenu(row, { x, y }, trigger),
+    );
 
   return [
     html`<tr
@@ -1441,10 +1449,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       @dragover=${rowDrop.dragover}
       @dragleave=${rowDrop.dragleave}
       @drop=${rowDrop.drop}
-      @contextmenu=${(event: MouseEvent) => {
-        event.preventDefault();
-        props.onOpenSessionMenu(row, { x: event.clientX, y: event.clientY }, null);
-      }}
+      @contextmenu=${openMenuFromEvent}
       @click=${(e: MouseEvent) => {
         if (isRowControlTarget(e.target)) {
           return;
@@ -1452,6 +1457,9 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         props.onToggleDetails(row.key);
       }}
       @keydown=${(e: KeyboardEvent) => {
+        if (openMenuFromEvent(e)) {
+          return;
+        }
         if (isRowControlTarget(e.target)) {
           return;
         }

@@ -582,13 +582,6 @@ export const SessionsCompactionListParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
 });
 
-/** Reads one compaction checkpoint by id. */
-export const SessionsCompactionGetParamsSchema = closedObject({
-  key: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
-  checkpointId: NonEmptyString,
-});
-
 /** Creates a new branch from a compaction checkpoint. */
 export const SessionsCompactionBranchParamsSchema = closedObject({
   key: NonEmptyString,
@@ -665,13 +658,6 @@ export const SessionsCompactionListResultSchema = closedObject({
   ok: Type.Literal(true),
   key: NonEmptyString,
   checkpoints: Type.Array(SessionCompactionCheckpointSchema),
-});
-
-/** Get response for a single compaction checkpoint. */
-export const SessionsCompactionGetResultSchema = closedObject({
-  ok: Type.Literal(true),
-  key: NonEmptyString,
-  checkpoint: SessionCompactionCheckpointSchema,
 });
 
 /** Branch response with the newly created session key and entry metadata. */
@@ -784,11 +770,9 @@ export type SessionsCompanionStateResult = Static<typeof SessionsCompanionStateR
 export type SessionsCompanionResetParams = Static<typeof SessionsCompanionResetParamsSchema>;
 export type SessionsCompanionResetResult = Static<typeof SessionsCompanionResetResultSchema>;
 export type SessionsCompactionListParams = Static<typeof SessionsCompactionListParamsSchema>;
-export type SessionsCompactionGetParams = Static<typeof SessionsCompactionGetParamsSchema>;
 export type SessionsCompactionBranchParams = Static<typeof SessionsCompactionBranchParamsSchema>;
 export type SessionsCompactionRestoreParams = Static<typeof SessionsCompactionRestoreParamsSchema>;
 export type SessionsCompactionListResult = Static<typeof SessionsCompactionListResultSchema>;
-export type SessionsCompactionGetResult = Static<typeof SessionsCompactionGetResultSchema>;
 export type SessionsCompactionBranchResult = Static<typeof SessionsCompactionBranchResultSchema>;
 export type SessionsCompactionRestoreResult = Static<typeof SessionsCompactionRestoreResultSchema>;
 export type SessionsRewindParams = Static<typeof SessionsRewindParamsSchema>;

@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
+import type { FailoverReason } from "../agents/failover/signal.js";
 import {
   buildModelAliasIndex,
   legacyModelKey,
@@ -28,7 +29,10 @@ export type SetupInferenceTestPlan = {
   provider: string;
   model: string;
   modelRef: string;
+  /** Authored/staged config used for route, auth, and persistence decisions. */
   config: OpenClawConfig;
+  /** Execution-only projection that admits the reserved OpenClaw agent. */
+  executionConfig?: OpenClawConfig;
   /** Execution identity used by the real OpenClaw turn. */
   agentId?: string;
   /** Default-agent owner whose model/runtime config is being selected. */
@@ -274,25 +278,31 @@ export function resolveSetupAgentRuntimeId(
   return undefined;
 }
 
+const SETUP_STATUS_BY_FAILOVER_REASON = {
+  auth: "auth",
+  auth_permanent: "auth",
+  format: "format",
+  rate_limit: "rate_limit",
+  overloaded: "rate_limit",
+  billing: "billing",
+  server_error: "unknown",
+  timeout: "timeout",
+  tls_certificate: "unknown",
+  context_overflow: "unknown",
+  model_not_found: "format",
+  session_expired: "unknown",
+  empty_response: "unknown",
+  no_error_details: "unknown",
+  unclassified: "unknown",
+  unknown: "unknown",
+} satisfies Record<FailoverReason, SetupInferenceFailureStatus>;
+
 export function mapFailoverReasonToSetupStatus(
   reason?: string | null,
 ): SetupInferenceFailureStatus {
-  if (reason === "auth" || reason === "auth_permanent") {
-    return "auth";
-  }
-  if (reason === "rate_limit" || reason === "overloaded") {
-    return "rate_limit";
-  }
-  if (reason === "billing") {
-    return "billing";
-  }
-  if (reason === "timeout") {
-    return "timeout";
-  }
-  if (reason === "format" || reason === "model_not_found") {
-    return "format";
-  }
-  return "unknown";
+  return reason
+    ? (SETUP_STATUS_BY_FAILOVER_REASON[reason as FailoverReason] ?? "unknown")
+    : "unknown";
 }
 
 export function prepareManualAuthForActivation(params: {

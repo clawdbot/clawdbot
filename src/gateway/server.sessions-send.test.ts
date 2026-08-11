@@ -16,10 +16,10 @@ import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/chan
 import { captureEnv } from "../test-utils/env.js";
 import { runDirectSessionAnnounceScenario } from "./server.sessions-send.direct-announce.test-support.js";
 import {
-  agentCommand,
-  getFreePort,
+  agentCommandMock,
+  getGatewayTestPort,
   installGatewayTestHooks,
-  startGatewayServer,
+  startTestGatewayServer,
   setTestPluginRegistry,
   testState,
   writeSessionStore,
@@ -29,7 +29,7 @@ const { createOpenClawTools } = await import("../agents/openclaw-tools.js");
 
 installGatewayTestHooks({ scope: "suite" });
 
-let server: Awaited<ReturnType<typeof startGatewayServer>>;
+let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
 let gatewayPort: number;
 const gatewayToken = "test-gateway-token-1234567890";
 let envSnapshot: ReturnType<typeof captureEnv>;
@@ -118,7 +118,7 @@ async function emitLifecycleAssistantReply(params: {
 
 beforeAll(async () => {
   envSnapshot = captureEnv(["OPENCLAW_GATEWAY_PORT", "OPENCLAW_GATEWAY_TOKEN"]);
-  gatewayPort = await getFreePort();
+  gatewayPort = await getGatewayTestPort();
   const { approveDevicePairing, requestDevicePairing } = await import("../infra/device-pairing.js");
   const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
     await import("../infra/device-identity.js");
@@ -138,7 +138,7 @@ beforeAll(async () => {
   testState.gatewayAuth = { mode: "token", token: gatewayToken };
   process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
   process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
-  server = await startGatewayServer(gatewayPort);
+  server = await startTestGatewayServer(gatewayPort);
 });
 
 beforeEach(() => {
@@ -154,7 +154,7 @@ afterAll(async () => {
 
 describe("sessions_send gateway loopback", () => {
   it("returns reply when lifecycle ends before agent.wait", async () => {
-    const spy = agentCommand as unknown as Mock<(opts: unknown) => Promise<void>>;
+    const spy = agentCommandMock as unknown as Mock<(opts: unknown) => Promise<void>>;
     spy.mockImplementation(async (opts: unknown) =>
       emitLifecycleAssistantReply({
         opts,
@@ -528,7 +528,7 @@ describe("sessions_send label lookup", () => {
         "utf-8",
       );
 
-      const spy = agentCommand as unknown as Mock<(opts: unknown) => Promise<void>>;
+      const spy = agentCommandMock as unknown as Mock<(opts: unknown) => Promise<void>>;
       spy.mockImplementation(async (opts: unknown) =>
         emitLifecycleAssistantReply({
           opts,
@@ -610,7 +610,7 @@ describe("sessions_send agent targeting", () => {
           },
         });
 
-        const spy = agentCommand as unknown as Mock<(opts: unknown) => Promise<void>>;
+        const spy = agentCommandMock as unknown as Mock<(opts: unknown) => Promise<void>>;
         spy.mockImplementation(async (opts: unknown) =>
           emitLifecycleAssistantReply({
             opts,
@@ -749,7 +749,7 @@ describe("sessions_send direct-message requester routing", () => {
           },
         });
 
-        const spy = agentCommand as unknown as Mock<(opts: unknown) => Promise<void>>;
+        const spy = agentCommandMock as unknown as Mock<(opts: unknown) => Promise<void>>;
         spy.mockReset();
         spy.mockImplementation(async (opts: unknown) =>
           emitLifecycleAssistantReply({

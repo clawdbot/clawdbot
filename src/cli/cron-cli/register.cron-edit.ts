@@ -227,6 +227,18 @@ export function registerCronEditCommand(cron: Command) {
           if (deliveryModeFlagCount > 1) {
             throw new Error("Choose at most one of --announce, --no-deliver, or --webhook.");
           }
+          const triggerScriptPath = normalizeOptionalString(opts.triggerScript);
+          if (typeof opts.triggerScript === "string" && !triggerScriptPath) {
+            throw new Error("--trigger-script must not be blank");
+          }
+          if (opts.clearTrigger && (triggerScriptPath || opts.triggerOnce)) {
+            throw new Error("Use --clear-trigger or trigger options, not both");
+          }
+          // Local input errors must not depend on Gateway availability, even when
+          // another edit field needs the existing job.
+          const triggerScript = triggerScriptPath
+            ? await readCronTriggerScript(triggerScriptPath)
+            : undefined;
           const patch: Record<string, unknown> = {};
           if (typeof opts.name === "string") {
             patch.name = opts.name;
@@ -312,16 +324,13 @@ export function registerCronEditCommand(cron: Command) {
               ...(pacingMax ? { max: pacingMax } : {}),
             };
           }
-
-          const triggerScriptPath = normalizeOptionalString(opts.triggerScript);
-          if (opts.clearTrigger && (triggerScriptPath || opts.triggerOnce)) {
-            throw new Error("Use --clear-trigger or trigger options, not both");
-          }
           if (opts.clearTrigger) {
             patch.trigger = null;
-          } else if (triggerScriptPath) {
+          } else if (triggerScript !== undefined) {
+            const existing = await readExistingCronJob();
             patch.trigger = {
-              script: await readCronTriggerScript(triggerScriptPath),
+              ...existing.trigger,
+              script: triggerScript,
               ...(opts.triggerOnce ? { once: true } : {}),
             };
           } else if (opts.triggerOnce) {

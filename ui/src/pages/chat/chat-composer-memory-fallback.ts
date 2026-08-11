@@ -22,7 +22,7 @@ export type ChatComposerMemoryFallbackOwnership = {
   sequence: number;
 };
 
-export function resolveChatComposerMemoryFallback(
+function resolveChatComposerMemoryFallback(
   state: ChatPageHost,
   sessionKey: string,
   scopeOverride?: StoredChatOutboxScope,

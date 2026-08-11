@@ -1,7 +1,6 @@
 // Applies media-understanding outputs to inbound message context, including
 // attachment normalization, provider execution, file text extraction, and echoing.
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -19,11 +18,25 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { renderFileContextBlock } from "../media/file-context.js";
 import { extractFileContentFromSource, normalizeMimeType } from "../media/input-files.js";
 import { classifyMediaReferenceSource } from "../media/media-reference.js";
-import { wrapExternalContent } from "../security/external-content.js";
 import { runMediaCapability } from "./apply-capability.js";
+import {
+  decodeTextSample,
+  guessDelimitedMime,
+  hasSuspiciousBinarySignal,
+  looksLikeUtf8Text,
+  resolveUtf16Charset,
+} from "./attachment-text-sniff.js";
 import { resolveAttachmentKind } from "./attachments.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
 import type { ExtractedFileImage } from "./extracted-file-images.js";
+import {
+  type FileAttachmentOutcome,
+  isSkippedFileOutcome,
+  MAX_SKIPPED_FILE_MARKERS,
+  renderFileAttachmentOutcome,
+  renderSkippedFileOverflowSummary,
+  sanitizeMimeType,
+} from "./file-attachment-outcomes.js";
 import {
   type FileExtractionLimits,
   resolveFileExtractionLimits,
@@ -36,6 +49,7 @@ import {
   resolveMediaAttachmentLocalRoots,
 } from "./runner.js";
 import type {
+  MediaAttachment,
   MediaUnderstandingCapability,
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
@@ -82,27 +96,6 @@ const TEXT_EXT_MIME = new Map<string, string>([
   [".xml", "application/xml"],
 ]);
 
-// Reject inputs with trailing junk after the type/subtype to defend against
-// callers that compare the original string elsewhere; permit the standard
-// `;param=value` parameter tail (RFC 9110 §8.3) and discard it.
-const MIME_TYPE = String.raw`([a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+)`;
-const HTTP_TOKEN = String.raw`[a-z0-9!#$%&'*+.^_\x60|~-]+`;
-const HTTP_QUOTED_STRING = String.raw`"(?:[\t !#-\[\]-~]|\\[\t -~])*"`;
-const MIME_PARAMETER = String.raw`[ \t]*;[ \t]*${HTTP_TOKEN}=(?:${HTTP_TOKEN}|${HTTP_QUOTED_STRING})`;
-const MIME_TYPE_WITH_OPTIONAL_PARAMS = new RegExp(
-  String.raw`^${MIME_TYPE}(?:${MIME_PARAMETER})*$`,
-  "i",
-);
-
-function sanitizeMimeType(value?: string): string | undefined {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  const match = trimmed.match(MIME_TYPE_WITH_OPTIONAL_PARAMS);
-  return match?.[1]?.toLowerCase();
-}
-
 function appendFileBlocks(body: string | undefined, blocks: string[]): string {
   if (!blocks || blocks.length === 0) {
     return body ?? "";
@@ -113,204 +106,6 @@ function appendFileBlocks(body: string | undefined, blocks: string[]): string {
     return suffix;
   }
   return `${base}\n\n${suffix}`.trim();
-}
-
-function wrapUntrustedAttachmentContent(content: string): string {
-  return wrapExternalContent(content, {
-    source: "unknown",
-    includeWarning: false,
-  });
-}
-
-function resolveUtf16Charset(buffer?: Buffer): "utf-16le" | "utf-16be" | undefined {
-  // Some chat attachments arrive as UTF-16 without a reliable MIME charset; the
-  // BOM and zero-byte distribution are enough to select a safe decoder.
-  if (!buffer || buffer.length < 2) {
-    return undefined;
-  }
-  const b0 = buffer[0];
-  const b1 = buffer[1];
-  if (b0 === 0xff && b1 === 0xfe) {
-    return "utf-16le";
-  }
-  if (b0 === 0xfe && b1 === 0xff) {
-    return "utf-16be";
-  }
-  const sampleLen = Math.min(buffer.length, 2048);
-  let zeroEven = 0;
-  let zeroOdd = 0;
-  for (let i = 0; i < sampleLen; i += 1) {
-    if (buffer[i] !== 0) {
-      continue;
-    }
-    if (i % 2 === 0) {
-      zeroEven += 1;
-    } else {
-      zeroOdd += 1;
-    }
-  }
-  const zeroCount = zeroEven + zeroOdd;
-  if (zeroCount / sampleLen > 0.2) {
-    return zeroOdd >= zeroEven ? "utf-16le" : "utf-16be";
-  }
-  return undefined;
-}
-
-const WORDISH_CHAR = /[\p{L}\p{N}]/u;
-const CP1252_MAP: Array<string | undefined> = [
-  "\u20ac",
-  undefined,
-  "\u201a",
-  "\u0192",
-  "\u201e",
-  "\u2026",
-  "\u2020",
-  "\u2021",
-  "\u02c6",
-  "\u2030",
-  "\u0160",
-  "\u2039",
-  "\u0152",
-  undefined,
-  "\u017d",
-  undefined,
-  undefined,
-  "\u2018",
-  "\u2019",
-  "\u201c",
-  "\u201d",
-  "\u2022",
-  "\u2013",
-  "\u2014",
-  "\u02dc",
-  "\u2122",
-  "\u0161",
-  "\u203a",
-  "\u0153",
-  undefined,
-  "\u017e",
-  "\u0178",
-];
-
-function decodeLegacyText(buffer: Buffer): string {
-  let output = "";
-  for (const byte of buffer) {
-    if (byte >= 0x80 && byte <= 0x9f) {
-      const mapped = CP1252_MAP[byte - 0x80];
-      output += mapped ?? String.fromCharCode(byte);
-      continue;
-    }
-    output += String.fromCharCode(byte);
-  }
-  return output;
-}
-
-function getTextStats(text: string): { printableRatio: number; wordishRatio: number } {
-  if (!text) {
-    return { printableRatio: 0, wordishRatio: 0 };
-  }
-  let printable = 0;
-  let control = 0;
-  let wordish = 0;
-  for (const char of text) {
-    const code = char.codePointAt(0) ?? 0;
-    if (code === 9 || code === 10 || code === 13 || code === 32) {
-      printable += 1;
-      wordish += 1;
-      continue;
-    }
-    if (code < 32 || (code >= 0x7f && code <= 0x9f)) {
-      control += 1;
-      continue;
-    }
-    printable += 1;
-    if (WORDISH_CHAR.test(char)) {
-      wordish += 1;
-    }
-  }
-  const total = printable + control;
-  if (total === 0) {
-    return { printableRatio: 0, wordishRatio: 0 };
-  }
-  return { printableRatio: printable / total, wordishRatio: wordish / total };
-}
-
-function isMostlyPrintable(text: string): boolean {
-  return getTextStats(text).printableRatio > 0.85;
-}
-
-function looksLikeLegacyTextBytes(buffer: Buffer): boolean {
-  if (buffer.length === 0) {
-    return false;
-  }
-  const text = decodeLegacyText(buffer);
-  const { printableRatio, wordishRatio } = getTextStats(text);
-  return printableRatio > 0.95 && wordishRatio > 0.3;
-}
-
-function looksLikeUtf8Text(buffer?: Buffer): boolean {
-  if (!buffer || buffer.length === 0) {
-    return false;
-  }
-  const sample = buffer.subarray(0, Math.min(buffer.length, 4096));
-  try {
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(sample);
-    return isMostlyPrintable(text);
-  } catch {
-    return looksLikeLegacyTextBytes(sample);
-  }
-}
-
-function hasSuspiciousBinarySignal(buffer?: Buffer): boolean {
-  if (!buffer || buffer.length === 0) {
-    return false;
-  }
-  const sample = buffer.subarray(0, Math.min(buffer.length, 4096));
-  if (sample.length < 4 || sample[0] !== 0x50 || sample[1] !== 0x4b) {
-    return false;
-  }
-  const signature =
-    (expectDefined(sample[2], "sample entry at 2") << 8) |
-    expectDefined(sample[3], "sample entry at 3");
-  // Cover the ZIP local-header, central-directory, and empty-archive markers
-  // so archive payloads cannot slip past text coercion when MIME detection is weak.
-  return signature === 0x0304 || signature === 0x0102 || signature === 0x0506;
-}
-
-function decodeTextSample(buffer?: Buffer): string {
-  if (!buffer || buffer.length === 0) {
-    return "";
-  }
-  const sample = buffer.subarray(0, Math.min(buffer.length, 8192));
-  const utf16Charset = resolveUtf16Charset(sample);
-  if (utf16Charset === "utf-16be") {
-    const swapped = Buffer.alloc(sample.length);
-    for (let i = 0; i + 1 < sample.length; i += 2) {
-      swapped[i] = expectDefined(sample[i + 1], "UTF-16BE low byte");
-      swapped[i + 1] = expectDefined(sample[i], "UTF-16BE high byte");
-    }
-    return new TextDecoder("utf-16le").decode(swapped);
-  }
-  if (utf16Charset === "utf-16le") {
-    return new TextDecoder("utf-16le").decode(sample);
-  }
-  return new TextDecoder("utf-8").decode(sample);
-}
-
-function guessDelimitedMime(text: string): string | undefined {
-  if (!text) {
-    return undefined;
-  }
-  const line = text.split(/\r?\n/)[0] ?? "";
-  const tabs = (line.match(/\t/g) ?? []).length;
-  const commas = (line.match(/,/g) ?? []).length;
-  if (commas > 0) {
-    return "text/csv";
-  }
-  if (tabs > 0) {
-    return "text/tab-separated-values";
-  }
-  return undefined;
 }
 
 function resolveTextMimeFromName(name?: string): string | undefined {
@@ -383,10 +178,166 @@ function isBinaryMediaMime(mime?: string): boolean {
   return false;
 }
 
-type ExtractedFileContext = {
-  blocks: string[];
-  images: ExtractedFileImage[];
+type ClassifiedFileAttachment = {
+  outcome: FileAttachmentOutcome;
+  filename?: string;
+  mimeType?: string;
 };
+
+// URL attachments may carry signed query credentials; only the pathname
+// basename is safe to surface as a model-visible display name.
+function attachmentUrlDisplayName(url: string): string | undefined {
+  try {
+    const base = new URL(url).pathname.split("/").findLast((segment) => segment.length > 0);
+    return base || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function classifyFileAttachment(params: {
+  attachment: MediaAttachment;
+  cache: ReturnType<typeof createMediaAttachmentCache>;
+  cfg: OpenClawConfig;
+  limits: FileExtractionLimits;
+  skipAttachmentIndexes?: Set<number>;
+}): Promise<ClassifiedFileAttachment> {
+  const { attachment, cache, cfg, limits, skipAttachmentIndexes } = params;
+  const attachmentFilename =
+    attachment.path ?? (attachment.url ? attachmentUrlDisplayName(attachment.url) : undefined);
+  if (skipAttachmentIndexes?.has(attachment.index)) {
+    return { outcome: { kind: "claimed-elsewhere" } };
+  }
+  const forcedTextMime = resolveTextMimeFromName(attachmentFilename ?? "");
+  const kind = forcedTextMime ? "document" : resolveAttachmentKind(attachment);
+  if (!forcedTextMime && (kind === "image" || kind === "video" || kind === "audio")) {
+    return { outcome: { kind: "claimed-elsewhere" } };
+  }
+  if (
+    !limits.allowUrl &&
+    attachment.url &&
+    !attachment.path &&
+    !classifyMediaReferenceSource(attachment.url).isMediaStoreUrl
+  ) {
+    if (shouldLogVerbose()) {
+      logVerbose(`media: file attachment skipped (url disabled) index=${attachment.index}`);
+    }
+    return { outcome: { kind: "url-sources-disabled" }, filename: attachmentFilename };
+  }
+  let bufferResult: Awaited<ReturnType<typeof cache.getBuffer>>;
+  try {
+    bufferResult = await cache.getBuffer({
+      attachmentIndex: attachment.index,
+      maxBytes: limits.maxBytes,
+      timeoutMs: limits.timeoutMs,
+    });
+  } catch (err) {
+    if (shouldLogVerbose()) {
+      logVerbose(`media: file attachment skipped (buffer): ${String(err)}`);
+    }
+    return { outcome: { kind: "read-failure" }, filename: attachmentFilename };
+  }
+  const filename = bufferResult?.fileName;
+  const nameHint = filename ?? attachmentFilename;
+  const forcedTextMimeResolved = forcedTextMime ?? resolveTextMimeFromName(nameHint ?? "");
+  const rawMime = bufferResult?.mime ?? attachment.mime;
+  const normalizedRawMime = normalizeMimeType(rawMime);
+  // Marker mime prefers the sender-declared type; never the name-forced text mime,
+  // which would mislabel binary bytes inside a text-named file as a text format.
+  // Both candidates pass strict token validation so raw header text never
+  // reaches model context; undefined drops the mime from block and marker.
+  const binaryMime =
+    sanitizeMimeType(normalizeMimeType(attachment.mime)) ?? sanitizeMimeType(normalizedRawMime);
+  if (!forcedTextMimeResolved && isBinaryMediaMime(normalizedRawMime)) {
+    return {
+      outcome: { kind: "unsupported-format", mime: binaryMime },
+      filename,
+      mimeType: binaryMime,
+    };
+  }
+  if (hasSuspiciousBinarySignal(bufferResult?.buffer)) {
+    return {
+      outcome: { kind: "unsupported-format", mime: binaryMime },
+      filename,
+      mimeType: binaryMime,
+    };
+  }
+  const utf16Charset = resolveUtf16Charset(bufferResult?.buffer);
+  const textSample = decodeTextSample(bufferResult?.buffer);
+  // Do not coerce real PDFs into text/plain via printable-byte heuristics.
+  // PDFs have a dedicated extraction path in extractFileContentFromSource.
+  const allowTextHeuristic = normalizedRawMime !== "application/pdf";
+  const textLike =
+    allowTextHeuristic && (Boolean(utf16Charset) || looksLikeUtf8Text(bufferResult?.buffer));
+  const guessedDelimited = textLike ? guessDelimitedMime(textSample) : undefined;
+  const textHint =
+    forcedTextMimeResolved ?? guessedDelimited ?? (textLike ? "text/plain" : undefined);
+  const mimeType = sanitizeMimeType(textHint ?? normalizeMimeType(rawMime));
+  // Log when MIME type is overridden from non-text to text for auditability
+  if (textHint && rawMime && !rawMime.startsWith("text/")) {
+    logVerbose(
+      `media: MIME override from "${rawMime}" to "${textHint}" for index=${attachment.index}`,
+    );
+  }
+  if (!mimeType) {
+    if (shouldLogVerbose()) {
+      logVerbose(`media: file attachment skipped (unknown mime) index=${attachment.index}`);
+    }
+    return { outcome: { kind: "unsupported-format" }, filename };
+  }
+  const allowedMimes = new Set(limits.allowedMimes);
+  if (!limits.allowedMimesConfigured) {
+    for (const extra of EXTRA_TEXT_MIMES) {
+      allowedMimes.add(extra);
+    }
+    if (mimeType.startsWith("text/")) {
+      allowedMimes.add(mimeType);
+    }
+  }
+  if (!allowedMimes.has(mimeType)) {
+    if (shouldLogVerbose()) {
+      logVerbose(
+        `media: file attachment skipped (unsupported mime ${mimeType}) index=${attachment.index}`,
+      );
+    }
+    // Operator-pinned allowlists reject as policy; the default allowlist
+    // rejects as a capability gap. The markers differ so the prompt never
+    // claims support the active configuration disables.
+    const outcome: FileAttachmentOutcome = limits.allowedMimesConfigured
+      ? { kind: "policy-rejected", mime: mimeType }
+      : { kind: "unsupported-format", mime: mimeType };
+    return { outcome, filename, mimeType };
+  }
+  let extracted: Awaited<ReturnType<typeof extractFileContentFromSource>>;
+  try {
+    const mediaType = utf16Charset ? `${mimeType}; charset=${utf16Charset}` : mimeType;
+    const { allowedMimesConfigured: _allowedMimesConfigured, ...baseLimits } = limits;
+    extracted = await extractFileContentFromSource({
+      source: {
+        type: "base64",
+        data: bufferResult.buffer.toString("base64"),
+        mediaType,
+        filename: bufferResult.fileName,
+      },
+      limits: { ...baseLimits, allowedMimes },
+      config: cfg,
+    });
+  } catch (err) {
+    if (shouldLogVerbose()) {
+      logVerbose(`media: file attachment skipped (extract): ${String(err)}`);
+    }
+    return { outcome: { kind: "read-failure" }, filename, mimeType };
+  }
+  const text = extracted?.text?.trim() ?? "";
+  const extractedImages = extracted?.images ?? [];
+  if (text) {
+    return { outcome: { kind: "extracted", text, images: extractedImages }, filename, mimeType };
+  }
+  if (extractedImages.length > 0) {
+    return { outcome: { kind: "rendered-to-images", images: extractedImages }, filename, mimeType };
+  }
+  return { outcome: { kind: "no-extractable-text" }, filename, mimeType };
+}
 
 async function extractFileContext(params: {
   attachments: ReturnType<typeof normalizeMediaAttachments>;
@@ -394,144 +345,56 @@ async function extractFileContext(params: {
   cfg: OpenClawConfig;
   limits: FileExtractionLimits;
   skipAttachmentIndexes?: Set<number>;
-}): Promise<ExtractedFileContext> {
+}) {
   const { attachments, cache, cfg, limits, skipAttachmentIndexes } = params;
   if (!attachments || attachments.length === 0) {
     return { blocks: [], images: [] };
   }
   const blocks: string[] = [];
   const images: ExtractedFileImage[] = [];
+  let skippedMarkers = 0;
+  let skippedOverflow = 0;
   for (const attachment of attachments) {
     if (!attachment) {
       continue;
     }
-    if (skipAttachmentIndexes?.has(attachment.index)) {
-      continue;
-    }
-    const forcedTextMime = resolveTextMimeFromName(attachment.path ?? attachment.url ?? "");
-    const kind = forcedTextMime ? "document" : resolveAttachmentKind(attachment);
-    if (!forcedTextMime && (kind === "image" || kind === "video" || kind === "audio")) {
-      continue;
-    }
-    if (
-      !limits.allowUrl &&
-      attachment.url &&
-      !attachment.path &&
-      !classifyMediaReferenceSource(attachment.url).isMediaStoreUrl
-    ) {
-      if (shouldLogVerbose()) {
-        logVerbose(`media: file attachment skipped (url disabled) index=${attachment.index}`);
-      }
-      continue;
-    }
-    let bufferResult: Awaited<ReturnType<typeof cache.getBuffer>>;
-    try {
-      bufferResult = await cache.getBuffer({
-        attachmentIndex: attachment.index,
-        maxBytes: limits.maxBytes,
-        timeoutMs: limits.timeoutMs,
-      });
-    } catch (err) {
-      if (shouldLogVerbose()) {
-        logVerbose(`media: file attachment skipped (buffer): ${String(err)}`);
-      }
-      continue;
-    }
-    const nameHint = bufferResult?.fileName ?? attachment.path ?? attachment.url;
-    const forcedTextMimeResolved = forcedTextMime ?? resolveTextMimeFromName(nameHint ?? "");
-    const rawMime = bufferResult?.mime ?? attachment.mime;
-    const normalizedRawMime = normalizeMimeType(rawMime);
-    if (!forcedTextMimeResolved && isBinaryMediaMime(normalizedRawMime)) {
-      continue;
-    }
-    if (hasSuspiciousBinarySignal(bufferResult?.buffer)) {
-      continue;
-    }
-    const utf16Charset = resolveUtf16Charset(bufferResult?.buffer);
-    const textSample = decodeTextSample(bufferResult?.buffer);
-    // Do not coerce real PDFs into text/plain via printable-byte heuristics.
-    // PDFs have a dedicated extraction path in extractFileContentFromSource.
-    const allowTextHeuristic = normalizedRawMime !== "application/pdf";
-    const textLike =
-      allowTextHeuristic && (Boolean(utf16Charset) || looksLikeUtf8Text(bufferResult?.buffer));
-    const guessedDelimited = textLike ? guessDelimitedMime(textSample) : undefined;
-    const textHint =
-      forcedTextMimeResolved ?? guessedDelimited ?? (textLike ? "text/plain" : undefined);
-    const mimeType = sanitizeMimeType(textHint ?? normalizeMimeType(rawMime));
-    // Log when MIME type is overridden from non-text to text for auditability
-    if (textHint && rawMime && !rawMime.startsWith("text/")) {
-      logVerbose(
-        `media: MIME override from "${rawMime}" to "${textHint}" for index=${attachment.index}`,
-      );
-    }
-    if (!mimeType) {
-      if (shouldLogVerbose()) {
-        logVerbose(`media: file attachment skipped (unknown mime) index=${attachment.index}`);
-      }
-      continue;
-    }
-    const allowedMimes = new Set(limits.allowedMimes);
-    if (!limits.allowedMimesConfigured) {
-      for (const extra of EXTRA_TEXT_MIMES) {
-        allowedMimes.add(extra);
-      }
-      if (mimeType.startsWith("text/")) {
-        allowedMimes.add(mimeType);
-      }
-    }
-    if (!allowedMimes.has(mimeType)) {
-      if (shouldLogVerbose()) {
-        logVerbose(
-          `media: file attachment skipped (unsupported mime ${mimeType}) index=${attachment.index}`,
-        );
-      }
-      continue;
-    }
-    let extracted: Awaited<ReturnType<typeof extractFileContentFromSource>>;
-    try {
-      const mediaType = utf16Charset ? `${mimeType}; charset=${utf16Charset}` : mimeType;
-      const { allowedMimesConfigured: _allowedMimesConfigured, ...baseLimits } = limits;
-      extracted = await extractFileContentFromSource({
-        source: {
-          type: "base64",
-          data: bufferResult.buffer.toString("base64"),
-          mediaType,
-          filename: bufferResult.fileName,
-        },
-        limits: {
-          ...baseLimits,
-          allowedMimes,
-        },
-        config: cfg,
-      });
-    } catch (err) {
-      if (shouldLogVerbose()) {
-        logVerbose(`media: file attachment skipped (extract): ${String(err)}`);
-      }
-      continue;
-    }
-    const text = extracted?.text?.trim() ?? "";
-    let blockText = text ? wrapUntrustedAttachmentContent(text) : "";
-    if (extracted?.images && extracted.images.length > 0) {
+    const { outcome, filename, mimeType } = await classifyFileAttachment({
+      attachment,
+      cache,
+      cfg,
+      limits,
+      skipAttachmentIndexes,
+    });
+    if (outcome.kind === "extracted" || outcome.kind === "rendered-to-images") {
       images.push(
-        ...extracted.images.map((image) => ({ ...image, attachmentIndex: attachment.index })),
+        ...outcome.images.map((image) => ({
+          ...image,
+          attachmentIndex: attachment.index,
+        })),
       );
     }
-    if (!blockText) {
-      if (extracted?.images && extracted.images.length > 0) {
-        blockText = "[PDF content rendered to images]";
-      } else {
-        blockText = "[No extractable text]";
+    const blockText = renderFileAttachmentOutcome(outcome);
+    if (blockText === null) {
+      continue;
+    }
+    if (isSkippedFileOutcome(outcome)) {
+      if (skippedMarkers >= MAX_SKIPPED_FILE_MARKERS) {
+        skippedOverflow += 1;
+        continue;
       }
+      skippedMarkers += 1;
     }
     blocks.push(
       renderFileContextBlock({
-        filename: bufferResult.fileName,
+        filename,
         fallbackName: `file-${attachment.index + 1}`,
         mimeType,
         content: blockText,
       }),
     );
+  }
+  if (skippedOverflow > 0) {
+    blocks.push(renderSkippedFileOverflowSummary(skippedOverflow));
   }
   return { blocks, images };
 }

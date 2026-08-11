@@ -129,6 +129,27 @@ describe("renderSkills", () => {
     await i18n.setLocale("en");
   });
 
+  it("hides the agent selector when only one agent is configured", () => {
+    const container = document.createElement("div");
+    render(
+      renderSkills(
+        createProps({
+          agentsList: {
+            defaultId: "main",
+            mainKey: "main",
+            scope: "per-sender",
+            agents: [{ id: "main", name: "Main" }],
+          },
+          selectedAgentId: "main",
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector('openclaw-agent-select[name="skills-agent"]')).toBeNull();
+    expect(container.querySelector('input[name="skills-filter"]')).toBeInstanceOf(HTMLInputElement);
+  });
+
   it("renders the agent selector and routes agent changes", async () => {
     const container = document.createElement("div");
     document.body.append(container);

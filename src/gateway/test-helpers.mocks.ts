@@ -5,7 +5,7 @@ import { vi } from "vitest";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
-  agentCommand,
+  agentCommandMock,
   cronIsolatedRun,
   embeddedRunMock,
   type GetReplyFromConfigFn,
@@ -38,6 +38,7 @@ function createEmbeddedRunMockExports() {
       embeddedRunMock.waitCalls.push(sessionId);
       const ended = embeddedRunMock.waitResults.get(sessionId) ?? true;
       if (ended) {
+        embeddedRunMock.activeIds.delete(sessionId);
         embeddedRunMock.endWaiters.get(sessionId)?.(true);
       } else if (embeddedRunMock.resolveEndBeforeTimeoutIds.delete(sessionId)) {
         embeddedRunMock.endWaiters.get(sessionId)?.(true);
@@ -248,9 +249,9 @@ vi.mock("../status/summary.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
 vi.mock("../commands/agent.js", () => ({
-  agentCommand,
-  agentCommandFromGatewayIngress: agentCommand,
-  agentCommandFromIngress: agentCommand,
+  agentCommand: agentCommandMock,
+  agentCommandFromGatewayIngress: agentCommandMock,
+  agentCommandFromIngress: agentCommandMock,
 }));
 vi.mock("../agents/btw.js", () => ({
   runBtwSideQuestion: (...args: Parameters<RunBtwSideQuestionFn>) =>

@@ -4,6 +4,7 @@ import { estimateUsageCost, resolveModelCostConfig } from "../../../utils/usage-
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AgentRunTerminalReceipt } from "../../agent-run-terminal-receipt.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
+import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import type { NormalizedUsage, UsageLike } from "../../usage.js";
 import { resolveEmbeddedRunFailureSignal } from "../failure-signal.js";
 import type { EmbeddedAgentMeta, EmbeddedAgentRunResult } from "../types.js";
@@ -31,6 +32,7 @@ export function prepareEmbeddedRunTerminal(input: {
   attempt: EmbeddedRunAttemptResult;
   currentAttemptCompletedAssistant?: AssistantMessage;
   provider: string;
+  providerOwner?: PreparedProviderFailoverOwner;
   model: string;
   activeErrorContext: { provider: string; model: string };
   authProfileStore: AuthProfileStore;
@@ -100,7 +102,7 @@ export function prepareEmbeddedRunTerminal(input: {
     sessionFile: input.sessionFileUsed,
     provider: reportedModelRef.provider,
     model: reportedModelRef.model,
-    ...input.outerContextTokenMeta,
+    contextTokens: attempt.contextTokens ?? input.outerContextTokenMeta.contextTokens,
     agentHarnessId: attempt.agentHarnessId,
     usage: usageMeta.usage,
     lastCallUsage: usageMeta.lastCallUsage,
@@ -166,7 +168,6 @@ export function prepareEmbeddedRunTerminal(input: {
     assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
     assistantTranscriptOwned: attempt.assistantTranscriptOwned,
     assistantTranscriptIdempotencyKey: attempt.assistantTranscriptIdempotencyKey,
-    toolMetas: attempt.toolMetas,
     lastAssistant: payloadAssistant,
     currentAssistant: attempt.yieldDetected ? null : (payloadAssistant ?? null),
     lastToolError: attempt.lastToolError,
@@ -175,6 +176,7 @@ export function prepareEmbeddedRunTerminal(input: {
     isHeartbeatTrigger: runParams.trigger === "heartbeat",
     sessionKey: runParams.sessionKey ?? runParams.sessionId,
     provider: input.activeErrorContext.provider,
+    providerOwner: input.providerOwner,
     model: input.activeErrorContext.model,
     authMode: input.authProfileId
       ? input.authProfileStore.profiles?.[input.authProfileId]?.type
@@ -184,7 +186,6 @@ export function prepareEmbeddedRunTerminal(input: {
     thinkingLevel: runParams.thinkLevel,
     toolResultFormat: input.resolvedToolResultFormat,
     suppressToolErrorWarnings: runParams.suppressToolErrorWarnings,
-    inlineToolResultsAllowed: false,
     didSendViaMessagingTool: attempt.didSendViaMessagingTool,
     didDeliverSourceReplyViaMessageTool: attempt.didDeliverSourceReplyViaMessageTool === true,
     messagingToolSentTargets: attempt.messagingToolSentTargets,

@@ -90,10 +90,7 @@ export const resolveCronDeliveryPlanMock = createMock();
 export const resolveDeliveryTargetMock = createMock();
 export const dispatchCronDeliveryMock = createMock();
 export const queueCronMessageToolDeliveryAwarenessMock = createMock();
-export const cleanupDirectCronSessionMock = createMock();
 export const preflightCronModelProviderMock = createMock();
-export const isHeartbeatOnlyResponseMock = createMock();
-const resolveHeartbeatAckMaxCharsMock = createMock();
 export const resolveSessionAuthProfileOverrideMock = createMock();
 export const resolveFastModeStateMock = createMock();
 export const getChannelPluginMock = createMock();
@@ -399,7 +396,6 @@ vi.mock("./run-delivery.runtime.js", async () => {
   );
   return {
     ...actual,
-    cleanupDirectCronSession: cleanupDirectCronSessionMock,
     resolveDeliveryTarget: resolveDeliveryTargetMock,
     dispatchCronDelivery: dispatchCronDeliveryMock,
     queueCronMessageToolDeliveryAwareness: queueCronMessageToolDeliveryAwarenessMock,
@@ -411,11 +407,9 @@ vi.mock("./model-preflight.runtime.js", () => ({
 }));
 
 vi.mock("./helpers.js", () => ({
-  isHeartbeatOnlyResponse: isHeartbeatOnlyResponseMock,
   pickLastNonEmptyTextFromPayloads: pickLastNonEmptyTextFromPayloadsMock,
   pickSummaryFromOutput: vi.fn().mockReturnValue("summary"),
   resolveCronPayloadOutcome: resolveCronPayloadOutcomeMock,
-  resolveHeartbeatAckMaxChars: resolveHeartbeatAckMaxCharsMock,
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -707,6 +701,7 @@ function resetRunOutcomeMocks(): void {
           : synthesizedText
             ? [{ text: synthesizedText }]
             : [],
+        deliveryDisposition: { kind: "visible" },
         deliveryPayloadHasStructuredContent: false,
         hasFatalErrorPayload,
         hasFatalStructuredErrorPayload,
@@ -763,14 +758,8 @@ function resetRunOutcomeMocks(): void {
   );
   queueCronMessageToolDeliveryAwarenessMock.mockReset();
   queueCronMessageToolDeliveryAwarenessMock.mockResolvedValue(undefined);
-  cleanupDirectCronSessionMock.mockReset();
-  cleanupDirectCronSessionMock.mockResolvedValue(undefined);
   preflightCronModelProviderMock.mockReset();
   preflightCronModelProviderMock.mockResolvedValue({ status: "available" });
-  isHeartbeatOnlyResponseMock.mockReset();
-  isHeartbeatOnlyResponseMock.mockReturnValue(false);
-  resolveHeartbeatAckMaxCharsMock.mockReset();
-  resolveHeartbeatAckMaxCharsMock.mockReturnValue(100);
   resolveSessionAuthProfileOverrideMock.mockReset();
   resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
 }

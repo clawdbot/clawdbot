@@ -70,7 +70,16 @@ export interface AiTransportPluginHost {
         transport: "stream" | "websocket";
       };
     },
-  ): { headers?: Record<string, string>; metadata?: Record<string, string> } | undefined;
+  ):
+    | {
+        headers?: Record<string, string>;
+        metadata?: Record<string, string>;
+        websocket?: {
+          headers?: Record<string, string>;
+          degradeCooldownMs?: number;
+        };
+      }
+    | undefined;
   wrapSimpleCompletionStream(
     this: void,
     params: {
@@ -310,6 +319,11 @@ export function resolveAiTransportHeaderSentinels(
   const host = getAiTransportHost();
   let resolvedHeaders: Record<string, string> | undefined;
   for (const [name, value] of Object.entries(headers)) {
+    if (value === null) {
+      // applyLocalNoAuthHeaderOverride marks no-auth local providers with a
+      // runtime null marker outside the public string-only Model contract.
+      continue;
+    }
     const resolved = host.resolveSecretSentinel(value);
     if (resolved !== value) {
       resolvedHeaders ??= { ...headers };

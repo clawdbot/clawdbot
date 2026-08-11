@@ -55,6 +55,7 @@ export type {
   SessionEntryLifecycleMutationResult,
   SessionEntryLifecycleRemoval,
   SessionEntryLifecycleUpsert,
+  SessionEntryListScope,
   SessionEntryPatchContext,
   SessionEntryPatchOptions,
   SessionEntryPatchResult,
@@ -126,7 +127,7 @@ export type {
 } from "./session-accessor.entry-mutation.js";
 export {
   countSessionEntryRowsReadOnly,
-  ensureSqliteSessionEntrySync as ensureSessionEntrySync,
+  ensureSessionEntrySync,
   copySessionOwnedStateForCanonicalRepair,
   hasSessionEntriesByStatusReadOnly,
   listSessionGenerationIdsForCanonicalRepair,
@@ -189,7 +190,7 @@ export {
   resolveSessionTranscriptActiveLeafEntryId,
   rewindSessionToMessage,
   switchSessionBranch,
-} from "./session-accessor.message-cut.js";
+} from "./session-accessor.sqlite-message-cut.js";
 export {
   commitReplySessionInitialization,
   loadReplySessionInitializationSnapshot,
@@ -263,7 +264,8 @@ export {
 } from "./session-accessor.sqlite-transcript-watermark.js";
 export {
   resolveConcreteSessionStorePath,
+  resolveSessionTranscriptDatabasePath,
   resolveSessionTranscriptReadTarget,
-  resolveSessionTranscriptRuntimeReadTarget,
   resolveSessionTranscriptRuntimeTarget,
+  resolveSessionTranscriptRuntimeTarget as resolveSessionTranscriptRuntimeReadTarget,
 } from "./session-accessor.transcript-target.js";

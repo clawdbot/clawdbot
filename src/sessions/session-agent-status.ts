@@ -3,8 +3,8 @@ import {
   SESSION_AGENT_ATTENTION_ICON_IDS,
   type SessionAgentAttentionIconId,
   type SessionAgentStatus,
-} from "../../packages/gateway-protocol/src/session-icon.js";
-import { sanitizeUserFacingText } from "../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
+} from "../../packages/gateway-protocol/src/session-agent-status.js";
+import { renderUserFacingText } from "../agents/embedded-agent-helpers/user-facing-text.js";
 
 const SESSION_AGENT_STATUS_NOTE_MAX_CHARS = 120;
 const SESSION_AGENT_STATUS_DEFAULT_TTL_MINUTES = 30;
@@ -19,7 +19,7 @@ export function isSessionAgentAttentionIconId(
 }
 
 export function sanitizeSessionAgentStatusNote(value: string): string {
-  const normalized = sanitizeUserFacingText(value, { errorContext: true })
+  const normalized = renderUserFacingText(value, { errorContext: true })
     .replace(/\s+/g, " ")
     .trim();
   return truncateUtf16Safe(normalized, SESSION_AGENT_STATUS_NOTE_MAX_CHARS).trimEnd();

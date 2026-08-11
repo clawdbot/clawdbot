@@ -25,7 +25,7 @@ import {
 } from "../infra/outbound/delivery-queue-storage.js";
 import {
   ackDelivery,
-  drainPendingDeliveries,
+  drainPendingDeliveriesCore,
   failDelivery,
   failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend,
@@ -188,7 +188,7 @@ async function drainFailedRestartSentinelNotice(params: {
     if (attemptCount < RESTART_NOTICE_MAX_ATTEMPTS) {
       await waitForRecoveryDrain();
     }
-    await drainPendingDeliveries({
+    await drainPendingDeliveriesCore({
       drainKey: `restart-recovery:${params.queueId}`,
       logLabel: `${params.summary}: restart notice recovery`,
       cfg: params.cfg,

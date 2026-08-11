@@ -8,7 +8,11 @@ import {
 } from "../../agents/agent-scope-config.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
-import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
+import {
+  normalizeReplyPayloadOutcome,
+  type NormalizeReplyOutcome,
+  type NormalizeReplySkipReason,
+} from "../../auto-reply/reply/normalize-reply.js";
 import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.runtime.js";
 import { formatBtwTextForExternalDelivery } from "../../auto-reply/reply/reply-payloads-base.js";
 import {
@@ -17,6 +21,7 @@ import {
   resolveMessagingToolPayloadDedupe,
 } from "../../auto-reply/reply/reply-payloads-dedupe.runtime.js";
 import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
+import { createChannelReplyTransform } from "../../channels/message/reply-transform.js";
 import {
   sendDurableMessageBatch,
   serializeDurableMessagePayloadOutcomes,
@@ -286,13 +291,13 @@ function preDeliveryFailureStatus(reason: string): AgentCommandDeliveryStatus {
   };
 }
 
-function noVisiblePayloadStatus(): AgentCommandDeliveryStatus {
+function noVisiblePayloadStatus(reason?: NormalizeReplySkipReason): AgentCommandDeliveryStatus {
   return {
     requested: true,
     attempted: false,
     status: "suppressed",
     succeeded: true,
-    reason: "no_visible_payload",
+    reason: reason === "channel_transform" ? reason : "no_visible_payload",
     resultCount: 0,
   };
 }
@@ -469,17 +474,17 @@ function normalizeAgentCommandReplyPayloads(params: {
   accountId?: string;
   applyChannelTransforms?: boolean;
   includeRunModelContext?: boolean;
-}): ReplyPayload[] {
+}): NormalizeReplyOutcome<ReplyPayload[]> {
   const payloads = params.payloads ?? [];
   if (payloads.length === 0) {
-    return [];
+    return { kind: "suppress", reason: "empty" };
   }
   const channel =
     params.deliveryChannel && !isInternalMessageChannel(params.deliveryChannel)
       ? (normalizeChannelId(params.deliveryChannel) ?? params.deliveryChannel)
       : undefined;
   if (!channel) {
-    return payloads as ReplyPayload[];
+    return { kind: "deliver", payload: payloads as ReplyPayload[] };
   }
   const applyChannelTransforms = params.applyChannelTransforms ?? true;
   const deliveryPlugin = applyChannelTransforms ? params.plugin : undefined;
@@ -517,28 +522,31 @@ function normalizeAgentCommandReplyPayloads(params: {
     UNRESOLVED_RESPONSE_PREFIX_VAR_PATTERN.test(resolvedResponsePrefix)
       ? undefined
       : replyPrefix.responsePrefix;
-  const transformReplyPayload = deliveryPlugin?.messaging?.transformReplyPayload
-    ? (payload: ReplyPayload) =>
-        deliveryPlugin.messaging?.transformReplyPayload?.({
-          payload,
-          cfg: params.cfg,
-          accountId: params.accountId,
-        }) ?? payload
-    : undefined;
+  const deliveryMessaging = deliveryPlugin?.messaging;
+  const transformReplyPayload = createChannelReplyTransform({
+    messaging: deliveryMessaging,
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
 
   const normalizedPayloads: ReplyPayload[] = [];
+  let suppressionReason: NormalizeReplySkipReason | undefined;
   for (const payload of payloads) {
-    const normalized = normalizeReplyPayload(payload as ReplyPayload, {
+    const outcome = normalizeReplyPayloadOutcome(payload as ReplyPayload, {
       responsePrefix,
       applyChannelTransforms,
       responsePrefixContext,
       transformReplyPayload,
     });
-    if (normalized) {
-      normalizedPayloads.push(normalized);
+    if (outcome.kind === "deliver") {
+      normalizedPayloads.push(outcome.payload);
+    } else if (suppressionReason === undefined || outcome.reason === "channel_transform") {
+      suppressionReason = outcome.reason;
     }
   }
-  return normalizedPayloads;
+  return normalizedPayloads.length > 0
+    ? { kind: "deliver", payload: normalizedPayloads }
+    : { kind: "suppress", reason: suppressionReason ?? "empty" };
 }
 
 /** Delivers an agent command result or records why delivery was skipped. */
@@ -772,7 +780,7 @@ export async function deliverAgentCommandResult(
     }
   }
 
-  const normalizedReplyPayloads = normalizeAgentCommandReplyPayloads({
+  const replyNormalization = normalizeAgentCommandReplyPayloads({
     cfg,
     opts,
     outboundSession,
@@ -783,6 +791,8 @@ export async function deliverAgentCommandResult(
     accountId: resolvedAccountId,
     applyChannelTransforms: deliver,
   });
+  const normalizedReplyPayloads =
+    replyNormalization.kind === "deliver" ? replyNormalization.payload : [];
   const canonicalReplyPayloads = projectOutboundPayloadPlanForDelivery(
     createOutboundPayloadPlan(normalizedReplyPayloads),
   );
@@ -791,8 +801,8 @@ export async function deliverAgentCommandResult(
     !deliveryStatus &&
     Boolean(deliveryTarget) &&
     !isInternalMessageChannel(deliveryChannel);
-  const normalizeSentTexts = (sentTexts: readonly string[]) =>
-    normalizeAgentCommandReplyPayloads({
+  const normalizeSentTexts = (sentTexts: readonly string[]) => {
+    const outcome = normalizeAgentCommandReplyPayloads({
       cfg,
       opts,
       outboundSession,
@@ -803,7 +813,11 @@ export async function deliverAgentCommandResult(
       accountId: resolvedAccountId,
       applyChannelTransforms: deliver,
       includeRunModelContext: false,
-    }).flatMap((payload) => (payload.text?.trim() ? [payload.text] : []));
+    });
+    return (outcome.kind === "deliver" ? outcome.payload : []).flatMap((payload) =>
+      payload.text?.trim() ? [payload.text] : [],
+    );
+  };
   const filterDeliveredPayloads = (
     replyPayloads: ReplyPayload[],
     normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>,
@@ -886,7 +900,12 @@ export async function deliverAgentCommandResult(
 
   const deliveryPayloads = projectOutboundPayloadPlanForOutbound(outboundPayloadPlan);
   if (deliveryPayloads.length === 0) {
-    deliveryStatus = deliver ? (deliveryStatus ?? noVisiblePayloadStatus()) : undefined;
+    deliveryStatus = deliver
+      ? (deliveryStatus ??
+        noVisiblePayloadStatus(
+          replyNormalization.kind === "suppress" ? replyNormalization.reason : undefined,
+        ))
+      : undefined;
     const deliverySucceeded = deliveryStatus?.succeeded === true ? true : undefined;
     emitJsonEnvelope(deliveryStatus);
     return captureDeliveryResult(

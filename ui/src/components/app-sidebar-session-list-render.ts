@@ -1,7 +1,6 @@
 import { html, nothing } from "lit";
 import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { titleForRoute } from "../app-navigation.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
@@ -45,7 +44,7 @@ type SessionCatalogRenderSnapshot = {
   loadingMoreCatalogIds: ReadonlySet<string>;
   projectGrouping: CatalogProjectGrouping;
   liveRows: readonly GatewaySessionRow[];
-  sidebarRowsByKey: ReadonlyMap<string, SidebarRecentSession>;
+  toSidebarSession: (row: GatewaySessionRow) => SidebarRecentSession;
   creatorId: string | null;
   catalogOpenTarget: CatalogOpenTarget;
   terminalAvailable: boolean;
@@ -248,7 +247,7 @@ function renderSessionSection(params: {
 
 function renderDraftSessionRow() {
   return html`
-    <div class="sidebar-recent-session sidebar-recent-session--draft">
+    <div class="sidebar-recent-session sidebar-recent-session--draft" role="listitem">
       <span class="sidebar-recent-session__link">
         <span class="sidebar-session-indicator"></span>
         <span class="sidebar-recent-session__text">
@@ -336,7 +335,7 @@ function renderSessionCatalog(params: {
       renderLiveRow: (row, display) =>
         renderRecentSession({
           host,
-          session: snapshot.sidebarRowsByKey.get(row.key)!,
+          session: snapshot.toSidebarSession(row),
           display,
         }),
       onToggleSection: (sectionId) => host.toggleSection(sectionId),
@@ -484,7 +483,7 @@ export function renderSessionList(params: {
             </div>
           `
         : nothing}
-      <div class="sidebar-recent-sessions" aria-label=${titleForRoute("sessions")}>
+      <div class="sidebar-recent-sessions">
         ${renderSessionListBody({
           host,
           sections: params.sections,

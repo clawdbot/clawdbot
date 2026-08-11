@@ -3,6 +3,7 @@ import type {
   PageDefinition,
   RouteLocation,
   RouteMatch,
+  RouteNotFound,
   Router,
   RouterHistory,
 } from "@openclaw/uirouter";
@@ -47,6 +48,7 @@ import { page as newSessionPage } from "./pages/new-session/route.ts";
 import { page as pluginPage } from "./pages/plugin/route.ts";
 import { page as pluginsPage } from "./pages/plugins/route.ts";
 import { page as profilePage } from "./pages/profile/route.ts";
+import { page as secretsPage } from "./pages/secrets/route.ts";
 import { page as sessionsPage } from "./pages/sessions/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
 import { page as skillsPage } from "./pages/skills/route.ts";
@@ -93,6 +95,7 @@ const APP_ROUTE_TREE = [
   workboardPage,
   worktreesPage,
   sessionsPage,
+  secretsPage,
   usagePage,
   debugPage,
   logsPage,
@@ -163,6 +166,23 @@ function sameRouteLocation(left: RouteLocation, right: RouteLocation): boolean {
   );
 }
 
+function isRouteNotFound(error: unknown): error is RouteNotFound {
+  return (
+    typeof error === "object" && error !== null && "type" in error && error.type === "notFound"
+  );
+}
+
+async function tolerateRouteNotFound(navigation: Promise<void>): Promise<void> {
+  try {
+    await navigation;
+  } catch (error) {
+    // uirouter commits not-found state before rethrowing; the outlet owns its recovery UI.
+    if (!isRouteNotFound(error)) {
+      throw error;
+    }
+  }
+}
+
 export async function startApplicationRouter(
   router: ApplicationRouter,
   history: RouterHistory,
@@ -206,12 +226,14 @@ export async function startApplicationRouter(
         listener(next);
       }),
   };
-  await router.start(applicationHistory, basePath, context);
+  await tolerateRouteNotFound(router.start(applicationHistory, basePath, context));
   if (initialDynamicRoute && sameRouteLocation(history.location(), location)) {
     // Replace the synthetic exact-match location with the real browser path
     // before the shell renders. A loader-visible redirect wins if it already
     // moved history while startup was still resolving.
-    await router.navigate(initialDynamicRoute[0], context, { history: "none" }, location);
+    await tolerateRouteNotFound(
+      router.navigate(initialDynamicRoute[0], context, { history: "none" }, location),
+    );
   }
 }
 

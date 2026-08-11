@@ -1,6 +1,8 @@
 // Feishu plugin module implements post behavior.
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isRecord } from "./comment-shared.js";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 
 const FALLBACK_POST_TEXT = "[Rich text message]";

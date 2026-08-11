@@ -2,6 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
+import {
+  copyPluginInstallRecordMap,
+  createPluginInstallRecordMap,
+  getPluginInstallRecordMapEntry,
+  parsePluginInstallRecordMap,
+  serializePluginInstallRecordMap,
+  setPluginInstallRecordMapEntry,
+} from "../config/plugin-install-record-map.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import {
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
@@ -11,7 +20,7 @@ import {
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
-import { fileExists, safeReadDir } from "./state-migrations.fs.js";
+import { migrationFileExists, safeReadDir } from "./state-migrations.fs.js";
 import {
   insertTaskDeliveryRowSql,
   insertTaskRunRowSql,
@@ -112,9 +121,9 @@ export function hasPendingSqliteSidecarArchive(
   suffixes: readonly string[],
 ): boolean {
   return (
-    !fileExists(sourcePath) &&
-    fileExists(`${sourcePath}.migrated`) &&
-    suffixes.some((suffix) => suffix !== "" && fileExists(`${sourcePath}${suffix}`))
+    !migrationFileExists(sourcePath) &&
+    migrationFileExists(`${sourcePath}.migrated`) &&
+    suffixes.some((suffix) => suffix !== "" && migrationFileExists(`${sourcePath}${suffix}`))
   );
 }
 
@@ -140,7 +149,7 @@ function archiveLegacyFileSource(params: {
 }): LegacyArchiveResolution | null {
   const archivedPath = `${params.sourcePath}.migrated`;
   try {
-    if (fileExists(archivedPath)) {
+    if (migrationFileExists(archivedPath)) {
       // Import has already committed before archival. Identical archive bytes
       // preserve the same snapshot, so the leftover source can be removed.
       if (fs.readFileSync(params.sourcePath).equals(fs.readFileSync(archivedPath))) {
@@ -181,7 +190,7 @@ function archiveLegacySqliteSidecar(params: {
 }): void {
   const existingSources = PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES.map(
     (suffix) => `${params.sourcePath}${suffix}`,
-  ).filter(fileExists);
+  ).filter(migrationFileExists);
   if (existingSources.length === 0) {
     return;
   }
@@ -228,9 +237,12 @@ export function readLegacyInstalledPluginIndex(sourcePath: string): InstalledPlu
     if (current) {
       return current;
     }
+    const topLevelInstallRecords = readLegacyTopLevelInstallRecords(parsed);
     const installRecords =
-      readLegacyTopLevelInstallRecords(parsed) ?? readLegacyEmbeddedInstallRecords(parsed);
-    if (!installRecords || typeof installRecords !== "object" || Array.isArray(installRecords)) {
+      topLevelInstallRecords === undefined
+        ? readLegacyEmbeddedInstallRecords(parsed)
+        : topLevelInstallRecords;
+    if (!installRecords) {
       return null;
     }
     return parseInstalledPluginIndex({
@@ -249,15 +261,24 @@ export function readLegacyInstalledPluginIndex(sourcePath: string): InstalledPlu
   }
 }
 
-function readLegacyTopLevelInstallRecords(parsed: unknown): unknown {
+function readLegacyTopLevelInstallRecords(
+  parsed: unknown,
+): Record<string, PluginInstallRecord> | null | undefined {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return null;
   }
-  const legacy = parsed as { installRecords?: unknown; records?: unknown };
-  return legacy.installRecords ?? legacy.records;
+  const legacy = parsed as Record<string, unknown>;
+  const key = Object.hasOwn(legacy, "installRecords")
+    ? "installRecords"
+    : Object.hasOwn(legacy, "records")
+      ? "records"
+      : undefined;
+  return key ? parsePluginInstallRecordMap(legacy[key]) : undefined;
 }
 
-function readLegacyEmbeddedInstallRecords(parsed: unknown): Record<string, unknown> | null {
+function readLegacyEmbeddedInstallRecords(
+  parsed: unknown,
+): Record<string, PluginInstallRecord> | null {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return null;
   }
@@ -265,24 +286,24 @@ function readLegacyEmbeddedInstallRecords(parsed: unknown): Record<string, unkno
   if (!Array.isArray(plugins)) {
     return null;
   }
-  const records: Record<string, unknown> = {};
+  const records = createPluginInstallRecordMap<unknown>();
+  let found = false;
   for (const plugin of plugins) {
     if (!plugin || typeof plugin !== "object" || Array.isArray(plugin)) {
+      return null;
+    }
+    if (!Object.hasOwn(plugin, "installRecord")) {
       continue;
     }
     const pluginId = (plugin as { pluginId?: unknown }).pluginId;
     const installRecord = (plugin as { installRecord?: unknown }).installRecord;
-    if (
-      typeof pluginId === "string" &&
-      pluginId.trim() &&
-      installRecord &&
-      typeof installRecord === "object" &&
-      !Array.isArray(installRecord)
-    ) {
-      records[pluginId] = installRecord;
+    if (typeof pluginId !== "string" || !pluginId.trim()) {
+      return null;
     }
+    setPluginInstallRecordMapEntry(records, pluginId, installRecord);
+    found = true;
   }
-  return Object.keys(records).length > 0 ? records : null;
+  return found ? parsePluginInstallRecordMap(records) : null;
 }
 
 export function legacyInstalledPluginIndexMatches(
@@ -290,7 +311,8 @@ export function legacyInstalledPluginIndexMatches(
   legacy: InstalledPluginIndex,
 ): boolean {
   return (
-    JSON.stringify(current.installRecords) === JSON.stringify(legacy.installRecords) &&
+    serializePluginInstallRecordMap(current.installRecords) ===
+      serializePluginInstallRecordMap(legacy.installRecords) &&
     JSON.stringify(current.plugins) === JSON.stringify(legacy.plugins) &&
     JSON.stringify(current.diagnostics) === JSON.stringify(legacy.diagnostics)
   );
@@ -396,13 +418,13 @@ export function mergeLegacyInstalledPluginIndexRecords(
   current: InstalledPluginIndex,
   legacy: InstalledPluginIndex,
 ): { merged: InstalledPluginIndex; addedCount: number; conflicts: string[] } {
-  const installRecords = { ...current.installRecords };
+  const installRecords = copyPluginInstallRecordMap(current.installRecords);
   const conflicts: string[] = [];
   let addedCount = 0;
   for (const [pluginId, legacyRecord] of Object.entries(legacy.installRecords)) {
-    const currentRecord = installRecords[pluginId];
+    const currentRecord = getPluginInstallRecordMapEntry(installRecords, pluginId);
     if (!currentRecord) {
-      installRecords[pluginId] = legacyRecord;
+      setPluginInstallRecordMapEntry(installRecords, pluginId, legacyRecord);
       addedCount += 1;
       continue;
     }
@@ -610,7 +632,7 @@ async function migrateLegacyTaskRunsSidecar(params: {
   stateDir: string;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const sourcePath = resolveLegacyTaskRunsSidecarPath(params.stateDir);
-  if (!fileExists(sourcePath)) {
+  if (!migrationFileExists(sourcePath)) {
     const changes: string[] = [];
     const warnings: string[] = [];
     if (hasPendingSqliteSidecarArchive(sourcePath, TASK_STATE_SQLITE_SIDECAR_SUFFIXES)) {
@@ -748,7 +770,7 @@ async function migrateLegacyFlowRunsSidecar(params: {
   stateDir: string;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const sourcePath = resolveLegacyFlowRunsSidecarPath(params.stateDir);
-  if (!fileExists(sourcePath)) {
+  if (!migrationFileExists(sourcePath)) {
     const changes: string[] = [];
     const warnings: string[] = [];
     if (hasPendingSqliteSidecarArchive(sourcePath, TASK_STATE_SQLITE_SIDECAR_SUFFIXES)) {

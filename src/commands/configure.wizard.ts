@@ -7,13 +7,8 @@ import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatPortRangeHint } from "../cli/error-format.js";
 import { parsePort } from "../cli/shared/parse-port.js";
-import {
-  createConfigIO,
-  readConfigFileSnapshotForWrite,
-  resolveGatewayPort,
-} from "../config/config.js";
+import { readConfigFileSnapshotForWrite, resolveGatewayPort } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
-import { ConfigMutationConflictError } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
@@ -25,7 +20,7 @@ import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { resolveSetupSecretInputString } from "../wizard/setup.secret-input.js";
-import { mergeWizardConfigOntoLatest } from "../wizard/setup.shared.js";
+import { writeWizardConfigFile } from "../wizard/setup.shared.js";
 import { removeChannelConfigWizard } from "./configure.channels.js";
 import { maybeInstallDaemon } from "./configure.daemon.js";
 import { promptAuthConfig } from "./configure.gateway-auth.js";
@@ -405,13 +400,7 @@ export async function runConfigureWizard(
       expectedConfigPath: prepared.writeOptions.expectedConfigPath,
       ownedConfigPathForWrite: prepared.writeOptions.ownedConfigPathForWrite,
     };
-    const readOwnedConfigSnapshot = async () =>
-      (
-        await createConfigIO({
-          configPath: configWriteOwnership.ownedConfigPathForWrite,
-        }).readConfigFileSnapshotForWrite()
-      ).snapshot;
-    let currentBaseHash = snapshot.hash;
+    const currentBaseHash = snapshot.hash;
     const baseConfig: OpenClawConfig = snapshot.valid
       ? (snapshot.sourceConfig ?? snapshot.config)
       : {};
@@ -528,7 +517,6 @@ export async function runConfigureWizard(
         writeOptions: configWriteOwnership,
       });
       remoteConfig = committed.config;
-      currentBaseHash = undefined;
       logConfigUpdated(runtime);
       outro("Remote gateway configured.");
       return;
@@ -557,44 +545,12 @@ export async function runConfigureWizard(
         mode: metadataMode,
       });
 
-      // Retry loop: if config was mutated by a plugin, re-read and merge before retry
-      const maxRetries = 3;
-      for (let attempt = 0; attempt < maxRetries; attempt++) {
-        try {
-          const committed = await commitConfigWithPendingPluginInstalls({
-            nextConfig,
-            ...(currentBaseHash !== undefined ? { baseHash: currentBaseHash } : {}),
-            writeOptions: configWriteOwnership,
-          });
-          nextConfig = committed.config;
-
-          // After successful write, re-read the snapshot to get the new hash
-          const freshSnapshot = await readOwnedConfigSnapshot();
-          currentBaseHash = freshSnapshot.hash ?? undefined;
-          mergeBaseConfig = structuredClone(nextConfig);
-
-          logConfigUpdated(runtime);
-          return;
-        } catch (err) {
-          if (
-            err instanceof ConfigMutationConflictError &&
-            err.retryable &&
-            attempt < maxRetries - 1
-          ) {
-            // Config was mutated externally (e.g. plugin wrote token during auth setup).
-            // Re-read the on-disk config and merge plugin changes into nextConfig so
-            // the retry won't silently overwrite them.
-            const freshSnapshot = await readOwnedConfigSnapshot();
-            currentBaseHash = freshSnapshot.hash ?? undefined;
-            const diskConfig = freshSnapshot.valid
-              ? (freshSnapshot.sourceConfig ?? freshSnapshot.config)
-              : {};
-            nextConfig = mergeWizardConfigOntoLatest(diskConfig, mergeBaseConfig, nextConfig);
-            continue;
-          }
-          throw err;
-        }
-      }
+      nextConfig = await writeWizardConfigFile(nextConfig, {
+        mergeBase: mergeBaseConfig,
+        writeOptions: configWriteOwnership,
+      });
+      mergeBaseConfig = structuredClone(nextConfig);
+      logConfigUpdated(runtime);
     };
 
     const configureWorkspace = async () => {

@@ -153,24 +153,14 @@ injection behavior from the shared defaults. Omitted fields inherit from
 }
 ```
 
-### `agents.defaults.bootstrapPromptTruncationWarning`
+### Bootstrap truncation notice
 
-Controls the agent-visible system-prompt notice when bootstrap context is truncated.
-Default: `"always"`.
-
-- `"off"`: never inject truncation notice text into the system prompt.
-- `"once"`: inject a concise notice once per unique truncation signature.
-- `"always"`: inject a concise notice on every run when truncation exists (recommended).
-
-Detailed raw/injected counts and config tuning fields stay in diagnostics such
-as context/status reports and logs; routine WebChat user/runtime context only
-gets the concise recovery notice.
-
-```json5
-{
-  agents: { defaults: { bootstrapPromptTruncationWarning: "always" } }, // off | once | always
-}
-```
+When bootstrap context is truncated, OpenClaw always injects a concise
+agent-visible notice into the system prompt saying some bootstrap files were
+truncated and to read the affected files directly. This notice is built in
+and not configurable, and it deliberately omits per-file diagnostics: file
+names, raw vs injected counts, and limit causes stay in diagnostics such as
+context/status reports and logs.
 
 ### Context budget ownership map
 
@@ -184,7 +174,6 @@ knob.
 | `agents.defaults.startupContext.*`                             | One-shot reset/startup model-run prelude, including recent daily `memory/*.md` files. Bare chat `/new` and `/reset` are acknowledged without invoking the model |
 | `skills.limits.*`                                              | The compact skills list injected into the system prompt                                                                                                         |
 | `agents.defaults.contextLimits.*`                              | Bounded runtime excerpts and injected runtime-owned blocks                                                                                                      |
-| `memory.qmd.limits.*`                                          | Indexed memory-search snippet and injection sizing                                                                                                              |
 
 Matching per-agent overrides:
 
@@ -506,16 +495,16 @@ as shown above. See [CLI backends](/gateway/cli-backends) for operations and
 [building CLI backend plugins](/plugins/cli-backend-plugins) for command,
 session, image, and parser registration.
 
-### `agents.defaults.promptOverlays`
+### OpenAI GPT-5 personality
 
-Provider-independent prompt overlays applied by model family on OpenClaw-assembled prompt surfaces. GPT-5-family model ids receive the shared behavior contract across OpenClaw/provider routes; `personality` controls only the friendly interaction-style layer. Native Codex app-server routes keep Codex-owned base/model instructions instead of this OpenClaw GPT-5 overlay, and OpenClaw disables Codex's built-in personality for native threads.
+The bundled OpenAI plugin owns the GPT-5 friendly interaction-style setting. Matching GPT-5-family prompts receive the shared behavior contract; `personality` controls only the friendly style layer. Native Codex app-server routes keep Codex-owned base/model instructions instead of this OpenClaw GPT-5 contribution, and OpenClaw disables Codex's built-in personality for native threads.
 
 ```json5
 {
-  agents: {
-    defaults: {
-      promptOverlays: {
-        gpt5: {
+  plugins: {
+    entries: {
+      openai: {
+        config: {
           personality: "friendly", // friendly | on | off
         },
       },
@@ -526,7 +515,8 @@ Provider-independent prompt overlays applied by model family on OpenClaw-assembl
 
 - `"friendly"` (default) and `"on"` enable the friendly interaction-style layer.
 - `"off"` disables only the friendly layer; the tagged GPT-5 behavior contract remains enabled.
-- Legacy `plugins.entries.openai.config.personality` is still read when this shared setting is unset.
+
+See [OpenAI GPT-5 prompt contribution](/providers/openai#gpt-5-prompt-contribution) for provider and native Codex behavior.
 
 ### `agents.defaults.heartbeat`
 
@@ -542,7 +532,7 @@ Periodic heartbeat runs.
         activeHours: { start: "08:00", end: "24:00" },
         model: "openai/gpt-5.4-mini",
         session: "main",
-        target: "none", // default: none | options: last | whatsapp | telegram | discord | ...
+        target: "owner", // default | options: last | none | whatsapp | telegram | discord | ...
         directPolicy: "allow", // allow (default) | block
         to: "+15555550123",
         accountId: "ops-bot",
@@ -562,6 +552,8 @@ Periodic heartbeat runs.
 - The heartbeat object is strict. Its supported fields are `every`, `activeHours`, `model`, `session`, `target`, `directPolicy`, `to`, `accountId`, `prompt`, `timeoutSeconds`, `lightContext`, and `isolatedSession`.
 - `timeoutSeconds`: maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use `agents.defaults.timeoutSeconds` when set, otherwise the heartbeat cadence capped at 600 seconds.
 - `directPolicy`: direct/DM delivery policy. `allow` (default) permits direct-target delivery. `block` suppresses direct-target delivery and emits `reason=dm-blocked`.
+- `target`: `owner` (default) sends only to a direct-message identity from `commands.ownerAllowFrom` or channel `allowFrom`. `last` explicitly follows the latest conversation, including groups. `none` keeps results internal.
+- `to`: used only with an explicit channel target. `owner` and an unset target ignore it.
 - `lightContext`: when true, heartbeat runs use lightweight bootstrap context and skip workspace bootstrap files. Monitor scratch is injected by the heartbeat runner either way.
 - `isolatedSession`: when true, each heartbeat runs in a fresh session with no prior conversation history. Same isolation pattern as cron `sessionTarget: "isolated"`. Reduces per-heartbeat token cost from ~100K to ~2-5K tokens.
 - Busy deferral is automatic: scheduled heartbeats wait for main/cron activity, same-agent active runs, and target-session work. Immediate and manual wakes bypass only the broad same-agent active-run precheck.
@@ -1291,7 +1283,6 @@ Membership and visibility changes are written into the session transcript as sys
     ackReactionScope: "group-mentions", // group-mentions | group-all | direct | all | off | none
     queue: {
       mode: "steer", // steer (default) | followup | collect | interrupt
-      debounceMs: 500,
       cap: 20,
       drop: "summarize", // old | new | summarize (default)
       byChannel: {
@@ -1347,11 +1338,13 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
   - `followup`: run the new prompt after the active run finishes.
   - `collect`: batch compatible messages and run them together later.
   - `interrupt`: abort the active run before starting the newest prompt.
-- `debounceMs`: delay before dispatching a queued/steered message. Default: `500`.
+- The queue uses a built-in 500ms debounce for steer, followup, and collect batching.
 - `cap`: maximum queued messages before the drop policy applies. Default: `20`.
 - `drop`: strategy when the cap is exceeded. `"summarize"` (default) drops oldest entries but keeps compact summaries; `"old"` drops oldest without summaries; `"new"` rejects the newest item.
 - `byChannel`: per-channel `mode` overrides keyed by provider id.
-- `debounceMsByChannel`: per-channel `debounceMs` overrides keyed by provider id.
+- `debounceMsByChannel`: per-channel debounce overrides in milliseconds, keyed by provider id.
+
+Use `messages.inbound.debounceMs` for the global pre-queue debounce window.
 
 ### Inbound debounce
 

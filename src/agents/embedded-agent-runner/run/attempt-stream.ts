@@ -20,14 +20,13 @@ import {
   dropThinkingBlocks,
   wrapAnthropicStreamWithRecovery,
 } from "../thinking.js";
-import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
-import { resolveUnknownToolGuardThreshold } from "./attempt.run-decisions.js";
-import type { createEmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
+import { resolveUnknownToolGuardThreshold } from "./attempt-run-decisions.js";
 import {
   createYieldAbortedResponse,
   isSessionsYieldAbortReason,
-} from "./attempt.sessions-yield.js";
-import { wrapStreamFnHandleSensitiveStopReason } from "./attempt.stop-reason-recovery.js";
+} from "./attempt-sessions-yield.js";
+import { wrapStreamFnHandleSensitiveStopReason } from "./attempt-stop-reason-recovery.js";
+import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 import {
   shouldRepairMalformedToolCallArguments,
   wrapStreamFnDecodeXaiToolCallArguments,
@@ -51,10 +50,6 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type CacheTrace = ReturnType<typeof createCacheTrace>;
 type AnthropicPayloadLogger = ReturnType<typeof createAnthropicPayloadLogger>;
-type AttemptSessionLockController = Awaited<
-  ReturnType<typeof createEmbeddedAttemptSessionLockController>
->;
-
 export function installEmbeddedAttemptStreamGuards(input: {
   attempt: EmbeddedRunAttemptParams;
   session: AgentSession;
@@ -64,7 +59,6 @@ export function installEmbeddedAttemptStreamGuards(input: {
   systemPromptText: string;
   transcriptPolicy: TranscriptPolicy;
   sessionManager: SessionManager | undefined;
-  sessionLockController: AttemptSessionLockController;
   isOpenAIResponsesApi: boolean;
   replayAllowedToolNames: Set<string>;
   liveAllowedToolNames: Set<string>;
@@ -138,7 +132,6 @@ export function installEmbeddedAttemptStreamGuards(input: {
         });
         if (repair.repaired) {
           input.onRejectedThinkingReplayRepaired();
-          input.sessionLockController.refreshAfterOwnedSessionWrite();
           return;
         }
         log.warn(

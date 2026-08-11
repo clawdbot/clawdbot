@@ -8,7 +8,6 @@ import {
   ErrorCodes,
   type ErrorShape,
   errorShape,
-  normalizeSessionIconInput,
   type SessionCreatedActor,
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
@@ -291,19 +290,6 @@ export async function projectSessionsPatchEntry(params: {
 
   if ("boardFace" in patch && patch.boardFace !== undefined) {
     next.boardFace = patch.boardFace;
-  }
-
-  if ("icon" in patch) {
-    const raw = patch.icon;
-    if (raw === null) {
-      delete next.icon;
-    } else if (raw !== undefined) {
-      const normalized = normalizeSessionIconInput(raw);
-      if (!normalized.ok) {
-        return invalid(`invalid icon: ${normalized.reason}`);
-      }
-      next.icon = normalized.value;
-    }
   }
 
   if ("statusNote" in patch || "attention" in patch || "ttlMinutes" in patch) {
@@ -697,38 +683,4 @@ export async function projectSessionsPatchEntry(params: {
   }
 
   return { ok: true, entry: next };
-}
-
-/** Apply a validated gateway session patch to an in-memory session store entry. */
-export async function applySessionsPatchToStore(params: {
-  cfg: OpenClawConfig;
-  store: Record<string, SessionEntry>;
-  storeKey: string;
-  agentId?: string;
-  patch: SessionsPatchParams;
-  archivedBy?: SessionCreatedActor;
-  loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
-  providerAuthMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
-  /** Exact harness owner authorized to project its new reserved session row. */
-  authorizedAgentHarnessId?: string;
-}): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
-  const projected = await projectSessionsPatchEntry({
-    cfg: params.cfg,
-    existingEntry: params.store[params.storeKey],
-    isLabelInUse: (label) =>
-      Object.entries(params.store).some(
-        ([sessionKey, entry]) => sessionKey !== params.storeKey && entry.label === label,
-      ),
-    storeKey: params.storeKey,
-    agentId: params.agentId,
-    patch: params.patch,
-    archivedBy: params.archivedBy,
-    loadGatewayModelCatalog: params.loadGatewayModelCatalog,
-    providerAuthMetadataSnapshot: params.providerAuthMetadataSnapshot,
-    authorizedAgentHarnessId: params.authorizedAgentHarnessId,
-  });
-  if (projected.ok) {
-    params.store[params.storeKey] = projected.entry;
-  }
-  return projected;
 }

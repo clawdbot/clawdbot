@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "vitest";
+import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { WorkerProvider, WorkerSshEndpoint } from "../plugins/types.js";
 import { runCommandWithTimeout, type CommandOptions, type SpawnResult } from "../process/exec.js";
 import {
@@ -29,6 +30,7 @@ import {
 import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
 import type { WorkerSshProcess, WorkerSshRunner } from "./worker-environments/tunnel-ssh-runner.js";
 import { createWorkerTunnelManager } from "./worker-environments/tunnel.js";
+import { prepareLocalWorkspaceRsyncBoundary } from "./worker-environments/tunnel.test-support.js";
 import { rsyncArgvPort, sshArgvPort } from "./worker-environments/worker-ssh-argv.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./worker-environments/workspace-operation-coordinator.js";
 
@@ -43,7 +45,7 @@ const BUNDLE_HASH = "a".repeat(64);
 const RECEIPT = {
   bundleHash: BUNDLE_HASH,
   openclawVersion: "2026.8.1",
-  protocolFeatures: [],
+  protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
 };
 const INSTALLATION: WorkerInstallationArtifact = {
   install: "bundle",
@@ -189,14 +191,17 @@ class OriginalOrderSshRunner implements WorkerSshRunner {
     }
     if (argv[0] === "rsync") {
       this.events.push(`workspace:transfer:${port}`);
+      if (argv.some((arg) => arg.startsWith("--rsync-path="))) {
+        const boundary = await prepareLocalWorkspaceRsyncBoundary(this.remoteHome, argv);
+        return await runCommandWithTimeout(boundary.argv, {
+          ...options,
+          baseEnv: { ...options.baseEnv, HOME: this.remoteHome },
+        });
+      }
       const localArgv = [...argv];
       const remoteShellIndex = localArgv.indexOf("-e");
       if (remoteShellIndex >= 0) {
         localArgv.splice(remoteShellIndex, 2);
-      }
-      const remoteReceiverIndex = localArgv.findIndex((arg) => arg.startsWith("--rsync-path="));
-      if (remoteReceiverIndex >= 0) {
-        localArgv.splice(remoteReceiverIndex, 1);
       }
       for (let index = 1; index < localArgv.length; index += 1) {
         const candidate = localArgv[index];
@@ -445,6 +450,7 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
     profileId: PROFILE_ID,
   });
   expect(active).toMatchObject({ state: "active", environmentId: ENVIRONMENT_ID });
+  expect(runner.starts).toHaveLength(1);
   await expect(fs.stat(runner.bootstrapUploadPath)).rejects.toMatchObject({ code: "ENOENT" });
   await expect(fs.readFile(runner.bootstrapReceiptPath, "utf8")).resolves.toBe(
     `${JSON.stringify(RECEIPT)}\n`,

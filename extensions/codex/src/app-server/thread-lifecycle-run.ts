@@ -75,7 +75,8 @@ export async function startOrResumeThread(
       ringZeroActive,
       ringZeroClientInstanceId,
       ringZeroConfigFingerprint,
-      ringZeroInheritedMcpServerNames,
+      restrictedToolSurface,
+      restrictedToolSurfaceInheritedMcpServerNames,
       userMcpServersConfigPatch,
       userMcpServersFingerprint,
       webSearchThreadConfigFingerprint,
@@ -183,6 +184,9 @@ export async function startOrResumeThread(
         nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
         nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
         webSearchAllowed: params.webSearchAllowed,
+        hostSystemAgentActive,
+        restrictedToolSurface,
+        restrictedToolSurfaceInheritedMcpServerNames,
         environmentSelection: params.environmentSelection,
         provisionalAppIds: pluginThreadConfig?.provisionalAppIds,
         signal: params.signal,
@@ -396,7 +400,7 @@ export async function startOrResumeThread(
       assertCodexBindingMayBeReplaced(binding, "changing web-search configuration");
       if (!ringZeroActive && transientWebSearchRestriction) {
         embeddedAgentLog.debug(
-          "codex app-server web search restricted for turn; starting transient thread",
+          "codex app-server tool surface restricted for turn; starting transient thread",
           {
             threadId: binding.threadId,
           },
@@ -498,18 +502,23 @@ export async function startOrResumeThread(
       });
       if (
         !pluginBindingStale &&
-        shouldRecheckRecoverablePluginBinding({
-          binding,
-          pluginThreadConfig: params.pluginThreadConfig,
-        })
+        (params.pluginThreadConfig?.requiresCurrentPolicyCheck ||
+          shouldRecheckRecoverablePluginBinding({
+            binding,
+            pluginThreadConfig: params.pluginThreadConfig,
+          }))
       ) {
         try {
+          const bindingThreadId = binding.threadId;
           prebuiltPluginThreadConfig = await lifecycleTiming.measure("plugin-config-recovery", () =>
-            params.pluginThreadConfig?.build(),
+            params.pluginThreadConfig?.build({ threadId: bindingThreadId }),
           );
           pluginBindingStale =
             prebuiltPluginThreadConfig?.fingerprint !== binding.pluginAppsFingerprint;
         } catch (error) {
+          if (params.pluginThreadConfig?.requiresCurrentPolicyCheck) {
+            throw error;
+          }
           embeddedAgentLog.warn("codex app-server plugin app config recovery check failed", {
             error,
             threadId: binding.threadId,
@@ -613,7 +622,7 @@ export async function startOrResumeThread(
               cause,
             }),
           ringZeroActive,
-          ringZeroInheritedMcpServerNames,
+          restrictedToolSurfaceInheritedMcpServerNames,
           startModelProvider,
           startModelSelection,
           throwIfAborted,
@@ -643,13 +652,14 @@ export async function startOrResumeThread(
           environmentSelectionFingerprint,
           hostSystemAgentActive,
           ringZeroActive,
-          ringZeroInheritedMcpServerNames,
+          restrictedToolSurfaceInheritedMcpServerNames,
           nativeSkillIsolation,
           lifecycleTiming,
           normalizeBindingModelProvider,
           throwIfAborted,
           clearCurrentBinding,
           prebuiltFinalConfigPatch: warmReuse.prebuiltFinalConfigPatch,
+          prebuiltPluginThreadConfig,
         });
         if (resumed) {
           return resumed;
@@ -677,7 +687,7 @@ export async function startOrResumeThread(
       environmentSelectionFingerprint,
       hostSystemAgentActive,
       ringZeroActive,
-      ringZeroInheritedMcpServerNames,
+      restrictedToolSurfaceInheritedMcpServerNames,
       nativeSkillIsolation,
       lifecycleTiming,
       normalizeBindingModelProvider,

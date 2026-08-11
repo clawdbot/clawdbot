@@ -3,7 +3,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
-  type SessionsPatchManyResult,
   validateSessionsPatchManyParams,
   validateSessionsPatchParams,
   validateSessionsPluginPatchParams,
@@ -14,7 +13,7 @@ import { isPluginJsonValue } from "../../plugins/host-hooks.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
-import { executeSessionPatchEngine } from "./sessions-patch-engine.js";
+import { executeSessionPatch, executeSessionPatchMany } from "./sessions-patch-engine.js";
 import { loadSessionsRuntimeModule, requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -32,8 +31,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const executed = await executeSessionPatchEngine({
-      authorizationMode: "target",
+    const executed = await executeSessionPatchMany({
       client,
       context,
       patch: params.patch,
@@ -44,81 +42,31 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       respond(false, undefined, executed.error);
       return;
     }
-    const outcomes: SessionsPatchManyResult["outcomes"] = executed.outcomes.map((outcome) => {
-      if (!outcome.ok) {
-        return outcome;
-      }
-      return outcome.agentId
-        ? { ok: true, key: outcome.key, agentId: outcome.agentId }
-        : { ok: true, key: outcome.key };
-    });
-    respond(true, { outcomes } satisfies SessionsPatchManyResult, undefined);
+    respond(true, { outcomes: executed.outcomes }, undefined);
   },
   "sessions.patch": async ({ params, respond, context, client, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsPatchParams, "sessions.patch", respond)) {
       return;
     }
-    const key = requireSessionKey(params.key, respond);
+    // Beta v4 clients may still send the retired icon field. Drop it at the
+    // Gateway boundary so it cannot re-enter session state or patch hooks.
+    const canonicalParams = { ...params } as typeof params & { icon?: unknown };
+    delete canonicalParams.icon;
+    const key = requireSessionKey(canonicalParams.key, respond);
     if (!key) {
       return;
     }
-    const executed = await executeSessionPatchEngine({
-      authorizationMode: "request",
+    const executed = await executeSessionPatch({
       client,
       context,
-      patch: params,
+      patch: { ...canonicalParams, key },
       sessionMutationAuthorization,
-      targets: [
-        {
-          key,
-          ...(params.agentId ? { agentId: params.agentId } : {}),
-          ...(params.expectedSessionId !== undefined
-            ? { expectedSessionId: params.expectedSessionId }
-            : {}),
-          ...(params.expectedLifecycleRevision !== undefined
-            ? { expectedLifecycleRevision: params.expectedLifecycleRevision }
-            : {}),
-        },
-      ],
     });
     if (!executed.ok) {
       respond(false, undefined, executed.error);
       return;
     }
-    const outcome = executed.outcomes[0];
-    if (!outcome) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          "Session patch failed unexpectedly. Retry the request.",
-          {
-            retryable: true,
-          },
-        ),
-      );
-      return;
-    }
-    if (!outcome.ok) {
-      respond(false, undefined, outcome.error);
-      return;
-    }
-    if (!outcome.result) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          "Session patch failed unexpectedly. Retry the request.",
-          {
-            retryable: true,
-          },
-        ),
-      );
-      return;
-    }
-    respond(true, outcome.result, undefined);
+    respond(true, executed.result, undefined);
   },
   "sessions.pluginPatch": async ({
     params,

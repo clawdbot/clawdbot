@@ -7,8 +7,8 @@
 import {
   appendTranscriptMessageSync,
   loadTranscriptEventsSync,
+  type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
-import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { Message } from "../../llm/types.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
@@ -33,8 +33,6 @@ export type {
   LabelEntry,
   ModelChangeEntry,
   NewSessionOptions,
-  PromptReleasedSessionEntry,
-  PromptReleasedSessionMergeResult,
   ResetEntry,
   ResetReason,
   SessionContext,

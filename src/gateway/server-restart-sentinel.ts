@@ -4,14 +4,14 @@ import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import {
   resolveCorrelatedSubagentDelivery,
   settleCorrelatedSubagentDelivery,
-} from "../agents/subagent-completion-delivery.js";
+} from "../agents/subagents/completion/subagent-completion-delivery.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "../auto-reply/reply/get-reply-run-queue.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
-import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
+import { dispatchReplyWithBufferedBlockDispatcherCore } from "../auto-reply/reply/provider-dispatcher.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { recordInboundSession } from "../channels/session.js";
-import { dispatchAssembledChannelTurn } from "../channels/turn/kernel.js";
+import { dispatchAssembledChannelTurn } from "../channels/turn/lifecycle.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
@@ -297,7 +297,7 @@ export async function deliverQueuedSessionDelivery(params: {
     storePath,
     ctxPayload,
     recordInboundSession,
-    dispatchReplyWithBufferedBlockDispatcher,
+    dispatchReplyWithBufferedBlockDispatcher: dispatchReplyWithBufferedBlockDispatcherCore,
     replyOptions: {
       sourceReplyDeliveryMode: "message_tool_only",
     },

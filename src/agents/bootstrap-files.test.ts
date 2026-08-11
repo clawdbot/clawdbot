@@ -632,20 +632,6 @@ describe("resolveBootstrapContextForRun", () => {
     expect(files).toStrictEqual([]);
   });
 
-  it("excludes HEARTBEAT.md from commitment-only context", async () => {
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
-    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "global work", "utf8");
-    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "persona", "utf8");
-
-    const files = await resolveBootstrapFilesForRun({
-      workspaceDir,
-      runKind: "commitment-only",
-    });
-
-    expect(files.map((file) => file.name)).not.toContain("HEARTBEAT.md");
-    expect(files.map((file) => file.name)).toContain("SOUL.md");
-  });
-
   it("never re-imports a leftover workspace HEARTBEAT.md into bootstrap context", async () => {
     const workspaceDir = await createHeartbeatAgentsWorkspace();
 

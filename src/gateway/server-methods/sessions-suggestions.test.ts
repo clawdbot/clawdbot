@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
@@ -79,14 +80,6 @@ const defaultSuggestionSession = {
 
 function upsertDefaultSuggestionSession() {
   return upsertSessionEntry({ agentId: "main", sessionKey }, defaultSuggestionSession);
-}
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
-    resolve = nextResolve;
-  });
-  return { promise, resolve };
 }
 
 function client(profileId: string, displayName: string, admin = false): GatewayClient {
@@ -851,7 +844,7 @@ describe("session suggestion handlers", () => {
         client("alice", "Alice"),
       );
       const id = responseSuggestionId(added);
-      const gate = createDeferred<void>();
+      const gate = createDeferred();
       mocks.handleChatSend.mockImplementationOnce(async ({ respond }: { respond: RespondFn }) => {
         await gate.promise;
         respond(true, { runId: "suggestion-run", status: "started" });
@@ -891,7 +884,7 @@ describe("session suggestion handlers", () => {
         { sessionKey, text: "dispatch before reset" },
         client("alice", "Alice"),
       );
-      const dispatched = createDeferred<void>();
+      const dispatched = createDeferred();
       mocks.handleChatSend.mockImplementationOnce(async ({ respond }: { respond: RespondFn }) => {
         await dispatched.promise;
         respond(true, { runId: "suggestion-run", status: "started" });

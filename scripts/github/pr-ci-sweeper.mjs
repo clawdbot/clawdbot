@@ -35,6 +35,21 @@ const sleep = (ms) =>
     setTimeout(resolve, ms);
   });
 
+/**
+ * @param {{
+ *   pr: {
+ *     draft?: boolean;
+ *     created_at: string;
+ *     updated_at: string;
+ *     mergeable?: boolean | null;
+ *     auto_merge?: object | null;
+ *   };
+ *   ciRuns: Array<{ conclusion: string | null }>;
+ *   botCloseCount: number;
+ *   now: number;
+ * }} params
+ * @returns {{ action: "refire" | "skip"; reason: string }}
+ */
 export function classifyPrForSweep({ pr, ciRuns, botCloseCount, now }) {
   if (pr.draft) {
     return { action: "skip", reason: "draft" };
@@ -69,6 +84,22 @@ export function classifyPrForSweep({ pr, ciRuns, botCloseCount, now }) {
   };
 }
 
+/**
+ * @param {{
+ *   run: {
+ *     conclusion: string | null;
+ *     event: string;
+ *     run_attempt: number;
+ *     created_at: string;
+ *     head_branch?: string | null;
+ *     head_repository?: { full_name?: string };
+ *   };
+ *   prCreatedAt: string;
+ *   prHeadBranch: string;
+ *   repoFullName: string;
+ * }} params
+ * @returns {{ action: "revive" | "skip"; reason: string }}
+ */
 export function classifyRunForRevive({ run, prCreatedAt, prHeadBranch, repoFullName }) {
   if (run.conclusion !== "cancelled") {
     return { action: "skip", reason: "not-cancelled" };
@@ -297,6 +328,22 @@ async function reopenWithRetry({ github, core, owner, repo, pullNumber }) {
   return false;
 }
 
+/**
+ * @param {{
+ *   github: Record<string, unknown>;
+ *   context: Record<string, unknown>;
+ *   core: Pick<Console, "info"> & { setFailed: (message: string) => void };
+ *   dryRun?: boolean;
+ *   appSlug?: string;
+ *   now?: number;
+ * }} params
+ * @returns {Promise<Array<{
+ *   number: number;
+ *   sha: string;
+ *   action: "refire" | "skip";
+ *   reason: string;
+ * }>>}
+ */
 export async function runPrCiSweeper({
   github,
   context,

@@ -23,11 +23,11 @@ If the node and gateway are on different networks, multicast mDNS can't cross th
 ```json5
 {
   gateway: { bind: "tailnet" }, // tailnet-only (recommended)
-  discovery: { wideArea: { enabled: true, domain: "openclaw.internal" } },
+  discovery: { wideArea: { domain: "openclaw.internal" } },
 }
 ```
 
-`discovery.wideArea.domain` also accepts the `OPENCLAW_WIDE_AREA_DOMAIN` env var as a fallback when unset.
+Setting `discovery.wideArea.domain` enables wide-area discovery. OpenClaw also accepts the `OPENCLAW_WIDE_AREA_DOMAIN` env var as a fallback when the config key is unset.
 
 ### One-time DNS server setup (gateway host, macOS only)
 

@@ -23,7 +23,6 @@ import {
 } from "./reply-parameters.js";
 import { TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS } from "./retry-after.js";
 import type { TelegramRichMessageContextParams } from "./rich-message.js";
-import { isTelegramHtmlParseError } from "./rich-plain-fallback.js";
 import { requireRuntimeConfig, type OpenClawConfig } from "./send.runtime.js";
 import { maybePersistResolvedTelegramTarget } from "./target-writeback.js";
 import { normalizeTelegramChatId, normalizeTelegramLookupTarget } from "./targets.js";
@@ -32,7 +31,6 @@ export type TelegramApi = Bot["api"];
 export type TelegramApiOverride = Partial<TelegramApi>;
 export type TelegramThreadScopedParams = {
   message_thread_id?: number;
-  direct_messages_topic_id?: number;
   reply_parameters?: { message_id?: number };
   reply_to_message_id?: number;
 };
@@ -105,12 +103,6 @@ export function toAcceptedThreadScopedParams(
   const scoped: TelegramThreadScopedParams = {};
   if (typeof params.message_thread_id === "number" && Number.isFinite(params.message_thread_id)) {
     scoped.message_thread_id = params.message_thread_id;
-  }
-  if (
-    typeof params.direct_messages_topic_id === "number" &&
-    Number.isFinite(params.direct_messages_topic_id)
-  ) {
-    scoped.direct_messages_topic_id = params.direct_messages_topic_id;
   }
   if (
     typeof params.reply_to_message_id === "number" &&
@@ -395,29 +387,6 @@ export function isTelegramMessageHasNoTextError(err: unknown): boolean {
 
 export function isTelegramMessageDeleteNoopError(err: unknown): boolean {
   return MESSAGE_DELETE_NOOP_RE.test(formatErrorMessage(err));
-}
-
-export async function withTelegramHtmlParseFallback<T>(params: {
-  label: string;
-  verbose?: boolean;
-  requestHtml: (label: string) => Promise<T>;
-  requestPlain: (label: string) => Promise<T>;
-}): Promise<T> {
-  try {
-    return await params.requestHtml(params.label);
-  } catch (err) {
-    if (!isTelegramHtmlParseError(err)) {
-      throw err;
-    }
-    if (params.verbose) {
-      sendLogger.warn(
-        `telegram ${params.label} failed with HTML parse error, retrying as plain text: ${formatErrorMessage(
-          err,
-        )}`,
-      );
-    }
-    return await params.requestPlain(`${params.label}-plain`);
-  }
 }
 
 export async function withTelegramNativeQuoteFallback<T>(params: {

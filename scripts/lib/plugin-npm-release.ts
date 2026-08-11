@@ -34,6 +34,7 @@ type PluginPackageJson = {
       minGatewayVersion?: string;
     };
     build?: {
+      bundledDist?: boolean;
       openclawVersion?: string;
       pluginSdkVersion?: string;
     };
@@ -44,6 +45,13 @@ type PluginPackageJson = {
     };
   };
 };
+
+/** Explicit core ownership defers staged external publication until the plugin is externalized. */
+export function isPluginExternalPublicationDeferred(packageJson: {
+  openclaw?: { build?: { bundledDist?: unknown } };
+}): boolean {
+  return packageJson.openclaw?.build?.bundledDist === true;
+}
 
 export type RequiredLatestDependency = {
   packageName: string;
@@ -428,6 +436,9 @@ export function collectPublishablePluginPackages(
     }
     const packageName = packageJson.name?.trim() ?? "";
     if (hasSelectedPackageNames && !selectedPackageNames.has(packageName)) {
+      continue;
+    }
+    if (isPluginExternalPublicationDeferred(packageJson)) {
       continue;
     }
     if (packageJson.openclaw?.release?.publishToNpm !== true) {

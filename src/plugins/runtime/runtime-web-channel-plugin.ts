@@ -1,6 +1,6 @@
 // Runtime web-channel plugin helpers expose web-channel tools through activated plugin runtimes.
 import {
-  getDefaultLocalRoots as getDefaultLocalRootsImpl,
+  getDefaultLocalRootsCore,
   loadWebMedia as loadWebMediaImpl,
   loadWebMediaRaw as loadWebMediaRawImpl,
   optimizeImageToJpeg as optimizeImageToJpegImpl,
@@ -291,7 +291,7 @@ export const extractText = (...args: Parameters<WebChannelHeavyRuntimeModule["ex
 
 /** Returns default local media roots through the core media helper. */
 export function getDefaultLocalRoots(
-  ...args: Parameters<typeof getDefaultLocalRootsImpl>
-): ReturnType<typeof getDefaultLocalRootsImpl> {
-  return getDefaultLocalRootsImpl(...args);
+  ...args: Parameters<typeof getDefaultLocalRootsCore>
+): ReturnType<typeof getDefaultLocalRootsCore> {
+  return getDefaultLocalRootsCore(...args);
 }

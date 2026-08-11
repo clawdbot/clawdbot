@@ -1015,7 +1015,7 @@ describe("createBackupArchive", () => {
             INSERT INTO state_leases (
               scope, lease_key, owner, expires_at, heartbeat_at,
               payload_json, created_at, updated_at
-            ) VALUES ('plugin:memory-core:qmd', 'embed', 'worker', 9999999999999, 10, NULL, 10, 10)
+            ) VALUES ('core:test-fixture', 'write', 'worker', 9999999999999, 10, NULL, 10, 10)
           `,
         ).run();
 
@@ -1193,16 +1193,6 @@ describe("createBackupArchive", () => {
             .run(`keeper-${"y".repeat(16_384)}`);
           liveDb.exec("PRAGMA wal_checkpoint(TRUNCATE)");
           liveDb.prepare("DELETE FROM deleted_secrets WHERE value = ?").run(deletedSecret);
-          liveDb
-            .prepare(
-              `
-                INSERT INTO state_leases (
-                  scope, lease_key, owner, expires_at, heartbeat_at,
-                  payload_json, created_at, updated_at
-                ) VALUES ('plugin:memory-core:qmd', 'write', 'worker', 9999999999999, 1, NULL, 1, 1)
-              `,
-            )
-            .run();
         } finally {
           liveDb.close();
         }
@@ -1244,19 +1234,8 @@ describe("createBackupArchive", () => {
             provider: "openai",
             key: "sk-backup",
           });
-          expect(archivedDb.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
-            count: 0,
-          });
         } finally {
           archivedDb.close();
-        }
-        const sourceDb = new sqlite.DatabaseSync(liveDbPath, { readOnly: true });
-        try {
-          expect(sourceDb.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
-            count: 1,
-          });
-        } finally {
-          sourceDb.close();
         }
       },
     );
@@ -2407,7 +2386,7 @@ describe("createBackupArchive", () => {
           PRAGMA user_version = 1;
           PRAGMA wal_checkpoint(TRUNCATE);
           INSERT INTO durable_state (id, value) VALUES (1, 'committed-in-wal');
-          INSERT INTO state_leases (scope, lease_key) VALUES ('plugin:memory-core:qmd', 'write');
+          INSERT INTO state_leases (scope, lease_key) VALUES ('core:test-fixture', 'write');
         `);
         await fs.symlink(backingDbPath, linkedDbPath);
         await fs.link(backingDbPath, hardlinkedDbPath);

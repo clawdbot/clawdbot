@@ -11,7 +11,7 @@ import {
 import { replaceConfigFile } from "./mutate.js";
 import { redactSensitiveArgv } from "./redact-argv.js";
 import { REDACTED_SENTINEL, restoreRedactedValues } from "./redact-snapshot.js";
-import { buildConfigSchema } from "./schema.js";
+import { buildConfigSchemaCore } from "./schema.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
@@ -285,7 +285,7 @@ export async function setConfiguredMcpServer(params: {
   const restored = restoreRedactedValues(
     { mcp: { servers: { [name]: argvRestored.server } } },
     { mcp: { servers: loaded.mcpServers } },
-    buildConfigSchema().uiHints,
+    buildConfigSchemaCore().uiHints,
   );
   if (!restored.ok) {
     return {

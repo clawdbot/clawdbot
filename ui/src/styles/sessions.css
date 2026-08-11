@@ -169,7 +169,7 @@
   text-align: left;
   background: transparent;
   border: 0;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition: background var(--duration-fast) var(--ease-out);
 }
 

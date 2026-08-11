@@ -15,6 +15,7 @@ import type {
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
+import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   normalizeMessagePresentation,
@@ -431,10 +432,15 @@ export async function executeSendAction(params: {
             params.mediaUrls ??
             (params.mediaUrl ? [params.mediaUrl] : undefined);
           try {
+            const writerFence = getOwnedSessionTranscriptWriterFence();
             const mirrorResult = await appendAssistantMessageToSessionTranscript({
               agentId: params.ctx.mirror.agentId,
               sessionKey: params.ctx.mirror.sessionKey,
               expectedSessionId: params.ctx.mirror.expectedSessionId,
+              ...(writerFence?.expectedLifecycleRevision !== undefined
+                ? { expectedLifecycleRevision: writerFence.expectedLifecycleRevision }
+                : {}),
+              ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
               text: mirrorText,
               mediaUrls: mirrorMediaUrls,
               idempotencyKey: params.ctx.mirror.idempotencyKey,

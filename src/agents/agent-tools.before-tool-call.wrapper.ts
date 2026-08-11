@@ -14,6 +14,11 @@ import {
 } from "../infra/diagnostic-trace-context.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tools.js";
+import { recordRunSkillUsage } from "../skills/runtime/run-usage.js";
+import {
+  copyAgentToolSourceExecutionGuard,
+  runAgentToolSourceExecutionGuard,
+} from "./agent-tool-source-execution-guard.js";
 import {
   buildToolContentPrivateData,
   emitSkillUsedDiagnostic,
@@ -490,6 +495,9 @@ export function wrapToolWithBeforeToolCallHook(
           toolParams: executeParams,
         });
       }
+      // Host capabilities can close while hooks, approval, validation, or
+      // steering awaits. Recheck at the final synchronous source boundary.
+      runAgentToolSourceExecutionGuard(tool);
       onImplementationStart?.();
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
       const eventBase = buildEventBase(executeParams);
@@ -545,6 +553,15 @@ export function wrapToolWithBeforeToolCallHook(
           toolParams: executeParams,
           ctx,
         });
+        if (skillMatch) {
+          recordRunSkillUsage({
+            runId: ctx?.runId,
+            name: skillMatch.skillName,
+            source: skillMatch.skillSource,
+            activation: skillMatch.activation,
+            ...(skillMatch.skillFile ? { skillFile: skillMatch.skillFile } : {}),
+          });
+        }
         if (hookOptions.emitDiagnostics) {
           if (skillMatch) {
             emitSkillUsedDiagnostic({
@@ -691,6 +708,7 @@ export function rewrapToolWithBeforeToolCallHook(
   copyPluginToolMeta(tool, rewrapSource);
   copyChannelAgentToolMeta(tool as never, rewrapSource as never);
   copyToolTerminalPresentation(tool, rewrapSource);
+  copyAgentToolSourceExecutionGuard(tool, rewrapSource);
   return wrapToolWithBeforeToolCallHook(rewrapSource, ctx ?? preservedContext, options);
 }
 

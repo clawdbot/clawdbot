@@ -68,6 +68,7 @@ import {
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { resolveOpenAICodexAccountId } from "../utils/oauth/openai-chatgpt-jwt.js";
+import { projectProviderError } from "../utils/provider-error.js";
 import {
   createFirstStreamEventAbortController,
   getFirstStreamEventTimeoutHandler,
@@ -588,10 +589,9 @@ export const streamOpenAICodexResponses: StreamFunction<
         // partialJson is only a streaming scratch buffer; never persist it.
         delete (block as { partialJson?: string }).partialJson;
       }
-      output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-      output.errorMessage =
-        normalizedError instanceof Error ? normalizedError.message : String(normalizedError);
-      stream.push({ type: "error", reason: output.stopReason, error: output });
+      const terminal = projectProviderError(normalizedError, options?.signal);
+      Object.assign(output, terminal);
+      stream.push({ type: "error", reason: terminal.stopReason, error: output });
       stream.end();
     } finally {
       firstEventAbort?.dispose();

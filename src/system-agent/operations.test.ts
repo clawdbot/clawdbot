@@ -285,6 +285,14 @@ describe("parseSystemAgentOperation", () => {
       source: "env",
       id: "GATEWAY_TOKEN",
     });
+    expect(
+      parseSystemAgentOperation("config set-ref gateway.auth.token store GATEWAY_TOKEN"),
+    ).toEqual({
+      kind: "config-set-ref",
+      path: "gateway.auth.token",
+      source: "store",
+      id: "GATEWAY_TOKEN",
+    });
     expect(parseSystemAgentOperation("doctor fix")).toEqual({ kind: "doctor-fix" });
   });
 

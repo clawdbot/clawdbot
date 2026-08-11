@@ -31,7 +31,7 @@ import {
   ensureTaskRegistryReady,
   getPeerTasksForDelivery,
   loadTaskRegistryDeliveryRuntime,
-  log,
+  taskRegistryLog,
   pickPreferredRunIdTask,
   taskDeliveryStates,
   tasks,
@@ -290,7 +290,7 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
           lastEventAt: Date.now(),
         });
       } catch (error) {
-        log.warn("Failed to queue background task session delivery", {
+        taskRegistryLog.warn("Failed to queue background task session delivery", {
           taskId,
           ownerKey: latest.ownerKey,
           error,
@@ -335,7 +335,7 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
         lastEventAt: Date.now(),
       });
     } catch (error) {
-      log.warn("Failed to deliver background task update", {
+      taskRegistryLog.warn("Failed to deliver background task update", {
         taskId,
         ownerKey: ownerSessionKey,
         requesterOrigin: owner.requesterOrigin,
@@ -351,7 +351,7 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
           queueBlockedTaskFollowup(beforeFallback);
         }
       } catch (fallbackError) {
-        log.warn("Failed to queue background task fallback event", {
+        taskRegistryLog.warn("Failed to queue background task fallback event", {
           taskId,
           ownerKey: latest.ownerKey,
           error: fallbackError,
@@ -443,7 +443,7 @@ async function maybeDeliverTaskStateChangeUpdateUnderAdmission(
       lastEventAt: Date.now(),
     });
   } catch (error) {
-    log.warn("Failed to deliver background task state change", {
+    taskRegistryLog.warn("Failed to deliver background task state change", {
       taskId,
       ownerKey: current.ownerKey,
       error,

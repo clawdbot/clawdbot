@@ -16,9 +16,9 @@ import {
 } from "../../infra/diagnostics-timeline.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
+import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { updateChatRunProvider } from "../chat-abort.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
-import { setGatewayDedupeEntry } from "./agent-job.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import { hasGatewayAdminScope } from "./chat-origin-routing.js";
 import { terminalizeRestartSafeChatAdmission } from "./chat-restart-recovery.js";
@@ -33,11 +33,11 @@ import {
 } from "./chat-send-dispatch-errors.js";
 import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-authority-contract.js";
 import {
-  beginChatSendMessageInjection,
+  createChatSendMessageInjectionStarter,
   finalizeAcceptedChatSendMessageInjection,
+  settleChatSendPreAckMessageInjection,
 } from "./chat-send-message-injection.js";
 import { finalizeChatSendNonAgentReplies } from "./chat-send-nonagent-finalization.js";
-import { ACTIVE_RUN_CHANGED_ERROR_REASON } from "./chat-send-pre-admission.js";
 import {
   applyChatSendReplyContextFields,
   resolveChatSendReplyContext,
@@ -96,6 +96,7 @@ export async function handleChatSend(
     agentId,
     activeRunScopeKey,
     expectedLeafEntryId,
+    expectedRunId,
     resolvedSessionModel,
     now,
   } = preparedSession.value;
@@ -125,7 +126,6 @@ export async function handleChatSend(
     finishAbortedChatSend();
     return;
   }
-
   // Attachment preparation can suspend. Recheck immediately before the
   // synchronous ACK path so aborts and hot routing reloads cannot cross it.
   if (sessionRoutingChanged(context.getRuntimeConfig())) {
@@ -225,15 +225,7 @@ export async function handleChatSend(
       }
     }
 
-    const {
-      accountId,
-      ctx,
-      isInternalTextSlashCommandTurn,
-      pluginBoundMediaPromise,
-      queuedFollowupOwnerKey,
-      replyOptionImages,
-      replyOptionMedia,
-    } = prepareChatSendUserTurn({
+    const preparedUserTurn = prepareChatSendUserTurn({
       request: normalizedRequest.value,
       session: preparedSession.value,
       admission: admitted.value,
@@ -242,36 +234,62 @@ export async function handleChatSend(
       logGateway: context.logGateway,
       userTurn,
     });
-    const beginCapturedMessageInjection = () =>
+    const {
+      accountId,
+      ctx,
+      isInternalTextSlashCommandTurn,
+      pluginBoundMediaPromise,
+      queuedFollowupOwnerKey,
+      replyOptionImages,
+      replyOptionMedia,
+    } = preparedUserTurn;
+    const beginCapturedMessageInjection = createChatSendMessageInjectionStarter({
+      target: messageInjectionTarget,
+      request: normalizedRequest.value,
+      session: preparedSession.value,
+      turn: preparedUserTurn,
+      imageOrder,
+      userTurnTranscriptRecorder: userTurnRecorder,
+    });
+    const replyContextFieldsPromise = p.replyToId
+      ? resolveChatSendReplyContext({
+          replyToId: p.replyToId,
+          cfg,
+          agentId,
+          sessionKey,
+          sessionEntry: entry,
+          storePath,
+          userSenderLabel: clientInfo?.displayName,
+          warn: (message) => context.logGateway.warn(message),
+        })
+      : undefined;
+    const preAckReplyContextPromise =
       messageInjectionTarget && !isInternalTextSlashCommandTurn
-        ? beginChatSendMessageInjection({
-            target: messageInjectionTarget,
-            text: ctx.BodyForAgent ?? ctx.Body ?? rawMessage,
-            replyContext: p.replyToId
-              ? { body: ctx.BodyForAgent ?? ctx.Body ?? rawMessage, cfg, ctx, sessionEntry: entry }
-              : undefined,
-            images: replyOptionImages,
-            imageOrder,
-            media: replyOptionMedia,
-            queueSettings: {
-              cfg,
-              channel: ctx.Provider,
-              sessionEntry: entry,
-              inlineMode: p.queueMode,
-            },
-            taskSuggestionDeliveryMode: supportsTaskSuggestions ? "gateway" : undefined,
-            userTurnTranscriptRecorder: userTurnRecorder,
-          })
+        ? replyContextFieldsPromise
         : undefined;
-    let messageInjectionAttempt = p.replyToId ? undefined : beginCapturedMessageInjection();
-    if (messageInjectionTarget && !isInternalTextSlashCommandTurn) {
-      // Accepted injection never consumes plugin-bound media, but the shared
-      // persistence promise still needs a rejection observer.
-      void pluginBoundMediaPromise.catch(() => undefined);
+    if (preAckReplyContextPromise) {
+      applyChatSendReplyContextFields(ctx, await preAckReplyContextPromise);
+      if (activeRunAbort.controller.signal.aborted) {
+        return finishAbortedChatSend();
+      }
+      if (sessionRoutingChanged(context.getRuntimeConfig())) {
+        return admitted.value.rejectSessionRoutingChanged();
+      }
     }
-    if (messageInjectionAttempt?.rejectBeforeAck) {
-      return admitted.value.rejectActiveLeafChanged();
+    let messageInjectionAttempt =
+      !p.replyToId || preAckReplyContextPromise ? beginCapturedMessageInjection() : undefined;
+    const preAckInjection = await settleChatSendPreAckMessageInjection({
+      attempt: messageInjectionAttempt,
+      isAborted: () => activeRunAbort.controller.signal.aborted,
+      sessionRoutingChanged: () => sessionRoutingChanged(context.getRuntimeConfig()),
+      onActiveLeafChanged: admitted.value.rejectActiveLeafChanged,
+      onAborted: finishAbortedChatSend,
+      onSessionRoutingChanged: admitted.value.rejectSessionRoutingChanged,
+    });
+    if (preAckInjection.status === "handled") {
+      return;
     }
+    messageInjectionAttempt = preAckInjection.attempt;
 
     const serverTiming = shouldIncludeChatSendAckServerTiming(clientInfo)
       ? {
@@ -320,27 +338,11 @@ export async function handleChatSend(
       cfg,
       context,
       entry,
-      rawMessage,
+      request: normalizedRequest.value,
       sessionKey,
       sessionLoadOptions,
       storePath,
     });
-    // Resolve the reply target from session history in parallel with the
-    // remaining dispatch prep so replies do not delay the first model call.
-    // Skipped entirely for non-reply sends so their dispatch path keeps its
-    // existing await ordering.
-    const replyContextFieldsPromise = p.replyToId
-      ? resolveChatSendReplyContext({
-          replyToId: p.replyToId,
-          cfg,
-          agentId,
-          sessionKey,
-          sessionEntry: entry,
-          storePath,
-          userSenderLabel: clientInfo?.displayName,
-          warn: (message) => context.logGateway.warn(message),
-        })
-      : undefined;
     let agentRunStarted = false;
     const replyDispatch = createChatSendReplyDispatch({
       accountId,
@@ -415,7 +417,7 @@ export async function handleChatSend(
         measureDiagnosticsTimelineSpan(
           "gateway.chat_send.dispatch_inbound",
           async () => {
-            if (replyContextFieldsPromise) {
+            if (replyContextFieldsPromise && !preAckReplyContextPromise) {
               applyChatSendReplyContextFields(ctx, await replyContextFieldsPromise);
               messageInjectionAttempt = beginCapturedMessageInjection();
             }
@@ -438,9 +440,6 @@ export async function handleChatSend(
                   counts: { tool: 0, block: 0, final: 0 },
                 };
               }
-              if (p.replyToId) {
-                throw new Error(ACTIVE_RUN_CHANGED_ERROR_REASON);
-              }
             }
             applyChatSendManagedMedia(ctx, await pluginBoundMediaPromise);
             const dispatchInbound = () =>
@@ -448,13 +447,13 @@ export async function handleChatSend(
                 ctx,
                 cfg,
                 dispatcherOptions: replyDispatch.dispatcherOptions,
-                onSessionMetadataChanges: (changes) => {
-                  for (const change of changes) {
-                    emitSessionsChanged(context, change);
-                  }
-                },
+                onSessionMetadataChanges: (changes) =>
+                  changes.forEach((change) => emitSessionsChanged(context, change)),
                 replyOptions: {
                   runId: clientRunId,
+                  ...(cronCreatorAuthority
+                    ? { cronCreatorAuthorityCapability: cronCreatorAuthority }
+                    : {}),
                   ...(isOperatorUiClient(clientInfo)
                     ? {
                         promptCacheKey: resolveWebchatPromptCacheKey({
@@ -502,7 +501,8 @@ export async function handleChatSend(
                   fastModeOverride: p.fastMode,
                   queueModeOverride: p.queueMode,
                   userTurnTranscriptRecorder: userTurnRecorder,
-                  ...(messageInjectionTarget && !isInternalTextSlashCommandTurn
+                  ...((messageInjectionTarget && !isInternalTextSlashCommandTurn) ||
+                  (p.queueMode === "steer" && expectedRunId !== undefined)
                     ? { messageInjectionAttempted: true as const }
                     : {}),
                   ...(restartSafeAdmission ? { suppressNextUserMessagePersistence: true } : {}),
@@ -623,12 +623,9 @@ export async function handleChatSend(
               await persistGatewayUserTurnTranscriptBestEffort();
             }
             let broadcastedSourceReplyFinal = false;
-            // WebChat persistence has two owners. Agent runs persist model-visible turns
-            // through OpenClaw runtime's SessionManager; this dispatcher only owns live delivery payloads.
-            // Do not blindly mirror agent-run final payloads into JSONL or chat.history can
-            // duplicate normal embedded-agent assistant turns. The non-agent branch below has no
-            // runtime-owned assistant turn, so it appends a gateway-injected assistant entry before
-            // broadcasting the final UI event.
+            // Agent runs persist model-visible turns through SessionManager; this dispatcher owns
+            // live delivery. Mirroring agent finals would duplicate normal assistant turns. The
+            // non-agent branch has no runtime-owned turn, so it appends one before broadcasting.
             if (!agentRunStarted && !queuedFollowup.isEnqueued()) {
               await finalizeChatSendNonAgentReplies({
                 accountId,

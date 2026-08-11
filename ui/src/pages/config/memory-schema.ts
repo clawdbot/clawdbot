@@ -12,12 +12,6 @@ import { memoryTabFromPath, pathForMemoryTab, type MemoryRouteTab } from "../../
 
 export type MemoryTab = MemoryRouteTab;
 
-export type MemoryBackend = "builtin" | "qmd";
-export type MemoryBackendSelection =
-  | { kind: "default"; backend: "builtin" }
-  | { kind: "pinned"; backend: MemoryBackend }
-  | { kind: "invalid"; backend: null; value: unknown };
-
 /**
  * How `plugins.slots.memory` reads today, mirroring resolveSlotSelection in
  * src/plugins/slots.ts. `off` is the explicit `none` sentinel; `auto` is an
@@ -30,9 +24,6 @@ export type MemoryEngineSelection =
   | { kind: "pinned"; engineId: string };
 
 export const DEFAULT_MEMORY_ENGINE_ID = defaultSlotIdForKey("memory");
-
-/** Scroll target for `memory.backend`, which Settings curates out of the editor. */
-export const MEMORY_BACKEND_ANCHOR_ID = "memory-backend";
 
 const MEMORY_TABS: readonly MemoryTab[] = ["overview", "memories", "dreams", "settings"];
 
@@ -66,11 +57,7 @@ export function memoryTabForRoute(
     return tab;
   }
   const target = route.targetBlockId ?? "";
-  if (
-    route.section === "memory" ||
-    target === MEMORY_BACKEND_ANCHOR_ID ||
-    target.startsWith("config-section-memory")
-  ) {
+  if (route.section === "memory" || target.startsWith("config-section-memory")) {
     return "settings";
   }
   return pathTab;
@@ -112,12 +99,6 @@ export function selectedEngineId(selection: MemoryEngineSelection): string | nul
   return selection.kind === "off" ? null : selection.engineId;
 }
 
-// memory-core is the only plugin registering the memory runtime that resolves
-// `memory.backend`, so any other engine hides the backend row. This is a
-// runtime-ownership fact, not the slot default; the slot comes from
-// resolveSlotSelection.
-const MEMORY_CORE_PLUGIN_ID = "memory-core";
-
 /**
  * Mirrors the runtime exactly: resolveSlotSelection owns the rule, so an unset
  * slot reports the slot's default owner instead of guessing from the catalog.
@@ -135,31 +116,6 @@ export function resolveMemoryEngineSelection(
     default:
       return { kind: "auto", engineId: selection.pluginId };
   }
-}
-
-/**
- * The retrieval backend the page shows, or null when the slot owner runs its own
- * retrieval and `memory.backend` would save a value nothing consumes. Settings
- * search resolves it from the same config so both agree on what is visible.
- */
-export function resolveMemoryBackendSelection(
-  configObject: Record<string, unknown>,
-): MemoryBackendSelection | null {
-  if (selectedEngineId(resolveMemoryEngineSelection(configObject)) !== MEMORY_CORE_PLUGIN_ID) {
-    return null;
-  }
-  const memory = asConfigRecord(configObject.memory);
-  if (!memory || !Object.hasOwn(memory, "backend")) {
-    return { kind: "default", backend: "builtin" };
-  }
-  const backend = memory.backend;
-  return backend === "builtin" || backend === "qmd"
-    ? { kind: "pinned", backend }
-    : { kind: "invalid", backend: null, value: backend };
-}
-
-export function resolveMemoryBackend(configObject: Record<string, unknown>): MemoryBackend | null {
-  return resolveMemoryBackendSelection(configObject)?.backend ?? null;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -198,34 +154,17 @@ export function narrowMemorySchema(schema: unknown, keys: readonly string[]): un
   return narrowed;
 }
 
-/**
- * The `memory.*` children Settings renders as curated rows instead of through
- * the embedded editor. They have no `#config-section-*` id, so settings search
- * routes their deep links to MEMORY_BACKEND_ANCHOR_ID.
- */
-export const MEMORY_CURATED_SCHEMA_KEYS: readonly string[] = ["backend"];
-
 /** Which `memory.*` children the embedded editor shows for a tab. */
-export function memorySchemaKeysForTab(
-  tab: MemoryTab,
-  backend: MemoryBackend | null,
-): readonly string[] {
+export function memorySchemaKeysForTab(tab: MemoryTab): readonly string[] {
   if (tab !== "settings") {
     return [];
   }
   // Keep the old Overview fields before the old Search slice while rendering
   // one editor, which in turn keeps one autosave status and apply banner.
-  return backend === "qmd" ? ["citations", "qmd", "search"] : ["citations", "search"];
+  return ["citations", "search"];
 }
 
-/**
- * Every `memory.*` child the page surfaces for a config: the merged editor plus
- * `backend`, which Settings renders as a curated row rather than through the
- * editor. `qmd` and `backend` disappear with the backend/engine choice, so
- * settings search filters the section through this before matching — otherwise a
- * `memory.qmd` hit routes to Settings while its editor omits the matched field.
- */
-export function memoryVisibleSchemaKeys(backend: MemoryBackend | null): readonly string[] {
-  const editor = memorySchemaKeysForTab("settings", backend);
-  return backend === null ? editor : [...editor, "backend"];
+/** Every `memory.*` child the Settings editor surfaces. */
+export function memoryVisibleSchemaKeys(): readonly string[] {
+  return memorySchemaKeysForTab("settings");
 }

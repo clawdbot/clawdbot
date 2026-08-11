@@ -125,7 +125,7 @@
     <string name="native_1150ece524fd42ec" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"जारी रखने के लिए कृपया Android Settings में %1$s सक्षम करें।"</string>
     <string name="native_1196b6c538ecc61a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"मरम्मत करें"</string>
     <string name="native_1196c7b1e0e55580" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"reactions"</string>
-    <string name="native_11a6767d5674c7e4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"पूर्ण"</string>
+    <string name="native_11a6767d5674c7e4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"हो गया"</string>
     <string name="native_11e18d6748aa9128" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"वर्शन और अपडेट"</string>
     <string name="native_11f37f9652a47b5b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw अनुमोदन, विफल जॉब्स और चैनल समस्याएँ यहाँ दिखाएगा।"</string>
     <string name="native_11f6dc0befae5081" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"USB माइक्रोफ़ोन"</string>
@@ -1595,7 +1595,7 @@
     <string name="native_f8019af406d12fad" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ब्लॉक सूची"</string>
     <string name="native_f83f07be16e27018" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"act"</string>
     <string name="native_f85ae4b0b7ed13c8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dismiss Task"</string>
-    <string name="native_f87908f1a1e901c6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"चैट विफल रही"</string>
+    <string name="native_f87908f1a1e901c6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"चैट विफल"</string>
     <string name="native_f89aeeeee0922951" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw · लाइव"</string>
     <string name="native_f8b32f4e92bd84ce" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"इंस्टॉल किया गया"</string>
     <string name="native_f8c2745155505d39" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"जवाब की प्रतीक्षा का समय समाप्त हो गया; फिर से प्रयास करें या रीफ़्रेश करें।"</string>

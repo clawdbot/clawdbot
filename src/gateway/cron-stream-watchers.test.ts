@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { CronJob } from "../cron/types.js";
 import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import type { ManagedRun, ProcessSupervisor, RunExit } from "../process/supervisor/types.js";
-import { createDeferred } from "../test-utils/deferred.js";
 import { resolveStreamStopReason } from "./cron-stream-watchers.js";
 import {
   createCronStreamWatcherFixture,

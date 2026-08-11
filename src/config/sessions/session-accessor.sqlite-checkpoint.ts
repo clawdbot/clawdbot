@@ -9,7 +9,7 @@ import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
   collectSessionEntryLookupKeys,
   readSessionEntryRow,
-  readSqliteSessionIdentitySnapshot,
+  readSessionIdentitySnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
@@ -49,6 +49,8 @@ type SqliteCompactionCheckpointLegacySource = {
   totalTokens?: number;
 };
 
+type SessionEntryExpectedState = Pick<SessionEntry, "lifecycleRevision" | "sessionId">;
+
 /** Result from SQLite compaction checkpoint branch or restore operations. */
 type SqliteCompactionCheckpointSessionMutationResult =
   | {
@@ -61,6 +63,7 @@ type SqliteCompactionCheckpointSessionMutationResult =
   | { status: "missing-checkpoint" }
   | { status: "missing-boundary" }
   | { status: "model-selection-locked" }
+  | { status: "conflict" }
   | { status: "failed" };
 
 /** Parameters for branching a SQLite session from a compaction checkpoint. */
@@ -72,6 +75,7 @@ type SqliteBranchCheckpointSessionParams = {
   sourceStoreKey?: string;
   nextKey: string;
   checkpointId: string;
+  expectedState: SessionEntryExpectedState;
   legacySource?: SqliteCompactionCheckpointLegacySource;
 };
 
@@ -83,10 +87,11 @@ type SqliteRestoreCheckpointSessionParams = {
   sessionKey: string;
   sessionStoreKey?: string;
   checkpointId: string;
+  expectedState: SessionEntryExpectedState;
   legacySource?: SqliteCompactionCheckpointLegacySource;
 };
 
-export async function branchSqliteCompactionCheckpointSession(
+export async function branchCompactionCheckpointSession(
   params: SqliteBranchCheckpointSessionParams,
 ): Promise<SqliteCompactionCheckpointSessionMutationResult> {
   const sourceKey = normalizeSqliteSessionKey(params.sourceStoreKey ?? params.sourceKey);
@@ -107,16 +112,17 @@ export async function branchSqliteCompactionCheckpointSession(
         ...collectSessionEntryLookupKeys(database, sourceKey),
         ...collectSessionEntryLookupKeys(database, targetKey),
       ]);
-      previousIdentity = readSqliteSessionIdentitySnapshot(database, identityKeys);
+      previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
       result = branchSqliteCompactionCheckpointSessionInTransaction(database, {
         checkpointId: params.checkpointId,
+        expectedState: params.expectedState,
         parentSessionKey: requestedSourceKey,
         legacySource: params.legacySource,
         resolved,
         sourceKey,
         targetKey,
       });
-      currentIdentity = readSqliteSessionIdentitySnapshot(database, identityKeys);
+      currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
     }, toDatabaseOptions(resolved));
     emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
     return result ?? { status: "failed" };
@@ -124,7 +130,7 @@ export async function branchSqliteCompactionCheckpointSession(
 }
 
 /** Restores a SQLite session from a compaction checkpoint in one queued transaction. */
-export async function restoreSqliteCompactionCheckpointSession(
+export async function restoreCompactionCheckpointSession(
   params: SqliteRestoreCheckpointSessionParams,
 ): Promise<SqliteCompactionCheckpointSessionMutationResult> {
   const sessionKey = normalizeSqliteSessionKey(params.sessionStoreKey ?? params.sessionKey);
@@ -144,15 +150,16 @@ export async function restoreSqliteCompactionCheckpointSession(
         ...collectSessionEntryLookupKeys(database, sessionKey),
         ...collectSessionEntryLookupKeys(database, targetKey),
       ]);
-      previousIdentity = readSqliteSessionIdentitySnapshot(database, identityKeys);
+      previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
       result = restoreSqliteCompactionCheckpointSessionInTransaction(database, {
         checkpointId: params.checkpointId,
+        expectedState: params.expectedState,
         legacySource: params.legacySource,
         resolved,
         sourceKey: sessionKey,
         targetKey,
       });
-      currentIdentity = readSqliteSessionIdentitySnapshot(database, identityKeys);
+      currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
     }, toDatabaseOptions(resolved));
     emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
     return result ?? { status: "failed" };
@@ -165,6 +172,7 @@ function branchSqliteCompactionCheckpointSessionInTransaction(
   database: OpenClawAgentDatabase,
   params: {
     checkpointId: string;
+    expectedState: SessionEntryExpectedState;
     legacySource?: SqliteCompactionCheckpointLegacySource;
     parentSessionKey: string;
     resolved: ResolvedSqliteScope;
@@ -175,6 +183,12 @@ function branchSqliteCompactionCheckpointSessionInTransaction(
   const currentEntry = readSessionEntryRow(database, params.sourceKey)?.entry;
   if (!currentEntry?.sessionId) {
     return { status: "missing-session" };
+  }
+  if (
+    currentEntry.sessionId !== params.expectedState.sessionId ||
+    currentEntry.lifecycleRevision !== params.expectedState.lifecycleRevision
+  ) {
+    return { status: "conflict" };
   }
   if (currentEntry.modelSelectionLocked === true) {
     return { status: "model-selection-locked" };
@@ -215,6 +229,7 @@ function restoreSqliteCompactionCheckpointSessionInTransaction(
   database: OpenClawAgentDatabase,
   params: {
     checkpointId: string;
+    expectedState: SessionEntryExpectedState;
     legacySource?: SqliteCompactionCheckpointLegacySource;
     resolved: ResolvedSqliteScope;
     sourceKey: string;
@@ -224,6 +239,12 @@ function restoreSqliteCompactionCheckpointSessionInTransaction(
   const currentEntry = readSessionEntryRow(database, params.sourceKey)?.entry;
   if (!currentEntry?.sessionId) {
     return { status: "missing-session" };
+  }
+  if (
+    currentEntry.sessionId !== params.expectedState.sessionId ||
+    currentEntry.lifecycleRevision !== params.expectedState.lifecycleRevision
+  ) {
+    return { status: "conflict" };
   }
   if (currentEntry.modelSelectionLocked === true) {
     return { status: "model-selection-locked" };

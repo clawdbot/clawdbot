@@ -252,7 +252,7 @@ Custom providers configured under `models.providers` are written into `models.js
 
     - A non-empty `baseUrl` already present in the agent `models.json` wins.
     - A non-empty `apiKey` in `models.json` wins only when that provider is not SecretRef-managed in the current config/auth-profile context.
-    - SecretRef-managed `apiKey` values refresh from source markers instead of persisting resolved secrets: the env variable name for env refs, `secretref-managed` for file/exec refs.
+    - SecretRef-managed `apiKey` values refresh from source markers instead of persisting resolved secrets: the env variable name for env refs, `secretref-managed` for file/exec/store refs.
     - SecretRef-managed header values refresh the same way, using `secretref-env:ENV_VAR_NAME` for env refs.
     - Empty or missing `apiKey`/`baseUrl` in `models.json` fall back to config `models.providers`.
     - Other provider fields refresh from config and normalized catalog data.

@@ -36,7 +36,7 @@ import {
 import { couldNormalizeToolNamePrefixToAllowedTool, normalizeToolName } from "../../tool-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
-import { isRunnerToolCallBlockType } from "./attempt.tool-call-block-type.js";
+import { isRunnerToolCallBlockType } from "./attempt-tool-call-block-type.js";
 import { wrapStreamObjectEvents } from "./stream-wrapper.js";
 
 const BLANK_TOOL_CALL_NAME_DESCRIPTION = "blank tool name";

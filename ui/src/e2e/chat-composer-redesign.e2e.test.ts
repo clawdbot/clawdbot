@@ -1,6 +1,10 @@
 // Control UI E2E tests cover the redesigned chat composer.
 import { expect, it } from "vitest";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  navigateToControlUiSession,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -9,7 +13,56 @@ const suite = createControlUiE2eSuite({
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
 suite.define(() => {
-  it("keeps model and settings in the bottom bar and switches the primary action with input state", async () => {
+  it("keeps mobile picker panels above an attachment-expanded composer", async () => {
+    await suite.withPage({ viewport: { width: 667, height: 375 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+
+      const composer = page.locator(".agent-chat__input");
+      await composer.waitFor({ state: "visible" });
+      await composer.locator(".agent-chat__file-input").setInputFiles({
+        name: "mobile-composer-proof.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from("mobile composer attachment"),
+      });
+      await composer.locator(".chat-attachments-preview").waitFor({ state: "visible" });
+
+      for (const picker of [
+        {
+          menu: ".chat-controls__model-menu",
+          trigger: '[data-chat-model-select="true"]',
+        },
+        {
+          menu: ".chat-controls__effort-menu",
+          trigger: '[data-chat-thinking-select="true"]',
+        },
+      ]) {
+        await composer.locator(picker.trigger).click();
+        await page.waitForTimeout(100);
+        const [composerBox, footerBox, menuBox, triggerBox] = await Promise.all([
+          composer.boundingBox(),
+          composer.locator(".agent-chat__composer-footer").boundingBox(),
+          page.locator(picker.menu).boundingBox(),
+          composer.locator(picker.trigger).boundingBox(),
+        ]);
+        expect(composerBox).not.toBeNull();
+        expect(footerBox).not.toBeNull();
+        expect(menuBox).not.toBeNull();
+        expect(triggerBox).not.toBeNull();
+        if (!composerBox || !footerBox || !menuBox || !triggerBox) {
+          throw new Error(`expected mobile layout boxes for ${picker.menu}`);
+        }
+        expect(menuBox.y).toBeGreaterThanOrEqual(0);
+        expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(composerBox.y + 1);
+        expect(triggerBox.y + triggerBox.height).toBeLessThanOrEqual(376);
+        expect(footerBox.y + footerBox.height).toBeLessThanOrEqual(376);
+        await composer.locator(picker.trigger).click();
+      }
+    });
+  });
+
+  it("keeps the model in the bottom bar, session settings in the header, and switches the primary action with input state", async () => {
     await suite.withPage({ viewport: { width: 1920, height: 1080 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         assistantName: "Rosita",
@@ -100,7 +153,7 @@ suite.define(() => {
       );
       const camera = composerShell.locator(".agent-chat__camera-btn");
       const takePhoto = composerShell.getByRole("menuitem", { name: "Take photo" });
-      const settings = composer.getByRole("button", { name: "View", exact: true });
+      const settings = page.locator(".chat-header-session-menu__trigger");
       const splitView = page.getByRole("button", { name: "Open split view" });
       const voice = page.getByRole("button", { name: "Start voice input" });
       const microphonePicker = page.getByRole("button", { name: "Microphone input" });
@@ -134,20 +187,9 @@ suite.define(() => {
       await expect
         .poll(() => model.evaluate((node) => node.closest(".agent-chat__composer-footer") != null))
         .toBe(true);
-      // The settings chip must sit centered between the footer divider and
-      // the card edge (the old asymmetric footer padding pinned it to the top).
       await expect
-        .poll(() =>
-          settings.evaluate((element) => {
-            const footer = element.closest(".agent-chat__composer-footer")?.getBoundingClientRect();
-            const chip = element.getBoundingClientRect();
-            if (!footer || !chip) {
-              return null;
-            }
-            return Math.abs(chip.top - footer.top - (footer.bottom - chip.bottom));
-          }),
-        )
-        .toBeLessThanOrEqual(1.5);
+        .poll(() => settings.evaluate((node) => node.closest(".chat-pane__header") != null))
+        .toBe(true);
       await expect.poll(() => composer.locator(".agent-chat__composer-header").count()).toBe(0);
       await expect
         .poll(async () =>
@@ -329,20 +371,26 @@ suite.define(() => {
       ).toBeLessThanOrEqual(1);
 
       await settings.click();
-      const viewMenu = page.getByRole("menu", { name: "View" });
-      const viewDropdown = composer.locator("wa-dropdown.chat-view-menu");
+      const viewDropdown = page.locator("wa-dropdown.chat-header-session-menu");
+      const viewMenu = viewDropdown.getByRole("menuitem", { name: "View", exact: true });
       await expect.poll(() => viewMenu.isVisible()).toBe(true);
+      await viewMenu.hover();
       await expect
-        .poll(() => viewDropdown.locator(".chat-view-menu__text").allTextContents())
+        .poll(() =>
+          viewMenu
+            .locator('wa-dropdown-item[slot="submenu"] .session-menu__text')
+            .allTextContents(),
+        )
         .toEqual(["Reasoning", "Tool calls", "Keep commentary"]);
       const reasoning = viewDropdown.getByRole("menuitemcheckbox", { name: "Reasoning" });
+      await expect.poll(() => reasoning.isVisible()).toBe(true);
       await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("true");
       await reasoning.click();
       await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("false");
       await reasoning.click();
       await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("true");
       await settings.click();
-      await expect.poll(() => viewMenu.isVisible()).toBe(false);
+      await expect.poll(() => viewDropdown.getAttribute("open")).toBeNull();
 
       await textarea.fill("Send this message");
       await expect
@@ -384,23 +432,17 @@ suite.define(() => {
       await expect.poll(() => page.getByText("Working on it.").first().isVisible()).toBe(true);
       await expect.poll(() => spark.isVisible()).toBe(true);
       await expect.poll(() => announcement.textContent()).toContain("Rosita is responding");
-      const [activeSettingsBox, activeSplitViewBox, activeModelBox, activeChatContentBox] =
-        await Promise.all([
-          settings.boundingBox(),
-          splitView.boundingBox(),
-          model.boundingBox(),
-          chatContent.boundingBox(),
-        ]);
-      expect(activeSettingsBox).not.toBeNull();
+      const [activeSplitViewBox, activeModelBox, activeChatContentBox] = await Promise.all([
+        splitView.boundingBox(),
+        model.boundingBox(),
+        chatContent.boundingBox(),
+      ]);
       expect(activeSplitViewBox).not.toBeNull();
       expect(activeModelBox).not.toBeNull();
       expect(activeChatContentBox).not.toBeNull();
-      if (!activeSettingsBox || !activeSplitViewBox || !activeModelBox || !activeChatContentBox) {
+      if (!activeSplitViewBox || !activeModelBox || !activeChatContentBox) {
         throw new Error("expected chat content and composer controls to have layout boxes");
       }
-      expect(activeModelBox.x).toBeGreaterThanOrEqual(
-        activeSettingsBox.x + activeSettingsBox.width - 1,
-      );
       // The opener lives in the always-on pane header at the chat area's top edge.
       const headerBox = await page.locator(".chat-pane__header").boundingBox();
       expect(headerBox).not.toBeNull();
@@ -453,16 +495,13 @@ suite.define(() => {
       ) {
         throw new Error("expected mobile composer controls to have layout boxes");
       }
-      for (const control of [mobileModelBox, mobileSettingsBox, mobileContextBox]) {
+      for (const control of [mobileModelBox, mobileContextBox]) {
         expect(
-          Math.abs(
-            control.y + control.height / 2 - (mobileSettingsBox.y + mobileSettingsBox.height / 2),
-          ),
+          Math.abs(control.y + control.height / 2 - (mobileModelBox.y + mobileModelBox.height / 2)),
         ).toBeLessThanOrEqual(2);
       }
-      expect(mobileModelBox.x).toBeGreaterThanOrEqual(
-        mobileSettingsBox.x + mobileSettingsBox.width - 1,
-      );
+      expect(mobileSettingsBox.x).toBeGreaterThanOrEqual(0);
+      expect(mobileSettingsBox.x + mobileSettingsBox.width).toBeLessThanOrEqual(393);
       expect(mobileAttachBox.x + mobileAttachBox.width).toBeLessThanOrEqual(mobileVoiceBox.x + 1);
       await expect
         .poll(async () => {
@@ -619,41 +658,48 @@ suite.define(() => {
     });
   });
 
-  it("refreshes agent-scoped models when the pane switches sessions", async () => {
+  it("loads agent-scoped startup models when the route switches sessions", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const workModel = {
+        id: "work-model",
+        name: "Work Model",
+        provider: "openai",
+        available: true,
+      };
+      const otherModel = {
+        id: "other-model",
+        name: "Other Model",
+        provider: "anthropic",
+        available: true,
+      };
+      const startupResponse = (sessionId: string, model: typeof workModel) => ({
+        agentsList: {
+          agents: [
+            { id: "work", name: "Work" },
+            { id: "other", name: "Other" },
+          ],
+          defaultId: "work",
+          mainKey: "main",
+          scope: "agent",
+        },
+        messages: [],
+        metadata: { commands: [], models: [model] },
+        sessionId,
+        thinkingLevel: null,
+      });
       const gateway = await installMockGateway(page, {
         defaultAgentId: "work",
         sessionKey: "agent:work:main",
         methodResponses: {
-          "chat.metadata": {
+          "chat.startup": {
             cases: [
               {
-                match: { agentId: "work" },
-                response: {
-                  commands: [],
-                  models: [
-                    {
-                      id: "work-model",
-                      name: "Work Model",
-                      provider: "openai",
-                      available: true,
-                    },
-                  ],
-                },
+                match: { sessionKey: "agent:work:main" },
+                response: startupResponse("work-session", workModel),
               },
               {
-                match: { agentId: "other" },
-                response: {
-                  commands: [],
-                  models: [
-                    {
-                      id: "other-model",
-                      name: "Other Model",
-                      provider: "anthropic",
-                      available: true,
-                    },
-                  ],
-                },
+                match: { sessionKey: "agent:other:main" },
+                response: startupResponse("other-session", otherModel),
               },
             ],
           },
@@ -686,177 +732,41 @@ suite.define(() => {
             ts: Date.now(),
           },
         },
-        models: [{ id: "work-model", name: "Work Model", provider: "openai", available: true }],
+        models: [workModel],
       });
 
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:work:main"));
       await gateway.waitForRequest("chat.startup");
-      // The initial work-agent catalog is complete in chat.startup, so only the
-      // later switch to the other agent should require chat.metadata.
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
 
-      const composer = page.locator(".agent-chat__input");
+      const activeComposer = () =>
+        page.locator('openclaw-chat-pane[aria-hidden="false"] .agent-chat__input');
       await expect
-        .poll(() => composer.locator('[data-chat-model-option="openai/work-model"]').count())
-        .toBe(1);
-
-      await page.locator("openclaw-chat-pane").evaluate((pane) => {
-        (pane as HTMLElement & { sessionKey: string }).sessionKey = "agent:other:main";
-      });
-
-      await expect
-        .poll(async () => {
-          const requests = await gateway.getRequests("chat.metadata");
-          return requests.filter(
-            (request) => (request.params as { agentId?: string } | undefined)?.agentId === "other",
-          ).length;
-        })
-        .toBe(1);
-      await expect
-        .poll(() => composer.locator('[data-chat-model-option="anthropic/other-model"]').count())
-        .toBe(1);
-      await expect
-        .poll(() => composer.locator('[data-chat-model-option="openai/work-model"]').count())
-        .toBe(0);
-      const metadataRequests = await gateway.getRequests("chat.metadata");
-      expect(metadataRequests).toHaveLength(1);
-      expect((metadataRequests[0]?.params as { agentId?: string } | undefined)?.agentId).toBe(
-        "other",
-      );
-    });
-  });
-
-  it("keeps startup models when an explicit metadata refresh fails", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        deferredMethods: ["chat.metadata"],
-        models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true }],
-      });
-
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
-      const composer = page.locator(".agent-chat__input");
-      await expect
-        .poll(() => composer.locator('[data-chat-model-provider-group="openai"]').textContent())
-        .toContain("GPT-5.5");
-      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
-
-      // Startup metadata now owns the same-agent cache. A config change invalidates
-      // that cache, so the next pane refresh still exercises the failure fallback.
-      await gateway.emitGatewayEvent("config.changed", {});
-      await page.locator("openclaw-chat-pane").evaluate((pane) => {
-        (pane as HTMLElement & { sessionKey: string }).sessionKey = "agent:main:refreshed";
-      });
-      await gateway.waitForRequest("chat.metadata");
-      await gateway.rejectDeferred("chat.metadata", {
-        code: "UNAVAILABLE",
-        message: "metadata unavailable",
-      });
-      await expect
-        .poll(() => composer.locator('[data-chat-model-provider-group="openai"]').textContent())
-        .toContain("GPT-5.5");
-      expect(await gateway.getRequests("models.list")).toHaveLength(0);
-    });
-  });
-
-  it("does not substitute default-agent models when scoped metadata fails", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        deferredMethods: ["chat.startup"],
-        methodResponses: {
-          "chat.metadata": {
-            cases: [
-              {
-                match: { agentId: "work" },
-                response: {
-                  __mockError: { code: "UNAVAILABLE", message: "metadata unavailable" },
-                },
-              },
-            ],
-          },
-        },
-        models: [{ id: "gpt-default", name: "GPT Default", provider: "openai", available: true }],
-      });
-
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
-      await gateway.waitForRequest("chat.startup");
-      await page.locator("openclaw-chat-pane").evaluate((pane) => {
-        (pane as HTMLElement & { sessionKey: string }).sessionKey = "agent:work:main";
-      });
-      await expect
-        .poll(async () => {
-          const requests = await gateway.getRequests("chat.metadata");
-          return requests.some(
-            (request) => (request.params as { agentId?: string } | undefined)?.agentId === "work",
-          );
-        })
-        .toBe(true);
-      await page.waitForFunction(() => {
-        const pane = document.querySelector("openclaw-chat-pane") as
-          | (HTMLElement & {
-              state?: {
-                sessionKey?: string;
-                chatMetadataRequestVersion?: number;
-                chatModelCatalog?: unknown[];
-                chatModelsLoading?: boolean;
-              };
-            })
-          | null;
-        return (
-          pane?.state?.sessionKey === "agent:work:main" &&
-          (pane.state.chatMetadataRequestVersion ?? 0) >= 2 &&
-          pane.state.chatModelsLoading === false &&
-          pane.state.chatModelCatalog?.length === 0
-        );
-      });
-      await gateway.resolveDeferred("chat.startup", {
-        agentsList: {
-          agents: [
-            { id: "main", name: "Main" },
-            { id: "work", name: "Work" },
-          ],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
-        },
-        messages: [],
-        metadata: {
-          commands: [],
-          models: [{ id: "gpt-default", name: "GPT Default", provider: "openai", available: true }],
-        },
-        sessionId: "control-ui-e2e-session",
-        thinkingLevel: null,
-      });
-      await page.waitForFunction(() => {
-        const pane = document.querySelector("openclaw-chat-pane") as
-          | (HTMLElement & {
-              state?: { agentsList?: { defaultId?: string; agents?: Array<{ id?: string }> } };
-            })
-          | null;
-        return (
-          pane?.state?.agentsList?.defaultId === "main" &&
-          pane.state.agentsList.agents?.some((agent) => agent.id === "main") === true
-        );
-      });
-      const composer = page.locator(".agent-chat__input");
-      await expect
-        .poll(async () =>
-          (await composer.locator("[data-chat-model-option]").allTextContents()).join(" "),
+        .poll(() =>
+          activeComposer().locator('[data-chat-model-option="openai/work-model"]').count(),
         )
-        .not.toContain("GPT Default");
-      const metadataRequests = await gateway.getRequests("chat.metadata");
+        .toBe(1);
+
+      await navigateToControlUiSession(page, "agent:other:main");
+      const startupRequests = await gateway.getRequests("chat.startup");
       expect(
-        metadataRequests.filter(
-          (request) => (request.params as { agentId?: string } | undefined)?.agentId === "work",
+        startupRequests.filter(
+          (request) =>
+            (request.params as { sessionKey?: string } | undefined)?.sessionKey ===
+            "agent:other:main",
         ),
       ).toHaveLength(1);
-      expect(
-        metadataRequests.every(
-          (request) =>
-            typeof (request.params as { agentId?: string } | undefined)?.agentId === "string",
-        ),
-      ).toBe(true);
-      expect(await gateway.getRequests("models.list")).toHaveLength(0);
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
+      await expect
+        .poll(() =>
+          activeComposer().locator('[data-chat-model-option="anthropic/other-model"]').count(),
+        )
+        .toBe(1);
+      await expect
+        .poll(() =>
+          activeComposer().locator('[data-chat-model-option="openai/work-model"]').count(),
+        )
+        .toBe(0);
     });
   });
 

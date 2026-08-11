@@ -18,7 +18,7 @@ scenario:
   codeRefs:
     - src/agents/tools/image-generate-tool.ts
     - src/agents/tools/media-generate-background-shared.ts
-    - src/agents/image-generation-task-status.ts
+    - src/agents/media-generation-task-status.ts
     - test/e2e/qa-lab/media/image-generation-lifecycle.e2e.test.ts
   execution:
     kind: vitest

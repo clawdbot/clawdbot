@@ -22,7 +22,6 @@ import {
   DEFAULT_TTS_TIMEOUT_MS,
   asProviderConfig,
   asProviderConfigMap,
-  hasOwnProperty,
   normalizeConfiguredSpeechProviderId,
   readTtsPrefs as readPrefs,
   resolveTtsPersonaFromPrefs,
@@ -164,10 +163,10 @@ export function resolvePersonaProviderConfig(
     return undefined;
   }
   const normalized = normalizeConfiguredSpeechProviderId(providerId) ?? providerId;
-  if (hasOwnProperty(persona.providers, normalized)) {
+  if (Object.hasOwn(persona.providers, normalized)) {
     return persona.providers[normalized];
   }
-  if (hasOwnProperty(persona.providers, providerId)) {
+  if (Object.hasOwn(persona.providers, providerId)) {
     return persona.providers[providerId];
   }
   return undefined;

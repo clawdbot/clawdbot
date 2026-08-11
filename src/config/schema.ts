@@ -380,14 +380,14 @@ function applyHeartbeatTargetHints(
   const next: ConfigUiHints = { ...hints };
   const channelList = listHeartbeatTargetChannels(channels);
   const channelHelp = channelList.length ? ` Known channels: ${channelList.join(", ")}.` : "";
-  const help = `Delivery target ("last", "none", or a channel id).${channelHelp}`;
+  const help = `Delivery target ("owner", "last", "none", or a channel id).${channelHelp}`;
   const paths = ["agents.defaults.heartbeat.target", "agents.entries.*.heartbeat.target"];
   for (const path of paths) {
     const current = next[path] ?? {};
     next[path] = {
       ...current,
       help: current.help ?? help,
-      placeholder: current.placeholder ?? "last",
+      placeholder: current.placeholder ?? "owner",
     };
   }
   return next;
@@ -567,7 +567,7 @@ function buildBaseConfigSchema(): ConfigSchemaResponse {
   return next;
 }
 
-export function buildConfigSchema(params?: {
+export function buildConfigSchemaCore(params?: {
   plugins?: PluginUiMetadata[];
   channels?: ChannelUiMetadata[];
   cache?: boolean;

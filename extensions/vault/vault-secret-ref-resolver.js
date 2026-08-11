@@ -317,7 +317,7 @@ async function classifyVaultClientToken(baseUrl, vaultToken) {
   return "unknown";
 }
 
-function readStringField(payload, parsedId) {
+function readVaultStringField(payload, parsedId) {
   const record = payload;
   const data = resolveKvVersion() === 2 ? record?.data?.data : record?.data;
   const value = data?.[parsedId.field];
@@ -366,7 +366,7 @@ async function readVaultSecret(baseUrl, vaultToken, id) {
     }
     throw new Error(`Vault read failed for "${id}" (${response.status}).`);
   }
-  return readStringField(payload, parsedId);
+  return readVaultStringField(payload, parsedId);
 }
 
 async function resolveFromVault(ids) {

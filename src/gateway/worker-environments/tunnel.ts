@@ -4,8 +4,8 @@ import { withTimeout } from "../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import type { SpawnResult } from "../../process/exec.js";
-import { createDeferred, type Deferred } from "../../shared/deferred.js";
-import { boundedWorkerError } from "./service-validation.js";
+import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
+import { createWorkerDesktopTunnels } from "./desktop-tunnel.js";
 import {
   advanceWorkerSshAfterTransportExit,
   prepareWorkerSsh,
@@ -28,7 +28,9 @@ import {
   workerSshProcessError,
   WORKER_TUNNEL_READY_MARKER,
 } from "./tunnel-ssh-runner.js";
-import { createWorkerWorkspaceActions, stableWorkerPathComponent } from "./workspace-sync.js";
+import { boundedWorkerError } from "./worker-error.js";
+import { stableWorkerPathComponent } from "./workspace-sync-helpers.js";
+import { createWorkerWorkspaceActions } from "./workspace-sync.js";
 
 export type { WorkerTunnelHandle } from "./tunnel-contract.js";
 const REMOTE_SOCKET_NAME = "gateway.sock";
@@ -77,15 +79,19 @@ rmdir -- "$directory" 2>/dev/null || true
 `;
 
 type WorkerTunnelStartRequest = WorkerTunnelRequest & {
+  bundleHash: string;
   gateway: { host: "127.0.0.1" | "::1"; port: number };
   ssh: WorkerSshEndpoint;
+  sharedHost?: boolean;
   resolveIdentity: WorkerSshIdentityResolver;
 };
 
 type TunnelEntry = {
+  bundleHash: string;
   environmentId: string;
   ownerEpoch: number;
   gateway: WorkerTunnelStartRequest["gateway"];
+  sharedHost: boolean;
   remoteDirectory: string;
   remoteSocketPath: string;
   abortController: AbortController;
@@ -94,6 +100,7 @@ type TunnelEntry = {
   process?: WorkerSshProcess;
   initialization?: Promise<void>;
   loop?: Promise<void>;
+  loopSettled: boolean;
   stopPromise?: Promise<void>;
   readiness: Deferred<WorkerTunnelHandle>;
   workspaceTasks: Set<Promise<unknown>>;
@@ -138,6 +145,7 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
   const backoff = options.backoff ?? DEFAULT_BACKOFF;
   const now = options.now ?? Date.now;
   const stableConnectionMs = options.stableConnectionMs ?? DEFAULT_STABLE_CONNECTION_MS;
+  const desktop = createWorkerDesktopTunnels({ runner, now });
   const entries = new Map<string, TunnelEntry>();
   const claimedOwnerEpochs = new Map<string, number>();
 
@@ -223,11 +231,13 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
     remoteSocketPath: entry.remoteSocketPath,
     ...createWorkerWorkspaceActions({
       environmentId: entry.environmentId,
+      sharedHost: entry.sharedHost,
       ownerSignal: entry.abortController.signal,
       isConnected: () => isCurrent(entry) && entry.status === "connected",
       getPrepared: () => entry.prepared,
       runner,
       tasks: entry.workspaceTasks,
+      bundleHash: entry.bundleHash,
     }),
     stop: () => stop(entry.environmentId, entry.ownerEpoch),
   });
@@ -304,7 +314,7 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
             // Each established child owns one readiness barrier. Replace it as soon as that child
             // is lost so same-owner callers wait for the reconnect instead of using a stale handle.
             entry.status = "reconnecting";
-            const readiness = createDeferred<WorkerTunnelHandle>();
+            const readiness = createDeferredCore<WorkerTunnelHandle>();
             void readiness.promise.catch(() => undefined);
             entry.readiness = readiness;
           }
@@ -408,16 +418,19 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
 
     const environmentKey = stableWorkerPathComponent(request.environmentId, 16);
     const remoteDirectory = `/tmp/ocw-${environmentKey}-${request.ownerEpoch}`;
-    const readiness = createDeferred<WorkerTunnelHandle>();
+    const readiness = createDeferredCore<WorkerTunnelHandle>();
     void readiness.promise.catch(() => undefined);
     const entry: TunnelEntry = {
       environmentId: request.environmentId,
+      bundleHash: request.bundleHash,
       ownerEpoch: request.ownerEpoch,
       gateway: request.gateway,
+      sharedHost: request.sharedHost === true,
       remoteDirectory,
       remoteSocketPath: `${remoteDirectory}/${REMOTE_SOCKET_NAME}`,
       abortController: new AbortController(),
       status: "connecting",
+      loopSettled: false,
       readiness,
       workspaceTasks: new Set(),
     };
@@ -442,7 +455,9 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
         entry.prepared = undefined;
         return;
       }
-      entry.loop = reconnectLoop(entry);
+      entry.loop = reconnectLoop(entry).finally(() => {
+        entry.loopSettled = true;
+      });
       void entry.loop.catch((error: unknown) => {
         entry.readiness.reject(error instanceof Error ? error : new Error("Worker tunnel failed"));
       });
@@ -456,10 +471,10 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
 
   async function stop(environmentId: string, ownerEpoch?: number): Promise<void> {
     const entry = entries.get(environmentId);
-    if (!entry || (ownerEpoch !== undefined && ownerEpoch !== entry.ownerEpoch)) {
-      return;
+    if (entry && (ownerEpoch === undefined || ownerEpoch === entry.ownerEpoch)) {
+      await stopEntry(entry);
     }
-    await stopEntry(entry);
+    await desktop.stop(environmentId, ownerEpoch);
   }
 
   async function stopAll(): Promise<void> {
@@ -468,15 +483,17 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
       entries.delete(entry.environmentId);
       entry.abortController.abort(new Error("Worker tunnel manager stopped"));
     }
-    await Promise.all(current.map(stopEntry));
+    await Promise.all([...current.map(stopEntry), desktop.stopAll()]);
   }
 
   return {
+    desktop,
     start,
     stop,
     stopAll,
     status(environmentId: string): WorkerTunnelStatus {
-      return entries.get(environmentId)?.status ?? "stopped";
+      const entry = entries.get(environmentId);
+      return !entry || entry.loopSettled ? "stopped" : entry.status;
     },
   };
 }

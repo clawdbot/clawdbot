@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   getRegistryWorktree,
+  listRegistryWorktrees,
   updateRegistryWorktree,
   WorktreeRemovalContentionError,
 } from "./registry.js";
@@ -20,8 +21,9 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-async function git(cwd: string, ...args: string[]): Promise<void> {
-  await execFileAsync("git", ["-C", cwd, ...args]);
+async function git(cwd: string, ...args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+  return stdout.trim();
 }
 
 describe("ManagedWorktreeService run-end cleanup outcomes", () => {
@@ -57,6 +59,27 @@ describe("ManagedWorktreeService run-end cleanup outcomes", () => {
       stateDir,
     });
   }
+
+  it("removes an allocated worktree when its commit guard closes during setup", async () => {
+    let checks = 0;
+    await expect(
+      service.create({
+        repoRoot: repo,
+        name: "closed-authority",
+        baseRef: "HEAD",
+        commitGuard: () => {
+          checks += 1;
+          if (checks === 2) {
+            throw new TypeError("authority closed");
+          }
+        },
+      }),
+    ).rejects.toThrow("authority closed");
+
+    expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("closed-authority");
+    expect(await git(repo, "branch", "--list", "openclaw/closed-authority")).toBe("");
+    expect(listRegistryWorktrees(env)).toEqual([]);
+  });
 
   it("records removal after clean run-end cleanup", async () => {
     const created = await materialize("clean");

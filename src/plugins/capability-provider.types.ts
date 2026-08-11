@@ -78,15 +78,43 @@ export type WorkerSshIdentityRequest = {
   keyRef: SecretRef;
 };
 
+/** Closed set of applications installed and launchable on a provisioned worker desktop. */
+export type WorkerDesktopApp =
+  | {
+      id: "browser";
+      executablePath: string;
+      cdpPort: number;
+    }
+  | { id: "terminal"; executablePath: string };
+
+/** Optional interactive desktop endpoint provisioned with the lease (warm-time capability). */
+export type WorkerDesktopEndpoint = {
+  /** Desktop service protocol on the worker loopback; "rfb" is the only phase-1 value. */
+  protocol: "rfb";
+  /** Loopback port on the worker (e.g. 5900). */
+  port: number;
+  /** Absolute on-box path to the per-lease password file; read over SSH, never persisted as plaintext. */
+  passwordFilePath?: string;
+  /** Closed application metadata advertised by the provider for this desktop. */
+  apps?: WorkerDesktopApp[];
+};
+
 /** Durable lease identity and endpoint returned by a successful provision operation. */
 export type WorkerLease = {
   leaseId: string;
   ssh: WorkerSshEndpoint;
+  /** The SSH account also owns processes unrelated to this worker lease. */
+  sharedHost?: boolean;
+  desktop?: WorkerDesktopEndpoint;
 };
 
 /** Authoritative inspection result for an already-known worker lease. */
 export type WorkerLeaseStatus =
-  | { status: "active" }
+  | {
+      status: "active";
+      /** Explicit provider fact used to reconcile leases persisted before this metadata existed. */
+      sharedHost?: boolean;
+    }
   | { status: "destroyed" }
   | { status: "unknown" };
 
@@ -108,6 +136,8 @@ export type WorkerProvider = {
    * Repeating the same operation id must be idempotent across gateway restarts.
    */
   provision: (profile: WorkerProfile, operationId: string) => Promise<WorkerLease>;
+  /** Maximum core wait for one provision attempt, including provider-owned setup and cleanup. */
+  resolveProvisionTimeoutMs?: (profile: WorkerProfile) => number;
   /** Throws on transient/indeterminate failures; `unknown` means authoritative absence. */
   inspect: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<WorkerLeaseStatus>;
   /**
