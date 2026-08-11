@@ -7,7 +7,7 @@ import { isProvisionalSubagentKillTask } from "../../../tasks/task-cancellation-
 import { mergeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import { peekSwarmStructuredOutput } from "../../tools/structured-output-tool.js";
 import { withSubagentOutcomeTiming } from "../announce/subagent-announce-output.js";
-import type { SubagentRunOutcome } from "../announce/subagent-announce-output.js";
+import type { SubagentRunOutcome } from "../announce/subagent-run-outcome.js";
 import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
 import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { clearDeliveryState, ensureCompletionState } from "./subagent-delivery-state.js";

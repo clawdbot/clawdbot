@@ -31,7 +31,7 @@ import { removeInternalSessionEffectsSession } from "../../internal-session-effe
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import { isRecoverableAgentWaitError, waitForAgentRun } from "../../run-wait.js";
 import { withSubagentOutcomeTiming } from "../announce/subagent-announce-output.js";
-import type { SubagentRunOutcome } from "../announce/subagent-announce-output.js";
+import type { SubagentRunOutcome } from "../announce/subagent-run-outcome.js";
 import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
 import { isSwarmRunQueued, removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import {

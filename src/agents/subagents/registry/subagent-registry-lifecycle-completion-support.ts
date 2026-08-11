@@ -1,5 +1,5 @@
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
-import type { SubagentRunOutcome } from "../announce/subagent-announce-output.js";
+import type { SubagentRunOutcome } from "../announce/subagent-run-outcome.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {

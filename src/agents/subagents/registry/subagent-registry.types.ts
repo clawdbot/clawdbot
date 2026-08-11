@@ -3,7 +3,7 @@ import type { SubagentEndReason } from "../../../context-engine/types.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
-import type { SubagentRunOutcome } from "../announce/subagent-announce-output.js";
+import type { SubagentRunOutcome } from "../announce/subagent-run-outcome.js";
 import type { SubagentLaunchAuthorization } from "../spawn/subagent-launch-authorization.js";
 import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";

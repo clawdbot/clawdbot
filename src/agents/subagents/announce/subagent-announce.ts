@@ -59,7 +59,6 @@ import {
   readSubagentTimeoutProgress,
   waitForSubagentRunOutcome,
 } from "./subagent-announce-output.js";
-import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import {
   callGateway,
   dispatchGatewayMethodInProcess,
@@ -68,6 +67,7 @@ import {
   resolveContinuationRuntimeConfig,
   waitForEmbeddedAgentRunEnd,
 } from "./subagent-announce.runtime.js";
+import type { SubagentRunOutcome } from "./subagent-run-outcome.js";
 type SubagentAnnounceDeps = {
   callGateway: typeof callGateway;
   dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;

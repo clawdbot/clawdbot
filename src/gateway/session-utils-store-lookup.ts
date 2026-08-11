@@ -32,7 +32,7 @@ import {
 import type {
   GatewaySessionStoreTarget,
   GatewaySessionStoreTargetWithStore,
-} from "./session-utils-contracts.js";
+} from "./session-utils-store-target.js";
 
 function findCanonicalStoreMatch(
   store: Record<string, SessionEntry>,

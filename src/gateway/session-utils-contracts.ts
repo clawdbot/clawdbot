@@ -9,6 +9,13 @@ import type { ThinkLevel, listThinkingLevelOptions } from "../auto-reply/thinkin
 import type { SessionAcpMeta, SessionEntry } from "../config/sessions.js";
 import type { ModelCostConfig } from "../utils/usage-format.js";
 
+// Store-target shapes live on a registry-free leaf so spawn/runtime can import
+// them without the session-utils barrel. Re-export for existing gateway callers.
+export type {
+  GatewaySessionStoreTarget,
+  GatewaySessionStoreTargetWithStore,
+} from "./session-utils-store-target.js";
+
 export type SessionActorProfileIdentity = {
   label?: string;
   avatarUrl?: string;
@@ -32,18 +39,6 @@ export type SessionListRowContext = {
 };
 
 export type SessionListRowContextProvider = () => SessionListRowContext;
-
-export type GatewaySessionStoreTarget = {
-  agentId: string;
-  storePath: string;
-  canonicalKey: string;
-  storeKeys: string[];
-};
-
-export type GatewaySessionStoreTargetWithStore = GatewaySessionStoreTarget & {
-  canonicalValidationError?: Error;
-  store: Record<string, SessionEntry>;
-};
 
 export function createSessionRowModelCacheKey(
   provider: string | undefined,
