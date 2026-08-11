@@ -215,28 +215,42 @@ export async function reconcilePendingFinalDeliveryAfterSettlement(params: {
       const relevantDeliveries = pendingPayloadSet
         ? params.deliveries.filter((delivery) => pendingPayloadSet.has(delivery.payload))
         : params.deliveries;
-      const ownsEveryPendingPayload =
-        !pendingPayloadSet || relevantDeliveries.length === pendingPayloadSet.size;
       const failedBeforeDeliver = relevantDeliveries.filter(
         (delivery) => delivery.outcome === "failed-before-deliver",
       );
 
+      if (pendingPayloadSet) {
+        // Mapped markers: narrow to the failed-before-deliver payloads. Delivered
+        // and block-deduped (no delivery entry) payloads drop out of the retained
+        // marker so recovery never replays already-visible content. When nothing
+        // failed before delivery, clear the marker.
+        if (failedBeforeDeliver.length > 0) {
+          const retryText = buildPendingFinalDeliveryRetryText(
+            failedBeforeDeliver.map((delivery) => delivery.payload),
+          );
+          if (retryText && pending.kind === "replayable") {
+            return {
+              pendingFinalDelivery: { ...pending, text: retryText },
+              updatedAt: Date.now(),
+            };
+          }
+        }
+        return {
+          ...buildPendingFinalDeliveryCleanupPatch(entry),
+          updatedAt: Date.now(),
+        };
+      }
+      // Unmapped (legacy) markers: we cannot identify which payloads failed,
+      // so retaining the whole marker after a mixed settlement risks replaying
+      // already-delivered siblings on recovery. Only retain when every relevant
+      // delivery failed before send — the all-failed case is safe because no
+      // sibling was delivered. Mixed or partial cases clear the marker, matching
+      // the pre-fix cleanup behavior.
       if (
         relevantDeliveries.length > 0 &&
         failedBeforeDeliver.length === relevantDeliveries.length
       ) {
         return null;
-      }
-      if (pendingPayloadSet && ownsEveryPendingPayload && failedBeforeDeliver.length > 0) {
-        const retryText = buildPendingFinalDeliveryRetryText(
-          failedBeforeDeliver.map((delivery) => delivery.payload),
-        );
-        if (retryText && pending.kind === "replayable") {
-          return {
-            pendingFinalDelivery: { ...pending, text: retryText },
-            updatedAt: Date.now(),
-          };
-        }
       }
       return {
         ...buildPendingFinalDeliveryCleanupPatch(entry),
