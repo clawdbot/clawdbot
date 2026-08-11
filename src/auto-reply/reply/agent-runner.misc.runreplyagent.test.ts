@@ -246,7 +246,10 @@ vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async (impo
   listSubagentRunsForController: () => [],
 }));
 
-vi.mock("../../agents/subagents/registry/subagent-registry-read.js", () => ({
+vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../agents/subagents/registry/subagent-registry-read.js")
+  >()),
   getLatestSubagentRunByChildSessionKey: () => null,
   listSubagentRunsForController: () => [],
 }));
