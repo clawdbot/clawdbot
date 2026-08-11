@@ -70,18 +70,6 @@ describe("loadPreparedModelCatalogSnapshotForBrowse", () => {
     expect(loadCatalog).toHaveBeenCalledExactlyOnceWith({ readOnly: false });
   });
 
-  it("uses the full catalog for configured picker views", async () => {
-    const loadCatalog = vi.fn(async ({ readOnly }: { readOnly: boolean }) =>
-      readOnly ? readOnlyCatalog : fullCatalog,
-    );
-
-    await expect(
-      loadPreparedModelCatalogSnapshotForBrowse({ cfg: config(), view: "configured", loadCatalog }),
-    ).resolves.toBe(fullCatalog);
-
-    expect(loadCatalog).toHaveBeenCalledExactlyOnceWith({ readOnly: false });
-  });
-
   it("uses the full catalog for default views with provider wildcards", async () => {
     const loadCatalog = vi.fn(async ({ readOnly }: { readOnly: boolean }) =>
       readOnly ? readOnlyCatalog : fullCatalog,

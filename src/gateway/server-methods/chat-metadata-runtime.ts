@@ -235,8 +235,9 @@ async function defaultBuildProjection(params: {
 }): Promise<{ modelCatalog: ModelCatalogEntry[]; models?: unknown[] }> {
   const { buildModelsListResult, createGatewayAgentModelCatalogProjector } =
     await import("./models-list-result.js");
-  const snapshot = params.facts.owner.loadFullModelCatalog
-    ? await params.facts.owner.loadFullModelCatalog()
+  const loadFullModelCatalog = params.facts.owner.loadFullModelCatalog;
+  const snapshot = loadFullModelCatalog
+    ? await loadFullModelCatalog()
     : params.facts.owner.modelCatalog;
   const projector = createGatewayAgentModelCatalogProjector({
     cfg: params.facts.owner.config,
@@ -262,6 +263,7 @@ async function defaultBuildProjection(params: {
         agentId: params.facts.agentId,
         config: params.facts.owner.config,
         snapshot,
+        ...(loadFullModelCatalog ? { fullyDiscovered: true } : {}),
       },
       preloadedOnly: true,
       catalogProjector: projector,

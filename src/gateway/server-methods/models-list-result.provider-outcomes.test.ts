@@ -34,7 +34,7 @@ describe("models.list provider catalog outcomes", () => {
       agents: {
         defaults: {
           model: { primary: "openai/gpt-5.6-sol" },
-          models: { "openai/gpt-5.6-sol": {} },
+          models: { "openai/*": {}, "openai/gpt-5.6-sol": {} },
         },
       },
     } as OpenClawConfig;
@@ -78,7 +78,7 @@ describe("models.list provider catalog outcomes", () => {
         context,
         agentId: "main",
         params: { view: "configured" },
-        preloadedCatalog: { agentId: "main", config, snapshot },
+        preloadedCatalog: { agentId: "main", config, snapshot, fullyDiscovered: true },
         preloadedOnly: true,
         catalogProjector: projector,
       }),
