@@ -7,6 +7,8 @@ const base = {
   sourceReplyDeliveryMode: "message_tool_only" as const,
   sendPolicyDenied: false,
   successfulSourceReplyDelivery: false,
+  isHeartbeat: false,
+  isRoomEvent: false,
   finalText:
     "Here is the answer the user asked for. It includes enough detail to look like a visible response rather than an internal no-op note.",
 };
@@ -141,5 +143,10 @@ describe("shouldWarnAboutPrivateMessageToolFinal", () => {
 
   it("does not flag when delivery was intentionally denied by send policy", () => {
     expect(shouldWarnAboutPrivateMessageToolFinal({ ...base, sendPolicyDenied: true })).toBe(false);
+  });
+
+  it("does not flag heartbeat or room-event non-delivery", () => {
+    expect(shouldWarnAboutPrivateMessageToolFinal({ ...base, isHeartbeat: true })).toBe(false);
+    expect(shouldWarnAboutPrivateMessageToolFinal({ ...base, isRoomEvent: true })).toBe(false);
   });
 });

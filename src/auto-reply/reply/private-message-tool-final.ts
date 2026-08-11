@@ -12,18 +12,34 @@ const MULTI_SENTENCE_TERMINATOR_MIN_COUNT = 2;
 // CJK sentence marks do not require following whitespace; keep ASCII's boundary rule.
 const SENTENCE_TERMINATOR_REGEX = /[.!?]+(?:\s|$)|[。！？．｡]+/gu;
 
-/** Classifies private final text after message-tool-only source delivery settles. */
-export function classifyPrivateMessageToolFinal(params: {
+type PrivateMessageToolFinalContext = {
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
   sendPolicyDenied: boolean;
   successfulSourceReplyDelivery: boolean;
-  finalText: string;
-}): "none" | "short" | "substantive" {
-  if (
+  isHeartbeat: boolean;
+  isRoomEvent: boolean;
+};
+
+/** Returns whether a private final can represent an expected source reply that was not delivered. */
+export function shouldClassifyPrivateMessageToolFinal(
+  params: PrivateMessageToolFinalContext,
+): boolean {
+  return !(
+    params.isHeartbeat ||
+    params.isRoomEvent ||
     params.sourceReplyDeliveryMode !== "message_tool_only" ||
     params.sendPolicyDenied ||
     params.successfulSourceReplyDelivery
-  ) {
+  );
+}
+
+/** Classifies private final text after message-tool-only source delivery settles. */
+export function classifyPrivateMessageToolFinal(
+  params: PrivateMessageToolFinalContext & {
+    finalText: string;
+  },
+): "none" | "short" | "substantive" {
+  if (!shouldClassifyPrivateMessageToolFinal(params)) {
     return "none";
   }
   const trimmed = params.finalText.trim();

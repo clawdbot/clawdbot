@@ -3666,13 +3666,19 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
   });
 
   it("does not warn or enqueue retry for room_event turns", async () => {
-    await runPrivateFinalCase({ inboundEventKind: "room_event" });
+    const { terminalEvent } = await runPrivateFinalCase({ inboundEventKind: "room_event" });
+    expect((terminalEvent?.data.terminalReply as { code?: unknown } | undefined)?.code).not.toBe(
+      "message-tool-not-called",
+    );
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
   });
 
   it("does not warn, enqueue retry, or emit diagnostic for heartbeat runs", async () => {
-    const { result } = await runPrivateFinalCase({ isHeartbeat: true });
+    const { result, terminalEvent } = await runPrivateFinalCase({ isHeartbeat: true });
+    expect((terminalEvent?.data.terminalReply as { code?: unknown } | undefined)?.code).not.toBe(
+      "message-tool-not-called",
+    );
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
     const payloads = result === undefined ? [] : normalizeReplyPayloads(result);
@@ -3680,7 +3686,10 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
   });
 
   it("does not warn or enqueue retry when send policy denied source delivery", async () => {
-    await runPrivateFinalCase({ sendPolicyDenied: true });
+    const { terminalEvent } = await runPrivateFinalCase({ sendPolicyDenied: true });
+    expect((terminalEvent?.data.terminalReply as { code?: unknown } | undefined)?.code).not.toBe(
+      "message-tool-not-called",
+    );
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
   });

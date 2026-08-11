@@ -14,6 +14,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
+import { resolveSourceReplyPolicy } from "./agent-runner-core.js";
 import { markAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import type { AgentFallbackCandidatesResult } from "./agent-runner-fallback-candidate.js";
 import type {
@@ -127,7 +128,16 @@ export async function settleAgentFallbackCycle(params: {
     };
   }
   const terminalMetadata = fallbackResult.terminal.metadata;
-  const sourceReplyDeliveryMode = turn.followupRun.run.sourceReplyDeliveryMode;
+  const sourceReplyPolicy = turn.sessionKey
+    ? resolveSourceReplyPolicy({
+        cfg: cycle.runtimeConfig,
+        sessionCtx: turn.sessionCtx,
+        sessionEntry: turn.getActiveSessionEntry(),
+        sessionKey: turn.sessionKey,
+        runtimePolicySessionKey: turn.runtimePolicySessionKey,
+        opts: turn.opts,
+      })
+    : undefined;
   const finalText = runResult.meta?.finalAssistantVisibleText?.trim() ?? "";
   const successfulSourceReplyDelivery = hasCompletedSourceReplyDeliveryEvidence(runResult);
   const hasPendingContinuation =
@@ -135,9 +145,11 @@ export async function settleAgentFallbackCycle(params: {
   const privateFinalTerminalReply =
     !hasPendingContinuation &&
     classifyPrivateMessageToolFinal({
-      sourceReplyDeliveryMode,
-      sendPolicyDenied: false,
+      sourceReplyDeliveryMode: sourceReplyPolicy?.sourceReplyDeliveryMode,
+      sendPolicyDenied: sourceReplyPolicy?.sendPolicyDenied === true,
       successfulSourceReplyDelivery,
+      isHeartbeat: turn.isHeartbeat,
+      isRoomEvent: turn.sessionCtx.InboundEventKind === "room_event",
       finalText,
     }) === "short"
       ? ({ disposition: "empty", code: "message-tool-not-called" } as const)
