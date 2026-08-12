@@ -66,7 +66,13 @@ suite.define(() => {
             },
           ],
         },
-        "environments.list": { environments: [], profiles: [] },
+        "environments.list": {
+          environments: [
+            { id: "gateway", type: "local", status: "available" },
+            { id: "node:existing-mac", type: "node", status: "available" },
+          ],
+          profiles: [],
+        },
       },
     });
 
@@ -96,6 +102,14 @@ suite.define(() => {
           },
         ],
       });
+      await gateway.setMethodResponse("environments.list", {
+        environments: [
+          { id: "gateway", type: "local", status: "available" },
+          { id: "node:existing-mac", type: "node", status: "available" },
+          { id: "node:new-mac", type: "node", status: "available" },
+        ],
+        profiles: [],
+      });
       await gateway.emitGatewayEvent("presence", {
         presence: [
           { deviceId: "existing-mac", mode: "node", reason: "connect", ts: 1 },
@@ -106,12 +120,15 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("node.list")).length)
         .toBeGreaterThan(nodeRequests);
+      await expect
+        .poll(async () => (await gateway.getRequests("environments.list")).length)
+        .toBeGreaterThan(environmentRequests);
       await place.getByRole("button", { name: "New Mac" }).waitFor();
       await place.getByText("This gateway", { exact: true }).waitFor();
       await place.getByText("Your devices", { exact: true }).waitFor();
       expect(await place.getAttribute("open")).not.toBeNull();
-      expect(await gateway.getRequests("environments.list")).toHaveLength(environmentRequests);
 
+      const refreshedEnvironmentRequests = (await gateway.getRequests("environments.list")).length;
       await gateway.setMethodResponse("environments.list", {
         environments: [],
         profiles: [{ id: "aws", providerId: "crabbox", trust: "disposable" }],
@@ -123,7 +140,7 @@ suite.define(() => {
       });
       await expect
         .poll(async () => (await gateway.getRequests("environments.list")).length)
-        .toBeGreaterThan(environmentRequests);
+        .toBeGreaterThan(refreshedEnvironmentRequests);
       await place.getByText("Cloud", { exact: true }).waitFor();
       await place.getByRole("button", { name: "Cloud · aws" }).waitFor();
       expect(await place.getAttribute("open")).not.toBeNull();

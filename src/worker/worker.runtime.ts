@@ -63,7 +63,7 @@ export async function runWorkerDescriptor(
   let resultFenceAcked = false;
   let forcedStopTimer: NodeJS.Timeout | undefined;
   const connection = createWorkerConnection({
-    socketPath: descriptor.socketPath,
+    endpoint: descriptor.connectionEndpoint,
     connectParams: buildWorkerConnectParams(descriptor),
   });
   const abortFromCaller = () => {

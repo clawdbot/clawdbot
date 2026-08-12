@@ -227,6 +227,7 @@ export function renderPlaceSelect(params: {
   onBrowserNavigate: (path: string | undefined) => void;
   onBrowserBack: () => void;
   onRegisterProject: (path: string) => void;
+  onConnectMachine: () => void;
   onClose: () => void;
   onToggleWorktree: () => void;
   onBaseRefInput: (baseRef: string) => void;
@@ -676,6 +677,22 @@ export function renderPlaceSelect(params: {
                 : html`<div class="new-session-page__menu-note">
                     ${t("newSession.runsOn", { place: gatewayLabel })}
                   </div>`}
+              ${params.isAdmin
+                ? html`
+                    <div class="session-menu__separator" role="separator"></div>
+                    <button
+                      type="button"
+                      class="session-menu__item new-session-page__connect-machine"
+                      data-value="connect-machine"
+                      aria-pressed="false"
+                      ?disabled=${params.submitting || params.pendingCloud}
+                      @click=${params.onConnectMachine}
+                    >
+                      <span class="session-menu__icon" aria-hidden="true">${icons.link}</span>
+                      <span class="session-menu__text">${t("newSession.connectMachine")}</span>
+                    </button>
+                  `
+                : nothing}
             </div>
           `}
     </wa-popover>

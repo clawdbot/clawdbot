@@ -9,7 +9,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { completePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { isGatewayWorkAdmissionClosed } from "../process/gateway-work-admission.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-identity-token.js";
+import { restartRunningChannelAccounts } from "./channel-thaw-restart.js";
 import type { ExecApprovalManager } from "./exec-approval-manager.js";
 import { revokeAttachGrantsForSession } from "./mcp-grant-store.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
@@ -26,7 +28,12 @@ import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation
 import type { prepareGatewayLifecycle } from "./server-lifecycle.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
-import { getHealthVersion, getPresenceVersion } from "./server/health-state.js";
+import {
+  getHealthVersion,
+  getPresenceVersion,
+  incrementPresenceVersion,
+} from "./server/health-state.js";
+import { broadcastPresenceSnapshot } from "./server/presence-events.js";
 
 type GatewayLifecycle = Awaited<ReturnType<typeof prepareGatewayLifecycle>>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
@@ -115,6 +122,7 @@ export async function startGatewayCoreRuntime(input: {
     kernel,
     startupTrace,
     channelManager,
+    readinessEventLoopHealth,
     workerDispatchAuthority,
     clients,
     startChannel,
@@ -168,6 +176,14 @@ export async function startGatewayCoreRuntime(input: {
         getPresenceVersion,
         getHealthVersion,
         refreshGatewayHealthSnapshot: refreshGatewayHealthSnapshotWithRuntime,
+        restartRunningChannels: async () =>
+          await restartRunningChannelAccounts(channelManager, {
+            shouldContinue: () => !isGatewayWorkAdmissionClosed(),
+            onError: (message) => logHealth.error(message),
+          }),
+        refreshPresence: () =>
+          broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion }),
+        resetEventLoopHealth: readinessEventLoopHealth.reset,
         logHealth,
         dedupe,
         chatAbortControllers,

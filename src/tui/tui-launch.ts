@@ -2,8 +2,8 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { formatErrorMessage } from "../infra/errors.js";
+import { filterOpenClawChildExecArgv } from "../infra/openclaw-cli-invocation.js";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
-import { filterTuiExecArgv } from "./tui-exec-argv.js";
 import type { TuiOptions } from "./tui.js";
 
 function appendOption(args: string[], flag: string, value: string | number | undefined): void {
@@ -22,7 +22,11 @@ function buildCurrentCliEntryArgs(): string[] {
 }
 
 function buildTuiCliArgs(opts: TuiOptions): string[] {
-  const args = [...filterTuiExecArgv(process.execArgv), ...buildCurrentCliEntryArgs(), "tui"];
+  const args = [
+    ...filterOpenClawChildExecArgv(process.execArgv),
+    ...buildCurrentCliEntryArgs(),
+    "tui",
+  ];
   if (opts.local) {
     args.push("--local");
   }

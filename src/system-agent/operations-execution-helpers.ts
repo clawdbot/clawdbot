@@ -187,12 +187,12 @@ export function createNoExitRuntime(runtime: RuntimeEnv): RuntimeEnv {
   };
 }
 
-export async function resolveTuiAgentId(params: {
+export function resolveTuiAgentId(params: {
   requestedAgentId: string | undefined;
   requestedWorkspace?: string;
-  deps?: SystemAgentCommandDeps;
-}): Promise<string | undefined> {
-  const overview = await loadOverviewForOperation(params.deps);
+  overview: SystemAgentOverview;
+}): string | undefined {
+  const { overview } = params;
   const workspace = params.requestedWorkspace
     ? resolveUserPath(params.requestedWorkspace)
     : undefined;

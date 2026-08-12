@@ -197,11 +197,15 @@ describe("codex plugin", () => {
     expect(migrationRegistration?.id).toBe("codex");
     expect(migrationRegistration?.label).toBe("Codex");
     expect(registerTool).toHaveBeenCalledWith(expect.any(Function), { name: "codex_threads" });
+    expect(registerTool).toHaveBeenCalledWith(expect.any(Function), { name: "codex_plugins" });
     expect(registerTool).not.toHaveBeenCalledWith(expect.any(Function), {
       names: [...CODEX_SUPERVISION_COMPAT_TOOL_NAMES],
     });
     expect(registerToolMetadata).toHaveBeenCalledWith(
       expect.objectContaining({ toolName: "codex_threads", risk: "high" }),
+    );
+    expect(registerToolMetadata).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "codex_plugins", risk: "low" }),
     );
     expect(inboundClaimRegistration?.[0]).toBe("inbound_claim");
     expect(typeof inboundClaimRegistration?.[1]).toBe("function");

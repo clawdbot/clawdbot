@@ -50,9 +50,13 @@ type PendingDesktopConnection = {
 type ObservedDesktopConnection = PendingDesktopConnection & { observed: DesktopObserveResult };
 
 function desktopSourceForEnvironment(environment: Pick<EnvironmentSummary, "id">): DesktopSource {
-  return environment.id === "gateway"
-    ? { kind: "host" }
-    : { kind: "environment", environmentId: environment.id };
+  if (environment.id === "gateway") {
+    return { kind: "host" };
+  }
+  if (environment.id.startsWith("node:") && environment.id.length > "node:".length) {
+    return { kind: "node", nodeId: environment.id.slice("node:".length) };
+  }
+  return { kind: "environment", environmentId: environment.id };
 }
 
 /** `<openclaw-desktop-panel>` — dockable RFB access to Gateway desktop sources. */
@@ -248,7 +252,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     this.controlTakeoverRecoveryUsed = options.takeoverRecovery === true;
     try {
       const observeCredentials =
-        source.kind === "host" &&
+        source.kind !== "environment" &&
         this.credentials?.password &&
         (this.credentialAuth === "vnc-password" ||
           (this.credentialAuth === "ard-account" && this.credentials.username))
@@ -262,12 +266,18 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       if (operationId !== this.operationId) {
         return;
       }
-      const credentials = observed.vncPassword
-        ? { password: observed.vncPassword }
-        : observed.auth === "vnc-password"
-          ? this.credentials
-          : undefined;
-      if (observed.auth === "vnc-password" && !credentials?.password) {
+      const credentials = observed.preauthenticated
+        ? undefined
+        : observed.vncPassword
+          ? { password: observed.vncPassword }
+          : observed.auth === "vnc-password"
+            ? this.credentials
+            : undefined;
+      if (
+        observed.auth === "vnc-password" &&
+        observed.preauthenticated !== true &&
+        !credentials?.password
+      ) {
         this.credentialAuth = "vnc-password";
         this.pendingConnection = { environmentId, control, observed, operationId };
         this.state = "credentials";

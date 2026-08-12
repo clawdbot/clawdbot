@@ -196,6 +196,8 @@ export function createSlackDraftStream(params: {
 
   const forceNewMessage = () => {
     stopTrackingConversationBoundary();
+    streamState.stopped = false;
+    streamState.final = false;
     streamMessageId = undefined;
     streamChannelId = undefined;
     lastVisibleUpdate = undefined;

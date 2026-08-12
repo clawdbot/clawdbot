@@ -16,7 +16,6 @@ import type { GatewayServerHarness } from "../server.e2e-ws-harness.js";
 import { embeddedRunMock, agentDiscoveryMock, testState } from "../test-helpers.runtime-state.js";
 import type { connectOk } from "../test-helpers.server.js";
 import { installGatewayTestHooks, writeSessionStore } from "../test-helpers.server.js";
-import { sessionHandlerTestSurface } from "./server-sessions-handlers.test-support.js";
 
 export const getSessionManagerModule = createLazyRuntimeModule(
   () => import("../../agents/sessions/index.js"),
@@ -34,8 +33,10 @@ const getGatewayServerHarnessModule = createLazyRuntimeModule(
   () => import("../server.e2e-ws-harness.js"),
 );
 
+const getGatewayServerMethodsModule = createLazyRuntimeModule(() => import("../server-methods.js"));
+
 export async function getSessionsHandlers() {
-  return sessionHandlerTestSurface;
+  return (await getGatewayServerMethodsModule()).coreGatewayHandlers;
 }
 
 type TestTranscriptMessage = Record<string, unknown> & {

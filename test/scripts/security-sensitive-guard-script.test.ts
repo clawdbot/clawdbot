@@ -183,6 +183,9 @@ describe("security-sensitive guard script", () => {
     const trustedAuthors = securitySensitiveGuardCommentAuthors(
       "github-actions[bot], openclaw-security-guard[bot]",
     );
+    expect(securitySensitiveGuardCommentAuthors(undefined)).toEqual(
+      new Set(["github-actions[bot]"]),
+    );
 
     expect(
       isSecuritySensitiveGuardMarkerComment(

@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   FsListDirResult,
   WorktreesBranchesResult,
@@ -7,7 +8,6 @@ import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operat
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import * as catalog from "./catalog-target.ts";
 import type { DraftNode, DraftRepositoryState } from "./discovery.ts";
 import { readDraftNodes } from "./discovery.ts";

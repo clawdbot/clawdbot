@@ -13,6 +13,7 @@ import {
   guardCommentHeadSha,
   guardTrustedActorCandidates,
   isCommentNewerThan,
+  normalizeGuardLoginSet,
   readBoundedGitHubErrorText,
   readBoundedGitHubJson,
 } from "./guard-shared.mjs";
@@ -170,21 +171,11 @@ export function isSecuritySensitiveGuardTrustedForHead(comment, currentHeadSha) 
 }
 
 export function securityApproverSet(value) {
-  return new Set(
-    String(value ?? "")
-      .split(/[\s,]+/u)
-      .map((login) => login.trim().toLowerCase())
-      .filter(Boolean),
-  );
+  return normalizeGuardLoginSet(value);
 }
 
 export function securitySensitiveGuardCommentAuthors(value) {
-  return new Set(
-    String(value ?? "github-actions[bot]")
-      .split(/[\s,]+/u)
-      .map((login) => login.trim().toLowerCase())
-      .filter(Boolean),
-  );
+  return normalizeGuardLoginSet(value, "github-actions[bot]");
 }
 
 export function isSecuritySensitiveGuardMarkerComment(comment, trustedAuthors) {

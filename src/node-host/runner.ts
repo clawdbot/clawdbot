@@ -504,8 +504,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
         void activeRuntime.invoke(payload);
       }
     },
-    onHelloOk: (hello, url) => {
+    onHelloOk: (hello, url, tlsFingerprint) => {
       writeStderrLine(`node host gateway connected: ${url}`);
+      activeRuntime.updateGatewayConnection({ url, ...(tlsFingerprint ? { tlsFingerprint } : {}) });
       gatewayConnectionGeneration += 1;
       gatewayHelloReceived = true;
       connectedGatewayProtocol = hello.protocol;
@@ -533,6 +534,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     },
     onClose: (code, reason) => {
       retireGatewayConnection();
+      activeRuntime.updateGatewayConnection();
       activeRuntime.cancelAll();
       writeStderrLine(`node host gateway closed (${code}): ${reason}`);
     },

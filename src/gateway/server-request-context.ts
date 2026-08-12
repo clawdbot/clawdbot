@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { upsertPresence } from "../infra/system-presence.js";
 import { resolveUserProfileId } from "../state/user-profiles.js";
 import { buildAuthenticatedPresenceUser } from "./authenticated-presence-user.js";
+import { NODE_DESKTOP_SERVICE_CONTEXT } from "./desktop/node-source-context.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { disconnectAllSharedGatewayAuthClients } from "./server-shared-auth-generation.js";
@@ -79,6 +80,7 @@ type GatewayRequestContextParams = {
     scopes: string[];
   }) => void;
   nodeRegistry: GatewayRequestContext["nodeRegistry"];
+  nodeDesktopService?: import("./desktop/node-source.js").NodeDesktopService;
   workerEnvironmentService?: GatewayRequestContext["workerEnvironmentService"];
   hostDesktopService?: GatewayRequestContext["hostDesktopService"];
   workerSessionPlacementService?: GatewayRequestContext["workerSessionPlacementService"];
@@ -365,6 +367,9 @@ export function createGatewayRequestContext(
     releaseControlUiDeviceAuthMigrationClaim: params.releaseControlUiDeviceAuthMigrationClaim,
     completeControlUiDeviceAuthMigration: params.completeControlUiDeviceAuthMigration,
     nodeRegistry: params.nodeRegistry,
+    ...(params.nodeDesktopService
+      ? { [NODE_DESKTOP_SERVICE_CONTEXT]: params.nodeDesktopService }
+      : {}),
     ...(params.workerEnvironmentService
       ? { workerEnvironmentService: params.workerEnvironmentService }
       : {}),

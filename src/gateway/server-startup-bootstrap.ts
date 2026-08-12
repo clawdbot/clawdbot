@@ -30,6 +30,7 @@ import {
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
 import { isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
+import { prepareGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { readGatewayRestartHandoffSync } from "../infra/restart-handoff.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -152,6 +153,9 @@ export async function prepareGatewayServerBootstrap(input: {
     ]);
   }
   const startupTrace = createGatewayStartupTrace(log);
+  if (!minimalTestGateway) {
+    await startupTrace.measure("runtime.agent-cli", () => prepareGatewayAgentCliShim());
+  }
   const startupConfigModulePromise = import("./server-startup-config.js");
   const loadStartupPluginsModule = createLazyPromise(() => import("./server-startup-plugins.js"), {
     cacheRejections: true,

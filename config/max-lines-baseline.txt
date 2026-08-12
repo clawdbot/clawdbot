@@ -684,7 +684,6 @@ src/gateway/server-restart-sentinel.test.ts
 src/gateway/server-startup-config.secrets.test.ts
 src/gateway/server-startup-post-attach.test.ts
 src/gateway/server-startup-post-attach.ts
-src/gateway/server.auth.control-ui.suite.ts
 src/gateway/server.chat.gateway-server-chat-b.test.ts
 src/gateway/server.chat.gateway-server-chat.test.ts
 src/gateway/server.config-patch.test.ts

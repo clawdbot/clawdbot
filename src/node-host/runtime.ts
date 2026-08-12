@@ -20,6 +20,7 @@ import { logDebug } from "../logger.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node-host.js";
 import { BoundedBuffer } from "../shared/bounded-buffer.js";
+import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import type { NodeHostClient } from "./client.js";
 import { handleInvoke, type NodeInvokeRequestPayload, type SkillBinsProvider } from "./invoke.js";
 import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
@@ -61,6 +62,7 @@ type ActiveNodeHostRuntime = {
   handleInput(invokeId: string, seq: number, payloadJSON: string): void;
   cancel(invokeId: string): void;
   cancelAll(): void;
+  updateGatewayConnection(connection?: { url: string; tlsFingerprint?: string }): void;
   close(): Promise<void>;
 };
 
@@ -252,6 +254,9 @@ export async function prepareNodeHostRuntime(params?: {
   const platform = params?.platform ?? process.platform;
   const installedAppsSharingEnabled =
     platform === "darwin" && params?.installedAppsSharingEnabled === true;
+  const desktopStreamingEnabled =
+    (platform === "darwin" || platform === "linux" || platform === "win32") &&
+    config.desktop?.host?.enabled === true;
   const availabilityContext = { config, env };
   const resolvePluginNodeHost = () =>
     listRegisteredNodeHostCapsAndCommands(availabilityContext, {
@@ -281,6 +286,7 @@ export async function prepareNodeHostRuntime(params?: {
         NODE_FS_LIST_DIR_COMMAND,
         NODE_TERMINAL_UPLOAD_COMMAND,
         NODE_MCP_TOOLS_CALL_COMMAND,
+        ...(desktopStreamingEnabled ? [NODE_DESKTOP_STREAM_COMMAND] : []),
         ...(installedAppsSharingEnabled ? [NODE_DEVICE_APPS_COMMAND] : []),
         ...(claudePath ? [NODE_AGENT_CLI_CLAUDE_RUN_COMMAND] : []),
         ...pluginManifest.commands,
@@ -307,6 +313,7 @@ export async function prepareNodeHostRuntime(params?: {
       };
       let currentPluginNodeHost = pluginNodeHost;
       let currentManifest = manifest;
+      let gatewayConnection: { url: string; tlsFingerprint?: string } | undefined;
       let manager: NodeHostMcpManager | undefined;
       const startup = startNodeHostMcpManager(config.nodeHost?.mcp?.servers, {
         signal: mcpAbort.signal,
@@ -348,6 +355,7 @@ export async function prepareNodeHostRuntime(params?: {
       return {
         async invoke(frame) {
           const duplexCommand = duplexEnabled && isRegisteredNodeHostCommandDuplex(frame.command);
+          const progressEnabled = duplexCommand || frame.command === NODE_DESKTOP_STREAM_COMMAND;
           const controller = new AbortController();
           // Every command must remain cancellable after dispatch; only duplex
           // commands own ordered input and its pre-spawn buffer.
@@ -373,7 +381,7 @@ export async function prepareNodeHostRuntime(params?: {
           // let its cleanup unregister the replacement invocation.
           activeInvokes.get(frame.id)?.controller.abort();
           activeInvokes.set(frame.id, active);
-          const progress = duplexCommand
+          const progress = progressEnabled
             ? createNodeInvokeProgressWriter({
                 client,
                 frame,
@@ -381,7 +389,9 @@ export async function prepareNodeHostRuntime(params?: {
                 onError: () => controller.abort(),
               })
             : undefined;
-          progress?.startHeartbeats();
+          if (duplexCommand) {
+            progress?.startHeartbeats();
+          }
           const pluginCommandIo: OpenClawPluginNodeHostCommandIo | undefined =
             input && progress
               ? {
@@ -399,6 +409,12 @@ export async function prepareNodeHostRuntime(params?: {
               ...(claudePath ? { claudePath } : {}),
               signal: controller.signal,
               ...(pluginCommandIo ? { pluginCommandIo } : {}),
+              ...(gatewayConnection?.url ? { gatewayUrl: gatewayConnection.url } : {}),
+              ...(gatewayConnection?.tlsFingerprint
+                ? { gatewayTlsFingerprint: gatewayConnection.tlsFingerprint }
+                : {}),
+              ...(config.desktop?.host ? { desktopHostConfig: config.desktop.host } : {}),
+              ...(progress ? { emitProgress: (text) => progress.write(text) } : {}),
               installedAppsSharingEnabled,
               installedAppsPlatform: platform,
               pluginCommandContext,
@@ -425,6 +441,9 @@ export async function prepareNodeHostRuntime(params?: {
             active.controller.abort();
           }
           activeInvokes.clear();
+        },
+        updateGatewayConnection(connection) {
+          gatewayConnection = connection;
         },
         async close() {
           this.cancelAll();

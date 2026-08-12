@@ -1,103 +1,31 @@
 // Openai tests cover realtime voice provider plugin behavior.
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
-const {
-  FakeWebSocket,
-  execFileSyncMock,
-  fetchWithSsrFGuardMock,
-  isProviderAuthProfileConfiguredMock,
-  resolveProviderAuthProfileApiKeyMock,
-} = vi.hoisted(() => {
-  type Listener = (...args: unknown[]) => void;
-
-  class MockWebSocket {
-    static readonly OPEN = 1;
-    static readonly CLOSED = 3;
-    static instances: MockWebSocket[] = [];
-
-    readonly listeners = new Map<string, Listener[]>();
-    readyState = 0;
-    sent: string[] = [];
-    closed = false;
-    terminated = false;
-    deferClose = false;
-    deferredClose: (() => void) | undefined;
-    args: unknown[];
-
-    constructor(...args: unknown[]) {
-      this.args = args;
-      MockWebSocket.instances.push(this);
-    }
-
-    on(event: string, listener: Listener): this {
-      const listeners = this.listeners.get(event) ?? [];
-      listeners.push(listener);
-      this.listeners.set(event, listeners);
-      return this;
-    }
-
-    emit(event: string, ...args: unknown[]): void {
-      for (const listener of this.listeners.get(event) ?? []) {
-        listener(...args);
-      }
-    }
-
-    send(payload: string): void {
-      this.sent.push(payload);
-    }
-
-    close(code?: number, reason?: string): void {
-      this.closed = true;
-      this.readyState = MockWebSocket.CLOSED;
-      const emitClose = () => this.emit("close", code ?? 1000, Buffer.from(reason ?? ""));
-      if (this.deferClose) {
-        this.deferredClose = emitClose;
-        return;
-      }
-      emitClose();
-    }
-
-    terminate(): void {
-      this.terminated = true;
-      this.close(1006, "terminated");
-    }
-
-    emitDeferredClose(): void {
-      const emitClose = this.deferredClose;
-      this.deferredClose = undefined;
-      emitClose?.();
-    }
-  }
-
-  return {
-    FakeWebSocket: MockWebSocket,
-    execFileSyncMock: vi.fn(),
-    fetchWithSsrFGuardMock: vi.fn(),
-    isProviderAuthProfileConfiguredMock: vi.fn(),
-    resolveProviderAuthProfileApiKeyMock: vi.fn(),
-  };
+const mocks = await vi.hoisted(async () => {
+  const { createOpenAIRealtimeMockState } = await import("./realtime-voice-test-support.js");
+  return createOpenAIRealtimeMockState();
 });
-
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
     ...actual,
-    execFileSync: execFileSyncMock,
+    execFileSync: mocks.execFileSyncMock,
   };
 });
 
 vi.mock("ws", () => ({
-  default: FakeWebSocket,
+  default: mocks.FakeWebSocket,
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+  fetchWithSsrFGuard: mocks.fetchWithSsrFGuardMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
-  isProviderAuthProfileConfigured: isProviderAuthProfileConfiguredMock,
-  resolveProviderAuthProfileApiKey: resolveProviderAuthProfileApiKeyMock,
+  isProviderAuthProfileConfigured: mocks.isProviderAuthProfileConfiguredMock,
+  resolveProviderAuthProfileApiKey: mocks.resolveProviderAuthProfileApiKeyMock,
 }));
 import { createOpenAIRealtimeTestSupport } from "./realtime-voice-test-support.js";
 
@@ -105,91 +33,40 @@ const {
   parseSent,
   createNativeBridge,
   connectReadyBridge,
+  emitServerEvent,
+  emitAssistantPlayback,
   expectedResponseCancelEvent,
   hasSentEventType,
-} = createOpenAIRealtimeTestSupport({ FakeWebSocket, fetchWithSsrFGuardMock });
+  resetTestState,
+  restoreTestEnvironment,
+} = createOpenAIRealtimeTestSupport({ ...mocks, buildOpenAIRealtimeVoiceProvider });
 
 describe("OpenAI realtime voice bridge events", () => {
   beforeEach(() => {
-    FakeWebSocket.instances = [];
-    vi.stubEnv("OPENAI_API_KEY", "");
-    execFileSyncMock.mockReset();
-    fetchWithSsrFGuardMock.mockReset();
-    isProviderAuthProfileConfiguredMock.mockReset();
-    isProviderAuthProfileConfiguredMock.mockReturnValue(false);
-    resolveProviderAuthProfileApiKeyMock.mockReset();
-    resolveProviderAuthProfileApiKeyMock.mockResolvedValue(undefined);
+    resetTestState();
   });
 
   afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllEnvs();
+    restoreTestEnvironment();
   });
 
-  it("does not locally clear playback on speech-start events when input interruption is disabled", async () => {
+  it.each([
+    {
+      $name: "input interruption disabled",
+      bridgeOptions: { autoRespondToAudio: true, interruptResponseOnInputAudio: false },
+    },
+    {
+      $name: "automatic audio responses disabled",
+      bridgeOptions: { autoRespondToAudio: false },
+    },
+  ])("$name", async ({ bridgeOptions }) => {
     const onAudio = vi.fn();
     const onClearAudio = vi.fn();
-    const bridge = createNativeBridge({
-      autoRespondToAudio: true,
-      interruptResponseOnInputAudio: false,
-      onAudio,
-      onClearAudio,
-    });
+    const bridge = createNativeBridge({ ...bridgeOptions, onAudio, onClearAudio });
     const socket = await connectReadyBridge(bridge);
 
-    socket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
-    );
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.audio.delta",
-          item_id: "item_1",
-          delta: Buffer.from("assistant audio").toString("base64"),
-        }),
-      ),
-    );
-    socket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "input_audio_buffer.speech_started" })),
-    );
-
-    expect(onAudio).toHaveBeenCalledTimes(1);
-    expect(onClearAudio).not.toHaveBeenCalled();
-    expect(hasSentEventType(socket, "response.cancel")).toBe(false);
-    expect(hasSentEventType(socket, "conversation.item.truncate")).toBe(false);
-  });
-
-  it("keeps assistant playback active on server VAD when automatic audio responses are disabled", async () => {
-    const onAudio = vi.fn();
-    const onClearAudio = vi.fn();
-    const bridge = createNativeBridge({
-      autoRespondToAudio: false,
-      onAudio,
-      onClearAudio,
-    });
-    const socket = await connectReadyBridge(bridge);
-
-    socket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
-    );
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.audio.delta",
-          item_id: "item_1",
-          delta: Buffer.from("assistant audio").toString("base64"),
-        }),
-      ),
-    );
-    socket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "input_audio_buffer.speech_started" })),
-    );
+    emitAssistantPlayback(socket);
+    emitServerEvent(socket, { type: "input_audio_buffer.speech_started" });
 
     expect(onAudio).toHaveBeenCalledTimes(1);
     expect(onClearAudio).not.toHaveBeenCalled();
@@ -208,20 +85,7 @@ describe("OpenAI realtime voice bridge events", () => {
     const socket = await connectReadyBridge(bridge);
 
     bridge.setMediaTimestamp(1000);
-    socket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
-    );
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.audio.delta",
-          item_id: "item_1",
-          delta: Buffer.from("assistant audio").toString("base64"),
-        }),
-      ),
-    );
+    emitAssistantPlayback(socket);
     bridge.setMediaTimestamp(1300);
 
     bridge.handleBargeIn?.({ audioPlaybackActive: true });
@@ -250,16 +114,11 @@ describe("OpenAI realtime voice bridge events", () => {
 
     bridge.setMediaTimestamp(1000);
     for (let index = 0; index < 300; index += 1) {
-      socket.emit(
-        "message",
-        Buffer.from(
-          JSON.stringify({
-            type: "response.audio.delta",
-            item_id: "item_1",
-            delta: Buffer.from("assistant audio").toString("base64"),
-          }),
-        ),
-      );
+      emitServerEvent(socket, {
+        type: "response.audio.delta",
+        item_id: "item_1",
+        delta: Buffer.from("assistant audio").toString("base64"),
+      });
     }
 
     const marks = onMark.mock.calls.map(([markName]) => String(markName));
@@ -281,16 +140,11 @@ describe("OpenAI realtime voice bridge events", () => {
     expect(onClearAudio).toHaveBeenCalledWith("barge-in");
 
     for (let index = 0; index < 300; index += 1) {
-      socket.emit(
-        "message",
-        Buffer.from(
-          JSON.stringify({
-            type: "response.audio.delta",
-            item_id: "item_1",
-            delta: Buffer.from("assistant audio").toString("base64"),
-          }),
-        ),
-      );
+      emitServerEvent(socket, {
+        type: "response.audio.delta",
+        item_id: "item_1",
+        delta: Buffer.from("assistant audio").toString("base64"),
+      });
     }
     const latestMark = onMark.mock.calls.at(-1)?.[0];
     if (typeof latestMark !== "string") {
@@ -313,16 +167,11 @@ describe("OpenAI realtime voice bridge events", () => {
 
     bridge.setMediaTimestamp(1000);
     for (let index = 0; index < 3; index += 1) {
-      socket.emit(
-        "message",
-        Buffer.from(
-          JSON.stringify({
-            type: "response.audio.delta",
-            item_id: "item_1",
-            delta: Buffer.from("assistant audio").toString("base64"),
-          }),
-        ),
-      );
+      emitServerEvent(socket, {
+        type: "response.audio.delta",
+        item_id: "item_1",
+        delta: Buffer.from("assistant audio").toString("base64"),
+      });
     }
     const marks = onMark.mock.calls.map(([markName]) => String(markName));
     expect(marks).toHaveLength(3);
@@ -349,25 +198,15 @@ describe("OpenAI realtime voice bridge events", () => {
     const socket = await connectReadyBridge(bridge);
 
     const audio = Buffer.from("assistant audio");
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.output_audio.delta",
-          item_id: "item_1",
-          delta: audio.toString("base64"),
-        }),
-      ),
-    );
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.output_audio_transcript.done",
-          transcript: "hello from current realtime events",
-        }),
-      ),
-    );
+    emitServerEvent(socket, {
+      type: "response.output_audio.delta",
+      item_id: "item_1",
+      delta: audio.toString("base64"),
+    });
+    emitServerEvent(socket, {
+      type: "response.output_audio_transcript.done",
+      transcript: "hello from current realtime events",
+    });
 
     expect(onAudio).toHaveBeenCalledWith(audio);
     expect(onTranscript).toHaveBeenCalledWith(
@@ -383,16 +222,11 @@ describe("OpenAI realtime voice bridge events", () => {
     const bridge = createNativeBridge({ onError, onEvent });
     const socket = await connectReadyBridge(bridge);
 
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "conversation.item.input_audio_transcription.failed",
-          item_id: "item_speech",
-          error: { code: "decoder_failure", message: "speech decoder exploded" },
-        }),
-      ),
-    );
+    emitServerEvent(socket, {
+      type: "conversation.item.input_audio_transcription.failed",
+      item_id: "item_speech",
+      error: { code: "decoder_failure", message: "speech decoder exploded" },
+    });
 
     expect(onError).toHaveBeenCalledWith(
       expect.objectContaining({ message: "speech decoder exploded" }),
@@ -410,14 +244,8 @@ describe("OpenAI realtime voice bridge events", () => {
     const bridge = createNativeBridge({ onTranscript });
     const socket = await connectReadyBridge(bridge);
 
-    socket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "response.text.delta", delta: "draft assistant" })),
-    );
-    socket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "response.text.done", text: "corrected assistant" })),
-    );
+    emitServerEvent(socket, { type: "response.text.delta", delta: "draft assistant" });
+    emitServerEvent(socket, { type: "response.text.done", text: "corrected assistant" });
 
     expect(onTranscript.mock.calls).toEqual([
       ["assistant", "draft assistant", false],
@@ -439,16 +267,7 @@ describe("OpenAI realtime voice bridge events", () => {
     });
     const socket = await connectReadyBridge(bridge);
 
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.output_audio.delta",
-          item_id: "item_1",
-          delta,
-        }),
-      ),
-    );
+    emitServerEvent(socket, { type: "response.output_audio.delta", item_id: "item_1", delta });
 
     expect(onAudio).not.toHaveBeenCalled();
     expect(onError).toHaveBeenCalledWith(
@@ -473,44 +292,24 @@ describe("OpenAI realtime voice bridge events", () => {
     const socket = await connectReadyBridge(bridge);
 
     const audio = Buffer.from("legacy assistant audio");
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "conversation.output_audio.delta",
-          data: audio.toString("base64"),
-          sample_rate: 24000,
-          channels: 1,
-        }),
-      ),
-    );
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "conversation.input_transcript.delta",
-          delta: "partial user",
-        }),
-      ),
-    );
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "conversation.output_transcript.delta",
-          delta: "partial assistant",
-        }),
-      ),
-    );
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.output_text.done",
-          text: "final assistant text",
-        }),
-      ),
-    );
+    emitServerEvent(socket, {
+      type: "conversation.output_audio.delta",
+      data: audio.toString("base64"),
+      sample_rate: 24000,
+      channels: 1,
+    });
+    emitServerEvent(socket, {
+      type: "conversation.input_transcript.delta",
+      delta: "partial user",
+    });
+    emitServerEvent(socket, {
+      type: "conversation.output_transcript.delta",
+      delta: "partial assistant",
+    });
+    emitServerEvent(socket, {
+      type: "response.output_text.done",
+      text: "final assistant text",
+    });
 
     expect(onAudio).toHaveBeenCalledWith(audio);
     expect(onTranscript).toHaveBeenCalledWith("user", "partial user", false);
@@ -522,21 +321,13 @@ describe("OpenAI realtime voice bridge events", () => {
     const onEvent = vi.fn();
     const bridge = createNativeBridge({ onEvent });
     const socket = await connectReadyBridge(bridge);
-    socket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
-    );
+    emitServerEvent(socket, { type: "response.created", response: { id: "resp_1" } });
     bridge.setMediaTimestamp(1000);
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.audio.delta",
-          item_id: "item_1",
-          delta: Buffer.from("assistant audio").toString("base64"),
-        }),
-      ),
-    );
+    emitServerEvent(socket, {
+      type: "response.audio.delta",
+      item_id: "item_1",
+      delta: Buffer.from("assistant audio").toString("base64"),
+    });
     bridge.setMediaTimestamp(1300);
 
     bridge.handleBargeIn?.({ audioPlaybackActive: true });
@@ -564,20 +355,7 @@ describe("OpenAI realtime voice bridge events", () => {
     });
     const socket = await connectReadyBridge(bridge);
     bridge.setMediaTimestamp(1000);
-    socket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
-    );
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.audio.delta",
-          item_id: "item_1",
-          delta: Buffer.from("assistant audio").toString("base64"),
-        }),
-      ),
-    );
+    emitAssistantPlayback(socket);
 
     bridge.handleBargeIn?.({ audioPlaybackActive: true });
 
@@ -602,20 +380,7 @@ describe("OpenAI realtime voice bridge events", () => {
     });
     const socket = await connectReadyBridge(bridge);
     bridge.setMediaTimestamp(1000);
-    socket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
-    );
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.audio.delta",
-          item_id: "item_1",
-          delta: Buffer.from("assistant audio").toString("base64"),
-        }),
-      ),
-    );
+    emitAssistantPlayback(socket);
 
     bridge.handleBargeIn?.({ audioPlaybackActive: true, force: true });
 
@@ -647,20 +412,7 @@ describe("OpenAI realtime voice bridge events", () => {
     });
     const socket = await connectReadyBridge(bridge);
     bridge.setMediaTimestamp(1000);
-    socket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
-    );
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "response.audio.delta",
-          item_id: "item_1",
-          delta: Buffer.from("assistant audio").toString("base64"),
-        }),
-      ),
-    );
+    emitAssistantPlayback(socket);
 
     bridge.handleBargeIn?.({ audioPlaybackActive: true });
 

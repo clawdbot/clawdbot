@@ -7,7 +7,7 @@ import {
 } from "../index.js";
 
 describe("desktop protocol schemas", () => {
-  it("accepts host and environment observe sources while rejecting unknown source kinds", () => {
+  it("accepts host, environment, and node observe sources", () => {
     expect(validateDesktopObserveParams({ source: { kind: "host" }, control: true })).toBe(true);
     expect(
       validateDesktopObserveParams({
@@ -20,7 +20,21 @@ describe("desktop protocol schemas", () => {
         source: { kind: "environment", environmentId: "worker:one" },
       }),
     ).toBe(true);
-    expect(validateDesktopObserveParams({ source: { kind: "node", nodeId: "one" } })).toBe(false);
+    expect(validateDesktopObserveParams({ source: { kind: "node", nodeId: "one" } })).toBe(true);
+    expect(
+      validateDesktopObserveParams({
+        source: { kind: "node", nodeId: "one" },
+        credentials: { username: "operator", password: "secret" },
+      }),
+    ).toBe(true);
+    expect(
+      validateDesktopObserveParams({
+        source: { kind: "node", nodeId: "one" },
+        credentials: { password: "secret" },
+      }),
+    ).toBe(true);
+    expect(validateDesktopObserveParams({ source: { kind: "node", nodeId: "" } })).toBe(false);
+    expect(validateDesktopObserveParams({ source: { kind: "future" } })).toBe(false);
     expect(
       validateDesktopObserveParams({
         source: { kind: "environment", environmentId: "worker:one" },
@@ -55,6 +69,7 @@ describe("desktop protocol schemas", () => {
         expiresAtMs: 1,
         control: false,
         auth: "ard-account",
+        preauthenticated: true,
       }),
     ).toBe(true);
     expect(

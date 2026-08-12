@@ -9,6 +9,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import {
   isForegroundRestrictedPluginNodeCommand,
   isNodeCommandAllowed,
@@ -44,6 +45,59 @@ describe("gateway/node-command-policy", () => {
     setActivePluginRegistry(registry);
     return registry;
   }
+
+  it("keeps desktop streaming dangerous, advertised, explicitly allowed, and deny-wins", () => {
+    const node = {
+      platform: "linux",
+      deviceFamily: "Linux",
+      commands: [NODE_DESKTOP_STREAM_COMMAND],
+      approvedCommands: [NODE_DESKTOP_STREAM_COMMAND],
+    };
+    expect(
+      resolveNodeCommandAllowlist({} as OpenClawConfig, node).has(NODE_DESKTOP_STREAM_COMMAND),
+    ).toBe(false);
+    expect(
+      resolveNodePairingCommandAllowlist({} as OpenClawConfig, {
+        platform: node.platform,
+        deviceFamily: node.deviceFamily,
+        commands: node.commands,
+      }).has(NODE_DESKTOP_STREAM_COMMAND),
+    ).toBe(false);
+
+    const allowedConfig = {
+      gateway: { nodes: { commands: { allow: [NODE_DESKTOP_STREAM_COMMAND] } } },
+    } as OpenClawConfig;
+    const allowed = resolveNodeCommandAllowlist(allowedConfig, node);
+    expect(
+      isNodeCommandAllowed({
+        command: NODE_DESKTOP_STREAM_COMMAND,
+        declaredCommands: node.commands,
+        allowlist: allowed,
+      }),
+    ).toEqual({ ok: true });
+    expect(
+      isNodeCommandAllowed({
+        command: NODE_DESKTOP_STREAM_COMMAND,
+        declaredCommands: [],
+        allowlist: allowed,
+      }),
+    ).toEqual({ ok: false, reason: "node did not declare commands" });
+
+    const denied = resolveNodeCommandAllowlist(
+      {
+        gateway: {
+          nodes: {
+            commands: {
+              allow: [NODE_DESKTOP_STREAM_COMMAND],
+              deny: [NODE_DESKTOP_STREAM_COMMAND],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      node,
+    );
+    expect(denied.has(NODE_DESKTOP_STREAM_COMMAND)).toBe(false);
+  });
 
   it("normalizes declared node commands against the allowlist", () => {
     const allowlist = new Set(["canvas.snapshot", "system.run"]);

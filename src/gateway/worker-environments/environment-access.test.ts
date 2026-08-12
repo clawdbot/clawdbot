@@ -23,7 +23,8 @@ describe("worker environment service", () => {
         return {
           environmentId: request.environmentId,
           ownerEpoch: request.ownerEpoch,
-          remoteSocketPath: "/tmp/worker/gateway.sock",
+          connectionEndpoint: { kind: "unix", socketPath: "/tmp/worker/gateway.sock" },
+          launchTurn: vi.fn(),
           runWorkspaceCommand: vi.fn(),
           syncWorkspace: vi.fn(),
           stop: async () => {},
@@ -86,7 +87,8 @@ describe("worker environment service", () => {
       start: vi.fn(async (request: Parameters<WorkerTunnelManager["start"]>[0]) => ({
         environmentId: request.environmentId,
         ownerEpoch: request.ownerEpoch,
-        remoteSocketPath: "/tmp/worker/gateway.sock",
+        connectionEndpoint: { kind: "unix", socketPath: "/tmp/worker/gateway.sock" },
+        launchTurn: vi.fn(),
         runWorkspaceCommand: vi.fn(),
         syncWorkspace: vi.fn(),
         stop: async () => {},

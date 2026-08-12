@@ -46,7 +46,6 @@ import { sanitizeAutocompleteProvider } from "./tui-autocomplete.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
-import { filterTuiExecArgv } from "./tui-exec-argv.js";
 import {
   formatTuiErrorMessage,
   formatTuiFooter,
@@ -170,7 +169,7 @@ export function resolveTuiLocalAuthCliInvocation(params: {
   return resolveCurrentOpenClawCliInvocation(
     ["models", "auth", "login", ...(provider ? ["--provider", provider] : [])],
     {
-      execArgv: filterTuiExecArgv(params.execArgv ?? process.execArgv),
+      execArgv: params.execArgv ?? process.execArgv,
     },
   );
 }

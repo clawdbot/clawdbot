@@ -353,6 +353,19 @@ function normalizePackageChannelSetup(setup: unknown): PluginPackageChannel["set
       });
       continue;
     }
+    if (kind === "boolean") {
+      const envVars = normalizeOptionalTrimmedStringList(value.envVars);
+      const envVarMode =
+        value.envVarMode === "any" || value.envVarMode === "all" ? value.envVarMode : undefined;
+      fields.push({
+        key,
+        kind,
+        ...(envVars?.length ? { envVars } : {}),
+        ...(envVars?.length && envVarMode ? { envVarMode } : {}),
+        cli,
+      });
+      continue;
+    }
     fields.push({ key, kind, cli });
   }
   return { fields };

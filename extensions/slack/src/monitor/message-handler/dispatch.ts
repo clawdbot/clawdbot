@@ -111,6 +111,24 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         }
         return;
       }
+      if (progress.useDraftProgressCard) {
+        await delivery.deliverNormally({
+          payload,
+          kind: info.kind,
+          forcedThreadTs: delivery.usedReplyThreadTs,
+        });
+        const finalized = await progress.finalizeDraftProgressCard(
+          payload.isError === true ? "error" : "success",
+        );
+        // The final reply already landed separately. A card that could not be
+        // terminalized would linger in its Working state and misrepresent an
+        // in-progress turn, so drop it (mirrors the pre-card preview cleanup).
+        if (!finalized) {
+          await draftStream?.clear();
+        }
+        progress.progressDraft.markFinalReplyDelivered();
+        return;
+      }
     }
     if (progress.useNativeProgressStreaming) {
       await delivery.deliverNormally({
@@ -498,7 +516,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     dispatchError = err;
   } finally {
     progress.progressDraft.cancel();
-    await draftStream?.discardPending();
+    if (!progress.useDraftProgressCard) {
+      await draftStream?.discardPending();
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -569,6 +589,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     },
   );
 
+  if (dispatchError || agentRunFailed) {
+    await progress.finalizeDraftProgressCard("error");
+  }
+
   if (statusReactionsEnabled) {
     if (dispatchError || agentRunFailed) {
       await statusReactions.setError();
@@ -596,7 +620,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   if (dispatchError) {
     throw toErrorObject(dispatchError, "Slack dispatch failed");
   }
-  if (!anyReplyDelivered && !draftPreviewCommitted.value) {
+  if (
+    !anyReplyDelivered &&
+    !draftPreviewCommitted.value &&
+    !(agentRunFailed && progress.useDraftProgressCard)
+  ) {
     await draftStream?.clear();
     return;
   }

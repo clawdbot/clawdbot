@@ -3,7 +3,7 @@ const HOST_DESKTOP_GUIDANCE = {
   darwin:
     "Enable System Settings -> General -> Sharing -> Screen Sharing, or run `sudo launchctl enable system/com.apple.screensharing && sudo launchctl kickstart -k system/com.apple.screensharing`.",
   linux:
-    "Install TigerVNC with `apt install tigervnc-standalone-server` and run it loopback-only on port 5900, or run `x11vnc -display :0 -localhost -rfbport 5900 -forever -passwdfile <file>`. gnome-remote-desktop uses unsupported VeNCrypt.",
+    "Install the managed desktop binaries with `apt install tigervnc-standalone-server tigervnc-tools xfce4-session`, enable desktop.host.managed, or run a loopback-only VNC server yourself. gnome-remote-desktop uses unsupported VeNCrypt.",
   win32:
     "Install TightVNC with `SET_USEVNCAUTHENTICATION=1 SET_ALLOWLOOPBACK=1 ACCEPTHTTPCONNECTIONS=0` and listen on 127.0.0.1:5900. Locked or UAC sessions may render black.",
 } as const;

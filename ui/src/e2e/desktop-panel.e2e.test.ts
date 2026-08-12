@@ -270,6 +270,73 @@ suite.define(() => {
     });
   });
 
+  it("lists an observable node and connects with the node source arm", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["desktop.observe", "environments.list"],
+        methodResponses: {
+          "sessions.list": sessionsList("local"),
+          "environments.list": {
+            environments: [
+              {
+                id: "node:paired-node",
+                type: "node",
+                status: "available",
+                desktop: true,
+                capabilities: ["desktop.stream"],
+              },
+              {
+                id: "node:plain-node",
+                type: "node",
+                status: "available",
+                capabilities: ["screen.snapshot"],
+              },
+            ],
+          },
+          "desktop.observe": {
+            sequence: [
+              {
+                __mockError: {
+                  code: "INVALID_REQUEST",
+                  message: "VNC password is required to observe this node",
+                  details: {
+                    code: "DESKTOP_CREDENTIALS_REQUIRED",
+                    auth: "vnc-password",
+                  },
+                },
+              },
+              {
+                transport: "rfb",
+                wsPath: "/desktop/observe?token=node",
+                expiresAtMs: 60_000,
+                control: false,
+                auth: "vnc-password",
+                preauthenticated: true,
+              },
+            ],
+          },
+        },
+      });
+      const panel = await openDesktopPanel(page);
+      await gateway.waitForRequest("environments.list");
+      await panel.getByText("node:paired-node", { exact: true }).waitFor();
+      expect(await panel.getByText("node:plain-node", { exact: true }).count()).toBe(0);
+      await installDesktopClientFake(panel);
+
+      await panel.getByRole("button", { name: "Connect", exact: true }).click();
+      await panel.getByLabel("VNC password", { exact: true }).fill("node-password");
+      await panel.getByRole("button", { name: "Connect", exact: true }).click();
+      await expect.poll(async () => await panel.getAttribute("data-connect-count")).toBe("1");
+      expect(await panel.getAttribute("data-used-credentials")).toBe("false");
+      const observeRequests = await gateway.getRequests("desktop.observe");
+      expect(observeRequests.at(-1)?.params).toEqual({
+        source: { kind: "node", nodeId: "paired-node" },
+        control: false,
+        credentials: { password: "node-password" },
+      });
+    });
+  });
+
   it("launches advertised desktop apps and keeps observe controls working", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {

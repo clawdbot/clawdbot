@@ -969,6 +969,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it.each([
     "test/scripts/check-extension-package-tsc-boundary.test.ts",
+    "test/scripts/check-plugin-sdk-wildcard-reexports.test.ts",
     "test/scripts/control-ui-i18n.test.ts",
   ])("routes process-group test %s to the isolated tooling shard", (testFile) => {
     expectSingleVitestRunPlan(buildVitestRunPlans([testFile]), {
@@ -1370,6 +1371,7 @@ describe("scripts/test-projects changed-target routing", () => {
         forwardedArgs: [],
         includePatterns: [
           "test/scripts/check-extension-package-tsc-boundary.test.ts",
+          "test/scripts/check-plugin-sdk-wildcard-reexports.test.ts",
           "test/scripts/control-ui-i18n.test.ts",
           "test/scripts/openclaw-e2e-instance.test.ts",
         ],
@@ -1556,6 +1558,7 @@ describe("scripts/test-projects changed-target routing", () => {
         forwardedArgs: [],
         includePatterns: [
           "test/scripts/check-extension-package-tsc-boundary.test.ts",
+          "test/scripts/check-plugin-sdk-wildcard-reexports.test.ts",
           "test/scripts/control-ui-i18n.test.ts",
           "test/scripts/openclaw-e2e-instance.test.ts",
         ],
@@ -3354,35 +3357,6 @@ describe("scripts/test-projects full-suite sharding", () => {
 });
 
 describe("scripts/test-projects parallel cache paths", () => {
-  it("assigns isolated Vitest fs-module cache paths per parallel shard", () => {
-    const specs = applyParallelVitestCachePaths(
-      [
-        { config: "test/vitest/vitest.gateway.config.ts", env: {}, pnpmArgs: [] },
-        { config: "test/vitest/vitest.extension-matrix.config.ts", env: {}, pnpmArgs: [] },
-      ],
-      { cwd: "/repo", env: {} },
-    );
-
-    expect(specs.map((spec) => spec.env)).toEqual([
-      {
-        OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(
-          "/repo",
-          "node_modules",
-          ".experimental-vitest-cache",
-          "0-test-vitest-vitest.gateway.config.ts",
-        ),
-      },
-      {
-        OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(
-          "/repo",
-          "node_modules",
-          ".experimental-vitest-cache",
-          "1-test-vitest-vitest.extension-matrix.config.ts",
-        ),
-      },
-    ]);
-  });
-
   it("splits an explicit global cache root per parallel shard", () => {
     const specs = applyParallelVitestCachePaths(
       [

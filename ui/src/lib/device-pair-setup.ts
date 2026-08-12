@@ -8,6 +8,13 @@ type GatewayRequestClient = {
 export type DevicePairSetup = DevicePairSetupCodeResult;
 export type DevicePairSetupAccess = "full" | "limited" | "node";
 
+export function requestDevicePairJoinSetup(client: GatewayRequestClient) {
+  return client.request<DevicePairSetup>("device.pair.setupCode", {
+    includeQr: false,
+    joinUrl: true,
+  });
+}
+
 type DevicePairSetupState = {
   client: GatewayRequestClient | null;
   connected: boolean;
