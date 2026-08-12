@@ -20,7 +20,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", () => ({
 }));
 
 describe("importClaudeHistory", () => {
-  it("falls back for invalid timestamps while preserving valid pre-epoch dates", async () => {
+  it("preserves Date.parse semantics for valid strings and falls back for invalid values", async () => {
     appended.length = 0;
     const fallbackTimestamp = new Date("2026-07-18T12:00:00.000Z").getTime();
     vi.useFakeTimers();
@@ -29,11 +29,13 @@ describe("importClaudeHistory", () => {
       await importClaudeHistory({
         items: [
           { type: "userMessage", text: "invalid", timestamp: "not-a-date", uuid: "u-1" },
+          { type: "userMessage", text: "numeric year", timestamp: "2026", uuid: "u-2" },
+          { type: "userMessage", text: "numeric zero", timestamp: "0", uuid: "u-3" },
           {
             type: "userMessage",
             text: "pre-epoch",
             timestamp: "1969-12-31T23:59:59.000Z",
-            uuid: "u-2",
+            uuid: "u-4",
           },
         ],
         threadId: "thread-1",
@@ -47,8 +49,13 @@ describe("importClaudeHistory", () => {
       vi.useRealTimers();
     }
 
-    expect(appended).toHaveLength(2);
-    expect(appended.map((message) => message.timestamp)).toEqual([-1_000, fallbackTimestamp + 1]);
+    expect(appended).toHaveLength(4);
+    expect(appended.map((message) => message.timestamp)).toEqual([
+      -1_000,
+      Date.parse("0"),
+      Date.parse("2026"),
+      fallbackTimestamp + 3,
+    ]);
     expect(JSON.stringify(appended)).not.toContain('"timestamp":null');
   });
 

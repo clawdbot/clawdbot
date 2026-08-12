@@ -144,7 +144,6 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
         agentId: undefined,
         allowedDecisions: undefined,
         description: "Test approval request",
-        pluginId: "test-plugin",
         sessionKey: undefined,
         severity: "info",
         timeoutMs: 120_000,
@@ -436,7 +435,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(result.blocked).toBe(true);
     const approvalCall = requireApprovalRequestCall("non-embedded approval request");
     expect(approvalCall.timeoutParams.timeoutMs).toBe(15_000);
-    expect(approvalCall.request.pluginId).toBe("test-plugin");
+    expect(approvalCall.request.pluginId).toBeUndefined();
     expect(approvalCall.request.title).toBe("Needs approval");
     expect(approvalCall.request.description).toBe("Test approval request");
     expect(approvalCall.request.severity).toBe("info");
@@ -523,7 +522,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     });
     const approvalCall = requireApprovalRequestCall("trusted policy approval request");
     expect(approvalCall.timeoutParams.timeoutMs).toBe(130_000);
-    expect(approvalCall.request.pluginId).toBe("trusted-policy");
+    expect(approvalCall.request.pluginId).toBeUndefined();
     expect(approvalCall.request.title).toBe("Policy approval");
     expect(approvalCall.request.description).toBe("Policy requested approval");
     expect(approvalCall.request.toolName).toBe("exec");

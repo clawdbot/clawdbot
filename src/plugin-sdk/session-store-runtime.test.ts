@@ -6,7 +6,7 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   loadSessionEntry as loadInternalSessionEntry,
-  patchSessionEntry as patchInternalSessionEntry,
+  patchSessionEntryCore as patchInternalSessionEntry,
   replaceSessionEntry as replaceInternalSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";

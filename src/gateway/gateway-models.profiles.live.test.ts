@@ -12,6 +12,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   clampThinkingLevel,
   type Api,
@@ -53,9 +54,9 @@ import {
   isLiveBillingDrift,
   isLiveRateLimitDrift,
 } from "../agents/live-test-provider-drift.test-support.js";
-import { getApiKeyForModel, resolveEnvApiKey } from "../agents/model-auth.js";
+import { getApiKeyForModelCore, resolveEnvApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
-import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
+import { shouldSuppressBuiltInModelCore } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { appendPrioritizedDynamicLiveModels } from "../agents/test-helpers/live-model-dynamic-candidates.js";
@@ -72,7 +73,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import type { ModelRegistry } from "../llm/model-registry.js";
 import { redactSecrets } from "../logging/redact.js";
 import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
-import { resolveProviderThinkingProfile } from "../plugins/provider-runtime.js";
+import { resolveRuntimeThinkingProfile } from "../plugins/provider-runtime.js";
 import { LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
 import { findFinalTagMatches, stripFinalTags } from "../shared/text/final-tags.js";
@@ -1269,10 +1270,6 @@ function resolveBedrockDiscoveryRegion(cfg: OpenClawConfig | undefined): string 
   }
   const region = discoveryConfig.region;
   return typeof region === "string" ? normalizeOptionalEnvValue(region) : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function resolveAwsProfileRegion(env: NodeJS.ProcessEnv): string | undefined {
@@ -4281,7 +4278,7 @@ function resolveGatewayLiveModelThinkingLevel(params: {
   if (!isGatewayLiveThinkingLevel(normalized)) {
     return requestedLevel;
   }
-  const profile = resolveProviderThinkingProfile({
+  const profile = resolveRuntimeThinkingProfile({
     provider: model.provider,
     config: params.cfg,
     context: {
@@ -4395,7 +4392,7 @@ async function resolveGatewayLiveRequestedModels(): Promise<string | undefined> 
   if (!selected) {
     throw new Error("fresh OpenAI API-key inference selection returned no candidate");
   }
-  expect(selected.modelRef).toBe("openai/gpt-5.6");
+  expect(selected.modelRef).toBe("openai/gpt-5.6-sol");
   return selected.modelRef;
 }
 
@@ -5620,7 +5617,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         const candidates: Array<Model> = [];
         const skipped: Array<{ model: string; error: string }> = [];
         for (const model of wanted) {
-          if (shouldSuppressBuiltInModel({ provider: model.provider, id: model.id })) {
+          if (shouldSuppressBuiltInModelCore({ provider: model.provider, id: model.id })) {
             continue;
           }
           if (!targetMatcher.matchesProvider(model.provider)) {
@@ -5629,7 +5626,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           const modelRef = `${model.provider}/${model.id}`;
           try {
             const apiKeyInfo = await withGatewayLiveSetupTimeout(
-              getApiKeyForModel({
+              getApiKeyForModelCore({
                 model,
                 cfg,
                 store: authProfileStore,
@@ -5766,12 +5763,12 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         return;
       }
       try {
-        await getApiKeyForModel({
+        await getApiKeyForModelCore({
           model: anthropic,
           cfg,
           credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
         });
-        await getApiKeyForModel({
+        await getApiKeyForModelCore({
           model: zai,
           cfg,
           credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,

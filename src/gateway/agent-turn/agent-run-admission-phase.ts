@@ -1,6 +1,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import {
+  createOperationalRunInstanceRef,
+  type OperationalRunInstanceRef,
+} from "../../agents/admitted-run-context.js";
+import {
   clearEmbeddedAgentRunAbortabilityForRunId,
   isEmbeddedAgentRunAbortableForRunId,
   retainEmbeddedAgentRunAbortabilityForRunId,
@@ -50,6 +54,7 @@ export type PreparedAgentRunDispatch = {
   activeGatewayWorkAdmission: SessionWorkAdmissionLease;
   activeRunAbort: ReturnType<typeof registerChatAbortController>;
   cronCreatorAuthority?: GatewayCronCreatorAuthorityAdmission;
+  operationalRunInstance: OperationalRunInstanceRef;
   effectiveProviderOverride?: string;
   effectiveModelOverride?: string;
   effectiveThinking?: string;
@@ -191,10 +196,12 @@ export async function prepareAgentRunDispatch(params: {
         clone: false,
       }).storePath
     : `agent:${params.activeSessionAgentId}`;
+  let operationalRunInstance: OperationalRunInstanceRef | undefined;
   try {
     await params.acquireGatewayWorkAdmission(lifecycleStorePath);
     params.assertGatewayWorkAdmissionAllowed();
     if (!params.hasGatewayAdmissionOutcome()) {
+      operationalRunInstance = createOperationalRunInstanceRef(params.runId);
       const now = Date.now();
       params.setAdmittedRunAbort(
         registerChatAbortController({
@@ -218,6 +225,7 @@ export async function prepareAgentRunDispatch(params: {
           controlUiVisible: !params.suppressVisibleSessionEffects,
           kind: "agent",
           lifecycleGeneration: params.lifecycleGeneration,
+          operationalRunInstance,
         }),
       );
     }
@@ -242,7 +250,8 @@ export async function prepareAgentRunDispatch(params: {
     return undefined;
   }
   const activeRunAbort = params.getAdmittedRunAbort();
-  if (!activeRunAbort) {
+  if (!activeRunAbort || !operationalRunInstance) {
+    activeRunAbort?.cleanup({ force: true });
     activeGatewayWorkAdmission.release();
     params.io.emitAcceptance([
       false,
@@ -319,6 +328,7 @@ export async function prepareAgentRunDispatch(params: {
       logGateway: params.context.logGateway,
     }),
     modelRun: params.isOneShotModelRun,
+    runId: params.runId,
   });
   const dispatchTaskTrackingMode: PreparedAgentRunDispatch["dispatchTaskTrackingMode"] =
     taskTrackingMode === "cli" ? "cli" : "none";
@@ -462,6 +472,7 @@ export async function prepareAgentRunDispatch(params: {
     activeGatewayWorkAdmission,
     activeRunAbort,
     ...(cronCreatorAuthority ? { cronCreatorAuthority } : {}),
+    operationalRunInstance,
     effectiveProviderOverride,
     effectiveModelOverride,
     effectiveThinking,

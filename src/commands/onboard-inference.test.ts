@@ -17,8 +17,8 @@ function probeDeps(found: Record<string, boolean>) {
 }
 
 describe("detectInferenceBackends", () => {
-  it("uses route-specific GPT-5.6 defaults for direct API and Codex", () => {
-    expect(OPENAI_API_DEFAULT_MODEL_REF).toBe("openai/gpt-5.6");
+  it("uses canonical GPT-5.6 Sol defaults for direct API and Codex", () => {
+    expect(OPENAI_API_DEFAULT_MODEL_REF).toBe("openai/gpt-5.6-sol");
     expect(CODEX_APP_SERVER_DEFAULT_MODEL_REF).toBe("openai/gpt-5.6-sol");
   });
 

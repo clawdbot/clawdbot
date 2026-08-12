@@ -2,11 +2,11 @@
  * Public barrel for gateway integration test helpers.
  */
 export {
-  agentCommand,
+  agentCommandMock,
   cronIsolatedRun,
   dispatchInboundMessageMock,
   embeddedRunMock,
-  getReplyFromConfig,
+  gatewayReplyMock,
   mockGetReplyFromConfigOnce,
   agentDiscoveryMock,
   testState,
@@ -18,7 +18,7 @@ export {
   connectReq,
   connectWebchatClient,
   createGatewaySuiteHarness,
-  getFreePort,
+  getGatewayTestPort,
   getTrackedConnectChallengeNonce,
   installGatewayTestHooks,
   onceMessage,

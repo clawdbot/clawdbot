@@ -5,6 +5,7 @@ import {
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
+import { t } from "../../i18n/index.ts";
 import type { ChatItem, ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import {
   streamSegmentHasItemId,
@@ -22,6 +23,7 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import {
   buildCompactionDividerItem,
+  buildResetDividerItem,
   clearWorkingProgress,
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
@@ -47,7 +49,6 @@ import {
   messageMatchesSearchQuery,
   queuedSendThreadMessage,
   rawMessageTimestamp,
-  safeNormalizeMessage,
   insertChatItemsByTimestamp,
   sanitizeStreamText,
   timestampAfterVisibleItems,
@@ -56,7 +57,9 @@ import {
   userTurnSendIdentity,
   type TurnInsertionBounds,
 } from "./chat-thread-items.ts";
+import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { chatMessagesContainQueuedSend } from "./steer-lifecycle.ts";
+import { resolveSystemNoticeKind } from "./system-notice-kinds.ts";
 import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
 import {
   extractToolMessageRefs,
@@ -229,6 +232,10 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       items.push(buildCompactionDividerItem(marker, normalized.timestamp ?? Date.now(), i));
       continue;
     }
+    if (marker && marker.kind === "reset") {
+      items.push(buildResetDividerItem(marker, normalized.timestamp ?? Date.now(), i));
+      continue;
+    }
 
     const role = normalizeRoleForGrouping(normalized.role);
     if (role === "system") {
@@ -264,6 +271,28 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       continue;
     }
     if (!hasRenderableNormalizedMessage(msg) && normalized.role.toLowerCase() !== "assistant") {
+      continue;
+    }
+
+    const provenance = asRecord(raw.provenance);
+    if (role === "user" && provenance?.kind === "internal_system") {
+      const noticeKind = resolveSystemNoticeKind(
+        typeof provenance.sourceTool === "string" ? provenance.sourceTool : undefined,
+      );
+      const text = noticeKind?.summaryKey
+        ? t(noticeKind.summaryKey)
+        : extractTextCached(msg)?.replace(/^\[System\] /u, "");
+      if (text?.trim()) {
+        items.push({
+          kind: "notice",
+          key: itemKey,
+          icon: noticeKind?.icon ?? "cpu",
+          label: noticeKind ? t(noticeKind.labelKey) : t("common.system"),
+          startsTurn: true,
+          text,
+          timestamp: normalized.timestamp,
+        });
+      }
       continue;
     }
 

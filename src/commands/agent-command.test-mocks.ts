@@ -297,9 +297,12 @@ vi.mock("../agents/workspace.js", () => ({
   ensureAgentWorkspace: vi.fn(async ({ dir }: { dir: string }) => ({ dir })),
 }));
 
-vi.mock("../skills/loading/workspace.js", () => ({
-  buildWorkspaceSkillSnapshot: vi.fn(() => undefined),
-  loadWorkspaceSkillEntries: vi.fn(() => []),
+vi.mock("../skills/loading/workspace-skill-prompt.js", () => ({
+  buildSkillSnapshot: vi.fn(() => undefined),
+}));
+
+vi.mock("../skills/loading/workspace-skill-loader.js", () => ({
+  loadWorkspaceSkills: vi.fn(() => []),
 }));
 
 vi.mock("../skills/runtime/remote.js", () => ({

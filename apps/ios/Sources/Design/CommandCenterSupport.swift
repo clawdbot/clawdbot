@@ -155,8 +155,10 @@ struct CommandSessionActionsModifier: ViewModifier {
         content
             .contextMenu {
                 if self.isArchived {
-                    self.actionButton("Unarchive", systemImage: "archivebox") {
-                        self.actions.toggleArchived()
+                    if self.canArchive {
+                        self.actionButton("Unarchive", systemImage: "archivebox") {
+                            self.actions.toggleArchived()
+                        }
                     }
                     if self.canDelete {
                         self.deleteButton

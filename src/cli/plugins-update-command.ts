@@ -12,6 +12,7 @@ import {
   formatInvalidConfigDetails,
 } from "../config/io.invalid-config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
+import { containsConfigIncludeDirective } from "../config/io.read-helpers.js";
 import { createMergePatch } from "../config/merge-patch.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import { ConfigMutationConflictError } from "../config/mutate.js";
@@ -21,7 +22,6 @@ import { readHookInstalls } from "../hooks/installs.js";
 import { updateNpmInstalledHookPacks } from "../hooks/update.js";
 import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import {
-  containsConfigIncludeDirective,
   resolveCombinedPluginAndHookConfigMutationPreflight,
   resolveInstallConfigMutationPreflights,
   selectInstallMutationWriteOptions,

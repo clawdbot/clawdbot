@@ -75,6 +75,28 @@ describe("OpenClaw database maintenance schema validation", () => {
     }
   });
 
+  it("keeps the cron authority companion table compatible with the previous schema", () => {
+    const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+      "CREATE TABLE IF NOT EXISTS cron_job_runtime_authorities (",
+    );
+    const endMarker = "\n) STRICT;";
+    const end = start >= 0 ? OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start) : -1;
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const previousSchema = `${OPENCLAW_STATE_SCHEMA_SQL.slice(
+      0,
+      start,
+    )}${OPENCLAW_STATE_SCHEMA_SQL.slice(end + endMarker.length)}`;
+    const database = createGlobalDatabase();
+    try {
+      expect(() =>
+        assertSqliteSchemaContains(database, "previous global schema", previousSchema),
+      ).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
   it("accepts compatible future columns in shared-state and agent databases", () => {
     const globalDatabase = createGlobalDatabase();
     const agentDatabase = createAgentDatabase();

@@ -143,6 +143,8 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
       // Reordering is local bookkeeping, so it stays available while offline —
       // exactly when a queue is long enough to need it.
       onQueueMove: props.onQueueMove,
+      onQueueEdit: props.queuedEdit?.onEdit,
+      editingId: props.queuedEdit?.editingId ?? null,
       onQueueRemove: props.onQueueRemove,
     })}
     ${props.runError
@@ -168,6 +170,8 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         ? html`<div
             class="agent-chat__input ${props.offline ? "agent-chat__input--offline" : ""}"
             @click=${(event: MouseEvent) => focusComposerFromChrome(event, canCompose)}
+            @pointerdown=${(event: PointerEvent) => focusComposerFromChrome(event, canCompose)}
+            ${ref(state.composerInputRef ?? undefined)}
           >
             ${props.offline
               ? html`<div class="agent-chat__offline-hint" role="status" aria-live="polite">
@@ -347,6 +351,24 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 onEnsureToolAccess: props.capabilityMenu?.onEnsureToolAccess,
                 onOpenToolAccess: props.capabilityMenu?.onOpenToolAccess,
               })}
+              ${props.queuedEdit?.editingId
+                ? html`
+                    <span class="agent-chat__composer-edit" role="status">
+                      <span class="agent-chat__composer-edit-icon" aria-hidden="true"
+                        >${icons.pencil}</span
+                      >
+                      <span class="agent-chat__sr-only">${t("chat.queue.editing")}</span>
+                      <button
+                        class="agent-chat__composer-edit-cancel"
+                        type="button"
+                        aria-label=${t("chat.queue.cancelEdit")}
+                        @click=${() => props.queuedEdit?.onCancel()}
+                      >
+                        ${icons.x}
+                      </button>
+                    </span>
+                  `
+                : nothing}
               <div class="agent-chat__composer-combobox">
                 <textarea
                   ${ref(state.textareaRef ?? undefined)}
@@ -389,14 +411,14 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 ></textarea>
                 <span
                   id=${slashMenuAnnouncementId}
-                  class="agent-chat__sr-only"
+                  class="sr-only"
                   role="status"
                   aria-live="polite"
                   aria-atomic="true"
                   >${activeSlashMenuOptionLabel}</span
                 >
                 <span
-                  class="agent-chat__run-status-announcement agent-chat__sr-only"
+                  class="agent-chat__run-status-announcement sr-only"
                   role="status"
                   aria-live="polite"
                   aria-atomic="true"

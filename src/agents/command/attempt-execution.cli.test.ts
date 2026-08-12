@@ -12,7 +12,7 @@ import {
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
-  listSessionEntries,
+  listSessionEntriesCore,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -29,11 +29,11 @@ import { registerGeneratedMediaTaskActivity } from "../../tasks/generated-media-
 import { resetGeneratedMediaTaskActivityForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  saveAuthProfileStore,
-} from "../auth-profiles/store.js";
+import { createTestPreparedRunAdmission } from "../admitted-run-context.test-support.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../auth-profiles/runtime-snapshots.js";
+import { saveAuthProfileStore } from "../auth-profiles/store.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
+import { createCronCreatorAuthorityCapability } from "../cron-creator-authority-context.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
 import { attachToolAllowlistIntersection } from "../tool-policy.js";
@@ -296,6 +296,7 @@ type RunAgentAttemptOverrides = Omit<
 
 function makeRunAgentAttemptParams(overrides: RunAgentAttemptOverrides): RunAgentAttemptParams {
   const provider = overrides.providerOverride ?? "openai";
+  const runId = overrides.runId ?? `run-${overrides.sessionEntry.sessionId}`;
   return {
     providerOverride: provider,
     originalProvider: provider,
@@ -308,7 +309,7 @@ function makeRunAgentAttemptParams(overrides: RunAgentAttemptOverrides): RunAgen
     isFallbackRetry: false,
     resolvedThinkLevel: "medium",
     timeoutMs: 1_000,
-    runId: `run-${overrides.sessionEntry.sessionId}`,
+    runId,
     spawnedBy: undefined,
     messageChannel: undefined,
     skillsSnapshot: undefined,
@@ -317,6 +318,7 @@ function makeRunAgentAttemptParams(overrides: RunAgentAttemptOverrides): RunAgen
     authProfileProvider: provider,
     sessionHasHistory: false,
     ...overrides,
+    preparedRunAdmission: overrides.preparedRunAdmission ?? createTestPreparedRunAdmission(runId),
     lifecycleGeneration: overrides.lifecycleGeneration ?? "test-generation",
     opts: { ...overrides.opts } as RunAgentAttemptParams["opts"],
     runContext: { ...overrides.runContext } as RunAgentAttemptParams["runContext"],
@@ -708,7 +710,7 @@ describe("CLI attempt execution", () => {
 
   function readSessionStore(): Record<string, SessionEntry> {
     return Object.fromEntries(
-      listSessionEntries({ storePath }).map(({ entry, sessionKey }) => [sessionKey, entry]),
+      listSessionEntriesCore({ storePath }).map(({ entry, sessionKey }) => [sessionKey, entry]),
     );
   }
 
@@ -3100,6 +3102,21 @@ describe("CLI attempt execution", () => {
     });
 
     expect(embeddedArg.suppressLiveStreamOutput).toBe(false);
+  });
+
+  it("forwards exact cron creator authority into embedded execution", async () => {
+    const runId = "embedded-cron-creator-authority";
+    const capability = createCronCreatorAuthorityCapability(runId);
+    if (!capability) {
+      throw new Error("expected cron creator authority capability");
+    }
+
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      runId,
+      opts: { cronCreatorAuthorityCapability: capability },
+    });
+
+    expect(embeddedArg.cronCreatorAuthorityCapability).toBe(capability);
   });
 
   it("forwards Gateway plugin runtime binding to embedded runs", async () => {

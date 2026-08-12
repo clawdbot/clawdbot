@@ -15,7 +15,7 @@ export {
   asToolParamsRecord,
   jsonResult,
   readNumberParam,
-  readStringParam,
+  readToolStringParam as readStringParam,
 } from "../../../../src/agents/tools/common.js";
 export type { AnyAgentTool } from "../../../../src/agents/tools/common.js";
 export {

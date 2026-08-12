@@ -67,10 +67,9 @@ observation side effects.
 
 Trigger eligibility is enforced by the host before it invokes the handler. A
 hook registered with `eligibleTriggers: ["heartbeat", "cron"]` is therefore
-inactive for user turns and does not block recovery of an interrupted user
-turn. Omitted, empty, malformed, or partly unknown lists remain unrestricted
-so dispatch and recovery fail closed. Other hook kinds do not accept this
-option.
+inactive for user turns, including a recovered user turn. Omitted, empty,
+malformed, or partly unknown lists remain unrestricted, so the hook runs for
+those turns. Other hook kinds do not accept this option.
 
 Operators can set hook budgets without patching plugin code:
 
@@ -756,7 +755,8 @@ Use message hooks for channel-level routing and delivery policy:
 
 - `message_received`: observe inbound content, sender, `threadId`,
   `messageId`, `senderId`, optional run/session correlation, ordered `media`,
-  and metadata.
+  normalized `location`, stable `providerUpdate` identity when supplied by the
+  channel, and metadata.
 - `message_sending`: rewrite `content` or return `{ cancel: true }`.
 - `reply_payload_sending`: rewrite normalized `ReplyPayload` objects
   (including `presentation`, `delivery`, media refs, and text) or return

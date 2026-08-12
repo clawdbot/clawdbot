@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { cloneCronRuntimeAuthority, type CronRuntimeAuthority } from "../cron/runtime-authority.js";
 
 export type CronCreatorAuthorityGrant = Readonly<{
   runId: string;
@@ -15,6 +16,7 @@ export type CronCreatorAuthorityRunScope = {
 
 type CronCreatorAuthorityGrantEntry = {
   scope: CronCreatorAuthorityRunScope;
+  runtimeAuthority?: CronRuntimeAuthority;
   operationSignal?: AbortSignal;
   onOperationAbort?: () => void;
 };
@@ -44,12 +46,23 @@ export function createCronCreatorAuthorityRunScope(runId: string): CronCreatorAu
 export function mintCronCreatorAuthorityGrant(
   scope: CronCreatorAuthorityRunScope,
   operationSignal?: AbortSignal,
+  runtimeAuthority?: CronRuntimeAuthority,
 ): CronCreatorAuthorityGrant {
   if (!scope.active || scope.signal.aborted || operationSignal?.aborted) {
     throw expiredAuthorityError();
   }
   const token = randomBytes(32).toString("base64url");
-  const entry: CronCreatorAuthorityGrantEntry = { scope, operationSignal };
+  const normalizedRuntimeAuthority = runtimeAuthority
+    ? cloneCronRuntimeAuthority(runtimeAuthority)
+    : undefined;
+  if (runtimeAuthority && !normalizedRuntimeAuthority) {
+    throw new TypeError("cron creator runtime authority is invalid");
+  }
+  const entry: CronCreatorAuthorityGrantEntry = {
+    scope,
+    operationSignal,
+    ...(normalizedRuntimeAuthority ? { runtimeAuthority: normalizedRuntimeAuthority } : {}),
+  };
   if (operationSignal) {
     entry.onOperationAbort = () => revokeCronCreatorAuthorityGrant(token);
   }
@@ -85,7 +98,9 @@ export function revokeCronCreatorAuthorityRunScope(scope: CronCreatorAuthorityRu
 }
 
 /** Consumes one live exact-run grant synchronously at the cron commit boundary. */
-export function consumeCronCreatorAuthorityGrant(grant: CronCreatorAuthorityGrant): void {
+export function consumeCronCreatorAuthorityGrant(
+  grant: CronCreatorAuthorityGrant,
+): CronRuntimeAuthority | undefined {
   const runId = grant.runId.trim();
   const token = grant.token.trim();
   const entry = token ? grantsByToken.get(token) : undefined;
@@ -105,4 +120,5 @@ export function consumeCronCreatorAuthorityGrant(grant: CronCreatorAuthorityGran
     throw expiredAuthorityError();
   }
   revokeCronCreatorAuthorityGrant(token);
+  return entry.runtimeAuthority ? cloneCronRuntimeAuthority(entry.runtimeAuthority) : undefined;
 }

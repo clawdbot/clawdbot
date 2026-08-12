@@ -30,6 +30,11 @@ const CLAW_LAZY_ADDITIVE_STATE_COLUMNS = [
 ] as const;
 
 const CLAW_LAZY_ADDITIVE_STATE_COLUMN_SET = new Set<string>(CLAW_LAZY_ADDITIVE_STATE_COLUMNS);
+const CLAW_STARTUP_ADDITIVE_STATE_TABLES = [
+  "worker_session_tool_operations",
+  "worker_turn_tool_authorities",
+] as const;
+const CLAW_STARTUP_ADDITIVE_STATE_TABLE_SET = new Set<string>(CLAW_STARTUP_ADDITIVE_STATE_TABLES);
 let openClawStateCanonicalNamedIndexSet: ReadonlySet<string> | undefined;
 
 function getOpenClawStateCanonicalNamedIndexSet(): ReadonlySet<string> {
@@ -111,12 +116,15 @@ export const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = 
 
 export const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
   ...STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
-  allowedMissingTables: LAZY_ADDITIVE_STATE_TABLES,
+  allowedMissingTables: [...LAZY_ADDITIVE_STATE_TABLES, ...CLAW_STARTUP_ADDITIVE_STATE_TABLES],
   allowedMissingColumns: CLAW_LAZY_ADDITIVE_STATE_COLUMNS,
 };
 
 /** Identify schema differences that the writable shared-state cold open repairs. */
 export function isOpenClawStateStartupRepairableSchemaIssue(issue: SqliteSchemaIssue): boolean {
+  if (issue.code === "missing-table") {
+    return CLAW_STARTUP_ADDITIVE_STATE_TABLE_SET.has(issue.objectName);
+  }
   if (issue.code === "missing-column") {
     return CLAW_LAZY_ADDITIVE_STATE_COLUMN_SET.has(issue.objectName);
   }

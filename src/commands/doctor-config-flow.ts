@@ -12,6 +12,7 @@ import { callGateway } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   noteImplicitFallbackClobberWarnings,
+  noteMcpOriginWarning,
   noteOpencodeProviderOverrides,
   noteSandboxOriginProxyWarning,
 } from "./doctor-config-analysis.js";
@@ -425,6 +426,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       applyConfigMutation(staleCleanup, {
         fixHint: `Run "${doctorFixCommand}" to remove stale channel plugin references.`,
         sanitize: true,
+        emitWarnings: true,
       });
     }
   }
@@ -546,6 +548,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   });
   noteImplicitFallbackClobberWarnings(cfg);
   noteSandboxOriginProxyWarning(cfg);
+  noteMcpOriginWarning(cfg);
 
   return {
     cfg,

@@ -240,6 +240,8 @@ export function resolveCodexAppServerAuthProfileStore(params: {
 type CodexAppServerPreparedAuthProfileSnapshot = {
   loginParams: CodexLoginAccountParams;
   secretFreeCacheKey: string;
+  /** Genuine ChatGPT principal id; email/profile fallbacks are not authorization identity. */
+  chatgptAccountId?: string;
 };
 
 export type CodexAppServerPreparedAuth =
@@ -304,7 +306,12 @@ export async function resolveCodexAppServerPreparedAuthProfileSnapshot(params: {
           (credential.type === "token" || !stableChatgptAccountId)
         ? `${accountId}:${fingerprintTokenAuthProfileCacheKey(loginParams.accessToken)}`
         : accountId;
-  return { loginParams, secretFreeCacheKey };
+  const chatgptAccountId = resolveExplicitChatgptAccountId(credential);
+  return {
+    loginParams,
+    secretFreeCacheKey,
+    ...(chatgptAccountId ? { chatgptAccountId } : {}),
+  };
 }
 
 /** Maps one prepared route to one mutually exclusive app-server auth handoff. */
@@ -1136,12 +1143,15 @@ function resolveChatgptAccountId(profileId: string, credential: AuthProfileCrede
 }
 
 function resolveStableChatgptAccountId(credential: AuthProfileCredential): string | undefined {
+  return resolveExplicitChatgptAccountId(credential) ?? (credential.email?.trim() || undefined);
+}
+
+function resolveExplicitChatgptAccountId(credential: AuthProfileCredential): string | undefined {
   if ("accountId" in credential && typeof credential.accountId === "string") {
     const accountId = credential.accountId.trim();
     if (accountId) {
       return accountId;
     }
   }
-  const email = credential.email?.trim();
-  return email || undefined;
+  return undefined;
 }

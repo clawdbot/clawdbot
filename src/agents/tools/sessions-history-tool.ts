@@ -22,7 +22,7 @@ import {
   jsonResult,
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
-  readStringParam,
+  readToolStringParam,
   ToolInputError,
 } from "./common.js";
 import {
@@ -365,13 +365,13 @@ export function createSessionsHistoryTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
-      const sessionKeyParam = readStringParam(params, "sessionKey", {
+      const sessionKeyParam = readToolStringParam(params, "sessionKey", {
         required: true,
       });
       const limit = readPositiveIntegerParam(params, "limit");
       const offset = readOffsetParam(params);
-      const messageId = readStringParam(params, "messageId");
-      const sessionId = readStringParam(params, "sessionId");
+      const messageId = readToolStringParam(params, "messageId");
+      const sessionId = readToolStringParam(params, "sessionId");
       if (offset !== undefined && messageId) {
         throw new ToolInputError("offset and messageId cannot be used together");
       }

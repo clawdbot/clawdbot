@@ -1,4 +1,3 @@
-// Control UI view renders chat screen composition.
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
@@ -42,6 +41,7 @@ import type { BackgroundTasksProps } from "./components/chat-background-tasks.ty
 import type {
   CapabilityMenuProps,
   ChatComposerDisabledBanner,
+  ChatQueuedEditProps,
 } from "./components/chat-composer-types.ts";
 import { isChatRunWorking, renderChatComposer } from "./components/chat-composer.ts";
 import { inlineChatImageFromEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
@@ -55,12 +55,10 @@ import {
 } from "./components/chat-session-workspace.ts";
 import type { SidebarContent, SidebarFullMessageLoader } from "./components/chat-sidebar.ts";
 import { renderChatSwarmProgress } from "./components/chat-swarm-progress.ts";
+import { renderChatTaskSuggestionTray } from "./components/chat-task-suggestions.ts";
+import type { ChatTaskSuggestionTrayProps } from "./components/chat-task-suggestions.ts";
+import type { ChatReplyMessageAccess, ChatTranscriptController } from "./components/chat-thread.ts";
 import {
-  renderChatTaskSuggestionTray,
-  type ChatTaskSuggestionTrayProps,
-} from "./components/chat-task-suggestions.ts";
-import {
-  type ChatTranscriptController,
   renderChatPinnedMessages,
   renderChatSearchBar,
   renderChatThread,
@@ -232,6 +230,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     onQueueRetry?: (id: string) => void;
     onQueueSteer?: (id: string) => void;
     onQueueMove?: (id: string, toIndex: number) => void;
+    queuedEdit?: ChatQueuedEditProps;
     onGoalCommand?: (command: string) => void;
     onHistoryIntent?: (event: Event) => void;
     onCompanionQuestion?: (question: string) => void;
@@ -262,6 +261,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     replyTarget?: ChatReplyTarget | null;
     onClearReply?: () => void;
     onSetReply?: (target: ChatReplyTarget) => void;
+    replyMessageAccess?: ChatReplyMessageAccess;
     onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
     onForkMessage?: (entryId: string) => Promise<void> | void;
     sessionWorkspace?: SessionWorkspaceProps;
@@ -379,10 +379,9 @@ export function renderChat(props: ChatProps) {
       onDraftChange: props.onDraftChange,
       onSend: props.onSend,
       onSetReply: props.onSetReply,
+      replyMessageAccess: props.replyMessageAccess,
       onRewindMessage: props.onRewindMessage,
       onForkMessage: props.onForkMessage,
-      // Archived/non-composable sessions must not offer selection actions:
-      // withholding the callback keeps the popup from rendering at all.
       onCompanionQuestion:
         props.canSend && !props.suggestionComposer ? props.onCompanionQuestion : undefined,
       onCompanionPrefill:
@@ -518,6 +517,7 @@ export function renderChat(props: ChatProps) {
     onQueueRetry: props.onQueueRetry,
     onQueueSteer: props.onQueueSteer,
     onQueueMove: props.onQueueMove,
+    queuedEdit: props.queuedEdit,
     onGoalCommand: props.onGoalCommand,
     onGatewayQuestionChange: props.onGatewayQuestionChange,
     onGatewayQuestionSubmit: props.onGatewayQuestionSubmit,
@@ -582,7 +582,7 @@ export function renderChat(props: ChatProps) {
           resolveAsciiShortcutKey(event) === "f"
         ) {
           event.preventDefault();
-          toggleChatThreadSearch(props.paneId, requestUpdate);
+          toggleChatThreadSearch(props.paneId, requestUpdate, event);
         }
       }}
     >

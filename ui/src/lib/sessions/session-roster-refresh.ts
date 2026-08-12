@@ -1,6 +1,6 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
-import { appendSessionResults } from "./reconcile.ts";
+import { appendSessionResults, reconcileRosterPresentationMetadata } from "./reconcile.ts";
 import type {
   SessionConnectionOwner,
   SessionGateway,
@@ -137,11 +137,11 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
             return;
           }
           const previous = entry.snapshot.result;
-          const decorated = host.decorate(
+          const nextResult =
             result && append && requestOptions.offset && previous
               ? appendSessionResults(previous, result)
-              : result,
-          );
+              : reconcileRosterPresentationMetadata(result, previous);
+          const decorated = host.decorate(nextResult);
           if (append && decorated) {
             entry.options.limit = Math.max(
               entry.options.limit ?? DEFAULT_SESSION_LIST_QUERY.limit,
@@ -198,6 +198,9 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       return;
     }
     const { append = false, force: _force, backgroundHydrate = false, ...requestOptions } = options;
+    // Every canonical roster replaces visible session names, so omitted title
+    // enrichment must inherit the UI default instead of publishing fallback ids.
+    requestOptions.includeDerivedTitles ??= true;
     const durableListOptions: SessionListOptions = { ...requestOptions };
     // Pagination is request-local; replacements retain filters but restart at page one.
     delete durableListOptions.offset;
@@ -224,7 +227,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       let nextResult =
         result && append && requestOptions.offset && currentState.result
           ? appendSessionResults(currentState.result, result)
-          : result;
+          : reconcileRosterPresentationMetadata(result, currentState.result);
       if (append && nextResult && !backgroundHydrate) {
         // Canonical event refreshes must retain all previously appended visible pages.
         lastListOptions = {
@@ -235,27 +238,32 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
           ),
         };
       }
-      if (backgroundHydrate && nextResult) {
+      if (nextResult) {
         const snapshot = host.snapshot();
         const currentKey = snapshot.sessionKey?.trim();
         if (currentKey) {
           const currentAgentId = normalizeAgentId(
             parseAgentSessionKey(currentKey)?.agentId ?? resolveUiSelectedGlobalAgentId(snapshot),
           );
+          const exactPreviousCurrentRow = currentState.result?.sessions.find((row) =>
+            areUiSessionKeysEquivalent(row.key, currentKey),
+          );
           const previousCurrentRow =
-            currentState.result?.sessions.find((row) =>
-              areUiSessionKeysEquivalent(row.key, currentKey),
-            ) ??
+            exactPreviousCurrentRow ??
             (currentState.agentId === currentAgentId
               ? currentState.result?.sessions.find((row) =>
                   uiSessionRowMatchesSelectedChat(snapshot, row.key, currentKey),
                 )
               : undefined);
+          const nextContainsCurrentRow = exactPreviousCurrentRow
+            ? nextResult.sessions.some((row) => areUiSessionKeysEquivalent(row.key, currentKey))
+            : nextResult.sessions.some((row) =>
+                uiSessionRowMatchesSelectedChat(snapshot, row.key, currentKey),
+              );
           if (
             previousCurrentRow &&
-            !nextResult.sessions.some((row) =>
-              uiSessionRowMatchesSelectedChat(snapshot, row.key, currentKey),
-            )
+            (backgroundHydrate || previousCurrentRow.archived === true) &&
+            !nextContainsCurrentRow
           ) {
             const sessions = [...nextResult.sessions, previousCurrentRow];
             nextResult = { ...nextResult, count: sessions.length, sessions };
@@ -392,10 +400,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   }
 
   const refreshReplacement = (agentId?: string | null): Promise<void> => {
-    const options = {
-      ...lastListOptions,
-      includeDerivedTitles: lastListOptions.includeDerivedTitles ?? true,
-    };
+    const options = { ...lastListOptions };
     const normalizedAgentId = agentId?.trim();
     if (normalizedAgentId) {
       options.agentId = normalizedAgentId;

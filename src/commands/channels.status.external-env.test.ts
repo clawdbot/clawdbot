@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   EMPTY_PLUGIN_SCHEMA,
-  makeTempDir,
+  makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
 } from "../plugins/loader.test-fixtures.js";
@@ -53,7 +53,7 @@ vi.mock("../cli/progress.js", () => ({
 
 function writeExternalEnvChannelPlugin() {
   useNoBundledPlugins();
-  const pluginDir = makeTempDir();
+  const pluginDir = makePluginLoaderTempDir();
   const fullMarker = path.join(pluginDir, "full-loaded.txt");
   fs.writeFileSync(
     path.join(pluginDir, "package.json"),

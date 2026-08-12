@@ -4,7 +4,10 @@ import {
   classifyAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
-import { runWithCronCreatorAuthority } from "../../agents/cron-creator-authority-context.js";
+import {
+  createCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapability,
+} from "../../agents/cron-creator-authority-context.js";
 import { isTimeoutError } from "../../agents/failover-error.js";
 import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
@@ -168,13 +171,23 @@ export function dispatchAgentRunFromGateway(params: {
       return false;
     }
   };
+  const cronCreatorAuthorityCapability = params.cronCreatorAuthority
+    ? createCronCreatorAuthorityCapability(params.cronCreatorAuthority.runId)
+    : undefined;
   const runAgent = () =>
-    agentCommandFromGatewayIngress(params.ingressOpts, defaultRuntime, params.context.deps, {
-      restoreAdmittedRecovery: params.restoreAdmittedRecovery,
-    });
-  const agentRun = params.cronCreatorAuthority
-    ? runWithCronCreatorAuthority(
-        params.cronCreatorAuthority.runId,
+    agentCommandFromGatewayIngress(
+      cronCreatorAuthorityCapability
+        ? { ...params.ingressOpts, cronCreatorAuthorityCapability }
+        : params.ingressOpts,
+      defaultRuntime,
+      params.context.deps,
+      {
+        restoreAdmittedRecovery: params.restoreAdmittedRecovery,
+      },
+    );
+  const agentRun = cronCreatorAuthorityCapability
+    ? runWithCronCreatorAuthorityCapability(
+        cronCreatorAuthorityCapability,
         runAgent,
         params.abortController.signal,
       )

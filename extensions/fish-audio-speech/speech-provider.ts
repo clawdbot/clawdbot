@@ -11,12 +11,11 @@ import type {
 } from "openclaw/plugin-sdk/speech";
 import {
   asBoolean,
-  asFiniteNumber,
-  asObject,
   parseSpeechDirectiveNumberOverride,
   resolveSpeechProviderApiKey,
   trimToUndefined,
 } from "openclaw/plugin-sdk/speech-core";
+import { asFiniteNumberInRange, asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   FISH_AUDIO_STREAM_MAX_BYTES,
   type FishAudioFormat,
@@ -71,8 +70,7 @@ function normalizeLatency(value: unknown): FishAudioLatency {
 }
 
 function normalizeNumber(value: unknown, min: number, max: number): number | undefined {
-  const number = asFiniteNumber(value);
-  return number != null && number >= min && number <= max ? number : undefined;
+  return asFiniteNumberInRange(value, { min, max });
 }
 
 function resolveReferenceId(raw: Record<string, unknown> | undefined): string | undefined {
@@ -80,8 +78,9 @@ function resolveReferenceId(raw: Record<string, unknown> | undefined): string | 
 }
 
 function normalizeProviderConfig(rawConfig: Record<string, unknown>): FishAudioProviderConfig {
-  const providers = asObject(rawConfig.providers);
-  const raw = asObject(providers?.["fish-audio"]) ?? asObject(rawConfig["fish-audio"]);
+  const providers = asOptionalRecord(rawConfig.providers);
+  const raw =
+    asOptionalRecord(providers?.["fish-audio"]) ?? asOptionalRecord(rawConfig["fish-audio"]);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
@@ -100,7 +99,7 @@ function normalizeProviderConfig(rawConfig: Record<string, unknown>): FishAudioP
 
 function readProviderConfig(config: SpeechProviderConfig): FishAudioProviderConfig {
   const defaults = normalizeProviderConfig({});
-  const raw = asObject(config) ?? {};
+  const raw = asOptionalRecord(config) ?? {};
   return {
     apiKey: trimToUndefined(raw.apiKey) ?? defaults.apiKey,
     baseUrl: normalizeFishAudioBaseUrl(trimToUndefined(raw.baseUrl) ?? defaults.baseUrl),
@@ -115,7 +114,7 @@ function readProviderConfig(config: SpeechProviderConfig): FishAudioProviderConf
 }
 
 function readOverrides(overrides: SpeechProviderOverrides | undefined): FishAudioOverrides {
-  const raw = asObject(overrides) ?? {};
+  const raw = asOptionalRecord(overrides) ?? {};
   return {
     model: trimToUndefined(raw.model ?? raw.modelId)
       ? normalizeModel(raw.model ?? raw.modelId)

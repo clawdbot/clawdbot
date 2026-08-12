@@ -385,13 +385,13 @@ function buildMediaGenerationReplyInstruction(params: {
   if (params.status === "ok") {
     return [
       `The ${params.completionLabel} is ready for the original chat.`,
-      'Use the current visible-reply contract: if this session requires message-tool replies, call message(action="send") with a short caption and every structured attachment from the internal event, then reply only NO_REPLY.',
-      "Otherwise, write the normal final reply and attach every generated media path with final-reply MEDIA lines.",
+      "Follow the current visible-reply contract with a short user-facing caption and every structured generated attachment from this event.",
+      "Keep internal task/session details private and do not copy the internal event text verbatim.",
     ].join(" ");
   }
   return [
     `${params.completionLabel[0]?.toUpperCase() ?? "T"}${params.completionLabel.slice(1)} generation task failed for the original chat.`,
-    'Use the current visible-reply contract: call message(action="send") when message-tool replies are required, otherwise write the normal final reply.',
+    "Follow the current visible-reply contract with a concise user-facing failure message.",
     "Keep internal task/session details private and do not copy the internal event text verbatim.",
   ].join(" ");
 }

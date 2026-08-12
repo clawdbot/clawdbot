@@ -1,6 +1,6 @@
 // Manual facade. Keep loader boundary explicit.
 import type { SecurityAuditFinding } from "../security/audit.types.js";
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
+import { loadBundledPluginPublicSurfaceModuleSyncCore } from "./facade-loader.js";
 
 type FacadeModule = {
   collectSynologyChatSecurityAuditFindings: (params: {
@@ -15,7 +15,7 @@ type FacadeModule = {
 };
 
 function loadFacadeModule(): FacadeModule {
-  return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
+  return loadBundledPluginPublicSurfaceModuleSyncCore<FacadeModule>({
     dirName: "synology-chat",
     artifactBasename: "contract-api.js",
   });

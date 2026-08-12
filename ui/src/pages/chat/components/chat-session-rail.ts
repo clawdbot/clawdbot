@@ -202,6 +202,24 @@ function companionHasActivity(thread: ChatSessionCompanionThread): boolean {
   );
 }
 
+const COMPANION_HINT_KEYS = {
+  busy: "chat.rail.askBusy",
+  "history-unavailable": "chat.rail.askHistoryUnavailable",
+  missing: "chat.rail.askMissing",
+  "model-unavailable": "chat.rail.askModelUnavailable",
+  "rate-limited": "chat.rail.askRateLimited",
+  unavailable: "chat.rail.askUnavailable",
+} as const satisfies Record<
+  NonNullable<ChatSessionCompanionThread["hint"]>,
+  Parameters<typeof t>[0]
+>;
+
+function companionHintKey(
+  hint: NonNullable<ChatSessionCompanionThread["hint"]>,
+): Parameters<typeof t>[0] {
+  return COMPANION_HINT_KEYS[hint];
+}
+
 export class ChatSessionRailElement extends OpenClawLightDomElement {
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) digest: SessionObserverDigest | null = null;
@@ -216,6 +234,8 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
     pendingQuestion: null,
     failedQuestion: null,
     hint: null,
+    retryable: false,
+    phase: null,
     draft: "",
   };
   @property({ attribute: false }) connected = false;
@@ -495,12 +515,19 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
               <article class="chat-session-rail__exchange chat-session-rail__exchange--error">
                 <div class="chat-session-rail__question">${this.companion.failedQuestion}</div>
                 <div class="chat-session-rail__hint">
-                  ${t(
-                    this.companion.hint === "busy"
-                      ? "chat.rail.askBusy"
-                      : "chat.rail.askUnavailable",
-                  )}
+                  ${t(companionHintKey(this.companion.hint))}
                 </div>
+                ${this.companion.retryable && this.connected && this.onSubmit
+                  ? html`
+                      <button
+                        class="btn btn--secondary chat-session-rail__retry"
+                        type="button"
+                        @click=${() => this.onSubmit?.(this.companion.failedQuestion ?? "")}
+                      >
+                        ${t("chat.rail.askRetry")}
+                      </button>
+                    `
+                  : nothing}
               </article>
             `
           : nothing}
@@ -508,7 +535,13 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
           ? html`
               <article class="chat-session-rail__exchange chat-session-rail__exchange--pending">
                 <div class="chat-session-rail__question">${this.companion.pendingQuestion}</div>
-                <div class="chat-session-rail__hint">${t("chat.rail.askPending")}</div>
+                <div class="chat-session-rail__hint">
+                  ${t(
+                    this.companion.phase === "answering"
+                      ? "chat.rail.askAnswering"
+                      : "chat.rail.askReading",
+                  )}
+                </div>
               </article>
             `
           : nothing}
@@ -665,7 +698,11 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
               aria-label=${t("chat.rail.askLabel")}
               .value=${this.companion.draft}
               placeholder=${this.companion.pendingQuestion
-                ? t("chat.rail.askPending")
+                ? t(
+                    this.companion.phase === "answering"
+                      ? "chat.rail.askAnswering"
+                      : "chat.rail.askReading",
+                  )
                 : t("chat.rail.askPlaceholder")}
               ?disabled=${!this.connected || this.companion.pendingQuestion !== null}
               @input=${(event: InputEvent) => {

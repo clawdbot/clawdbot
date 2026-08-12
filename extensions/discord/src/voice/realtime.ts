@@ -164,9 +164,6 @@ function formatRealtimeInterruptionLog(event: RealtimeVoiceBridgeEvent): string 
     if (event.type === "response.cancelled") {
       return `discord voice: realtime model interrupt confirmed ${event.direction}:${event.type}${detail}`;
     }
-    if (event.type === "response.done" && event.detail?.includes("status=cancelled")) {
-      return `discord voice: realtime model interrupt confirmed ${event.direction}:${event.type}${detail}`;
-    }
     if (event.type === "error" && event.detail === DISCORD_REALTIME_CANCELLATION_RACE_DETAIL) {
       return `discord voice: realtime model interrupt raced ${event.direction}:${event.type}${detail}`;
     }
@@ -180,14 +177,6 @@ function formatRealtimeLifecycleLog(event: RealtimeVoiceBridgeEvent): string | u
   }
   const detail = event.detail ? ` ${event.detail}` : "";
   return `discord voice: realtime lifecycle ${event.direction}:${event.type}${detail}`;
-}
-
-function isRealtimeResponseCancelled(event: RealtimeVoiceBridgeEvent): boolean {
-  return (
-    event.direction === "server" &&
-    (event.type === "response.cancelled" ||
-      (event.type === "response.done" && event.detail?.includes("status=cancelled") === true))
-  );
 }
 
 function isRealtimeResponseCancellationRace(event: RealtimeVoiceBridgeEvent): boolean {
@@ -562,12 +551,9 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
         if (shouldLogRealtimeVerboseEvent(event)) {
           logVoiceVerbose(`realtime ${event.direction}:${event.type}${detail}`);
         }
-        const responseEnded =
-          event.direction === "server" &&
-          (event.type === "response.done" || event.type === "response.cancelled");
         const responseCancellationRaced =
           this.outputBackpressure !== undefined && isRealtimeResponseCancellationRace(event);
-        if (responseEnded || responseCancellationRaced) {
+        if (responseCancellationRaced) {
           const outputBackpressured = this.outputBackpressure !== undefined;
           this.outputBackpressure = undefined;
           if (
@@ -577,7 +563,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
             this.completeExactSpeechResponse(event.type);
           }
           this.finishOutputAudioStream(event.type, {
-            playBuffered: responseEnded && !isRealtimeResponseCancelled(event),
+            playBuffered: false,
           });
         }
         const interruptionLog = formatRealtimeInterruptionLog(event);
@@ -587,6 +573,27 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
         const lifecycleLog = formatRealtimeLifecycleLog(event);
         if (lifecycleLog) {
           logger.info(lifecycleLog);
+        }
+      },
+      onResponseDone: (outcome) => {
+        this.markProviderGenerationObserved();
+        const outputBackpressured = this.outputBackpressure !== undefined;
+        this.outputBackpressure = undefined;
+        if (
+          this.exactSpeechResponseActive &&
+          (outputBackpressured || !this.exactSpeechAudioStarted)
+        ) {
+          this.completeExactSpeechResponse(outcome.status);
+        }
+        this.finishOutputAudioStream(outcome.status, {
+          playBuffered: outcome.status === "completed",
+        });
+        if (outcome.status === "cancelled") {
+          logger.info(
+            `discord voice: realtime model interrupt confirmed server:response.done status=cancelled${outcome.reason ? ` reason=${outcome.reason}` : ""}`,
+          );
+        } else if (outcome.status === "failed" || outcome.status === "incomplete") {
+          this.logRealtimeError(outcome.message);
         }
       },
       onError: (error) => this.logRealtimeError(formatErrorMessage(error)),
@@ -715,7 +722,9 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
         );
         this.handleBargeIn("active-speaker-audio");
       }
-      this.bridge.sendAudio(realtimePcm);
+      if (this.harness.recordInputAudio(realtimePcm)) {
+        this.bridge.sendAudio(realtimePcm);
+      }
     }
   }
 
@@ -800,7 +809,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     if (this.exactSpeechResponseActive) {
       this.exactSpeechAudioStarted = true;
     }
-    this.harness.outputActivity.markAudio({
+    this.harness.recordOutputAudio(realtimePcm24kMono, {
       audioMs: pcm16MonoDurationMs(
         realtimePcm24kMono,
         REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ.sampleRateHz,

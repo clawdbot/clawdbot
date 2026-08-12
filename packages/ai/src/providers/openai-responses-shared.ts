@@ -13,6 +13,7 @@ import type {
 } from "openai/resources/responses/responses.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
+import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import {
   buildOpenAIResponsesCompactionReplayPlan,
   buildOpenAIResponsesReasoningReplayMetadata,
@@ -27,7 +28,11 @@ import {
   readOpenAIResponsesReasoningReplayBlockMetadata,
 } from "../transports/openai-responses-replay-internal.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
-import { transportAbortError } from "../transports/transport-stream-shared.js";
+import { createOpenAIResponseHook } from "../transports/openai-transport-shared.js";
+import {
+  transportAbortError,
+  withProviderResponseHook,
+} from "../transports/transport-stream-shared.js";
 import type {
   Api,
   AssistantMessage,
@@ -40,7 +45,6 @@ import type {
 } from "../types.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
-import { headersToRecord } from "../utils/headers.js";
 import { projectProviderError } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import {
@@ -61,7 +65,6 @@ import {
   extractToolResultText,
   isImageWithMediaPayload,
 } from "./tool-result-text.js";
-import { transformMessages } from "./transform-messages.js";
 
 // =============================================================================
 // Utilities
@@ -637,11 +640,13 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
           }),
       },
     );
-    await options?.onResponse?.(
-      { status: response.status, headers: headersToRecord(response.headers) },
-      model,
-    );
-    stream.push({ type: "start", partial: output });
+    const hookedOpenAIStream = withProviderResponseHook({
+      stream: openaiStream,
+      signal: firstEventAbort.signal,
+      abort: firstEventAbort.abort,
+      hook: createOpenAIResponseHook(options?.onResponse, response, model),
+      onReady: () => stream.push({ type: "start", partial: output }),
+    });
 
     const firstEventTimeoutMs = getFirstStreamEventTimeoutMs(options);
     const onFirstEventTimeout = getFirstStreamEventTimeoutHandler(options);
@@ -660,7 +665,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
             signal: params.processStreamOptions?.signal ?? options?.signal,
           }
         : undefined;
-    await processResponsesStream(openaiStream, output, stream, model, {
+    await processResponsesStream(hookedOpenAIStream, output, stream, model, {
       ...processStreamOptions,
       reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
         sessionId: options?.sessionId,

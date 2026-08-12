@@ -55,6 +55,7 @@ export type {
   SessionEntryLifecycleMutationResult,
   SessionEntryLifecycleRemoval,
   SessionEntryLifecycleUpsert,
+  SessionEntryListScope,
   SessionEntryPatchContext,
   SessionEntryPatchOptions,
   SessionEntryPatchResult,
@@ -132,7 +133,7 @@ export {
   listSessionGenerationIdsForCanonicalRepair,
   clearPluginOwnedSessionState,
   listSessionChildEntriesReadOnly,
-  listSessionEntries,
+  listSessionEntriesCore,
   listSessionEntriesReadOnly,
   listSessionEntriesForCanonicalRepair,
   rehomeSessionDeliveryReferencesForCanonicalRepair,
@@ -143,17 +144,17 @@ export {
   loadSessionEntry,
   loadSessionEntryReadOnly,
   openSessionEntryReadView,
-  patchSessionEntry,
+  patchSessionEntryCore,
   patchSessionEntryTarget,
   patchSessionEntryWithKey,
-  readSessionUpdatedAt,
+  readSessionUpdatedAtCore,
   replaceSessionEntry,
   replaceSessionEntrySync,
   resolveSessionEntryAccessTarget,
   resolveSessionEntryCandidateTarget,
   resolveSessionEntrySelection,
   updateResolvedSessionEntry,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "./session-accessor.entry.js";
 export {
   createSessionEntryWithTranscript,
@@ -174,7 +175,7 @@ export {
   applySessionStoreProjection,
   branchSessionFromCompactionCheckpoint,
   cleanupPluginHostSessionStore,
-  cleanupSessionLifecycleArtifacts,
+  cleanupSessionLifecycleArtifactsCore,
   deleteSessionEntryLifecycle,
   preserveTemporarySessionMapping,
   purgeDeletedAgentSessionEntries,
@@ -189,7 +190,7 @@ export {
   resolveSessionTranscriptActiveLeafEntryId,
   rewindSessionToMessage,
   switchSessionBranch,
-} from "./session-accessor.message-cut.js";
+} from "./session-accessor.sqlite-message-cut.js";
 export {
   commitReplySessionInitialization,
   loadReplySessionInitializationSnapshot,
@@ -242,7 +243,7 @@ export {
   readSessionTranscriptMessageEventCount,
   readSessionTranscriptMessageEventPage,
   readSessionTranscriptMessageEvents,
-  readSessionTranscriptVisibleMessageDelta,
+  readSessionTranscriptVisibleMessageDeltaCore,
   SessionTranscriptProjectionUnavailableError,
   waitForSessionTranscriptProjection,
 } from "./session-accessor.sqlite-active-events.js";
@@ -265,6 +266,6 @@ export {
   resolveConcreteSessionStorePath,
   resolveSessionTranscriptDatabasePath,
   resolveSessionTranscriptReadTarget,
-  resolveSessionTranscriptRuntimeReadTarget,
   resolveSessionTranscriptRuntimeTarget,
+  resolveSessionTranscriptRuntimeTarget as resolveSessionTranscriptRuntimeReadTarget,
 } from "./session-accessor.transcript-target.js";

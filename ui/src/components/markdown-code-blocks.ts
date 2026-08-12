@@ -20,6 +20,8 @@ import { escapeMarkdownHtml, isMarkdownBlockArtText } from "./markdown-text.ts";
 
 const blockArtCopyPayloadPrefix = "openclaw:block-art-code:";
 const blockArtCodeBlockCopyPayloadEncoding = "block-art-json";
+// Keep typical replies visible; disclosure is reserved for JSON that dominates the transcript.
+const JSON_COLLAPSE_LINE_THRESHOLD = 40;
 const codeBlockCopyAttempts = new WeakMap<HTMLElement, number>();
 const codeBlockCopyResetTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
 
@@ -175,12 +177,11 @@ export function renderMarkdownCodeBlock(
         (trimmed.startsWith("[") && trimmed.endsWith("]"))));
 
   if (isJson) {
-    const lineCount = text.split("\n").length;
-    const label =
-      lineCount > 1
-        ? escapeMarkdownHtml(t("chat.codeBlock.jsonLines", { count: String(lineCount) }))
-        : "JSON";
-    return `<details class="json-collapse"><summary>${label}</summary><div class="code-block-wrapper">${header}${codeBlock}</div></details>`;
+    const lineCount = markdownCodeBlockCopyText(text).split("\n").length;
+    if (lineCount > JSON_COLLAPSE_LINE_THRESHOLD) {
+      const label = escapeMarkdownHtml(t("chat.codeBlock.jsonLines", { count: String(lineCount) }));
+      return `<details class="json-collapse code-block-wrapper"><summary class="code-block-header"><span>${label}</span>${copyButton}</summary>${codeBlock}</details>`;
+    }
   }
 
   return `<div class="code-block-wrapper">${header}${codeBlock}</div>`;

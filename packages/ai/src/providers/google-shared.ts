@@ -14,6 +14,7 @@ import {
   ThinkingLevel,
 } from "@google/genai";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
+import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import {
   assignTransportErrorDetails,
   coerceTransportToolCallArguments,
@@ -43,7 +44,6 @@ import {
   extractToolResultText,
   isImageWithMediaPayload,
 } from "./tool-result-text.js";
-import { transformMessages } from "./transform-messages.js";
 
 type GoogleApiType = "google-generative-ai" | "google-vertex";
 

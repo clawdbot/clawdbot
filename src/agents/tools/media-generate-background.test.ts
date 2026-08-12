@@ -160,15 +160,6 @@ function getDeliveredInternalEvents(): Array<Record<string, unknown>> {
   return params.internalEvents as Array<Record<string, unknown>>;
 }
 
-function expectReplyInstructionContains(text: string) {
-  const event = getDeliveredInternalEvents().find(
-    (item) => typeof item.replyInstruction === "string" && item.replyInstruction.includes(text),
-  );
-  if (!event) {
-    throw new Error(`Expected reply instruction containing ${text}`);
-  }
-}
-
 // Music background tests cover task-run creation, progress recording, and
 // completion delivery through the durable requester-agent handoff.
 describe("music generate background helpers", () => {
@@ -246,29 +237,58 @@ describe("music generate background helpers", () => {
     expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
   });
 
-  it("tells channel completion agents to follow the visible-reply contract", async () => {
-    announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
-      delivered: true,
-      path: "direct",
-    });
-    const completion = createMediaCompletionFixture({
-      runId: "tool:music_generate:abc",
-      taskLabel: "night-drive synthwave",
-      result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
-      mediaUrls: ["/tmp/generated-night-drive.mp3"],
-    });
+  it.each([
+    "agent:main:discord:direct:123",
+    "agent:main:discord:channel:C123",
+    "agent:main:whatsapp:123@g.us",
+  ])(
+    "gives %s tool-agnostic visible-reply guidance with every generated attachment",
+    async (requesterSessionKey) => {
+      announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
+        delivered: true,
+        path: "direct",
+      });
+      const attachments = [
+        {
+          type: "audio" as const,
+          path: "/tmp/generated-night-drive.mp3",
+          mimeType: "audio/mpeg",
+          name: "night-drive.mp3",
+        },
+        {
+          type: "image" as const,
+          path: "/tmp/generated-night-drive-cover.png",
+          mimeType: "image/png",
+          name: "night-drive-cover.png",
+        },
+      ];
+      const completion = createMediaCompletionFixture({
+        runId: "tool:music_generate:abc",
+        taskLabel: "night-drive synthwave",
+        result: "Generated a track and cover art.",
+      });
 
-    await musicGenerationTaskLifecycle.wakeTaskCompletion({
-      ...completion,
-      handle: {
-        ...completion.handle,
-        requesterSessionKey: "agent:main:discord:channel:C123",
-      },
-    });
+      await musicGenerationTaskLifecycle.wakeTaskCompletion({
+        ...completion,
+        attachments,
+        handle: {
+          ...completion.handle,
+          requesterSessionKey,
+        },
+      });
 
-    expectReplyInstructionContains("visible-reply contract");
-    expectReplyInstructionContains("final-reply MEDIA lines");
-  });
+      const event = getDeliveredInternalEvents().at(0);
+      expect(event?.attachments).toEqual(attachments);
+      const replyInstruction = String(event?.replyInstruction);
+      expect(replyInstruction).toContain("current visible-reply contract");
+      expect(replyInstruction).toContain("short user-facing caption");
+      expect(replyInstruction).toContain("every structured generated attachment from this event");
+      expect(replyInstruction).toContain("Keep internal task/session details private");
+      expect(replyInstruction).not.toContain('message(action="send")');
+      expect(replyInstruction).not.toContain("NO_REPLY");
+      expect(replyInstruction).not.toContain("MEDIA:");
+    },
+  );
 
   it("keeps failed completion notices in the durable agent-loop handoff", async () => {
     announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
@@ -294,33 +314,6 @@ describe("music generate background helpers", () => {
     expect(taskDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
     expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
   });
-
-  it.each(["agent:main:discord:guild-123:channel-456", "agent:main:whatsapp:123@g.us"])(
-    "warns legacy group/channel completion agents for %s",
-    async (requesterSessionKey) => {
-      announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
-        delivered: true,
-        path: "direct",
-      });
-      const completion = createMediaCompletionFixture({
-        runId: "tool:music_generate:abc",
-        taskLabel: "night-drive synthwave",
-        result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
-        mediaUrls: ["/tmp/generated-night-drive.mp3"],
-      });
-
-      await musicGenerationTaskLifecycle.wakeTaskCompletion({
-        ...completion,
-        handle: {
-          ...completion.handle,
-          requesterSessionKey,
-        },
-      });
-
-      expectReplyInstructionContains("visible-reply contract");
-      expectReplyInstructionContains("final-reply MEDIA lines");
-    },
-  );
 });
 
 // Video generation background tests cover detached task lifecycle, keepalive
@@ -478,5 +471,13 @@ describe("video generate background helpers", () => {
 
     expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
     expect(taskDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
+    const replyInstruction = String(getDeliveredInternalEvents().at(0)?.replyInstruction);
+    expect(replyInstruction).toContain("current visible-reply contract");
+    expect(replyInstruction).toContain("concise user-facing failure");
+    expect(replyInstruction).toContain("Keep internal task/session details private");
+    expect(replyInstruction).toContain("do not copy the internal event text verbatim");
+    expect(replyInstruction).not.toContain('message(action="send")');
+    expect(replyInstruction).not.toContain("NO_REPLY");
+    expect(replyInstruction).not.toContain("MEDIA:");
   });
 });

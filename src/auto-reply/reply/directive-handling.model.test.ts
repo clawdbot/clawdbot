@@ -168,9 +168,6 @@ vi.mock("../../agents/auth-profiles/store.js", () => {
     profiles: authProfilesStoreMock.profiles,
   });
   return {
-    clearRuntimeAuthProfileStoreSnapshots: () => {
-      authProfilesStoreMock.profiles = {};
-    },
     ensureAuthProfileStore: store,
     ensureAuthProfileStoreForLocalUpdate: store,
     findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
@@ -181,13 +178,6 @@ vi.mock("../../agents/auth-profiles/store.js", () => {
     loadAuthProfileStoreForRuntime: store,
     loadAuthProfileStoreForSecretsRuntime: store,
     loadAuthProfileStoreWithoutExternalProfiles: store,
-    replaceRuntimeAuthProfileStoreSnapshots: (
-      snapshots: Array<{
-        store?: { profiles?: Record<string, AuthProfileForTest> };
-      }>,
-    ) => {
-      authProfilesStoreMock.profiles = snapshots[0]?.store?.profiles ?? {};
-    },
     saveAuthProfileStore: vi.fn(),
     updateAuthProfileStoreWithLock: vi.fn(async ({ update }) => update(store())),
   };
@@ -317,7 +307,7 @@ let maybeHandleModelDirectiveInfo: typeof import("./directive-handling.model.js"
 let createModelVisibilityPolicy: typeof import("../../agents/model-visibility-policy.js").createModelVisibilityPolicy;
 let buildModelAliasIndex: typeof import("../../agents/model-selection.js").buildModelAliasIndex;
 let resolveModelSelectionFromDirective: typeof import("./directive-handling.model-selection.js").resolveModelSelectionFromDirective;
-let parseInlineDirectives: typeof import("./directive-handling.parse.js").parseInlineDirectives;
+let parseInlineSessionDirectives: typeof import("./directive-handling.parse.js").parseInlineSessionDirectives;
 let applyInlineDirectiveOverrides: typeof import("./get-reply-directives-apply.js").applyInlineDirectiveOverrides;
 let createFastTestModelSelectionState: typeof import("./model-selection.js").createFastTestModelSelectionState;
 
@@ -329,7 +319,7 @@ beforeAll(async () => {
   ({ buildModelAliasIndex } = await import("../../agents/model-selection.js"));
   ({ resolveModelSelectionFromDirective } =
     await import("./directive-handling.model-selection.js"));
-  ({ parseInlineDirectives } = await import("./directive-handling.parse.js"));
+  ({ parseInlineSessionDirectives } = await import("./directive-handling.parse.js"));
   ({ applyInlineDirectiveOverrides } = await import("./get-reply-directives-apply.js"));
   ({ createFastTestModelSelectionState } = await import("./model-selection.js"));
 });
@@ -545,7 +535,7 @@ function resolveModelSelectionForCommand(params: {
   agentId?: string;
 }) {
   return resolveModelSelectionFromDirective({
-    directives: parseInlineDirectives(params.command),
+    directives: parseInlineSessionDirectives(params.command),
     cfg: params.cfg ?? ({ commands: { text: true } } as unknown as OpenClawConfig),
     agentId: params.agentId,
     agentDir: TEST_AGENT_DIR,
@@ -574,11 +564,11 @@ async function persistModelDirectiveForTest(params: {
   if (params.profiles) {
     setAuthProfiles(params.profiles);
   }
-  const originalDirectives = parseInlineDirectives(params.command);
+  const originalDirectives = parseInlineSessionDirectives(params.command);
   const commandBody = originalDirectives.cleaned.trim()
     ? params.command
     : `${params.command} continue with the request`;
-  const directives = parseInlineDirectives(commandBody);
+  const directives = parseInlineSessionDirectives(commandBody);
   const cfg = params.cfg ?? baseConfig();
   const sessionEntry = params.sessionEntry ?? createSessionEntry();
   const provider = params.provider ?? "anthropic";
@@ -672,7 +662,7 @@ function createDirectiveHandlingParams(
   const sessionEntry = overrides.sessionEntry ?? createSessionEntry();
   return {
     cfg: baseConfig(),
-    directives: parseInlineDirectives(""),
+    directives: parseInlineSessionDirectives(""),
     sessionEntry,
     sessionStore: { [sessionKey]: sessionEntry },
     sessionKey,
@@ -699,7 +689,7 @@ async function persistInternalOperatorWriteDirective(
   const sessionEntry = overrides.sessionEntry ?? createSessionEntry();
   await handleDirectiveOnly(
     createDirectiveHandlingParams({
-      directives: parseInlineDirectives(command),
+      directives: parseInlineSessionDirectives(command),
       sessionEntry,
       surface: "webchat",
       gatewayClientScopes: ["operator.write"],
@@ -724,7 +714,7 @@ async function resolveModelInfoReply(
   overrides: Partial<Parameters<typeof maybeHandleModelDirectiveInfo>[0]> = {},
 ) {
   return maybeHandleModelDirectiveInfo({
-    directives: parseInlineDirectives("/model"),
+    directives: parseInlineSessionDirectives("/model"),
     cfg: baseConfig(),
     agentDir: TEST_AGENT_DIR,
     activeAgentId: "main",
@@ -806,7 +796,7 @@ async function withWorkspaceAuthFixture(
 
 function nestedOpenRouterStatusFixture(configureDirectProvider: boolean) {
   return {
-    directives: parseInlineDirectives("/model status"),
+    directives: parseInlineSessionDirectives("/model status"),
     provider: "openrouter",
     model: "google/gemini-3-flash-preview",
     defaultProvider: "openrouter",
@@ -857,7 +847,7 @@ describe("/model chat UX", () => {
 
   it("marks an auth profile without a model selection as an error", async () => {
     const reply = await resolveModelInfoReply({
-      directives: parseInlineDirectives("/model list@work"),
+      directives: parseInlineSessionDirectives("/model list@work"),
     });
 
     expect(reply).toEqual({
@@ -879,7 +869,7 @@ describe("/model chat UX", () => {
     "rejects action options on informational model commands: $command",
     async ({ command, text }) => {
       const reply = await resolveModelInfoReply({
-        directives: parseInlineDirectives(command),
+        directives: parseInlineSessionDirectives(command),
       });
 
       expect(reply).toEqual({ text, isError: true });
@@ -949,7 +939,7 @@ describe("/model chat UX", () => {
 
   it("treats /model list as a models browser alias, not a model id", async () => {
     const reply = await resolveModelInfoReply({
-      directives: parseInlineDirectives("/model list"),
+      directives: parseInlineSessionDirectives("/model list"),
     });
 
     expect(reply?.text).toContain("Providers:");
@@ -969,7 +959,7 @@ describe("/model chat UX", () => {
       async (workspaceDir) => {
         modelsCommandMock.delegateToActual = true;
         const reply = await resolveModelInfoReply({
-          directives: parseInlineDirectives("/model list"),
+          directives: parseInlineSessionDirectives("/model list"),
           workspaceDir,
           cfg: {
             ...baseConfig(),
@@ -1011,7 +1001,7 @@ describe("/model chat UX", () => {
 
   it("shows status for the allowed catalog without duplicate missing auth labels", async () => {
     const reply = await resolveModelInfoReply({
-      directives: parseInlineDirectives("/model status"),
+      directives: parseInlineSessionDirectives("/model status"),
       cfg: {
         commands: { text: true },
         agents: {
@@ -1038,7 +1028,7 @@ describe("/model chat UX", () => {
 
   it("expands provider wildcard models without retaining a rejected default", async () => {
     const reply = await resolveModelInfoReply({
-      directives: parseInlineDirectives("/model status"),
+      directives: parseInlineSessionDirectives("/model status"),
       provider: "anthropic",
       model: "claude-sonnet-4-6",
       defaultProvider: "openai",
@@ -1088,7 +1078,7 @@ describe("/model chat UX", () => {
     });
 
     const reply = await resolveModelInfoReply({
-      directives: parseInlineDirectives("/model status"),
+      directives: parseInlineSessionDirectives("/model status"),
       cfg,
       allowedModelKeys: policy.allowedKeys,
       allowedModelCatalog: policy.allowedCatalog,
@@ -1135,7 +1125,7 @@ describe("/model chat UX", () => {
     });
 
     const reply = await resolveModelInfoReply({
-      directives: parseInlineDirectives("/model status"),
+      directives: parseInlineSessionDirectives("/model status"),
       cfg,
       activeAgentId: "main",
       defaultProvider: "provider-a",
@@ -1191,7 +1181,7 @@ describe("/model chat UX", () => {
     });
 
     const reply = await resolveModelInfoReply({
-      directives: parseInlineDirectives("/model status"),
+      directives: parseInlineSessionDirectives("/model status"),
       provider: "openai",
       model: "gpt-5.5",
       defaultProvider: "openai",
@@ -1234,7 +1224,7 @@ describe("/model chat UX", () => {
     });
 
     const reply = await resolveModelInfoReply({
-      directives: parseInlineDirectives("/model status"),
+      directives: parseInlineSessionDirectives("/model status"),
       provider: "openai",
       model: "gpt-5.5",
       defaultProvider: "openai",
@@ -1270,7 +1260,7 @@ describe("/model chat UX", () => {
     });
 
     const reply = await resolveModelInfoReply({
-      directives: parseInlineDirectives("/model status"),
+      directives: parseInlineSessionDirectives("/model status"),
       provider: "openai",
       model: "gpt-5.5",
       defaultProvider: "openai",
@@ -1309,7 +1299,7 @@ describe("/model chat UX", () => {
     });
 
     const reply = await resolveModelInfoReply({
-      directives: parseInlineDirectives("/model status"),
+      directives: parseInlineSessionDirectives("/model status"),
       provider: "openai",
       model: "gpt-5.5",
       defaultProvider: "openai",
@@ -1350,7 +1340,7 @@ describe("/model chat UX", () => {
     });
 
     const reply = await resolveModelInfoReply({
-      directives: parseInlineDirectives("/model status"),
+      directives: parseInlineSessionDirectives("/model status"),
       provider: "openai",
       model: "gpt-5.5",
       defaultProvider: "openai",
@@ -1392,7 +1382,7 @@ describe("/model chat UX", () => {
       },
       async (workspaceDir) => {
         const reply = await resolveModelInfoReply({
-          directives: parseInlineDirectives("/model status"),
+          directives: parseInlineSessionDirectives("/model status"),
           workspaceDir,
           cfg: {
             ...baseConfig(),
@@ -1416,7 +1406,7 @@ describe("/model chat UX", () => {
   });
 
   it("auto-applies closest match for typos", () => {
-    const directives = parseInlineDirectives("/model anthropic/claud-opus-4-5");
+    const directives = parseInlineSessionDirectives("/model anthropic/claud-opus-4-5");
     const cfg = { commands: { text: true } } as unknown as OpenClawConfig;
 
     const resolved = resolveModelSelectionFromDirective({
@@ -1567,7 +1557,7 @@ describe("/model chat UX", () => {
     setAuthProfiles(createDateAuthProfiles("openai"));
 
     const resolved = resolveModelSelectionFromDirective({
-      directives: parseInlineDirectives(`/model gpt@${OPENAI_DATE_PROFILE_ID}`),
+      directives: parseInlineSessionDirectives(`/model gpt@${OPENAI_DATE_PROFILE_ID}`),
       cfg: { commands: { text: true } } as unknown as OpenClawConfig,
       agentDir: TEST_AGENT_DIR,
       defaultProvider: "anthropic",
@@ -1941,7 +1931,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
   function runHandleCommand(command: string, overrides: Partial<HandleParams> = {}) {
     return handleDirectiveOnly(
-      createHandleParams({ ...overrides, directives: parseInlineDirectives(command) }),
+      createHandleParams({ ...overrides, directives: parseInlineSessionDirectives(command) }),
     );
   }
 
@@ -2045,7 +2035,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     const sessionEntry = createSessionEntry();
     const result = await handleDirectiveOnly(
       createHandleParams({
-        directives: parseInlineDirectives("/model openai/gpt-4o --runtime openclaw"),
+        directives: parseInlineSessionDirectives("/model openai/gpt-4o --runtime openclaw"),
         sessionEntry,
       }),
     );
@@ -2072,7 +2062,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     const initialSessionEntry = { ...sessionEntry };
     const result = await handleDirectiveOnly(
       createHandleParams({
-        directives: parseInlineDirectives("/model openai/gpt-4o --runtime claude-cli"),
+        directives: parseInlineSessionDirectives("/model openai/gpt-4o --runtime claude-cli"),
         sessionEntry,
       }),
     );
@@ -2087,7 +2077,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     const sessionEntry = createSessionEntry({ agentRuntimeOverride: "codex" });
     await handleDirectiveOnly(
       createHandleParams({
-        directives: parseInlineDirectives("/model openai/gpt-4o"),
+        directives: parseInlineSessionDirectives("/model openai/gpt-4o"),
         sessionEntry,
       }),
     );
@@ -2107,7 +2097,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
     const result = await handleDirectiveOnly(
       createHandleParams({
-        directives: parseInlineDirectives("/model openai/gpt-4o --runtime openclaw"),
+        directives: parseInlineSessionDirectives("/model openai/gpt-4o --runtime openclaw"),
         sessionEntry,
       }),
     );
@@ -2136,7 +2126,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     try {
       const result = await handleDirectiveOnly(
         createHandleParams({
-          directives: parseInlineDirectives("/model openai/gpt-4o"),
+          directives: parseInlineSessionDirectives("/model openai/gpt-4o"),
           sessionEntry,
           sessionStore,
           storePath,
@@ -2280,7 +2270,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(sessionEntry.thinkingLevel).toBe("xhigh");
   });
   it("retargets queued followups when /model mutates session state", async () => {
-    const directives = parseInlineDirectives("/model openai/gpt-4o");
+    const directives = parseInlineSessionDirectives("/model openai/gpt-4o");
     const sessionEntry = createSessionEntry();
 
     await handleDirectiveOnly(
@@ -2329,7 +2319,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     try {
       const result = await handleDirectiveOnly(
         createHandleParams({
-          directives: parseInlineDirectives("/model openai/gpt-4o"),
+          directives: parseInlineSessionDirectives("/model openai/gpt-4o"),
           sessionEntry,
           sessionStore,
           storePath,
@@ -2373,7 +2363,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     try {
       const result = await handleDirectiveOnly(
         createHandleParams({
-          directives: parseInlineDirectives("/elevated off"),
+          directives: parseInlineSessionDirectives("/elevated off"),
           sessionEntry,
           sessionStore,
           storePath,
@@ -2410,7 +2400,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     try {
       const result = await handleDirectiveOnly(
         createHandleParams({
-          directives: parseInlineDirectives("/elevated off"),
+          directives: parseInlineSessionDirectives("/elevated off"),
           sessionEntry,
           sessionStore: { [sessionKey]: sessionEntry },
           storePath,
@@ -2452,7 +2442,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     try {
       const result = await handleDirectiveOnly(
         createHandleParams({
-          directives: parseInlineDirectives("/fast on"),
+          directives: parseInlineSessionDirectives("/fast on"),
           sessionEntry,
           sessionStore: { [sessionKey]: sessionEntry },
           storePath,
@@ -2531,7 +2521,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
   });
 
   it("strips inline elevated directives while keeping user text", () => {
-    const directives = parseInlineDirectives("hello there /elevated off");
+    const directives = parseInlineSessionDirectives("hello there /elevated off");
 
     expect(directives.hasElevatedDirective).toBe(true);
     expect(directives.elevatedLevel).toBe("off");
@@ -2608,7 +2598,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
     const result = await handleDirectiveOnly(
       createHandleParams({
-        directives: parseInlineDirectives("/think"),
+        directives: parseInlineSessionDirectives("/think"),
         provider: "openai",
         model: "gpt-5.6-luna",
         currentThinkLevel: "ultra",
@@ -2871,7 +2861,7 @@ describe("canonical session directive persistence policy", () => {
       modelOverride: "gpt-5.5",
     };
     await replaceSessionEntry({ sessionKey, storePath }, concurrentEntry);
-    const directives = parseInlineDirectives("hello /model openai/gpt-4o");
+    const directives = parseInlineSessionDirectives("hello /model openai/gpt-4o");
 
     try {
       const result = await handleDirectiveOnly(
@@ -2917,7 +2907,7 @@ describe("canonical session directive persistence policy", () => {
     };
     await replaceSessionEntry({ sessionKey, storePath }, concurrentEntry);
     const sessionStore = { [sessionKey]: sessionEntry };
-    const directives = parseInlineDirectives("hello /model openai/gpt-4o");
+    const directives = parseInlineSessionDirectives("hello /model openai/gpt-4o");
     const patchEvents: InternalHookEvent[] = [];
     registerInternalHook("session:patch", async (event) => {
       patchEvents.push(event);

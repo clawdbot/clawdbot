@@ -61,6 +61,7 @@ import {
   openSessionWorkspaceFile,
   revealSessionWorkspaceFile,
 } from "./components/chat-session-workspace.ts";
+import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import {
@@ -86,6 +87,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
     }
     void this.ensureTaskSuggestionCloudProfiles();
     const selectedSession = selectedChatSessionRow(state);
+    const selectedSessionId = selectedSession?.sessionId?.trim() || undefined;
     const mutationAccess = readChatPaneMutationAccess(
       this.context.gateway.snapshot,
       state.sessionKey,
@@ -369,12 +371,14 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
               kind: "composer-replacement",
               text: t("chat.archivedSessionDisabled"),
               actionLabel: t("common.unarchive"),
-              disabledReason: mutationAccess.unarchive.allowed
-                ? undefined
-                : mutationAccess.unarchive.reason,
+              disabledReason: !selectedSessionId
+                ? "Session lifecycle action requires a durable session identity."
+                : mutationAccess.unarchive.allowed
+                  ? undefined
+                  : mutationAccess.unarchive.reason,
               onAction: () => {
-                if (mutationAccess.unarchive.allowed) {
-                  void this.restoreArchivedSession(state.sessionKey);
+                if (selectedSessionId && mutationAccess.unarchive.allowed) {
+                  void this.restoreArchivedSession(state.sessionKey, selectedSessionId);
                 }
               },
             }
@@ -549,6 +553,11 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         ? undefined
         : (id) => void state.steerQueuedChatMessage(id),
       onQueueMove: sessionParticipationBlocked ? undefined : state.moveQueuedChatMessage,
+      queuedEdit: {
+        editingId: activeQueuedMessageEdit(state)?.id ?? null,
+        onEdit: sessionParticipationBlocked ? undefined : state.editQueuedChatMessage,
+        onCancel: state.cancelQueuedChatMessageEdit,
+      },
       onGoalCommand: (command) => void state.handleSendChat(command),
       onCompanionQuestion: (question) => void this.submitSessionCompanionQuestion(question),
       onCompanionPrefill: this.prefillSessionCompanionQuestion,
@@ -561,6 +570,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         state.chatReplyTarget = target;
         state.requestUpdate?.();
       },
+      replyMessageAccess: catalogKey ? undefined : this.currentReplyMessageAccess(state.sessionKey),
       onRewindMessage: sessionActionCallbacks.onRewindMessage,
       onForkMessage: sessionActionCallbacks.onForkMessage,
       onNewSession: () => void this.createSession(),

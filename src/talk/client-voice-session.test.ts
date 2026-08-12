@@ -55,7 +55,9 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
   sessionAccessorMocks.appendTranscriptMessage.mockImplementation(actual.appendTranscriptMessage);
   return { ...actual, appendTranscriptMessage: sessionAccessorMocks.appendTranscriptMessage };
 });
-vi.mock("../channels/message/runtime.js", () => ({ sendDurableMessageBatch }));
+vi.mock("../channels/message/runtime.js", () => ({
+  sendDurableMessageBatchCore: sendDurableMessageBatch,
+}));
 
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 let tempDir: string;

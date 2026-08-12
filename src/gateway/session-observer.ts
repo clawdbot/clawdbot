@@ -1,10 +1,10 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { resolveDefaultAgentId, resolveSessionAgentId } from "../agents/agent-scope.js";
 import {
   createSessionActivityNoteState,
   flushSessionActivityAssistantNote,
   noteSessionActivityEvent,
-  readFiniteNumber,
   terminalHealthFor,
 } from "../agents/session-activity-notes.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
@@ -513,7 +513,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     }
     const session = readSession(sessionKey, agentId);
     const startedAt =
-      readFiniteNumber(event.data.startedAt) ?? session?.startedAt ?? event.ts ?? now();
+      asFiniteNumber(event.data.startedAt) ?? session?.startedAt ?? event.ts ?? now();
     const state: SessionObserverState = {
       ...createSessionActivityNoteState(),
       sessionKey,
@@ -681,7 +681,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       state.consecutiveFailures = 0;
     }
     state.lastActivityAt = event.ts;
-    const eventStartedAt = readFiniteNumber(event.data.startedAt);
+    const eventStartedAt = asFiniteNumber(event.data.startedAt);
     if (eventStartedAt !== undefined) {
       state.startedAt = Math.min(state.startedAt, eventStartedAt);
     }
@@ -695,7 +695,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       preamblePublisher.clear(state);
       state.terminalHealth = terminalHealthFor(event);
       disabledRuns.delete(event.runId);
-      const endedAt = readFiniteNumber(event.data.endedAt) ?? now();
+      const endedAt = asFiniteNumber(event.data.endedAt) ?? now();
       // previousDigest is set on every ACCEPTED digest of this run; digestCount now
       // counts attempts (budget), so it no longer implies any digest was published.
       const hasRunDigest = state.previousDigest?.runId === state.runId;

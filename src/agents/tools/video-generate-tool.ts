@@ -41,7 +41,7 @@ import {
 import { getCustomProviderApiKey } from "../model-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
-import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
+import { ToolInputError, readNumberParam, readToolStringParam } from "./common.js";
 import { persistGeneratedMediaBatch } from "./generated-media-batch-persistence.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
 import {
@@ -975,7 +975,7 @@ export function createVideoGenerateTool(options?: {
       const effectiveCfg =
         applyVideoGenerationModelConfigDefaults(cfg, videoGenerationModelConfig) ?? cfg;
       const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
-      const prompt = readStringParam(args, "prompt", { required: true });
+      const prompt = readToolStringParam(args, "prompt", { required: true });
 
       const activeDuplicateGuardResult = createVideoGenerateDuplicateGuardResult(
         options?.agentSessionKey,
@@ -985,11 +985,11 @@ export function createVideoGenerateTool(options?: {
         return activeDuplicateGuardResult;
       }
 
-      const model = readStringParam(args, "model");
-      const filename = readStringParam(args, "filename");
-      const size = readStringParam(args, "size");
-      const aspectRatio = normalizeAspectRatio(readStringParam(args, "aspectRatio"));
-      const resolution = normalizeResolution(readStringParam(args, "resolution"));
+      const model = readToolStringParam(args, "model");
+      const filename = readToolStringParam(args, "filename");
+      const size = readToolStringParam(args, "size");
+      const aspectRatio = normalizeAspectRatio(readToolStringParam(args, "aspectRatio"));
+      const resolution = normalizeResolution(readToolStringParam(args, "resolution"));
       const durationSeconds = readNumberParam(args, "durationSeconds", {
         positiveInteger: true,
         strict: true,

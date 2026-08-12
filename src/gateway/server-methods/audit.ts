@@ -34,10 +34,6 @@ function parsePositiveCursor(cursor: string | undefined): number | undefined | n
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
-const parseAuditCursor = parsePositiveCursor;
-const parseDecisionCursor = parsePositiveCursor;
-const parseExecutionCursor = parsePositiveCursor;
-
 /** Preserve the shipped audit.list result shape for run/tool-only clients. */
 function mapLegacyAuditEvent(
   event: AgentRunAuditEventRecord | ToolActionAuditEventRecord,
@@ -74,7 +70,7 @@ function invalidRangeOrCursor(params: { cursor?: string; after?: number; before?
   cursor?: number;
   invalid: boolean;
 } {
-  const cursor = parseAuditCursor(params.cursor);
+  const cursor = parsePositiveCursor(params.cursor);
   return {
     ...(cursor !== undefined && cursor !== null ? { cursor } : {}),
     invalid:
@@ -166,9 +162,9 @@ export const auditHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateAuditRunInspectParams, "audit.run.inspect", respond)) {
       return;
     }
-    const decisionOffset = parseDecisionCursor(params.decisionCursor);
+    const decisionOffset = parsePositiveCursor(params.decisionCursor);
     const executionOffset =
-      typeof params.runId === "string" ? parseExecutionCursor(params.executionCursor) : undefined;
+      typeof params.runId === "string" ? parsePositiveCursor(params.executionCursor) : undefined;
     if (decisionOffset === null || executionOffset === null) {
       respond(
         false,
@@ -192,12 +188,4 @@ export const auditHandlers: GatewayRequestHandlers = {
       }),
     );
   },
-};
-
-export const testApi = {
-  mapAuditActivityEvent,
-  mapLegacyAuditEvent,
-  parseAuditCursor,
-  parseDecisionCursor,
-  parseExecutionCursor,
 };

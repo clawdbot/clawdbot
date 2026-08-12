@@ -14,7 +14,7 @@ import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -43,6 +43,7 @@ import {
 } from "../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../sessions/user-turn-transcript.test-support.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import {
   restoreCliRunnerTestDeps,
@@ -199,8 +200,10 @@ function buildPreparedContext(params: PreparedContextOverrides = {}): PreparedCl
     sessionMode: "existing" as const,
     serialize: true,
   };
+  const runId = params?.runId ?? "run-2";
   return {
     params: {
+      admittedRunContext: createTestAdmittedRunContext(runId),
       sessionId: "s1",
       sessionKey: params?.sessionKey,
       sessionFile: "/tmp/session.jsonl",
@@ -210,7 +213,7 @@ function buildPreparedContext(params: PreparedContextOverrides = {}): PreparedCl
       model,
       thinkLevel: "low",
       timeoutMs: 1_000,
-      runId: params?.runId ?? "run-2",
+      runId,
       lane: params?.lane,
       executionMode: params?.executionMode,
       allowEmptyAssistantReplyAsSilent: params?.allowEmptyAssistantReplyAsSilent,
@@ -386,7 +389,7 @@ async function seedSqliteSessionEntry(params: {
   sessionFile: string;
   storePath: string;
 }): Promise<void> {
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     {
       agentId: "main",
       sessionKey: "agent:main:main",
@@ -836,6 +839,52 @@ describe("runCliAgent reliability", () => {
       sessionId: "downgraded-session",
     });
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not treat unsupported-flag wording fragments as a Claude downgrade", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockResolvedValueOnce(
+      makeManagedRun({
+        exitCode: 1,
+        durationMs: 25,
+        stderr: "Claude exited unexpectedly while using --resume-session-at",
+      }),
+    );
+    const clearBeforeRetry = vi.fn(async () => true);
+    const context = makeClaudePreparedContext({
+      sessionKey: "agent:main:resume-token-boundary",
+      runId: "run-resume-token-boundary",
+      cliSessionId: "existing-session",
+      openClawHistoryPrompt: CLI_RESEED_PROMPT,
+    });
+    context.preparedBackend.backend = {
+      ...context.preparedBackend.backend,
+      resumeArgs: ["--resume", "{sessionId}"],
+      forkArg: "--fork-session",
+      resumeAtArg: "--resume-session-at",
+    };
+    context.params.cliSessionBinding = {
+      sessionId: "existing-session",
+      resumeCheckpointId: "assistant-before-stall",
+      forkNextResume: true,
+    };
+
+    await expect(
+      runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          forkCliSessionOnResume: true,
+          claimCliSessionFork: vi.fn(async () => true),
+          restoreCliSessionFork: vi.fn(async () => {}),
+          persistCliSessionForkSuccessor: vi.fn(async () => {}),
+          onBeforeFreshCliSessionRetry: clearBeforeRetry,
+        },
+      }),
+    ).rejects.toThrow("exited unexpectedly");
+
+    expect(clearBeforeRetry).not.toHaveBeenCalled();
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
   });
 
   it("preserves fresh retry for direct CLI callers without a pre-clear hook", async () => {
@@ -3975,7 +4024,7 @@ describe("runCliAgent reliability", () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "before_agent_run"),
       runBeforeAgentRun: vi.fn(async () => {
-        await upsertSessionEntry(
+        await upsertSessionEntryCore(
           { agentId: "main", sessionKey, storePath },
           { sessionId: "replacement-session", updatedAt: 2 },
         );
@@ -4405,6 +4454,7 @@ describe("runCliAgent reliability", () => {
 
     try {
       const context = await prepareCliRunContext({
+        admittedRunContext: createTestAdmittedRunContext("run-history-hook"),
         sessionId: "s1",
         sessionFile,
         workspaceDir: dir,

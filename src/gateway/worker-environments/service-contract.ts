@@ -1,4 +1,5 @@
-import type { WorkerDesktopApp } from "../../plugins/capability-provider.types.js";
+import { createHash } from "node:crypto";
+import type { WorkerDesktopApp, WorkerProfile } from "../../plugins/capability-provider.types.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
@@ -6,6 +7,17 @@ import type {
   WorkerTunnelRequest,
   WorkerTunnelStatus,
 } from "./tunnel-contract.js";
+
+export function deriveEnvironmentIntent(idempotencyKey: string): {
+  environmentId: string;
+  provisionOperationId: string;
+} {
+  const digest = createHash("sha256").update(idempotencyKey).digest("hex");
+  return {
+    environmentId: `worker:${digest.slice(0, 32)}`,
+    provisionOperationId: `provision:v2:${digest}`,
+  };
+}
 
 /** Non-secret worker projection available to Gateway request handlers. */
 export type WorkerEnvironmentServiceRecord = {
@@ -60,6 +72,10 @@ export type WorkerPlacementDispatchRequest = {
   sessionKey: string;
   agentId: string;
   profileId: string;
+  inheritedProfile?: {
+    providerId: string;
+    profileSnapshot: WorkerProfile;
+  };
 };
 
 export type WorkerPlacementReclaimRequest = {

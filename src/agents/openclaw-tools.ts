@@ -14,7 +14,7 @@ import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
-import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
+import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import { resolveTranscriptsConfig } from "../transcripts/config.js";
@@ -70,7 +70,7 @@ import { createHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js"
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { callAgentToolGatewayRequest } from "./tools/in-process-gateway.js";
-import { createMessageTool } from "./tools/message-tool.js";
+import { createMessageTool } from "./tools/message-tool-execution.js";
 import { createMobileUiTool } from "./tools/mobile-ui-tool.js";
 import { createMusicGenerateTool } from "./tools/music-generate-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
@@ -265,7 +265,7 @@ export function createOpenClawTools(
   // Scheduled turns keep delivery routing live, but Gateway authorization remains bound to the
   // authenticated creator account captured in the immutable scheduled authority envelope.
   const gatewayCallerAccountId = options?.gatewayCallerAccountId ?? options?.agentAccountId;
-  const runtimeWebTools = getActiveRuntimeWebToolsMetadata();
+  const runtimeWebTools = getActiveRuntimeWebToolsMetadataFromState();
   const sandbox =
     options?.sandboxRoot && options?.sandboxFsBridge
       ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
@@ -490,6 +490,7 @@ export function createOpenClawTools(
             // Use the durable runSessionKey; cleanup-retired policy keys leave cron jobs dangling.
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentAccountId: gatewayCallerAccountId,
+            config: options?.config,
             currentDeliveryContext: {
               channel: options?.agentChannel,
               to: options?.currentChannelId ?? options?.agentTo,
@@ -505,6 +506,7 @@ export function createOpenClawTools(
           }),
           createSessionsTool({
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            agentSessionId: options?.sessionId,
             sandboxed: options?.sandboxed,
             config: resolvedConfig,
           }),
@@ -757,10 +759,7 @@ export function createOpenClawTools(
     ...(options?.currentChannelId ? { channelId: options.currentChannelId } : {}),
     loopDetection: resolveToolLoopDetectionConfig({ cfg: resolvedConfig, agentId: hookAgentId }),
   };
-  const hookContext = {
-    ...defaultHookContext,
-    ...options?.beforeToolCallHookContext,
-  };
+  const hookContext = { ...defaultHookContext, ...options?.beforeToolCallHookContext };
   options?.recordToolPrepStage?.("openclaw-tools:tool-hooks");
   return allTools
     .map((tool) =>

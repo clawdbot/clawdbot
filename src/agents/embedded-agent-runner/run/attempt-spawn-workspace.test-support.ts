@@ -22,6 +22,7 @@ import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
 import type { Model } from "../../../llm/types.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
+import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
 import type {
   MessagingToolSend,
@@ -33,6 +34,7 @@ import {
   initializeModelRegistryRuntime,
 } from "../../sessions/model-registry-runtime.js";
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
+import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type SubscribeEmbeddedAgentSessionFn =
   typeof import("../../embedded-agent-subscribe.js").subscribeEmbeddedAgentSession;
@@ -128,6 +130,7 @@ function createSubscriptionMock(): SubscriptionMock {
     getCurrentAttemptAssistant: () => undefined,
     getLastAssistantTextMessageIndex: () => undefined,
     getLatestMcpAppChannelView: () => undefined,
+    getLatestMcpConnectAction: () => undefined,
     toolMetas: [] as Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>,
     runToolLifecycle: async <T>(toolParams: { execute: () => Promise<T> }) =>
       await toolParams.execute(),
@@ -489,8 +492,8 @@ vi.mock("../../../skills/runtime/env-overrides.js", () => ({
   applySkillEnvOverridesFromSnapshot: () => () => {},
 }));
 
-vi.mock("../../../skills/loading/workspace.js", () => ({
-  resolveSkillsPromptForRun: (...args: unknown[]) => hoisted.resolveSkillsPromptForRunMock(...args),
+vi.mock("../../../skills/loading/workspace-skill-prompt.js", () => ({
+  resolveSkillsPrompt: (...args: unknown[]) => hoisted.resolveSkillsPromptForRunMock(...args),
 }));
 
 vi.mock("../../../skills/runtime/embedded-run-entries.js", () => ({
@@ -1367,9 +1370,7 @@ export async function createContextEngineAttemptRunner(params: {
     process.env.OPENCLAW_TRAJECTORY_DIR = workspaceDir;
   }
   try {
-    return await (
-      await loadRunEmbeddedAttempt()
-    )({
+    const attempt: Omit<EmbeddedRunAttemptParams, "admittedRunContext"> = {
       sessionId: "embedded-session",
       sessionKey: params.sessionKey,
       sessionFile: params.sessionKey,
@@ -1418,6 +1419,12 @@ export async function createContextEngineAttemptRunner(params: {
         },
       },
       ...params.attemptOverrides,
+    };
+    return await (
+      await loadRunEmbeddedAttempt()
+    )({
+      ...attempt,
+      admittedRunContext: createTestAdmittedRunContext(attempt.runId),
     });
   } finally {
     if (previousTrajectoryEnv === undefined) {

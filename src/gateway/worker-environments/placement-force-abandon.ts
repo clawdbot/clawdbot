@@ -111,6 +111,24 @@ export async function forceAbandonWorkerEnvironment(params: {
           placement,
           refs: [finalRef, preparedWorkerWorkspaceResultRef(finalRef)],
         });
+        const claim = placement.turnClaim;
+        if (
+          claim?.owner === "worker" &&
+          claim.claimId === pending.claimId &&
+          claim.runId === pending.runId
+        ) {
+          await placements.closeWorkerTurnToolState({
+            sessionId: placement.sessionId,
+            claimId: claim.claimId,
+            runId: claim.runId,
+            placementGeneration: claim.generation,
+            owner: {
+              kind: "worker",
+              environmentId: placement.environmentId,
+              ownerEpoch: claim.ownerEpoch,
+            },
+          });
+        }
         placements.failWorkspaceResultAndReleaseTurn(pending, recoveryError);
       } else {
         placements.abandonWorkspaceResult(pending);
@@ -131,6 +149,19 @@ export async function forceAbandonWorkerEnvironment(params: {
       });
     }
     if (current?.state === "draining") {
+      if (current.turnClaim) {
+        await placements.closeWorkerTurnToolState({
+          sessionId: current.sessionId,
+          claimId: current.turnClaim.claimId,
+          runId: current.turnClaim.runId,
+          placementGeneration: current.turnClaim.generation,
+          owner: {
+            kind: "worker",
+            environmentId: current.environmentId,
+            ownerEpoch: current.turnClaim.ownerEpoch,
+          },
+        });
+      }
       current = placements.startReconcile({
         sessionId: current.sessionId,
         environmentId: current.environmentId,

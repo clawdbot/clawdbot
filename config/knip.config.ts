@@ -21,6 +21,8 @@ const repositoryScriptEntries = [
   "apps/android/scripts/build-release-artifacts.ts!",
   "scripts/bundle-a2ui.mts!",
   "scripts/build-discord-activity-sdk.mts!",
+  "scripts/check-control-ui-performance.mts!",
+  "scripts/check-control-ui-precompressed-assets.mts!",
   "scripts/check-live-cache.ts!",
   "scripts/check-package-dist-imports.mjs!",
   "scripts/dev/ios-node-e2e.ts!",
@@ -190,10 +192,6 @@ const rootEntries = [
   "src/plugins/contracts/rootdir-boundary-canary.ts!",
   // Mintlify executes every JavaScript file in the docs content directory on each page.
   "docs/nav-tabs-underline.js!",
-  // Knip loads these audit configurations by command-line path.
-  "config/knip.config.ts!",
-  "config/knip.all-exports.config.ts!",
-  "config/knip.scripts-exports.config.ts!",
   // Native applications load these JavaScript assets directly rather than through Node imports.
   "apps/android/app/src/main/assets/katex/katex.min.js!",
   "apps/android/app/src/main/assets/katex/renderer.js!",
@@ -419,8 +417,6 @@ const config = {
     // Focused media tests consume these explicit seams; production uses the helpers in-module.
     "src/agents/embedded-agent-subscribe.handlers.lifecycle.ts": ["exports"],
     "src/gateway/server-methods/chat-webchat-media.ts": ["exports"],
-    // Collection reconcile behavior is asserted by the focused review tests;
-    // production wires only the scheduled review loop.
     // Greeting cache/fact contracts (hash, alert text, store shapes) are
     // asserted by the focused greeting unit tests, not by another prod module.
     "src/system-agent/greeting.ts": ["exports", "types"],
@@ -504,6 +500,7 @@ const config = {
       // Mirror the published export map so knip sees every dist entry point.
       entry: [
         "src/index.ts!",
+        "src/provider-types.ts!",
         "src/providers.ts!",
         "src/types.ts!",
         "src/validation.ts!",
@@ -605,6 +602,7 @@ const config = {
     "packages/media-core": {
       entry: [
         "src/index.ts!",
+        "src/attachment-classify.ts!",
         "src/base64.ts!",
         "src/constants.ts!",
         "src/content-length.ts!",

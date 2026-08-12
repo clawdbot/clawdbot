@@ -84,7 +84,7 @@ function retainGatewayWorkUntilSettled(session: WizardSession): void {
   // active between steps or a config reload can erase the process-local session.
   const release = retainGatewayRootWorkAdmissionContinuation();
   if (release) {
-    void whenAdmittedWizardSessionSettled(session).then(release);
+    void whenAdmittedWizardSessionSettled(session).then(release, release);
   }
 }
 
@@ -219,15 +219,14 @@ export const wizardHandlers: GatewayRequestHandlers = {
     const cancelled = session.cancel();
     const status = readWizardStatus(session);
     if (cancelled) {
-      void whenAdmittedWizardSessionSettled(session).then(() =>
-        context.purgeWizardSession(sessionId),
-      );
+      const purge = () => context.purgeWizardSession(sessionId);
+      void whenAdmittedWizardSessionSettled(session).then(purge, purge);
     } else {
       context.purgeWizardSession(sessionId);
     }
     respond(true, status, undefined);
   },
-  "wizard.status": ({ params, respond, context }) => {
+  "wizard.status": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateWizardStatusParams, "wizard.status", respond)) {
       return;
     }
@@ -237,6 +236,9 @@ export const wizardHandlers: GatewayRequestHandlers = {
       return;
     }
     const status = readWizardStatus(session);
+    if (status.status !== "running") {
+      await whenAdmittedWizardSessionSettled(session);
+    }
     context.purgeWizardSession(sessionId);
     respond(true, status, undefined);
   },

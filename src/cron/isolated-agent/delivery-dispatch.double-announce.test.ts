@@ -13,6 +13,7 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import * as deliveryQueueSqlite from "../../infra/delivery-queue-sqlite.js";
 
 const directCronCompletionRetention = {
@@ -46,6 +47,20 @@ const {
   retireSessionMcpRuntimeMock: vi.fn().mockResolvedValue(true),
   resolveOutboundSessionRouteMock: vi.fn().mockResolvedValue(null),
 }));
+const channelTransformMock = vi.hoisted(() => ({
+  current: undefined as ChannelMessagingAdapter["transformReplyPayload"],
+}));
+
+vi.mock("../../channels/plugins/registry-loaded.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../channels/plugins/registry-loaded.js")>();
+  return {
+    ...actual,
+    getLoadedChannelPluginForRead: (id: string) =>
+      channelTransformMock.current
+        ? { id, meta: {}, messaging: { transformReplyPayload: channelTransformMock.current } }
+        : actual.getLoadedChannelPluginForRead(id),
+  };
+});
 
 vi.mock("../../config/sessions/main-session.js", () => ({
   canonicalizeMainSessionAlias: vi.fn(
@@ -340,9 +355,11 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       lifecycleRevision: "test-lifecycle-revision",
     });
     maybeApplyTtsToPayloadMock.mockReset().mockImplementation(async (params) => params.payload);
+    channelTransformMock.current = undefined;
   });
 
   afterEach(() => {
+    channelTransformMock.current = undefined;
     vi.restoreAllMocks();
     vi.useRealTimers();
     vi.unstubAllEnvs();
@@ -402,6 +419,121 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
+  });
+
+  it("records channel transform suppression before TTS, custody, transport, or mirroring", async () => {
+    const transformReplyPayload = vi.fn(() => null);
+    channelTransformMock.current = transformReplyPayload;
+    const params = makeBaseParams({ synthesizedText: "private cron reply" });
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(false);
+    expect(state.deliverySuppressionReason).toBe("channel_transform");
+    expect(state.result?.deliverySuppressionReason).toBe("channel_transform");
+    expect(maybeApplyTtsToPayloadMock).not.toHaveBeenCalled();
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(deliveryQueueSqlite.getDeliveryQueueEntryStatus).not.toHaveBeenCalled();
+    expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("delivers a later accepted cron payload after an earlier transform veto", async () => {
+    const transformReplyPayload = vi.fn(({ payload }: { payload: { text?: string } }) =>
+      payload.text === "private cron reply" ? null : payload,
+    );
+    channelTransformMock.current = transformReplyPayload;
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [{ text: "private cron reply" }, { text: "public cron reply" }];
+    params.summary = "public cron reply";
+    params.outputText = "public cron reply";
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.delivered).toBe(true);
+    expect(state.deliverySuppressionReason).toBeUndefined();
+    expectDeliveryCall(0, {
+      payloads: [{ text: "public cron reply" }],
+      deliveryIntentId: expect.stringContaining("cron-direct-delivery:v1:"),
+    });
+    expect(transformReplyPayload).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps one transformed cron fallback source without duplicating it", async () => {
+    channelTransformMock.current = vi.fn(({ payload }) => ({
+      ...payload,
+      ...(payload.text ? { text: `${payload.text}!` } : {}),
+      ...(payload.fallbackText
+        ? { fallbackText: { ...payload.fallbackText, text: `${payload.fallbackText.text}!` } }
+        : {}),
+    }));
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [
+      { text: "Cron summary" },
+      { channelData: { telegram: { buttons: [[{ text: "Open", url: "https://example.test" }]] } } },
+    ];
+    params.summary = "Cron summary";
+    params.outputText = "Cron summary";
+
+    await dispatchCronDelivery(params);
+
+    expectDeliveryCall(0, {
+      payloads: [
+        { text: "Cron summary!" },
+        {
+          channelData: {
+            telegram: { buttons: [[{ text: "Open", url: "https://example.test" }]] },
+          },
+          fallbackText: { text: "Cron summary!", replacesPayloadIndex: 0 },
+        },
+      ],
+    });
+    expect(channelTransformMock.current).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not regenerate a cron fallback source vetoed by the channel transform", async () => {
+    channelTransformMock.current = vi.fn(({ payload }) => (payload.text ? null : payload));
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [
+      { text: "Private summary" },
+      { channelData: { telegram: { reaction: { emoji: "👍", replyToId: "123" } } } },
+    ];
+    params.summary = "Private summary";
+    params.outputText = "Private summary";
+
+    await dispatchCronDelivery(params);
+
+    expectDeliveryCall(0, {
+      payloads: [{ channelData: { telegram: { reaction: { emoji: "👍", replyToId: "123" } } } }],
+    });
+    expect(channelTransformMock.current).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets the channel veto the final fallback-bearing cron payload shape", async () => {
+    channelTransformMock.current = vi.fn(({ payload }) => (payload.fallbackText ? null : payload));
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [
+      { text: "Public summary" },
+      { channelData: { telegram: { buttons: [[{ text: "Open", url: "https://example.test" }]] } } },
+    ];
+    params.summary = "Public summary";
+    params.outputText = "Public summary";
+
+    await dispatchCronDelivery(params);
+
+    expectDeliveryCall(0, { payloads: [{ text: "Public summary" }] });
+    expect(channelTransformMock.current).toHaveBeenCalledWith({
+      payload: expect.objectContaining({
+        fallbackText: { text: "Public summary", replacesPayloadIndex: 0 },
+      }),
+      cfg: {},
+      accountId: undefined,
+    });
   });
 
   it("uses non-empty summary text when structured direct payloads are textless", async () => {

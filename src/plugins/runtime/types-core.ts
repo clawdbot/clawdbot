@@ -296,7 +296,7 @@ export type LlmCompleteResult = {
 
 type RuntimeRunEmbeddedAgentParams = Omit<
   import("../../agents/embedded-agent-runner/run/params.js").RunEmbeddedAgentParams,
-  "skillWorkshopCollectionReconcile"
+  "admittedRunContext" | "preparedRunAdmission" | "skillWorkshopCollectionReconcile"
 >;
 
 type RuntimeRunEmbeddedAgent = (
@@ -333,7 +333,7 @@ export type PluginRuntimeCore = {
     resolveAgentWorkspaceDir: typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir;
     resolveAgentIdentity: typeof import("../../agents/identity.js").resolveAgentIdentity;
     /** Resolve an allowed catalog create target through canonical agent model/runtime policy. */
-    resolveSessionCatalogCreateTarget: typeof import("./runtime-agent-session-catalog.js").resolveSessionCatalogCreateTarget;
+    resolveSessionCatalogCreateTarget: typeof import("./runtime-agent-session-catalog.js").resolveAgentCatalogCreateTarget;
     resolveThinkingDefault: (params: {
       cfg: import("../../config/types.openclaw.js").OpenClawConfig;
       provider: string;
@@ -358,7 +358,7 @@ export type PluginRuntimeCore = {
     resolveCliBackendDispatchEligibility: typeof import("../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js").resolveEmbeddedCliBackendDispatchEligibility;
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {
-      resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
+      resolveStorePath: typeof import("../../config/sessions/paths.js").resolveSessionStorePathCore;
       createSessionEntry: (
         params: RuntimeCreateSessionEntryParams,
       ) => Promise<RuntimeCreateSessionEntryResult>;
@@ -389,9 +389,8 @@ export type PluginRuntimeCore = {
     requestHeartbeatNow: (opts?: RuntimeRequestHeartbeatNowOptions) => void;
     /**
      * Run a single heartbeat cycle immediately (bypassing the coalesce timer).
-     * Accepts an optional `heartbeat` config override so callers can force
-     * delivery to the last active channel — the same pattern the cron service
-     * uses to avoid the default `target: "none"` suppression.
+     * Accepts an optional `heartbeat` config override so callers can choose
+     * an explicit destination or opt into internal-only `target: "none"` runs.
      */
     runHeartbeatOnce: (opts?: RunHeartbeatOnceOptions) => Promise<HeartbeatRunResult>;
     runCommandWithTimeout: typeof import("../../process/exec.js").runCommandWithTimeout;

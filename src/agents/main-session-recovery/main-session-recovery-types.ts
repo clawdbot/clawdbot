@@ -1,8 +1,4 @@
-import type {
-  InternalSessionEntry as SessionEntry,
-  MainRestartRecoveryState,
-  RestartRecoveryRun,
-} from "../../config/sessions.js";
+import type { MainRestartRecoveryState, RestartRecoveryRun } from "../../config/sessions.js";
 
 type MainSessionRecoveryExecutionIdentity = NonNullable<
   MainRestartRecoveryState["executionIdentity"]
@@ -95,10 +91,14 @@ export type MainSessionRecoveryCommand =
       now: number;
       observation: MainSessionRecoveryObservation;
       runId: string;
-      executionIdentity:
-        | { state: "disabled" }
-        | { state: "enabled"; token: MainSessionRecoveryExecutionIdentity };
+      executionIdentity: { state: "disabled" } | { state: "enabled" };
     }
+  | ({
+      kind: "bind_admitted_execution_identity";
+      attempt: number;
+      cycleId: string;
+      token: MainSessionRecoveryExecutionIdentity;
+    } & RecoveryRunOwner)
   | {
       kind: "cancel_reservation" | "abandon_reservation";
       reservation: MainSessionRecoveryReservation;
@@ -126,11 +126,6 @@ export type MainSessionRecoveryCommand =
       observation: MainSessionRecoveryObservation;
       reason: string;
     }
-  | {
-      kind: "fail_recovery";
-      now: number;
-      observation: MainSessionRecoveryObservation;
-    }
   | { kind: "doctor_repair"; now: number }
   | { kind: "clear" };
 
@@ -145,7 +140,6 @@ export type MainSessionRecoveryTransitionResult =
         | "recovery_validated"
         | "tombstoned";
     }
-  | { kind: "failed"; noticeEntry: SessionEntry }
   | { kind: "foreground_claimed"; claim: MainSessionRecoveryOwnerClaim }
   | { kind: "observed"; view: MainSessionRecoveryView }
   | { kind: "rejected"; reason: MainSessionRecoveryConflict }

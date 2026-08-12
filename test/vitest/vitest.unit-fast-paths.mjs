@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { cliProcessTestFiles } from "./vitest.cli-process-paths.mjs";
 import {
   commandsLightSourceFiles,
   commandsLightTestFiles,
@@ -165,6 +166,8 @@ const broadUnitFastCandidateGlobs = [
   "test/**/*.test.ts",
 ];
 const ownerRoutedUnitTestPatterns = [
+  ...cliProcessTestFiles,
+  "src/agents/embedded-agent-runner/run.incomplete-turn.*.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.abort-race.test.ts",
   "src/agents/openai-transport-stream.*.test.ts",
   "src/agents/embedded-agent-runner/run.shared-integration.test.ts",
@@ -251,7 +254,7 @@ const disqualifyingPatterns = [
 ];
 
 const statefulTestHelperImportPattern =
-  /\bfrom\s+["']([^"']*(?:test-support|\.harness)(?:\.js|\.ts)?)["']/gu;
+  /\bfrom\s+["']([^"']*(?:test-support|\.harness|message-action-runner\.test-helpers)(?:\.js|\.ts)?)["']/gu;
 const statefulTestHelperByKey = new Map();
 
 function importsStatefulTestHelper(cwd, file, source) {

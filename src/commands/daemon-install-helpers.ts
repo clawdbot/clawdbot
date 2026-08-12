@@ -35,7 +35,7 @@ import {
   normalizeEnvVarKey,
 } from "../infra/host-env-security.js";
 import {
-  loadPluginManifestRegistry,
+  loadPluginManifestRegistryCore,
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
 import {
@@ -300,7 +300,7 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
     }
     const execProvider = isPluginIntegrationSecretProviderConfig(provider)
       ? (() => {
-          manifestRegistry ??= loadPluginManifestRegistry({
+          manifestRegistry ??= loadPluginManifestRegistryCore({
             config: params.config,
             env: params.env,
           });
@@ -756,7 +756,6 @@ export async function buildGatewayInstallPlan(params: {
   const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
     port: params.port,
     dev: devMode,
-    runtime: params.runtime,
     nodePath,
     wrapperPath,
   });

@@ -2,7 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { loadBundledCapabilityRuntimeRegistry } from "../bundled-capability-runtime.js";
 import { discoverOpenClawPlugins } from "../discovery.js";
-import { loadPluginManifestRegistry } from "../manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "../manifest-registry.js";
 import { resolveBundledExplicitProviderContractsFromPublicArtifacts } from "../provider-contract-public-artifacts.js";
 import type { ProviderPlugin, WebFetchProviderPlugin, WebSearchProviderPlugin } from "../types.js";
 import { resolveBundledExplicitWebSearchProvidersFromPublicArtifacts } from "../web-provider-public-artifacts.explicit.js";
@@ -74,7 +74,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       toolNames: [...entry.toolNames],
     }));
   }
-  return loadPluginManifestRegistry({})
+  return loadPluginManifestRegistryCore({})
     .plugins.filter(
       (plugin) =>
         plugin.origin === "bundled" &&

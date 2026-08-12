@@ -19,6 +19,7 @@ import {
   sessionsListResponse,
   trimmedTextContents,
   uiProofArtifactDir,
+  waitForConfirmModal,
   waitForPatch,
 } from "./session-management.test-support.ts";
 
@@ -218,9 +219,10 @@ suite.define(() => {
       },
       sessionKey: "agent:main:main",
     });
-    const dialogs: string[] = [];
+    // Control UI confirms in-app; a native dialog here would be a regression.
+    const nativeDialogs: string[] = [];
     page.on("dialog", (dialog) => {
-      dialogs.push(dialog.message());
+      nativeDialogs.push(dialog.message());
       void dialog.dismiss();
     });
 
@@ -265,7 +267,8 @@ suite.define(() => {
           .toBeLessThanOrEqual(0);
       };
       const hiddenActionCounts = async () => ({
-        dialogs: dialogs.length,
+        confirms: await page.locator("openclaw-modal-dialog .exec-approval-actions").count(),
+        nativeDialogs: nativeDialogs.length,
         patches: (await gateway.getRequests("sessions.patch")).length,
       });
       const expectHiddenShortcutsInert = async (
@@ -673,7 +676,7 @@ suite.define(() => {
     }
   });
 
-  it("pins a session dropped into the interleaved sidebar zone", async () => {
+  it("pins a session dropped below an existing row in the Pinned group", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -720,10 +723,19 @@ suite.define(() => {
       await expect
         .poll(() => trimmedTextContents(pinnedEntry.locator(".sidebar-recent-session__name")))
         .toEqual(["Already pinned"]);
+      await expect.poll(() => page.locator(".sidebar-nav__head--pinned").count()).toBe(1);
       await captureUiProof(page, "sidebar-session-before-pinned-drop.png");
+      const pinnedBox = await pinnedEntry.boundingBox();
+      if (!pinnedBox) {
+        throw new Error("expected the pinned row to be laid out");
+      }
+      // The drop slot is decided by which half of the row the pointer is in, so
+      // aim below its midpoint instead of the default centre landing on the edge.
       await researchGroup
         .locator('.sidebar-recent-session[data-session-key="agent:main:candidate"]')
-        .dragTo(pinnedEntry);
+        .dragTo(pinnedEntry, {
+          targetPosition: { x: pinnedBox.width / 2, y: pinnedBox.height - 2 },
+        });
 
       const pinPatch = await waitForPatch(
         gateway,
@@ -981,6 +993,55 @@ suite.define(() => {
       await expect.poll(() => actionPointerEvents(menu)).toBe("auto");
       await menu.click();
       await page.getByRole("menuitem", { name: "Archive session" }).waitFor({ state: "visible" });
+    } finally {
+      await context.close();
+    }
+  });
+  it("deletes a sidebar session through the in-app confirm", async () => {
+    const key = "agent:main:research";
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    // Playwright auto-dismisses native dialogs, which is exactly how a
+    // bridge-less WebView behaves. Deleting must not depend on one.
+    const nativeDialogs: string[] = [];
+    page.on("dialog", (dialog) => {
+      nativeDialogs.push(dialog.message());
+      void dialog.dismiss();
+    });
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.delete": { ok: true, deleted: true },
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(key, "Research notes", Date.parse("2026-07-01T15:00:00.000Z")),
+        ]),
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
+      await row.waitFor({ state: "visible", timeout: 10_000 });
+      await row.hover();
+      await row.getByRole("button", { name: "Open session menu" }).click();
+      await page
+        .locator("openclaw-session-menu")
+        .getByRole("menuitem", { name: "Delete…" })
+        .click();
+
+      const confirmModal = await waitForConfirmModal(page);
+      await captureUiProof(page, "sidebar-delete-session-confirm.png");
+      await confirmModal.getByRole("button", { name: "Delete", exact: true }).click();
+
+      await expect(gateway.waitForRequest("sessions.delete")).resolves.toMatchObject({
+        params: { deleteTranscript: true, key },
+      });
+      expect(nativeDialogs).toEqual([]);
     } finally {
       await context.close();
     }

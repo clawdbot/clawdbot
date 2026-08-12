@@ -31,7 +31,7 @@ import {
 } from "./model-ref-shared.js";
 import { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
 import {
-  resolveAllowedModelRef as resolveAllowedModelRefInternal,
+  resolveAllowedModelRefCore as resolveAllowedModelRefInternal,
   resolveConfiguredModelFallbacks,
 } from "./model-selection-resolve.js";
 import {
@@ -43,7 +43,6 @@ import {
   inferUniqueProviderFromConfiguredModels,
   normalizeModelSelection,
   resolveBareModelDefaultProvider,
-  resolveAllowlistModelKey as resolveAllowlistModelKeyFromShared,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
   resolveModelAliasFromPair,
@@ -208,15 +207,6 @@ export function normalizeStoredOverrideModel(params: {
       ? modelOverride.slice(providerOverride.length + 1).trim() || modelOverride
       : modelOverride,
   };
-}
-
-export function resolveAllowlistModelKey(
-  raw: string,
-  defaultProvider: string,
-  cfg?: OpenClawConfig,
-  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"],
-): string | null {
-  return resolveAllowlistModelKeyFromShared({ cfg, raw, defaultProvider, manifestPlugins });
 }
 
 export async function canonicalizeCaseOnlyCatalogModelRef(params: {

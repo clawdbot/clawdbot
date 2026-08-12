@@ -1,6 +1,34 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { readDraftCloudProfiles } from "./discovery.ts";
+import { readDraftCloudProfiles, readDraftNodes } from "./discovery.ts";
+
+describe("readDraftNodes", () => {
+  it("ignores non-record array entries without throwing", () => {
+    expect(
+      readDraftNodes([
+        null,
+        undefined,
+        42,
+        "node",
+        [],
+        [[{ nodeId: "nested", connected: true, commands: ["system.run"] }]],
+        { nodeId: " valid ", connected: true, commands: ["system.run", "fs.listDir"] },
+      ]),
+    ).toEqual([
+      {
+        nodeId: "valid",
+        displayName: "valid",
+        platform: undefined,
+        deviceFamily: undefined,
+        modelIdentifier: undefined,
+        remoteIp: undefined,
+        connected: true,
+        canExec: true,
+        canBrowse: true,
+      },
+    ]);
+  });
+});
 
 describe("readDraftCloudProfiles", () => {
   it("keeps closed profile summaries in stable order", () => {

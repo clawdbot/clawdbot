@@ -335,14 +335,15 @@ describe("oversized multimodal chat history", () => {
   });
 });
 
-describe("private transcript metadata projection", () => {
-  it("keeps visible text while omitting oversized upstream prompt metadata", () => {
+describe("transcript metadata projection", () => {
+  it("keeps display metadata while omitting oversized upstream prompt metadata", () => {
     const message = {
       role: "user",
       content: "Keep this visible user message.",
       __openclaw: {
         id: "message-1",
         mirrorIdentity: "turn-1:prompt",
+        replyToId: "message-0",
         upstreamUserText: "private decorated prompt ".repeat(12_000),
       },
     };
@@ -354,6 +355,7 @@ describe("private transcript metadata projection", () => {
           __openclaw: {
             id: "message-1",
             mirrorIdentity: "turn-1:prompt",
+            replyToId: "message-0",
           },
         },
       ]);

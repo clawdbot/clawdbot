@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import {
   claimExecApprovalFollowupRuntimeHandoff,
@@ -436,6 +437,18 @@ export function startAgentRunExecution(params: {
           forceRestartSafeTools: params.request.forceRestartSafeTools,
           forceCodeModeTools: params.request.forceCodeModeTools,
           ...(executionIdentityAdmission ? { executionIdentityAdmission } : {}),
+          operationalRunInstance: prepared.operationalRunInstance,
+          onAdmittedRunContext: (admittedRunContext) => {
+            const authority = getAdmittedRunDelegatedAuthority(admittedRunContext);
+            if (!authority) {
+              throw new Error("agent run delegated authority was not admitted");
+            }
+            // Sessionless runs intentionally have no abort-map owner. Their
+            // prepared admission retains authority until agentCommand closes it.
+            if (prepared.activeRunAbort.registered) {
+              prepared.activeRunAbort.bindAgentRunDelegatedAuthority(authority);
+            }
+          },
           internalDeliveryMediaUrls: params.client?.internal?.internalDeliveryMediaUrls,
           internalDeliverySuppressText: params.client?.internal?.internalDeliverySuppressText,
           suppressPromptPersistence:
@@ -480,6 +493,11 @@ export function startAgentRunExecution(params: {
             ? { mainRestartRecoveryOwnerLease: params.mainRestartRecoveryOwnerLease }
             : {}),
           ...(params.isRestartRecoveryResumeRun ? { mainRestartRecoveryAdmitted: true } : {}),
+          ...(params.request.internalExecutionIdentityRecoveryAttempt !== undefined
+            ? {
+                mainRestartRecoveryAttempt: params.request.internalExecutionIdentityRecoveryAttempt,
+              }
+            : {}),
           allowModelOverride: prepared.effectiveAllowModelOverride,
         },
         runId: params.runId,

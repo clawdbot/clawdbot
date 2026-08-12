@@ -8,6 +8,7 @@ import {
   SESSION_LIST_DEFAULTS,
   WORKSPACE,
   captureProjectUiProof,
+  captureUiProof,
   captureUiProofEnabled,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
@@ -22,6 +23,46 @@ import {
 const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
+  it("keeps the pre-creation draft on the composer surface", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Main" },
+              name: "Main",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "sessions.list": createdSessionListResult("agent:main:existing"),
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new?agent=main`);
+      await page.getByRole("heading", { name: "Main" }).waitFor();
+      await page.locator(".new-session-page__message").waitFor();
+      await expect.poll(() => page.locator(".sidebar-recent-session--draft").count()).toBe(0);
+      await captureUiProof(page, "draft-row-after-light.png");
+      await page.evaluate(() => document.documentElement.setAttribute("data-theme-mode", "dark"));
+      await captureUiProof(page, "draft-row-after-dark.png");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("drafts a session with a browsed folder and creates it on first message", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",

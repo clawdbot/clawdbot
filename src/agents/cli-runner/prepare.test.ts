@@ -27,6 +27,10 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import {
+  createTestAdmittedRunContext,
+  createTestPreparedRunAdmission,
+} from "../admitted-run-context.test-support.js";
 import { readExternalCliBootstrapCredential as readExternalCliBootstrapCredentialImpl } from "../auth-profiles/external-cli-sync.js";
 import { resolveApiKeyForProfile as resolveApiKeyForProfileImpl } from "../auth-profiles/oauth.js";
 import {
@@ -372,6 +376,7 @@ describe("prepareCliRunContext", () => {
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
       mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
+      bindMcpLoopbackClientGrantAdmission: vi.fn(() => true),
       revokeMcpLoopbackClientGrant: vi.fn(() => true),
       resolveMcpLoopbackPolicyTools: vi.fn(() => ({ agentId: "main", tools: [] })),
       resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
@@ -2785,6 +2790,38 @@ describe("prepareCliRunContext", () => {
     expect(context.preparedBackend.backend.args).toEqual(["--print"]);
   });
 
+  it("binds the exact late prepared admission to the CLI MCP grant", async () => {
+    const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+      port: 31783,
+      ownerToken: "loopback-owner-token",
+      nonOwnerToken: "loopback-non-owner-token",
+    }));
+    const bindMcpLoopbackClientGrantAdmission = vi.fn(() => true);
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime,
+      ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
+      createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
+      mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
+      bindMcpLoopbackClientGrantAdmission,
+    });
+    const preparedRunAdmission = createTestPreparedRunAdmission("run-prepared-mcp");
+
+    const context = await fixture.prepare({
+      runId: "run-prepared-mcp",
+      preparedRunAdmission,
+      config: createCliBackendConfig({ bundleMcp: true }),
+    });
+
+    expect(context.params.admittedRunContext.operationalRunInstance).toBe(
+      preparedRunAdmission.operationalRunInstance,
+    );
+    expect(bindMcpLoopbackClientGrantAdmission).toHaveBeenCalledExactlyOnceWith({
+      token: "loopback-token",
+      runtimeOwnerToken: "loopback-owner-token",
+      admittedRunContext: context.params.admittedRunContext,
+    });
+  });
+
   it("uses loopback-scoped tools when building bundled MCP CLI prompts", async () => {
     registerTestMemoryPromptBuilder(({ availableTools }) =>
       availableTools.has("memory_search")
@@ -3128,6 +3165,7 @@ describe("prepareCliRunContext", () => {
         spawnedBy: "agent:main:telegram:group:parent",
       },
       runtimeOwnerToken: "loopback-owner-token",
+      admittedRunContext: context.params.admittedRunContext,
       toolAuth: {
         agentDir: expect.any(String),
         store: expect.objectContaining({ version: 1, profiles: {} }),
@@ -3899,6 +3937,7 @@ describe("prepareCliRunContext", () => {
     });
 
     const params: RunCliAgentParams & { systemAgentTool: SystemAgentToolOptions } = {
+      admittedRunContext: createTestAdmittedRunContext("run-test-openclaw-mcp"),
       sessionId: "session-test",
       sessionFile,
       workspaceDir: dir,
@@ -4065,10 +4104,11 @@ describe("prepareCliRunContext", () => {
   });
 
   it("arms raw-transcript reseed for a missing claude-cli transcript so prior conversation is redelivered", async () => {
+    const recoveredAt = "2020-01-02T03:04:05.000Z";
     fixture.appendTranscript({
       id: "msg-1",
       parentId: null,
-      timestamp: new Date(1).toISOString(),
+      timestamp: recoveredAt,
       message: {
         role: "user",
         content: "prior claude-cli ask",
@@ -4099,8 +4139,16 @@ describe("prepareCliRunContext", () => {
       mode: "invalidate",
       invalidatedReason: "missing-transcript",
     });
-    expect(context.openClawHistoryPrompt).toContain("prior claude-cli ask");
-    expect(context.openClawHistoryPrompt).toContain("latest ask");
+    expect(context.openClawHistoryPrompt).toContain(`[${recoveredAt}] User: prior claude-cli ask`);
+    expect(context.openClawHistoryPrompt).not.toContain(
+      "[1970-01-01T00:00:00.001Z] User: prior claude-cli ask",
+    );
+    expect(context.openClawHistoryPrompt).toContain(
+      "Recovered history may be stale; verify current and time-sensitive facts before acting.",
+    );
+    expect(context.openClawHistoryPrompt).toContain(
+      "<next_user_message>\nlatest ask\n</next_user_message>",
+    );
   });
 
   it("prepares node-placed Claude resumes without Gateway MCP, skills, or transcript checks", async () => {

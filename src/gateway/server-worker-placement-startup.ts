@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { installSessionPlacementAdmissionProvider } from "../agents/session-placement-admission.js";
 import { clearSessionQueues } from "../auto-reply/reply/queue/cleanup.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -197,7 +198,8 @@ export function coordinateWorkerPlacementDispatch(
         if (
           inFlight.request.sessionKey !== request.sessionKey ||
           inFlight.request.agentId !== request.agentId ||
-          inFlight.request.profileId !== request.profileId
+          inFlight.request.profileId !== request.profileId ||
+          !isDeepStrictEqual(inFlight.request.inheritedProfile, request.inheritedProfile)
         ) {
           throw new Error(`Session ${request.sessionKey} is already dispatching another request`);
         }

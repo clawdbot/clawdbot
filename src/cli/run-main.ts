@@ -53,9 +53,9 @@ import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 import { formatCliCommandSuggestions } from "./program/command-suggestions.js";
 import {
   getCoreCliCommandDescriptors,
-  getCoreCliCommandNames,
+  getCoreCliCommandNamesCore,
 } from "./program/core-command-descriptors.js";
-import { getSubCliEntries } from "./program/subcli-descriptors.js";
+import { getSubCliEntriesCore } from "./program/subcli-descriptors.js";
 import {
   resolveMissingPluginCommandMessage,
   rewriteUpdateFlagArgv,
@@ -68,7 +68,7 @@ import {
 import { registerSignalExitBarrier, waitForSignalExitBarriers } from "./signal-exit-barrier.js";
 import {
   configureGatewayStartupTraceConsoleFormatting,
-  createGatewayStartupTrace,
+  createGatewayDispatchStartupTrace,
 } from "./startup-trace.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
@@ -161,7 +161,7 @@ function isGatewayRunInvocationArgv(argv: string[]): boolean {
 
 async function tryRunGatewayRunFastPath(
   argv: string[],
-  startupTrace: ReturnType<typeof createGatewayStartupTrace>,
+  startupTrace: ReturnType<typeof createGatewayDispatchStartupTrace>,
 ): Promise<boolean> {
   if (!isGatewayRunFastPathArgv(argv)) {
     return false;
@@ -274,14 +274,22 @@ async function closeCliResources(): Promise<void> {
       }
     },
     async () => {
-      const { stopManagedProviderLocalServices } =
-        await import("../agents/provider-local-service.js");
-      stopManagedProviderLocalServices();
+      const { hasManagedProviderLocalServices } =
+        await import("../agents/provider-runtime-lifecycle.js");
+      if (hasManagedProviderLocalServices()) {
+        const { stopManagedProviderLocalServices } =
+          await import("../agents/provider-local-service.js");
+        stopManagedProviderLocalServices();
+      }
     },
     async () => {
-      const { closeProviderTransportDispatcherPool } =
-        await import("../agents/provider-transport-dispatcher-pool.js");
-      await closeProviderTransportDispatcherPool();
+      const { hasProviderTransportDispatcherPool } =
+        await import("../agents/provider-runtime-lifecycle.js");
+      if (hasProviderTransportDispatcherPool()) {
+        const { closeProviderTransportDispatcherPool } =
+          await import("../agents/provider-transport-dispatcher-pool.js");
+        await closeProviderTransportDispatcherPool();
+      }
     },
     async () => {
       const { getActiveMcpLoopbackRuntime } =
@@ -294,8 +302,9 @@ async function closeCliResources(): Promise<void> {
     async () => {
       const { hasMemoryRuntime } = await import("../plugins/memory-state.js");
       if (hasMemoryRuntime()) {
-        const { closeActiveMemorySearchManagers } = await import("../plugins/memory-runtime.js");
-        await closeActiveMemorySearchManagers();
+        const { closeActiveMemorySearchManagersCore } =
+          await import("../plugins/memory-runtime.js");
+        await closeActiveMemorySearchManagersCore();
       }
     },
   ];
@@ -856,8 +865,8 @@ function shouldBootstrapCliProxyBeforeFastPath(env: NodeJS.ProcessEnv = process.
 
 function isKnownBuiltInCommandRoot(primary: string): boolean {
   return (
-    getCoreCliCommandNames().includes(primary) ||
-    getSubCliEntries().some((entry) => entry.name === primary)
+    getCoreCliCommandNamesCore().includes(primary) ||
+    getSubCliEntriesCore().some((entry) => entry.name === primary)
   );
 }
 
@@ -875,7 +884,7 @@ function resolveBuiltInMachineOutput(argv: string[]): boolean {
   if (!primary) {
     return false;
   }
-  const descriptor = [...getCoreCliCommandDescriptors(), ...getSubCliEntries()].find(
+  const descriptor = [...getCoreCliCommandDescriptors(), ...getSubCliEntriesCore()].find(
     (entry) => entry.name === primary,
   );
   return descriptor ? resolvesMachineOutput(descriptor, argv) : false;
@@ -1016,7 +1025,7 @@ async function resolveUnownedCliPrimaryMessage(params: {
 }
 
 async function bootstrapCliProxyCaptureAndDispatcher(
-  startupTrace: ReturnType<typeof createGatewayStartupTrace>,
+  startupTrace: ReturnType<typeof createGatewayDispatchStartupTrace>,
   options: { ensureDispatcher?: boolean } = {},
 ): Promise<void> {
   const [
@@ -1038,7 +1047,7 @@ async function bootstrapCliProxyCaptureAndDispatcher(
 export async function runCli(
   argv: string[] = process.argv,
   options: {
-    additionalStartupTrace?: ReturnType<typeof createGatewayStartupTrace>;
+    additionalStartupTrace?: ReturnType<typeof createGatewayDispatchStartupTrace>;
     retainConsoleRoutingUntilProcessExit?: boolean;
   } = {},
 ) {
@@ -1058,11 +1067,11 @@ export async function runCli(
 async function runCliWithPreparedOutputMode(
   originalArgv: string[],
   options: {
-    additionalStartupTrace?: ReturnType<typeof createGatewayStartupTrace>;
+    additionalStartupTrace?: ReturnType<typeof createGatewayDispatchStartupTrace>;
     builtInMachineOutput: boolean;
   },
 ) {
-  const startupTrace = createGatewayStartupTrace(originalArgv, "cli.main");
+  const startupTrace = createGatewayDispatchStartupTrace(originalArgv, "cli.main");
   const earlyProfile = parseCliProfileArgs(originalArgv);
   if (earlyProfile.ok && earlyProfile.profile) {
     applyCliProfileEnv({ profile: earlyProfile.profile });
@@ -1213,7 +1222,7 @@ async function runCliWithPreparedOutputMode(
     return await bestEffortConfigPromise;
   };
   const startupTraces = [startupTrace, options.additionalStartupTrace].filter(
-    (trace): trace is ReturnType<typeof createGatewayStartupTrace> => Boolean(trace),
+    (trace): trace is ReturnType<typeof createGatewayDispatchStartupTrace> => Boolean(trace),
   );
   if (
     !isDatabaseInvocation &&

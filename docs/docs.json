@@ -1086,6 +1086,7 @@
               {
                 "group": "Maintenance",
                 "pages": [
+                  "install/backups",
                   "install/updating",
                   {
                     "group": "Migrating",

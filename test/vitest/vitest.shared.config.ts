@@ -483,6 +483,16 @@ export const sharedVitestConfig = {
         ),
       },
       {
+        find: "@openclaw/normalization-core/promise-like",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "promise-like.ts",
+        ),
+      },
+      {
         find: "@openclaw/normalization-core/record-coerce",
         replacement: path.join(
           repoRoot,
@@ -536,6 +546,7 @@ export const sharedVitestConfig = {
       },
       sourcePackageAlias("markdown-core", "code-spans"),
       sourcePackageAlias("markdown-core", "fences"),
+      sourcePackageAlias("media-core", "attachment-classify"),
       sourcePackageAlias("media-core", "base64"),
       sourcePackageAlias("media-core", "constants"),
       sourcePackageAlias("media-core", "content-length"),

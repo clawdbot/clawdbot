@@ -158,8 +158,7 @@ function renderSessionSummary(
     },
     {
       labelKey: "usage.details.duration",
-      value:
-        formatDurationCompact(usage.durationMs, { spaced: true }) ?? t("usage.common.emptyValue"),
+      value: formatDurationCompact(usage.durationMs) ?? t("usage.common.emptyValue"),
       meta: html`${formatTs(usage.firstActivity)} → ${formatTs(usage.lastActivity)}`,
     },
   ];

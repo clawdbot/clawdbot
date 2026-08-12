@@ -16,7 +16,7 @@ import { isRecord } from "../utils.js";
 import {
   decodeHeaderEnvPlaceholder,
   normalizeBundleMcpServerConfig,
-  normalizeStringRecord,
+  normalizeMcpStringRecord,
 } from "./bundle-mcp-adapter.js";
 import { prepareOwnedBundleMcpDataDirs } from "./bundle-mcp-config.js";
 import type {
@@ -106,7 +106,7 @@ export function normalizeCodexMcpServerConfig(
   if (defaultToolsApprovalMode) {
     next.default_tools_approval_mode = defaultToolsApprovalMode;
   }
-  const httpHeaders = normalizeStringRecord(server.headers);
+  const httpHeaders = normalizeMcpStringRecord(server.headers);
   if (httpHeaders) {
     const staticHeaders: Record<string, string> = {};
     const envHeaders: Record<string, string> = {};
@@ -170,7 +170,7 @@ function fingerprintCodexMcpServersConfig(config: CodexMcpServersConfig): string
 }
 
 /** Load bundle MCP config for one Codex app-server thread. */
-export function loadCodexBundleMcpThreadConfig(
+export function loadCodexBundleMcpThreadConfigCore(
   params: LoadCodexBundleMcpThreadConfigParams,
 ): CodexBundleMcpThreadConfig {
   const shouldCreateRuntime = shouldCreateBundleMcpRuntimeForAttempt({

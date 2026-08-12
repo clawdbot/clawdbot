@@ -25,18 +25,11 @@ import {
   resolveControlUiLinks,
   resolveLocalControlUiProbeLinks,
   summarizeExistingConfig,
-  testing,
   validateGatewayPasswordInput,
   waitForGatewayReachable,
 } from "./onboard-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-describe("onboard error summaries", () => {
-  it("keeps the bounded first line UTF-16 well-formed", () => {
-    expect(testing.summarizeError(`${"x".repeat(118)}🚀tail\nignored`)).toBe(`${"x".repeat(118)}…`);
-  });
-});
 
 describe("printWizardHeader", () => {
   const withColumns = async (columns: number | undefined, run: () => Promise<void>) => {
@@ -89,7 +82,7 @@ const mocks = vi.hoisted(() => ({
     termination: "exit",
   })),
   pickPrimaryTailnetIPv4: vi.fn<() => string | undefined>(() => undefined),
-  resolveAdvertisedLanHost: vi.fn<() => Promise<string | null>>(async () => null),
+  resolveAdvertisedLanHostCore: vi.fn<() => Promise<string | null>>(async () => null),
   probeGateway: vi.fn(),
   deleteWorkspaceState: vi.fn(),
   prepareWorkspaceStateDeletion: vi.fn((workspaceDir: string) => ({ workspaceDir })),
@@ -116,7 +109,7 @@ vi.mock("../infra/tailnet.js", () => ({
 }));
 
 vi.mock("../infra/advertised-lan-host.js", () => ({
-  resolveAdvertisedLanHost: mocks.resolveAdvertisedLanHost,
+  resolveAdvertisedLanHostCore: mocks.resolveAdvertisedLanHostCore,
 }));
 
 vi.mock("../gateway/probe.js", () => ({
@@ -699,6 +692,14 @@ describe("probeGatewayReachable", () => {
     });
   });
 
+  it("bounds thrown probe errors without splitting UTF-16", async () => {
+    const detail = `${"x".repeat(118)}…`;
+    const params = { url: "ws://127.0.0.1:18789" };
+    mocks.probeGateway.mockRejectedValue(new Error(`${"x".repeat(118)}🚀tail\nignored`));
+    expect(await probeGatewayReachable(params)).toEqual({ ok: false, detail });
+    expect(await probeGatewayConfiguredModel(params)).toEqual({ kind: "unreachable", detail });
+  });
+
   it("forwards a configured TLS fingerprint to the gateway probe", async () => {
     mocks.probeGateway.mockResolvedValueOnce({
       ok: true,
@@ -1068,7 +1069,7 @@ describe("resolveControlUiLinks", () => {
   });
 
   it("uses route-aware advertised LAN host for display links", async () => {
-    mocks.resolveAdvertisedLanHost.mockResolvedValueOnce("10.211.55.3");
+    mocks.resolveAdvertisedLanHostCore.mockResolvedValueOnce("10.211.55.3");
 
     const links = await resolveAdvertisedControlUiLinks({
       port: 18789,
@@ -1087,7 +1088,7 @@ describe("resolveControlUiLinks", () => {
 
     expect(links.httpUrl).toBe("http://127.0.0.1:18789/");
     expect(links.wsUrl).toBe("ws://127.0.0.1:18789");
-    expect(mocks.resolveAdvertisedLanHost).not.toHaveBeenCalled();
+    expect(mocks.resolveAdvertisedLanHostCore).not.toHaveBeenCalled();
   });
 });
 

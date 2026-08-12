@@ -108,6 +108,8 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
       return (
         previous.kind === "notice" &&
         previous.text === next.text &&
+        previous.label === next.label &&
+        previous.startsTurn === next.startsTurn &&
         previous.timestamp === next.timestamp
       );
     case "divider":

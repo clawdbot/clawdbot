@@ -1,5 +1,6 @@
 import { type CallToolResult, ContentBlockSchema } from "@modelcontextprotocol/sdk/types.js";
-import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { BoardMcpAppDescriptor } from "../../packages/gateway-protocol/src/index.js";
 import { getOrCreateSessionMcpRuntime } from "../agents/agent-bundle-mcp-runtime.js";
 import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
@@ -45,18 +46,13 @@ type TranscriptResultRead =
   | { kind: "restorable"; value: TranscriptResult }
   | { kind: "unavailable" };
 
-function readString(record: Record<string, unknown> | undefined, key: string): string | undefined {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function readDescriptor(value: unknown): McpAppDescriptor | undefined {
-  const record = asRecord(value);
-  const viewId = readString(record, "viewId");
-  const serverName = readString(record, "serverName");
-  const toolName = readString(record, "toolName");
-  const uiResourceUri = readString(record, "uiResourceUri");
-  const toolCallId = readString(record, "toolCallId");
+  const record = asOptionalRecord(value);
+  const viewId = normalizeOptionalString(record?.viewId);
+  const serverName = normalizeOptionalString(record?.serverName);
+  const toolName = normalizeOptionalString(record?.toolName);
+  const uiResourceUri = normalizeOptionalString(record?.uiResourceUri);
+  const toolCallId = normalizeOptionalString(record?.toolCallId);
   const rawResultMetaState = record?.resultMetaState;
   const resultMetaState = rawResultMetaState === "unavailable" ? rawResultMetaState : undefined;
   if (
@@ -89,22 +85,27 @@ function readToolInputFromMessage(
   toolCallId: string,
   modelToolName: string,
 ): { found: true; input: unknown } | undefined {
-  const message = asRecord(value);
-  if (readString(message, "role")?.toLowerCase() !== "assistant") {
+  const message = asOptionalRecord(value);
+  if (normalizeOptionalString(message?.role)?.toLowerCase() !== "assistant") {
     return undefined;
   }
   const content = Array.isArray(message?.content) ? message.content : [];
   for (const blockValue of content) {
-    const block = asRecord(blockValue);
-    if ((readString(block, "id") ?? readString(block, "toolCallId")) !== toolCallId) {
+    const block = asOptionalRecord(blockValue);
+    if (
+      (normalizeOptionalString(block?.id) ?? normalizeOptionalString(block?.toolCallId)) !==
+      toolCallId
+    ) {
       continue;
     }
-    const type = readString(block, "type")?.toLowerCase();
+    const type = normalizeOptionalString(block?.type)?.toLowerCase();
     if (type !== "toolcall" && type !== "tool_call" && type !== "tooluse" && type !== "tool_use") {
       continue;
     }
     const blockToolName =
-      readString(block, "name") ?? readString(block, "toolName") ?? readString(block, "tool_name");
+      normalizeOptionalString(block?.name) ??
+      normalizeOptionalString(block?.toolName) ??
+      normalizeOptionalString(block?.tool_name);
     if (blockToolName !== modelToolName) {
       continue;
     }
@@ -134,14 +135,14 @@ function matchesLookup(
   lookup: TranscriptLookup,
 ): boolean {
   if ("viewId" in lookup) {
-    return readString(rawDescriptor, "viewId") === lookup.viewId;
+    return normalizeOptionalString(rawDescriptor?.viewId) === lookup.viewId;
   }
   const descriptor = lookup.descriptor;
   return (
-    readString(rawDescriptor, "serverName") === descriptor.serverName &&
-    readString(rawDescriptor, "toolName") === descriptor.toolName &&
-    readString(rawDescriptor, "uiResourceUri") === descriptor.uiResourceUri &&
-    readString(rawDescriptor, "toolCallId") === descriptor.toolCallId
+    normalizeOptionalString(rawDescriptor?.serverName) === descriptor.serverName &&
+    normalizeOptionalString(rawDescriptor?.toolName) === descriptor.toolName &&
+    normalizeOptionalString(rawDescriptor?.uiResourceUri) === descriptor.uiResourceUri &&
+    normalizeOptionalString(rawDescriptor?.toolCallId) === descriptor.toolCallId
   );
 }
 
@@ -149,28 +150,29 @@ function readTranscriptResult(
   value: unknown,
   lookup: TranscriptLookup,
 ): TranscriptResultRead | undefined {
-  const message = asRecord(value);
-  if (!message || readString(message, "role")?.toLowerCase() !== "toolresult") {
+  const message = asOptionalRecord(value);
+  if (!message || normalizeOptionalString(message.role)?.toLowerCase() !== "toolresult") {
     return undefined;
   }
-  const details = asRecord(message.details);
+  const details = asOptionalRecord(message.details);
   if (!details) {
     return undefined;
   }
-  const preview = asRecord(details.mcpAppPreview);
-  const rawDescriptor = asRecord(preview?.mcpApp);
+  const preview = asOptionalRecord(details.mcpAppPreview);
+  const rawDescriptor = asOptionalRecord(preview?.mcpApp);
   if (!matchesLookup(rawDescriptor, lookup)) {
     return undefined;
   }
   const descriptor = readDescriptor(rawDescriptor);
-  const modelToolName = readString(message, "toolName") ?? readString(message, "tool_name");
+  const modelToolName =
+    normalizeOptionalString(message.toolName) ?? normalizeOptionalString(message.tool_name);
   if (!descriptor || !modelToolName) {
     return { kind: "unavailable" };
   }
   if (
-    readString(message, "toolCallId") !== descriptor.toolCallId ||
-    readString(details, "mcpServer") !== descriptor.serverName ||
-    readString(details, "mcpTool") !== descriptor.toolName ||
+    normalizeOptionalString(message.toolCallId) !== descriptor.toolCallId ||
+    normalizeOptionalString(details.mcpServer) !== descriptor.serverName ||
+    normalizeOptionalString(details.mcpTool) !== descriptor.toolName ||
     descriptor.resultMetaState === "unavailable"
   ) {
     return { kind: "unavailable" };

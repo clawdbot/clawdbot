@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   appendTranscriptMessage,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type {
   TranscriptTurnAdmission,
@@ -74,7 +74,6 @@ function createPayload(params: {
     boundary,
     isHeartbeat: false,
     messages: [],
-    prePromptMessageCount: params.sequence,
   };
 }
 
@@ -147,7 +146,7 @@ describe("context-engine turn outbox", () => {
       sessionKey: "agent:main:recovered-turn",
       storePath: path.join(stateDir, "sessions.json"),
     };
-    await upsertSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const admitted = await appendTranscriptMessage(target, {
       message: { role: "user", content: "first" },
       now: 1_000,
@@ -205,7 +204,9 @@ describe("context-engine turn outbox", () => {
       message: currentMessage,
       target: async () => undefined,
     });
-    const commitTurn = vi.fn(async () => ({ status: "committed" as const }));
+    const commitTurn = vi.fn<NonNullable<ContextEngine["commitTurn"]>>(async () => ({
+      status: "committed",
+    }));
     const engine = {
       info: {
         id: "test",
@@ -251,12 +252,12 @@ describe("context-engine turn outbox", () => {
           { role: "user", content: "first" },
           { role: "assistant", content: "first answer" },
         ],
-        prePromptMessageCount: 0,
       }),
     );
     expect(
       database.db.prepare("SELECT advancement_key FROM context_engine_turn_outbox").all(),
     ).toHaveLength(0);
+    expect(commitTurn.mock.calls[0]?.[0]).not.toHaveProperty("prePromptMessageCount");
 
     recorder.markRuntimePersisted(currentMessage, currentAdmission);
     const queued = database.db
@@ -283,7 +284,7 @@ describe("context-engine turn outbox", () => {
       sessionKey: "agent:main:unaccepted-turn",
       storePath: path.join(stateDir, "sessions.json"),
     };
-    await upsertSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const admitted = await appendTranscriptMessage(target, {
       message: { role: "user", content: "first" },
       now: 1_000,

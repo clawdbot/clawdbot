@@ -544,6 +544,34 @@ describe("Claude session catalog", () => {
     );
   });
 
+  it("preserves date-first parsing for numeric-looking index timestamps", async () => {
+    const home = await createHome();
+    const sessionId = "numeric-looking-timestamps";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          created: "0",
+          modified: "2026",
+          isSidechain: false,
+        },
+      ],
+      transcripts: { [sessionId]: [message(sessionId, "user", "timestamp contract", 1)] },
+    });
+
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [
+        {
+          threadId: sessionId,
+          createdAt: Date.parse("0"),
+          updatedAt: Date.parse("2026"),
+          recencyAt: Date.parse("2026"),
+        },
+      ],
+    });
+  });
+
   it("adopts a local CLI row with a locked one-shot fork binding", async () => {
     const home = await createHome();
     process.env.HOME = home;
@@ -2254,7 +2282,11 @@ describe("Claude session catalog", () => {
     const binDir = path.join(home, "bin");
     await fs.mkdir(binDir);
     await fs.writeFile(path.join(binDir, "claude"), "#!/bin/sh\n");
-    await fs.chmod(path.join(binDir, "claude"), 0o755);
+    if (process.platform === "win32") {
+      await fs.writeFile(path.join(binDir, "claude.cmd"), "@echo off\r\n");
+    } else {
+      await fs.chmod(path.join(binDir, "claude"), 0o755);
+    }
     expect(
       commands[2]?.isAvailable?.({ config: {}, env: { HOME: home, PATH: binDir } } as never),
     ).toBe(true);
@@ -2288,6 +2320,9 @@ describe("Claude session catalog", () => {
     const binDir = path.join(home, "bin");
     await fs.mkdir(binDir);
     const executable = path.join(binDir, process.platform === "win32" ? "claude.cmd" : "claude");
+    if (process.platform === "win32") {
+      await fs.writeFile(path.join(binDir, "claude"), "#!/bin/sh\n");
+    }
     await fs.writeFile(executable, process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\n");
     if (process.platform !== "win32") {
       await fs.chmod(executable, 0o755);

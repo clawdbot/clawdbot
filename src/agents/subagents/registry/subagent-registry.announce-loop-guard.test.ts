@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
   callGateway: vi.fn().mockResolvedValue({ status: "ok" }),
   onAgentEventStop: vi.fn(),
   onAgentEvent: vi.fn(),
-  runSubagentAnnounceFlow: vi.fn().mockResolvedValue(false),
+  runSubagentAnnounceFlow: vi.fn().mockResolvedValue("retryable"),
   captureSubagentCompletionReply: vi.fn(),
   loadSubagentRegistryFromSqlite: vi.fn(() => new Map()),
   saveSubagentRegistryChangesToSqlite: vi.fn(),
@@ -37,21 +37,21 @@ vi.mock("../../../config/sessions.js", () => ({
     return match?.[1] ?? "main";
   },
   resolveMainSessionKey: () => "agent:main:main",
-  resolveStorePath: () => "/tmp/test-store",
+  resolveSessionStorePathCore: () => "/tmp/test-store",
   updateSessionStore: mocks.updateSessionStore,
 }));
 
 vi.mock("../../../config/sessions/session-accessor.js", () => {
-  const listSessionEntries = () =>
+  const listSessionEntriesCore = () =>
     Object.entries(sessionStore).map(([sessionKey, entry]) => ({ sessionKey, entry }));
   const loadSessionEntry = (scope: { sessionKey: keyof typeof sessionStore }) =>
     sessionStore[scope.sessionKey];
   return {
-    listSessionEntries,
-    listSessionEntriesReadOnly: listSessionEntries,
+    listSessionEntriesCore,
+    listSessionEntriesReadOnly: listSessionEntriesCore,
     loadSessionEntry,
     loadSessionEntryReadOnly: loadSessionEntry,
-    patchSessionEntry: async () => null,
+    patchSessionEntryCore: async () => null,
   };
 });
 
@@ -126,7 +126,7 @@ describe("announce loop guard (#18264)", () => {
     mocks.onAgentEvent.mockReturnValue(mocks.onAgentEventStop);
     mocks.resolveAgentTimeoutMs.mockClear();
     mocks.runSubagentAnnounceFlow.mockReset();
-    mocks.runSubagentAnnounceFlow.mockResolvedValue(false);
+    mocks.runSubagentAnnounceFlow.mockResolvedValue("retryable");
     mocks.saveSubagentRegistryChangesToSqlite.mockClear();
     mocks.saveSubagentRegistryToSqlite.mockClear();
     mocks.updateSessionStore.mockClear();
@@ -250,7 +250,7 @@ describe("announce loop guard (#18264)", () => {
 
   test("expired completion-message entries are still resumed for announce", async () => {
     mocks.runSubagentAnnounceFlow.mockReset();
-    mocks.runSubagentAnnounceFlow.mockResolvedValueOnce(true);
+    mocks.runSubagentAnnounceFlow.mockResolvedValueOnce("delivered");
     registry.resetSubagentRegistryForTests();
 
     const now = Date.now();

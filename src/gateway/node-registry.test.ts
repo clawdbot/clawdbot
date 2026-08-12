@@ -355,6 +355,43 @@ describe("gateway/node-registry", () => {
     expect(frames).toEqual([]);
   });
 
+  it("does not dispatch when runtime authority closes during pairing resolution", async () => {
+    let resolvePairing!: (state: { identity: string; generation: string }) => void;
+    const resolveCurrentPairingState = vi.fn(
+      () =>
+        new Promise<{ identity: string; generation: string }>((resolve) => {
+          resolvePairing = resolve;
+        }),
+    );
+    const registry = createNodeRegistry({ resolveCurrentPairingState });
+    const frames: string[] = [];
+    registerNodeSession(registry, makeClient("conn-authority", "node-authority", frames), {
+      pairingIdentity: "identity-a",
+      pairingGeneration: "generation-a",
+    });
+    let authorityActive = true;
+
+    const invoke = registry.invoke({
+      nodeId: "node-authority",
+      expectedConnId: "conn-authority",
+      expectedPairingGeneration: "generation-a",
+      command: "system.run",
+      isDispatchAuthorized: () => authorityActive,
+    });
+    await vi.waitFor(() => expect(resolveCurrentPairingState).toHaveBeenCalledOnce());
+    authorityActive = false;
+    resolvePairing({ identity: "identity-a", generation: "generation-a" });
+
+    await expect(invoke).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "APPROVAL_AUTHORITY_CLOSED",
+        message: "runtime authority closed before node dispatch",
+      },
+    });
+    expect(frames).toEqual([]);
+  });
+
   it("revalidates persistent generation ownership for inbound node RPCs", async () => {
     const resolveCurrentPairingState = vi.fn().mockResolvedValue({
       identity: "identity-a",

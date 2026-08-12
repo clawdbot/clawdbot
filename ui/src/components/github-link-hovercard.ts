@@ -5,6 +5,7 @@ import type { ControlUiGitHubPreview } from "../../../src/gateway/control-ui-con
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
+import { parseGitHubItemPath, type GitHubItemTarget } from "./github-link-target.ts";
 
 const GITHUB_HOST = "github.com";
 const OPEN_DELAY_MS = 250;
@@ -14,14 +15,8 @@ const CACHE_LIMIT = 100;
 const VIEWPORT_PADDING = 12;
 const CARD_GAP = 10;
 
-type GitHubLinkKind = "issue" | "pull";
-
-type GitHubLinkTarget = {
+type GitHubLinkTarget = GitHubItemTarget & {
   href: string;
-  kind: GitHubLinkKind;
-  number: number;
-  owner: string;
-  repo: string;
 };
 
 type GitHubPreview = GitHubLinkTarget & ControlUiGitHubPreview;
@@ -46,7 +41,10 @@ function requiredString(record: Record<string, unknown>, key: string): string {
   return value;
 }
 
-function optionalString(record: Record<string, unknown>, key: string): string | undefined {
+function readOptionalGitHubString(
+  record: Record<string, unknown>,
+  key: string,
+): string | undefined {
   const value = record[key];
   return typeof value === "string" && value.trim() ? value : undefined;
 }
@@ -54,15 +52,6 @@ function optionalString(record: Record<string, unknown>, key: string): string | 
 function optionalNumber(record: Record<string, unknown>, key: string): number | undefined {
   const value = record[key];
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function decodePathSegment(value: string): string | null {
-  try {
-    const decoded = decodeURIComponent(value).trim();
-    return decoded && decoded !== "." && decoded !== ".." ? decoded : null;
-  } catch {
-    return null;
-  }
 }
 
 function parseGitHubIssueOrPullRequestLink(href: string): GitHubLinkTarget | null {
@@ -78,19 +67,8 @@ function parseGitHubIssueOrPullRequestLink(href: string): GitHubLinkTarget | nul
   if (url.username || url.password || (url.port && url.port !== "443")) {
     return null;
   }
-  const segments = url.pathname.split("/").filter(Boolean);
-  const owner = decodePathSegment(segments[0] ?? "");
-  const repo = decodePathSegment(segments[1] ?? "");
-  const surface = segments[2];
-  const numberText = segments[3] ?? "";
-  if (!owner || !repo || !/^[1-9]\d{0,9}$/.test(numberText)) {
-    return null;
-  }
-  const kind = surface === "issues" ? "issue" : surface === "pull" ? "pull" : null;
-  if (!kind) {
-    return null;
-  }
-  return { href: url.href, kind, number: Number(numberText), owner, repo };
+  const target = parseGitHubItemPath(url);
+  return target ? { ...target, href: url.href } : null;
 }
 
 export function isGitHubPullRequestLink(href: string): boolean {
@@ -122,19 +100,19 @@ function parsePreviewResponse(target: GitHubLinkTarget, value: unknown): GitHubP
     additions: optionalNumber(value, "additions"),
     avatarDataUrl: safeAvatarDataUrl(value.avatarDataUrl),
     changedFiles: optionalNumber(value, "changedFiles"),
-    closedAt: optionalString(value, "closedAt"),
+    closedAt: readOptionalGitHubString(value, "closedAt"),
     comments: optionalNumber(value, "comments"),
     createdAt: requiredString(value, "createdAt"),
     deletions: optionalNumber(value, "deletions"),
     draft: typeof value.draft === "boolean" ? value.draft : undefined,
     kind: target.kind,
-    login: optionalString(value, "login") ?? "ghost",
-    mergedAt: optionalString(value, "mergedAt"),
+    login: readOptionalGitHubString(value, "login") ?? "ghost",
+    mergedAt: readOptionalGitHubString(value, "mergedAt"),
     number: target.number,
     owner: target.owner,
     repo: target.repo,
     state: requiredString(value, "state"),
-    stateReason: optionalString(value, "stateReason"),
+    stateReason: readOptionalGitHubString(value, "stateReason"),
     title: requiredString(value, "title"),
     updatedAt: requiredString(value, "updatedAt"),
   };

@@ -1,9 +1,10 @@
 // WebSocket message-handler health tests cover post-connect startup-unavailable and health-gated dispatch.
 import type { IncomingMessage } from "node:http";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
+import { prepareSystemAgentRunAdmission } from "../../../agents/admitted-run-context.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -145,6 +146,25 @@ function createHealthSummary(): HealthSummary {
       count: 0,
       recent: [],
     },
+  };
+}
+
+async function createTestAgentRuntimeIdentityLease() {
+  const prepared = prepareSystemAgentRunAdmission(
+    {},
+    "run-1",
+    "ops",
+    "message-handler.post-connect-health.test",
+  );
+  await prepared.admit("embedded");
+  onTestFinished(prepared.close);
+  return {
+    close: prepared.close,
+    token: await mintAgentRuntimeIdentityToken({
+      agentId: "ops",
+      sessionKey: "agent:ops:telegram:direct:alice",
+      operationalRunInstance: prepared.operationalRunInstance,
+    }),
   };
 }
 
@@ -1284,6 +1304,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       refreshHealthSnapshot,
     });
 
+    const identityLease = await createTestAgentRuntimeIdentityLease();
     harness.sendConnect("connect-agent-runtime-token", {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
@@ -1297,10 +1318,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       scopes: ["operator.write"],
       caps: [],
       auth: {
-        agentRuntimeIdentityToken: await mintAgentRuntimeIdentityToken({
-          agentId: "ops",
-          sessionKey: "agent:ops:telegram:direct:alice",
-        }),
+        agentRuntimeIdentityToken: identityLease.token,
       },
     });
 
@@ -1316,6 +1334,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       agentId: "ops",
       sessionKey: "agent:ops:telegram:direct:alice",
     });
+    identityLease.close();
   });
 
   it("rejects agent runtime identity tokens from remote clients", async () => {
@@ -1337,6 +1356,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       close,
     });
 
+    const identityLease = await createTestAgentRuntimeIdentityLease();
     harness.sendConnect("connect-remote-agent-runtime-token", {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
@@ -1351,10 +1371,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       caps: [],
       auth: {
         token: "gateway-token",
-        agentRuntimeIdentityToken: await mintAgentRuntimeIdentityToken({
-          agentId: "ops",
-          sessionKey: "agent:ops:telegram:direct:alice",
-        }),
+        agentRuntimeIdentityToken: identityLease.token,
       },
     });
 
@@ -1365,6 +1382,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       );
     });
     expect(harness.client).toBeNull();
+    identityLease.close();
   });
 
   it("rejects invalid local agent runtime identity tokens", async () => {

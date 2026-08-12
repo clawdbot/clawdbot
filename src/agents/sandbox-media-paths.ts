@@ -10,7 +10,7 @@ import type { OutboundMediaReadFile } from "../media/load-options.js";
 import { resolveMediaReferenceSandboxPath } from "../media/media-reference.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge, SandboxResolvedPath } from "./sandbox/fs-bridge.js";
-import { isPathInsideContainerRoot, normalizeContainerPath } from "./sandbox/path-utils.js";
+import { isPathInsideContainerRoot, normalizeContainerPathCore } from "./sandbox/path-utils.js";
 
 export type SandboxedBridgeMediaPathConfig = {
   root: string;
@@ -70,8 +70,8 @@ export async function resolveSandboxedBridgeMediaPath(params: {
     });
     if (
       !isPathInsideContainerRoot(
-        normalizeContainerPath(workspaceRoot.containerPath),
-        normalizeContainerPath(resolved.containerPath),
+        normalizeContainerPathCore(workspaceRoot.containerPath),
+        normalizeContainerPathCore(resolved.containerPath),
       )
     ) {
       throw new Error(`Sandbox path escapes workspace root: ${resolved.containerPath}`);

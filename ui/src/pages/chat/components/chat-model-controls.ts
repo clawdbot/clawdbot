@@ -142,10 +142,6 @@ function formatPickerModelLabel(label: string): string {
   return match?.[1] ?? label;
 }
 
-function formatPickerThinkingLabel(label: string): string {
-  return label.replace(/^Inherited:\s*/u, "");
-}
-
 export function renderChatModelControls(props: ChatModelControlsProps) {
   const {
     currentOverride,
@@ -157,7 +153,6 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     agentDefaultModel: props.agentDefaultModel,
     chatModelCatalog: props.modelCatalog,
     modelOverrides: props.modelOverrides ?? {},
-    restrictOptionsToCatalog: props.modelCatalogState !== undefined,
     sessionKey: props.sessionKey,
     sessionsResult: props.sessionsResult,
   });
@@ -246,19 +241,16 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
           currentOverride || pickerDefaultLabel,
           props.modelCatalog,
         ));
-  const committedThinkingLabel =
-    thinking.currentOverride === ""
-      ? thinking.defaultLabel
-      : (thinking.options.find((entry) => entry.value === thinking.currentOverride)?.label ??
-        thinking.currentOverride);
-  const managedCatalog = props.modelCatalogState;
+  const managedCatalog = props.modelCatalogState ?? {
+    hasSnapshot: !props.modelsLoading,
+    status: props.modelsLoading ? ("loading" as const) : ("ready" as const),
+  };
   const catalogLoadingWithoutSnapshot =
-    managedCatalog !== undefined &&
     !managedCatalog.hasSnapshot &&
     ["idle", "loading", "refreshing"].includes(managedCatalog.status);
   const catalogErrorWithoutSnapshot =
-    managedCatalog?.status === "error" && !managedCatalog.hasSnapshot;
-  const catalogSnapshotEmpty = managedCatalog?.hasSnapshot === true && modelOptions.length === 0;
+    managedCatalog.status === "error" && !managedCatalog.hasSnapshot;
+  const catalogSnapshotEmpty = managedCatalog.hasSnapshot && modelOptions.length === 0;
   const catalogTriggerStatus = catalogLoadingWithoutSnapshot
     ? t("chat.modelControls.loadingModels")
     : catalogErrorWithoutSnapshot
@@ -275,12 +267,12 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     commonDisabled ||
     Boolean(props.modelMutationDisabledReason) ||
     catalogLoadingWithoutSnapshot ||
-    (managedCatalog === undefined && Boolean(props.modelsLoading) && selectOptions.length === 0);
+    (Boolean(props.modelsLoading) && selectOptions.length === 0);
   const thinkingDisabled =
     commonDisabled ||
     effortMutationDisabled ||
-    (managedCatalog !== undefined && !managedCatalog.hasSnapshot) ||
-    (thinking.options.length === 0 && thinking.currentOverride === "");
+    !managedCatalog.hasSnapshot ||
+    (thinking.options.length === 0 && thinking.selection.source === "default");
   const showFastMode = props.showFastMode !== false;
   const effortDisabled =
     commonDisabled ||
@@ -312,13 +304,10 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
           ...fastMode,
           disabled: fastMode.disabled || commonDisabled || effortMutationDisabled,
         },
-        selectedThinkingValue: thinking.currentOverride,
         sessionKey: props.sessionKey,
         showFastMode,
-        thinkingDefaultValue: thinking.defaultValue,
         thinkingDisabled,
-        thinkingOptions: [{ value: "", label: thinking.defaultLabel }, ...thinking.options],
-        triggerThinkingLabel: formatPickerThinkingLabel(committedThinkingLabel),
+        thinking,
         onFastModeSelect: async (next, targetSessionKey) =>
           props.onFastModeSelect?.(next, targetSessionKey),
         onRequestUpdate: props.onRequestUpdate,

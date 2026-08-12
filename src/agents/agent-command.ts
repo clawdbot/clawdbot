@@ -22,7 +22,12 @@ import { ensureSessionDiffBaseline } from "../sessions/session-diff-baseline.js"
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { classifySessionStateActor } from "../sessions/session-state-events.js";
 import { sessionDeliveryChannel, type DeliveryContext } from "../utils/delivery-context.shared.js";
-import { executionIdentity } from "./agent-command-execution-identity.js";
+import {
+  executionIdentity,
+  prepareAgentCommandExecutionIdentity,
+  sanitizePublicAgentCommandIngressOpts,
+  type AgentCommandAdmissionIngress,
+} from "./agent-command-execution-identity.js";
 import { runLocalAgentCommand } from "./agent-command-local.js";
 import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import {
@@ -32,13 +37,14 @@ import {
 } from "./agent-command-restart-recovery.js";
 import { runAcpAgentCommand } from "./command/acp-execution.js";
 import { repairPendingAssistantTranscriptTurns } from "./command/assistant-transcript-repair.js";
+import { persistAgentSession } from "./command/attempt-execution.shared.js";
 import { emitIngressModelUsageDiagnostic } from "./command/ingress-diagnostics.js";
 import { resolveEmbeddedModelSelection } from "./command/model-selection.js";
 import { finalizeEmbeddedAgentCommand } from "./command/post-run.js";
 import { prepareAgentCommandExecution } from "./command/prepare.js";
 import { runEmbeddedAgentAttempt } from "./command/run-embedded-attempt.js";
 import { loadSessionStoreRuntime, resolveAgentCommandDeps } from "./command/runtime-loaders.js";
-import { persistSessionEntry, prepareCurrentRunDelivery } from "./command/session-helpers.js";
+import { prepareCurrentRunDelivery } from "./command/session-helpers.js";
 import { prepareEmbeddedSessionState } from "./command/session-preparation.js";
 import { clearRotatedSessionMetadata } from "./command/session.js";
 import type {
@@ -56,8 +62,6 @@ import type { AgentRunSessionTarget } from "./run-session-target.js";
 import { createAgentRunRestartAbortError } from "./run-termination.js";
 import { withAgentPluginRegistry } from "./runtime-plugins.js";
 import { measureAgentStartup } from "./startup-timing.js";
-
-type AgentCommandAdmissionIngress = Parameters<typeof executionIdentity.record>[0]["ingress"];
 
 const log = createSubsystemLogger("agents/agent-command");
 
@@ -173,6 +177,7 @@ async function agentCommandInternal(
   }
 
   let sessionWorkAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+  let preparedRunAdmission: ReturnType<typeof executionIdentity.prepare> | undefined;
   try {
     assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
     const sessionStoreRuntime =
@@ -223,13 +228,11 @@ async function agentCommandInternal(
       },
     });
     return await sessionWorkAdmission.run(async () => {
-      executionIdentity.record({
-        admission: opts.executionIdentityAdmission,
-        agentId: sessionAgentId,
-        cfg,
+      preparedRunAdmission = prepareAgentCommandExecutionIdentity({
+        opts,
+        prepared,
         ingress: admissionIngress,
-        runId,
-        runtimeKind: !isRawModelRun && acpResolution?.kind === "ready" ? "acp" : "embedded",
+        lifecycleGeneration,
       });
       if (sessionStore && sessionKey && !suppressVisibleSessionEffects) {
         try {
@@ -352,7 +355,7 @@ async function agentCommandInternal(
             suppressTextDelivery: opts.internalDeliverySuppressText,
           }),
         };
-        const persisted = await persistSessionEntry({
+        const persisted = await persistAgentSession({
           sessionStore,
           sessionKey,
           storePath,
@@ -417,6 +420,7 @@ async function agentCommandInternal(
           acpManager,
           acpResolution,
           trackInternalModelRunTarget,
+          preparedRunAdmission,
         });
       }
 
@@ -491,6 +495,7 @@ async function agentCommandInternal(
         modelSelection,
         embeddedSessionState,
         trackInternalModelRunTarget,
+        preparedRunAdmission,
       });
       if (embeddedAttempt.fallbackExhausted) {
         opts.onModelFallbackExhausted?.();
@@ -524,6 +529,7 @@ async function agentCommandInternal(
       return finalized.deliveryResult;
     });
   } finally {
+    preparedRunAdmission?.close();
     sessionWorkAdmission?.release();
     if (internalModelRunTargets) {
       // Compaction may rotate a private session identity. Remove every owned
@@ -561,7 +567,7 @@ async function agentCommandInternal(
             }),
             updatedAt: Date.now(),
           };
-          const persisted = await persistSessionEntry({
+          const persisted = await persistAgentSession({
             sessionStore,
             sessionKey,
             storePath,
@@ -674,7 +680,7 @@ export async function agentCommandFromIngress(
   // Plugin SDK callers may be plain JavaScript. Enforce the private recovery
   // boundary at runtime so extra or inherited properties cannot author audit identity.
   return await agentCommandFromIngressInternal(
-    { ...opts, executionIdentityAdmission: undefined },
+    sanitizePublicAgentCommandIngressOpts(opts),
     runtime,
     deps,
   );

@@ -2,10 +2,14 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   ProjectRecordSchema,
+  ProjectsAddResultSchema,
   ProjectsListResultSchema,
+  ProjectsSearchRemoteResultSchema,
+  validateProjectsAddParams,
   validateProjectsListParams,
   validateProjectsRegisterParams,
   validateProjectsRemoveParams,
+  validateProjectsSearchRemoteParams,
   validateSessionsCreateParams,
 } from "../index.js";
 
@@ -15,8 +19,40 @@ describe("project protocol schemas", () => {
     expect(validateProjectsListParams({ extra: true })).toBe(false);
     expect(validateProjectsRegisterParams({ path: "/repo", name: "OpenClaw" })).toBe(true);
     expect(validateProjectsRegisterParams({ path: "" })).toBe(false);
-    expect(validateProjectsRemoveParams({ id: "openclaw-2" })).toBe(true);
+    expect(validateProjectsAddParams({ gitUrl: "https://github.com/openclaw/openclaw.git" })).toBe(
+      true,
+    );
+    expect(validateProjectsAddParams({ gitUrl: "", unexpected: true })).toBe(false);
+    expect(validateProjectsSearchRemoteParams({ query: "openclaw" })).toBe(true);
+    expect(validateProjectsSearchRemoteParams({ query: "" })).toBe(false);
+    expect(validateProjectsRemoveParams({ id: "openclaw-2", deleteCheckout: true })).toBe(true);
     expect(validateProjectsRemoveParams({ id: "workspace:main" })).toBe(false);
+  });
+
+  it("accepts bounded remote search and clone results", () => {
+    const project = {
+      id: "openclaw",
+      displayName: "OpenClaw",
+      repoRoot: "/state/projects/fingerprint/openclaw",
+      originUrl: "https://github.com/openclaw/openclaw.git",
+      source: "cloned",
+    };
+    expect(Value.Check(ProjectsAddResultSchema, project)).toBe(true);
+    expect(
+      Value.Check(ProjectsSearchRemoteResultSchema, {
+        credential: "missing",
+        projects: [
+          {
+            name: "openclaw",
+            fullName: "openclaw/openclaw",
+            description: "Personal AI assistant",
+            cloneUrl: "https://github.com/openclaw/openclaw.git",
+            webUrl: "https://github.com/openclaw/openclaw",
+            private: false,
+          },
+        ],
+      }),
+    ).toBe(true);
   });
 
   it("accepts workspace and stored project records", () => {
@@ -39,8 +75,13 @@ describe("project protocol schemas", () => {
             source: "registered",
           },
         ],
+        recents: [
+          { kind: "project", projectId: "openclaw", displayName: "OpenClaw" },
+          { kind: "folder", folder: "/repo/scratch", displayName: "scratch" },
+        ],
       }),
     ).toBe(true);
+    expect(Value.Check(ProjectsListResultSchema, { projects: [] })).toBe(true);
   });
 
   it("accepts projectId as an additive sessions.create parameter", () => {

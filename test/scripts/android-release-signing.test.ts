@@ -15,6 +15,7 @@ const ZERO_INSTALL_FILES = [
   "scripts/android-release-signing.mjs",
   "scripts/lib/android-release-signing-process.mjs",
   "scripts/lib/arg-utils.runtime.mjs",
+  "scripts/lib/record-shared.mjs",
   "scripts/lib/repo-root.mjs",
   "apps/android/Config/ReleaseSigning.json",
 ] as const;

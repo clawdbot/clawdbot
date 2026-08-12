@@ -1,4 +1,4 @@
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   forkSessionEntryFromParentTarget,
   forkSessionFromParentTranscript,
@@ -94,7 +94,8 @@ function resolveParentForkStorePath(params: {
   storePath?: string;
 }): string {
   return (
-    params.storePath ?? resolveStorePath(params.config?.session?.store, { agentId: params.agentId })
+    params.storePath ??
+    resolveSessionStorePathCore(params.config?.session?.store, { agentId: params.agentId })
   );
 }
 

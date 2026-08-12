@@ -67,13 +67,12 @@ export type SidebarLifecycleState = HTMLElement & {
     routeId: string,
     options?: { pathname?: string; search?: string; hash?: string },
   ) => void;
-  onCloseNavDrawer: () => void;
   readonly sessionData: SessionDataController;
   readonly sessionOrganizer: SessionOrganizerController;
   requestUpdate: () => void;
   updateComplete: Promise<boolean>;
   updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
-  updateRunning: boolean;
+  updateBusy: boolean;
   canUpdate: boolean;
   onUpdate: () => void;
   refreshRequired: boolean;
@@ -187,6 +186,7 @@ export function createSessionState(agentId: string, keys: string[]): SessionStat
     },
     sessions: keys.map((key, index) => ({
       key,
+      sessionId: `session:${key}`,
       kind: "direct" as const,
       updatedAt: index + 1,
     })),

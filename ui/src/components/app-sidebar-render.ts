@@ -82,8 +82,7 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
     const agentId = normalizeAgentId(entry.id);
     return agentId !== cardAgentId && host.agentUnreadCount(agentId) > 0;
   });
-  const cardName =
-    cardIdentity?.name?.trim() || (cardAgent ? normalizeAgentLabel(cardAgent) : cardAgentId);
+  const cardName = normalizeAgentLabel(cardAgent ?? { id: cardAgentId }, cardIdentity);
   const approvalCount = host.sessionData.approvalBadgeSnapshot().agentCounts.get(cardAgentId) ?? 0;
   const gateway = host.sessionDataContext?.gateway;
   const avatarAuthToken = gateway
@@ -228,6 +227,32 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
           </span>`
         : nothing}
     </a>
+  `;
+}
+
+/** Both zone groups accept drops, so dragging a session onto either one pins it
+    and records its slot in the canonical entry order. */
+export function renderAppSidebarZoneGroup(host: AppSidebarRenderHost, content: unknown) {
+  return html`
+    <div
+      class="nav-section__items"
+      @dragover=${(event: DragEvent) => host.sessionOrganizer.handleSidebarZoneDragOver(event)}
+      @dragleave=${(event: DragEvent) => host.sessionOrganizer.handleSidebarZoneDragLeave(event)}
+      @drop=${(event: DragEvent) => host.sessionOrganizer.handleSidebarZoneDrop(event)}
+    >
+      ${content}
+    </div>
+  `;
+}
+
+/** Pinned sessions are elevated content, not navigation, so they carry their own
+    section label instead of trailing the Pages list. No customize affordance:
+    the Pages head owns the pin editor, and pinning is a per-session action. */
+export function renderAppSidebarPinnedHead() {
+  return html`
+    <div class="sidebar-nav__head sidebar-nav__head--pinned">
+      <span class="sidebar-recent-sessions__label-text">${t("nav.pinned")}</span>
+    </div>
   `;
 }
 

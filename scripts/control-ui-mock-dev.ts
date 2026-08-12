@@ -650,6 +650,7 @@ function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
     messages: { queueLimit: 5, responsePrefix: "" },
     gateway: { port: 18789, bind: "127.0.0.1" },
     agents: { defaults: { thinkingDefault: "medium" } },
+    commands: { native: "auto", nativeSkills: "auto" },
     models: { mode: "merge" },
     ...(options.swarmEnabled ? { tools: { swarm: true } } : {}),
     channels: {
@@ -740,6 +741,22 @@ function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
             type: "string",
             title: "Response prefix",
             description: "Optional text prepended to outbound replies.",
+          },
+        },
+      },
+      commands: {
+        type: "object",
+        title: "Commands",
+        properties: {
+          native: {
+            title: "Native Commands",
+            default: "auto",
+            anyOf: [{ type: "boolean" }, { type: "string", const: "auto" }],
+          },
+          nativeSkills: {
+            title: "Native Skill Commands",
+            default: "auto",
+            anyOf: [{ type: "boolean" }, { type: "string", const: "auto" }],
           },
         },
       },

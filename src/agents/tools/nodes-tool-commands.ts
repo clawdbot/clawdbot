@@ -12,12 +12,12 @@ import {
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
   readStringArrayParam,
-  readStringParam,
+  readToolStringParam,
 } from "./common.js";
 import type { GatewayCallOptions } from "./gateway.js";
 import { callGatewayTool } from "./gateway.js";
 import { POLICY_REDIRECT_INVOKE_COMMANDS } from "./nodes-tool-media.js";
-import { resolveNodeId } from "./nodes-utils.js";
+import { resolveAgentNodeId } from "./nodes-utils.js";
 
 const BLOCKED_INVOKE_COMMANDS = new Set(["system.run", "system.run.prepare"]);
 const DEDICATED_TOOL_INVOKE_COMMANDS = new Map([
@@ -56,8 +56,8 @@ export async function executeNodeCommandAction(params: {
 > {
   switch (params.action) {
     case "camera_ptz": {
-      const node = readStringParam(params.input, "node", { required: true });
-      const deviceId = readStringParam(params.input, "deviceId", { required: true });
+      const node = readToolStringParam(params.input, "node", { required: true });
+      const deviceId = readToolStringParam(params.input, "deviceId", { required: true });
       const ptzOperation = normalizeLowercaseStringOrEmpty(params.input.ptzOperation);
       if (
         ptzOperation !== "status" &&
@@ -102,7 +102,7 @@ export async function executeNodeCommandAction(params: {
     case "device_info":
     case "device_permissions":
     case "device_health": {
-      const node = readStringParam(params.input, "node", { required: true });
+      const node = readToolStringParam(params.input, "node", { required: true });
       const payloadRaw = await invokeNodeCommandPayload({
         gatewayOpts: params.gatewayOpts,
         node,
@@ -113,8 +113,10 @@ export async function executeNodeCommandAction(params: {
       return jsonResult(payload);
     }
     case "notifications_action": {
-      const node = readStringParam(params.input, "node", { required: true });
-      const notificationKey = readStringParam(params.input, "notificationKey", { required: true });
+      const node = readToolStringParam(params.input, "node", { required: true });
+      const notificationKey = readToolStringParam(params.input, "notificationKey", {
+        required: true,
+      });
       const notificationAction = normalizeLowercaseStringOrEmpty(params.input.notificationAction);
       if (
         notificationAction !== "open" &&
@@ -145,7 +147,7 @@ export async function executeNodeCommandAction(params: {
       return jsonResult(payload);
     }
     case "location_get": {
-      const node = readStringParam(params.input, "node", { required: true });
+      const node = readToolStringParam(params.input, "node", { required: true });
       const maxAgeMs = readNonNegativeIntegerParam(params.input, "maxAgeMs");
       const desiredAccuracy =
         params.input.desiredAccuracy === "coarse" ||
@@ -167,7 +169,7 @@ export async function executeNodeCommandAction(params: {
       return jsonResult(payload);
     }
     case "which": {
-      const node = readStringParam(params.input, "node", { required: true });
+      const node = readToolStringParam(params.input, "node", { required: true });
       const bins = readStringArrayParam(params.input, "bins", { required: true });
       const payload = await invokeNodeCommandPayload({
         gatewayOpts: params.gatewayOpts,
@@ -178,9 +180,9 @@ export async function executeNodeCommandAction(params: {
       return jsonResult(payload);
     }
     case "invoke": {
-      const node = readStringParam(params.input, "node", { required: true });
-      const nodeId = await resolveNodeId(params.gatewayOpts, node);
-      const invokeCommand = readStringParam(params.input, "invokeCommand", { required: true });
+      const node = readToolStringParam(params.input, "node", { required: true });
+      const nodeId = await resolveAgentNodeId(params.gatewayOpts, node);
+      const invokeCommand = readToolStringParam(params.input, "invokeCommand", { required: true });
       const invokeCommandNormalized = normalizeLowercaseStringOrEmpty(invokeCommand);
       if (BLOCKED_INVOKE_COMMANDS.has(invokeCommandNormalized)) {
         throw new Error(
@@ -246,7 +248,7 @@ async function invokeNodeCommandPayload(params: {
   command: string;
   commandParams?: Record<string, unknown>;
 }): Promise<unknown> {
-  const nodeId = await resolveNodeId(params.gatewayOpts, params.node);
+  const nodeId = await resolveAgentNodeId(params.gatewayOpts, params.node);
   const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", params.gatewayOpts, {
     nodeId,
     command: params.command,

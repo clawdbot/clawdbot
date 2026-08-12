@@ -13,6 +13,7 @@ import {
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptActiveLeafEvents,
   readSessionTranscriptActiveStats,
+  readSessionTranscriptBoundedContextMessageTailPage,
   readSessionTranscriptBoundedMessageTailPage,
   readSessionTranscriptMessageAnchorPage,
   readSessionTranscriptMessageEventById,
@@ -872,5 +873,40 @@ describe("SQLite active transcript event projection", () => {
     await reconciliation;
     expect(order).toEqual(["event-loop-responsive", "live-write", "reconciled"]);
     expect(readSessionTranscriptMessageEventCount(scope)).toBe(100_001);
+
+    await appendTranscriptEvent(scope, {
+      type: "compaction",
+      id: "large-context-boundary",
+      parentId: "m100001",
+      timestamp: "2026-08-11T00:00:00.000Z",
+      summary: "bounded large-history summary",
+      firstKeptEntryId: "m1",
+      tokensBefore: 100_000,
+    });
+    await persistSessionTranscriptTurn(scope, {
+      messages: Array.from({ length: 40 }, (_, index) => ({
+        eventId: `post-boundary-${index}`,
+        parentId: index === 0 ? "large-context-boundary" : `post-boundary-${index - 1}`,
+        message: {
+          role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+          content: `post-boundary ${index}`,
+        },
+      })),
+      touchSessionEntry: false,
+    });
+
+    const contextPage = readSessionTranscriptBoundedContextMessageTailPage(scope, {
+      maxBytes: 1024 * 1024,
+      maxMessages: 40,
+      maxScannedMessages: 4096,
+    });
+    expect(contextPage).toMatchObject({
+      authoritative: true,
+      contextSummary: { text: "bounded large-history summary" },
+      empty: false,
+    });
+    expect(contextPage.events).toHaveLength(40);
+    expect(contextPage.events.at(0)?.event).toMatchObject({ id: "post-boundary-0" });
+    expect(contextPage.events.at(-1)?.event).toMatchObject({ id: "post-boundary-39" });
   }, 60_000);
 });

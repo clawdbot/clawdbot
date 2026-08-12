@@ -37,7 +37,7 @@ vi.mock("../../auto-reply/reply/provider-dispatcher.js", async (importOriginal) 
     await importOriginal<typeof import("../../auto-reply/reply/provider-dispatcher.js")>();
   return {
     ...actual,
-    dispatchReplyWithBufferedBlockDispatcher: dispatchReplyWithBufferedBlockDispatcherCore,
+    dispatchReplyWithBufferedBlockDispatcherCore,
   };
 });
 
@@ -62,7 +62,7 @@ vi.mock("../message/send.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../message/send.js")>();
   return {
     ...actual,
-    sendDurableMessageBatch,
+    sendDurableMessageBatchCore: sendDurableMessageBatch,
   };
 });
 

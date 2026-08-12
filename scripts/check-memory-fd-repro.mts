@@ -8,7 +8,8 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveTimerTimeoutMs } from "../packages/normalization-core/src/number-coercion.ts";
+import { asNullableRecord as asRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 
@@ -51,7 +52,6 @@ type InvokeResponseOptions = { httpOk: boolean; status: number; bodyText: string
 const ISSUE_MEMORY_FILE_COUNT = ISSUE_FILE_COUNTS.reduce((sum, [, count]) => sum + count, 0);
 const DEFAULT_FILE_COUNT = 512;
 const DEFAULT_MAX_WORKSPACE_REG_FDS = process.platform === "darwin" ? 8 : 64;
-const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 /**
  * Maximum gateway-ready output tail retained while waiting for startup.
  */
@@ -126,7 +126,7 @@ function stripPackageManagerSeparatorForKnownFlags(argv: string[]) {
 /**
  * Parses a safe non-negative integer option.
  */
-export function readNumber(value: unknown, label: string) {
+export function parseNonNegativeInteger(value: unknown, label: string) {
   const raw = String(value).trim();
   if (!NON_NEGATIVE_INTEGER_PATTERN.test(raw)) {
     throw new Error(`${label} must be a non-negative integer`);
@@ -142,7 +142,7 @@ export function readNumber(value: unknown, label: string) {
  * Parses a safe positive integer option.
  */
 export function readPositiveNumber(value: unknown, label: string) {
-  const parsed = readNumber(value, label);
+  const parsed = parseNonNegativeInteger(value, label);
   if (parsed <= 0) {
     throw new Error(`${label} must be greater than 0`);
   }
@@ -151,7 +151,7 @@ export function readPositiveNumber(value: unknown, label: string) {
 
 function readNumberEnv(name: string, fallback: number) {
   const raw = process.env[name];
-  return raw == null || raw.trim() === "" ? fallback : readNumber(raw, name);
+  return raw == null || raw.trim() === "" ? fallback : parseNonNegativeInteger(raw, name);
 }
 
 function readPositiveNumberEnv(name: string, fallback: number) {
@@ -159,21 +159,16 @@ function readPositiveNumberEnv(name: string, fallback: number) {
   return raw == null || raw.trim() === "" ? fallback : readPositiveNumber(raw, name);
 }
 
-function clampTimerTimeoutMs(valueMs: number, minMs = 1) {
-  const min = Math.max(0, Math.floor(minMs));
-  const value = Number.isFinite(valueMs) ? valueMs : min;
-  return Math.min(Math.max(Math.floor(value), min), MAX_TIMER_TIMEOUT_MS);
-}
-
 function readTimerTimeoutNumber(value: unknown, label: string, minMs = 1) {
-  const parsed = minMs > 0 ? readPositiveNumber(value, label) : readNumber(value, label);
-  return clampTimerTimeoutMs(parsed, minMs);
+  const parsed =
+    minMs > 0 ? readPositiveNumber(value, label) : parseNonNegativeInteger(value, label);
+  return resolveTimerTimeoutMs(parsed, minMs, minMs);
 }
 
 function readTimerTimeoutNumberEnv(name: string, fallback: number, minMs = 1) {
   const raw = process.env[name];
   return raw == null || raw.trim() === ""
-    ? clampTimerTimeoutMs(fallback, minMs)
+    ? resolveTimerTimeoutMs(fallback, minMs, minMs)
     : readTimerTimeoutNumber(raw, name, minMs);
 }
 
@@ -230,7 +225,7 @@ export function parseArgs(argv: string[]) {
         mode = "report";
         break;
       case "--max-workspace-reg-fds":
-        maxWorkspaceRegFds = readNumber(readValue(), "--max-workspace-reg-fds");
+        maxWorkspaceRegFds = parseNonNegativeInteger(readValue(), "--max-workspace-reg-fds");
         break;
       case "--min-leaked-fds":
         minLeakedFds = readPositiveNumber(readValue(), "--min-leaked-fds");
@@ -295,7 +290,7 @@ function logStep(message: string) {
 
 function sleep(ms: number) {
   return new Promise<void>((resolve) => {
-    setTimeout(resolve, clampTimerTimeoutMs(ms, 0));
+    setTimeout(resolve, resolveTimerTimeoutMs(ms, 0, 0));
   });
 }
 
@@ -741,7 +736,7 @@ export function classifyMemorySearchInvokeResponse({
 }
 
 export async function invokeMemorySearch({ port, token, timeoutMs }: InvokeOptions) {
-  const resolvedTimeoutMs = clampTimerTimeoutMs(timeoutMs);
+  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), resolvedTimeoutMs);
   const startedAt = Date.now();

@@ -92,21 +92,32 @@ const buildChatItemsMock = vi.fn(
     runWorking?: boolean;
     loading?: boolean;
   }): ReturnType<typeof chatThread.buildCachedChatItems> => {
-    if (
-      props.messages.some(
-        (message) =>
-          typeof message === "object" &&
-          message !== null &&
-          (message as { __testDivider?: unknown })["__testDivider"] === true,
-      )
-    ) {
+    const testDivider = props.messages.find(
+      (message) =>
+        typeof message === "object" &&
+        message !== null &&
+        typeof (message as { testDividerMarker?: unknown }).testDividerMarker === "string",
+    ) as { testDividerMarker: string } | undefined;
+    if (testDivider) {
+      if (testDivider.testDividerMarker === "reset") {
+        return [
+          {
+            kind: "divider",
+            key: "divider:reset:test",
+            icon: "rotateCcw",
+            label: "Session reset",
+            description: "The earlier conversation was cleared.",
+            timestamp: 1,
+          },
+        ] as ReturnType<typeof chatThread.buildCachedChatItems>;
+      }
       return [
         {
           kind: "divider",
           key: "divider:compaction:test",
+          icon: "foldVertical",
           label: "Compacted history",
-          description:
-            "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
+          description: "The compacted transcript is preserved as a checkpoint.",
           action: {
             kind: "session-checkpoints",
             label: "Open checkpoints",
@@ -777,6 +788,12 @@ function createBackgroundTasks(
     loading: false,
     error: null,
     tasks: [],
+    subagentActivity: {
+      rows: [],
+      overflowWorking: 0,
+      taskIds: new Set<string>(),
+      nextExpiryAt: null,
+    },
     view: { kind: "list" },
     cancellingTaskIds: new Set<string>(),
     finishedCollapsed: false,
@@ -888,16 +905,15 @@ describe("chat compaction divider", () => {
   it("renders checkpoint recovery copy and action", () => {
     const onOpenSessionCheckpoints = vi.fn();
     const container = renderChatView({
-      messages: [{ __testDivider: true }],
+      messages: [{ testDividerMarker: "compaction" }],
       onOpenSessionCheckpoints,
     });
 
-    expect(container.querySelector(".chat-divider__label > span")?.textContent).toBe(
-      "Compacted history",
-    );
+    expect(container.querySelector(".chat-divider__title")?.textContent).toBe("Compacted history");
     expect(container.querySelector(".chat-divider__description")?.textContent?.trim()).toBe(
-      "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
+      "The compacted transcript is preserved as a checkpoint.",
     );
+    expect(container.querySelector(".chat-divider__icon svg")).not.toBeNull();
     const button = container.querySelector<HTMLButtonElement>(".chat-divider__action");
     expect(button?.textContent?.trim()).toBe("Open checkpoints");
 
@@ -905,6 +921,14 @@ describe("chat compaction divider", () => {
     button!.click();
 
     expect(onOpenSessionCheckpoints).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders the session reset divider title", () => {
+    const container = renderChatView({
+      messages: [{ testDividerMarker: "reset" }],
+    });
+
+    expect(container.querySelector(".chat-divider__title")?.textContent).toBe("Session reset");
   });
 });
 
@@ -1988,22 +2012,92 @@ describe("session rail pane commands", () => {
 });
 
 describe("per-pane chat presentation state", () => {
-  it("opens thread search from the physical shortcut on a non-Latin layout", () => {
-    const onRequestUpdate = vi.fn();
-    const container = renderChatView({ onRequestUpdate });
-    const chat = requireElement(container, "section.card.chat", "chat view");
-    const event = new KeyboardEvent("keydown", {
-      key: "а",
-      code: "KeyF",
-      ctrlKey: true,
-      bubbles: true,
-      cancelable: true,
-    });
+  it("moves focus into and back out of thread search for the physical shortcut", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const onRequestUpdate = vi.fn(() => renderChatInto(container, { onRequestUpdate }));
+    try {
+      renderChatInto(container, { onRequestUpdate });
+      const composer = getComposerTextarea(container);
+      composer.focus();
+      const event = new KeyboardEvent("keydown", {
+        key: "а",
+        code: "KeyF",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
 
-    chat.dispatchEvent(event);
+      composer.dispatchEvent(event);
+      await Promise.resolve();
 
-    expect(event.defaultPrevented).toBe(true);
-    expect(onRequestUpdate).toHaveBeenCalledOnce();
+      expect(event.defaultPrevented).toBe(true);
+      expect(onRequestUpdate).toHaveBeenCalledOnce();
+      expect(document.activeElement).toBe(
+        container.querySelector<HTMLInputElement>('.agent-chat__search-bar input[type="text"]'),
+      );
+
+      const closeEvent = new KeyboardEvent("keydown", {
+        key: "а",
+        code: "KeyF",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      document.activeElement?.dispatchEvent(closeEvent);
+      await Promise.resolve();
+
+      expect(closeEvent.defaultPrevented).toBe(true);
+      expect(onRequestUpdate).toHaveBeenCalledTimes(2);
+      expect(document.activeElement).toBe(composer);
+      expect(container.querySelector(".agent-chat__search-bar")).toBeNull();
+    } finally {
+      container.remove();
+    }
+  });
+
+  it("returns focus to the composer when the original target disappears", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const onRequestUpdate = vi.fn(() => renderChatInto(container, { onRequestUpdate }));
+    try {
+      renderChatInto(container, { onRequestUpdate });
+      const composer = getComposerTextarea(container);
+      const transientTarget = document.createElement("button");
+      const chat = container.querySelector<HTMLElement>(".card.chat");
+      if (!chat) {
+        throw new Error("expected chat section");
+      }
+      chat.append(transientTarget);
+      transientTarget.focus();
+
+      transientTarget.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "f",
+          code: "KeyF",
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await Promise.resolve();
+
+      transientTarget.remove();
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "f",
+          code: "KeyF",
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await Promise.resolve();
+
+      expect(document.activeElement).toBe(composer);
+    } finally {
+      container.remove();
+    }
   });
 
   it("keeps slash menus independent and resets only the targeted pane", () => {
@@ -3592,6 +3686,65 @@ describe("chat slash menu accessibility", () => {
     expect(container.querySelector(".skill-menu")).toBeNull();
   });
 
+  it("scrolls the keyboard-active skill inside the nested menu viewport", () => {
+    replaceSkillCommands(
+      ...Array.from({ length: 8 }, (_, index) => ({
+        key: `skill_${index + 1}`,
+        description: `Skill ${index + 1}.`,
+      })),
+    );
+    const animationFrames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      animationFrames.push(callback);
+      return animationFrames.length;
+    });
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: HTMLElement) {
+        const height = 28;
+        let top = 0;
+        if (this.classList.contains("slash-menu-item")) {
+          const scrollRegion = this.closest<HTMLElement>(".slash-menu__scroll");
+          const options = Array.from(
+            scrollRegion?.querySelectorAll<HTMLElement>(".slash-menu-item") ?? [],
+          );
+          top = options.indexOf(this) * height - (scrollRegion?.scrollTop ?? 0);
+        }
+        const bottom = this.classList.contains("slash-menu__scroll") ? height * 2 : top + height;
+        return {
+          bottom,
+          height: bottom - top,
+          left: 0,
+          right: 240,
+          top,
+          width: 240,
+          x: 0,
+          y: top,
+          toJSON: () => ({}),
+        };
+      },
+    );
+    const { container } = createReactiveDraftHarness();
+    document.body.append(container);
+    inputDraftAtEnd(container, "Use $");
+    animationFrames.length = 0;
+
+    for (let index = 0; index < 4; index += 1) {
+      keydownComposer(container, "ArrowDown");
+    }
+    animationFrames.at(-1)?.(0);
+
+    const scrollRegion = container.querySelector<HTMLElement>(".skill-menu .slash-menu__scroll");
+    const outerMenu = container.querySelector<HTMLElement>(".skill-menu");
+    const activeOption = container.querySelector<HTMLElement>(".slash-menu-item--active");
+    const viewportBounds = scrollRegion?.getBoundingClientRect();
+    const optionBounds = activeOption?.getBoundingClientRect();
+    expect(scrollRegion?.scrollTop).toBeGreaterThan(0);
+    expect(outerMenu?.scrollTop).toBe(0);
+    expect(optionBounds?.top).toBeGreaterThanOrEqual(viewportBounds?.top ?? 0);
+    expect(optionBounds?.bottom).toBeLessThanOrEqual(viewportBounds?.bottom ?? 0);
+    container.remove();
+  });
+
   it("does not reopen a dismissed skill picker after a slow refresh", async () => {
     replaceSkillCommands({ key: "prose", description: "Prose skill." });
     const refresh = createDeferred();
@@ -3889,6 +4042,47 @@ describe("chat slash menu accessibility", () => {
     expect(listbox?.getAttribute("role")).toBe("listbox");
     expect(activeId).toMatch(/^chat-single-slash-option-command-/u);
     expect(listbox?.querySelector(`#${activeId}`)?.getAttribute("role")).toBe("option");
+  });
+
+  it("removes instant implementation badges without hiding option counts", () => {
+    const harness = createSlashRerenderHarness();
+    const container = harness.inputAndRender(harness.container, "/");
+    const stopOption = Array.from(
+      container.querySelectorAll<HTMLElement>(".slash-menu [role='option']"),
+    ).find((option) => option.querySelector(".slash-menu-name")?.textContent?.trim() === "/stop");
+
+    expect(stopOption).toBeDefined();
+    expect(stopOption?.querySelector(".slash-menu-badge")).toBeNull();
+    expect(container.querySelector(".slash-menu-badge")).not.toBeNull();
+  });
+
+  it("shows every command directly without an expander or keyboard footer", () => {
+    replaceSlashCommands([
+      {
+        key: "standard-command",
+        name: "standard-command",
+        description: "Standard command.",
+        tier: "standard",
+        category: "session",
+      },
+      {
+        key: "power-command",
+        name: "power-command",
+        description: "Power command.",
+        tier: "power",
+        category: "tools",
+      },
+    ]);
+    const harness = createSlashRerenderHarness();
+    const container = harness.inputAndRender(harness.container, "/");
+
+    expect(
+      Array.from(container.querySelectorAll<HTMLElement>(".slash-menu [role='option']")).map(
+        (option) => option.querySelector(".slash-menu-name")?.textContent?.trim(),
+      ),
+    ).toEqual(["/standard-command", "/power-command"]);
+    expect(container.querySelector(".slash-menu-show-more")).toBeNull();
+    expect(container.querySelector(".slash-menu-footer")).toBeNull();
   });
 
   it("keeps filtered command DOM and keyboard order aligned with relevance", () => {
@@ -5075,6 +5269,20 @@ describe("chat model controls", () => {
     expect(modelSelect.getAttribute("aria-disabled")).toBe("true");
   });
 
+  it("shows an empty state instead of a configured default when no usable models exist", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.6-sol",
+      modelProvider: "openai",
+      models: [],
+    });
+    const container = renderModelControls(state);
+
+    expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
+    expect(
+      container.querySelector('[data-chat-model-catalog-state="ready"]')?.textContent,
+    ).toContain("No models available");
+  });
+
   it("applies a model selection immediately", () => {
     const { state } = createOpenAiHeaderState();
     const onModelSelect = vi.fn(async () => true);
@@ -5374,7 +5582,7 @@ describe("chat model controls", () => {
       container.querySelectorAll<HTMLButtonElement>("[data-chat-model-provider]"),
     );
     const providerLabels = providerButtons.map((button) => button.textContent?.trim());
-    expect(providerLabels).toEqual(["OpenAI", "Google", "OpenCode", "Moonshot AI"]);
+    expect(providerLabels).toEqual(["Google", "OpenCode", "Moonshot AI"]);
     expect(new Set(providerLabels).size).toBe(providerLabels.length);
     expect(
       container.querySelector('[data-chat-model-provider-group="google"]')?.textContent,

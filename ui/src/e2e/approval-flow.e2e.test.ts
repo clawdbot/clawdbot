@@ -1,4 +1,5 @@
 // Control UI E2E tests cover approval queue behavior through the Gateway WebSocket.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -19,12 +20,7 @@ function approval(id: string, command: string, createdAtMs: number) {
   };
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected object value");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-object-value");
 
 suite.define(() => {
   afterEach(async () => {

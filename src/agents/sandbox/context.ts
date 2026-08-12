@@ -14,6 +14,7 @@ import {
   resolveBrowserConfig,
 } from "../../plugin-sdk/browser-profiles.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createLazyRuntimeNamedExport } from "../../shared/lazy-runtime.js";
 import type { SkillEligibilityContext, SkillSnapshot, SkillUsagePath } from "../../skills/types.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import { getSandboxBackendWorkdirResolver, requireSandboxBackendFactory } from "./backend.js";
@@ -29,6 +30,11 @@ import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
+const loadSyncWorkspaceSkills = createLazyRuntimeNamedExport(
+  () => import("../../skills/loading/workspace-skill-sync.runtime.js"),
+  "syncWorkspaceSkills",
+);
+
 async function syncSandboxSkillsToWorkspace(params: {
   sourceWorkspaceDir: string;
   targetWorkspaceDir: string;
@@ -39,15 +45,12 @@ async function syncSandboxSkillsToWorkspace(params: {
   skillsSnapshot?: SkillSnapshot;
 }): Promise<{ eligibility?: SkillEligibilityContext; skillUsagePaths?: SkillUsagePath[] }> {
   try {
-    const [
-      { syncSkillsToWorkspace },
-      { getRemoteSkillEligibility },
-      { resolveNodeExecEligibility },
-    ] = await Promise.all([
-      import("../../skills/loading/workspace.js"),
-      import("../../skills/runtime/remote.js"),
-      import("../exec-defaults.js"),
-    ]);
+    const [syncWorkspaceSkills, { getRemoteSkillEligibility }, { resolveNodeExecEligibility }] =
+      await Promise.all([
+        loadSyncWorkspaceSkills(),
+        import("../../skills/runtime/remote.js"),
+        import("../exec-defaults.js"),
+      ]);
     const nodeSkills = resolveNodeExecEligibility({
       cfg: params.config,
       sessionKey: params.rawSessionKey,
@@ -60,7 +63,7 @@ async function syncSandboxSkillsToWorkspace(params: {
         advertiseExecNode: nodeSkills.canExec,
       }),
     };
-    const skillUsagePaths = await syncSkillsToWorkspace({
+    const skillUsagePaths = await syncWorkspaceSkills({
       sourceWorkspaceDir: params.sourceWorkspaceDir,
       targetWorkspaceDir: params.targetWorkspaceDir,
       config: params.config,

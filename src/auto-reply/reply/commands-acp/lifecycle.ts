@@ -15,6 +15,11 @@ import {
   resolveAcpDispatchPolicyMessage,
 } from "../../../acp/policy.js";
 import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta.js";
+import {
+  closeAdmittedRunDelegatedAuthority,
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../../../agents/admitted-run-context.js";
 import { resolveSpawnedWorkspaceInheritance } from "../../../agents/spawned-context.js";
 import {
   resolveAcpSpawnRuntimePolicyError,
@@ -28,6 +33,7 @@ import {
   getSessionBindingService,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
+import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import {
@@ -386,29 +392,43 @@ async function runAcpSteer(params: {
 }): Promise<string> {
   const acpManager = getAcpSessionManager();
   let output = "";
-
-  await acpManager.runTurn({
+  const admittedRunContext = await prepareAgentRunAdmission({
     cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    provenance: "agent",
-    text: params.instruction,
-    mode: "steer",
-    requestId: params.requestId,
-    onEvent: (event) => {
-      if (event.type !== "text_delta") {
-        return;
-      }
-      if (event.stream && event.stream !== "output") {
-        return;
-      }
-      if (event.text) {
-        output += event.text;
-        if (output.length > ACP_STEER_OUTPUT_LIMIT) {
-          output = `${truncateUtf16Safe(output, ACP_STEER_OUTPUT_LIMIT)}…`;
-        }
-      }
+    operationalRunInstance: createOperationalRunInstanceRef(params.requestId),
+    facts: {
+      runId: params.requestId,
+      agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+      ingress: { kind: "acp", boundary: "acp.command.steer", state: "present" },
     },
-  });
+  }).admit("acp");
+
+  try {
+    await acpManager.runTurn({
+      admittedRunContext,
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      provenance: "agent",
+      text: params.instruction,
+      mode: "steer",
+      requestId: params.requestId,
+      onEvent: (event) => {
+        if (event.type !== "text_delta") {
+          return;
+        }
+        if (event.stream && event.stream !== "output") {
+          return;
+        }
+        if (event.text) {
+          output += event.text;
+          if (output.length > ACP_STEER_OUTPUT_LIMIT) {
+            output = `${truncateUtf16Safe(output, ACP_STEER_OUTPUT_LIMIT)}…`;
+          }
+        }
+      },
+    });
+  } finally {
+    closeAdmittedRunDelegatedAuthority(admittedRunContext);
+  }
   return output.trim();
 }
 

@@ -711,30 +711,6 @@ describe("CronService failure alerts", () => {
     );
   });
 
-  it("uses provider context when surfacing failure alert causes", async () => {
-    await withFailureAlertCron(
-      {
-        failureAlert: { enabled: true, after: 1 },
-        runResult: {
-          status: "error",
-          error: "403 Key limit exceeded (monthly limit)",
-          provider: "openrouter",
-        },
-      },
-      async ({ cron, sendCronFailureAlert, addJob }) => {
-        const job = await addJob("provider limit alert", {
-          payload: { kind: "agentTurn", message: "ping" },
-          delivery: createTelegramDelivery(),
-        });
-
-        await cron.run(job.id, "force");
-        expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
-        const alertText = alertCallArg(sendCronFailureAlert).text;
-        expect(alertText).toBe('Automation "provider limit alert" failed 1 times\nCause: billing');
-      },
-    );
-  });
-
   it("does not reclassify permanent local script errors in failure alerts", async () => {
     await withFailureAlertCron(
       {

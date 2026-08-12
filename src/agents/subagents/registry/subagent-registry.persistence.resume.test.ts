@@ -18,7 +18,7 @@ import {
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const { announceSpy } = vi.hoisted(() => ({
-  announceSpy: vi.fn(async () => true),
+  announceSpy: vi.fn(async () => "delivered" as const),
 }));
 vi.mock("../announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,
@@ -177,6 +177,46 @@ describe("subagent registry persistence resume", () => {
       expect(announceSpy).toHaveBeenCalledWith(
         expect.objectContaining({ childRunId: "run-pending-delivery" }),
       );
+    });
+  });
+
+  it("keeps dismissed terminal delivery dormant and TTL-eligible after restore", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    const stateDir = tempStateDir;
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const now = Date.now();
+      const run: SubagentRunRecord = {
+        runId: "run-dismissed-delivery",
+        childSessionKey: "agent:main:subagent:dismissed-delivery",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "retain no delivery obligation",
+        cleanup: "keep",
+        createdAt: now - 10 * 60_000,
+        endedReason: "subagent-complete",
+        execution: {
+          status: "terminal",
+          startedAt: now - 9 * 60_000,
+          endedAt: now - 8 * 60_000,
+          outcome: { status: "ok" },
+        },
+        expectsCompletionMessage: true,
+        completion: { required: true, resultText: "done", capturedAt: now - 8 * 60_000 },
+        delivery: {
+          status: "discarded",
+          disposition: "intentional_non_delivery",
+          dismissedAt: now - 6 * 60_000,
+        },
+        cleanupHandled: true,
+        cleanupCompletedAt: now - 6 * 60_000,
+      };
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+
+      mod.initSubagentRegistry();
+      await mod.testing.sweepOnceForTests();
+
+      expect(announceSpy).not.toHaveBeenCalled();
+      expect(mod.getSubagentRunByRunId(run.runId)).toBeUndefined();
     });
   });
 

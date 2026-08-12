@@ -9,6 +9,7 @@ import {
 } from "../infra/agent-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import {
   buildBlockedToolResult,
   recordAdjustedParamsForToolCall,
@@ -1271,6 +1272,31 @@ describe("handleToolExecutionEnd MCP App channel view tracking", () => {
     });
 
     expect(ctx.state.latestMcpAppChannelView).toBeUndefined();
+  });
+});
+
+describe("handleToolExecutionEnd MCP connect action tracking", () => {
+  it("retains only a successful HTTP(S) connect action", async () => {
+    const { ctx } = createTestContext();
+
+    await endTool(ctx, {
+      toolName: "mcp_connect",
+      toolCallId: "mcp-connect",
+      isError: false,
+      result: {
+        details: {
+          mcpConnect: {
+            serverName: "calendar",
+            authorizationUrl: "https://auth.example/authorize?state=opaque",
+          },
+        },
+      },
+    });
+
+    expect(ctx.state.latestMcpConnectAction).toEqual({
+      serverName: "calendar",
+      authorizationUrl: "https://auth.example/authorize?state=opaque",
+    });
   });
 });
 
@@ -2632,6 +2658,7 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     ]);
     const prepared = prepareEmbeddedRunTerminal({
       runParams: {
+        admittedRunContext: createTestAdmittedRunContext("run-test"),
         sessionId: "session-test-id",
         runId: "run-test",
         workspaceDir: "/tmp/openclaw-test",

@@ -1,12 +1,8 @@
-import path from "node:path";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { extractApplyPatchTargetPaths } from "../agents/apply-patch-paths.js";
-import {
-  resolveFileMutationToolName,
-  type FileMutationToolName,
-} from "../agents/tool-mutation-names.js";
+import { readCompletedFileMutationDelta } from "../agents/file-mutation-args.js";
+import { resolveFileMutationToolName } from "../agents/tool-mutation-names.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { isTerminalTaskStatus } from "./task-executor-policy.js";
 import { cloneTaskRecord } from "./task-registry-records.js";
@@ -27,9 +23,6 @@ type TaskActivitySnapshot = {
   lastActivity?: string;
   diffStat?: { files: number; added: number; removed: number };
 };
-
-type DiffDelta = { files: string[]; added: number; removed: number };
-type EditPair = { oldText: string; newText: string };
 
 function activityFor(task: TaskRecord): TaskActivityOverlayState {
   const runId = task.runId ?? "";
@@ -83,90 +76,6 @@ function updateStreamText(
   // Retain only a suffix for delta-only producers; full snapshots remain authoritative.
   activity[key] = sliceUtf16Safe(cumulative, -STREAM_TEXT_BUFFER_CHARS);
   return lastLineSnippet(cumulative);
-}
-
-function readString(record: Record<string, unknown>, keys: string[]): string | undefined {
-  for (const key of keys) {
-    if (typeof record[key] === "string") {
-      return record[key];
-    }
-  }
-  return undefined;
-}
-
-function readTarget(record: Record<string, unknown>): string | undefined {
-  const target = normalizeOptionalString(record.path ?? record.file_path ?? record.filePath);
-  return target ? path.resolve(target) : undefined;
-}
-
-// Live progress is intentionally a best-effort count from submitted args, not a post-write diff.
-function countLines(text: string): number {
-  return text.length === 0 ? 0 : text.split(/\r\n|\r|\n/).length;
-}
-
-function readEditPairs(args: Record<string, unknown>): EditPair[] {
-  const candidates = Array.isArray(args.edits) ? args.edits : [args];
-  const pairs: EditPair[] = [];
-  for (const candidate of candidates) {
-    const edit = asOptionalObjectRecord(candidate);
-    if (!edit) {
-      continue;
-    }
-    const oldText = readString(edit, ["oldText", "old_string"]);
-    const newText = readString(edit, ["newText", "new_string"]);
-    if (oldText !== undefined && newText !== undefined) {
-      pairs.push({ oldText, newText });
-    }
-  }
-  return pairs;
-}
-
-function readPatchDelta(args: Record<string, unknown>): DiffDelta | undefined {
-  if (typeof args.input !== "string") {
-    return undefined;
-  }
-  const files = extractApplyPatchTargetPaths(args);
-  if (files.length === 0) {
-    return undefined;
-  }
-  let added = 0;
-  let removed = 0;
-  let inBody = false;
-  for (const line of args.input.split(/\r\n|\r|\n/)) {
-    if (/^\s*\*\*\* (?:Add|Update|Delete) File: /.test(line)) {
-      inBody = true;
-    } else if (!/^\s*\*\* /.test(line) && inBody) {
-      added += Number(line.startsWith("+"));
-      removed += Number(line.startsWith("-"));
-    }
-  }
-  return { files, added, removed };
-}
-
-function readDiffDelta(
-  kind: FileMutationToolName,
-  args: Record<string, unknown>,
-): DiffDelta | undefined {
-  if (kind === "apply_patch") {
-    return readPatchDelta(args);
-  }
-  const target = readTarget(args);
-  if (!target) {
-    return undefined;
-  }
-  if (kind === "write") {
-    return typeof args.content === "string"
-      ? { files: [target], added: countLines(args.content), removed: 0 }
-      : undefined;
-  }
-  const pairs = readEditPairs(args);
-  return pairs.length > 0
-    ? {
-        files: [target],
-        added: pairs.reduce((total, pair) => total + countLines(pair.newText), 0),
-        removed: pairs.reduce((total, pair) => total + countLines(pair.oldText), 0),
-      }
-    : undefined;
 }
 
 function scheduleFlush(taskId: string, activity: TaskActivityOverlayState): void {
@@ -224,7 +133,7 @@ export function recordTaskActivityEvent(task: TaskRecord, event: AgentEventPaylo
   const toolCallId = normalizeOptionalString(event.data.toolCallId);
   if (event.data.phase === "start") {
     const args = asOptionalObjectRecord(event.data.args);
-    const delta = args ? readDiffDelta(kind, args) : undefined;
+    const delta = args ? readCompletedFileMutationDelta(kind, args) : undefined;
     if (!toolCallId || !delta) {
       return false;
     }

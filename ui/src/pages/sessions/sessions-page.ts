@@ -1138,9 +1138,14 @@ class SessionsPage extends OpenClawLightDomElement {
     key: string,
     patch: Parameters<SessionsProps["onPatch"]>[1],
     scope: SessionsPageRequestScope | null = this.captureRequestScope(),
+    expectedSessionId?: string,
   ): Promise<SessionsPageMutationResult> {
     if (!scope) {
       return "stale";
+    }
+    if (typeof patch.archived === "boolean" && !expectedSessionId?.trim()) {
+      this.error = "Session lifecycle action requires a durable session identity.";
+      return "failed";
     }
     const agentId = this.sessionAgentId(key, scope.context);
     if (
@@ -1154,6 +1159,7 @@ class SessionsPage extends OpenClawLightDomElement {
     try {
       const patched = await scope.sessions.patch(key, patch, {
         agentId,
+        ...(typeof patch.archived === "boolean" ? { expectedSessionId } : {}),
       });
       if (!this.isRequestScopeCurrent(scope)) {
         return "stale";
@@ -1180,7 +1186,7 @@ class SessionsPage extends OpenClawLightDomElement {
     if (!scope) {
       return;
     }
-    const result = await this.patchSession(row.key, { archived: true }, scope);
+    const result = await this.patchSession(row.key, { archived: true }, scope, row.sessionId);
     if (result !== "completed" || !this.isRequestScopeCurrent(scope)) {
       return;
     }
@@ -1196,6 +1202,7 @@ class SessionsPage extends OpenClawLightDomElement {
             row.key,
             { archived: false, ...(row.pinned === true ? { pinned: true } : {}) },
             scope,
+            row.sessionId,
           );
         })();
       },
@@ -1521,7 +1528,7 @@ class SessionsPage extends OpenClawLightDomElement {
               break;
             case "toggle-archived":
               if (row.archived === true) {
-                void this.patchSession(row.key, { archived: false });
+                void this.patchSession(row.key, { archived: false }, undefined, row.sessionId);
               } else {
                 void this.archiveSessionWithUndo(row);
               }

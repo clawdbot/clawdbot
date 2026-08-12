@@ -53,6 +53,107 @@ describe("dispatchReplyFromConfig", () => {
   });
   afterEach(clearRuntimeConfigSnapshot);
 
+  it("records channel transform suppression before TTS or visible fallback delivery", async () => {
+    setNoAbort();
+    const transport = vi.fn(async () => {});
+    const transformReplyPayload = vi.fn(() => null);
+    const dispatcher = createReplyDispatcher({ deliver: transport, transformReplyPayload });
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      SessionKey: "agent:main:telegram:direct:123",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: vi.fn(async (_ctx, opts) => {
+        await opts?.onBlockReply?.({ text: "private block" });
+        return { text: "private reply" };
+      }),
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(result).toMatchObject({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(result).not.toHaveProperty("noVisibleReplyFallbackEligible");
+    expect(result).not.toHaveProperty("noVisibleReplyFallbackDelivered");
+    expect(transformReplyPayload).toHaveBeenCalledTimes(2);
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+    expect(transport).not.toHaveBeenCalled();
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: "completed", reason: "channel_transform" }),
+    );
+  });
+
+  it("keeps a block-only channel transform veto terminal", async () => {
+    setNoAbort();
+    const transport = vi.fn(async () => {});
+    const dispatcher = createReplyDispatcher({
+      deliver: transport,
+      transformReplyPayload: () => null,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: vi.fn(async (_ctx, opts) => {
+        await opts?.onBlockReply?.({ text: "private block" });
+        return undefined;
+      }),
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(result).toMatchObject({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(result).not.toHaveProperty("noVisibleReplyFallbackEligible");
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+    expect(transport).not.toHaveBeenCalled();
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "channel_transform" }),
+    );
+  });
+
+  it("lets a later accepted final override an earlier transform veto", async () => {
+    setNoAbort();
+    const transport = vi.fn(async () => {});
+    const transformReplyPayload = vi.fn((payload: ReplyPayload) =>
+      payload.text === "private reply" ? null : payload,
+    );
+    const dispatcher = createReplyDispatcher({ deliver: transport, transformReplyPayload });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: vi.fn(async () => [{ text: "private reply" }, { text: "public reply" }]),
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(result).toMatchObject({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+    expect(transformReplyPayload).toHaveBeenCalledTimes(2);
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledTimes(1);
+    expect(transport).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: "public reply" }),
+      { kind: "final" },
+    );
+    expect(diagnosticMocks.logMessageProcessed).not.toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "channel_transform" }),
+    );
+  });
+
   it("keeps unauthorized plugin-owned binding slash replies suppressed while routed to the bound plugin", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockImplementation(

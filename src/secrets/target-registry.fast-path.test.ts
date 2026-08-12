@@ -53,7 +53,7 @@ const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: loadPluginManifestRegistryMock,
+  loadPluginManifestRegistryCore: loadPluginManifestRegistryMock,
 }));
 
 vi.mock("../plugins/public-surface-loader.js", () => ({

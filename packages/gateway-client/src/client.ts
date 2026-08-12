@@ -7,15 +7,9 @@ import {
 } from "@openclaw/gateway-protocol/client-info";
 import {
   ConnectErrorDetailCodes,
-  formatConnectErrorMessage,
   readConnectErrorDetailCode,
 } from "@openclaw/gateway-protocol/connect-error-details";
-import type {
-  ConnectParams,
-  ErrorShape,
-  EventFrame,
-  HelloOk,
-} from "@openclaw/gateway-protocol/frame-guards";
+import type { ConnectParams, EventFrame, HelloOk } from "@openclaw/gateway-protocol/frame-guards";
 import { resolveGatewayStartupRetryAfterMs } from "@openclaw/gateway-protocol/startup-unavailable";
 import {
   MIN_CLIENT_PROTOCOL_VERSION,
@@ -48,8 +42,12 @@ import {
   type GatewayProtocolSocket,
   type GatewayProtocolSocketHandlers,
 } from "./protocol-client.js";
-import { GatewayProtocolRequestError } from "./protocol-request.js";
+import {
+  GatewayProtocolRequestError,
+  GatewayProtocolRequestTimeoutError,
+} from "./protocol-request.js";
 import { shouldPauseGatewayReconnect } from "./reconnect-policy.js";
+import { GatewayClientRequestError } from "./request-error.js";
 import {
   DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
   resolveConnectChallengeTimeoutMs,
@@ -245,27 +243,12 @@ export type GatewayClientCloseInfo = {
   transientPreHelloCleanClose: boolean;
 };
 
-export class GatewayClientRequestError extends GatewayProtocolRequestError {
-  constructor(error: Partial<ErrorShape>) {
-    super({
-      ...error,
-      message: formatConnectErrorMessage({ message: error.message, details: error.details }),
-    });
-    this.name = "GatewayClientRequestError";
-  }
-}
+export { GatewayClientRequestError } from "./request-error.js";
 
-export class GatewayClientRequestTimeoutError extends Error {
-  readonly method: string;
-  readonly timeoutMs: number;
-  readonly requestSent: boolean;
-
+export class GatewayClientRequestTimeoutError extends GatewayProtocolRequestTimeoutError {
   constructor(params: { method: string; timeoutMs: number; requestSent: boolean }) {
-    super(`gateway request timeout for ${params.method}`);
+    super(params, `gateway request timeout for ${params.method}`);
     this.name = "GatewayClientRequestTimeoutError";
-    this.method = params.method;
-    this.timeoutMs = params.timeoutMs;
-    this.requestSent = params.requestSent;
   }
 }
 
@@ -417,7 +400,7 @@ export class GatewayClient {
     };
     this.requestTimeoutMs =
       typeof opts.requestTimeoutMs === "number" && Number.isFinite(opts.requestTimeoutMs)
-        ? resolveSafeTimeoutDelayMs(opts.requestTimeoutMs, { minMs: 0 })
+        ? opts.requestTimeoutMs
         : DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS;
     const connectChallengeTimeoutMs = resolveConnectChallengeTimeoutMs(
       this.opts.connectChallengeTimeoutMs,
@@ -1372,7 +1355,7 @@ export class GatewayClient {
       opts?.timeoutMs === null
         ? null
         : typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
-          ? resolveSafeTimeoutDelayMs(opts.timeoutMs, { minMs: 0 })
+          ? opts.timeoutMs
           : expectFinal
             ? null
             : this.requestTimeoutMs;

@@ -14,6 +14,7 @@ import {
   parseThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
 import { finalizeTaskRunByRunId } from "../../tasks/detached-task-runtime.js";
+import { findTaskByRunId } from "../../tasks/runtime-internal.js";
 import type { TaskStatus } from "../../tasks/task-registry.types.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
@@ -88,6 +89,7 @@ export function resolveGatewayAgentTaskTrackingMode(params: {
   inputProvenance?: InputProvenance;
   confirmedAcpManualSpawn?: boolean;
   modelRun?: boolean;
+  runId?: string;
 }): GatewayAgentTaskTrackingMode {
   // Model probes are stateless one-shot work. A terminal CLI task row would
   // outlive the probe even when its session/transcript effects are internal.
@@ -99,6 +101,15 @@ export function resolveGatewayAgentTaskTrackingMode(params: {
   }
   if (params.client?.internal?.agentRunTracking === "plugin_subagent") {
     return "plugin_subagent";
+  }
+  // The subagent registry created the authoritative row before its host-owned
+  // gateway dispatch. A CLI row here would represent the same run twice.
+  const existingTask = params.runId ? findTaskByRunId(params.runId) : undefined;
+  if (
+    existingTask?.runtime === "subagent" &&
+    existingTask.childSessionKey === params.sessionKey?.trim()
+  ) {
+    return "none";
   }
   // A confirmed ACP manual-spawn child turn already owns its requester-visible
   // `acp` task row from the spawn control plane (src/agents/subagents/spawn/acp-spawn.ts). The

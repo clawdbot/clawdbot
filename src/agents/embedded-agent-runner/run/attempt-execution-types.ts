@@ -6,9 +6,11 @@ import type {
   createEmbeddedAttemptExternalAbortController,
   EmbeddedAttemptAbortStatePort,
 } from "./attempt-finalize.js";
+import type { prepareEmbeddedAttemptHistory } from "./attempt-history.js";
 import type { prepareEmbeddedAttemptSessionRuntime } from "./attempt-session-runtime-prepare.js";
 import type { prepareEmbeddedAttemptSetup } from "./attempt-setup.js";
-import type { prepareEmbeddedAttemptStreamRuntime } from "./attempt-stream-runtime-prepare.js";
+import type { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
+import type { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
 import type { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
 import type { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
@@ -18,11 +20,12 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type Prepared<T extends (...args: never[]) => unknown> = Awaited<ReturnType<T>>;
 type PreparedSetup = Prepared<typeof prepareEmbeddedAttemptSetup>;
 type PreparedTranscriptLifecycle = Prepared<typeof prepareEmbeddedAttemptTranscriptLifecycle>;
-type StreamRuntimeInput = Parameters<typeof prepareEmbeddedAttemptStreamRuntime>[0];
-type AttemptContextEngine = NonNullable<StreamRuntimeInput["history"]["activeContextEngine"]>;
+type HistoryInput = Parameters<typeof prepareEmbeddedAttemptHistory>[0];
+type StreamInput = Parameters<typeof prepareEmbeddedAttemptStream>[0];
+type StreamGuardInput = Parameters<typeof installEmbeddedAttemptStreamGuards>[0];
+type AttemptContextEngine = NonNullable<HistoryInput["activeContextEngine"]>;
 
 export type EmbeddedAttemptExecutionState = {
-  beforeAgentRunBlocked: boolean;
   beforeAgentRunBlockedBy: string | undefined;
   terminal: AgentRunAttemptTerminal;
   trajectoryEndRecorded: boolean;
@@ -63,8 +66,8 @@ export type EmbeddedAttemptExecutionPhaseInput = {
     | "sessionAgentId"
   >;
   diagnostics: {
-    diagnosticTrace: StreamRuntimeInput["stream"]["diagnosticTrace"];
-    runTrace: StreamRuntimeInput["guards"]["runTrace"];
+    diagnosticTrace: StreamInput["diagnosticTrace"];
+    runTrace: StreamGuardInput["runTrace"];
   };
   state: EmbeddedAttemptExecutionState;
   lifecycle: {
@@ -73,6 +76,8 @@ export type EmbeddedAttemptExecutionPhaseInput = {
       yieldDetected: boolean;
       yieldMessage: string | null;
     };
-    setToolSearchCatalogExecutor: StreamRuntimeInput["lifecycle"]["setToolSearchCatalogExecutor"];
+    setToolSearchCatalogExecutor: (
+      executor: ReturnType<typeof prepareEmbeddedAttemptStream>["toolSearchCatalogExecutor"],
+    ) => void;
   };
 };

@@ -15,6 +15,7 @@ const supportedRuntimeBuildProfiles = new Set(["sourcePerformance"]);
 const fullGitCommitPattern = /^[0-9a-f]{40}$/iu;
 
 type WorkspacePackage = { name: string; version: string; tarball: string };
+type WorkspacePackageSource = Omit<WorkspacePackage, "tarball"> & { dir: string };
 
 export function parseWorkspaceDependencyDirs(
   raw: string | undefined = process.env[WORKSPACE_DIRS_ENV],
@@ -223,7 +224,7 @@ function packWorkspaceDependencies(
   workspaceDirs: string[],
   outputDir: string,
 ): WorkspacePackage[] {
-  return workspaceDirs.map((packageDir) => {
+  const sources: WorkspacePackageSource[] = workspaceDirs.map((packageDir) => {
     const packageJson = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
     if (typeof packageJson.name !== "string" || packageJson.name.trim() === "") {
       throw new Error(`workspace dependency has no package name: ${packageDir}`);
@@ -231,26 +232,45 @@ function packWorkspaceDependencies(
     if (typeof packageJson.version !== "string" || packageJson.version.trim() === "") {
       throw new Error(`workspace dependency has no package version: ${packageDir}`);
     }
+    return {
+      dir: packageDir,
+      name: packageJson.name,
+      version: packageJson.version,
+    };
+  });
+  const workspacePackages = sources.map(({ dir, name, version }) => {
     const before = new Set(readdirSync(outputDir));
-    const result = runNpm(npm, ["pack", packageDir, "--pack-destination", outputDir, "--silent"], {
+    const result = runNpm(npm, ["pack", dir, "--pack-destination", outputDir, "--silent"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "inherit"],
     });
     if (result.status !== 0) {
-      throw new Error(`npm pack failed for ${packageJson.name} with status ${result.status ?? 1}`);
+      throw new Error(`npm pack failed for ${name} with status ${result.status ?? 1}`);
     }
     const tarballs = readdirSync(outputDir).filter(
       (entry) => entry.endsWith(".tgz") && !before.has(entry),
     );
     if (tarballs.length !== 1) {
       throw new Error(
-        `expected npm pack to create one archive for ${packageJson.name}, found ${tarballs.length}`,
+        `expected npm pack to create one archive for ${name}, found ${tarballs.length}`,
       );
     }
     return {
-      name: packageJson.name,
-      version: packageJson.version,
+      name,
+      version,
       tarball: join(outputDir, tarballs[0]!),
+    };
+  });
+  return workspacePackages.map((workspacePackage, index) => {
+    return {
+      name: workspacePackage.name,
+      version: workspacePackage.version,
+      tarball: patchPackageArchiveWorkspaceDependencies(
+        workspacePackage.tarball,
+        workspacePackages,
+        outputDir,
+        `workspace-${index}`,
+      ),
     };
   });
 }
@@ -277,7 +297,7 @@ export function rewriteWorkspaceDependencyVersions(
       }
       const version = workspaceVersions.get(name);
       if (!version) {
-        throw new Error(`root archive references unconfigured workspace dependency: ${name}`);
+        throw new Error(`package archive references unconfigured workspace dependency: ${name}`);
       }
       Reflect.set(dependencies, name, version);
       rewritten += 1;
@@ -286,26 +306,40 @@ export function rewriteWorkspaceDependencyVersions(
   return rewritten;
 }
 
-function patchRootArchiveWorkspaceDependencies(
-  rootArchive: string,
+function patchPackageArchiveWorkspaceDependencies(
+  archive: string,
   workspacePackages: WorkspacePackage[],
   outputDir: string,
+  outputStem: string,
 ): string {
-  const unpackDir = join(outputDir, "root-archive");
+  const unpackDir = join(outputDir, `${outputStem}-archive`);
   mkdirSync(unpackDir);
-  runTar(["-xzf", rootArchive, "-C", unpackDir]);
+  runTar(["-xzf", archive, "-C", unpackDir]);
 
   const packageJsonPath = join(unpackDir, "package", "package.json");
   const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
   const rewritten = rewriteWorkspaceDependencyVersions(packageJson, workspacePackages);
   if (rewritten === 0) {
-    return rootArchive;
+    return archive;
   }
 
   writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
-  const patchedArchive = join(outputDir, "openclaw-root-patched.tgz");
+  const patchedArchive = join(outputDir, `${outputStem}-patched.tgz`);
   runTar(["-czf", patchedArchive, "-C", unpackDir, "package"]);
   return patchedArchive;
+}
+
+function patchRootArchiveWorkspaceDependencies(
+  rootArchive: string,
+  workspacePackages: WorkspacePackage[],
+  outputDir: string,
+): string {
+  return patchPackageArchiveWorkspaceDependencies(
+    rootArchive,
+    workspacePackages,
+    outputDir,
+    "openclaw-root",
+  );
 }
 
 function main(): number {

@@ -15,7 +15,7 @@ import type {
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   patchSessionEntryWithKey,
-  resolveStorePath,
+  resolveSessionStorePathCore,
   type SessionEntry,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -70,7 +70,7 @@ import type { AnyAgentTool } from "./common.js";
 import {
   normalizeToolModelOverride,
   readNonNegativeIntegerParam,
-  readStringParam,
+  readToolStringParam,
 } from "./common.js";
 import {
   callAgentToolGatewayRequest,
@@ -634,7 +634,7 @@ export function createSessionStatusTool(opts?: {
         callGateway: gatewayCall,
       });
 
-      const requestedKeyParam = readStringParam(params, "sessionKey");
+      const requestedKeyParam = readToolStringParam(params, "sessionKey");
       const isImplicitRunSessionStatus =
         requestedKeyParam === undefined && Boolean(opts?.runSessionKey?.trim());
       let requestedKeyRaw = requestedKeyParam ?? opts?.agentSessionKey;
@@ -715,7 +715,7 @@ export function createSessionStatusTool(opts?: {
       let agentId = isExplicitAgentKey
         ? resolveAgentIdFromSessionKey(requestedKeyInput, configuredDefaultAgentId)
         : requesterAgentId;
-      let storePath = resolveStorePath(cfg.session?.store, { agentId });
+      let storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
       let storeScopedRequesterKey = resolveStoreScopedRequesterKey({
         requesterKey: effectiveRequesterKey,
         agentId,
@@ -767,7 +767,7 @@ export function createSessionStatusTool(opts?: {
           requestedKeyRaw = visibleSession.key;
           requestedKeyInput = requestedKeyRaw.trim();
           agentId = resolveAgentIdFromSessionKey(visibleSession.key, configuredDefaultAgentId);
-          storePath = resolveStorePath(cfg.session?.store, { agentId });
+          storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
           storeScopedRequesterKey = resolveStoreScopedRequesterKey({
             requesterKey: effectiveRequesterKey,
             agentId,
@@ -878,7 +878,7 @@ export function createSessionStatusTool(opts?: {
           const configured = resolveDefaultModelForAgent({ cfg, agentId });
           const selectedAgentDir = resolveAgentDir(cfg, agentId);
           const selectedWorkspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-          const modelRaw = readStringParam(params, "model");
+          const modelRaw = readToolStringParam(params, "model");
           let changedModel = false;
           if (typeof modelRaw === "string") {
             const selection = await resolveModelOverride({

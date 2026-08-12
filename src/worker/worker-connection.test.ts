@@ -13,7 +13,7 @@ import type {
   WorkerInferenceEventFrame,
   WorkerInferenceTerminalFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
-import { toError } from "./worker-connection-contract.js";
+import { toWorkerConnectionError } from "./worker-connection-contract.js";
 import { WorkerConnectionFrameDispatcher } from "./worker-connection-frames.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 
@@ -143,7 +143,7 @@ describe("worker connection error coercion", () => {
     original.name = "WorkerFailure";
     const originalStack = original.stack;
 
-    const error = toError(original);
+    const error = toWorkerConnectionError(original);
 
     expect(error).toBe(original);
     expect(error).toMatchObject({
@@ -157,7 +157,7 @@ describe("worker connection error coercion", () => {
   it("preserves structured non-Error causes", () => {
     const cause = { code: "ECONNRESET", status: 503 };
 
-    const error = toError(cause);
+    const error = toWorkerConnectionError(cause);
 
     expect(error.message).toBe("[object Object]");
     expect(error.cause).toBe(cause);
@@ -174,7 +174,7 @@ describe("worker connection error coercion", () => {
     let error: Error | undefined;
 
     expect(() => {
-      error = toError(cause);
+      error = toWorkerConnectionError(cause);
     }).not.toThrow();
     expect(error).toMatchObject({ code: "ECONNRESET" });
     expect(error).not.toHaveProperty("details");
@@ -202,7 +202,7 @@ describe("worker connection error coercion", () => {
 
     for (const handler of handlers) {
       const cause = new Proxy({ code: "ECONNRESET", status: 503 }, handler);
-      const error = toError(cause);
+      const error = toWorkerConnectionError(cause);
 
       expect(error).toMatchObject({ name: "Error", message: "[object Object]" });
       expect(error.cause).toBe(cause);
@@ -236,7 +236,7 @@ describe("worker connection error coercion", () => {
       [detailKey]: "symbol detail",
     };
 
-    const error = toError(cause);
+    const error = toWorkerConnectionError(cause);
 
     expect(reservedReads).toBe(0);
     expect(error.message).toBe("[object Object]");
@@ -254,7 +254,7 @@ describe("worker connection error coercion", () => {
       enumerable: true,
     });
 
-    const error = toError(cause);
+    const error = toWorkerConnectionError(cause);
 
     expect(Object.getPrototypeOf(error)).toBe(Error.prototype);
     expect(Object.hasOwn(error, "__proto__")).toBe(false);

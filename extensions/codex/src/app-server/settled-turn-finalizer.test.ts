@@ -1,7 +1,4 @@
-import {
-  normalizeUsage,
-  type EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { normalizeUsage, type AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
@@ -26,7 +23,11 @@ vi.mock("./transcript-mirror.js", () => ({
 
 const { runCodexSettledTurnFinalization } = await import("./settled-turn-finalizer.js");
 
-function createAttempt(): EmbeddedRunAttemptParams {
+type SettledTurnFinalizationAttemptParams = Parameters<
+  NonNullable<AgentHarnessV2["finalizeSettledTurn"]>
+>[0]["attempt"];
+
+function createAttempt(): SettledTurnFinalizationAttemptParams {
   return {
     prompt: "Produce the final user-visible answer now.",
     sessionId: "session-1",
@@ -46,7 +47,7 @@ function createAttempt(): EmbeddedRunAttemptParams {
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
     thinkLevel: "low",
-  } as EmbeddedRunAttemptParams;
+  } as SettledTurnFinalizationAttemptParams;
 }
 
 function createSettledAttempt(): EmbeddedRunAttemptResult {

@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createPatternFileHelper } from "./helpers/pattern-file.js";
 import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
+import { auditFullSuiteTestFileOwnership } from "./vitest-projects-config.test-support.js";
 import { createAgentsCoreVitestConfig } from "./vitest/vitest.agents-core.config.ts";
 import { createAgentsEmbeddedIncompleteTurnVitestConfig } from "./vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts";
 import { createAgentsEmbeddedOverflowCompactionVitestConfig } from "./vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts";
@@ -80,6 +81,13 @@ describe("projects vitest config", () => {
       agentVitestProjectConfigs,
     );
     expect(agentConfigs.size).toBe(agentVitestProjectConfigs.length);
+  });
+
+  it("covers each normal full-suite test file exactly once", async () => {
+    const { missing, duplicated } = await auditFullSuiteTestFileOwnership();
+
+    expect(missing).toStrictEqual([]);
+    expect(duplicated).toStrictEqual([]);
   });
 
   it("keeps all embedded harnesses under their canonical embedded owner", () => {

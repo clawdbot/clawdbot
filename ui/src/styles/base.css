@@ -166,6 +166,13 @@
   --radius-full: 9999px;
   --radius: 10px;
 
+  /* Menu items stay optically parallel to their panel edge: radius 6 + padding 4
+     = panel radius 10. Shared knobs keep transient menus from drifting again. */
+  --menu-radius: var(--radius-md);
+  --menu-item-radius: var(--radius-sm);
+  --menu-item-height: 28px;
+  --menu-padding: 4px;
+
   /* Transitions - Crisp and responsive */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
@@ -180,12 +187,20 @@
 
   /* Layering */
   --z-dropdown: 100;
+  --z-toast: 2000;
 
   /* Custom select chevron. Data URIs cannot read var(--muted), so the stroke
      color is baked per theme mode; light mode overrides the whole image. */
   --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
 
   color-scheme: dark;
+}
+
+/* Menu actions follow the platform 44px touch-target contract for coarse pointers. */
+@media (pointer: coarse) {
+  :root {
+    --menu-item-height: 44px;
+  }
 }
 
 /* The claw family deepens only the text-bearing destructive fill. */
@@ -600,6 +615,19 @@
   box-sizing: border-box;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 html,
 body {
   height: 100%;
@@ -771,6 +799,21 @@ wa-dropdown-item[disabled] {
   cursor: not-allowed;
 }
 
+/* Keep Web Awesome's checkbox rail trailing so it cannot shift menu icons and labels. */
+wa-dropdown-item[checkbox-adjacent] {
+  padding-inline-start: 1em;
+}
+
+wa-dropdown-item[type="checkbox"]::part(checkmark) {
+  order: 1;
+  margin-inline: 0.75em 0;
+}
+
+wa-dropdown-item[type="checkbox"] {
+  display: flex;
+  align-items: center;
+}
+
 button,
 input,
 textarea,
@@ -835,6 +878,17 @@ textarea,
   }
   to {
     opacity: 1;
+  }
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }
 

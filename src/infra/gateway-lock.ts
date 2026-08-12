@@ -13,7 +13,7 @@ import { z } from "zod";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
-import { sha256HexPrefix } from "./crypto-digest.js";
+import { sha256HexPrefixCore } from "./crypto-digest.js";
 import { createFileLockManager } from "./file-lock-manager.js";
 import {
   isGatewayArgv,
@@ -315,7 +315,7 @@ function resolveGatewayLockPaths(env: NodeJS.ProcessEnv, suppliedLockDir?: strin
   const stateDir = canonicalizeStateDir(resolvedStateDir);
   const lockDir = suppliedLockDir ?? resolveGatewayLockDir(stateDir);
   const configPath = resolveConfigPath(env, resolvedStateDir);
-  const configHash = sha256HexPrefix(configPath, 8);
+  const configHash = sha256HexPrefixCore(configPath, 8);
   return {
     configLockPath: path.join(lockDir, `gateway.${configHash}.lock`),
     configPath,

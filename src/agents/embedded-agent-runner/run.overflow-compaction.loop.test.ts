@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import {
   createEmbeddedRunReplayState,
   type EmbeddedRunReplayState,
@@ -40,14 +41,6 @@ vi.mock("../subagents/registry/subagent-registry.js", () => ({
   settleRequesterAfterSessionSpawns: mocks.settleRequesterAfterSessionSpawns,
 }));
 
-vi.mock("./run/plugin-harness-prompt-images.js", () => ({
-  preparePluginHarnessPromptImages: vi.fn(async () => ({
-    images: undefined,
-    imageOrder: undefined,
-    media: undefined,
-  })),
-}));
-
 vi.mock("./run/skill-workshop-attempt-params.js", () => ({
   resolveSkillWorkshopAttemptParams: vi.fn(() => ({})),
 }));
@@ -64,6 +57,7 @@ function makeDispatchInput(
       config: {},
       contextEngineLogicalTurnLease: { owner: "logical-turn" },
       onContextEngineTurnCandidate: vi.fn(),
+      admittedRunContext: createTestAdmittedRunContext("run-1"),
     },
     transcriptOwnership: { kind: "caller-owned", sessionManager },
     runtime: {

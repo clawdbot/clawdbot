@@ -9,6 +9,7 @@ import type {
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
 import type { McpToolCatalog } from "../agent-bundle-mcp-types.js";
+import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
 
 export type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
@@ -88,16 +89,35 @@ type AgentHarnessLegacyAttemptResult = Omit<
       | null;
   };
 
-export type AgentHarnessAttemptParams = Omit<
+type AgentHarnessAttemptParamsBase = Omit<
   InternalEmbeddedRunAttemptParams,
-  "contextEngineLogicalTurnLease" | "onContextEngineTurnCandidate" | "trajectoryRecorder"
+  | "admittedRunContext"
+  | "contextEngineLogicalTurnLease"
+  | "onContextEngineTurnCandidate"
+  | "trajectoryRecorder"
 >;
+/**
+ * @deprecated Use AgentHarnessAttemptParamsV2. The optional capability keeps
+ * existing harness source compatible through 2026-10-12.
+ */
+export type AgentHarnessAttemptParams = AgentHarnessAttemptParamsBase & {
+  hostCapabilities?: AgentHarnessHostCapabilities;
+};
+/** Current host-prepared attempt contract for agent harnesses. */
+export type AgentHarnessAttemptParamsV2 = AgentHarnessAttemptParamsBase & {
+  hostCapabilities: AgentHarnessHostCapabilities;
+};
 export type AgentHarnessAttemptResult =
   | AgentHarnessCanonicalAttemptResult
   | AgentHarnessLegacyAttemptResult;
-type AgentHarnessSettledTurnFinalizationParams = {
+export type AgentHarnessSettledTurnFinalizationAttemptParams<
+  TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
+> = Omit<TAttemptParams, "hostCapabilities"> & { hostCapabilities?: never };
+type AgentHarnessSettledTurnFinalizationParams<
+  TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
+> = {
   /** Fully prepared attempt context for the isolated finalization operation. */
-  attempt: AgentHarnessAttemptParams;
+  attempt: AgentHarnessSettledTurnFinalizationAttemptParams<TAttemptParams>;
   /** Settled result whose completed tool transcript needs a final visible answer. */
   settledAttempt: AgentHarnessCanonicalAttemptResult;
 };
@@ -149,7 +169,15 @@ export type AgentHarnessAuthBindingFingerprintParams = {
   agentDir: string;
   config?: import("../../config/types.openclaw.js").OpenClawConfig;
 };
+/**
+ * @deprecated Use {@link AgentHarnessSideQuestionParamsV2}. This compatibility
+ * contract is retained through 2026-10-12.
+ */
 export type AgentHarnessSideQuestionParams = {
+  /** Host-bound authority for this admitted side execution; contains no public token fields. */
+  hostCapabilities?: AgentHarnessHostCapabilities;
+  /** Host-resolved sandbox snapshot for this side execution. */
+  sandbox?: import("../sandbox/types.js").SandboxContext | null;
   cfg: import("../../config/types.openclaw.js").OpenClawConfig;
   agentDir: string;
   provider: string;
@@ -202,6 +230,10 @@ export type AgentHarnessSideQuestionParams = {
   toolsAllow?: string[];
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
+};
+/** Current side-question contract for hosts that always provide closure-bound authority. */
+export type AgentHarnessSideQuestionParamsV2 = AgentHarnessSideQuestionParams & {
+  hostCapabilities: AgentHarnessHostCapabilities;
 };
 export type AgentHarnessSideQuestionResult = {
   text: string;
@@ -267,7 +299,9 @@ export type AgentHarnessDeliveryDefaults = {
   sourceVisibleReplies?: "automatic" | "message_tool";
 };
 
-type AgentHarnessRunCapability = {
+type AgentHarnessRunCapability<
+  TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
+> = {
   id: string;
   label: string;
   pluginId?: string;
@@ -293,13 +327,13 @@ type AgentHarnessRunCapability = {
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
   /** Lets this harness resolve forwarded profiles or its own native credentials. */
   authBootstrap?: "harness";
-  runAttempt(params: AgentHarnessAttemptParams): Promise<AgentHarnessAttemptResult>;
+  runAttempt(params: TAttemptParams): Promise<AgentHarnessAttemptResult>;
   /**
    * Produces one final answer from a settled tool transcript without exposing
    * capabilities that can repeat or extend the completed work.
    */
   finalizeSettledTurn?(
-    params: AgentHarnessSettledTurnFinalizationParams,
+    params: AgentHarnessSettledTurnFinalizationParams<TAttemptParams>,
   ): Promise<AgentHarnessSettledTurnFinalizationResult>;
   /**
    * Runs one fresh prompt-only completion with a literal zero-tool model surface.
@@ -310,14 +344,18 @@ type AgentHarnessRunCapability = {
   ): Promise<AgentHarnessIsolatedCompletionResult>;
 };
 
-type AgentHarnessSideQuestionCapability = {
-  runSideQuestion?(params: AgentHarnessSideQuestionParams): Promise<AgentHarnessSideQuestionResult>;
+type AgentHarnessSideQuestionCapability<
+  TSideQuestionParams extends AgentHarnessSideQuestionParams = AgentHarnessSideQuestionParams,
+> = {
+  runSideQuestion?(params: TSideQuestionParams): Promise<AgentHarnessSideQuestionResult>;
 };
 
-type AgentHarnessClassificationCapability = {
+type AgentHarnessClassificationCapability<
+  TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
+> = {
   classify?(
     result: AgentHarnessAttemptResult,
-    ctx: AgentHarnessAttemptParams,
+    ctx: TAttemptParams,
   ): AgentHarnessResultClassification | undefined;
 };
 
@@ -383,9 +421,25 @@ type AgentHarnessMcpCatalogCapability = {
   loadMcpToolCatalog?(params: AgentHarnessMcpCatalogParams): Promise<McpToolCatalog | undefined>;
 };
 
+/**
+ * @deprecated Implement AgentHarnessV2. This registration contract remains
+ * source-compatible for existing plugins through 2026-10-12.
+ */
 export type AgentHarness = AgentHarnessRunCapability &
   AgentHarnessSideQuestionCapability &
   AgentHarnessClassificationCapability &
+  AgentHarnessCompactionCapability &
+  AgentHarnessRuntimeArtifactCapability &
+  AgentHarnessAuthBindingCapability &
+  AgentHarnessProviderUsageCapability &
+  AgentHarnessMcpCatalogCapability &
+  AgentHarnessSessionForkCapability &
+  AgentHarnessSessionLifecycleCapability;
+
+/** Current harness contract for hosts that always supply versioned capabilities. */
+export type AgentHarnessV2 = AgentHarnessRunCapability<AgentHarnessAttemptParamsV2> &
+  AgentHarnessSideQuestionCapability<AgentHarnessSideQuestionParamsV2> &
+  AgentHarnessClassificationCapability<AgentHarnessAttemptParamsV2> &
   AgentHarnessCompactionCapability &
   AgentHarnessRuntimeArtifactCapability &
   AgentHarnessAuthBindingCapability &

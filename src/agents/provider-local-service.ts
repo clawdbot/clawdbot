@@ -14,6 +14,7 @@ import { sleepWithAbort } from "@openclaw/retry";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
+import { mergeProcessEnv } from "../infra/process-env.js";
 import type { Model } from "../llm/types.js";
 import { isSensitiveFieldKey, redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -22,6 +23,7 @@ import {
   signalChildProcessTree,
   shouldDetachChildForProcessTree,
 } from "../process/child-process-tree.js";
+import { setManagedProviderLocalServicesActive } from "./provider-runtime-lifecycle.js";
 import { unwrapHeadersInitSentinelsForProviderEgress } from "./provider-secret-egress.js";
 
 const log = createSubsystemLogger("provider-local-service");
@@ -228,6 +230,7 @@ export async function ensureProviderLocalService(
   installExitHandler();
   const managed = services.get(key) ?? { active: 0 };
   services.set(key, managed);
+  setManagedProviderLocalServicesActive(true);
   clearIdleTimer(managed);
   managed.active += 1;
 
@@ -294,6 +297,7 @@ export function stopManagedProviderLocalServices(): void {
     stopManagedService(key, managed, "host-shutdown");
   }
   services.clear();
+  setManagedProviderLocalServicesActive(false);
 }
 
 /** Return bounded local-service state for focused lifecycle tests. */
@@ -312,11 +316,7 @@ function validateLocalServiceConfig(service: ModelProviderLocalServiceConfig, pr
 }
 
 function resolveHealthUrl(service: ModelProviderLocalServiceConfig, baseUrl: string): string {
-  const configured = service.healthUrl?.trim();
-  if (configured) {
-    return configured;
-  }
-  return `${baseUrl.replace(/\/+$/, "")}/models`;
+  return service.healthUrl?.trim() || `${baseUrl.replace(/\/+$/, "")}/models`;
 }
 
 function localServiceKey(
@@ -426,7 +426,7 @@ async function startAndWaitForLocalService(params: {
   log.info(`starting ${provider} local service: ${service.command}`);
   managed.process = spawn(service.command, service.args ?? [], {
     cwd: service.cwd,
-    env: service.env ? { ...process.env, ...service.env } : process.env,
+    env: service.env ? mergeProcessEnv([process.env, service.env]) : process.env,
     stdio: ["ignore", "pipe", "pipe"],
     detached: shouldDetachChildForProcessTree(),
   });
@@ -583,6 +583,7 @@ function scheduleIdleStop(
   if (!managed.process) {
     if (!managed.starting) {
       services.delete(key);
+      setManagedProviderLocalServicesActive(services.size > 0);
     }
     return;
   }
@@ -613,6 +614,7 @@ function stopManagedService(key: string, managed: ManagedLocalService, reason: s
   managed.process = undefined;
   managed.lastExit = undefined;
   services.delete(key);
+  setManagedProviderLocalServicesActive(services.size > 0);
   if (child) {
     drainLocalServiceOutput(child);
   }

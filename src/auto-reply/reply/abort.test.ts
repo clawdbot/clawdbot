@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveStorePath } from "../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
@@ -96,10 +96,11 @@ const { subagentRegistryMocks, subagentRegistryDeps } = vi.hoisted(() => {
 });
 
 vi.mock("../../agents/subagents/registry/subagent-registry.js", () => ({
-  getLatestSubagentRunByChildSessionKey: subagentRegistryDeps.getLatestSubagentRunByChildSessionKey,
-  listSubagentRunsForRequester: subagentRegistryDeps.listSubagentRunsForRequester,
-  listSubagentRunsForController: subagentRegistryDeps.listSubagentRunsForRequester,
   markSubagentRunTerminated: subagentRegistryMocks.markSubagentRunTerminated,
+}));
+vi.mock("../../agents/subagents/registry/subagent-registry-read.js", () => ({
+  getLatestSubagentRunByChildSessionKey: subagentRegistryDeps.getLatestSubagentRunByChildSessionKey,
+  listSubagentRunsForController: subagentRegistryDeps.listSubagentRunsForRequester,
 }));
 
 const acpManagerMocks = vi.hoisted(() => ({
@@ -279,7 +280,7 @@ describe("abort detection", () => {
         sessionKey: entry.childSessionKey,
         config: params.cfg,
       });
-      const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+      const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
       const sessionId =
         replyRunRegistry.resolveSessionId(entry.childSessionKey) ??
         loadSessionEntry({

@@ -53,6 +53,24 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        index += 1;
+        continue;
+      }
+      return true;
+    }
+    if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function writeExecutable(pathname: string, content: string): void {
   fs.writeFileSync(pathname, content, { mode: 0o755 });
 }
@@ -631,6 +649,34 @@ describe("telegram user Crabbox proof log polling", () => {
     expect(tail).not.toContain("old\nold\nold\nold\nold\nold\nold\nold\nold");
   });
 
+  it("keeps byte-cut log tails UTF-8 safe and reads at least one byte", () => {
+    const logPath = path.join(makeTempDir(tempDirs, "openclaw-telegram-proof-"), "gateway.log");
+    fs.writeFileSync(
+      logPath,
+      Buffer.concat([Buffer.from("x".repeat(100)), Buffer.from("😀"), Buffer.from("y".repeat(20))]),
+    );
+
+    expect(readLogTail(logPath, 23)).toBe("y".repeat(20));
+    expect(readLogTail(logPath, 24)).toBe(`😀${"y".repeat(20)}`);
+    expect(readLogTail(logPath, 0)).toBe("y");
+  });
+
+  it("keeps readiness timeout tails free of split surrogate pairs", async () => {
+    const logPath = path.join(makeTempDir(tempDirs, "openclaw-telegram-proof-"), "gateway.log");
+    fs.writeFileSync(logPath, `${"a".repeat(9)}😀${"b".repeat(3999)}`, "utf8");
+
+    let message = "";
+    try {
+      await waitForLog(logPath, /\[gateway\] ready/u, "gateway", 0);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    const tail = message.split("\n").at(-1) ?? "";
+    expect(tail).toBe("b".repeat(3999));
+    expect(hasLoneSurrogate(tail)).toBe(false);
+  });
+
   it("honors short reads when a log shrinks during tailing", () => {
     vi.spyOn(fs, "statSync").mockReturnValue({
       isFile: () => true,
@@ -802,6 +848,68 @@ fs.writeFileSync(process.env.OPENCLAW_TEST_ARGV_PATH, JSON.stringify(process.arg
 
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     setTimeoutSpy.mockRestore();
+  });
+
+  it("keeps command failure tails free of split surrogate pairs", async () => {
+    const root = makeTempDir(tempDirs, "openclaw-telegram-proof-");
+    const scriptPath = path.join(root, "unicode-failure.mjs");
+    fs.writeFileSync(
+      scriptPath,
+      `
+await new Promise((resolve) => {
+  process.stdout.write("a".repeat(3) + "😀" + "b".repeat(65_535), resolve);
+});
+await new Promise((resolve) => {
+  process.stderr.write("😀" + "c".repeat(262_143), resolve);
+});
+process.exitCode = 2;
+`,
+    );
+    let message = "";
+    try {
+      await runCommand({
+        args: [scriptPath],
+        command: process.execPath,
+        cwd: root,
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    const marker = "[stdout truncated to last 65536 characters]\n";
+    const tail = message.split(marker).at(-1) ?? "";
+    expect(message).toContain(marker);
+    expect(tail.startsWith("b".repeat(100))).toBe(true);
+    expect(tail.endsWith("c".repeat(100))).toBe(true);
+    expect(tail).not.toContain("😀");
+    expect(hasLoneSurrogate(tail)).toBe(false);
+  });
+
+  it("decodes command output statefully across split stream chunks", async () => {
+    const script = [
+      'const emoji = Buffer.from("😀", "utf8");',
+      "process.stdout.write(emoji.subarray(0, 2));",
+      "process.stderr.write(emoji.subarray(0, 2));",
+      "setTimeout(() => {",
+      "  process.stdout.write(emoji.subarray(2));",
+      "  process.stderr.write(emoji.subarray(2));",
+      "  process.exit(2);",
+      "}, 100);",
+    ].join("\n");
+    let message = "";
+    try {
+      await runCommand({
+        args: ["-e", script],
+        command: process.execPath,
+        cwd: makeTempDir(tempDirs, "openclaw-telegram-proof-"),
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    const output = message.split("failed with exit code 2\n").at(-1) ?? "";
+    expect(output.match(/😀/gu)).toHaveLength(2);
+    expect(output).not.toContain("�");
   });
 
   posixIt("kills timed-out command process groups when the leader exits first", async () => {
@@ -1069,7 +1177,7 @@ setInterval(() => {}, 1000);
     }
   });
 
-  posixIt("cleans local SUT children when gateway startup fails", async () => {
+  posixIt("keeps local SUT startup tails Unicode-safe and cleans child processes", async () => {
     const root = makeTempDir(tempDirs, "openclaw-telegram-proof-");
     const outputDir = makeTempDir(tempDirs, "openclaw-telegram-proof-");
     const mockScript = path.join(root, "scripts/e2e/mock-openai-server.mjs");
@@ -1096,13 +1204,15 @@ setInterval(() => {}, 1000);
     writeExecutable(
       gatewayScript,
       `
-process.stderr.write("gateway startup failed\\n");
+const output = "😀" + "x".repeat(7998) + "😀" + "y".repeat(3999);
+process.stderr.write(output);
 process.exit(2);
 `,
     );
 
-    await expect(
-      startLocalSut(
+    let message = "";
+    try {
+      await startLocalSut(
         {
           gatewayPort: 19042,
           groupId: "group",
@@ -1126,9 +1236,14 @@ process.exit(2);
             webhookUrlSet: false,
           }),
         },
-      ),
-    ).rejects.toThrow("gateway exited before ready");
+      );
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
 
+    expect(message).toContain("gateway exited before ready");
+    expect(message.endsWith("y".repeat(3999))).toBe(true);
+    expect(hasLoneSurrogate(message)).toBe(false);
     await waitFor(() => fs.existsSync(mockTermPath));
     const mockPid = Number.parseInt(fs.readFileSync(mockPidPath, "utf8"), 10);
     await waitFor(() => !isProcessAlive(mockPid));

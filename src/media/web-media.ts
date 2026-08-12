@@ -40,7 +40,7 @@ import { readRemoteMediaBuffer } from "./fetch.js";
 import type { OutboundMediaReadFile } from "./load-options.js";
 import {
   assertLocalMediaAllowed,
-  getDefaultLocalRoots,
+  getDefaultLocalRootsCore,
   LocalMediaAccessError,
   readLocalMediaFile,
   type LocalMediaAccessErrorCode,
@@ -53,7 +53,7 @@ import {
 } from "./media-services.js";
 import { extractOriginalFilename, getMediaDir } from "./store.js";
 
-export { getDefaultLocalRoots, LocalMediaAccessError };
+export { getDefaultLocalRootsCore, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
 
 /** Loaded media bytes plus resolved MIME kind and filename metadata for outbound/plugin callers. */

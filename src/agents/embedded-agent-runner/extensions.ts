@@ -34,9 +34,8 @@ type AgentToolResultEvent = {
 
 function snapshotToolSendReceipt(details: unknown): unknown {
   const toolSend = (asOptionalRecord(details) ?? {}).toolSend;
-  return toolSend && typeof toolSend === "object" && !Array.isArray(toolSend)
-    ? { ...(toolSend as Record<string, unknown>) }
-    : toolSend;
+  const toolSendRecord = asOptionalRecord(toolSend);
+  return toolSendRecord ? { ...toolSendRecord } : toolSend;
 }
 
 function buildAgentToolResultMiddlewareFactory(

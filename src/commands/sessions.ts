@@ -526,12 +526,3 @@ export async function sessionsCommand(
     runtime.log(line.trimEnd());
   }
 }
-
-const testing = {
-  parseSessionsLimit,
-} as const;
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.sessionsCommandTestApi")] =
-    testing;
-}

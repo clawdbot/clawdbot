@@ -263,7 +263,7 @@ export const SUB_CLI_DESCRIPTORS = filterPrivateQaItems(
 );
 
 /** Return visible sub-CLI descriptors in help/registration order. */
-export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {
+export function getSubCliEntriesCore(): ReadonlyArray<SubCliDescriptor> {
   return filterPrivateQaItems(
     subCliCommandCatalog.getDescriptors(),
     (descriptor) => descriptor.name,

@@ -232,6 +232,44 @@ describe("canonical session message recovery", () => {
     expect(state.chatMessages).toEqual([selectedUser]);
   });
 
+  it("keeps the routed row when a hidden pane observes its archive first", () => {
+    const archivedKey = "agent:main:dashboard:archived";
+    const sharedHost = makeChatHost({
+      sessionKey: archivedKey,
+      sessionsResult: {
+        ts: 1,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: archivedKey,
+            kind: "direct",
+            archived: false,
+            derivedTitle: "Archived title",
+            updatedAt: 1,
+          },
+        ],
+      },
+    });
+    expect(sharedHost.sessions.state.result?.sessions).toHaveLength(1);
+    const { state } = createSessionEventState({ sessions: sharedHost.sessions });
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "sessions.changed",
+      payload: { key: archivedKey, sessionKey: archivedKey, archived: true, reason: "update" },
+    });
+
+    expect(state.sessions.state.result?.sessions).toEqual([
+      expect.objectContaining({
+        key: archivedKey,
+        archived: true,
+        derivedTitle: "Archived title",
+      }),
+    ]);
+  });
+
   it("does not mistake identity-only message invalidation for a session reset", () => {
     const selectedUser = {
       role: "user",
@@ -748,6 +786,39 @@ describe("ChatStateController render lifecycle", () => {
       lifecycleEvent("approval-resolved", state.sessionKey, "approval-2"),
     );
     expect(state.waitingApprovalStatuses.size).toBe(0);
+  });
+
+  it("skips no-op assistant invalidation while tool and plan changes render immediately", () => {
+    const requestUpdate = vi.fn();
+    const state = createStreamEventState({
+      requestUpdate,
+      chatStreamSegments: [],
+      chatToolMessages: [],
+      toolStreamById: new Map(),
+      toolStreamOrder: [],
+      toolStreamSyncTimer: null,
+      planStatus: null,
+      sessions: { setModelOverride: vi.fn() } as never,
+    });
+    const emitAgent = (seq: number, stream: string, data: Record<string, unknown>) =>
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "agent",
+        payload: { runId: "run-1", seq, stream, ts: seq, sessionKey: "main", data },
+      });
+
+    emitAgent(1, "assistant", { text: "Hello", delta: "Hello" });
+    expect(requestUpdate).not.toHaveBeenCalled();
+
+    emitAgent(2, "plan", {
+      phase: "update",
+      steps: [{ step: "Measure the repair", status: "in_progress" }],
+    });
+    expect(requestUpdate).toHaveBeenCalledOnce();
+
+    requestUpdate.mockClear();
+    emitAgent(3, "tool", { phase: "start", name: "read", toolCallId: "tool-1" });
+    expect(requestUpdate).toHaveBeenCalledOnce();
   });
 
   it("coalesces stream invalidations into one animation frame", () => {
@@ -1587,8 +1658,14 @@ describe("refreshChatMetadata", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
-  it("does not load unscoped compatibility models for a non-default agent", async () => {
-    const request = vi.fn(async (method: string) => {
+  it("loads agent-scoped compatibility models for a non-default agent", async () => {
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "models.list") {
+        expect(params).toEqual({ view: "configured", agentId: "work" });
+        return {
+          models: [{ id: "work-model", name: "Work Model", provider: "openai" }],
+        };
+      }
       expect(method).toBe("commands.list");
       return { commands: [] };
     });
@@ -1600,9 +1677,11 @@ describe("refreshChatMetadata", () => {
 
     await refreshChatMetadata(state);
 
-    expect(state.chatModelCatalog).toEqual([]);
+    expect(state.chatModelCatalog).toEqual([
+      { id: "work-model", name: "Work Model", provider: "openai" },
+    ]);
     expect(state.chatModelsLoading).toBe(false);
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("does not apply compatibility commands after switching agents", async () => {

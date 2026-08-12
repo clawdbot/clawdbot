@@ -38,10 +38,7 @@ import {
   preloadRunEmbeddedAttemptForTests,
   resetEmbeddedAttemptHarness,
 } from "./attempt-spawn-workspace.test-support.js";
-import {
-  buildEmbeddedSubscriptionParams,
-  cleanupEmbeddedAttemptResources,
-} from "./attempt-subscription-cleanup.js";
+import { cleanupEmbeddedAttemptResources } from "./attempt-subscription-cleanup.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 
 const hoisted = getHoisted();
@@ -2851,36 +2848,20 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
   });
 
-  it("forwards silentExpected to the embedded subscription", () => {
-    const params = buildEmbeddedSubscriptionParams({
-      session: {} as never,
-      runId: "run-context-engine-forwarding",
-      hookRunner: undefined,
-      verboseLevel: undefined,
-      reasoningMode: "off",
-      toolResultFormat: undefined,
-      shouldEmitToolResult: undefined,
-      shouldEmitToolOutput: undefined,
-      onToolResult: undefined,
-      onReasoningStream: undefined,
-      onReasoningEnd: undefined,
-      onBlockReply: undefined,
-      onBlockReplyFlush: undefined,
-      blockReplyBreak: undefined,
-      blockReplyChunking: undefined,
-      onPartialReply: undefined,
-      onAssistantMessageStart: undefined,
-      onAgentEvent: undefined,
-      enforceFinalTag: undefined,
-      silentExpected: true,
-      config: undefined,
+  it("forwards silentExpected to the embedded subscription", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
       sessionKey,
-      sessionId: embeddedSessionId,
-      agentId: "main",
+      tempPaths,
+      attemptOverrides: { silentExpected: true },
     });
 
-    expect(params.silentExpected).toBe(true);
-    expect(params.sessionKey).toBe(sessionKey);
+    const subscriptionParams = requireRecord(
+      hoisted.subscribeEmbeddedAgentSessionMock.mock.calls[0]?.[0],
+      "subscription params",
+    );
+    expect(subscriptionParams.silentExpected).toBe(true);
+    expect(subscriptionParams.sessionKey).toBe(sessionKey);
   });
 
   it("forwards the normalized message channel to the embedded subscription", async () => {

@@ -141,6 +141,21 @@ describe("model-switch tool continuity terminal evidence", () => {
     );
   });
 
+  it("accepts a logical read appended after the physical Code Mode exec", async () => {
+    const { result } = await runToolContinuity(["exec", "read"]);
+
+    expect(result.status).toBe("pass");
+    expect(result.modelSwitchEvidence).toMatchObject({
+      alternate: { runId: "run-2", successfulToolNames: ["exec", "read"] },
+    });
+  });
+
+  it("rejects a bare successful Code Mode exec without logical read evidence", async () => {
+    await expect(runToolContinuity(["exec"])).rejects.toThrow(
+      "alternate-model run did not return exact owned successful read evidence",
+    );
+  });
+
   it("does not let a successful prior-run read satisfy the alternate run", async () => {
     await expect(runToolContinuity([])).rejects.toThrow(
       "alternate-model run did not return exact owned successful read evidence",

@@ -28,7 +28,10 @@ export function requiredString(record: Record<string, unknown>, key: string): st
   return value;
 }
 
-export function optionalString(record: Record<string, unknown>, key: string): string | undefined {
+export function readOptionalGitHubString(
+  record: Record<string, unknown>,
+  key: string,
+): string | undefined {
   const value = record[key];
   return typeof value === "string" && value.trim() ? value : undefined;
 }
@@ -38,8 +41,8 @@ export function optionalNumber(record: Record<string, unknown>, key: string): nu
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-export function githubApiToken(): string | undefined {
-  return process.env.GH_TOKEN?.trim() || process.env.GITHUB_TOKEN?.trim() || undefined;
+export function githubApiToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return env.GH_TOKEN?.trim() || env.GITHUB_TOKEN?.trim() || undefined;
 }
 
 function githubApiHeaders(token?: string): Record<string, string> {

@@ -18,6 +18,7 @@ import {
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import type { SandboxContext } from "../../sandbox/types.js";
+import { toolPolicyRestrictsTools } from "../../tool-policy.js";
 import { isAgentToolRestartSafe } from "../../tool-replay-safety.js";
 import {
   createToolSearchCatalogRef,
@@ -115,7 +116,9 @@ export function prepareEmbeddedAttemptToolBase(params: {
       ? createToolSearchCatalogRef()
       : undefined;
   const toolSearchTargetTranscriptProjections: ToolSearchTargetTranscriptProjection[] = [];
-  const codeModeSkills = attempt.toolsAllow?.length ? [] : params.codeModeSkills;
+  const codeModeSkills = toolPolicyRestrictsTools({ allow: attempt.toolsAllow })
+    ? []
+    : params.codeModeSkills;
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
   const cronCreatorToolAllowlistCaptureRef: CronToolsAllowCaptureRef = {};
   const inheritedToolAllowlist: string[] = [];
@@ -323,8 +326,13 @@ export function prepareEmbeddedAttemptToolBase(params: {
           scheduledToolPolicy: attempt.scheduledToolPolicy,
           onYield: params.onYield,
         });
+        // The built-in harness retains its existing authoritative wrappers.
+        // Only plugin harnesses receive and require the projected host capability.
+        const boundTools = attempt.hostCapabilities
+          ? attempt.hostCapabilities.bindToolSurface(allTools)
+          : allTools;
         params.markCoreToolStage("attempt:create-openclaw-coding-tools");
-        const filteredTools = applyEmbeddedAttemptToolsAllow(allTools, effectiveToolsAllow, {
+        const filteredTools = applyEmbeddedAttemptToolsAllow(boundTools, effectiveToolsAllow, {
           toolMeta: (tool) => getPluginToolMeta(tool),
         });
         params.markCoreToolStage("attempt:tools-allow");

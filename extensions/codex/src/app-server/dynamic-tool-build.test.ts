@@ -7,7 +7,7 @@ import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import {
   embeddedAgentLog,
   isToolWrappedWithBeforeToolCallHook,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -33,6 +33,7 @@ import {
   resolveCodexDynamicToolsLoadingForRuntime,
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { createCodexTestModel } from "./test-support.js";
 
@@ -84,6 +85,7 @@ type RuntimeDynamicToolForTest = Parameters<
 
 function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
   return {
+    hostCapabilities: createCodexTestHostCapabilities(),
     prompt: "hello",
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
@@ -169,6 +171,38 @@ async function buildDynamicToolsForTest(
 }
 
 describe("Codex app-server dynamic tool build", () => {
+  it("binds a resolver-backed constructed tool surface exactly once", async () => {
+    const workspaceDir = path.join(tempDir, "resolver-bound-workspace");
+    const params = createParams(path.join(tempDir, "resolver-bound-session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const bindToolSurface = vi.fn(params.hostCapabilities.bindToolSurface);
+    params.hostCapabilities = Object.freeze({
+      ...params.hostCapabilities,
+      bindToolSurface,
+    });
+    const factory = vi.fn(() => [createRuntimeDynamicTool("read")]);
+    setOpenClawCodingToolsFactoryForTests(factory);
+    const resolveCronCreatorToolAuthority = vi.fn(async () => ({
+      tools: ["read"],
+      provenance: { version: 1 as const, source: "final-executable-surface" as const },
+    }));
+    const effectiveCwd = path.join(workspaceDir, "native-cwd");
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      effectiveCwd,
+      resolveCronCreatorToolAuthority,
+    });
+
+    expect(factory).toHaveBeenCalledOnce();
+    expect(bindToolSurface).toHaveBeenCalledOnce();
+    expect(bindToolSurface).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ name: "read" })]),
+      { cwd: effectiveCwd },
+    );
+    expect(tools).toEqual([]);
+  });
+
   it("uses the prepared explicit-policy fact to disable the native surface", () => {
     const params = createParams("/tmp/session.jsonl", "/tmp/workspace");
     params.disableTools = false;

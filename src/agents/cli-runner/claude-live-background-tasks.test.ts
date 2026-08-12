@@ -11,6 +11,7 @@ import {
   startDiagnosticRunActivityTracking,
 } from "../../logging/diagnostic-run-activity.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
+import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import {
   restoreCliRunnerPrepareTestDeps,
   supervisorSpawnMock,
@@ -68,6 +69,7 @@ function buildPreparedCliRunContext(params: {
   };
   return {
     params: {
+      admittedRunContext: createTestAdmittedRunContext(params.runId),
       sessionId: params.sessionId ?? "s-bg",
       sessionKey: params.sessionKey ?? "agent:main:bg",
       sessionFile: "/tmp/session.jsonl",
