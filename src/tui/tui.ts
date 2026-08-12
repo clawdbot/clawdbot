@@ -114,13 +114,16 @@ type RunTuiOptions = TuiOptions & {
 /** Resolve the absolute path to the `codex` CLI binary, or `null` if not installed. */
 export async function resolveCodexCliBin(): Promise<string | null> {
   if (process.platform === "win32") {
+    const pathEnv = process.env.PATH ?? process.env.Path ?? "";
+    // Prefer npm's runnable PATHEXT launcher, but retain bare-only native installs.
     return (
-      resolveExecutableFromPathEnv(
-        "codex",
-        process.env.PATH ?? process.env.Path ?? "",
-        process.env,
-        { includeExtensionless: false },
-      ) ?? null
+      resolveExecutableFromPathEnv("codex", pathEnv, process.env, {
+        includeExtensionless: false,
+      }) ??
+      resolveExecutableFromPathEnv("codex", pathEnv, process.env, {
+        includeExtensionless: true,
+      }) ??
+      null
     );
   }
   try {

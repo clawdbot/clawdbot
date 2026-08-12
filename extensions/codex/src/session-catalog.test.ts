@@ -3890,11 +3890,11 @@ describe("Codex supervision actions", () => {
       getProvider()?.startTerminalSession?.({
         agentId: "main",
         cwd: "/workspace/new",
-        initialMessage: "--help",
+        initialMessage: "Fix A&B and 100%",
       }),
     ).resolves.toEqual({
       kind: "local",
-      argv: [executable, "--", "--help"],
+      argv: [executable, "--", "Fix A&B and 100%"],
       cwd: "/workspace/new",
       env: {
         CODEX_HOME: resolveCodexAppServerHomeDir(resolveDefaultAgentDir(config)),

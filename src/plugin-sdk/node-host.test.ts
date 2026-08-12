@@ -20,6 +20,14 @@ async function createNpmShimPair(executable: string) {
   return { barePath, binDir, commandPath };
 }
 
+async function createBareNativeHost(executable: string) {
+  const binDir = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-node-host-${executable}-`));
+  tempDirs.push(binDir);
+  const barePath = path.join(binDir, executable);
+  await fs.copyFile(process.execPath, barePath);
+  return { barePath, binDir };
+}
+
 afterEach(async () => {
   clearExecutablePathCache();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
@@ -59,6 +67,54 @@ describe("resolveNodeHostExecutable", () => {
           strategy: "direct",
         }),
       ).toEqual({ executable: barePath });
+    },
+  );
+
+  it.runIf(process.platform === "win32").each([["direct"], ["fallback"], ["prefer"]] as const)(
+    "falls back to a bare-only Windows host for %s",
+    async (strategy) => {
+      const { barePath, binDir } = await createBareNativeHost(`bare-${strategy}`);
+
+      const resolution = resolveNodeHostExecutable(`bare-${strategy}`, {
+        env: { PATH: binDir, PATHEXT: ".CMD;.EXE" },
+        pathEnv: binDir,
+        strategy,
+      });
+
+      expect(resolution).toEqual({ executable: barePath });
+    },
+  );
+
+  it.runIf(process.platform === "win32").each([["direct"], ["fallback"], ["prefer"]] as const)(
+    "prefers a later Windows PATHEXT launcher over an earlier bare shim for %s",
+    async (strategy) => {
+      const { binDir: bareDir } = await createBareNativeHost(`later-${strategy}`);
+      const { binDir: launcherDir, commandPath } = await createNpmShimPair(`later-${strategy}`);
+      const pathEnv = `${bareDir};${launcherDir}`;
+
+      expect(
+        resolveNodeHostExecutable(`later-${strategy}`, {
+          env: { PATH: pathEnv, PATHEXT: ".CMD" },
+          pathEnv,
+          strategy,
+        }),
+      ).toEqual({ executable: commandPath });
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
+    "preserves an explicit PATHEXT-only Windows override",
+    async () => {
+      const { binDir } = await createBareNativeHost("suffix-only-host");
+
+      expect(
+        resolveNodeHostExecutable("suffix-only-host", {
+          env: { PATH: binDir, PATHEXT: ".CMD" },
+          includeExtensionless: false,
+          pathEnv: binDir,
+          strategy: "direct",
+        }),
+      ).toBeUndefined();
     },
   );
 
