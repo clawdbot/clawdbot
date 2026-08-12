@@ -115,7 +115,8 @@ export function registerMaintenanceCommands(program: Command) {
         opts.lint !== true &&
         opts.postUpgrade !== true &&
         typeof opts.stateSqlite !== "string" &&
-        typeof opts.sessionSqlite !== "string";
+        typeof opts.sessionSqlite !== "string" &&
+        !hasSessionSqliteOnlyDoctorOptions(opts);
       if (jsonImpliesLint && (opts.repair === true || opts.fix === true || opts.force === true)) {
         defaultRuntime.error(
           "doctor --json runs read-only lint checks and cannot be combined with --repair, --fix, or --force.",

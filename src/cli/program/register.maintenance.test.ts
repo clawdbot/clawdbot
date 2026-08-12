@@ -231,10 +231,14 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
-  it("rejects session sqlite selectors without session sqlite mode", async () => {
-    await runMaintenanceCli(["doctor", "--session-sqlite-agent", "main"]);
+  it.each([
+    ["without JSON", ["--session-sqlite-agent", "main"]],
+    ["with JSON", ["--json", "--session-sqlite-agent", "main"]],
+  ])("rejects session sqlite selectors without session sqlite mode %s", async (_label, args) => {
+    await runMaintenanceCli(["doctor", ...args]);
 
     expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith(
       "doctor session SQLite options require --session-sqlite. Use `openclaw doctor --session-sqlite dry-run ...`.",
     );
