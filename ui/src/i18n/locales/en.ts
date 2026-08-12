@@ -2345,7 +2345,6 @@ export const en: TranslationMap = {
     unsupportedGateway: "Update the Gateway to continue setup with OpenClaw.",
     panel: {
       title: "OpenClaw",
-      toggle: "Ask OpenClaw",
       close: "Close Ask OpenClaw",
       resize: "Resize Ask OpenClaw",
       dockBottom: "Dock Ask OpenClaw at bottom",
