@@ -61,12 +61,48 @@ describe("registerNodeCli", () => {
     daemonMocks.runNodeDaemonUninstall.mockClear();
   });
 
-  it("registers node start for the macOS app node service manager", async () => {
+  it.each([
+    ["status", daemonMocks.runNodeDaemonStatus],
+    ["uninstall", daemonMocks.runNodeDaemonUninstall],
+    ["stop", daemonMocks.runNodeDaemonStop],
+    ["start", daemonMocks.runNodeDaemonStart],
+    ["restart", daemonMocks.runNodeDaemonRestart],
+  ])("registers node %s and forwards --json", async (command, action) => {
     const program = createProgram();
 
-    await program.parseAsync(["node", "start", "--json"], { from: "user" });
+    await program.parseAsync(["node", command, "--json"], { from: "user" });
 
-    expect(daemonMocks.runNodeDaemonStart.mock.calls[0]?.[0]?.json).toBe(true);
+    expect(action.mock.calls[0]?.[0]?.json).toBe(true);
+  });
+
+  it("forwards node install options to the daemon adapter", async () => {
+    const program = createProgram();
+
+    await program.parseAsync(
+      [
+        "node",
+        "install",
+        "--port",
+        "19000",
+        "--host",
+        "gateway.example",
+        "--runtime",
+        "node",
+        "--force",
+        "--json",
+      ],
+      { from: "user" },
+    );
+
+    expect(daemonMocks.runNodeDaemonInstall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        port: "19000",
+        host: "gateway.example",
+        runtime: "node",
+        force: true,
+        json: true,
+      }),
+    );
   });
 
   it("rejects an explicit invalid node run port", async () => {
