@@ -721,9 +721,6 @@ export async function tryDispatchAcpReplyCore(params: {
         const mediaResult = await applyMediaUnderstanding({
           ctx: params.ctx,
           cfg: params.cfg,
-          // ACP harnesses execute on the host; embedded sandbox config never
-          // applies to their tool runtime.
-          selfServeLocalPaths: true,
           deliveredImageIndexes: new Set(resolvedTurnAttachments.attachmentIndexes ?? []),
           agentId: acpAgentId,
           agentDir: resolveAgentDir(params.cfg, acpAgentId),
