@@ -224,7 +224,11 @@ defineDiscordVoiceTests(
     });
 
     it("does not require speaker context for internal exact-speech consults", async () => {
-      const { bridgeParams } = await createJoinedAgentProxyFixture();
+      const { bridgeParams, entry } = await createJoinedAgentProxyFixture();
+      const realtime = entry.realtime as unknown as {
+        playback: { enqueueExactSpeechMessage: (text: string) => void };
+      };
+      realtime.playback.enqueueExactSpeechMessage("already answered");
 
       void bridgeParams?.onToolCall?.(
         {
@@ -232,8 +236,8 @@ defineDiscordVoiceTests(
           callId: "call-exact",
           name: "openclaw_agent_consult",
           args: {
-            question: "Speak the provided exact answer verbatim to the Discord voice channel.",
-            context: 'Provided answer text: "already answered"\\nSpoken style: verbatim only',
+            question: "Should I repeat the previous voice result?",
+            context: 'The retained answer was "already answered".',
           },
         },
         realtimeSessionMock,
