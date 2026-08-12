@@ -99,6 +99,7 @@ function workerRecord(overrides: Partial<TestWorkerRecord> = {}): TestWorkerReco
     profileSnapshot: { settings: {} },
     provisionOperationId: "provision:worker-1",
     leaseId: "lease-1",
+    sharedHost: false,
     desktop: null,
     sshEndpoint: {
       host: "worker.example.test",
@@ -208,6 +209,9 @@ describe("environment gateway methods", () => {
           type: "local",
           label: "Gateway local",
           status: "available",
+          platform: process.platform,
+          sessionHost: true,
+          trust: "persistent",
           capabilities: ["agent.run", "sessions", "tools", "workspace"],
         },
         {
@@ -215,6 +219,9 @@ describe("environment gateway methods", () => {
           type: "node",
           label: "Live Node",
           status: "available",
+          platform: "ios",
+          sessionHost: false,
+          trust: "persistent",
           capabilities: ["camera", "system.run"],
         },
         {
@@ -222,6 +229,8 @@ describe("environment gateway methods", () => {
           type: "node",
           label: "Offline Node",
           status: "unavailable",
+          sessionHost: false,
+          trust: "persistent",
           capabilities: ["camera.snap", "screen"],
         },
       ],
@@ -254,6 +263,7 @@ describe("environment gateway methods", () => {
           id: "worker-1",
           type: "worker",
           status: "available",
+          trust: "disposable",
           worker: {
             providerId: "static-ssh",
             leaseId: "lease-1",
@@ -283,6 +293,18 @@ describe("environment gateway methods", () => {
     ["orphaned", "error"],
   ] as const)("maps worker state %s to %s", (state, status) => {
     expect(summarizeWorkerEnvironment(workerRecord({ state }), NOW).status).toBe(status);
+  });
+
+  it("projects trust from recorded worker isolation without guessing unknown leases", () => {
+    expect(summarizeWorkerEnvironment(workerRecord({ sharedHost: true }), NOW).trust).toBe(
+      "persistent",
+    );
+    expect(summarizeWorkerEnvironment(workerRecord({ sharedHost: false }), NOW).trust).toBe(
+      "disposable",
+    );
+    expect(summarizeWorkerEnvironment(workerRecord({ sharedHost: null }), NOW)).not.toHaveProperty(
+      "trust",
+    );
   });
 
   it("projects recorded errors only for terminal error states", () => {
@@ -324,6 +346,9 @@ describe("environment gateway methods", () => {
       type: "node",
       label: "Live Node",
       status: "available",
+      platform: "ios",
+      sessionHost: false,
+      trust: "persistent",
       capabilities: ["camera", "system.run"],
     });
   });
@@ -341,6 +366,7 @@ describe("environment gateway methods", () => {
     expect(payload).toMatchObject({
       id: "worker-1",
       status: "available",
+      trust: "disposable",
       worker: { state: "attached", ageMs: 9_000 },
     });
     expect(get).toHaveBeenCalledWith("worker-1");

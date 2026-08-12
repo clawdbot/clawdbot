@@ -25,6 +25,9 @@ const GATEWAY_ENVIRONMENT: EnvironmentSummary = {
   type: "local",
   label: "Gateway local",
   status: "available",
+  platform: process.platform,
+  sessionHost: true,
+  trust: "persistent",
   capabilities: ["agent.run", "sessions", "tools", "workspace"],
 };
 const WORKER_STATUS: Record<WorkerEnvironmentState, EnvironmentSummary["status"]> = {
@@ -54,11 +57,15 @@ function summarizeNodeEnvironment(node: NodeListNode): EnvironmentSummary {
   // Expose both declared capabilities and command names so older node
   // runtimes still advertise useful execution surfaces in one stable list.
   const capabilities = uniqueSortedStrings(node.caps, node.commands);
+  const platform = node.platform?.trim();
   return {
     id: `node:${node.nodeId}`,
     type: "node",
     label: node.displayName ?? node.nodeId,
     status: node.connected ? "available" : "unavailable",
+    ...(platform ? { platform } : {}),
+    sessionHost: false,
+    trust: "persistent",
     ...(capabilities.length > 0 ? { capabilities } : {}),
   };
 }
@@ -71,6 +78,9 @@ export function summarizeWorkerEnvironment(
     id: record.environmentId,
     type: "worker",
     status: WORKER_STATUS[record.state],
+    ...(record.sharedHost === null
+      ? {}
+      : { trust: record.sharedHost ? "persistent" : "disposable" }),
     worker: {
       providerId: record.providerId,
       ...(record.leaseId ? { leaseId: record.leaseId } : {}),

@@ -717,7 +717,7 @@ export const en: TranslationMap = {
     cloudSyncsFolder: "Syncs {folder} to the cloud worker",
     folder: "Folder",
     folderPlaceholder: "Agent workspace",
-    places: "Places",
+    yourDevices: "Your devices",
     projects: "Projects",
     projectsAdminHint: "Admins can register projects from Browse folders",
     projectSearchPlaceholder: "Search projects or paste a Git URL",

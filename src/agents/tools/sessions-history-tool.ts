@@ -33,6 +33,7 @@ import {
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
   createSessionVisibilityGuard,
+  createSessionVisibilityRowChecker,
   createAgentToAgentPolicy,
   resolveEffectiveSessionToolsVisibility,
   resolveSessionReference,
@@ -398,12 +399,25 @@ export function createSessionsHistoryTool(opts?: {
       if (!resolvedSession.ok) {
         return jsonResult({ status: resolvedSession.status, error: resolvedSession.error });
       }
+      const a2aPolicy = createAgentToAgentPolicy(cfg);
+      const visibility = resolveEffectiveSessionToolsVisibility({
+        cfg,
+        sandboxed: opts?.sandboxed === true,
+      });
+      const resolutionAccess = createSessionVisibilityRowChecker({
+        action: "history",
+        defaultAgentId: resolveDefaultAgentId(cfg),
+        requesterSessionKey: effectiveRequesterKey,
+        visibility,
+        a2aPolicy,
+      }).check({ key: resolvedSession.key });
       const visibleSession = await resolveVisibleSessionReference({
         action: "history",
         resolvedSession,
         requesterSessionKey: effectiveRequesterKey,
         restrictToSpawned,
         visibilitySessionKey: sessionKeyParam,
+        concealResolutionError: resolutionAccess.allowed ? undefined : resolutionAccess.error,
         callGateway: gatewayCall,
       });
       if (!visibleSession.ok) {
@@ -416,11 +430,6 @@ export function createSessionsHistoryTool(opts?: {
       const resolvedKey = visibleSession.key;
       const displayKey = visibleSession.displayKey;
 
-      const a2aPolicy = createAgentToAgentPolicy(cfg);
-      const visibility = resolveEffectiveSessionToolsVisibility({
-        cfg,
-        sandboxed: opts?.sandboxed === true,
-      });
       const visibilityGuard = await createSessionVisibilityGuard({
         action: "history",
         defaultAgentId: resolveDefaultAgentId(cfg),

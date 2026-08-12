@@ -1,6 +1,7 @@
 import { consume } from "@lit/context";
 import { html, nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
 import { property } from "lit/decorators.js";
+import type { PresenceEntry } from "../../api/types.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
@@ -29,6 +30,24 @@ import type { NewSessionRouteData } from "./location.ts";
 import { renderPlaceSelect } from "./place-picker.ts";
 import { renderAgentSelect } from "./target-controls.ts";
 
+function readPresence(value: unknown): PresenceEntry[] | null {
+  const presence =
+    value && typeof value === "object" ? (value as { presence?: unknown }).presence : null;
+  return Array.isArray(presence) ? (presence as PresenceEntry[]) : null;
+}
+
+function presenceConnectivitySignature(entries: PresenceEntry[]): string {
+  const states = new Map<string, "connected" | "offline">();
+  for (const entry of entries) {
+    const id = (entry.deviceId ?? entry.instanceId)?.trim().toLowerCase();
+    if (!id || entry.mode?.trim().toLowerCase() === "gateway") {
+      continue;
+    }
+    states.set(id, entry.reason?.trim().toLowerCase() === "disconnect" ? "offline" : "connected");
+  }
+  return JSON.stringify([...states].toSorted(([left], [right]) => left.localeCompare(right)));
+}
+
 function controllerHost(element: OpenClawLightDomElement): ReactiveControllerHost {
   return {
     addController: (controller: ReactiveController) => element.addController(controller),
@@ -49,6 +68,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   private openedFor: string | null = null;
   private openedAgentId = "";
   private messageOwnerKey = "";
+  private presenceSignature = "";
   private readonly gateway: DraftGatewayState;
   private readonly browser: DraftPlaceBrowser;
   private readonly place: DraftPlaceState;
@@ -146,6 +166,41 @@ class NewSessionPage extends OpenClawLightDomElement {
         () => this.context?.gateway,
         (gateway, notify) => gateway.subscribe(notify),
         (gateway) => this.gateway.synchronize(gateway),
+      )
+      .effect(
+        () => this.context?.gateway,
+        (gateway) => {
+          this.presenceSignature = presenceConnectivitySignature(
+            readPresence(gateway.snapshot.hello?.snapshot) ?? [],
+          );
+          return gateway.subscribeEvents((event) => {
+            if (this.context?.gateway !== gateway) {
+              return;
+            }
+            if (event.event === "config.changed") {
+              void this.gateway.refreshCloudProfiles();
+              return;
+            }
+            if (
+              event.event === "node.pair.requested" ||
+              event.event === "node.pair.resolved" ||
+              event.event === "device.pair.requested" ||
+              event.event === "device.pair.resolved"
+            ) {
+              void this.place.refreshNodes();
+              return;
+            }
+            const presence = event.event === "presence" ? readPresence(event.payload) : null;
+            if (!presence) {
+              return;
+            }
+            const signature = presenceConnectivitySignature(presence);
+            if (signature !== this.presenceSignature) {
+              this.presenceSignature = signature;
+              void this.place.refreshNodes();
+            }
+          });
+        },
       )
       .watch(
         () => this.context?.agents,
