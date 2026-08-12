@@ -242,7 +242,7 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
     await server?.close();
   });
 
-  it("preserves an execution-owned session when editing a linked Workboard card", async () => {
+  it("keeps an execution-owned session out of primary edits and preserves it on save", async () => {
     const executionLinkedCard: WorkboardCard = {
       ...initialCard,
       title: "Keep my execution-linked session",
@@ -338,23 +338,22 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
       await executionCard.locator('button[aria-label="Edit card"]').click();
       const editDialog = page.getByRole("dialog", { name: "Edit card" });
       await editDialog.waitFor({ timeout: 10_000 });
-      await expect
-        .poll(() => workboardSelectValue(page, "Session"))
-        .toBe("Execution linked session");
+      await expect.poll(() => workboardSelectValue(page, "Session")).toBe("No linked session");
 
       await page.getByLabel("Title").fill(updatedCard.title);
       await page.getByRole("button", { name: "Save" }).click();
 
       const requests = await waitForRequestCount(gateway, "workboard.cards.update", 1);
-      expect(
-        requestParams(expectDefined(requests[0], "execution-linked card update")),
-      ).toMatchObject({
+      const updateParams = requestParams(
+        expectDefined(requests[0], "execution-linked card update"),
+      );
+      expect(updateParams).toMatchObject({
         id: executionLinkedCard.id,
         patch: {
           title: updatedCard.title,
-          sessionKey: linkedSessionKey,
         },
       });
+      expect(requireRecord(updateParams.patch)).not.toHaveProperty("sessionKey");
       await editDialog.waitFor({ state: "detached", timeout: 10_000 });
       await page.locator(".workboard-card", { hasText: updatedCard.title }).waitFor({
         timeout: 10_000,
@@ -442,7 +441,6 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
                   priority: "high",
                   labels: ["ui"],
                   agentId: "main",
-                  sessionKey: linkedSessionKey,
                 },
               },
               response: { card: editedCard },

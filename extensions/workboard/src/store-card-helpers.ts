@@ -46,6 +46,12 @@ export function cardSessionKey(card: WorkboardCard): string | undefined {
   return card.sessionKey ?? card.execution?.sessionKey;
 }
 
+export function canHoldPrimarySessionBinding(
+  card: Pick<WorkboardCard, "status" | "metadata">,
+): boolean {
+  return !card.metadata?.archivedAt && card.status !== "blocked" && card.status !== "done";
+}
+
 export function cardRunId(card: WorkboardCard): string | undefined {
   return card.runId ?? card.execution?.runId;
 }
@@ -350,6 +356,14 @@ export function assertCanMutateClaimedCard(
   const token = normalizeOptionalString(scope.token);
   if (claim.ownerId !== ownerId && !safeEqualSecret(token, claim.token)) {
     throw new Error(`card is claimed by ${claim.ownerId}.`);
+  }
+  const callerSessionKey = normalizeOptionalString(scope.sessionKey);
+  const boundSessionKey = cardSessionKey(card);
+  const executionSessionKey = normalizeOptionalString(card.execution?.sessionKey);
+  const callerMatchesSession =
+    callerSessionKey === boundSessionKey || callerSessionKey === executionSessionKey;
+  if (callerSessionKey && boundSessionKey && !callerMatchesSession) {
+    throw new Error(`card is bound to session ${boundSessionKey}.`);
   }
 }
 

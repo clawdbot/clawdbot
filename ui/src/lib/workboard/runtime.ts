@@ -361,6 +361,8 @@ function createDefaultState(): WorkboardUiState {
     draftLabels: "",
     draftAgentId: "",
     draftSessionKey: "",
+    draftOriginalSessionKey: "",
+    draftSessionKeyDirty: false,
     draftTemplateId: "",
     draftCommentBody: "",
     detailCardId: null,

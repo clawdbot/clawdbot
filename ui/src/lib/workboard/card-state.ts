@@ -117,6 +117,8 @@ export function resetDraftState(state: WorkboardUiState) {
   state.draftLabels = "";
   state.draftAgentId = "";
   state.draftSessionKey = "";
+  state.draftOriginalSessionKey = "";
+  state.draftSessionKeyDirty = false;
   state.draftTemplateId = "";
   state.draftCommentBody = "";
   if (resolveStaleEdit) {

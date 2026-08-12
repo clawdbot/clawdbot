@@ -53,6 +53,7 @@ describe("workboard gateway methods", () => {
       "workboard.cards.delete",
       "workboard.cards.comment",
       "workboard.cards.link",
+      "workboard.cards.bindSession",
       "workboard.cards.linkDependency",
       "workboard.cards.proof",
       "workboard.cards.artifact",

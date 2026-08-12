@@ -27,8 +27,10 @@ import type {
   PersistedWorkboardBoard,
   PersistedWorkboardCard,
   PersistedWorkboardNotificationSubscription,
+  WorkboardCardRegistrationExpectation,
   WorkboardKeyedStore,
 } from "./persistence-types.js";
+import { cardSessionKey, canHoldPrimarySessionBinding } from "./store-card-helpers.js";
 const WORKBOARD_DB_RELATIVE_PATH = ["plugins", "workboard", "workboard.sqlite"] as const;
 const SCHEMA_VERSION = 3;
 const WORKBOARD_SQLITE_BUSY_TIMEOUT_MS = 5000;
@@ -1203,6 +1205,60 @@ class WorkboardSqliteCardStore implements WorkboardKeyedStore {
       throw new Error("invalid workboard card payload");
     }
     runTransaction(this.db, () => insertCard(this.db, value.card));
+  }
+
+  async registerWithPrimarySessionReservation(
+    key: string,
+    value: PersistedWorkboardCard,
+    expected?: WorkboardCardRegistrationExpectation,
+  ): Promise<void> {
+    if (value.version !== 1 || value.card.id !== key) {
+      throw new Error("invalid workboard card payload");
+    }
+    runTransaction(this.db, () => {
+      if (expected) {
+        const current = this.db
+          .prepare("SELECT updated_at, claim_json FROM workboard_cards WHERE id = ?")
+          .get(key) as Row | undefined;
+        if (!current) {
+          throw new Error(`card ${key} changed before persistence; retry.`);
+        }
+        const currentClaim = parseJson(current.claim_json) as
+          | WorkboardMetadata["claim"]
+          | undefined;
+        if (currentClaim?.token !== expected.claimToken) {
+          if (currentClaim) {
+            throw new Error(`card already claimed by ${currentClaim.ownerId}.`);
+          }
+          throw new Error(`card ${key} changed before persistence; retry.`);
+        }
+        if (requiredNumber(current, "updated_at") !== expected.updatedAt) {
+          throw new Error(`card ${key} changed before persistence; retry.`);
+        }
+      }
+      const sessionKey = cardSessionKey(value.card);
+      if (sessionKey && canHoldPrimarySessionBinding(value.card)) {
+        const conflict = this.db
+          .prepare(
+            `
+              SELECT id
+              FROM workboard_cards
+              WHERE id <> ?
+                AND archived_at IS NULL
+                AND status NOT IN ('blocked', 'done')
+                AND COALESCE(session_key, execution_session_key) = ?
+              LIMIT 1
+            `,
+          )
+          .get(key, sessionKey) as Row | undefined;
+        if (conflict) {
+          throw new Error(
+            `session ${sessionKey} is already reserved by card ${requiredString(conflict, "id")}.`,
+          );
+        }
+      }
+      insertCard(this.db, value.card);
+    });
   }
 
   async lookup(key: string): Promise<PersistedWorkboardCard | undefined> {

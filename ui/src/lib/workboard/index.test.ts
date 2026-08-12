@@ -156,6 +156,8 @@ function openEditDraft(card: WorkboardCard, status: WorkboardCard["status"] = "r
   state.draftLabels = card.labels.join(", ");
   state.draftAgentId = card.agentId ?? "";
   state.draftSessionKey = card.sessionKey ?? "";
+  state.draftOriginalSessionKey = state.draftSessionKey;
+  state.draftSessionKeyDirty = false;
 }
 
 function makeMovedCard(card: WorkboardCard, overrides: Partial<WorkboardCard> = {}) {
@@ -2590,6 +2592,115 @@ describe("workboard controller", () => {
     expect(state.cards[0]).toMatchObject({ title: "Updated board", status: "review" });
     expect(state.draftOpen).toBe(false);
     expect(state.editingCardId).toBeNull();
+  });
+
+  it("omits an unchanged primary binding from a stale title-only edit", async () => {
+    const original = createWorkboardCard({ status: "todo" });
+    const concurrentlyBound = {
+      ...original,
+      sessionKey: "agent:main:chat:bound-while-editing",
+      updatedAt: original.updatedAt + 1,
+    };
+    state.cards = [original];
+    openEditDraft(original, original.status);
+    state.draftTitle = "Updated after concurrent bind";
+    const client = createClient((method, params) => {
+      if (method !== "workboard.cards.update") {
+        return {};
+      }
+      const patch = (params as { patch: Partial<WorkboardCard> }).patch;
+      return { card: { ...concurrentlyBound, ...patch } };
+    });
+
+    await saveDraft(client);
+
+    expect(requestPatch(client, 0)).not.toHaveProperty("sessionKey");
+    expect(state.cards[0]).toMatchObject({
+      title: "Updated after concurrent bind",
+      sessionKey: concurrentlyBound.sessionKey,
+    });
+  });
+
+  it("sends an explicit detach when the original primary binding is removed", async () => {
+    const bound = createWorkboardCard({
+      status: "todo",
+      sessionKey: "agent:main:chat:detach-me",
+    });
+    state.cards = [bound];
+    openEditDraft(bound, bound.status);
+    state.draftSessionKey = "";
+    const client = createClient({
+      "workboard.cards.update": { card: { ...bound, sessionKey: undefined } },
+    });
+
+    await saveDraft(client);
+
+    expect(requestPatch(client, 0)).toMatchObject({ sessionKey: "" });
+    expect(state.cards[0]?.sessionKey).toBeUndefined();
+  });
+
+  it("sends an explicitly reselected original binding after a concurrent rebind", async () => {
+    const original = createWorkboardCard({
+      status: "todo",
+      sessionKey: "agent:main:chat:original",
+    });
+    const concurrentlyRebound = {
+      ...original,
+      sessionKey: "agent:main:chat:concurrent",
+      updatedAt: original.updatedAt + 1,
+    };
+    state.cards = [original];
+    openEditDraft(original, original.status);
+    state.draftSessionKey = "agent:main:chat:temporary";
+    state.draftSessionKey = original.sessionKey ?? "";
+    state.draftSessionKeyDirty = true;
+    const client = createClient((method, params) => {
+      if (method !== "workboard.cards.update") {
+        return {};
+      }
+      const patch = (params as { patch: Partial<WorkboardCard> }).patch;
+      return { card: { ...concurrentlyRebound, ...patch } };
+    });
+
+    await saveDraft(client);
+
+    expect(requestPatch(client, 0)).toMatchObject({ sessionKey: original.sessionKey });
+    expect(state.cards[0]?.sessionKey).toBe(original.sessionKey);
+  });
+
+  it("keeps the existing binding when the atomic card update fails", async () => {
+    const bound = createWorkboardCard({ sessionKey: sampleSession.key });
+    state.cards = [bound];
+    state.draftOpen = true;
+    state.editingCardId = bound.id;
+    state.draftTitle = "Updated title";
+    state.draftStatus = bound.status;
+    state.draftPriority = bound.priority;
+    state.draftLabels = bound.labels.join(", ");
+    state.draftSessionKey = "agent:main:dashboard:replacement";
+    const client = createClient((method) => {
+      if (method === "workboard.cards.update") {
+        throw new Error("update rejected");
+      }
+      return {};
+    });
+
+    await saveWorkboardCardDraft({ host, client: client as never });
+
+    expect(client.request).toHaveBeenCalledTimes(1);
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.update", {
+      id: bound.id,
+      patch: expect.objectContaining({
+        title: "Updated title",
+        sessionKey: "agent:main:dashboard:replacement",
+      }),
+    });
+    expect(state.cards[0]).toMatchObject({
+      title: bound.title,
+      sessionKey: bound.sessionKey,
+    });
+    expect(state.draftOpen).toBe(true);
+    expect(state.editingCardId).toBe(bound.id);
   });
 
   it("creates cards from draft state through the save action", async () => {

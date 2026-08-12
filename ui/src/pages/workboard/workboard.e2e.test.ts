@@ -505,13 +505,14 @@ suite.define(() => {
         updateBeforeEdit,
       );
       expect(requestParams(editRequest)).toMatchObject({ id: createdCard.id });
-      expect(requireRecord(requestParams(editRequest).patch)).toMatchObject({
+      const editPatch = requireRecord(requestParams(editRequest).patch);
+      expect(editPatch).toMatchObject({
         labels: ["ui", "proof", "e2e"],
         notes: editedCard.notes,
         priority: "high",
-        sessionKey: linkedSessionKey,
         title: editedCard.title,
       });
+      expect(editPatch).not.toHaveProperty("sessionKey");
       await writableGateway.resolveDeferred("workboard.cards.update", { card: editedCard });
       await cardInColumn(writable.page, "Todo", editedCard.title).waitFor({ state: "visible" });
       await captureScreenshot(writable.page, artifacts, "04-edited-card");

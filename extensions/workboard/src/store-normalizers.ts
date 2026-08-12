@@ -1179,37 +1179,6 @@ export function normalizeExecution(value: unknown): WorkboardExecution | undefin
   };
 }
 
-export function syncExecutionSessionKey(
-  execution: WorkboardExecution | undefined,
-  sessionKey: string | undefined,
-): WorkboardExecution | undefined {
-  if (!execution) {
-    return undefined;
-  }
-  return removeUndefinedExecutionFields({
-    ...execution,
-    sessionKey,
-    updatedAt: Date.now(),
-  });
-}
-
-function removeUndefinedExecutionFields(execution: WorkboardExecution): WorkboardExecution {
-  const next = { ...execution };
-  if (next.engine === undefined) {
-    delete next.engine;
-  }
-  if (next.model === undefined) {
-    delete next.model;
-  }
-  if (next.sessionKey === undefined) {
-    delete next.sessionKey;
-  }
-  if (next.runId === undefined) {
-    delete next.runId;
-  }
-  return next;
-}
-
 function removeUndefinedAutomationFields(automation: WorkboardAutomation): WorkboardAutomation {
   const next = { ...automation };
   for (const key of [

@@ -84,6 +84,11 @@ export type WorkboardClaimInput = {
   ownerId?: unknown;
   token?: unknown;
   ttlSeconds?: unknown;
+  sessionKey?: unknown;
+};
+export type WorkboardSessionBindingInput = {
+  action?: unknown;
+  sessionKey?: unknown;
 };
 export type WorkboardClaimOptions = {
   /** Trusted dispatcher guard; never accepted from public tool or gateway input. */
@@ -192,6 +197,7 @@ export type WorkboardNotificationEventsInput = WorkboardNotificationListOptions 
 export type WorkboardMutationScope = {
   ownerId?: unknown;
   token?: unknown;
+  sessionKey?: unknown;
 };
 
 export type WorkboardDiagnosticsResult = {

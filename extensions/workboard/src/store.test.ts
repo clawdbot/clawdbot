@@ -14,6 +14,7 @@ import type {
   WorkboardKeyedStore,
 } from "./persistence-types.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
+import { cardSessionKey } from "./store-card-helpers.js";
 import { normalizeExecution } from "./store-normalizers.js";
 import { WorkboardStore } from "./store.js";
 
@@ -845,7 +846,7 @@ describe("WorkboardStore", () => {
     expect(staleLifecycle.metadata?.lifecycleStatusSourceUpdatedAt).toBeUndefined();
   });
 
-  it("keeps execution session links aligned with edited card links", async () => {
+  it("keeps primary session binding edits separate from execution state", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({
       title: "Relink me",
@@ -865,7 +866,8 @@ describe("WorkboardStore", () => {
 
     const relinked = await store.update(card.id, { sessionKey: "agent:main:dashboard:2" });
     expect(relinked.sessionKey).toBe("agent:main:dashboard:2");
-    expect(relinked.execution?.sessionKey).toBe("agent:main:dashboard:2");
+    expect(relinked.execution?.sessionKey).toBe("agent:main:dashboard:1");
+    expect(relinked.execution?.updatedAt).toBe(10);
     expect(relinked.events?.at(-1)).toMatchObject({
       kind: "linked",
       sessionKey: "agent:main:dashboard:2",
@@ -873,10 +875,545 @@ describe("WorkboardStore", () => {
 
     const unlinked = await store.update(card.id, { sessionKey: "" });
     expect(unlinked.sessionKey).toBeUndefined();
-    expect(unlinked.execution?.sessionKey).toBeUndefined();
+    expect(unlinked.execution?.sessionKey).toBe("agent:main:dashboard:1");
+    expect(unlinked.execution?.updatedAt).toBe(10);
 
     const cleared = await store.update(card.id, { execution: null });
     expect(cleared.execution).toBeUndefined();
+  });
+
+  it("binds one active card to a session and requires explicit rebinding", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Session-bound card" });
+
+    const bound = await store.bindSession(card.id, {
+      action: "bind",
+      sessionKey: "agent:main:chat:one",
+    });
+    expect(bound.sessionKey).toBe("agent:main:chat:one");
+    expect(bound.events?.at(-1)).toMatchObject({
+      kind: "linked",
+      sessionKey: "agent:main:chat:one",
+    });
+
+    await expect(
+      store.bindSession(card.id, {
+        action: "bind",
+        sessionKey: "agent:main:chat:two",
+      }),
+    ).rejects.toThrow("use rebind");
+
+    const conflicting = await store.create({ title: "Conflicting card" });
+    await expect(
+      store.bindSession(conflicting.id, {
+        action: "bind",
+        sessionKey: "agent:main:chat:one",
+      }),
+    ).rejects.toThrow("already reserved by card");
+
+    const rebound = await store.bindSession(card.id, {
+      action: "rebind",
+      sessionKey: "agent:main:chat:two",
+    });
+    expect(rebound.sessionKey).toBe("agent:main:chat:two");
+
+    const detached = await store.bindSession(card.id, { action: "detach" });
+    expect(detached.sessionKey).toBeUndefined();
+  });
+
+  it("does not detach a running execution-only session", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const executionOnly = await store.create({
+      title: "Execution-owned card",
+      status: "running",
+      execution: {
+        id: "exec-worker",
+        kind: "agent-session",
+        mode: "autonomous",
+        status: "running",
+        sessionKey: "agent:worker:execution-only",
+        startedAt: 10,
+        updatedAt: 10,
+      },
+    });
+    const executionDetached = await store.bindSession(executionOnly.id, { action: "detach" });
+    expect(executionDetached.sessionKey).toBeUndefined();
+    expect(executionDetached.execution).toMatchObject({
+      sessionKey: "agent:worker:execution-only",
+      status: "running",
+      updatedAt: 10,
+    });
+  });
+
+  it("binds an unbound card to the claiming session and rejects a mismatched claim", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const unbound = await store.create({ title: "Claim me" });
+
+    const claimed = await store.claim(unbound.id, {
+      ownerId: "agent-main",
+      sessionKey: "agent:main:chat:one",
+    });
+    expect(claimed.card.sessionKey).toBe("agent:main:chat:one");
+
+    const bound = await store.create({
+      title: "Already bound",
+      sessionKey: "agent:main:chat:two",
+    });
+    await expect(
+      store.claim(bound.id, {
+        ownerId: "agent-main",
+        sessionKey: "agent:main:chat:one",
+      }),
+    ).rejects.toThrow("bound to session agent:main:chat:two");
+  });
+
+  it("reserves provisional session bindings before claim", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const sessionKey = "agent:main:provisional";
+    const first = await store.create({ title: "First", sessionKey });
+    const second = await store.create({ title: "Second" });
+
+    await expect(store.create({ title: "Duplicate", sessionKey })).rejects.toThrow(
+      "already reserved by card",
+    );
+    await expect(store.update(second.id, { sessionKey })).rejects.toThrow(
+      "already reserved by card",
+    );
+
+    const claimed = await store.claim(first.id, {
+      ownerId: "agent-main",
+      sessionKey,
+    });
+    expect(claimed.card.status).toBe("running");
+    expect(claimed.card.sessionKey).toBe(sessionKey);
+  });
+
+  it("reserves one primary session across independent SQLite stores", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-session-race-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const firstStores = createWorkboardSqliteStores({ dbPath });
+    const secondStores = createWorkboardSqliteStores({ dbPath });
+    try {
+      const firstStore = new WorkboardStore(firstStores.cards);
+      const secondStore = new WorkboardStore(secondStores.cards);
+      const first = await firstStore.create({ title: "First candidate" });
+      const second = await secondStore.create({ title: "Second candidate" });
+      const sessionKey = "agent:main:sqlite-race";
+
+      const results = await Promise.allSettled([
+        firstStore.update(first.id, { sessionKey }),
+        secondStore.update(second.id, { sessionKey }),
+      ]);
+
+      expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      expect(results.filter((result) => result.status === "rejected")).toEqual([
+        expect.objectContaining({
+          reason: expect.objectContaining({
+            message: expect.stringContaining("already reserved by card"),
+          }),
+        }),
+      ]);
+      const persisted = await firstStore.list();
+      expect(persisted.filter((card) => cardSessionKey(card) === sessionKey)).toHaveLength(1);
+    } finally {
+      secondStores.close();
+      firstStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("serializes competing same-card claims across independent SQLite stores", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-claim-race-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const firstStores = createWorkboardSqliteStores({ dbPath });
+    const secondStores = createWorkboardSqliteStores({ dbPath });
+    try {
+      const firstStore = new WorkboardStore(firstStores.cards);
+      const secondStore = new WorkboardStore(secondStores.cards);
+      const card = await firstStore.create({ title: "Claim candidate", status: "ready" });
+
+      const results = await Promise.allSettled([
+        firstStore.claim(card.id, { ownerId: "first", token: "first-token" }),
+        secondStore.claim(card.id, { ownerId: "second", token: "second-token" }),
+      ]);
+
+      const fulfilled = results.filter((result) => result.status === "fulfilled");
+      const rejected = results.filter((result) => result.status === "rejected");
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0]).toEqual(
+        expect.objectContaining({
+          reason: expect.objectContaining({
+            message: expect.stringMatching(/already claimed|changed before persistence/),
+          }),
+        }),
+      );
+      const persisted = await firstStore.get(card.id);
+      expect(persisted?.metadata?.claim?.token).toBe(
+        fulfilled[0]?.value.card.metadata?.claim?.token,
+      );
+    } finally {
+      secondStores.close();
+      firstStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("serializes frozen-clock same-card binds across independent SQLite stores", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-bind-race-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const firstStores = createWorkboardSqliteStores({ dbPath });
+    const secondStores = createWorkboardSqliteStores({ dbPath });
+    try {
+      const firstStore = new WorkboardStore(firstStores.cards);
+      const secondStore = new WorkboardStore(secondStores.cards);
+      const card = await firstStore.create({ title: "Bind candidate" });
+
+      const results = await Promise.allSettled([
+        firstStore.bindSession(card.id, { sessionKey: "agent:main:first" }),
+        secondStore.bindSession(card.id, { sessionKey: "agent:main:second" }),
+      ]);
+
+      const fulfilled = results.filter((result) => result.status === "fulfilled");
+      const rejected = results.filter((result) => result.status === "rejected");
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toEqual([
+        expect.objectContaining({
+          reason: expect.objectContaining({
+            message: expect.stringContaining("changed before persistence"),
+          }),
+        }),
+      ]);
+      const persisted = await firstStore.get(card.id);
+      expect(persisted?.sessionKey).toBe(fulfilled[0]?.value.sessionKey);
+    } finally {
+      secondStores.close();
+      firstStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects a claim whose initial unbound-card decision is stale after a concurrent bind", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-bind-claim-race-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const claimStores = createWorkboardSqliteStores({ dbPath });
+    const bindStores = createWorkboardSqliteStores({ dbPath });
+    try {
+      const setupStore = new WorkboardStore(claimStores.cards);
+      const bindStore = new WorkboardStore(bindStores.cards);
+      const card = await setupStore.create({ title: "Bind then claim", status: "ready" });
+      const originalLookup = claimStores.cards.lookup.bind(claimStores.cards);
+      let markClaimRead!: () => void;
+      let releaseClaimRead!: () => void;
+      const claimRead = new Promise<void>((resolve) => {
+        markClaimRead = resolve;
+      });
+      const claimReadReleased = new Promise<void>((resolve) => {
+        releaseClaimRead = resolve;
+      });
+      let pauseNextLookup = true;
+      claimStores.cards.lookup = async (key) => {
+        const value = await originalLookup(key);
+        if (pauseNextLookup) {
+          pauseNextLookup = false;
+          markClaimRead();
+          await claimReadReleased;
+        }
+        return value;
+      };
+      const claimStore = new WorkboardStore(claimStores.cards);
+
+      const claiming = claimStore.claim(card.id, {
+        ownerId: "claiming-agent",
+        sessionKey: "agent:main:claiming",
+      });
+      await claimRead;
+      const bound = await bindStore.bindSession(card.id, {
+        sessionKey: "agent:main:operator",
+      });
+      releaseClaimRead();
+
+      await expect(claiming).rejects.toThrow("changed before persistence");
+      await expect(bindStore.get(card.id)).resolves.toMatchObject({
+        status: "ready",
+        sessionKey: bound.sessionKey,
+      });
+      expect((await bindStore.get(card.id))?.metadata?.claim).toBeUndefined();
+    } finally {
+      bindStores.close();
+      claimStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a diagnostics write that races a bind across independent SQLite stores", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-diagnostics-bind-race-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const diagnosticsStores = createWorkboardSqliteStores({ dbPath });
+    const bindStores = createWorkboardSqliteStores({ dbPath });
+    try {
+      const setupStore = new WorkboardStore(diagnosticsStores.cards);
+      const bindStore = new WorkboardStore(bindStores.cards);
+      const card = await setupStore.create({
+        title: "Diagnose then bind",
+        status: "ready",
+        agentId: "main",
+      });
+      const originalRegister = diagnosticsStores.cards.register.bind(diagnosticsStores.cards);
+      const originalReservedRegister =
+        diagnosticsStores.cards.registerWithPrimarySessionReservation?.bind(
+          diagnosticsStores.cards,
+        );
+      let markWriteStarted!: () => void;
+      let releaseWrite!: () => void;
+      const writeStarted = new Promise<void>((resolve) => {
+        markWriteStarted = resolve;
+      });
+      const writeReleased = new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+      let pauseNextWrite = true;
+      const pauseBeforeWrite = async () => {
+        if (!pauseNextWrite) {
+          return;
+        }
+        pauseNextWrite = false;
+        markWriteStarted();
+        await writeReleased;
+      };
+      diagnosticsStores.cards.register = async (key, value) => {
+        await pauseBeforeWrite();
+        await originalRegister(key, value);
+      };
+      if (originalReservedRegister) {
+        diagnosticsStores.cards.registerWithPrimarySessionReservation = async (
+          key,
+          value,
+          expected,
+        ) => {
+          await pauseBeforeWrite();
+          await originalReservedRegister(key, value, expected);
+        };
+      }
+      const diagnosticsStore = new WorkboardStore(diagnosticsStores.cards);
+
+      const refreshing = diagnosticsStore.refreshDiagnostics(Date.now() + 2 * 24 * 60 * 60 * 1000);
+      await writeStarted;
+      const bound = await bindStore.bindSession(card.id, {
+        sessionKey: "agent:main:operator-during-diagnostics",
+      });
+      releaseWrite();
+
+      await expect(refreshing).rejects.toThrow("changed before persistence");
+      await expect(bindStore.get(card.id)).resolves.toMatchObject({
+        sessionKey: bound.sessionKey,
+      });
+    } finally {
+      bindStores.close();
+      diagnosticsStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("advances diagnostics writes before a prepared update can persist", async () => {
+    const dir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-workboard-diagnostics-update-race-"),
+    );
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const diagnosticsStores = createWorkboardSqliteStores({ dbPath });
+    const updateStores = createWorkboardSqliteStores({ dbPath });
+    try {
+      const setupStore = new WorkboardStore(diagnosticsStores.cards);
+      const diagnosticsStore = new WorkboardStore(diagnosticsStores.cards);
+      const card = await setupStore.create({
+        title: "Diagnose before update",
+        status: "ready",
+        agentId: "main",
+      });
+      const originalReservedRegister =
+        updateStores.cards.registerWithPrimarySessionReservation?.bind(updateStores.cards);
+      if (!originalReservedRegister) {
+        throw new Error("expected SQLite registration reservation support");
+      }
+      let markWriteStarted!: () => void;
+      let releaseWrite!: () => void;
+      const writeStarted = new Promise<void>((resolve) => {
+        markWriteStarted = resolve;
+      });
+      const writeReleased = new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+      updateStores.cards.registerWithPrimarySessionReservation = async (key, value, expected) => {
+        markWriteStarted();
+        await writeReleased;
+        await originalReservedRegister(key, value, expected);
+      };
+      const updateStore = new WorkboardStore(updateStores.cards);
+
+      const updating = updateStore.update(card.id, { title: "Prepared stale update" });
+      await writeStarted;
+      let refreshed: Awaited<ReturnType<WorkboardStore["refreshDiagnostics"]>>;
+      try {
+        refreshed = await diagnosticsStore.refreshDiagnostics(Date.now() + 2 * 24 * 60 * 60 * 1000);
+      } finally {
+        releaseWrite();
+      }
+
+      expect(refreshed.count).toBeGreaterThan(0);
+      await expect(updating).rejects.toThrow("changed before persistence");
+      const persisted = await diagnosticsStore.get(card.id);
+      expect(persisted?.title).toBe(card.title);
+      expect(persisted?.updatedAt).toBeGreaterThan(card.updatedAt);
+      expect(persisted?.metadata?.diagnostics).toEqual(
+        expect.arrayContaining([expect.objectContaining({ kind: "stranded_ready" })]),
+      );
+    } finally {
+      updateStores.close();
+      diagnosticsStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reserves normalized execution-only session bindings and ignores terminal cards", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const sessionKey = "agent:main:execution-only";
+    const first = await store.create({
+      title: "Execution-only binding",
+      execution: {
+        id: "exec-primary",
+        kind: "agent-session",
+        engine: "codex",
+        mode: "autonomous",
+        status: "running",
+        sessionKey,
+        startedAt: 10,
+        updatedAt: 10,
+      },
+    });
+
+    expect(first.sessionKey).toBeUndefined();
+    expect(first.execution?.sessionKey).toBe(sessionKey);
+    await expect(store.create({ title: "Top-level duplicate", sessionKey })).rejects.toThrow(
+      "already reserved by card",
+    );
+    await expect(
+      store.create({
+        title: "Execution duplicate",
+        execution: {
+          id: "exec-duplicate",
+          kind: "agent-session",
+          mode: "autonomous",
+          status: "idle",
+          sessionKey,
+          startedAt: 20,
+          updatedAt: 20,
+        },
+      }),
+    ).rejects.toThrow("already reserved by card");
+
+    await expect(
+      store.create({ title: "Blocked duplicate", status: "blocked", sessionKey }),
+    ).resolves.toMatchObject({ status: "blocked", sessionKey });
+    await expect(
+      store.create({ title: "Done duplicate", status: "done", sessionKey }),
+    ).resolves.toMatchObject({ status: "done", sessionKey });
+  });
+
+  it.each(["ready", "running", "review"] as const)(
+    "rejects a legacy duplicate %s claim before any mutation",
+    async (status) => {
+      const keyed = createMemoryStore();
+      const store = new WorkboardStore(keyed);
+      const sessionKey = `agent:main:legacy-${status}`;
+      await store.create({ title: "Existing reservation", sessionKey });
+      const duplicate = await store.create({ title: "Legacy duplicate", status });
+      await keyed.register(duplicate.id, {
+        version: 1,
+        card: { ...duplicate, sessionKey },
+      });
+      const before = structuredClone(await store.get(duplicate.id));
+
+      await expect(
+        store.claim(
+          duplicate.id,
+          { ownerId: "dispatcher" },
+          { adoptWorkspaceAccess: { unrestricted: true } },
+        ),
+      ).rejects.toThrow("already reserved by card");
+
+      expect(await store.get(duplicate.id)).toEqual(before);
+    },
+  );
+
+  it("persists a successful session-bound claim in one card write", async () => {
+    const beforeRegister = vi.fn();
+    const store = new WorkboardStore(createMemoryStore({ beforeRegister }));
+    const card = await store.create({ title: "Atomic claim", status: "ready" });
+    beforeRegister.mockClear();
+
+    const claimed = await store.claim(
+      card.id,
+      { ownerId: "dispatcher", sessionKey: "agent:main:atomic" },
+      { adoptWorkspaceAccess: { unrestricted: true } },
+    );
+
+    expect(beforeRegister).toHaveBeenCalledOnce();
+    expect(claimed.card).toMatchObject({
+      status: "running",
+      agentId: "dispatcher",
+      sessionKey: "agent:main:atomic",
+      metadata: {
+        automation: { workspaceAccess: { unrestricted: true } },
+        claim: { ownerId: "dispatcher" },
+      },
+    });
+  });
+
+  it("recovers legacy duplicate sqlite bindings by explicitly detaching one owner", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-session-recovery-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const sessionKey = "agent:main:legacy-sqlite";
+    let activeStores: ReturnType<typeof createWorkboardSqliteStores> | undefined;
+    try {
+      activeStores = createWorkboardSqliteStores({ dbPath });
+      const store = new WorkboardStore(activeStores.cards);
+      const first = await store.create({ title: "First owner", sessionKey });
+      const duplicate = await store.create({ title: "Duplicate owner", status: "ready" });
+      await activeStores.cards.register(duplicate.id, {
+        version: 1,
+        card: { ...duplicate, sessionKey },
+      });
+      activeStores.close();
+      activeStores = undefined;
+
+      activeStores = createWorkboardSqliteStores({ dbPath });
+      const reopened = new WorkboardStore(activeStores.cards);
+      const before = structuredClone(await reopened.get(duplicate.id));
+      await expect(
+        reopened.claim(duplicate.id, { ownerId: "dispatcher", sessionKey }),
+      ).rejects.toThrow("already reserved by card");
+      expect(await reopened.get(duplicate.id)).toEqual(before);
+
+      const detached = await reopened.bindSession(first.id, { action: "detach" });
+      expect(detached.id).toBe(first.id);
+      expect(detached).not.toHaveProperty("sessionKey");
+      const claimed = await reopened.claim(duplicate.id, {
+        ownerId: "dispatcher",
+        sessionKey,
+      });
+      expect(claimed.card).toMatchObject({
+        id: duplicate.id,
+        status: "running",
+        sessionKey,
+        metadata: { claim: { ownerId: "dispatcher" } },
+      });
+    } finally {
+      activeStores?.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("tracks execution attempts as card metadata", async () => {
@@ -2207,8 +2744,9 @@ describe("WorkboardStore", () => {
 
       expect(createdRunningTimed.startedAt).toBe(1_000);
       expect(result.count).toBe(4);
-      await expect(store.get(ready.id)).resolves.toMatchObject({
-        updatedAt: readyUpdatedAt,
+      const dispatchedReady = await store.get(ready.id);
+      expect(dispatchedReady?.updatedAt).toBeGreaterThan(readyUpdatedAt);
+      expect(dispatchedReady).toMatchObject({
         metadata: { automation: { dispatchCount: 1, lastDispatchAt: 600_000 } },
         events: expect.arrayContaining([expect.objectContaining({ kind: "dispatch" })]),
       });
@@ -2551,8 +3089,9 @@ describe("WorkboardStore", () => {
     const diagnostics = await store.refreshDiagnostics(now);
 
     expect(diagnostics.count).toBeGreaterThanOrEqual(4);
-    await expect(store.get(ready.id)).resolves.toMatchObject({ updatedAt: ready.updatedAt });
-    await expect(store.get(ready.id)).resolves.toMatchObject({
+    const refreshedReady = await store.get(ready.id);
+    expect(refreshedReady?.updatedAt).toBeGreaterThan(ready.updatedAt);
+    expect(refreshedReady).toMatchObject({
       metadata: { diagnostics: [expect.objectContaining({ kind: "stranded_ready" })] },
     });
     await expect(store.get(running.id)).resolves.toMatchObject({
@@ -3293,21 +3832,10 @@ describe("WorkboardStore", () => {
     const store = new WorkboardStore(createMemoryStore(), {
       subscriptions: createMemoryStore<PersistedWorkboardNotificationSubscription>(),
     });
-    const matching = await store.create({
-      title: "Matching session",
-      boardId: "ops",
-      sessionKey: "session-1",
-      runId: "run-1",
-    });
-    const unrelated = await store.create({
-      title: "Other session",
-      boardId: "ops",
-      sessionKey: "session-2",
-      runId: "run-2",
-    });
     await store.create({
       title: "Card-scoped failed notification",
       boardId: "ops",
+      status: "done",
       sessionKey: "session-1",
       runId: "run-1",
       metadata: {
@@ -3320,6 +3848,19 @@ describe("WorkboardStore", () => {
           },
         ],
       },
+    });
+    const matching = await store.create({
+      title: "Matching session",
+      boardId: "ops",
+      status: "running",
+      sessionKey: "session-1",
+      runId: "run-1",
+    });
+    const unrelated = await store.create({
+      title: "Other session",
+      boardId: "ops",
+      sessionKey: "session-2",
+      runId: "run-2",
     });
     const subscription = await store.subscribeNotifications({
       boardId: "ops",

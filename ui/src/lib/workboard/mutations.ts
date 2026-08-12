@@ -96,6 +96,8 @@ export async function saveWorkboardCardDraft(params: {
   state.loading = true;
   state.error = null;
   const cardId = state.editingCardId;
+  const requestedSessionKey = draftPayload(state).sessionKey?.trim() || undefined;
+  const originalSessionKey = state.draftOriginalSessionKey.trim() || undefined;
   const pendingStatusRecorded = recordPendingStatusTransition(
     params.host,
     state.cards.find((card) => card.id === cardId),
@@ -103,9 +105,14 @@ export async function saveWorkboardCardDraft(params: {
   );
   params.requestUpdate?.();
   try {
+    const { sessionKey: _sessionKey, ...cardPatch } = draftPayload(state);
+    const sessionPatch =
+      !state.draftSessionKeyDirty && requestedSessionKey === originalSessionKey
+        ? {}
+        : { sessionKey: requestedSessionKey ?? "" };
     const payload = await params.client.request("workboard.cards.update", {
       id: cardId,
-      patch: draftPayload(state),
+      patch: { ...cardPatch, ...sessionPatch },
     });
     replaceCard(state, normalizeCardPayload(payload));
     resetDraftState(state);

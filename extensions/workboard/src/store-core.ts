@@ -13,6 +13,7 @@ import type {
   PersistedWorkboardBoard,
   PersistedWorkboardCard,
   PersistedWorkboardNotificationSubscription,
+  WorkboardCardRegistrationExpectation,
   WorkboardKeyedStore,
 } from "./persistence-types.js";
 import { normalizeAutomationPatch, normalizeCardAutomation } from "./store-automation.js";
@@ -20,6 +21,8 @@ import {
   assertCanMutateClaimedCard,
   cardBoardId,
   cardParentIds,
+  cardSessionKey,
+  canHoldPrimarySessionBinding,
   compareCards,
   isActiveDependencyTarget,
   isDependencyPromotableStatus,
@@ -41,6 +44,7 @@ import type {
   WorkboardLinkedCreateInput,
   WorkboardListOptions,
   WorkboardMutationScope,
+  WorkboardSessionBindingInput,
   WorkboardStatsResult,
 } from "./store-inputs.js";
 import {
@@ -63,7 +67,6 @@ import {
   normalizeTemplateId,
   normalizeTimestamp,
   normalizeTitle,
-  syncExecutionSessionKey,
   trimMetadataToBudget,
 } from "./store-normalizers.js";
 
@@ -292,6 +295,85 @@ export class WorkboardCoreStore {
     return entry?.version === 1 ? entry.card : undefined;
   }
 
+  protected assertPrimarySessionAvailable(
+    cards: readonly WorkboardCard[],
+    candidate: WorkboardCard,
+  ): void {
+    const sessionKey = cardSessionKey(candidate);
+    if (!sessionKey || !canHoldPrimarySessionBinding(candidate)) {
+      return;
+    }
+    const conflict = cards.find(
+      (card) =>
+        card.id !== candidate.id &&
+        canHoldPrimarySessionBinding(card) &&
+        cardSessionKey(card) === sessionKey,
+    );
+    if (conflict) {
+      throw new Error(`session ${sessionKey} is already reserved by card ${conflict.id}.`);
+    }
+  }
+
+  protected async registerCard(
+    card: WorkboardCard,
+    knownCards?: readonly WorkboardCard[],
+    expected?: WorkboardCardRegistrationExpectation,
+  ): Promise<void> {
+    const value = { version: 1 as const, card };
+    if (this.store.registerWithPrimarySessionReservation) {
+      await this.store.registerWithPrimarySessionReservation(card.id, value, expected);
+      return;
+    }
+    if (cardSessionKey(card) && canHoldPrimarySessionBinding(card)) {
+      this.assertPrimarySessionAvailable(knownCards ?? (await this.list()), card);
+    }
+    await this.store.register(card.id, value);
+  }
+
+  protected async persistCardMutation(
+    previous: WorkboardCard,
+    next: WorkboardCard,
+  ): Promise<WorkboardCard> {
+    const persisted = removeUndefinedCardFields({
+      ...next,
+      updatedAt: Math.max(Date.now(), previous.updatedAt + 1),
+    });
+    await this.registerCard(persisted, undefined, {
+      updatedAt: previous.updatedAt,
+      claimToken: previous.metadata?.claim?.token,
+    });
+    return persisted;
+  }
+
+  protected async restoreCardSnapshot(snapshot: WorkboardCard): Promise<void> {
+    const current = await this.get(snapshot.id);
+    if (!current) {
+      return;
+    }
+    const { claim: _snapshotClaim, ...snapshotMetadata } = snapshot.metadata ?? {};
+    const currentClaim = current.metadata?.claim;
+    const metadata = trimMetadataToBudget({
+      ...snapshotMetadata,
+      ...(currentClaim ? { claim: currentClaim } : {}),
+    });
+    const restored = removeUndefinedCardFields({
+      ...snapshot,
+      ...(currentClaim
+        ? {
+            status: current.status,
+            startedAt: current.startedAt,
+            completedAt: current.completedAt,
+          }
+        : {}),
+      sessionKey: current.sessionKey,
+      execution: current.execution,
+      events: current.events,
+      metadata: metadataIsEmpty(metadata) ? undefined : metadata,
+      updatedAt: current.updatedAt,
+    });
+    await this.persistCardMutation(current, restored);
+  }
+
   private async removeReferencesToCard(cardId: string): Promise<void> {
     for (const card of await this.list()) {
       const links = card.metadata?.links;
@@ -433,7 +515,7 @@ export class WorkboardCoreStore {
       ...(completedAt ? { completedAt } : {}),
       ...(!metadataIsEmpty(syncedMetadata) ? { metadata: syncedMetadata } : {}),
     };
-    await this.store.register(card.id, { version: 1, card });
+    await this.registerCard(card, cards);
     try {
       for (const parent of parentCards) {
         card = await this.linkCardsDirect(parent.id, card.id, now, {
@@ -466,6 +548,7 @@ export class WorkboardCoreStore {
       allowMetadataDependencyLinks?: boolean;
       enforceStatusHolds?: boolean;
       preserveProofId?: string;
+      registrationExpectation?: WorkboardCardRegistrationExpectation;
     } = {},
   ): Promise<WorkboardCard> {
     const existing = await this.get(id);
@@ -499,7 +582,7 @@ export class WorkboardCoreStore {
       }
     }
     const status = normalizeStatus(effectivePatch.status, existing.status);
-    const now = Date.now();
+    const now = Math.max(Date.now(), existing.updatedAt + 1);
     const startedAt =
       effectivePatch.startedAt === undefined
         ? status === "running"
@@ -518,9 +601,7 @@ export class WorkboardCoreStore {
         : normalizeOptionalString(effectivePatch.sessionKey);
     const execution =
       effectivePatch.execution === undefined
-        ? effectivePatch.sessionKey === undefined
-          ? existing.execution
-          : syncExecutionSessionKey(existing.execution, sessionKey)
+        ? existing.execution
         : normalizeExecution(effectivePatch.execution);
     let metadata = normalizeMetadata(effectivePatch.metadata, existing.metadata, {
       allowDependencyLinks: options.allowMetadataDependencyLinks !== false,
@@ -622,9 +703,56 @@ export class WorkboardCoreStore {
     if (metadataIsEmpty(next.metadata)) {
       delete next.metadata;
     }
-    await this.store.register(next.id, { version: 1, card: next });
+    await this.registerCard(
+      next,
+      undefined,
+      options.registrationExpectation ?? {
+        updatedAt: existing.updatedAt,
+        claimToken: existing.metadata?.claim?.token,
+      },
+    );
     await this.deleteDetachedAttachments(existing, next);
     return next;
+  }
+
+  async bindSession(
+    id: string,
+    input: WorkboardSessionBindingInput,
+    scope?: WorkboardMutationScope,
+  ): Promise<WorkboardCard> {
+    return await this.enqueueMutation(async () => {
+      const existing = await this.get(id);
+      if (!existing) {
+        throw new Error(`card not found: ${id}`);
+      }
+      assertCanMutateClaimedCard(existing, scope);
+      const currentSessionKey = existing.sessionKey;
+      const requestedSessionKey = normalizeOptionalString(input.sessionKey);
+      const action =
+        normalizeOptionalString(input.action) ?? (currentSessionKey ? "rebind" : "bind");
+      if (action !== "bind" && action !== "rebind" && action !== "detach") {
+        throw new Error("session binding action must be bind, rebind, or detach.");
+      }
+      if (action === "detach") {
+        if (requestedSessionKey) {
+          throw new Error("detach must not include a session key.");
+        }
+        return currentSessionKey ? await this.updateCard(id, { sessionKey: "" }) : existing;
+      }
+      if (!requestedSessionKey) {
+        throw new Error(`${action} requires a session key.`);
+      }
+      if (action === "bind" && currentSessionKey && currentSessionKey !== requestedSessionKey) {
+        throw new Error("card is already bound; use rebind to change its session.");
+      }
+      if (action === "rebind" && !currentSessionKey) {
+        throw new Error("card is not bound; use bind to set its first session.");
+      }
+      if (currentSessionKey === requestedSessionKey) {
+        return existing;
+      }
+      return await this.updateCard(id, { sessionKey: requestedSessionKey });
+    });
   }
 
   private async assertActiveStatusAllowed(
@@ -803,7 +931,10 @@ export class WorkboardCoreStore {
     return await this.promoteDependencyReady(nextChild.id);
   }
 
-  private async dependencyTargetStatus(card: WorkboardCard, now: number): Promise<WorkboardStatus> {
+  protected async dependencyTargetStatus(
+    card: WorkboardCard,
+    now: number,
+  ): Promise<WorkboardStatus> {
     const scheduledAt = card.metadata?.automation?.scheduledAt;
     const parents = cardParentIds(card);
     if (card.status === "scheduled" && !scheduledAt) {
@@ -878,8 +1009,7 @@ export class WorkboardCoreStore {
       ...(!metadataIsEmpty(metadata) ? { metadata } : { metadata: undefined }),
       events: appendEvent(card, { kind: "dispatch" }, now),
     });
-    await this.store.register(card.id, { version: 1, card: next });
-    return next;
+    return await this.persistCardMutation(card, next);
   }
 
   protected async recordOrchestrationCandidate(
@@ -908,8 +1038,7 @@ export class WorkboardCoreStore {
       ...(!metadataIsEmpty(metadata) ? { metadata } : { metadata: undefined }),
       events: appendEvent(card, { kind: "orchestration" }, now),
     });
-    await this.store.register(card.id, { version: 1, card: next });
-    return next;
+    return await this.persistCardMutation(card, next);
   }
 
   protected async promoteDependencyReady(id: string, now = Date.now()): Promise<WorkboardCard> {

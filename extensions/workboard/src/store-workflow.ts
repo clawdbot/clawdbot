@@ -92,7 +92,18 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         now,
         ttlSeconds ? secondsToDurationMs(ttlSeconds) : DEFAULT_CLAIM_TTL_MS,
       );
-      const guarded = await this.promoteDependencyReady(id, now);
+      const existing = await this.get(id);
+      if (!existing) {
+        throw new Error(`card not found: ${id}`);
+      }
+      const callerSessionKey = normalizeOptionalString(input.sessionKey);
+      const boundSessionKey = cardSessionKey(existing);
+      if (callerSessionKey && boundSessionKey && callerSessionKey !== boundSessionKey) {
+        throw new Error(`card is bound to session ${boundSessionKey}.`);
+      }
+      const dependencyStatus = await this.dependencyTargetStatus(existing, now);
+      const guarded =
+        dependencyStatus === existing.status ? existing : { ...existing, status: dependencyStatus };
       if (guarded.metadata?.archivedAt) {
         throw new Error("card is archived.");
       }
@@ -134,25 +145,34 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       if (activeClaim) {
         throw new Error(`card already claimed by ${activeClaim.ownerId}.`);
       }
-      const claimable =
-        options.adoptWorkspaceAccess && !guarded.metadata?.automation?.workspaceAccess
-          ? await this.updateCard(id, { workspaceAccess: options.adoptWorkspaceAccess })
-          : guarded;
-      const metadata = clearDiagnostics(claimable.metadata, ["stranded_ready"]);
-      const card = await this.updateCard(id, {
-        metadata: {
-          ...metadata,
-          claim: { ownerId, token, claimedAt: now, lastHeartbeatAt: now, expiresAt },
+      const metadata = clearDiagnostics(guarded.metadata, ["stranded_ready"]);
+      const card = await this.updateCard(
+        id,
+        {
+          ...(options.adoptWorkspaceAccess && !guarded.metadata?.automation?.workspaceAccess
+            ? { workspaceAccess: options.adoptWorkspaceAccess }
+            : {}),
+          ...(callerSessionKey && !boundSessionKey ? { sessionKey: callerSessionKey } : {}),
+          status:
+            guarded.status === "backlog" || guarded.status === "todo" || guarded.status === "ready"
+              ? "running"
+              : guarded.status,
+          agentId: guarded.agentId ?? ownerId,
+          metadata: {
+            ...metadata,
+            claim: { ownerId, token, claimedAt: now, lastHeartbeatAt: now, expiresAt },
+          },
         },
-      });
-      const next = await this.updateCard(card.id, {
-        status:
-          card.status === "backlog" || card.status === "todo" || card.status === "ready"
-            ? "running"
-            : card.status,
-        agentId: card.agentId ?? ownerId,
-      });
-      return { card: next, token };
+        {
+          // Persist the binding decision against the row it was derived from so an intervening bind
+          // cannot be overwritten after updateCard reloads the card.
+          registrationExpectation: {
+            updatedAt: existing.updatedAt,
+            claimToken: existing.metadata?.claim?.token,
+          },
+        },
+      );
+      return { card, token };
     });
   }
 
@@ -529,8 +549,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         ...updated,
         events: appendEvent(updated, { kind: "specified" }, now),
       };
-      await this.store.register(specified.id, { version: 1, card: specified });
-      return specified;
+      return await this.persistCardMutation(updated, specified);
     });
   }
 
@@ -625,8 +644,8 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           ...updatedParent,
           events: appendEvent(updatedParent, { kind: "decomposed" }),
         };
-        await this.store.register(decomposedParent.id, { version: 1, card: decomposedParent });
-        return { parent: decomposedParent, children };
+        const persistedParent = await this.persistCardMutation(updatedParent, decomposedParent);
+        return { parent: persistedParent, children };
       } catch (error) {
         for (const child of children.toReversed()) {
           if (!existingCardIds.has(child.id)) {
@@ -634,9 +653,9 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           }
         }
         for (const child of reusedChildSnapshots.values()) {
-          await this.store.register(child.id, { version: 1, card: child });
+          await this.restoreCardSnapshot(child);
         }
-        await this.store.register(parent.id, { version: 1, card: parent });
+        await this.restoreCardSnapshot(parent);
         throw error;
       }
     });

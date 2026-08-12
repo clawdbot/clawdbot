@@ -1,11 +1,12 @@
 // Workboard tests cover tools plugin behavior.
+import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
 import { WorkboardStore } from "./store.js";
 import { createWorkboardTools } from "./tools.js";
-import { guardWorkboardToolsForWorkspaceAccess } from "./workspace-access.js";
+import { guardWorkboardToolsForWorkspaceAccess, WORKBOARD_TOOL_NAMES } from "./workspace-access.js";
 
 function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
   const entries = new Map<string, T>();
@@ -30,6 +31,67 @@ function readPayload(result: unknown): Record<string, unknown> {
 }
 
 describe("workboard tools", () => {
+  it("declares every runtime tool in the canonical list and plugin manifest", () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const api = { runtime: {} } as unknown as OpenClawPluginApi;
+    const runtimeNames = createWorkboardTools({ api, store }).map((tool) => tool.name);
+    const manifest = JSON.parse(
+      fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+    ) as {
+      contracts?: { tools?: string[] };
+      toolMetadata?: Record<string, { optional?: boolean }>;
+    };
+
+    expect(new Set(runtimeNames)).toEqual(new Set(WORKBOARD_TOOL_NAMES));
+    expect(new Set(manifest.contracts?.tools ?? [])).toEqual(new Set(WORKBOARD_TOOL_NAMES));
+    expect(manifest.toolMetadata?.workboard_session_bind).toEqual({ optional: true });
+  });
+
+  it("rejects agent binding without a trusted current session", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const api = { runtime: {} } as unknown as OpenClawPluginApi;
+    const tools = new Map(
+      createWorkboardTools({
+        api,
+        store,
+        context: { agentId: "main" } as never,
+      }).map((tool) => [tool.name, tool]),
+    );
+    const card = await store.create({ title: "Unbound card" });
+
+    await expect(
+      tools.get("workboard_session_bind")?.execute("contextless-bind", {
+        id: card.id,
+        action: "bind",
+        sessionKey: "agent:other:chosen-by-model",
+      }),
+    ).rejects.toThrow("current chat session");
+    expect((await store.get(card.id))?.sessionKey).toBeUndefined();
+
+    const currentSessionKey = "agent:main:trusted-current-chat";
+    const trustedTools = new Map(
+      createWorkboardTools({
+        api,
+        store,
+        context: { agentId: "main", sessionKey: currentSessionKey } as never,
+      }).map((tool) => [tool.name, tool]),
+    );
+    await expect(
+      trustedTools.get("workboard_session_bind")?.execute("mismatched-bind", {
+        id: card.id,
+        action: "bind",
+        sessionKey: "agent:other:chosen-by-model",
+      }),
+    ).rejects.toThrow("must target the current chat session");
+    await expect(
+      trustedTools.get("workboard_session_bind")?.execute("trusted-bind", {
+        id: card.id,
+        action: "bind",
+      }),
+    ).resolves.toBeDefined();
+    expect((await store.get(card.id))?.sessionKey).toBe(currentSessionKey);
+  });
+
   it("inherits the active tool filesystem boundary for workspace metadata", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const api = { runtime: {} } as unknown as OpenClawPluginApi;
