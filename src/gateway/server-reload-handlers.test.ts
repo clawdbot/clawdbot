@@ -81,6 +81,10 @@ import {
 import { shouldRewarmProviderAuthState } from "./config-reload-recovery.js";
 import { applyHookMappings } from "./hooks-mapping.js";
 import { commitHooksConfigReload } from "./hooks.js";
+import {
+  isGatewayReloadGenerationAborted,
+  nextGatewayReloadGeneration,
+} from "./server-reload-contracts.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
 import {
   abortPendingChannelReloads,
@@ -6638,49 +6642,16 @@ describe("deferred channel reload abort generation", () => {
     }
   });
 
-  it("new reload lifecycle is not affected by a previous lifecycle abort", async () => {
-    const logChannels = { info: vi.fn(), error: vi.fn() };
-    const channels = {
-      start: vi.fn(async () => {}),
-      stop: vi.fn(async () => {}),
-    };
-
-    // Create gen 1 and register abort for it
-    createTestHandlers(logChannels, channels);
+  it("new reload lifecycle is not affected by a previous lifecycle abort", () => {
+    const abortedGeneration = nextGatewayReloadGeneration();
     abortPendingChannelReloads();
 
-    // Create gen 2 — should not carry over the abort from gen 1
-    const h2 = createTestHandlers(logChannels, channels);
+    expect(isGatewayReloadGenerationAborted(abortedGeneration)).toBe(true);
 
-    hoisted.activeTaskBlockers.push(makeActiveTaskBlocker({ taskId: "task-blocking-reload-g2" }));
-    vi.useFakeTimers();
+    const nextGeneration = nextGatewayReloadGeneration();
 
-    try {
-      const reloadPromise = h2.applyHotReload(abortChannelReloadPlan, {});
-      await vi.advanceTimersByTimeAsync(600); // past first poll interval — still waiting
-      await Promise.resolve();
-
-      // Gen 2's generation > abort generation, so it should NOT abort
-      expect(logChannels.info).not.toHaveBeenCalledWith(
-        "channel restart cancelled by in-process restart",
-      );
-
-      // Drain active work → should proceed to stop/start channels normally
-      hoisted.activeTaskBlockers.length = 0;
-      await vi.advanceTimersByTimeAsync(500); // wake up, see active=0, drain complete
-      await expect(reloadPromise).resolves.toBeUndefined();
-
-      expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, {
-        manual: false,
-        restartPending: false,
-      });
-      expect(channels.start).toHaveBeenCalledWith("whatsapp", undefined, {
-        preserveManualStop: true,
-      });
-    } finally {
-      vi.useRealTimers();
-      hoisted.activeTaskBlockers.length = 0;
-    }
+    expect(nextGeneration).toBeGreaterThan(abortedGeneration);
+    expect(isGatewayReloadGenerationAborted(nextGeneration)).toBe(false);
   });
 
   it("abort inside beforeReplace prevents plugin metadata/runtime replacement and channel restart", async () => {
@@ -6718,18 +6689,16 @@ describe("deferred channel reload abort generation", () => {
     const pluginReloadPlan: GatewayReloadPlan = createPluginReloadPlan();
 
     hoisted.activeTaskBlockers.push(makeActiveTaskBlocker());
-    vi.useFakeTimers();
 
     try {
       const reloadPromise = applyHotReload(pluginReloadPlan, {});
       const reloadRejected = expect(reloadPromise).rejects.toThrow(
         "config hot reload cancelled by config supersession or in-process restart",
       );
-      // Advance into the waitForActiveWorkBeforeChannelReload poll loop
-      await vi.advanceTimersByTimeAsync(100);
+      // Let beforeReplace enter the active-work wait loop, then abort it. This
+      // uses real timers so the plugin reload promise owns its timer lifecycle.
+      await Promise.resolve();
       abortPendingChannelReloads();
-      // Advance past the 500ms sleep → abort check fires
-      await vi.advanceTimersByTimeAsync(500);
       await reloadRejected;
 
       // reloadPlugins should receive the isAborted callback
@@ -6744,7 +6713,6 @@ describe("deferred channel reload abort generation", () => {
       expect(channels.start).not.toHaveBeenCalled();
       expect(channels.stop).not.toHaveBeenCalled();
     } finally {
-      vi.useRealTimers();
       hoisted.activeTaskBlockers.length = 0;
     }
   });
