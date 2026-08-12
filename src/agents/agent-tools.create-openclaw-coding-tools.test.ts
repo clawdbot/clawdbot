@@ -640,8 +640,8 @@ describe("createOpenClawCodingTools", () => {
   });
 
   it("applies a provider coding profile to optional tools discovered by global full", () => {
-    const requiredPluginTool = stubTool("required_plugin_tool");
-    const optionalPluginTool = stubTool("optional_plugin_tool");
+    const requiredPluginTool = stubTool("required_plugin_tool") as unknown as OpenClawCodingTool;
+    const optionalPluginTool = stubTool("optional_plugin_tool") as unknown as OpenClawCodingTool;
     setPluginToolMeta(requiredPluginTool, { pluginId: "proof", optional: false });
     setPluginToolMeta(optionalPluginTool, { pluginId: "proof", optional: true });
     vi.mocked(createOpenClawTools).mockReturnValueOnce([requiredPluginTool, optionalPluginTool]);
