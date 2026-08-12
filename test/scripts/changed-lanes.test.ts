@@ -414,6 +414,31 @@ describe("scripts/changed-lanes", () => {
     );
   });
 
+  it("prints changed-check evidence decisions in dry-run output", () => {
+    const receiptDir = makeTempRepoRoot(tempDirs, "changed-check-dry-run-evidence-");
+    const freshResult = runRepoScript("scripts/check-changed.mjs", [
+      "--dry-run",
+      "--no-reuse",
+      "--proof-receipt-dir",
+      receiptDir,
+      "--",
+      "scripts/check-changed.mts",
+    ]);
+    expect(freshResult.status).toBe(0);
+    expect(freshResult.stderr).toContain("[check:changed:dry-run] no reuse:");
+    expect(freshResult.stderr).toContain("force-fresh requested");
+
+    const missingResult = runRepoScript("scripts/check-changed.mjs", [
+      "--dry-run",
+      "--proof-receipt-dir",
+      receiptDir,
+      "--",
+      "scripts/check-changed.mts",
+    ]);
+    expect(missingResult.status).toBe(0);
+    expect(missingResult.stderr).toContain("missing changed-check evidence receipt");
+  });
+
   it("includes untracked worktree files in the default local diff", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-");
     git(dir, ["init", "-q", "--initial-branch=main"]);
@@ -1711,6 +1736,38 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core");
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions:test");
+  });
+
+  it("keeps evidence-capable changed checks scoped to affected lane plans", () => {
+    const hasEvidenceCapableCommand = (paths: string[]) =>
+      createChangedCheckPlan(detectChangedLanes(paths)).commands.some((command) =>
+        command.args.some(
+          (arg) =>
+            arg.startsWith("tsgo:") ||
+            arg === "lint:core" ||
+            arg === "lint:extensions" ||
+            arg.includes("run-oxlint"),
+        ),
+      );
+
+    expect(hasEvidenceCapableCommand(["docs/ci.md"])).toBe(false);
+    expect(
+      hasEvidenceCapableCommand([
+        "package.json",
+        "CHANGELOG.md",
+        "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
+        "docs/.generated/config-baseline.counts.json",
+        "docs/.generated/config-baseline.sha256",
+      ]),
+    ).toBe(false);
+    expect(hasEvidenceCapableCommand(["src/agents/run.ts"])).toBe(true);
+    expect(hasEvidenceCapableCommand(["src/plugin-sdk/core.ts"])).toBe(true);
+
+    const rootResult = detectChangedLanes(["pnpm-lock.yaml"]);
+    expect(rootResult.lanes.all).toBe(true);
+    expect(createChangedCheckPlan(rootResult).commands.map((command) => command.args[0])).toContain(
+      "tsgo:all",
+    );
   });
 
   it("fails safe for root config changes", () => {
