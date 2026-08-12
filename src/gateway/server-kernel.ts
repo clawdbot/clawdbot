@@ -10,14 +10,11 @@ import {
   setRuntimeConfigAppliedHash,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import { clearGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import {
-  clearActivePluginRegistry,
-  commitStagedPluginRegistry,
-  getActivePluginRegistry,
-} from "../plugins/runtime.js";
+import { clearActivePluginRegistry, getActivePluginRegistry } from "../plugins/runtime.js";
 import {
   clearSecretsRuntimeSnapshotState,
   getActiveSecretsRuntimeRefreshContext,
@@ -149,7 +146,8 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
   // globals hold, and a second kernel attempt failing at ANY stage must not strip them from
   // it. Bootstrap STAGES its pre-bind registry (no retirement) and clearing an uncommitted
   // staged registry reverts the slot to the displaced survivor snapshot; the displaced
-  // registry retires only at the commit on full kernel success below.
+  // registry retires only when the loader activates the fully loaded startup registry after
+  // the listener binds (see startGatewayServerCore -> finishGatewayStartup), never here.
   const priorRegistry = getActivePluginRegistry();
   const priorSnapshot = getRuntimeConfigSnapshot();
   const priorSourceSnapshot = getRuntimeConfigSourceSnapshot();
@@ -259,22 +257,28 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
       log,
       logHealth,
     });
-    // Commit only at full kernel success, after the last throwing step: the displaced prior
-    // registry retires exactly once here, as a completed replacement. Committing any earlier
-    // lets a later startup failure close the attempt with the survivor already retired —
-    // destructive disable-cleanup fired — and nothing live left to restore.
-    commitStagedPluginRegistry(priorRegistry, bootstrap.pluginBootstrap.pluginRegistry);
-    return requestRuntime;
+    // The pre-bind registry stays STAGED past kernel success: transport creation and the
+    // listener bind still lie ahead in startGatewayServerCore and can fail as a unit. The
+    // commit — retiring the displaced survivor exactly once, as a completed replacement —
+    // happens when the loader activates the fully loaded startup registry after the listener
+    // binds (loader-shared's activatePluginRegistry stage/commit, marker-transfer semantics
+    // in plugins/runtime). Committing here let a bind failure close the attempt with the
+    // survivor already retired and nothing live left to restore. The caller's failure path
+    // reuses this attempt's snapshot-family restore through the handle returned below.
+    return {
+      ...requestRuntime,
+      restorePriorSnapshotFamiliesAfterStartupFailure: restorePriorSnapshotFamilies,
+    };
   } catch (error) {
     if (lifecycleRuntime) {
       // The close's shutdown clears the attempt's staged (uncommitted) registry, which
       // reverts the slot to the displaced survivor snapshot — key, subagent mode, workspace
       // dir — and skips the host-state wipe the survivor still owns (see
-      // clearActivePluginRegistry). The commit above only runs after the last throwing step,
-      // so every failure landing here still holds an unretired survivor. The close then
-      // scrubs the snapshot families unconditionally (its secrets clear cascades into the
-      // config snapshot, applied hash, and ambient policy), so restore them to the captured
-      // prior state once teardown settles — even when the close itself throws.
+      // clearActivePluginRegistry). The commit only happens later (the loader's post-bind
+      // activation), so every failure landing here still holds an unretired survivor. The
+      // close then scrubs the snapshot families unconditionally (its secrets clear cascades
+      // into the config snapshot, applied hash, and ambient policy), so restore them to the
+      // captured prior state once teardown settles — even when the close itself throws.
       try {
         await lifecycleRuntime.closeOnStartupFailure();
       } finally {
@@ -291,6 +295,7 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
       // config and secrets snapshots, exactly as normal shutdown orders it — and the
       // snapshots scrub (or restore to their prior state) afterwards even when that cleanup
       // throws.
+      clearGatewayAgentCliShim();
       try {
         if (getActivePluginRegistry() !== priorRegistry) {
           await clearActivePluginRegistry();

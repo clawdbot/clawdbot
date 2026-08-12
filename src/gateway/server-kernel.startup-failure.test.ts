@@ -865,10 +865,13 @@ describe("createGatewayKernel lifecycle-stage startup failure", () => {
     }
   });
 
-  // Success-path guard: deferring the commit to full kernel success must not lose the
-  // retirement itself. A successful second start still retires the displaced survivor exactly
-  // once — the commit's retirement, not a second one from the attempt's own close.
-  it("retires the displaced survivor exactly once when the second start succeeds", async () => {
+  // ClawSweeper cycle 41 (P1): committing at kernel return retires the survivor while the
+  // transport bind (and the rest of listener startup) can still fail — and that failure's
+  // close can only clear the candidate, leaving nothing live. Kernel success must keep the
+  // pre-bind registry STAGED so the post-kernel failure close aborts back to the survivor;
+  // the commit belongs to the loader's startup-plugin activation after the listener binds
+  // (the success path is pinned in server-start.startup-failure.test.ts).
+  it("keeps the survivor staged past kernel success so a bind failure restores it", async () => {
     const port = await getFreePort();
     const state = await createOpenClawTestState({
       label: "gateway-kernel-lifecycle-stage-success",
@@ -938,28 +941,31 @@ describe("createGatewayKernel lifecycle-stage startup failure", () => {
         controlUiEnabled: false,
         sidecarStartup: "defer",
       });
+      // The attempt's pre-bind registry holds the slot, but the displaced survivor must not
+      // retire at kernel return: transport creation and the listener bind still lie ahead.
       expect(getActivePluginRegistry()).not.toBe(survivor);
-      expect(isPluginRegistryRetired(survivor)).toBe(true);
-      await vi.waitFor(() => {
-        expect(lifecycleCleanupReasons).toEqual(["disable"]);
-        expect(schedulerCleanupReasons).toEqual(["disable"]);
+      expect(isPluginRegistryRetired(survivor)).toBe(false);
+      // The bind-failure close (startGatewayServerCore's catch) aborts the staged attempt
+      // and restores the survivor live — key, mode, lifecycle, and scheduler job intact.
+      const closing = kernel.closeOnStartupFailure();
+      kernel = undefined;
+      await closing;
+      expect(getActivePluginRegistry()).toBe(survivor);
+      expect(isPluginRegistryRetired(survivor)).toBe(false);
+      expect(getActivePluginRegistryKey()).toBe("embedded-prior-success");
+      expect(getActivePluginRuntimeSubagentMode()).toBe("gateway-bindable");
+      await new Promise((resolve) => {
+        setTimeout(resolve, 100);
       });
+      expect(lifecycleCleanupReasons).toEqual([]);
+      expect(schedulerCleanupReasons).toEqual([]);
       expect(
         getPluginSessionSchedulerJobGeneration({
           pluginId: "embedded-prior-plugin",
           jobId: "embedded-prior-job",
           sessionKey: "embedded-prior-session",
         }),
-      ).toBeUndefined();
-      // The completed replacement's own close must not fire a SECOND survivor retirement.
-      const closing = kernel.closeOnStartupFailure();
-      kernel = undefined;
-      await closing;
-      await new Promise((resolve) => {
-        setTimeout(resolve, 100);
-      });
-      expect(lifecycleCleanupReasons).toEqual(["disable"]);
-      expect(schedulerCleanupReasons).toEqual(["disable"]);
+      ).toBeDefined();
     } finally {
       lifecycleStageFixture.realLifecycle = false;
       lifecycleStageFixture.stubKernelTail = false;

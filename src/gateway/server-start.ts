@@ -81,7 +81,17 @@ export async function startGatewayServerCore(
     });
     startupSettled = startup.startupSettled;
   } catch (err) {
-    await closeOnStartupFailure();
+    // The pre-bind registry is still STAGED for any failure before the loader's post-bind
+    // activation commits it (transport create, ws attach, listener bind): the close's
+    // registry clear aborts the staged attempt and restores the displaced survivor. The
+    // close also scrubs the snapshot families unconditionally, so restore the survivor's
+    // captured prior state once teardown settles — mirroring the kernel's own failure path,
+    // even when the close itself throws.
+    try {
+      await closeOnStartupFailure();
+    } finally {
+      gatewayKernel.restorePriorSnapshotFamiliesAfterStartupFailure();
+    }
     throw err;
   }
   // The public server is fully initialized now. Leave a short I/O window before

@@ -47,14 +47,28 @@ const state: RegistryState = (() => {
   return registryState;
 })();
 
+export type ActivePluginRegistrySnapshot = {
+  activeRegistry: PluginRegistry | null;
+  key: string | null;
+  runtimeSubagentMode: RegistryState["runtimeSubagentMode"];
+  workspaceDir: string | null;
+  // The staged-abort revert armed for the captured registry when the capture happened
+  // mid-attempt (registry staged, not yet committed). Restore re-arms it so the displaced
+  // survivor stays recoverable across a capture/restore round-trip — the loader's activation
+  // failure rollback would otherwise strand the survivor behind a plain-clear marker wipe.
+  stagedRevert: ActivePluginRegistrySnapshot | null;
+};
+
 // Arms exactly one revert for the currently staged registry: staging displaces a still-live
 // registry WITHOUT retiring it, so if the staged attempt is cleared before commit the displaced
 // snapshot (registry, key, subagent mode, workspace dir) must come back — otherwise the clear
-// empties the slot and its tail wipes global host state the displaced survivor still owns. Any
-// other install or clear invalidates the marker so a stale snapshot can never resurrect.
+// empties the slot and its tail wipes global host state the displaced survivor still owns.
+// Staging a successor over a still-staged attempt TRANSFERS the marker (the abort target stays
+// the original survivor); any other install or clear invalidates it so a stale snapshot can
+// never resurrect.
 let stagedRegistryRevert: {
   registry: PluginRegistry;
-  snapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
+  snapshot: ActivePluginRegistrySnapshot;
 } | null = null;
 
 function registryHasPluginHostCleanupWork(registry: PluginRegistry | null): boolean {
@@ -179,11 +193,16 @@ export function stageActivePluginRegistry(
     workspaceDir: workspaceDir ?? null,
     retirePrevious: false,
   });
+  // Staging over a still-staged uncommitted attempt (the loader activating the fully loaded
+  // startup registry over the gateway's pre-bind provisional one) TRANSFERS the marker: the
+  // abort target stays the ORIGINAL displaced survivor, never the intermediate attempt
+  // registry — the commit retires that intermediate instead of the clear restoring it.
+  const revertSnapshot = displaced.stagedRevert ?? displaced;
   // A no-survivor stage keeps plain clear semantics (empty slot + host-state wipe); only a
   // displaced live registry earns the abort-by-clear revert.
   stagedRegistryRevert =
-    displaced.activeRegistry && displaced.activeRegistry !== registry
-      ? { registry, snapshot: displaced }
+    revertSnapshot.activeRegistry && revertSnapshot.activeRegistry !== registry
+      ? { registry, snapshot: revertSnapshot }
       : null;
 }
 
@@ -191,34 +210,55 @@ export function commitStagedPluginRegistry(
   previousRegistry: PluginRegistry | null,
   registry: PluginRegistry,
 ): void {
+  // A transferred marker (nested stage) means the true displaced survivor lives in the
+  // marker snapshot; the caller's previousRegistry is then the intermediate attempt registry
+  // it captured before its own stage, and both retire here — the survivor exactly once, as a
+  // completed replacement.
+  const displacedSurvivor =
+    stagedRegistryRevert?.registry === registry
+      ? stagedRegistryRevert.snapshot.activeRegistry
+      : previousRegistry;
   if (stagedRegistryRevert?.registry === registry) {
     // The attempt owns the slot from here: a later clear is a real clear, not an abort.
     stagedRegistryRevert = null;
   }
-  if (state.activeRegistry !== registry || !retirePluginRegistryIfUnused(previousRegistry)) {
+  if (state.activeRegistry !== registry) {
     return;
   }
-  cleanupRetiredPluginHostRegistry(previousRegistry!);
+  if (previousRegistry !== displacedSurvivor && retirePluginRegistryIfUnused(previousRegistry)) {
+    cleanupRetiredPluginHostRegistry(previousRegistry!);
+  }
+  if (!retirePluginRegistryIfUnused(displacedSurvivor)) {
+    return;
+  }
+  cleanupRetiredPluginHostRegistry(displacedSurvivor!);
 }
 
-export function captureActivePluginRegistrySnapshot() {
+export function captureActivePluginRegistrySnapshot(): ActivePluginRegistrySnapshot {
   return {
     activeRegistry: state.activeRegistry,
     key: state.key,
     runtimeSubagentMode: state.runtimeSubagentMode,
     workspaceDir: state.workspaceDir,
+    stagedRevert:
+      stagedRegistryRevert && stagedRegistryRevert.registry === state.activeRegistry
+        ? stagedRegistryRevert.snapshot
+        : null,
   };
 }
 
-export function restoreActivePluginRegistrySnapshot(
-  snapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>,
-): void {
+export function restoreActivePluginRegistrySnapshot(snapshot: ActivePluginRegistrySnapshot): void {
   installActivePluginRegistry({
     registry: snapshot.activeRegistry,
     key: snapshot.key,
     runtimeSubagentMode: snapshot.runtimeSubagentMode,
     workspaceDir: snapshot.workspaceDir,
   });
+  // Restoring a still-staged uncommitted attempt re-arms its abort so a later clear reverts
+  // to the original displaced survivor instead of wiping the slot.
+  if (snapshot.stagedRevert && snapshot.activeRegistry) {
+    stagedRegistryRevert = { registry: snapshot.activeRegistry, snapshot: snapshot.stagedRevert };
+  }
 }
 
 function installActivePluginRegistry(params: {

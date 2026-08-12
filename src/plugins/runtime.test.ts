@@ -1,15 +1,22 @@
 /** Covers plugin runtime registration API behavior and registry mutation guards. */
 import { beforeEach, describe, expect, it } from "vitest";
 import { getPluginRunContext, setPluginRunContext } from "./host-hook-runtime.js";
+import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import type { PluginHttpRouteRegistration } from "./registry.js";
 import {
+  captureActivePluginRegistrySnapshot,
   clearActivePluginRegistry,
+  commitStagedPluginRegistry,
   getActivePluginRegistry,
+  getActivePluginRegistryKey,
+  getActivePluginRuntimeSubagentMode,
   listImportedRuntimePluginIds,
   recordImportedPluginId,
   resetPluginRuntimeStateForTest,
+  restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
+  stageActivePluginRegistry,
 } from "./runtime.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
@@ -229,5 +236,85 @@ describe("setActivePluginRegistry", () => {
         get: { runId: "run-1", namespace: "state" },
       }),
     ).toBeUndefined();
+  });
+});
+
+// ClawSweeper cycle 41 (P1): gateway startup keeps its pre-bind registry staged past the
+// kernel; the loader then stages+commits the fully loaded registry OVER that still-staged
+// attempt (loader-shared's activatePluginRegistry). The nested stage transfers the abort
+// marker so the original displaced survivor — not the intermediate attempt registry — is what
+// a pre-commit clear restores and what the commit finally retires, exactly once.
+describe("staged plugin registry attempt", () => {
+  beforeEach(() => {
+    resetPluginRuntimeStateForTest();
+  });
+
+  function seedSurvivor() {
+    const survivor = createEmptyPluginRegistry();
+    setActivePluginRegistry(survivor, "survivor-key", "gateway-bindable");
+    return survivor;
+  }
+
+  it("commits a nested stage by retiring the original survivor exactly once", () => {
+    const survivor = seedSurvivor();
+    const preBind = createEmptyPluginRegistry();
+    stageActivePluginRegistry(preBind, null, "default");
+    const loaderCapture = captureActivePluginRegistrySnapshot();
+    const loaded = createEmptyPluginRegistry();
+    stageActivePluginRegistry(loaded, "loaded-key", "gateway-bindable");
+    expect(isPluginRegistryRetired(survivor)).toBe(false);
+
+    commitStagedPluginRegistry(loaderCapture.activeRegistry, loaded);
+
+    expect(getActivePluginRegistry()).toBe(loaded);
+    expect(isPluginRegistryRetired(survivor)).toBe(true);
+    expect(isPluginRegistryRetired(preBind)).toBe(true);
+  });
+
+  it("clears to an empty slot after the nested commit consumed the marker", async () => {
+    const survivor = seedSurvivor();
+    const preBind = createEmptyPluginRegistry();
+    stageActivePluginRegistry(preBind, null, "default");
+    const loaded = createEmptyPluginRegistry();
+    stageActivePluginRegistry(loaded, "loaded-key", "gateway-bindable");
+    commitStagedPluginRegistry(preBind, loaded);
+
+    await clearActivePluginRegistry();
+
+    expect(getActivePluginRegistry()).toBeNull();
+    expect(isPluginRegistryRetired(survivor)).toBe(true);
+  });
+
+  it("aborts a nested stage back to the original survivor", async () => {
+    const survivor = seedSurvivor();
+    stageActivePluginRegistry(createEmptyPluginRegistry(), null, "default");
+    stageActivePluginRegistry(createEmptyPluginRegistry(), "loaded-key", "gateway-bindable");
+
+    await clearActivePluginRegistry();
+
+    expect(getActivePluginRegistry()).toBe(survivor);
+    expect(isPluginRegistryRetired(survivor)).toBe(false);
+    expect(getActivePluginRegistryKey()).toBe("survivor-key");
+    expect(getActivePluginRuntimeSubagentMode()).toBe("gateway-bindable");
+  });
+
+  it("re-arms the staged abort across a capture/restore round-trip", async () => {
+    // The loader's activation failure path: capture the staged pre-bind attempt, stage the
+    // loaded registry, roll back to the capture — a later clear must still restore the
+    // survivor instead of wiping the slot.
+    const survivor = seedSurvivor();
+    const preBind = createEmptyPluginRegistry();
+    stageActivePluginRegistry(preBind, null, "default");
+    const loaderCapture = captureActivePluginRegistrySnapshot();
+    stageActivePluginRegistry(createEmptyPluginRegistry(), "loaded-key", "gateway-bindable");
+
+    restoreActivePluginRegistrySnapshot(loaderCapture);
+    expect(getActivePluginRegistry()).toBe(preBind);
+    await clearActivePluginRegistry();
+
+    expect(getActivePluginRegistry()).toBe(survivor);
+    expect(isPluginRegistryRetired(survivor)).toBe(false);
+    expect(getActivePluginRegistryKey()).toBe("survivor-key");
+    expect(getActivePluginRuntimeSubagentMode()).toBe("gateway-bindable");
   });
 });
