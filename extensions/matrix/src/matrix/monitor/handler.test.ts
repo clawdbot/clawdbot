@@ -4083,7 +4083,9 @@ describe("matrix monitor handler draft streaming", () => {
       }
       await finish();
 
-      const redactedEventIds = redactEventMock.mock.calls.map(([, eventId]) => eventId);
+      const redactedEventIds = mockCalls(redactEventMock, "redactEvent").map(
+        ([, eventId]) => eventId,
+      );
       expect(redactedEventIds.filter((eventId) => eventId === "$draft1")).toHaveLength(
         priorDisposition === "consumed" ? 1 : 0,
       );
