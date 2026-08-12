@@ -27,7 +27,7 @@ Local onboarding defaults new local configs to `tools.profile: "coding"` when un
 | `messaging` | `group:messaging`, `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `ask_user` |
 | `full`      | No restriction (same as unset)                                                                                                                                                                                                                          |
 
-`coding` and `messaging` also implicitly allow `bundle-mcp` (configured MCP servers).
+`coding` and `messaging` also include required tools from enabled plugins and implicitly allow `bundle-mcp` (configured MCP servers). Optional plugin tools still require an explicit allow entry. `minimal` keeps plugin tools out unless they are explicitly added.
 
 ### Tool groups
 

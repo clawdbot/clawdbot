@@ -28,6 +28,7 @@ type PluginTrustPolicyDeps = {
   resolveSandboxConfigForAgent: typeof import("../agents/sandbox/config.js").resolveSandboxConfigForAgent;
   resolveSandboxToolPolicyForAgent: typeof import("../agents/sandbox/tool-policy.js").resolveSandboxToolPolicyForAgent;
   resolveToolProfilePolicy: typeof import("../agents/tool-policy.js").resolveToolProfilePolicy;
+  toolProfileAllowsDefaultPluginTools: typeof import("../agents/tool-catalog.js").toolProfileAllowsDefaultPluginTools;
 };
 
 /** Lazily load tool-policy helpers so basic security imports avoid agent policy modules. */
@@ -39,13 +40,24 @@ const loadPluginTrustPolicyDeps = createLazyPromise(
       import("../agents/tool-policy-match.js"),
       import("../agents/tool-policy.js"),
       import("../agents/sandbox-tool-policy.js"),
-    ]).then(([sandboxConfig, sandboxToolPolicy, toolPolicyMatch, toolPolicy, auditToolPolicy]) => ({
-      isToolAllowedByPolicies: toolPolicyMatch.isToolAllowedByPolicies,
-      pickSandboxToolPolicy: auditToolPolicy.pickSandboxToolPolicy,
-      resolveSandboxConfigForAgent: sandboxConfig.resolveSandboxConfigForAgent,
-      resolveSandboxToolPolicyForAgent: sandboxToolPolicy.resolveSandboxToolPolicyForAgent,
-      resolveToolProfilePolicy: toolPolicy.resolveToolProfilePolicy,
-    })),
+      import("../agents/tool-catalog.js"),
+    ]).then(
+      ([
+        sandboxConfig,
+        sandboxToolPolicy,
+        toolPolicyMatch,
+        toolPolicy,
+        auditToolPolicy,
+        toolCatalog,
+      ]) => ({
+        isToolAllowedByPolicies: toolPolicyMatch.isToolAllowedByPolicies,
+        pickSandboxToolPolicy: auditToolPolicy.pickSandboxToolPolicy,
+        resolveSandboxConfigForAgent: sandboxConfig.resolveSandboxConfigForAgent,
+        resolveSandboxToolPolicyForAgent: sandboxToolPolicy.resolveSandboxToolPolicyForAgent,
+        resolveToolProfilePolicy: toolPolicy.resolveToolProfilePolicy,
+        toolProfileAllowsDefaultPluginTools: toolCatalog.toolProfileAllowsDefaultPluginTools,
+      }),
+    ),
   { cacheRejections: true },
 );
 
@@ -372,7 +384,9 @@ export async function collectPluginsTrustFindings(params: {
       const permissiveContexts: string[] = [];
       for (const context of contexts) {
         const profile = context.tools?.profile ?? params.cfg.tools?.profile;
-        const restrictiveProfile = Boolean(deps.resolveToolProfilePolicy(profile));
+        const profileAllowsDefaultPluginTools = deps.toolProfileAllowsDefaultPluginTools(profile);
+        const restrictiveProfile =
+          Boolean(deps.resolveToolProfilePolicy(profile)) && !profileAllowsDefaultPluginTools;
         const sandboxMode = deps.resolveSandboxConfigForAgent(params.cfg, context.agentId).mode;
         // Probe with a synthetic plugin tool id: broad allow policies will allow
         // it, while restrictive profiles or explicit allowlists should not.
@@ -383,7 +397,10 @@ export async function collectPluginsTrustFindings(params: {
           sandboxMode,
           agentId: context.agentId,
         });
-        const broadPolicy = deps.isToolAllowedByPolicies("__openclaw_plugin_probe__", policies);
+        const broadPolicy = deps.isToolAllowedByPolicies(
+          "__openclaw_plugin_probe__",
+          profileAllowsDefaultPluginTools ? policies.slice(1) : policies,
+        );
         const explicitPluginAllow =
           !restrictiveProfile &&
           (hasExplicitPluginAllow({
@@ -417,7 +434,7 @@ export async function collectPluginsTrustFindings(params: {
             `Enabled extension plugins: ${enabledExtensionPluginIds.join(", ")}.\n` +
             `Permissive tool policy contexts:\n${permissiveContexts.map((entry) => `- ${entry}`).join("\n")}`,
           remediation:
-            "Use restrictive profiles (`minimal`/`coding`) or explicit tool allowlists that exclude plugin tools for agents handling untrusted input.",
+            "Use the restrictive `minimal` profile or explicit tool allowlists that exclude plugin tools for agents handling untrusted input.",
         });
       }
     }

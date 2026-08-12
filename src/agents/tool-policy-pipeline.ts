@@ -5,7 +5,7 @@
  */
 import { filterToolsByPolicy } from "./agent-tools.policy.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { isKnownCoreToolId } from "./tool-catalog.js";
+import { isKnownCoreToolId, toolProfileAllowsDefaultPluginTools } from "./tool-catalog.js";
 import { auditToolPolicyFilter, type ToolPolicyAuditLogLevel } from "./tool-policy-audit.js";
 import {
   analyzeAllowlistByToolType,
@@ -79,7 +79,7 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
     {
       policy: params.profilePolicy,
       label: profile ? `tools.profile (${profile})` : "tools.profile",
-      preservePluginTools: true,
+      preservePluginTools: toolProfileAllowsDefaultPluginTools(profile),
       stripPluginOnlyAllowlist: true,
       suppressUnavailableCoreToolWarningAllowlist: params.profileUnavailableCoreWarningAllowlist,
       unavailableCoreToolReason,
@@ -89,7 +89,7 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
       label: providerProfile
         ? `tools.byProvider.profile (${providerProfile})`
         : "tools.byProvider.profile",
-      preservePluginTools: true,
+      preservePluginTools: toolProfileAllowsDefaultPluginTools(providerProfile),
       stripPluginOnlyAllowlist: true,
       suppressUnavailableCoreToolWarningAllowlist:
         params.providerProfileUnavailableCoreWarningAllowlist,

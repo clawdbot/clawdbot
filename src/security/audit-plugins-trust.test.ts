@@ -157,6 +157,11 @@ vi.mock("../agents/tool-policy.js", () => ({
     profile === "coding" || profile === "minimal" ? {} : undefined,
 }));
 
+vi.mock("../agents/tool-catalog.js", () => ({
+  toolProfileAllowsDefaultPluginTools: (profile: unknown) =>
+    profile === "coding" || profile === "messaging" || profile === "full",
+}));
+
 vi.mock("../agents/sandbox-tool-policy.js", () => ({
   pickSandboxToolPolicy: () => undefined,
 }));
@@ -557,10 +562,24 @@ describe("security audit extension tool reachability findings", () => {
         },
       },
       {
-        name: "does not flag plugin tool reachability when profile is restrictive",
+        name: "flags plugin tool reachability when coding includes required plugin tools",
         cfg: {
           plugins: { allow: ["some-plugin"] },
           tools: { profile: "coding" },
+        } satisfies OpenClawConfig,
+        assert: (findings: Awaited<ReturnType<typeof runSharedExtensionsAudit>>) => {
+          expect(
+            findings.some(
+              (finding) => finding.checkId === "plugins.tools_reachable_permissive_policy",
+            ),
+          ).toBe(true);
+        },
+      },
+      {
+        name: "does not flag plugin tool reachability when minimal is restrictive",
+        cfg: {
+          plugins: { allow: ["some-plugin"] },
+          tools: { profile: "minimal" },
         } satisfies OpenClawConfig,
         assert: (findings: Awaited<ReturnType<typeof runSharedExtensionsAudit>>) => {
           expect(

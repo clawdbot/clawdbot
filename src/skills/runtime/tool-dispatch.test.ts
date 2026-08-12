@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tools.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 
 type CreateOpenClawToolsArg = {
@@ -15,6 +16,7 @@ type CreateOpenClawToolsArg = {
   cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
   nativeChannelId?: string;
   pluginToolDenylist?: string[];
+  pluginToolAllowlist?: string[];
   senderIsOwner?: boolean;
 };
 
@@ -28,6 +30,7 @@ const hoisted = vi.hoisted(() => {
     };
   }
   return {
+    makeTool,
     createOpenClawToolsMock: vi.fn((_args: CreateOpenClawToolsArg) => [
       makeTool("read"),
       makeTool("cron"),
@@ -88,6 +91,50 @@ describe("resolveSkillDispatchTools", () => {
       { name: "exec" },
       { name: "conversations_send" },
     ]);
+  });
+
+  it("discovers required plugin tools before applying the coding profile", () => {
+    const pluginTool = hoisted.makeTool("required_plugin_tool");
+    setPluginToolMeta(pluginTool, { pluginId: "required-plugin", optional: false });
+    hoisted.createOpenClawToolsMock.mockReturnValueOnce([pluginTool]);
+
+    const tools = resolveSkillDispatchTools({
+      message: { surface: "telegram", senderId: "user-1" },
+      cfg: { tools: { profile: "coding" } } as OpenClawConfig,
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:user-1",
+      workspaceDir: "/tmp/openclaw-skill-tool-dispatch-test",
+      provider: "openai",
+      model: "gpt-5.5",
+      senderIsOwner: true,
+    });
+
+    const args = hoisted.createOpenClawToolsMock.mock.calls.at(-1)?.[0];
+    expect(args?.pluginToolAllowlist).toEqual([]);
+    expect(tools.map((tool) => tool.name)).toEqual(["required_plugin_tool"]);
+    expect(getPluginToolMeta(tools[0]!)).toEqual({
+      pluginId: "required-plugin",
+      optional: false,
+    });
+  });
+
+  it("keeps required plugin tools out of minimal skill dispatch", () => {
+    const pluginTool = hoisted.makeTool("required_plugin_tool");
+    setPluginToolMeta(pluginTool, { pluginId: "required-plugin", optional: false });
+    hoisted.createOpenClawToolsMock.mockReturnValueOnce([pluginTool]);
+
+    const tools = resolveSkillDispatchTools({
+      message: { surface: "telegram", senderId: "user-1" },
+      cfg: { tools: { profile: "minimal" } } as OpenClawConfig,
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:user-1",
+      workspaceDir: "/tmp/openclaw-skill-tool-dispatch-test",
+      provider: "openai",
+      model: "gpt-5.5",
+      senderIsOwner: true,
+    });
+
+    expect(tools).toEqual([]);
   });
 
   it("carries command skill file identity into tool diagnostics", () => {

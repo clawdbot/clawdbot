@@ -100,6 +100,21 @@ describe("tool-policy-pipeline", () => {
     expect(filtered.map((tool) => tool.name)).toEqual(["exec", "plugin_tool"]);
   });
 
+  test("minimal profiles keep plugin tools restricted", () => {
+    const tools = [{ name: "session_status" }, { name: "plugin_tool" }] as unknown as DummyTool[];
+    const filtered = applyToolPolicyPipeline({
+      tools: asPolicyTools(tools),
+      toolMeta: (tool) => (tool.name === "plugin_tool" ? { pluginId: "foo" } : undefined),
+      warn: () => {},
+      steps: buildDefaultToolPolicyPipelineSteps({
+        profile: "minimal",
+        profilePolicy: { allow: ["session_status"] },
+      }),
+    });
+
+    expect(filtered.map((tool) => tool.name)).toEqual(["session_status"]);
+  });
+
   test("explicit policies can still restrict plugin tools after a profile", () => {
     const tools = [{ name: "exec" }, { name: "plugin_tool" }] as unknown as DummyTool[];
     const filtered = applyToolPolicyPipeline({

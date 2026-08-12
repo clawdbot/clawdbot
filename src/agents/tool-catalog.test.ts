@@ -3,7 +3,11 @@
  * Verifies built-in profile allowlists include expected core tool groups.
  */
 import { describe, expect, it } from "vitest";
-import { listCoreToolSections, resolveCoreToolProfilePolicy } from "./tool-catalog.js";
+import {
+  listCoreToolSections,
+  resolveCoreToolProfilePolicy,
+  toolProfileAllowsDefaultPluginTools,
+} from "./tool-catalog.js";
 
 function requireCoreToolProfilePolicy(profile: Parameters<typeof resolveCoreToolProfilePolicy>[0]) {
   const policy = resolveCoreToolProfilePolicy(profile);
@@ -103,5 +107,12 @@ describe("tool-catalog", () => {
   it("full profile uses wildcard to grant all tools (#76507)", () => {
     const policy = requireCoreToolProfilePolicy("full");
     expect(policy.allow).toEqual(["*"]);
+  });
+
+  it("keeps minimal out of profiles that include required plugin tools", () => {
+    expect(toolProfileAllowsDefaultPluginTools("minimal")).toBe(false);
+    expect(toolProfileAllowsDefaultPluginTools("coding")).toBe(true);
+    expect(toolProfileAllowsDefaultPluginTools("messaging")).toBe(true);
+    expect(toolProfileAllowsDefaultPluginTools("full")).toBe(true);
   });
 });
