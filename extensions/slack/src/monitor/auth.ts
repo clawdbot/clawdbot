@@ -656,6 +656,7 @@ export async function authorizeSlackSystemEventSender(params: {
   const channelConfig = channelId
     ? resolveSlackChannelConfig({
         teamId: params.eventScope?.teamId ?? params.ctx.teamId,
+        allowUnscoped: params.ctx.installationIdentity?.kind !== "enterprise",
         channelId,
         channelName,
         channels: params.ctx.channelsConfig,
