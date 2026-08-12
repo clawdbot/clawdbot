@@ -65,7 +65,7 @@ vi.mock("./subagents/announce/subagent-announce.runtime.js", () => ({
   isEmbeddedAgentRunActive: () => false,
   loadSessionStore: () => ({}),
   readSessionMessagesAsync: vi.fn(async () => []),
-  readSessionEntry: () => undefined,
+  readSubagentSessionEntry: () => undefined,
   resolveAgentIdFromSessionKey: (sessionKey: string) =>
     sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main",
   resolveContinuationRuntimeConfig: (_cfg?: unknown) => ({
