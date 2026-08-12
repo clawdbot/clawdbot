@@ -627,6 +627,62 @@ describe("formatGitInstallLabel", () => {
 });
 
 describe("checkUpdateStatus", () => {
+  it("uses the tracked dev branch for detached exact-SHA deployments", async () => {
+    await withTempDir({ prefix: "openclaw-update-check-detached-dev-" }, async (base) => {
+      const sourceRoot = path.join(base, "source");
+      const localRoot = path.join(base, "local");
+      await initGitRepo(sourceRoot);
+      await fs.writeFile(
+        path.join(sourceRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", packageManager: "pnpm@10.0.0" }),
+      );
+      await runGit(sourceRoot, "add", "package.json");
+      await commitGit(sourceRoot, "base");
+      await runGit(base, "clone", "--quiet", sourceRoot, localRoot);
+      const sha = await runGit(localRoot, "rev-parse", "HEAD");
+      const readStatus = () =>
+        checkUpdateStatus({
+          root: localRoot,
+          includeRegistry: false,
+          fetchGit: false,
+          timeoutMs: 5000,
+          useDetachedDevUpstream: true,
+        });
+
+      await expect(readStatus()).resolves.toMatchObject({
+        git: {
+          branch: "main",
+          upstream: "origin/main",
+          upstreamSha: sha,
+          ahead: 0,
+          behind: 0,
+        },
+      });
+
+      await runGit(localRoot, "checkout", "--detach", sha);
+      await expect(readStatus()).resolves.toMatchObject({
+        git: {
+          branch: "HEAD",
+          upstream: "origin/main",
+          upstreamSha: sha,
+          ahead: 0,
+          behind: 0,
+        },
+      });
+
+      await runGit(localRoot, "branch", "--unset-upstream", "main");
+      await expect(readStatus()).resolves.toMatchObject({
+        git: {
+          branch: "HEAD",
+          upstream: null,
+          upstreamSha: null,
+          ahead: null,
+          behind: null,
+        },
+      });
+    });
+  });
+
   it("uses a matching receipt upstream only for the detached installed revision", async () => {
     await withTestDir({ prefix: "openclaw-update-check-receipt-fallback-" }, async (base) => {
       const sourceRoot = path.join(base, "source");
