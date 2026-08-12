@@ -114,20 +114,6 @@ function objectiveKeyFor(card: WorkboardCard): string | undefined {
   return card.metadata?.automation?.objectiveKey;
 }
 
-async function persistObjectiveKey(
-  store: { register: (key: string, value: { version: 1; card: WorkboardCard }) => Promise<void> },
-  card: WorkboardCard,
-  objectiveKey: string | undefined,
-): Promise<WorkboardCard> {
-  if (objectiveKey === undefined || objectiveKeyFor(card) === objectiveKey) return card;
-  const next: WorkboardCard = {
-    ...card,
-    metadata: { ...card.metadata, automation: { ...card.metadata?.automation, objectiveKey } },
-  };
-  await store.register(next.id, { version: 1, card: next });
-  return next;
-}
-
 function reconciliationResult(
   card: WorkboardCard,
   applied: boolean,
@@ -233,34 +219,41 @@ export class WorkboardStore extends WorkboardNotificationStore {
       if (typeof card.title !== "string" || card.title.trim() === "") {
         throw new Error("card.title is required when creating a card.");
       }
-      const created = await this.createDirect({
-        ...card,
-        ...(RECONCILIATION_PROTECTED_STATUSES.has(card.status as WorkboardStatus)
-          ? { status: "todo" }
-          : {}),
-        sourceUrl: link.sourceUrl,
-        tenant: link.tenant,
-        idempotencyKey: link.idempotencyKey,
-        metadata: {
-          automation: {
-            tenant: link.tenant,
-            idempotencyKey: link.idempotencyKey,
-          },
-          lifecycleStatusSourceUpdatedAt: link.sourceUpdatedAt,
-          links: [
-            {
-              id: externalLinkId(link),
-              type: "relates_to",
-              createdAt: Date.now(),
-              sourceUpdatedAt: link.sourceUpdatedAt,
-              url: link.sourceUrl,
-              ...(link.title ? { title: link.title } : {}),
+      const created = await this.createDirect(
+        {
+          ...card,
+          ...(RECONCILIATION_PROTECTED_STATUSES.has(card.status as WorkboardStatus)
+            ? { status: "todo" }
+            : {}),
+          sourceUrl: link.sourceUrl,
+          tenant: link.tenant,
+          idempotencyKey: link.idempotencyKey,
+          metadata: {
+            automation: {
+              tenant: link.tenant,
+              idempotencyKey: link.idempotencyKey,
             },
-          ],
+            lifecycleStatusSourceUpdatedAt: link.sourceUpdatedAt,
+            links: [
+              {
+                id: externalLinkId(link),
+                type: "relates_to",
+                createdAt: Date.now(),
+                sourceUpdatedAt: link.sourceUpdatedAt,
+                url: link.sourceUrl,
+                ...(link.title ? { title: link.title } : {}),
+              },
+            ],
+          },
         },
-      });
-      const canonical = await persistObjectiveKey(this.store, created, observation.objectiveKey);
-      return reconciliationResult(canonical, true, reconciliationLinkFor(canonical, link));
+        undefined,
+        {
+          ...(observation.objectiveKey === undefined
+            ? {}
+            : { reconciliationObjectiveKey: observation.objectiveKey }),
+        },
+      );
+      return reconciliationResult(created, true, reconciliationLinkFor(created, link));
     });
   }
 

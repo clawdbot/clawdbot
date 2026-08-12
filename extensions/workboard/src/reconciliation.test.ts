@@ -101,6 +101,36 @@ describe("WorkboardReconciler", () => {
     ).toHaveLength(3);
   });
 
+  it("writes the canonical objective on the initial create without an observable intermediate card", async () => {
+    const writes: PersistedWorkboardCard[] = [];
+    const entries = new Map<string, PersistedWorkboardCard>();
+    const store = new WorkboardStore({
+      async register(key, value) {
+        writes.push(value);
+        entries.set(key, value);
+      },
+      async lookup(key) {
+        return entries.get(key);
+      },
+      async delete(key) {
+        return entries.delete(key);
+      },
+      async entries() {
+        return [...entries].map(([key, value]) => ({ key, value }));
+      },
+    });
+    await new WorkboardReconciler(store).apply({
+      sourceUrl: "https://example.test/a",
+      tenant: "acme",
+      objectiveKey: "deploy",
+      idempotencyKey: "a",
+      sourceUpdatedAt: 1,
+      card: { title: "A" },
+    });
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.card.metadata?.automation?.objectiveKey).toBe("deploy");
+  });
+
   it("rejects an explicit card when its idempotency association belongs to another card", async () => {
     const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
     const owned = await reconciler.apply({

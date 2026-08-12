@@ -317,6 +317,7 @@ export class WorkboardCoreStore {
   protected async createDirect(
     input: WorkboardLinkedCreateInput,
     scope?: WorkboardMutationScope,
+    options: { reconciliationObjectiveKey?: string } = {},
   ): Promise<WorkboardCard> {
     const now = Date.now();
     const requestedStatus = normalizeStatus(input.status, "todo");
@@ -391,9 +392,18 @@ export class WorkboardCoreStore {
       },
       { allowDependencyLinks: false, allowArchivedAt: false },
     );
-    const syncedMetadata = trimMetadataToBudget(
+    let syncedMetadata = trimMetadataToBudget(
       syncExecutionAttemptMetadata(metadata, execution, now),
     );
+    if (options.reconciliationObjectiveKey) {
+      syncedMetadata = trimMetadataToBudget({
+        ...syncedMetadata,
+        automation: {
+          ...syncedMetadata.automation,
+          objectiveKey: options.reconciliationObjectiveKey,
+        },
+      });
+    }
     const boardId = syncedMetadata.automation?.boardId ?? "default";
     const position = Number.isFinite(normalizedPosition)
       ? normalizedPosition
