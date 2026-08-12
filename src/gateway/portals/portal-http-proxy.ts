@@ -10,6 +10,12 @@ import net, { type Socket } from "node:net";
 import type { Duplex } from "node:stream";
 
 const PORTAL_AUTH_NAME = "openclaw_portal";
+// Browser cookie jars are hostname-scoped, so the stable listener port in the
+// auth cookie name keeps concurrently open portals from replacing each other.
+function portalAuthCookieName(listenPort: number): string {
+  return `${PORTAL_AUTH_NAME}_${listenPort}`;
+}
+
 // Cookies are hostname-scoped, not port-scoped. Per-target prefixes keep Gateway
 // and sibling portal cookies from leaking into an agent-run application.
 const PORTAL_COOKIE_PREFIX = "oc_portal_";
@@ -27,6 +33,7 @@ const HOP_BY_HOP_HEADERS = new Set([
 ]);
 
 type PortalProxyTarget = {
+  listenPort: number;
   targetPort: number;
   token: string;
 };
@@ -46,10 +53,14 @@ function tokensEqual(candidate: string | undefined, expected: string): boolean {
   );
 }
 
-function readPortalCookie(cookieHeader: string | undefined): string | undefined {
+function readPortalCookie(
+  cookieHeader: string | undefined,
+  listenPort: number,
+): string | undefined {
+  const authCookieName = portalAuthCookieName(listenPort);
   for (const segment of cookieHeader?.split(";") ?? []) {
     const separator = segment.indexOf("=");
-    if (separator < 0 || segment.slice(0, separator).trim() !== PORTAL_AUTH_NAME) {
+    if (separator < 0 || segment.slice(0, separator).trim() !== authCookieName) {
       continue;
     }
     return segment.slice(separator + 1).trim();
@@ -118,7 +129,7 @@ function authorizePortalRequest(
       setCookie: true,
     };
   }
-  if (tokensEqual(readPortalCookie(req.headers.cookie), target.token)) {
+  if (tokensEqual(readPortalCookie(req.headers.cookie, target.listenPort), target.token)) {
     url?.searchParams.delete(PORTAL_AUTH_NAME);
     return {
       kind: "authorized",
@@ -130,7 +141,7 @@ function authorizePortalRequest(
 }
 
 function portalCookie(target: PortalProxyTarget, tls: boolean): string {
-  return `${PORTAL_AUTH_NAME}=${target.token}; HttpOnly; SameSite=Lax; Path=/${tls ? "; Secure" : ""}`;
+  return `${portalAuthCookieName(target.listenPort)}=${target.token}; HttpOnly; SameSite=Lax; Path=/${tls ? "; Secure" : ""}`;
 }
 
 function setProxyResponseHeader(
