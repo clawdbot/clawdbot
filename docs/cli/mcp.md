@@ -704,7 +704,7 @@ Native MCP OAuth sessions live in the owner-only shared SQLite database at `<sta
 
 Upgrades from the retired `<state-dir>/mcp-oauth/*.json` store are handled only by `openclaw doctor --fix`. Runtime code never reads, writes, or falls back to those files.
 
-Until shared credentials are available, OpenClaw omits only that MCP server from the agent runtime instead of failing the agent turn. The operator, or an agent with shell access, can then run `openclaw mcp login <name>` and use the server on a later turn.
+Until shared credentials are available, OpenClaw omits only that MCP server from the agent runtime instead of failing the agent turn. An operator can authorize the server from **Control UI → MCP** or run `openclaw mcp login <name>`, then use the server on a later turn.
 
 If a server rejects a token with `insufficient_scope`, OpenClaw preserves the requested scope and asks for `openclaw mcp login <name>` instead of repeating a refresh that cannot grant new scope. That login starts a new authorization request while keeping the previous token until replacement credentials are saved.
 
@@ -743,7 +743,7 @@ If `gateway.publicOrigin` is missing, the sign-in result names that setting and 
 
 Sign-in links are single-use bearer links: any chat participant who opens one connects their own account to the sender the link was issued for. Use per-requester OAuth in channels where every trusted sender is mutually trusted; a requester-private sign-in handoff is tracked as follow-up work.
 
-The shared operator flow uses the following commands:
+The shared operator flow uses either the Control UI or the following commands. The Control UI starts the same coordinator and uses the same token store as the CLI; it does not create a second OAuth listener or accept pasted callback data.
 
 <Steps>
   <Step title="Save the server">
@@ -843,7 +843,7 @@ Registry commands do not start the channel bridge. Only `probe` and `doctor --pr
 
 ## Control UI
 
-The browser Control UI includes a dedicated MCP settings page at `/settings/mcp`; the previous `/mcp` path remains an alias. The page shows configured server counts, enabled/OAuth/filter summaries, per-server transport rows, enable/disable controls, common CLI commands, and a scoped editor for the `mcp` config section.
+The browser Control UI includes a dedicated MCP settings page at `/settings/mcp`; the previous `/mcp` path remains an alias. The page shows configured server counts, enabled/OAuth/filter summaries, per-server transport rows, enable/disable controls, shared OAuth authorization actions, common CLI commands, and a scoped editor for the `mcp` config section.
 
 For a shorter setup walkthrough covering Settings, the composer path (**+** → **Connectors** → **Add MCP server…**) and its **This session** / **Everywhere** scopes, CLI, and direct config, see [Connect MCP servers](/tools/mcp).
 
@@ -853,16 +853,21 @@ Operator workflow:
 
 1. Open the Control UI and choose **MCP**.
 2. Review the summary cards for total, enabled, OAuth, and filtered servers.
-3. Use each server row for transport, auth, filter, timeout, and command hints.
-4. Toggle enablement when you want to keep a definition but exclude it from runtime discovery.
-5. Edit the scoped `mcp` config section for structural changes such as new servers, headers, TLS, OAuth metadata, or tool filters.
-6. Choose **Save** to persist config only, or **Save & Publish** to apply through the Gateway config path.
-7. Run `openclaw mcp doctor --probe` when you need live proof that the edited server starts and lists tools.
+3. Use each server row for transport, auth, filter, timeout, and command hints. Shared HTTP OAuth rows show **Authorization required**, **Waiting for browser**, **Ready**, or a safe error category.
+4. For **Authorization required**, select **Authorize** and finish in the provider browser page. The row updates automatically after callback exchange; never paste a code or callback URL into chat.
+5. Use **Reauthorize** to start a replacement transaction while retaining a usable current credential. Use **Cancel** to settle the exact pending transaction, or **Disconnect** to clear only this server's local operator credential.
+6. Toggle enablement when you want to keep a definition but exclude it from runtime discovery.
+7. Edit the scoped `mcp` config section for structural changes such as new servers, headers, TLS, OAuth metadata, or tool filters.
+8. Choose **Save** to persist config only, or **Save & Publish** to apply through the Gateway config path.
+9. Run `openclaw mcp doctor --probe` when you need live proof that the edited server starts and lists tools.
 
 Notes:
 
 - command snippets quote server names so unusual names remain copyable in a shell
 - displayed URL-like values are redacted before rendering when they contain embedded credentials
+- OAuth status exposes only lifecycle/category and credential presence; the start RPC returns an opaque same-origin launch path, so the Control UI never receives or renders a provider token, authorization code, or callback query
+- OAuth actions require `operator.admin`; read-only operators cannot inspect or mutate the credential state
+- per-requester OAuth remains sender-owned and does not expose shared operator actions
 - the page does not start MCP transports by itself
 - active runtimes may need `openclaw mcp reload`, Gateway config publish, or process restart depending on which process owns the MCP clients
 

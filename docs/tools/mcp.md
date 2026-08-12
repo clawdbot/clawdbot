@@ -21,7 +21,7 @@ This guide is about connecting third-party MCP servers **to OpenClaw**. For the 
 4. For the HTTP transports, enter the server's `http://` or `https://` URL. For stdio, enter the command followed by its arguments.
 5. Select **Add server**.
 
-That writes the new `mcp.servers` entry through the Gateway. For anything beyond the basics — headers, environment values, OAuth metadata, TLS settings, timeouts, parallel-tool-call hints, tool filters — use the scoped config editor further down the page. The server rows also let you enable, disable, or remove a definition.
+That writes the new `mcp.servers` entry through the Gateway. For anything beyond the basics — headers, environment values, OAuth metadata, TLS settings, timeouts, parallel-tool-call hints, tool filters — use the scoped config editor further down the page. The server rows also let you enable, disable, or remove a definition. A shared HTTP server with `auth: "oauth"` also shows its authorization state and the available **Authorize**, **Cancel**, **Reauthorize**, or **Disconnect** action.
 
 Once the server is saved, verify it actually answers:
 
@@ -105,13 +105,19 @@ Confirm the `command` resolves in the Gateway process environment and that `cwd`
 
 ### An HTTP server needs authorization
 
-Set `auth: "oauth"` plus any required `oauth` metadata, then:
+Set `auth: "oauth"` plus any required `oauth` metadata. For a shared operator credential, open **Settings → MCP** and select **Authorize** on the server row. Complete the provider page in the browser; the Gateway callback exchanges and saves the credential automatically. Do not paste an authorization code or callback URL into agent chat.
+
+The row shows **Waiting for browser** until exchange succeeds. **Reauthorize** keeps the current usable credential until the replacement succeeds, and a failed or canceled attempt does not delete that credential. **Disconnect** clears only the selected local OpenClaw credential; it does not revoke a provider-side token family.
+
+The equivalent CLI path is:
 
 ```bash
 openclaw mcp login <name>
 ```
 
-Follow the printed authorization URL. OpenClaw normally captures the loopback redirect and saves the credentials automatically; use the printed `--code` command when the browser cannot reach the callback listener.
+Follow the printed authorization URL. OpenClaw normally captures the loopback redirect and saves the credentials automatically; use the printed `--code` command only for the CLI fallback when the browser cannot reach the callback listener.
+
+Per-requester OAuth is sender-owned and does not use the shared Control UI actions. See [OAuth workflow](/cli/mcp#oauth-workflow) for its Gateway callback requirements.
 
 ### Changes do not reach an active agent
 

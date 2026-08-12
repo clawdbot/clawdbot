@@ -1016,6 +1016,7 @@ describe("MCP OAuth provider", () => {
             tokens: { access_token: expect.any(String) },
           });
           expect(readMcpOAuthStore(identity.storeKey)).not.toHaveProperty("codeVerifier");
+          expect(readMcpOAuthStore(identity.storeKey)).not.toHaveProperty("authorizationAttempt");
 
           const secondIdentity = requesterIdentity("fixture", config.url, "sender-b");
           const second = await startMcpOAuthAuthorization(secondIdentity, config, {});

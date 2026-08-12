@@ -2428,6 +2428,22 @@ export const en: TranslationMap = {
     disable: "Disable",
     removeNamed: "Remove {name}",
     working: "Working…",
+    oauth: {
+      required: "Authorization required",
+      authorize: "Authorize",
+      waiting: "Waiting for browser",
+      ready: "Ready",
+      reauthorize: "Reauthorize",
+      disconnect: "Disconnect",
+      errorLabel: "Authorization error",
+      error: {
+        "authorization-denied": "Authorization was denied. Retry when you are ready.",
+        "callback-invalid": "The browser response was invalid. Start a new authorization.",
+        "exchange-failed": "The credential exchange failed. Retry authorization.",
+        "timed-out": "Authorization timed out. Start a new authorization.",
+        "start-failed": "Authorization could not start. Check the server and retry.",
+      },
+    },
   },
   mcpPage: {
     intro: "Connect and manage MCP servers that provide tools to OpenClaw.",

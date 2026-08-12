@@ -215,8 +215,10 @@ and plugin-install policy checks as other Gateway-mediated installs. Installing
 or removing plugin code requires a Gateway restart. Enabling or disabling an
 installed plugin can apply without a restart when the plugin and current
 Gateway runtime support it; otherwise the UI reports that a restart is
-required. OAuth-backed MCP connectors need a one-time
-`openclaw mcp login <name>` from the CLI after they are added.
+required. Shared OAuth-backed MCP connectors can be authorized directly from
+the MCP settings row after they are added. Per-requester OAuth remains
+sender-owned; the CLI remains available for shared operator authorization and
+diagnostics.
 
 The page intentionally focuses on inventory, discovery, install, enablement,
 and removal. Use [`openclaw plugins`](/cli/plugins) for arbitrary npm, git, or
@@ -304,7 +306,7 @@ select it to open the owning Approvals page.
     - Model Setup (`/settings/model-setup`) is a subpage of Model Providers, launched from its header.
     - Agents: a settings page (**Settings → Agents**, `/settings/agents`) with an **Agent defaults** row for the shared template plus per-agent tabs (Overview, Files, Tools, Skills, Channels, Automations, Memory). The Overview tab edits the agent's identity — display name, emoji, and an avatar image that is downscaled and size-bounded in the browser before `agents.update`. Saving stores configured identity fields and mirrors them to the workspace `IDENTITY.md`; configured values take precedence over manual edits to the same file fields.
     - Profile: a settings page showing the default agent's identity with all-time usage stats — lifetime tokens, peak day, longest session, activity streaks, a year-long token heatmap, top tools, and channel highlights (`usage.cost`, `sessions.usage`).
-    - MCP has a dedicated settings page with server rows (transport, enablement, OAuth/filter/parallel summaries), direct add/enable/disable/remove controls, common operator commands, and the scoped `mcp` config editor. The Plugins page remains the home for one-click connectors and discovery.
+    - MCP has a dedicated settings page with server rows (transport, enablement, OAuth/filter/parallel summaries), shared OAuth authorize/cancel/reauthorize/disconnect actions, direct add/enable/disable/remove controls, common operator commands, and the scoped `mcp` config editor. The Plugins page remains the home for one-click connectors and discovery.
     - Model Providers: a settings page listing every configured model provider with its brand icon, auth state (`models.authStatus`), model availability (`models.list`), live plan/quota/billing data where the provider reports it (`usage.status`), and local session spend for the last 30 days (`sessions.usage`). A Refresh action re-reads credential state and provider usage.
     - Connection: a settings page (under **Connections**) owning the dashboard's own gateway link — WebSocket URL, gateway token, password, and default session key — plus the latest handshake snapshot (status, uptime, tick interval, last channels refresh). The offline login gate handles the disconnected case; this page edits the connection while connected.
     - Apply and restart with validation (`config.apply`), then wake the last active session.
@@ -387,11 +389,12 @@ Typical workflow:
 
 1. Open **MCP** from the sidebar.
 2. Check the summary cards for total, enabled, OAuth, and filtered server counts.
-3. Review each server row for transport, enablement, auth, filters, timeouts, and command hints.
-4. Add, enable, disable, or remove servers directly on the MCP page. Choose Streamable HTTP, SSE, or stdio explicitly; stdio command lines accept quoted arguments such as paths with spaces. Use the **Plugins** page for one-click connectors and discovery.
-5. Edit the scoped `mcp` config section for advanced server fields such as environment variables, working directories, headers, TLS/mTLS paths, OAuth metadata, tool filters, and Codex projection metadata.
-6. Use **Save** for a config write, or **Save & Publish** when the running Gateway should apply the changed config.
-7. Run `openclaw mcp status --verbose`, `openclaw mcp doctor --probe`, or `openclaw mcp reload` from a terminal for static diagnostics, live proof, or cached-runtime disposal.
+3. Review each server row for transport, enablement, auth, filters, timeouts, and command hints. Shared HTTP OAuth rows show **Authorization required**, **Waiting for browser**, **Ready**, or a safe error category.
+4. Select **Authorize** or **Reauthorize** and complete the provider browser page. The Control UI opens an opaque same-origin launch path; only the Gateway redirects that browser window to the provider. The Gateway callback updates the row automatically; do not paste codes or callback URLs into chat. **Cancel** settles the current attempt, and **Disconnect** clears only the selected local credential.
+5. Add, enable, disable, or remove servers directly on the MCP page. Choose Streamable HTTP, SSE, or stdio explicitly; stdio command lines accept quoted arguments such as paths with spaces. Use the **Plugins** page for one-click connectors and discovery.
+6. Edit the scoped `mcp` config section for advanced server fields such as environment variables, working directories, headers, TLS/mTLS paths, OAuth metadata, tool filters, and Codex projection metadata.
+7. Use **Save** for a config write, or **Save & Publish** when the running Gateway should apply the changed config.
+8. Run `openclaw mcp status --verbose`, `openclaw mcp doctor --probe`, or `openclaw mcp reload` from a terminal for static diagnostics, live proof, or cached-runtime disposal.
 
 The page redacts credential-bearing URL-like values before rendering and quotes server names in command snippets so copied commands still work with spaces or shell metacharacters. Full CLI and config reference: [MCP](/cli/mcp).
 

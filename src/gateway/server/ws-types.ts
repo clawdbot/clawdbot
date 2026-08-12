@@ -55,6 +55,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
     isLocalClient?: true;
     approvalRuntime?: boolean;
     agentRuntimeIdentity?: AgentRuntimeIdentity;
+    /** Origin already admitted by the Control UI websocket origin policy. */
+    controlUiOrigin?: string;
   };
   canvasHostUrl?: string;
   canvasCapability?: string;

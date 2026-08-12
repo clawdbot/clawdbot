@@ -13,6 +13,10 @@ import type { ValidationError } from "./validation-errors.js";
 
 // Validator names mirror schemas so callers can pair them with wire contracts.
 export const validateCommandsListParams = compile(S.CommandsListParamsSchema);
+export const validateMcpOAuthStatusParams = compile(S.McpOAuthStatusParamsSchema);
+export const validateMcpOAuthStartParams = compile(S.McpOAuthStartParamsSchema);
+export const validateMcpOAuthCancelParams = compile(S.McpOAuthCancelParamsSchema);
+export const validateMcpOAuthDisconnectParams = compile(S.McpOAuthDisconnectParamsSchema);
 export const validateConnectParams = compile(S.ConnectParamsSchema);
 export const validateWorkerAdmissionHandshake = compile(S.WorkerAdmissionHandshakeSchema);
 export const validateWorkerConnectRequestFrame = compile(S.WorkerConnectRequestFrameSchema);

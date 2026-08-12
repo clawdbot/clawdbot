@@ -21,11 +21,25 @@ type RuntimeConfigHarness = {
   >;
 };
 
-function createGateway(options: { connected?: boolean; admin?: boolean } = {}): ApplicationGateway {
+function createGateway(
+  options: {
+    connected?: boolean;
+    admin?: boolean;
+    request?: ReturnType<typeof vi.fn>;
+  } = {},
+): ApplicationGateway {
   const connected = options.connected ?? true;
   const admin = options.admin ?? true;
+  const request =
+    options.request ??
+    vi.fn(async (method: string) => {
+      if (method === "mcp.oauth.status") {
+        return { status: { state: "authorization-required", credentialPresent: false } };
+      }
+      throw new Error("unexpected gateway request");
+    });
   const snapshot = {
-    client: null,
+    client: connected ? { request } : null,
     phase: connected ? "connected" : "reconnecting",
     hello: {
       type: "hello-ok" as const,
@@ -97,6 +111,7 @@ async function mountCard(
     config?: Record<string, unknown>;
     connected?: boolean;
     admin?: boolean;
+    request?: ReturnType<typeof vi.fn>;
   } = {},
 ): Promise<{
   card: McpServersCard;
@@ -105,7 +120,18 @@ async function mountCard(
 }> {
   const harness = createRuntimeConfig(options.config ?? { mcp: { servers: {} } });
   const context = {
-    gateway: createGateway({ connected: options.connected, admin: options.admin }),
+    gateway: createGateway({
+      connected: options.connected,
+      admin: options.admin,
+      request:
+        options.request ??
+        vi.fn(async (method: string) => {
+          if (method === "mcp.oauth.status") {
+            return { status: { state: "authorization-required", credentialPresent: false } };
+          }
+          throw new Error("unexpected gateway request");
+        }),
+    }),
     runtimeConfig: harness.runtimeConfig,
     basePath: "",
   } as unknown as ApplicationContext;
@@ -198,7 +224,9 @@ describe("openclaw-mcp-servers-card", () => {
     const docs = expectDefined(card.querySelector('[data-mcp-name="docs"]'), "docs row");
     expect(docs.textContent).toContain("https://mcp.example.com/mcp?keep=visible&token=***");
     expect(docs.textContent).toContain("sse · oauth · tool filter · TLS verify off");
-    expect(docs.textContent).toContain("openclaw mcp login docs");
+    await waitForFast(() => expect(docs.textContent).toContain("Authorization required"));
+    expect(docs.textContent).toContain("Authorize");
+    expect(docs.textContent).not.toContain("openclaw mcp login");
     expect(docs.textContent).not.toContain("test-token");
 
     const local = expectDefined(card.querySelector('[data-mcp-name="local"]'), "local row");
@@ -409,5 +437,161 @@ describe("openclaw-mcp-servers-card", () => {
     expect(controls.every((button) => button.title.includes("operator.admin"))).toBe(true);
     actionButton(card, "Disable").click();
     expect(harness.patch).not.toHaveBeenCalled();
+  });
+
+  it("opens an opaque Gateway launch path without receiving or rendering the provider URL", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "mcp.oauth.status") {
+        return { status: { state: "authorization-required", credentialPresent: false } };
+      }
+      if (method === "mcp.oauth.start") {
+        return {
+          status: {
+            state: "authorizing",
+            credentialPresent: false,
+            authorizationId: "attempt-1",
+            startedAt: 1,
+          },
+          authorizationPath: "/oauth/mcp/authorize/attempt-1",
+        };
+      }
+      throw new Error("unexpected gateway request");
+    });
+    const replace = vi.fn();
+    const close = vi.fn();
+    vi.spyOn(window, "open").mockReturnValue({
+      opener: window,
+      location: { replace },
+      close,
+    } as unknown as Window);
+    const { card } = await mountCard({
+      request,
+      config: {
+        mcp: {
+          servers: {
+            docs: { url: "https://mcp.example.com/mcp", auth: "oauth" },
+          },
+        },
+      },
+    });
+
+    await waitForFast(() => expect(card.textContent).toContain("Authorization required"));
+    actionButton(card, "Authorize").click();
+
+    await waitForFast(() => expect(replace).toHaveBeenCalledOnce());
+    expect(request).toHaveBeenCalledWith("mcp.oauth.start", { serverName: "docs" });
+    expect(replace).toHaveBeenCalledWith(`${window.location.origin}/oauth/mcp/authorize/attempt-1`);
+    expect(card.textContent).toContain("Waiting for browser");
+    expect(card.textContent).not.toContain("accounts.example.com");
+  });
+
+  it("renders Ready actions and uses reauthorization without disconnecting first", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "mcp.oauth.status") {
+        return { status: { state: "ready", credentialPresent: true } };
+      }
+      if (method === "mcp.oauth.start") {
+        return {
+          status: {
+            state: "authorizing",
+            credentialPresent: true,
+            authorizationId: "attempt-2",
+            startedAt: 2,
+          },
+          authorizationPath: "/oauth/mcp/authorize/attempt-2",
+        };
+      }
+      if (method === "mcp.oauth.disconnect") {
+        return {
+          status: { state: "authorization-required", credentialPresent: false },
+        };
+      }
+      throw new Error("unexpected gateway request");
+    });
+    vi.spyOn(window, "open").mockReturnValue({
+      opener: window,
+      location: { replace: vi.fn() },
+      close: vi.fn(),
+    } as unknown as Window);
+    const { card } = await mountCard({
+      request,
+      config: {
+        mcp: {
+          servers: {
+            docs: { url: "https://mcp.example.com/mcp", auth: "oauth" },
+          },
+        },
+      },
+    });
+
+    await waitForFast(() => expect(card.textContent).toContain("Ready"));
+    expect(card.textContent).toContain("Reauthorize");
+    expect(card.textContent).toContain("Disconnect");
+    expect(card.textContent).not.toContain("Bearer");
+    actionButton(card, "Reauthorize").click();
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("mcp.oauth.start", {
+        serverName: "docs",
+        reauthorize: true,
+      }),
+    );
+    await (card as unknown as { refreshOauthStatuses(): Promise<void> }).refreshOauthStatuses();
+    await card.updateComplete;
+    actionButton(card, "Disconnect").click();
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("mcp.oauth.disconnect", { serverName: "docs" }),
+    );
+    await waitForFast(() => expect(card.textContent).toContain("Authorization required"));
+  });
+
+  it("cancels the exact pending transaction and renders only safe error diagnostics", async () => {
+    let status: Record<string, unknown> = {
+      state: "authorizing",
+      credentialPresent: true,
+      authorizationId: "attempt-3",
+      startedAt: 3,
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "mcp.oauth.status") {
+        return { status };
+      }
+      if (method === "mcp.oauth.cancel") {
+        status = { state: "ready", credentialPresent: true };
+        return { cancelled: true, status };
+      }
+      throw new Error("unexpected gateway request");
+    });
+    const { card } = await mountCard({
+      request,
+      config: {
+        mcp: {
+          servers: {
+            docs: { url: "https://mcp.example.com/mcp", auth: "oauth" },
+          },
+        },
+      },
+    });
+
+    await waitForFast(() => expect(card.textContent).toContain("Waiting for browser"));
+    actionButton(card, "Cancel").click();
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("mcp.oauth.cancel", {
+        serverName: "docs",
+        authorizationId: "attempt-3",
+      }),
+    );
+    await waitForFast(() => expect(card.textContent).toContain("Ready"));
+
+    status = {
+      state: "error",
+      credentialPresent: true,
+      category: "exchange-failed",
+    };
+    await (card as unknown as { refreshOauthStatuses(): Promise<void> }).refreshOauthStatuses();
+    await card.updateComplete;
+    expect(card.textContent).toContain("Authorization error");
+    expect(card.textContent).toContain("The credential exchange failed");
+    expect(card.textContent).toContain("Retry");
+    expect(card.textContent).not.toContain("invalid_grant");
   });
 });

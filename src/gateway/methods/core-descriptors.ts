@@ -516,6 +516,10 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ],
   ["desktop.observe", "environments", "operator.admin", "2026.8", { startup: true }],
   ["desktop.launch", "environments", "operator.admin", "2026.8", { startup: true }],
+  ["mcp.oauth.status", "mcp-oauth", "operator.admin", "2026.8"],
+  ["mcp.oauth.start", "mcp-oauth", "operator.admin", "2026.8", { controlPlaneWrite: true }],
+  ["mcp.oauth.cancel", "mcp-oauth", "operator.admin", "2026.8", { controlPlaneWrite: true }],
+  ["mcp.oauth.disconnect", "mcp-oauth", "operator.admin", "2026.8", { controlPlaneWrite: true }],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

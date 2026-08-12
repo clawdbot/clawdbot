@@ -1,6 +1,14 @@
 import { consume } from "@lit/context";
 import { html, nothing, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
+import type {
+  McpOAuthCancelResult,
+  McpOAuthControlStatus,
+  McpOAuthDisconnectResult,
+  McpOAuthErrorCategory,
+  McpOAuthStartResult,
+  McpOAuthStatusResult,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { t } from "../i18n/index.ts";
@@ -16,6 +24,11 @@ import {
   type McpServerSummary,
   type McpServersPatchBuildResult,
 } from "../lib/config/mcp-servers.ts";
+import {
+  openExternalUrlSafe,
+  reserveExternalWindowForDeferredNavigation,
+  resolveSafeExternalUrl,
+} from "../lib/open-external-url.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { icons } from "./icons.ts";
@@ -28,6 +41,16 @@ import {
 } from "./settings-ui.ts";
 
 type McpServerMessage = { kind: "error" | "success"; text: string };
+type McpOAuthUiErrorCategory = McpOAuthErrorCategory | "start-failed";
+type McpOAuthUiStatus =
+  | McpOAuthControlStatus
+  | {
+      state: "error";
+      credentialPresent: boolean;
+      category: McpOAuthUiErrorCategory;
+    };
+
+const MCP_OAUTH_LAUNCH_PATH_PREFIX = "/oauth/mcp/authorize/";
 
 function quoteShellArg(value: string): string {
   return /^[A-Za-z0-9._:/-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
@@ -56,6 +79,10 @@ class McpServersCard extends OpenClawLightDomElement {
   @state() private busy = false;
   @state() private message: McpServerMessage | null = null;
   @state() private formOpen = false;
+  @state() private oauthStatuses: Record<string, McpOAuthUiStatus> = {};
+  @state() private oauthBusy: Record<string, boolean> = {};
+  private oauthRequestEpoch = 0;
+  private oauthPollTimer: ReturnType<typeof setTimeout> | null = null;
 
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
@@ -76,17 +103,271 @@ class McpServersCard extends OpenClawLightDomElement {
     )
     .effect(
       () => this.context?.gateway,
-      (gateway) => gateway.subscribe(() => this.requestUpdate()),
+      (gateway) =>
+        gateway.subscribe(() => {
+          this.requestUpdate();
+          void this.refreshOauthStatuses();
+        }),
     );
 
   override disconnectedCallback() {
     this.subscriptions.clear();
+    this.clearOauthPoll();
+    this.oauthRequestEpoch += 1;
     super.disconnectedCallback();
   }
 
   private syncRows() {
     const snapshot = this.context?.runtimeConfig.state.configSnapshot;
     this.rows = summarizeMcpServers(resolveEditableSnapshotConfig(snapshot));
+    void this.refreshOauthStatuses();
+  }
+
+  private isSharedOauthServer(server: McpServerSummary): boolean {
+    return (
+      server.enabled &&
+      server.auth === "oauth" &&
+      server.transport !== "stdio" &&
+      server.transport !== "invalid" &&
+      server.oauthIdentity !== "per-requester"
+    );
+  }
+
+  private clearOauthPoll() {
+    if (this.oauthPollTimer !== null) {
+      clearTimeout(this.oauthPollTimer);
+      this.oauthPollTimer = null;
+    }
+  }
+
+  private scheduleOauthPoll() {
+    this.clearOauthPoll();
+    if (!Object.values(this.oauthStatuses).some((status) => status.state === "authorizing")) {
+      return;
+    }
+    this.oauthPollTimer = setTimeout(() => void this.refreshOauthStatuses(), 1_000);
+  }
+
+  private async refreshOauthStatuses() {
+    const gateway = this.context?.gateway;
+    const client = gateway?.snapshot.client;
+    const servers = (this.rows ?? []).filter((server) => this.isSharedOauthServer(server));
+    const epoch = ++this.oauthRequestEpoch;
+    if (
+      !gateway ||
+      gateway.snapshot.phase !== "connected" ||
+      !hasOperatorAdminAccess(gateway.snapshot.hello?.auth ?? null) ||
+      !client ||
+      servers.length === 0
+    ) {
+      this.oauthStatuses = {};
+      this.clearOauthPoll();
+      return;
+    }
+    const entries = await Promise.all(
+      servers.map(async (server): Promise<[string, McpOAuthUiStatus]> => {
+        try {
+          const result = await client.request<McpOAuthStatusResult>("mcp.oauth.status", {
+            serverName: server.name,
+          });
+          return [server.name, result.status];
+        } catch {
+          return [
+            server.name,
+            { state: "error", credentialPresent: false, category: "start-failed" },
+          ];
+        }
+      }),
+    );
+    if (epoch !== this.oauthRequestEpoch || gateway.snapshot.client !== client) {
+      return;
+    }
+    this.oauthStatuses = Object.fromEntries(entries);
+    this.scheduleOauthPoll();
+  }
+
+  private setOauthBusy(serverName: string, busy: boolean) {
+    const next = { ...this.oauthBusy };
+    if (busy) {
+      next[serverName] = true;
+    } else {
+      delete next[serverName];
+    }
+    this.oauthBusy = next;
+  }
+
+  private setOauthStatus(serverName: string, status: McpOAuthUiStatus) {
+    this.oauthStatuses = { ...this.oauthStatuses, [serverName]: status };
+    this.scheduleOauthPoll();
+  }
+
+  private async startOauth(serverName: string, reauthorize: boolean) {
+    const client = this.context?.gateway.snapshot.client;
+    if (!client || !this.canMutate() || this.oauthBusy[serverName]) {
+      return;
+    }
+    const browserWindow = reserveExternalWindowForDeferredNavigation();
+    this.setOauthBusy(serverName, true);
+    try {
+      const result = await client.request<McpOAuthStartResult>("mcp.oauth.start", {
+        serverName,
+        ...(reauthorize ? { reauthorize: true } : {}),
+      });
+      this.setOauthStatus(serverName, result.status);
+      if (result.authorizationPath?.startsWith(MCP_OAUTH_LAUNCH_PATH_PREFIX)) {
+        const authorizationUrl = resolveSafeExternalUrl(
+          result.authorizationPath,
+          window.location.href,
+        );
+        if (authorizationUrl && browserWindow) {
+          browserWindow.location.replace(authorizationUrl);
+        } else if (authorizationUrl) {
+          openExternalUrlSafe(authorizationUrl);
+        } else {
+          browserWindow?.close();
+        }
+      } else {
+        browserWindow?.close();
+      }
+    } catch {
+      browserWindow?.close();
+      const credentialPresent = this.oauthStatuses[serverName]?.credentialPresent === true;
+      this.setOauthStatus(serverName, {
+        state: "error",
+        credentialPresent,
+        category: "start-failed",
+      });
+    } finally {
+      this.setOauthBusy(serverName, false);
+    }
+  }
+
+  private async cancelOauth(serverName: string, authorizationId: string) {
+    const client = this.context?.gateway.snapshot.client;
+    if (!client || !this.canMutate() || this.oauthBusy[serverName]) {
+      return;
+    }
+    this.setOauthBusy(serverName, true);
+    try {
+      const result = await client.request<McpOAuthCancelResult>("mcp.oauth.cancel", {
+        serverName,
+        authorizationId,
+      });
+      this.setOauthStatus(serverName, result.status);
+    } catch {
+      const credentialPresent = this.oauthStatuses[serverName]?.credentialPresent === true;
+      this.setOauthStatus(serverName, {
+        state: "error",
+        credentialPresent,
+        category: "start-failed",
+      });
+    } finally {
+      this.setOauthBusy(serverName, false);
+    }
+  }
+
+  private async disconnectOauth(serverName: string) {
+    const client = this.context?.gateway.snapshot.client;
+    if (!client || !this.canMutate() || this.oauthBusy[serverName]) {
+      return;
+    }
+    this.setOauthBusy(serverName, true);
+    try {
+      const result = await client.request<McpOAuthDisconnectResult>("mcp.oauth.disconnect", {
+        serverName,
+      });
+      this.setOauthStatus(serverName, result.status);
+    } catch {
+      this.setOauthStatus(serverName, {
+        state: "error",
+        credentialPresent: true,
+        category: "start-failed",
+      });
+    } finally {
+      this.setOauthBusy(serverName, false);
+    }
+  }
+
+  private oauthErrorDiagnostic(category: McpOAuthUiErrorCategory): string {
+    return t(`mcpServers.oauth.error.${category}`);
+  }
+
+  private renderOauthControls(server: McpServerSummary): TemplateResult | typeof nothing {
+    if (!this.isSharedOauthServer(server)) {
+      return nothing;
+    }
+    const status = this.oauthStatuses[server.name];
+    if (!status) {
+      return renderSettingsStatus({ kind: "muted", label: t("common.loading") });
+    }
+    const blockedReason = this.mutationBlockedReason();
+    const disabled = Boolean(blockedReason) || this.oauthBusy[server.name] === true;
+    if (status.state === "authorization-required") {
+      return html`
+        ${renderSettingsStatus({ kind: "warn", label: t("mcpServers.oauth.required") })}
+        <button
+          type="button"
+          class="btn btn--sm mcp-oauth-authorize"
+          title=${blockedReason ?? ""}
+          ?disabled=${disabled}
+          @click=${() => void this.startOauth(server.name, false)}
+        >
+          ${t("mcpServers.oauth.authorize")}
+        </button>
+      `;
+    }
+    if (status.state === "authorizing") {
+      return html`
+        ${renderSettingsStatus({ kind: "accent", label: t("mcpServers.oauth.waiting") })}
+        <button
+          type="button"
+          class="btn btn--sm mcp-oauth-cancel"
+          title=${blockedReason ?? ""}
+          ?disabled=${disabled}
+          @click=${() => void this.cancelOauth(server.name, status.authorizationId)}
+        >
+          ${t("common.cancel")}
+        </button>
+      `;
+    }
+    if (status.state === "ready") {
+      return html`
+        ${renderSettingsStatus({ kind: "ok", label: t("mcpServers.oauth.ready") })}
+        <button
+          type="button"
+          class="btn btn--sm mcp-oauth-reauthorize"
+          title=${blockedReason ?? ""}
+          ?disabled=${disabled}
+          @click=${() => void this.startOauth(server.name, true)}
+        >
+          ${t("mcpServers.oauth.reauthorize")}
+        </button>
+        <button
+          type="button"
+          class="btn btn--sm mcp-oauth-disconnect"
+          title=${blockedReason ?? ""}
+          ?disabled=${disabled}
+          @click=${() => void this.disconnectOauth(server.name)}
+        >
+          ${t("mcpServers.oauth.disconnect")}
+        </button>
+      `;
+    }
+    return html`
+      ${renderSettingsStatus({ kind: "danger", label: t("mcpServers.oauth.errorLabel") })}
+      <span class="settings-row__desc mcp-oauth-diagnostic"
+        >${this.oauthErrorDiagnostic(status.category)}</span
+      >
+      <button
+        type="button"
+        class="btn btn--sm mcp-oauth-retry"
+        title=${blockedReason ?? ""}
+        ?disabled=${disabled}
+        @click=${() => void this.startOauth(server.name, status.credentialPresent)}
+      >
+        ${t("common.retry")}
+      </button>
+    `;
   }
 
   private mutationBlockedReason(): string | null {
@@ -165,9 +446,7 @@ class McpServersCard extends OpenClawLightDomElement {
   }
 
   private renderRow(server: McpServerSummary): TemplateResult {
-    const command = `openclaw mcp ${server.auth === "oauth" ? "login" : "probe"} ${quoteShellArg(
-      server.name,
-    )}`;
+    const command = `openclaw mcp probe ${quoteShellArg(server.name)}`;
     const meta = [
       server.transport,
       server.auth,
@@ -191,7 +470,9 @@ class McpServersCard extends OpenClawLightDomElement {
             kind: server.enabled ? "ok" : "muted",
             label: server.enabled ? t("common.enabled") : t("common.disabled"),
           })}
-          <code>${command}</code>
+          ${server.auth === "oauth"
+            ? this.renderOauthControls(server)
+            : html`<code>${command}</code>`}
           <button
             type="button"
             class="btn btn--sm"

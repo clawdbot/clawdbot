@@ -783,6 +783,17 @@
   font-family: var(--mono);
 }
 
+.mcp-server-row .settings-row__control {
+  flex-wrap: wrap;
+}
+
+.mcp-oauth-diagnostic {
+  order: 1;
+  flex: 1 0 100%;
+  text-align: right;
+  overflow-wrap: normal;
+}
+
 /* Shared inline form stays in config.css because the app-wide stylesheet
  * serves both the MCP settings page and the Plugins inventory. */
 .mcp-server-form {

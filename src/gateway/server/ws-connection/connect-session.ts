@@ -82,6 +82,17 @@ function setSocketMaxPayload(socket: WebSocket, maxPayload: number): void {
   }
 }
 
+function normalizeControlUiOrigin(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    return new URL(value).origin;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function attachAuthenticatedGatewayConnect(
   context: GatewayConnectPhaseContext,
   state: DeviceAuthorizedGatewayConnect,
@@ -311,14 +322,18 @@ export async function attachAuthenticatedGatewayConnect(
       return;
     }
   }
+  const controlUiOrigin = state.isControlUi
+    ? normalizeControlUiOrigin(context.handler.requestOrigin)
+    : undefined;
   const internal =
-    isLocalClient || isTrustedApprovalRuntime || trustedAgentRuntimeIdentity
+    isLocalClient || isTrustedApprovalRuntime || trustedAgentRuntimeIdentity || controlUiOrigin
       ? {
           ...(isLocalClient ? { isLocalClient: true as const } : {}),
           ...(isTrustedApprovalRuntime ? { approvalRuntime: true } : {}),
           ...(trustedAgentRuntimeIdentity
             ? { agentRuntimeIdentity: trustedAgentRuntimeIdentity }
             : {}),
+          ...(controlUiOrigin ? { controlUiOrigin } : {}),
         }
       : undefined;
   const localUserIngress = prepareGatewayLocalUserIngress({

@@ -42,6 +42,19 @@ type McpOAuthAuthorizationChallenge = {
   requiresAuthorization?: true;
 };
 
+export type McpOAuthAuthorizationErrorCategory =
+  | "authorization-denied"
+  | "callback-invalid"
+  | "exchange-failed"
+  | "timed-out";
+
+export type McpOAuthAuthorizationAttempt = {
+  id: string;
+  startedAt: number;
+  status: "pending" | "error";
+  error?: McpOAuthAuthorizationErrorCategory;
+};
+
 export type McpOAuthStore = {
   /** Provenance for token-less rows that Doctor must interpret during legacy import. */
   credentialState?: "uninitialized" | "cleared";
@@ -54,6 +67,8 @@ export type McpOAuthStore = {
   lastAuthorizationUrl?: string;
   redirectUrl?: string;
   pendingAuthorizationChallenge?: McpOAuthAuthorizationChallenge;
+  /** Safe UI lifecycle metadata. OAuth values stay in their existing private fields. */
+  authorizationAttempt?: McpOAuthAuthorizationAttempt;
 };
 
 class McpOAuthStoreCorruptionError extends Error {
@@ -140,6 +155,38 @@ function assertAuthorizationChallenge(storeKey: string, value: unknown): void {
   }
 }
 
+function assertAuthorizationAttempt(storeKey: string, value: unknown): void {
+  if (value === undefined) {
+    return;
+  }
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    value.id.length === 0 ||
+    !Number.isFinite(value.startedAt) ||
+    (value.startedAt as number) < 0 ||
+    (value.status !== "pending" && value.status !== "error")
+  ) {
+    throw new McpOAuthStoreCorruptionError(storeKey, "authorizationAttempt is invalid");
+  }
+  const validErrors = new Set<McpOAuthAuthorizationErrorCategory>([
+    "authorization-denied",
+    "callback-invalid",
+    "exchange-failed",
+    "timed-out",
+  ]);
+  if (
+    (value.status === "pending" && value.error !== undefined) ||
+    (value.status === "error" &&
+      !validErrors.has(value.error as McpOAuthAuthorizationErrorCategory))
+  ) {
+    throw new McpOAuthStoreCorruptionError(
+      storeKey,
+      "authorizationAttempt error metadata is invalid",
+    );
+  }
+}
+
 /** Parse a canonical row without discarding SDK extension fields. */
 export function parseMcpOAuthStoreJson(storeKey: string, raw: string): McpOAuthStore {
   let value: unknown;
@@ -208,6 +255,7 @@ export function parseMcpOAuthStoreJson(storeKey: string, raw: string): McpOAuthS
   assertOptionalString(storeKey, value, "redirectUrl");
   assertDiscoveryState(storeKey, value.discoveryState);
   assertAuthorizationChallenge(storeKey, value.pendingAuthorizationChallenge);
+  assertAuthorizationAttempt(storeKey, value.authorizationAttempt);
   return value as McpOAuthStore;
 }
 
@@ -309,7 +357,7 @@ function deletePendingForStore(
  * Sign-in links are channel-visible bearer state; a bounded lifetime caps how
  * long a copied link stays completable. Enforced at lookup AND claim.
  */
-const MCP_OAUTH_PENDING_STATE_TTL_MS = 10 * 60 * 1000;
+export const MCP_OAUTH_PENDING_STATE_TTL_MS = 10 * 60 * 1000;
 
 /** Resolve one OAuth callback state without scanning credential JSON. */
 export function readMcpOAuthPendingAuthorization(state: string): string | undefined {

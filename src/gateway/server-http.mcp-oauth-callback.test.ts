@@ -51,6 +51,33 @@ describe("Gateway MCP OAuth callback route", () => {
     });
   });
 
+  it("serves an opaque authorization launch before the Control UI fallback", async () => {
+    const callback = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 302;
+      res.setHeader("Location", "https://accounts.example.com/authorize");
+      res.end();
+      return true;
+    });
+    await withGatewayServer({
+      prefix: "mcp-oauth-launch-route",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        handleMcpOAuthCallbackRequest: callback,
+      },
+      run: async (server) => {
+        const response = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/oauth/mcp/authorize/attempt-1", method: "GET" }),
+          response.res,
+        );
+
+        expect(response.res.statusCode).toBe(302);
+        expect(callback).toHaveBeenCalledOnce();
+      },
+    });
+  });
+
   it("claims the callback before a hooks path that overlaps /oauth", async () => {
     const callback = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
       res.statusCode = 200;
@@ -100,6 +127,7 @@ describe("Gateway MCP OAuth callback route", () => {
       run: async (server) => {
         for (const request of [
           createRequest({ path: "/oauth/mcp/callback", method: "POST" }),
+          createRequest({ path: "/oauth/mcp/authorize/attempt-1", method: "POST" }),
           createRequest({ path: "/oauth/other", method: "GET" }),
         ]) {
           const response = createResponse();

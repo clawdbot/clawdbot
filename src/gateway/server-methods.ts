@@ -205,6 +205,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "tools-invoke": () =>
     import("./server-methods/tools-invoke.js").then((module) => module.toolsInvokeHandlers),
   "mcp-app": () => import("./server-methods/mcp-app.js").then((module) => module.mcpAppHandlers),
+  "mcp-oauth": () =>
+    import("./server-methods/mcp-oauth.js").then((module) => module.mcpOAuthHandlers),
   tts: () => import("./server-methods/tts.js").then((module) => module.ttsHandlers),
   update: () => import("./server-methods/update.js").then((module) => module.updateHandlers),
   usage: () => import("./server-methods/usage.js").then((module) => module.usageHandlers),

@@ -107,6 +107,8 @@ export type GatewayClient = {
     approvalRuntime?: boolean;
     cronRunContinuation?: boolean;
     agentRuntimeIdentity?: AgentRuntimeIdentity;
+    /** Origin already admitted by the Control UI websocket origin policy. */
+    controlUiOrigin?: string;
     pluginRuntimeOwnerId?: string;
     agentRunTracking?: "plugin_subagent";
     /** Host-captured requester lineage for opt-in plugin subagent completion delivery. */

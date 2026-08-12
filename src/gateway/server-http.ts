@@ -581,12 +581,13 @@ export function createGatewayHttpServer(opts: {
       }
 
       // Before hooks: an operator hooks.path of "/oauth" would otherwise claim
-      // this exact GET and 405 every provider redirect. The claim is exact-path
-      // and config-gated, so preceding hooks cannot shadow any hook route.
+      // the fixed callback and opaque browser-launch routes. The claim is
+      // method/path/config-gated, so preceding hooks cannot shadow them.
       addAdmittedStage(
         "mcp-oauth-callback",
         req.method === "GET" &&
-          scopedRequestPath === "/oauth/mcp/callback" &&
+          (scopedRequestPath === "/oauth/mcp/callback" ||
+            scopedRequestPath.startsWith("/oauth/mcp/authorize/")) &&
           Boolean(opts.handleMcpOAuthCallbackRequest),
         () => opts.handleMcpOAuthCallbackRequest?.(req, res) ?? false,
       );

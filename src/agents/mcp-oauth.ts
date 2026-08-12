@@ -1,4 +1,5 @@
 /** MCP OAuth credential provider, flow coordinator, and login helpers. */
+import { randomUUID } from "node:crypto";
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -28,6 +29,8 @@ import {
   readMcpOAuthStoreReadOnly,
   updateMcpOAuthStore,
   writeMcpOAuthPendingAuthorization,
+  MCP_OAUTH_PENDING_STATE_TTL_MS,
+  type McpOAuthAuthorizationErrorCategory,
   type McpOAuthStore,
 } from "./mcp-oauth-store.js";
 import type { resolveMcpTransportConfig } from "./mcp-transport-config.js";
@@ -41,7 +44,29 @@ type ResolvedHttpMcpTransportConfig = Extract<
 
 type McpOAuthAuthorizationStartResult =
   | { status: "authorized" }
-  | { status: "redirect"; authorizationUrl: string; redirectUrl: string; state: string };
+  | {
+      status: "redirect";
+      authorizationId: string;
+      authorizationUrl: string;
+      redirectUrl: string;
+      state: string;
+    };
+
+/** Safe lifecycle projection for Control UI and Gateway callers. */
+export type McpOAuthControlStatus =
+  | { state: "authorization-required"; credentialPresent: false }
+  | {
+      state: "authorizing";
+      credentialPresent: boolean;
+      authorizationId: string;
+      startedAt: number;
+    }
+  | { state: "ready"; credentialPresent: true }
+  | {
+      state: "error";
+      credentialPresent: boolean;
+      category: McpOAuthAuthorizationErrorCategory;
+    };
 
 /** Persisted OAuth authorization state for one principal and MCP server. */
 export type McpOAuthPrincipalStatus =
@@ -353,6 +378,38 @@ export async function readMcpOAuthCredentialsStatus(
   return { state: "unauthenticated" };
 }
 
+function hasUsableMcpOAuthCredential(store: McpOAuthStore): boolean {
+  return Boolean(
+    store.tokens &&
+    store.pendingAuthorizationChallenge?.requiresAuthorization !== true &&
+    (store.tokenExpiresAt === undefined || store.tokenExpiresAt > Date.now()),
+  );
+}
+
+/** Reads only lifecycle/category and credential presence; secret values never leave the store. */
+export function readMcpOAuthControlStatus(identity: McpOAuthIdentity): McpOAuthControlStatus {
+  const store = readMcpOAuthStoreReadOnly(identity.storeKey);
+  const credentialPresent = hasUsableMcpOAuthCredential(store);
+  const attempt = store.authorizationAttempt;
+  if (attempt?.status === "pending") {
+    if (attempt.startedAt <= Date.now() - MCP_OAUTH_PENDING_STATE_TTL_MS) {
+      return { state: "error", credentialPresent, category: "timed-out" };
+    }
+    return {
+      state: "authorizing",
+      credentialPresent,
+      authorizationId: attempt.id,
+      startedAt: attempt.startedAt,
+    };
+  }
+  if (attempt?.status === "error" && attempt.error) {
+    return { state: "error", credentialPresent, category: attempt.error };
+  }
+  return credentialPresent
+    ? { state: "ready", credentialPresent: true }
+    : { state: "authorization-required", credentialPresent: false };
+}
+
 function buildMcpOAuthAuthorizationFetch(config: ResolvedHttpMcpTransportConfig): FetchLike {
   const fetchFn = buildMcpHttpFetch({
     sslVerify: config.sslVerify,
@@ -401,7 +458,7 @@ async function runMcpOAuthAuthorizationAttempt(
 export async function startMcpOAuthAuthorization(
   identity: McpOAuthIdentity,
   config: ResolvedHttpMcpTransportConfig,
-  opts: { redirectUrl?: string },
+  opts: { redirectUrl?: string; forceAuthorization?: boolean },
 ): Promise<McpOAuthAuthorizationStartResult> {
   const storeKey = identity.storeKey;
   return await withMcpOAuthLease(storeKey, async (lease) => {
@@ -423,7 +480,8 @@ export async function startMcpOAuthAuthorization(
         ? new URL(pendingChallenge.resourceMetadataUrl)
         : undefined,
       scope: normalizeOptionalString(pendingChallenge?.scope),
-      suppressStoredTokens: pendingChallenge?.requiresAuthorization === true,
+      suppressStoredTokens:
+        opts.forceAuthorization === true || pendingChallenge?.requiresAuthorization === true,
     };
     let result: "authorized" | "redirect";
     try {
@@ -446,6 +504,13 @@ export async function startMcpOAuthAuthorization(
       }
     }
     if (result === "authorized") {
+      const assertLeaseOwned = bindMcpOAuthLeaseAssertion(lease);
+      updateMcpOAuthStore(
+        storeKey,
+        (current) => clearMcpOAuthAuthorizationFields(current),
+        assertLeaseOwned,
+      );
+      deleteMcpOAuthPendingAuthorization(storeKey, assertLeaseOwned);
       return { status: "authorized" };
     }
     const pending = readMcpOAuthStore(storeKey);
@@ -454,8 +519,28 @@ export async function startMcpOAuthAuthorization(
     if (!authorizationUrl || !pending.codeVerifier || !pending.redirectUrl || !state) {
       throw new Error("MCP OAuth authorization session was not persisted.");
     }
-    writeMcpOAuthPendingAuthorization(storeKey, state, bindMcpOAuthLeaseAssertion(lease));
-    return { status: "redirect", authorizationUrl, redirectUrl: pending.redirectUrl, state };
+    const assertLeaseOwned = bindMcpOAuthLeaseAssertion(lease);
+    const authorizationId = randomUUID();
+    updateMcpOAuthStore(
+      storeKey,
+      (current) => ({
+        ...current,
+        authorizationAttempt: {
+          id: authorizationId,
+          startedAt: Date.now(),
+          status: "pending",
+        },
+      }),
+      assertLeaseOwned,
+    );
+    writeMcpOAuthPendingAuthorization(storeKey, state, assertLeaseOwned);
+    return {
+      status: "redirect",
+      authorizationId,
+      authorizationUrl,
+      redirectUrl: pending.redirectUrl,
+      state,
+    };
   });
 }
 
@@ -479,6 +564,113 @@ function readMcpOAuthAuthorizationState(authorizationUrl: string | undefined): s
   } catch {
     return undefined;
   }
+}
+
+function clearMcpOAuthAuthorizationFields(current: McpOAuthStore): McpOAuthStore {
+  const next = { ...current };
+  delete next.codeVerifier;
+  delete next.lastAuthorizationUrl;
+  delete next.redirectUrl;
+  delete next.authorizationAttempt;
+  return next;
+}
+
+function settleMcpOAuthAuthorizationError(
+  current: McpOAuthStore,
+  category: McpOAuthAuthorizationErrorCategory,
+): McpOAuthStore {
+  const authorizationAttempt = current.authorizationAttempt ?? {
+    id: randomUUID(),
+    startedAt: Date.now(),
+    status: "pending" as const,
+  };
+  const next = clearMcpOAuthAuthorizationFields(current);
+  next.authorizationAttempt = {
+    id: authorizationAttempt.id,
+    startedAt: authorizationAttempt.startedAt,
+    status: "error",
+    error: category,
+  };
+  return next;
+}
+
+/** Cancels only the current exact UI transaction and preserves any usable credential. */
+export async function cancelMcpOAuthAuthorization(
+  identity: McpOAuthIdentity,
+  authorizationId: string,
+): Promise<boolean> {
+  return await withMcpOAuthLease(identity.storeKey, async (lease) => {
+    const current = readMcpOAuthStore(identity.storeKey);
+    if (
+      current.authorizationAttempt?.status !== "pending" ||
+      current.authorizationAttempt.id !== authorizationId
+    ) {
+      return false;
+    }
+    const assertLeaseOwned = bindMcpOAuthLeaseAssertion(lease);
+    updateMcpOAuthStore(
+      identity.storeKey,
+      (store) => clearMcpOAuthAuthorizationFields(store),
+      assertLeaseOwned,
+    );
+    deleteMcpOAuthPendingAuthorization(identity.storeKey, assertLeaseOwned);
+    return true;
+  });
+}
+
+/** Settles an expired UI transaction and removes its callback correlation. */
+export async function settleExpiredMcpOAuthAuthorization(
+  identity: McpOAuthIdentity,
+): Promise<boolean> {
+  return await withMcpOAuthLease(identity.storeKey, async (lease) => {
+    const current = readMcpOAuthStore(identity.storeKey);
+    const attempt = current.authorizationAttempt;
+    if (
+      attempt?.status !== "pending" ||
+      attempt.startedAt > Date.now() - MCP_OAUTH_PENDING_STATE_TTL_MS
+    ) {
+      return false;
+    }
+    const assertLeaseOwned = bindMcpOAuthLeaseAssertion(lease);
+    updateMcpOAuthStore(
+      identity.storeKey,
+      (store) => settleMcpOAuthAuthorizationError(store, "timed-out"),
+      assertLeaseOwned,
+    );
+    deleteMcpOAuthPendingAuthorization(identity.storeKey, assertLeaseOwned);
+    return true;
+  });
+}
+
+/** Settles one exact callback failure without exposing callback values to callers or logs. */
+export async function settleMcpOAuthCallback(
+  identity: McpOAuthIdentity,
+  input: {
+    state: string;
+    category: McpOAuthAuthorizationErrorCategory;
+    stateAlreadyClaimed?: boolean;
+  },
+): Promise<boolean> {
+  return await withMcpOAuthLease(identity.storeKey, async (lease) => {
+    const current = readMcpOAuthStore(identity.storeKey);
+    if (readMcpOAuthAuthorizationState(current.lastAuthorizationUrl) !== input.state) {
+      return false;
+    }
+    const assertLeaseOwned = bindMcpOAuthLeaseAssertion(lease);
+    if (
+      input.stateAlreadyClaimed !== true &&
+      !consumeOAuthState(identity.storeKey, input.state, assertLeaseOwned)
+    ) {
+      return false;
+    }
+    updateMcpOAuthStore(
+      identity.storeKey,
+      (store) => settleMcpOAuthAuthorizationError(store, input.category),
+      assertLeaseOwned,
+    );
+    deleteMcpOAuthPendingAuthorization(identity.storeKey, assertLeaseOwned);
+    return true;
+  });
 }
 
 async function completeMcpOAuthAuthorizationUnderLease(
@@ -510,13 +702,7 @@ async function completeMcpOAuthAuthorizationUnderLease(
   const assertLeaseOwned = bindMcpOAuthLeaseAssertion(lease);
   updateMcpOAuthStore(
     storeKey,
-    (current) => {
-      const next = { ...current };
-      delete next.codeVerifier;
-      delete next.lastAuthorizationUrl;
-      delete next.redirectUrl;
-      return next;
-    },
+    (current) => clearMcpOAuthAuthorizationFields(current),
     assertLeaseOwned,
   );
   deleteMcpOAuthPendingAuthorization(storeKey, assertLeaseOwned);

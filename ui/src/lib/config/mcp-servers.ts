@@ -13,6 +13,7 @@ export type McpServerSummary = {
   transport: McpServerTransport | "invalid";
   target: string;
   auth: string | null;
+  oauthIdentity: string | null;
   toolFilter: boolean;
   parallel: boolean;
   tls: "verify-off" | "mtls" | null;
@@ -147,6 +148,10 @@ export function summarizeMcpServers(
         transport,
         target: command || redactSensitiveUrlLikeString(url),
         auth: typeof server.auth === "string" ? server.auth : null,
+        oauthIdentity:
+          typeof asRecord(server.oauth)?.identity === "string"
+            ? (asRecord(server.oauth)?.identity as string)
+            : null,
         toolFilter: Boolean(server.toolFilter),
         parallel: server.supportsParallelToolCalls === true,
         tls:

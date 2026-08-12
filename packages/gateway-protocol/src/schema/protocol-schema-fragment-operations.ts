@@ -2,6 +2,7 @@ import * as auditActivity from "./audit-activity.js";
 import * as auditRun from "./audit-run.js";
 import * as audit from "./audit.js";
 import * as config from "./config.js";
+import * as mcpOAuth from "./mcp-oauth.js";
 import * as openclaw from "./openclaw.js";
 import * as taskSuggestions from "./task-suggestions.js";
 import * as tasks from "./tasks.js";
@@ -55,6 +56,15 @@ export const OperationsProtocolSchemas = {
   ConfigSchemaLookupParams: config.ConfigSchemaLookupParamsSchema,
   ConfigSchemaResponse: config.ConfigSchemaResponseSchema,
   ConfigSchemaLookupResult: config.ConfigSchemaLookupResultSchema,
+  McpOAuthControlStatus: mcpOAuth.McpOAuthControlStatusSchema,
+  McpOAuthStatusParams: mcpOAuth.McpOAuthStatusParamsSchema,
+  McpOAuthStatusResult: mcpOAuth.McpOAuthStatusResultSchema,
+  McpOAuthStartParams: mcpOAuth.McpOAuthStartParamsSchema,
+  McpOAuthStartResult: mcpOAuth.McpOAuthStartResultSchema,
+  McpOAuthCancelParams: mcpOAuth.McpOAuthCancelParamsSchema,
+  McpOAuthCancelResult: mcpOAuth.McpOAuthCancelResultSchema,
+  McpOAuthDisconnectParams: mcpOAuth.McpOAuthDisconnectParamsSchema,
+  McpOAuthDisconnectResult: mcpOAuth.McpOAuthDisconnectResultSchema,
   SystemAgentChatParams: openclaw.SystemAgentChatParamsSchema,
   SystemAgentChatResult: openclaw.SystemAgentChatResultSchema,
   SystemAgentChatHistoryParams: openclaw.SystemAgentChatHistoryParamsSchema,
