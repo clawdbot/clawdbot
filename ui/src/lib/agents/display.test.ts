@@ -14,10 +14,22 @@ import {
   buildAgentContext,
   formatBytes,
   listSelectableAgents,
+  normalizeAgentLabel,
   resolveEffectiveModelFallbacks,
   resolveToolProfileOptions,
   resolveToolSections,
 } from "./display.ts";
+
+describe("normalizeAgentLabel", () => {
+  it("uses resolved configured names but preserves ids for synthesized defaults", () => {
+    expect(
+      normalizeAgentLabel({ id: "main" }, { name: "Pacino", nameSource: "workspace" }),
+    ).toBe("Pacino");
+    expect(
+      normalizeAgentLabel({ id: "research" }, { name: "Assistant", nameSource: "default" }),
+    ).toBe("research");
+  });
+});
 
 const TOOLS_CATALOG_RESULT: ToolsCatalogResult = {
   agentId: "main",

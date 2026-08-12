@@ -39,11 +39,18 @@ const agentIdentities = {
         avatar: "🎬",
         avatarStatus: "none",
         name: "Pacino",
+        nameSource: "workspace",
       },
     },
     {
       match: { agentId: "research" },
-      response: null,
+      response: {
+        agentId: "research",
+        avatar: "A",
+        avatarStatus: "none",
+        name: "Assistant",
+        nameSource: "default",
+      },
     },
     {
       match: { agentId: "release" },
@@ -52,6 +59,7 @@ const agentIdentities = {
         avatar: "R",
         avatarStatus: "none",
         name: "Deployment Safety and Release Verification Agent",
+        nameSource: "agent",
       },
     },
   ],

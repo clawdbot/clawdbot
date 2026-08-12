@@ -326,13 +326,15 @@ type ConfigSnapshot = {
 
 export function normalizeAgentLabel(
   agent: AgentRosterEntry,
-  hydratedIdentity?: { name?: string } | null,
+  hydratedIdentity?: Pick<AgentIdentityResult, "name" | "nameSource"> | null,
 ) {
   // Roster labels own operator target identity; workspace identity only fills gaps.
   return (
     normalizeOptionalString(agent.name) ??
     normalizeOptionalString(agent.identity?.name) ??
-    normalizeOptionalString(hydratedIdentity?.name) ??
+    (hydratedIdentity?.nameSource !== "default"
+      ? normalizeOptionalString(hydratedIdentity?.name)
+      : undefined) ??
     agent.id
   );
 }
