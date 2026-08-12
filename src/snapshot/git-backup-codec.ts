@@ -1,14 +1,23 @@
 import { createHash } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import { createPrivateSqliteTempDirectory } from "../infra/sqlite-private-directory.js";
+import { publishVerifiedSqliteFile } from "../infra/sqlite-snapshot.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
+import { getOpenClawStateRuntimeSchema } from "../state/openclaw-state-schema-compatibility.js";
 import {
   AGENT_SECRET_TABLE_NAMES,
   STATE_SECRET_TABLE_NAMES,
 } from "../state/secret-state-tables.js";
+import { hashSnapshotArtifact } from "./manifest.js";
+import { buildSnapshotValidator } from "./openclaw-snapshot-copy.js";
+import { SNAPSHOT_SQLITE_FILENAME } from "./snapshot-provider.js";
 
 export const GIT_BACKUP_MANIFEST = "manifest.json";
 export const GIT_BACKUP_SCHEMA = "schema.sql";
@@ -425,6 +434,42 @@ async function assertFreshRestoreTarget(targetPath: string): Promise<void> {
   }
 }
 
+function assertNoSqliteSidecarsSync(targetPath: string): void {
+  for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
+    const sidecarPath = `${targetPath}${suffix}`;
+    try {
+      fsSync.lstatSync(sidecarPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        continue;
+      }
+      throw error;
+    }
+    throw new Error(`Fresh SQLite restore path already exists: ${sidecarPath}`);
+  }
+}
+
+function convergeRestoredSchema(database: DatabaseSync, identity: GitBackupIdentity): void {
+  database.exec(
+    identity.role === "global"
+      ? getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false })
+      : OPENCLAW_AGENT_SCHEMA_SQL,
+  );
+}
+
+function validateRestoredOwner(
+  database: DatabaseSync,
+  databasePath: string,
+  identity: GitBackupIdentity,
+): void {
+  assertSqliteIntegrity(database, databasePath);
+  const foreignKeys = database.prepare("PRAGMA foreign_key_check").all();
+  if (foreignKeys.length > 0) {
+    throw new Error(`SQLite foreign_key_check failed for restored Git backup: ${databasePath}`);
+  }
+  buildSnapshotValidator(identity)(database, databasePath);
+}
+
 function loadTable(database: DatabaseSync, table: string, content: string): number {
   const columns = readTableColumns(database, table);
   const statement = database.prepare(
@@ -455,10 +500,10 @@ export async function restoreGitBackupDirectory(params: {
     await fs.readFile(path.join(params.sourcePath, GIT_BACKUP_MANIFEST), "utf8"),
     params.sourcePath,
   );
+  const restoreIdentity = normalizeIdentity(params.expectedIdentity ?? manifest.identity);
   if (
     params.expectedIdentity &&
-    JSON.stringify(normalizeIdentity(manifest.identity)) !==
-      JSON.stringify(normalizeIdentity(params.expectedIdentity))
+    JSON.stringify(normalizeIdentity(manifest.identity)) !== JSON.stringify(restoreIdentity)
   ) {
     throw new Error("Git backup manifest database identity does not match the requested scope.");
   }
@@ -479,8 +524,17 @@ export async function restoreGitBackupDirectory(params: {
   const indexes = statements.filter((statement) =>
     /^CREATE\s+(?:UNIQUE\s+)?INDEX\b/iu.test(statement),
   );
-  await fs.mkdir(path.dirname(targetPath), { recursive: true, mode: 0o700 });
-  const database = openNodeSqliteDatabase(targetPath);
+  const targetDirectory = path.dirname(targetPath);
+  await fs.mkdir(targetDirectory, { recursive: true, mode: 0o700 });
+  const stagingDirectory = await createPrivateSqliteTempDirectory(
+    targetDirectory,
+    ".git-backup-restore-",
+  );
+  applyPrivateModeSync(stagingDirectory, 0o700);
+  const stagedPath = path.join(stagingDirectory, SNAPSHOT_SQLITE_FILENAME);
+  const stagedHandle = await fs.open(stagedPath, "wx", 0o600);
+  await stagedHandle.close();
+  const database = openNodeSqliteDatabase(stagedPath);
   try {
     database.exec("PRAGMA foreign_keys = OFF; PRAGMA journal_mode = DELETE;");
     for (const statement of [...plainTables, ...indexes]) {
@@ -529,11 +583,10 @@ export async function restoreGitBackupDirectory(params: {
     // Contentless transcript FTS stays empty. Omission of session_transcript_index_state
     // makes Gateway startup reconciliation rebuild that projection from transcripts.
     database.exec(`PRAGMA user_version = ${manifest.userVersion};`);
-    assertSqliteIntegrity(database, targetPath);
-    const foreignKeys = database.prepare("PRAGMA foreign_key_check").all();
-    if (foreignKeys.length > 0) {
-      throw new Error(`SQLite foreign_key_check failed for restored Git backup: ${targetPath}`);
-    }
+    // Redacted and operational projection tables are absent from Git. Recreate
+    // their canonical empty schemas before enforcing database ownership.
+    convergeRestoredSchema(database, restoreIdentity);
+    validateRestoredOwner(database, stagedPath, restoreIdentity);
     const tables = Object.entries(manifest.tables).map(([table, expected]) => {
       const actual = serializeTable(database, table);
       const actualSha256 = sha256(actual.content);
@@ -545,15 +598,37 @@ export async function restoreGitBackupDirectory(params: {
       };
     });
     if (tables.some((table) => !table.ok)) {
-      throw new Error(`Restored Git backup does not match its table manifest: ${targetPath}`);
+      throw new Error(`Restored Git backup does not match its table manifest: ${stagedPath}`);
     }
     database.close();
+    applyPrivateModeSync(stagedPath, 0o600);
+    const artifact = await hashSnapshotArtifact(stagingDirectory);
+    await publishVerifiedSqliteFile({
+      sourceIdentity: artifact.stat,
+      sourcePath: stagedPath,
+      targetPath,
+      expectedContent: artifact,
+      requireAtomicPublication: true,
+      beforePublish: async () => await assertFreshRestoreTarget(targetPath),
+      validatePublished: async (publishedPath) => {
+        const published = openNodeSqliteDatabase(publishedPath, { readOnly: true });
+        try {
+          validateRestoredOwner(published, publishedPath, restoreIdentity);
+        } finally {
+          published.close();
+        }
+      },
+      afterPublish: (guard) => {
+        guard.assertTargetMatchesExpectedContent(() => assertNoSqliteSidecarsSync(targetPath));
+      },
+    });
     return { manifest, targetPath, tables, excludedTables: manifest.excludedTables };
   } catch (error) {
     if (database.isOpen) {
       database.close();
     }
-    await fs.rm(targetPath, { force: true }).catch(() => undefined);
     throw error;
+  } finally {
+    await fs.rm(stagingDirectory, { recursive: true, force: true }).catch(() => undefined);
   }
 }

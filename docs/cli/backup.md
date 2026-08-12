@@ -131,18 +131,21 @@ unrelated files elsewhere in an adopted repository are never staged.
   Git history is durable. Without `--exclude-secrets`, snapshots include
   credential material and any pushed remote must be private.
 
-`--exclude-secrets` omits these shared-state tables:
+`src/state/secret-state-tables.ts` is the source of truth for redaction. At this revision, `--exclude-secrets` omits these shared-state tables:
 
-- `apns_registrations`
+- `audit_identity_keys`
 - `auth_profile_state`
 - `auth_profile_stores`
+- `apns_registrations`
 - `channel_ingress_events`
+- `channel_pairing_requests`
 - `clawhub_promotion_claims`
 - `device_auth_tokens`
 - `device_bootstrap_tokens`
 - `device_identities`
 - `device_pairing_paired`
 - `gateway_origin_device_tokens`
+- `mcp_oauth_pending_authorizations`
 - `mcp_oauth_stores`
 - `native_hook_relay_bridges`
 - `node_host_config`
@@ -185,7 +188,7 @@ Provision one Gateway-owned automation with a fixed name:
 openclaw backup enable --repository ~/Backups/openclaw-git --every 24h --push
 ```
 
-The default scope is every database. Use `--global-only` or `--agent <id>` to narrow it, and add `--exclude-secrets` for a redacted history. Pushed schedules (`--push`) redact credential-bearing tables by default because an unattended recurring push retains them durably in remote history; pass `--include-secrets` for explicit full-fidelity remote backups (restores from redacted history need device re-pairing and provider re-authentication). `--push` also requires the repository to already have an `origin` remote. Re-running `backup enable` updates the existing automation instead of creating a duplicate. `openclaw backup disable` removes it; disabling an already-missing job is a successful no-op. The Gateway must be reachable because OpenClaw does not install a local fallback scheduler.
+The default scope is every database. Use `--global-only` or `--agent <id>` to narrow it, and add `--exclude-secrets` for a redacted history. Pushed schedules (`--push`) redact credential-bearing tables by default because an unattended recurring push retains them durably in remote history; pass `--include-secrets` for explicit full-fidelity remote backups (restores from redacted history need device re-pairing and provider re-authentication). `--push` also requires the repository to already have an `origin` remote. Re-running `backup enable` updates the existing automation instead of creating a duplicate. `openclaw backup disable` removes it; disabling an already-missing job is a successful no-op. Backup scheduling currently requires a local Gateway because the command job runs on the Gateway host; for a remote Gateway, create the cron job manually with `openclaw cron add`.
 
 ## Recorded runs and freshness
 

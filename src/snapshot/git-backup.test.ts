@@ -5,6 +5,8 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import { requireGitCommand as requireGit } from "../infra/git-exec.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -52,7 +54,34 @@ async function createFormatFixture(databasePath: string): Promise<void> {
   try {
     await loadSqliteVecExtension({ db: database });
     database.exec(`
-      PRAGMA user_version = 17;
+      PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
+      CREATE TABLE schema_meta (
+        meta_key TEXT NOT NULL PRIMARY KEY,
+        role TEXT NOT NULL,
+        schema_version INTEGER NOT NULL,
+        agent_id TEXT,
+        app_version TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE TABLE device_auth_tokens (
+        device_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        token TEXT NOT NULL,
+        scopes_json TEXT NOT NULL,
+        updated_at_ms INTEGER NOT NULL,
+        PRIMARY KEY (device_id, role)
+      ) STRICT;
+      CREATE TABLE channel_pairing_requests (
+        channel_key TEXT NOT NULL,
+        account_id TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        code TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL,
+        meta_json TEXT,
+        PRIMARY KEY (channel_key, account_id, request_id)
+      ) STRICT;
       CREATE TABLE content (
         id INTEGER PRIMARY KEY,
         body TEXT NOT NULL,
@@ -67,15 +96,14 @@ async function createFormatFixture(databasePath: string): Promise<void> {
       CREATE VIRTUAL TABLE memory_vec USING vec0(embedding float[2]);
       CREATE TABLE empty_table (id INTEGER PRIMARY KEY, value TEXT);
       CREATE TABLE session_transcript_index_state (id TEXT PRIMARY KEY, cursor INTEGER);
-      CREATE TABLE device_auth_tokens (
-        device_id TEXT NOT NULL,
-        role TEXT NOT NULL,
-        token TEXT NOT NULL,
-        scopes_json TEXT NOT NULL,
-        updated_at_ms INTEGER NOT NULL,
-        PRIMARY KEY (device_id, role)
-      );
     `);
+    database
+      .prepare(
+        `INSERT INTO schema_meta
+           (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+         VALUES ('primary', 'global', ?, NULL, NULL, 1, 1)`,
+      )
+      .run(OPENCLAW_STATE_SCHEMA_VERSION);
     database
       .prepare("INSERT INTO content (id, body, huge, bytes, optional) VALUES (?, ?, ?, ?, ?)")
       .run(1, "hello lobster", 9_007_199_254_740_993n, Buffer.from([0, 1, 254, 255]), "");
@@ -84,8 +112,46 @@ async function createFormatFixture(databasePath: string): Promise<void> {
       .run(2, "second row", -9_007_199_254_740_994n, Buffer.from([42]), null);
     database.prepare("INSERT INTO session_transcript_index_state VALUES (?, ?)").run("main", 99);
     database
-      .prepare("INSERT INTO device_auth_tokens VALUES (?, ?, ?, ?, ?)")
+      .prepare(
+        `INSERT INTO device_auth_tokens
+           (device_id, role, token, scopes_json, updated_at_ms)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
       .run("device", "operator", "secret-token", "[]", 1);
+    database
+      .prepare(
+        `INSERT INTO channel_pairing_requests
+           (channel_key, account_id, request_id, code, created_at, last_seen_at, meta_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run("telegram", "default", "request", "pairing-code", "now", "now", null);
+  } finally {
+    database.close();
+  }
+}
+
+function createAgentFixture(databasePath: string, agentId: string): void {
+  const database = new DatabaseSync(databasePath);
+  try {
+    database.exec(`
+      PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
+      CREATE TABLE schema_meta (
+        meta_key TEXT NOT NULL PRIMARY KEY,
+        role TEXT NOT NULL,
+        schema_version INTEGER NOT NULL,
+        agent_id TEXT,
+        app_version TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+    `);
+    database
+      .prepare(
+        `INSERT INTO schema_meta
+           (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+         VALUES ('primary', 'agent', ?, ?, NULL, 1, 1)`,
+      )
+      .run(OPENCLAW_AGENT_SCHEMA_VERSION, agentId);
   } finally {
     database.close();
   }
@@ -390,6 +456,9 @@ describe("Git-backed SQLite snapshots", () => {
     expect(restored.tables.every((table) => table.ok)).toBe(true);
     expect(restored.manifest.tables).toEqual(manifest.tables);
     expect(manifest.tables).not.toHaveProperty("session_transcript_index_state");
+    if (process.platform !== "win32") {
+      expect((await fs.stat(restoredPath)).mode & 0o777).toBe(0o600);
+    }
 
     const database = new DatabaseSync(restoredPath, { readOnly: true });
     try {
@@ -444,13 +513,88 @@ describe("Git-backed SQLite snapshots", () => {
       excludeSecrets: true,
     });
     expect(manifest.excludedTables).toContain("device_auth_tokens");
+    expect(manifest.excludedTables).toContain("channel_pairing_requests");
     expect(manifest.tables).not.toHaveProperty("device_auth_tokens");
+    expect(manifest.tables).not.toHaveProperty("channel_pairing_requests");
+    await expect(
+      fs.lstat(path.join(dump, "tables", "channel_pairing_requests.jsonl")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
     const schema = await fs.readFile(path.join(dump, "schema.sql"), "utf8");
     expect(schema).not.toContain("device_auth_tokens");
+    expect(schema).not.toContain("channel_pairing_requests");
     const restored = await restoreGitBackupDirectory({
       sourcePath: dump,
       targetPath: path.join(root, "redacted.sqlite"),
     });
     expect(restored.excludedTables).toContain("device_auth_tokens");
+    const restoredDatabase = new DatabaseSync(restored.targetPath, { readOnly: true });
+    try {
+      expect(
+        restoredDatabase.prepare("SELECT COUNT(*) AS count FROM device_auth_tokens").get(),
+      ).toEqual({ count: 0 });
+      expect(
+        restoredDatabase.prepare("SELECT COUNT(*) AS count FROM channel_pairing_requests").get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      restoredDatabase.close();
+    }
+  });
+
+  it("rejects a restored global database without canonical ownership metadata", async () => {
+    const root = await tempRoot();
+    const source = path.join(root, "source.sqlite");
+    const dump = path.join(root, "dump");
+    const restoredPath = path.join(root, "restored.sqlite");
+    await createFormatFixture(source);
+    const database = new DatabaseSync(source);
+    try {
+      database.exec("DROP TABLE schema_meta;");
+    } finally {
+      database.close();
+    }
+    await dumpGitBackupDatabase({
+      snapshotPath: source,
+      outputPath: dump,
+      identity: { role: "global" },
+    });
+
+    await expect(
+      restoreGitBackupDirectory({
+        sourcePath: dump,
+        targetPath: restoredPath,
+        expectedIdentity: { role: "global" },
+      }),
+    ).rejects.toThrow(/schema role missing; expected global/u);
+    await expect(fs.lstat(restoredPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("converges and validates the requested agent database owner", async () => {
+    const root = await tempRoot();
+    const source = path.join(root, "agent.sqlite");
+    const dump = path.join(root, "dump");
+    const restoredPath = path.join(root, "restored.sqlite");
+    createAgentFixture(source, "main");
+    await dumpGitBackupDatabase({
+      snapshotPath: source,
+      outputPath: dump,
+      identity: { role: "agent", agentId: "main" },
+    });
+
+    await restoreGitBackupDirectory({
+      sourcePath: dump,
+      targetPath: restoredPath,
+      expectedIdentity: { role: "agent", agentId: "main" },
+    });
+    const restored = new DatabaseSync(restoredPath, { readOnly: true });
+    try {
+      expect(
+        restored.prepare("SELECT role, agent_id FROM schema_meta WHERE meta_key = 'primary'").get(),
+      ).toEqual({ role: "agent", agent_id: "main" });
+      expect(
+        restored.prepare("SELECT COUNT(*) AS count FROM session_transcript_index_state").get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      restored.close();
+    }
   });
 });
