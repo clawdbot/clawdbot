@@ -23,7 +23,7 @@ advances a milestone.
 | 3   | `openclaw connect` one-paste onboarding + `/j/` join route | in progress | #120768, #122499          |
 | 4   | Picker: grouping, placement, liveness, enrichment          | in progress | #120804, #122531, #122635 |
 | F   | Real-wire session boundary harness                         | landed      | #121212                   |
-| 5   | Public worker ingress path                                 | in progress | #122578                   |
+| 5   | Public worker ingress path                                 | in progress | #122578, #122643          |
 | 6   | Node worker provider (device runners)                      | not started | —                         |
 | 7   | Bundle push consent + runner updates                       | not started | —                         |
 | 8   | Stop-and-continue moves                                    | not started | —                         |
