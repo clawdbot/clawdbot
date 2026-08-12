@@ -650,7 +650,8 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     );
     expect(first.status).toBe("waiting");
     expect(first.output).toEqual([{ type: "text", text: "before timeout" }]);
-    expect(first.pendingToolCalls).toEqual([expect.objectContaining({ method: "callValue" })]);
+    // Both host calls begin from the parked snapshot, so neither has settled at this boundary.
+    expect(first.pendingToolCalls).toHaveLength(2);
     const runId = first.runId;
     expect(typeof runId).toBe("string");
     if (typeof runId !== "string") {
