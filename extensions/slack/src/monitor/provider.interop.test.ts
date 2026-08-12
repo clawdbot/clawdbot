@@ -407,9 +407,11 @@ describe("createSlackBoltApp", () => {
 
   it("recovers a transient error and close through one real SDK socket lifecycle", async () => {
     const socketServer = new WebSocketServer({ port: 0 });
-    await new Promise<void>((resolve) => socketServer.once("listening", resolve));
+    await new Promise<void>((resolve) => {
+      socketServer.once("listening", resolve);
+    });
     const address = socketServer.address();
-    if (typeof address === "string") {
+    if (!address || typeof address === "string") {
       throw new Error("expected a TCP Socket Mode test server");
     }
     let connectionAttempts = 0;
