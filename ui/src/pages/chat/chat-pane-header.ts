@@ -186,6 +186,18 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
           detail: { open: true },
         }),
       );
+    const browserPanelAction = sessionWorkspace.onToggleBrowser
+      ? html`<openclaw-tooltip .content=${t("browser.toggle")}>
+          <button
+            class="btn btn--ghost btn--icon chat-icon-btn chat-browser-panel-toggle"
+            type="button"
+            aria-label=${t("browser.toggle")}
+            @click=${sessionWorkspace.onToggleBrowser}
+          >
+            ${icons.globe}
+          </button>
+        </openclaw-tooltip>`
+      : nothing;
     const desktopPanelAction = desktopPanelAvailable
       ? html`<openclaw-tooltip .content=${t("desktop.toggle")}>
           <button
@@ -208,6 +220,14 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
         label: t("terminal.toggle"),
         icon: icons.terminal,
         onActivate: sessionWorkspace.onToggleTerminal,
+      });
+    }
+    if (sessionWorkspace.onToggleBrowser) {
+      panelMenuActions.push({
+        id: "browser",
+        label: t("browser.toggle"),
+        icon: icons.globe,
+        onActivate: sessionWorkspace.onToggleBrowser,
       });
     }
     if (desktopPanelAvailable) {
@@ -324,7 +344,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
         this.state,
         this.catalogSession,
         sessionWorkspace.onToggleTerminal,
-      )}${desktopPanelAction}`,
+      )}${browserPanelAction}${desktopPanelAction}`,
       discussionAction: this.renderSessionDiscussionAction(discussion),
       diffAction: renderSessionDiffToggle(sessionWorkspace),
       backgroundTasksAction: renderBackgroundTasksToggle(backgroundTasks),

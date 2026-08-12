@@ -20,7 +20,6 @@ import {
 import { icons } from "../../../components/icons.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
-  CUSTODIAN_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../../../components/panel-toggle-contract.ts";
 import "../../../components/tooltip.ts";
@@ -65,7 +64,6 @@ export type SessionWorkspaceProps = {
   onOpenArtifact: (artifactId: string) => void;
   onToggleTerminal?: () => void;
   onToggleBrowser?: () => void;
-  onToggleCustodian?: () => void;
   /** Opens the session diff panel; absent until a usable checkout is known. */
   onOpenDiff?: () => void;
 };
@@ -828,10 +826,6 @@ export function createSessionWorkspaceProps(
           window.dispatchEvent(new CustomEvent(BROWSER_PANEL_TOGGLE_EVENT, {}));
         }
       : undefined,
-    onToggleCustodian:
-      state.connected && isGatewayMethodAdvertised(state, "openclaw.chat") === true
-        ? () => window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT))
-        : undefined,
     onOpenDiff: canOpenDiff
       ? () => state.handleOpenSidebar(buildSessionDiffSidebarContent(state))
       : undefined,
@@ -961,62 +955,6 @@ export function renderSessionWorkspaceRail(
   // Narrow panes always present the rail as a bottom strip; a side column
   // would crush the thread below its readable minimum.
   const dock = sessionWorkspace.narrowLayout ? "bottom" : sessionWorkspace.dock;
-  const terminalButton = sessionWorkspace.onToggleTerminal
-    ? html`
-        <openclaw-tooltip .content=${t("terminal.toggle")}>
-          <button
-            type="button"
-            class="chat-workspace-rail__terminal"
-            aria-label=${t("terminal.toggle")}
-            @click=${sessionWorkspace.onToggleTerminal}
-          >
-            ${icons.terminal}
-          </button>
-        </openclaw-tooltip>
-      `
-    : nothing;
-  const browserButton = sessionWorkspace.onToggleBrowser
-    ? html`
-        <openclaw-tooltip .content=${t("browser.toggle")}>
-          <button
-            type="button"
-            class="chat-workspace-rail__terminal"
-            aria-label=${t("browser.toggle")}
-            @click=${sessionWorkspace.onToggleBrowser}
-          >
-            ${icons.globe}
-          </button>
-        </openclaw-tooltip>
-      `
-    : nothing;
-  const custodianButton = sessionWorkspace.onToggleCustodian
-    ? html`
-        <openclaw-tooltip .content=${t("custodian.panel.toggle")}>
-          <button
-            type="button"
-            class="chat-workspace-rail__terminal"
-            aria-label=${t("custodian.panel.toggle")}
-            @click=${sessionWorkspace.onToggleCustodian}
-          >
-            ${icons.lobster}
-          </button>
-        </openclaw-tooltip>
-      `
-    : nothing;
-  const diffButton = sessionWorkspace.onOpenDiff
-    ? html`
-        <openclaw-tooltip .content=${t("chat.sessionDiff.show")}>
-          <button
-            type="button"
-            class="chat-workspace-rail__terminal chat-session-diff-toggle"
-            aria-label=${t("chat.sessionDiff.show")}
-            @click=${sessionWorkspace.onOpenDiff}
-          >
-            ${icons.diff}
-          </button>
-        </openclaw-tooltip>
-      `
-    : nothing;
   const files = sessionWorkspace.list?.files ?? [];
   const modifiedFiles = files.filter((file) => file.kind === "modified");
   const readFiles = files.filter((file) => file.kind === "read");
@@ -1306,7 +1244,6 @@ export function renderSessionWorkspaceRail(
           <strong>${t("chat.workspaceFiles.files")}</strong>
         </div>
         <div class="chat-workspace-rail__actions">
-          ${diffButton} ${terminalButton} ${browserButton} ${custodianButton}
           ${sessionWorkspace.narrowLayout
             ? nothing
             : html`
