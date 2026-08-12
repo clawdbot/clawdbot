@@ -345,6 +345,7 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
 }));
 
 vi.mock("../config/runtime-snapshot.js", () => ({
+  registerRuntimeConfigSnapshotPreparer: vi.fn(),
   setRuntimeConfigSnapshot: vi.fn(),
 }));
 
