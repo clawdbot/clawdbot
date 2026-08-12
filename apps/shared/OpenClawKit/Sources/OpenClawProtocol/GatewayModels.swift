@@ -2447,6 +2447,7 @@ public struct SystemInfoResult: Codable, Sendable {
 
 public struct AgentEvent: Codable, Sendable {
     public let runid: String
+    public let resumedfromrunid: String?
     public let seq: Int
     public let stream: String
     public let ts: Int
@@ -2456,6 +2457,7 @@ public struct AgentEvent: Codable, Sendable {
 
     public init(
         runid: String,
+        resumedfromrunid: String? = nil,
         seq: Int,
         stream: String,
         ts: Int,
@@ -2464,6 +2466,7 @@ public struct AgentEvent: Codable, Sendable {
         data: [String: AnyCodable])
     {
         self.runid = runid
+        self.resumedfromrunid = resumedfromrunid
         self.seq = seq
         self.stream = stream
         self.ts = ts
@@ -2474,6 +2477,7 @@ public struct AgentEvent: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case runid = "runId"
+        case resumedfromrunid = "resumedFromRunId"
         case seq
         case stream
         case ts
@@ -2982,6 +2986,7 @@ public struct AgentParams: Codable, Sendable {
     public let internalruntimehandoffid: String?
     public let internalexecutionidentityretry: Bool?
     public let internalexecutionidentityrecoveryattempt: Int?
+    public let internalrestartrecoverysourcerunid: String?
     public let execapprovalfollowupexpectedsessionid: String?
     public let internalevents: [[String: AnyCodable]]?
     public let inputprovenance: [String: AnyCodable]?
@@ -3032,6 +3037,7 @@ public struct AgentParams: Codable, Sendable {
         internalruntimehandoffid: String? = nil,
         internalexecutionidentityretry: Bool? = nil,
         internalexecutionidentityrecoveryattempt: Int? = nil,
+        internalrestartrecoverysourcerunid: String? = nil,
         execapprovalfollowupexpectedsessionid: String? = nil,
         internalevents: [[String: AnyCodable]]? = nil,
         inputprovenance: [String: AnyCodable]? = nil,
@@ -3081,6 +3087,7 @@ public struct AgentParams: Codable, Sendable {
         self.internalruntimehandoffid = internalruntimehandoffid
         self.internalexecutionidentityretry = internalexecutionidentityretry
         self.internalexecutionidentityrecoveryattempt = internalexecutionidentityrecoveryattempt
+        self.internalrestartrecoverysourcerunid = internalrestartrecoverysourcerunid
         self.execapprovalfollowupexpectedsessionid = execapprovalfollowupexpectedsessionid
         self.internalevents = internalevents
         self.inputprovenance = inputprovenance
@@ -3132,6 +3139,7 @@ public struct AgentParams: Codable, Sendable {
         case internalruntimehandoffid = "internalRuntimeHandoffId"
         case internalexecutionidentityretry = "internalExecutionIdentityRetry"
         case internalexecutionidentityrecoveryattempt = "internalExecutionIdentityRecoveryAttempt"
+        case internalrestartrecoverysourcerunid = "internalRestartRecoverySourceRunId"
         case execapprovalfollowupexpectedsessionid = "execApprovalFollowupExpectedSessionId"
         case internalevents = "internalEvents"
         case inputprovenance = "inputProvenance"
@@ -18562,6 +18570,7 @@ public struct ChatInjectParams: Codable, Sendable {
 
 public struct ChatStatusEvent: Codable, Sendable {
     public let runid: String
+    public let resumedfromrunid: String?
     public let sessionkey: String
     public let agentid: String?
     public let spawnedby: String?
@@ -18571,6 +18580,7 @@ public struct ChatStatusEvent: Codable, Sendable {
 
     public init(
         runid: String,
+        resumedfromrunid: String? = nil,
         sessionkey: String,
         agentid: String? = nil,
         spawnedby: String? = nil,
@@ -18579,6 +18589,7 @@ public struct ChatStatusEvent: Codable, Sendable {
         phase: ChatRunStartupPhase)
     {
         self.runid = runid
+        self.resumedfromrunid = resumedfromrunid
         self.sessionkey = sessionkey
         self.agentid = agentid
         self.spawnedby = spawnedby
@@ -18589,6 +18600,7 @@ public struct ChatStatusEvent: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case runid = "runId"
+        case resumedfromrunid = "resumedFromRunId"
         case sessionkey = "sessionKey"
         case agentid = "agentId"
         case spawnedby = "spawnedBy"
@@ -18600,6 +18612,7 @@ public struct ChatStatusEvent: Codable, Sendable {
 
 public struct ChatDeltaEvent: Codable, Sendable {
     public let runid: String
+    public let resumedfromrunid: String?
     public let sessionkey: String
     public let agentid: String?
     public let spawnedby: String?
@@ -18612,6 +18625,7 @@ public struct ChatDeltaEvent: Codable, Sendable {
 
     public init(
         runid: String,
+        resumedfromrunid: String? = nil,
         sessionkey: String,
         agentid: String? = nil,
         spawnedby: String? = nil,
@@ -18623,6 +18637,7 @@ public struct ChatDeltaEvent: Codable, Sendable {
         usage: AnyCodable? = nil)
     {
         self.runid = runid
+        self.resumedfromrunid = resumedfromrunid
         self.sessionkey = sessionkey
         self.agentid = agentid
         self.spawnedby = spawnedby
@@ -18636,6 +18651,7 @@ public struct ChatDeltaEvent: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case runid = "runId"
+        case resumedfromrunid = "resumedFromRunId"
         case sessionkey = "sessionKey"
         case agentid = "agentId"
         case spawnedby = "spawnedBy"
@@ -18650,6 +18666,7 @@ public struct ChatDeltaEvent: Codable, Sendable {
 
 public struct ChatFinalEvent: Codable, Sendable {
     public let runid: String
+    public let resumedfromrunid: String?
     public let sessionkey: String
     public let agentid: String?
     public let spawnedby: String?
@@ -18662,6 +18679,7 @@ public struct ChatFinalEvent: Codable, Sendable {
 
     public init(
         runid: String,
+        resumedfromrunid: String? = nil,
         sessionkey: String,
         agentid: String? = nil,
         spawnedby: String? = nil,
@@ -18673,6 +18691,7 @@ public struct ChatFinalEvent: Codable, Sendable {
         yielded: Bool? = nil)
     {
         self.runid = runid
+        self.resumedfromrunid = resumedfromrunid
         self.sessionkey = sessionkey
         self.agentid = agentid
         self.spawnedby = spawnedby
@@ -18686,6 +18705,7 @@ public struct ChatFinalEvent: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case runid = "runId"
+        case resumedfromrunid = "resumedFromRunId"
         case sessionkey = "sessionKey"
         case agentid = "agentId"
         case spawnedby = "spawnedBy"
@@ -18700,6 +18720,7 @@ public struct ChatFinalEvent: Codable, Sendable {
 
 public struct ChatAbortedEvent: Codable, Sendable {
     public let runid: String
+    public let resumedfromrunid: String?
     public let sessionkey: String
     public let agentid: String?
     public let spawnedby: String?
@@ -18711,6 +18732,7 @@ public struct ChatAbortedEvent: Codable, Sendable {
 
     public init(
         runid: String,
+        resumedfromrunid: String? = nil,
         sessionkey: String,
         agentid: String? = nil,
         spawnedby: String? = nil,
@@ -18721,6 +18743,7 @@ public struct ChatAbortedEvent: Codable, Sendable {
         stopreason: String? = nil)
     {
         self.runid = runid
+        self.resumedfromrunid = resumedfromrunid
         self.sessionkey = sessionkey
         self.agentid = agentid
         self.spawnedby = spawnedby
@@ -18733,6 +18756,7 @@ public struct ChatAbortedEvent: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case runid = "runId"
+        case resumedfromrunid = "resumedFromRunId"
         case sessionkey = "sessionKey"
         case agentid = "agentId"
         case spawnedby = "spawnedBy"
@@ -18746,6 +18770,7 @@ public struct ChatAbortedEvent: Codable, Sendable {
 
 public struct ChatErrorEvent: Codable, Sendable {
     public let runid: String
+    public let resumedfromrunid: String?
     public let sessionkey: String
     public let agentid: String?
     public let spawnedby: String?
@@ -18759,6 +18784,7 @@ public struct ChatErrorEvent: Codable, Sendable {
 
     public init(
         runid: String,
+        resumedfromrunid: String? = nil,
         sessionkey: String,
         agentid: String? = nil,
         spawnedby: String? = nil,
@@ -18771,6 +18797,7 @@ public struct ChatErrorEvent: Codable, Sendable {
         stopreason: String? = nil)
     {
         self.runid = runid
+        self.resumedfromrunid = resumedfromrunid
         self.sessionkey = sessionkey
         self.agentid = agentid
         self.spawnedby = spawnedby
@@ -18785,6 +18812,7 @@ public struct ChatErrorEvent: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case runid = "runId"
+        case resumedfromrunid = "resumedFromRunId"
         case sessionkey = "sessionKey"
         case agentid = "agentId"
         case spawnedby = "spawnedBy"
