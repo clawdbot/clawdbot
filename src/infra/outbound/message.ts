@@ -6,7 +6,7 @@ import { deriveDurableFinalDeliveryRequirementsForBatch } from "../../channels/m
 import {
   sendDurableMessageBatchCore,
   serializeDurableMessagePayloadOutcomes,
-  type DurableMessageSuppressionReason,
+  type DurableMessageBatchSendResult,
   type SerializedDurableMessagePayloadOutcome,
 } from "../../channels/message/runtime.js";
 import type { DurableMessageSendIntent } from "../../channels/message/types.js";
@@ -130,7 +130,7 @@ export type MessageSendResult = {
   mediaUrls?: string[];
   result?: OutboundDeliveryResult | { messageId: string };
   deliveryStatus?: "sent" | "suppressed" | "partial_failed" | "failed";
-  suppressionReason?: DurableMessageSuppressionReason;
+  suppressionReason?: Extract<DurableMessageBatchSendResult, { status: "suppressed" }>["reason"];
   /** Formatted send error when deliveryStatus is "failed" or "partial_failed". */
   error?: string;
   sentBeforeError?: boolean;

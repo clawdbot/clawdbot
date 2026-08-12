@@ -10,6 +10,5 @@ export type {
   DurableMessageBatchSendResult,
   DurableMessageSendContext,
   DurableMessageSendContextParams,
-  DurableMessageSuppressionReason,
   SerializedDurableMessagePayloadOutcome,
 } from "./send.js";

@@ -44,7 +44,7 @@ export type DurableMessageBatchSendParams = Omit<
   previousReceipt?: MessageReceipt;
 };
 
-export type DurableMessageSuppressionReason =
+type DurableMessageSuppressionReason =
   | OutboundPayloadDeliverySuppressionReason
   | "no_visible_result";
 
