@@ -11,6 +11,30 @@ type GatewayOperatorAccess = Readonly<{
 }>;
 
 type OperatorAuth = { role?: string; scopes?: readonly string[] } | null;
+type OperatorScope =
+  | "operator.read"
+  | "operator.write"
+  | "operator.admin"
+  | "operator.pairing"
+  | "operator.approvals";
+
+function hasOperatorScope(
+  auth: OperatorAuth,
+  requestedScope: OperatorScope,
+  missingAuthHasAccess: boolean,
+): boolean {
+  if (!auth) {
+    return missingAuthHasAccess;
+  }
+  if (!auth.scopes) {
+    return true;
+  }
+  return roleScopesAllow({
+    role: auth.role ?? "operator",
+    requestedScopes: [requestedScope],
+    allowedScopes: auth.scopes,
+  });
+}
 
 export function readGatewayOperatorAccess(
   snapshot: Pick<ApplicationGatewaySnapshot, "hello"> | null | undefined,
@@ -28,62 +52,21 @@ export function readGatewayOperatorAccess(
 }
 
 export function hasOperatorWriteAccess(auth: OperatorAuth): boolean {
-  if (!auth?.scopes) {
-    return true;
-  }
-  return roleScopesAllow({
-    role: auth.role ?? "operator",
-    requestedScopes: ["operator.write"],
-    allowedScopes: auth.scopes,
-  });
+  return hasOperatorScope(auth, "operator.write", true);
 }
 
 export function hasOperatorReadAccess(auth: OperatorAuth): boolean {
-  if (!auth?.scopes) {
-    return true;
-  }
-  return roleScopesAllow({
-    role: auth.role ?? "operator",
-    requestedScopes: ["operator.read"],
-    allowedScopes: auth.scopes,
-  });
+  return hasOperatorScope(auth, "operator.read", true);
 }
 
 export function hasOperatorAdminAccess(auth: OperatorAuth): boolean {
-  if (!auth?.scopes) {
-    return true;
-  }
-  return roleScopesAllow({
-    role: auth.role ?? "operator",
-    requestedScopes: ["operator.admin"],
-    allowedScopes: auth.scopes,
-  });
+  return hasOperatorScope(auth, "operator.admin", true);
 }
 
 export function hasOperatorPairingAccess(auth: OperatorAuth): boolean {
-  if (!auth) {
-    return false;
-  }
-  if (!auth.scopes) {
-    return true;
-  }
-  return roleScopesAllow({
-    role: auth.role ?? "operator",
-    requestedScopes: ["operator.pairing"],
-    allowedScopes: auth.scopes,
-  });
+  return hasOperatorScope(auth, "operator.pairing", false);
 }
 
 export function hasOperatorApprovalsAccess(auth: OperatorAuth): boolean {
-  if (!auth) {
-    return false;
-  }
-  if (!auth.scopes) {
-    return true;
-  }
-  return roleScopesAllow({
-    role: auth.role ?? "operator",
-    requestedScopes: ["operator.approvals"],
-    allowedScopes: auth.scopes,
-  });
+  return hasOperatorScope(auth, "operator.approvals", false);
 }
