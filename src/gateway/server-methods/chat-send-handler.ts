@@ -38,13 +38,8 @@ export async function handleChatSend(
     return;
   }
   const { normalizedRequest, preparedSession, admitted } = setup;
-  const {
-    chatSendReceivedAtMs,
-    clientInfo,
-    p,
-    systemInputProvenance,
-    reconnectResumeRequested,
-  } = normalizedRequest.value;
+  const { chatSendReceivedAtMs, clientInfo, p, systemInputProvenance, reconnectResumeRequested } =
+    normalizedRequest.value;
   const {
     clientRunId,
     sessionLoadOptions,
