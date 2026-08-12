@@ -25,6 +25,7 @@ type TasksProps = {
   agentId: string;
   mainKey: string;
   connected: boolean;
+  canCopy: boolean;
   canCancel: boolean;
   loading: boolean;
   error: string | null;
@@ -115,36 +116,34 @@ function renderTask(task: TaskSummary, props: TasksProps) {
               ${cancelling ? t("tasksPage.cancelling") : t("common.cancel")}
             </button>`
           : nothing}
-        ${retainedResult && props.canCancel
+        ${retainedResult && props.canCopy
+          ? html`<button
+              class="btn"
+              type="button"
+              ?disabled=${cancelling || !props.connected}
+              @click=${() => props.onCopyResult(task.taskId)}
+            >
+              ${t("tasksPage.copyResult")}
+            </button>`
+          : nothing}
+        ${recoverableDelivery && props.canCancel
           ? html`
               <button
                 class="btn"
                 type="button"
                 ?disabled=${cancelling || !props.connected}
-                @click=${() => props.onCopyResult(task.taskId)}
+                @click=${() => props.onRetry(task.taskId)}
               >
-                ${t("tasksPage.copyResult")}
+                ${t("tasksPage.retryDelivery")}
               </button>
-              ${recoverableDelivery
-                ? html`
-                    <button
-                      class="btn"
-                      type="button"
-                      ?disabled=${cancelling || !props.connected}
-                      @click=${() => props.onRetry(task.taskId)}
-                    >
-                      ${t("tasksPage.retryDelivery")}
-                    </button>
-                    <button
-                      class="btn"
-                      type="button"
-                      ?disabled=${cancelling || !props.connected}
-                      @click=${() => props.onDismiss(task.taskId)}
-                    >
-                      ${t("tasksPage.dismissDelivery")}
-                    </button>
-                  `
-                : nothing}
+              <button
+                class="btn"
+                type="button"
+                ?disabled=${cancelling || !props.connected}
+                @click=${() => props.onDismiss(task.taskId)}
+              >
+                ${t("tasksPage.dismissDelivery")}
+              </button>
             `
           : nothing}
       </div>

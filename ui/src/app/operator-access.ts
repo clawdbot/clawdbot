@@ -10,6 +10,8 @@ type GatewayOperatorAccess = Readonly<{
   canGrantApprovals: boolean;
 }>;
 
+type OperatorAuth = { role?: string; scopes?: readonly string[] } | null;
+
 export function readGatewayOperatorAccess(
   snapshot: Pick<ApplicationGatewaySnapshot, "hello"> | null | undefined,
 ): GatewayOperatorAccess {
@@ -25,9 +27,7 @@ export function readGatewayOperatorAccess(
   };
 }
 
-export function hasOperatorWriteAccess(
-  auth: { role?: string; scopes?: readonly string[] } | null,
-): boolean {
+export function hasOperatorWriteAccess(auth: OperatorAuth): boolean {
   if (!auth?.scopes) {
     return true;
   }
@@ -38,9 +38,18 @@ export function hasOperatorWriteAccess(
   });
 }
 
-export function hasOperatorAdminAccess(
-  auth: { role?: string; scopes?: readonly string[] } | null,
-): boolean {
+export function hasOperatorReadAccess(auth: OperatorAuth): boolean {
+  if (!auth?.scopes) {
+    return true;
+  }
+  return roleScopesAllow({
+    role: auth.role ?? "operator",
+    requestedScopes: ["operator.read"],
+    allowedScopes: auth.scopes,
+  });
+}
+
+export function hasOperatorAdminAccess(auth: OperatorAuth): boolean {
   if (!auth?.scopes) {
     return true;
   }
@@ -51,9 +60,7 @@ export function hasOperatorAdminAccess(
   });
 }
 
-export function hasOperatorPairingAccess(
-  auth: { role?: string; scopes?: readonly string[] } | null,
-): boolean {
+export function hasOperatorPairingAccess(auth: OperatorAuth): boolean {
   if (!auth) {
     return false;
   }
@@ -67,9 +74,7 @@ export function hasOperatorPairingAccess(
   });
 }
 
-export function hasOperatorApprovalsAccess(
-  auth: { role?: string; scopes?: readonly string[] } | null,
-): boolean {
+export function hasOperatorApprovalsAccess(auth: OperatorAuth): boolean {
   if (!auth) {
     return false;
   }
