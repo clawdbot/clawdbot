@@ -9,6 +9,7 @@ import { loadSettings } from "../../app/settings.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
+import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { requestDevicePairJoinSetup, type DevicePairSetup } from "../../lib/device-pair-setup.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
@@ -211,6 +212,10 @@ class NewSessionPage extends OpenClawLightDomElement {
         (agents, notify) => agents.subscribe(notify),
       )
       .watch(
+        () => this.context?.agentIdentity,
+        (agentIdentity, notify) => agentIdentity.subscribe(notify),
+      )
+      .watch(
         () => this.context?.sessions,
         (sessions, notify) => sessions.subscribe(notify),
       )
@@ -285,6 +290,9 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.closeConnectMachine();
     }
     this.gateway.retryPendingCatalogTarget();
+    if (this.gateway.connected) {
+      void this.context?.agentIdentity.ensure(this.place.agents().map((agent) => agent.id));
+    }
     this.place.modelControl.loadCatalogTargets(
       this.context,
       this.place.agentId,
@@ -386,6 +394,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     return renderAgentSelect({
       agents: this.place.agents(),
       agentId: this.place.agentId,
+      agentIdentity: this.context?.agentIdentity,
       disabled: this.submission.submitting || Boolean(this.submission.pendingCloud.sessionKey),
       onSelect: (agentId) => this.place.selectAgentId(agentId),
     });
@@ -634,12 +643,12 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private renderWelcome() {
     const agent = this.place.selectedAgent();
-    const identity = agent?.identity;
+    const identity = this.context?.agentIdentity.get(this.place.agentId);
     const gateway = this.context?.gateway.snapshot;
     return renderWelcomeState({
-      assistantName: identity?.name ?? agent?.name ?? agent?.id ?? "",
-      assistantAvatar: identity?.avatar ?? identity?.emoji ?? null,
-      assistantAvatarUrl: identity?.avatarUrl ?? null,
+      assistantName: agent ? normalizeAgentLabel(agent, identity) : "",
+      assistantAvatar: agent?.identity?.avatar ?? agent?.identity?.emoji ?? null,
+      assistantAvatarUrl: agent?.identity?.avatarUrl ?? null,
       hint: t("newSession.hint"),
       composer: this.renderDraftBlock(),
       modelSetupRequired: this.submission.requiresModelSetup(),
