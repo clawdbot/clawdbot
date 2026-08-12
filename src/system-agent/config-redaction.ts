@@ -17,12 +17,18 @@ function splitConfigHintPath(path: string): string[] {
   return parseConfigSetPath(path.replace(/\[\]/g, "[*]"));
 }
 
-function resolveConfigUiHint(path: string): ConfigUiHint | undefined {
+function resolveConfigUiHint(
+  path: string,
+  includeAncestors = false,
+  acceptHint?: (hint: ConfigUiHint) => boolean,
+): ConfigUiHint | undefined {
   return (
     findWildcardHintMatch({
       uiHints: loadGatewayRuntimeConfigSchema().uiHints,
       path,
       splitPath: splitConfigHintPath,
+      includeAncestors,
+      acceptHint,
     })?.hint ?? undefined
   );
 }
@@ -38,10 +44,15 @@ export function isSystemAgentSensitiveConfigValue(path: string, value: unknown):
     // future writer or normalizer might interpret them.
     return true;
   }
-  const hint = resolveConfigUiHint(canonicalPath);
-  if (hint?.sensitive === true || isSensitiveConfigPath(canonicalPath)) {
+  const sensitiveHint = resolveConfigUiHint(
+    path,
+    true,
+    (candidate) => candidate.sensitive !== undefined,
+  );
+  if (sensitiveHint?.sensitive === true || isSensitiveConfigPath(canonicalPath)) {
     return true;
   }
+  const hint = resolveConfigUiHint(path);
   return (
     typeof value === "string" &&
     (hasSensitiveUrlHintTag(hint) || isSensitiveUrlConfigPath(canonicalPath)) &&

@@ -108,7 +108,10 @@ describe("synology-chat core", () => {
     expect(SynologyChatChannelConfigSchema.schema.additionalProperties).toEqual({});
   });
 
-  it("masks public callback URLs that may contain proxy credentials", () => {
+  it("masks incoming and public callback URLs that may contain credentials", () => {
+    expect(
+      synologyChatSetupContract.metadata.fields.find((field) => field.key === "url"),
+    ).toMatchObject({ sensitive: true });
     expect(
       synologyChatSetupContract.metadata.fields.find((field) => field.key === "webhookUrl"),
     ).toMatchObject({ sensitive: true });
@@ -119,6 +122,12 @@ describe("synology-chat core", () => {
       sensitive: true,
     });
     expect(SynologyChatChannelConfigSchema.uiHints?.["accounts.*.webhookUrl"]).toMatchObject({
+      sensitive: true,
+    });
+    expect(SynologyChatChannelConfigSchema.uiHints?.incomingUrl).toMatchObject({
+      sensitive: true,
+    });
+    expect(SynologyChatChannelConfigSchema.uiHints?.["accounts.*.incomingUrl"]).toMatchObject({
       sensitive: true,
     });
   });

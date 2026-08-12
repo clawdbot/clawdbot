@@ -231,6 +231,7 @@ export const synologyChatSetupContract = defineChannelSetupContract({
     },
     url: {
       kind: "string",
+      sensitive: true,
       cli: { flags: "--url <url>", description: "Synology Chat webhook URL" },
     },
     webhookUrl: {

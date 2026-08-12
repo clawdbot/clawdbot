@@ -392,12 +392,14 @@ describe("parseSystemAgentOperation", () => {
 
   it("keeps sensitive channel callback URLs out of model-visible config reads", async () => {
     const callbackUrl = "https://gateway.example/webhook/synology?access_token=callback-secret";
+    const incomingUrl = "https://nas.example/webapi/entry.cgi?token=incoming-secret";
     mockConfig.setConfig({
       channels: {
         "synology-chat": {
+          incomingUrl,
           webhookUrl: callbackUrl,
           accounts: {
-            work: { webhookUrl: callbackUrl },
+            work: { incomingUrl, webhookUrl: callbackUrl },
           },
         },
       },
@@ -410,7 +412,9 @@ describe("parseSystemAgentOperation", () => {
     );
 
     expect(lines.join("\n")).toContain('"webhookUrl": "<redacted>"');
+    expect(lines.join("\n")).toContain('"incomingUrl": "<redacted>"');
     expect(lines.join("\n")).not.toContain("callback-secret");
+    expect(lines.join("\n")).not.toContain("incoming-secret");
     expect(
       describeSystemAgentPersistentOperation({
         kind: "config-set",

@@ -12,6 +12,8 @@ export const SynologyChatChannelConfigSchema = buildChannelConfigSchema(
     .passthrough(),
   {
     uiHints: {
+      incomingUrl: { sensitive: true },
+      "accounts.*.incomingUrl": { sensitive: true },
       webhookUrl: { sensitive: true },
       "accounts.*.webhookUrl": { sensitive: true },
     },

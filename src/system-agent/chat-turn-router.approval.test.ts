@@ -655,7 +655,10 @@ describe("SystemAgentChatEngine approval", () => {
     "channels.synology-chat.webhookUrl",
     "channels.synology-chat[webhookUrl]",
     "channels.synology-chat.accounts[work].webhookUrl",
+    "channels.synology-chat.incomingUrl",
+    "channels.synology-chat.accounts[work].incomingUrl",
     "plugins.entries.codex.config.appServer.headers",
+    "plugins.entries.codex.config.appServer.headers.Authorization",
   ])("keeps hint-sensitive config set %s away from every model path", async (path) => {
     useTempStateDir();
     const runAgentTurn = vi.fn(async () => ({ text: "should never run" }));
@@ -686,7 +689,10 @@ describe("SystemAgentChatEngine approval", () => {
     "channels.telegram.botToken",
     "channels.synology-chat[webhookUrl]",
     "channels.synology-chat.accounts[work].webhookUrl",
+    "channels.synology-chat.incomingUrl",
+    "channels.synology-chat.accounts[work].incomingUrl",
     "plugins.entries.codex.config.appServer.headers",
+    "plugins.entries.codex.config.appServer.headers.Authorization",
   ])("redacts config-set value at %s from the AI-visible history", async (path) => {
     const planner = vi.fn(async (_params: { history?: Array<{ role: string; text: string }> }) => ({
       reply: "noted",
