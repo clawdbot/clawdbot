@@ -3618,6 +3618,91 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
+  it("applies residual hot actions when a revert cancels a deferred restart", async () => {
+    const configA = {
+      gateway: { reload: {} },
+      hooks: { gmail: { account: "a" } },
+    } satisfies OpenClawConfig;
+    const configB = {
+      gateway: { reload: {}, port: 18794 },
+      hooks: { gmail: { account: "a" } },
+    } satisfies OpenClawConfig;
+    const configD = {
+      gateway: { reload: {}, port: 18794 },
+      hooks: { gmail: { account: "d" } },
+    } satisfies OpenClawConfig;
+    const makeWrite = (config: OpenClawConfig, persistedHash: string): ConfigWriteNotification => ({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: config,
+      runtimeConfig: config,
+      persistedHash,
+      revision: 1,
+      fingerprint: `runtime-${persistedHash}`,
+      sourceFingerprint: `source-${persistedHash}`,
+      writtenAtMs: Date.now(),
+    });
+    // Production hot reload (server-reload-managed-secrets.ts) activates the
+    // prepared runtime snapshot and advances the runtime-applied baseline via
+    // transactionOwnership.markRuntimeCommitted, like the deferral-and-revert
+    // test above.
+    const onHotReload = vi.fn(
+      async (
+        plan: GatewayReloadPlan,
+        nextConfig: OpenClawConfig,
+        ownership: GatewayConfigReloadTransactionOwnership,
+      ) => {
+        ownership.markRuntimeCommitted(nextConfig, plan);
+      },
+    );
+    const harness = createReloaderHarness(
+      vi.fn(async () => makeSnapshot()),
+      {
+        initialConfig: configA,
+        onHotReload,
+      },
+    );
+
+    // Restart-required edit A -> B (gateway.port) plans a deferred restart.
+    harness.emitWrite(makeWrite(configB, "hash-b"));
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    expect(harness.onRestart.mock.calls[0]?.[1]).toEqual(configB);
+
+    // Intervening hot-only edit B -> D (hooks.gmail): the gmail watcher
+    // restarts hot and the runtime baseline advances while the restart stays
+    // deferred.
+    harness.emitWrite(makeWrite(configD, "hash-d"));
+    await vi.runAllTimersAsync();
+    expect(onHotReload).toHaveBeenCalledTimes(1);
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+
+    // Exact revert D -> A cancels the deferred restart, but the residual
+    // gmail revert (D -> A account) must still reach the runtime through the
+    // hot path instead of being dropped by the no-op commit.
+    harness.emitWrite(makeWrite(configA, "hash-a"));
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    expect(
+      harness.log.info.mock.calls.some((call) =>
+        call.some((arg) => String(arg).includes("reverted to running config")),
+      ),
+    ).toBe(true);
+    expect(onHotReload).toHaveBeenCalledTimes(2);
+    const residualPlan = onHotReload.mock.calls[1]?.[0];
+    expect(residualPlan?.restartGateway).toBe(false);
+    expect(residualPlan?.restartGmailWatcher).toBe(true);
+    expect(residualPlan?.reloadHooks).toBe(true);
+    expect(onHotReload.mock.calls[1]?.[1]).toEqual(configA);
+
+    // The revert still advanced the reload baseline, so a later genuine edit
+    // A -> B plans the restart again.
+    harness.emitWrite(makeWrite(configB, "hash-b2"));
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(2);
+
+    await harness.reloader.stop();
+  });
+
   it("drops pending-restart provenance when the coordinator retires the deferred debt on a source-only write", async () => {
     const configA = { gateway: { reload: {} } } satisfies OpenClawConfig;
     const configB = { gateway: { reload: {}, port: 18793 } } satisfies OpenClawConfig;

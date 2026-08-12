@@ -803,7 +803,22 @@ export function startGatewayConfigReloader(opts: {
         restartReasons: [],
       };
       await opts.onConfigChange?.(revertPlan, nextConfig);
-      await opts.onNoopConfigCommit(revertPlan, nextConfig, ownership, nextSourceConfig);
+      // The revert diff can still carry hot actions that landed while the
+      // restart was deferred (e.g. hooks.gmail B -> D before the D -> A
+      // revert). Those residual runtime effects must reach the accepted
+      // config even though the restart itself is cancelled, so route a
+      // non-noop residual plan through the normal hot path instead of the
+      // no-op commit.
+      if (isNoopGatewayReloadPlan(revertPlan)) {
+        await opts.onNoopConfigCommit(revertPlan, nextConfig, ownership, nextSourceConfig);
+      } else {
+        try {
+          await opts.onHotReload(revertPlan, nextConfig, ownership, nextSourceConfig);
+        } catch (error) {
+          ownership.rollbackRuntimeEnv();
+          throw error;
+        }
+      }
       assertCurrent();
       await appliedRevision.apply(revertPlan, nextConfig, nextConfigRevisionHash);
       await commitReloadBaseline();
