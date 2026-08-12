@@ -4,6 +4,7 @@ import {
   bindIngressLifecycleToReplyOptions,
   waitUntilAbort,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
@@ -44,7 +45,6 @@ import {
   shouldMigrateTlonSetting,
 } from "./settings-helpers.js";
 import { createActiveSnapshotTracker, createParticipatedThreadTracker } from "./tracking.js";
-import { formatErrorMessage } from "./utils.js";
 import {
   extractMessageText,
   formatModelName,

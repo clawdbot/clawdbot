@@ -166,7 +166,10 @@ export async function recoverEmbeddedRunAttempt(input: {
       provider: preparedRuntime.provider,
       model: preparedRuntime.modelId,
       authProfileId: runtime.lastProfileId,
-      authProfileIdSource: preparedRuntime.lockedProfileId ? "user" : "auto",
+      authProfileIdSource:
+        runtime.lastProfileId && runtime.lastProfileId === preparedRuntime.lockedProfileId
+          ? "user"
+          : "auto",
     },
     requested: requestedSelection,
   });

@@ -83,6 +83,7 @@ const assistantOutput = {
   role: "assistant",
   status: "completed",
   content: [{ type: "output_text", text: "one", annotations: [] }],
+  phase: "final_answer",
 };
 
 function completion(responseId: string, output: Array<Record<string, unknown>> = []) {
@@ -206,22 +207,30 @@ describe("native OpenAI Responses WebSocket transport", () => {
     });
   });
 
-  it("uses the response id when persisted encrypted reasoning has a different replay shape", async () => {
+  it("continues across equivalent request ordering, omissions, and persisted reasoning replay", async () => {
     const reasoning = { type: "reasoning", id: "rs_1", encrypted_content: "ciphertext" };
     websocketState.responseBatches.push(
       [completion("resp_1", [reasoning, assistantOutput])],
       [completion("resp_2")],
     );
-    await consumeResponse(createStream({ model: "gpt-5.6-luna", input: [firstUser] }));
+    await consumeResponse(
+      createStream({
+        model: "gpt-5.6-luna",
+        metadata: { beta: "2", alpha: "1" },
+        max_output_tokens: undefined,
+        input: [firstUser],
+      }),
+    );
 
     const second = createStream({
-      model: "gpt-5.6-luna",
       input: [
         firstUser,
         { type: "reasoning", summary: [] },
         assistantOutput,
         { role: "user", content: "second" },
       ],
+      metadata: { alpha: "1", beta: "2" },
+      model: "gpt-5.6-luna",
     });
 
     expect(second.continuationStatus).toBe("continued");
@@ -302,6 +311,17 @@ describe("native OpenAI Responses WebSocket transport", () => {
       mutate: (request: Record<string, unknown>) => ({
         ...request,
         input: [{ role: "user", content: "rewritten" }],
+      }),
+    },
+    {
+      name: "assistant phase change",
+      mutate: (request: Record<string, unknown>) => ({
+        ...request,
+        input: [
+          firstUser,
+          { ...assistantOutput, phase: "commentary" },
+          { role: "user", content: "second" },
+        ],
       }),
     },
   ])("resets continuation on $name", async ({ mutate }) => {

@@ -1,5 +1,6 @@
 import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import { teamsMeetingsConfig } from "./src/config.js";
 import { TeamsMeetingsInvalidRequestError, teamsMeetingsInvalidRequest } from "./src/errors.js";
@@ -26,8 +27,7 @@ export default MeetingPlatformAdapter.createPluginShellEntry({
     message: Type.Optional(Type.String({ description: "Instructions to speak" })),
   }),
   resolveGatewayTimeoutMs: teamsMeetingsConfig.resolveGatewayOperationTimeoutMs,
-  normalizeRequesterSessionKey: (value) =>
-    typeof value === "string" && value.trim() ? value.trim() : undefined,
+  normalizeRequesterSessionKey: normalizeOptionalString,
   normalizeToolAgentId: (agentId) => (agentId ? normalizeAgentId(agentId) : undefined),
   resolveToolRuntime: async (api, agentId) => {
     const trustedRouting = Boolean(agentId && agentId !== "main");

@@ -135,11 +135,10 @@ async function runEmbeddedAgentInternal(
   // Outer fallback attempts defer session suspension only while another
   // candidate remains. Direct and final-candidate runs suspend normally.
   const failureSuspension = resolveSessionSuspensionTarget();
-  const suspendForFailure = (suspensionParams: Omit<SessionSuspensionParams, "laneId">) => {
+  const suspendForFailure = (suspensionParams: SessionSuspensionParams) => {
     const suspension = buildEmbeddedFailureSuspension({
       suspension: suspensionParams,
       runAgentId: params.agentId,
-      laneId: globalLane,
     });
     if (failureSuspension.mode === "defer") {
       failureSuspension.defer(suspension);

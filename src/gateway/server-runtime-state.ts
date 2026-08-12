@@ -41,7 +41,7 @@ import {
   createPreauthConnectionBudget,
   type PreauthConnectionBudget,
 } from "./server/preauth-connection-budget.js";
-import type { ReadinessChecker } from "./server/readiness.js";
+import type { ReadinessChecker, StartupChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import type { WorkerDesktopTunnels } from "./worker-environments/desktop-tunnel.js";
 
@@ -114,6 +114,7 @@ export async function createGatewayHttpTransport(params: {
   logHooks: ReturnType<typeof createSubsystemLogger>;
   logPlugins: ReturnType<typeof createSubsystemLogger>;
   getReadiness?: ReadinessChecker;
+  getStartup?: StartupChecker;
   isTerminalEnabled: () => boolean;
   handleWatchNodeRequest?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   workerIngressEnabled?: boolean;
@@ -282,6 +283,7 @@ export async function createGatewayHttpTransport(params: {
       getResolvedAuth: params.getResolvedAuth,
       rateLimiter: params.rateLimiter,
       getReadiness: params.getReadiness,
+      getStartup: params.getStartup,
       getRuntimeConfig: loadRuntimeConfig,
       isStartupPluginRuntimeReady: params.isStartupPluginRuntimeReady,
       isTerminalEnabled: params.isTerminalEnabled,

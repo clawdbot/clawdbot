@@ -34,14 +34,18 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
     file: "packages/normalization-core/src/string-coerce.ts",
     kind: "function",
     names: [
+      "hasNonEmptyString",
       "lowercasePreservingWhitespace",
       "localeLowercasePreservingWhitespace",
       "normalizeBoundedOptionalString",
       "normalizeFastMode",
+      "normalizeLowercaseStringOrEmpty",
       "normalizeNullableString",
       "normalizeOptionalLowercaseString",
       "normalizeOptionalString",
       "normalizeOptionalStringifiedId",
+      "normalizeOptionalThreadValue",
+      "normalizeStringifiedOptionalString",
       "normalizeStringifiedEntries",
       "readNonBlankString",
       "readNonEmptyStringPreservingWhitespace",
@@ -52,7 +56,27 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
   {
     file: "packages/normalization-core/src/string-normalization.ts",
     kind: "function",
-    names: ["filterStringEntries"],
+    names: [
+      "filterStringEntries",
+      "normalizeArrayBackedTrimmedStringList",
+      "normalizeAtHashSlug",
+      "normalizeCsvOrLooseStringList",
+      "normalizeHyphenSlug",
+      "normalizeOptionalTrimmedStringList",
+      "normalizeSingleOrTrimmedStringList",
+      "normalizeSortedUniqueStringEntries",
+      "normalizeSortedUniqueTrimmedStringList",
+      "normalizeStringEntries",
+      "normalizeStringEntriesLower",
+      "normalizeTrimmedStringList",
+      "normalizeUniqueSingleOrTrimmedStringList",
+      "normalizeUniqueStringEntries",
+      "normalizeUniqueStringEntriesLower",
+      "normalizeUniqueTrimmedStringList",
+      "sortUniqueStrings",
+      "uniqueStrings",
+      "uniqueValues",
+    ],
   },
   {
     file: "packages/normalization-core/src/number-coercion.ts",
@@ -66,6 +90,7 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "asPositiveFiniteNumber",
       "asPositiveSafeInteger",
       "asSafeIntegerInRange",
+      "clampTimerTimeoutMs",
       "clampPositiveTimerTimeoutMs",
       "finiteSecondsToTimerSafeMilliseconds",
       "isFutureDateTimestampMs",
@@ -76,6 +101,7 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "parseStrictFiniteNumber",
       "parseStrictInteger",
       "parseStrictNonNegativeInteger",
+      "parseStrictPositiveInteger",
       "positiveSecondsToSafeMilliseconds",
       "resolveDateTimestampMs",
       "resolveExpiresAtMsFromDurationMs",
@@ -86,10 +112,16 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "resolveNonNegativeIntegerOption",
       "resolveOptionalIntegerOption",
       "resolvePositiveTimerTimeoutMs",
+      "resolveTimerTimeoutMs",
       "resolveTimestampMsToIsoString",
       "timestampMsToIsoFileStamp",
       "timestampMsToIsoString",
     ],
+  },
+  {
+    file: "packages/normalization-core/src/boolean-coercion.ts",
+    kind: "function",
+    names: ["parseBoolean"],
   },
   {
     file: "packages/normalization-core/src/record-coerce.ts",
@@ -110,28 +142,68 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
   {
     file: "packages/normalization-core/src/json-coercion.ts",
     kind: "function",
-    names: ["safeParseJsonRecord"],
+    names: ["safeParseJson", "safeParseJsonRecord"],
   },
   {
     file: "packages/normalization-core/src/error-coercion.ts",
     kind: "function",
-    names: ["coerceErrorMessage", "stringifyNonErrorCause", "toErrorObject", "toStringifiedError"],
+    names: [
+      "coerceErrorMessage",
+      "stringifyNonErrorCause",
+      "toErrorObject",
+      "toStringifiedError",
+      "toStructuredErrorObject",
+    ],
   },
   {
     file: "scripts/lib/error-format.mts",
     kind: "function",
-    names: ["coerceErrorMessage", "toErrorObject"],
+    names: ["coerceErrorMessage", "toErrorObject", "toStringifiedError"],
+  },
+  {
+    file: "scripts/lib/arg-utils.runtime.mjs",
+    kind: "function",
+    names: [
+      "classifyBoundedUnsignedDecimal",
+      "parsePermissiveBooleanToken",
+      "parseStrictBooleanArg",
+    ],
   },
   {
     file: "src/utils/boolean.ts",
     kind: "function",
-    names: ["parseBooleanValue"],
+    names: ["asBoolean", "parseBooleanValue"],
   },
 ] as const satisfies readonly {
   file: string;
   kind: CoercionHelperDeclarationKind;
   names: readonly string[];
 }[];
+
+export const CANONICAL_COERCION_MODULES = [
+  "packages/normalization-core/src/string-coerce.ts",
+  "packages/normalization-core/src/string-normalization.ts",
+  "packages/normalization-core/src/number-coercion.ts",
+  "packages/normalization-core/src/record-coerce.ts",
+  "packages/normalization-core/src/json-coercion.ts",
+  "packages/normalization-core/src/error-coercion.ts",
+  "packages/normalization-core/src/boolean-coercion.ts",
+  "scripts/lib/error-format.mts",
+  "src/utils/boolean.ts",
+] as const;
+
+export const DEFERRED_CANONICAL_COERCION_EXPORTS = [
+  {
+    file: "packages/normalization-core/src/error-coercion.ts",
+    name: "formatErrorMessage",
+    reason: "Structural formatter shares its public name with redacting owner adapters.",
+  },
+  {
+    file: "scripts/lib/error-format.mts",
+    name: "formatErrorMessage",
+    reason: "Dependency-light scripts retain a deliberately smaller formatting policy.",
+  },
+] as const satisfies readonly { file: string; name: string; reason: string }[];
 
 const EXCEPTIONAL_COERCION_HELPER_CARVE_OUTS = [
   {
@@ -206,6 +278,19 @@ export type CoercionHelperDeclaration = {
   kind: CoercionHelperDeclarationKind;
   line: number;
   name: BannedCoercionHelperName;
+};
+
+export type CanonicalCoercionExportClassification = {
+  file: string;
+  name: string;
+  reason?: string;
+  status: "deferred" | "enforced";
+};
+
+export type CanonicalCoercionExportAudit = {
+  invalidClassifications: string[];
+  staleClassifications: CanonicalCoercionExportClassification[];
+  unclassifiedExports: Array<{ file: string; name: string }>;
 };
 
 export type CoercionHelperCarveOut = {
@@ -385,6 +470,98 @@ export function findBannedCoercionHelperDeclarations(
   return declarations;
 }
 
+function hasExportModifier(node: ts.Node) {
+  return (ts.canHaveModifiers(node) ? (ts.getModifiers(node) ?? []) : []).some(
+    (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+  );
+}
+
+/** Finds directly declared callable exports in one selected canonical module. */
+export function findExportedCallableNames(source: string, file = "source.ts") {
+  const scriptKind = file.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+  const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, scriptKind);
+  const callableLocals = new Set<string>();
+  const exportedNames = new Set<string>();
+
+  for (const statement of sourceFile.statements) {
+    if (ts.isFunctionDeclaration(statement) && statement.name) {
+      callableLocals.add(statement.name.text);
+      if (hasExportModifier(statement)) {
+        exportedNames.add(statement.name.text);
+      }
+      continue;
+    }
+    if (!ts.isVariableStatement(statement)) {
+      continue;
+    }
+    for (const declaration of statement.declarationList.declarations) {
+      if (!ts.isIdentifier(declaration.name) || !declaration.initializer) {
+        continue;
+      }
+      const alias = unwrapDirectAliasInitializer(declaration.initializer);
+      if (
+        !isCallableInitializer(declaration.initializer) &&
+        (!alias || (!ts.isIdentifier(alias) && !ts.isPropertyAccessExpression(alias)))
+      ) {
+        continue;
+      }
+      callableLocals.add(declaration.name.text);
+      if (hasExportModifier(statement)) {
+        exportedNames.add(declaration.name.text);
+      }
+    }
+  }
+
+  for (const statement of sourceFile.statements) {
+    if (
+      !ts.isExportDeclaration(statement) ||
+      statement.moduleSpecifier ||
+      !statement.exportClause ||
+      !ts.isNamedExports(statement.exportClause)
+    ) {
+      continue;
+    }
+    for (const element of statement.exportClause.elements) {
+      const localName = element.propertyName?.text ?? element.name.text;
+      if (!element.isTypeOnly && callableLocals.has(localName)) {
+        exportedNames.add(element.name.text);
+      }
+    }
+  }
+  return [...exportedNames].toSorted();
+}
+
+/** Requires every selected callable export to be enforced or explicitly deferred. */
+export function auditCanonicalCoercionExports(
+  exportsByFile: ReadonlyMap<string, readonly string[]>,
+  classifications: readonly CanonicalCoercionExportClassification[],
+): CanonicalCoercionExportAudit {
+  const invalidClassifications: string[] = [];
+  const byKey = new Map<string, CanonicalCoercionExportClassification>();
+  for (const classification of classifications) {
+    const key = `${classification.file}\0${classification.name}`;
+    if (byKey.has(key)) {
+      invalidClassifications.push(
+        `${classification.file} [${classification.name}] is classified more than once`,
+      );
+      continue;
+    }
+    if (classification.status === "deferred" && !classification.reason?.trim()) {
+      invalidClassifications.push(
+        `${classification.file} [${classification.name}] needs a non-empty deferred reason`,
+      );
+    }
+    byKey.set(key, classification);
+  }
+  const unclassifiedExports = [...exportsByFile].flatMap(([file, names]) =>
+    names.flatMap((name) => (byKey.has(`${file}\0${name}`) ? [] : [{ file, name }])),
+  );
+  const staleClassifications = classifications.filter(
+    ({ file, name }) => !(exportsByFile.get(file) ?? []).includes(name),
+  );
+  return { invalidClassifications, staleClassifications, unclassifiedExports };
+}
+
 /** Checks exact file/name/count carve-outs and rejects stale or excess entries. */
 export function auditCoercionHelperDeclarations(
   declarations: readonly CoercionHelperDeclaration[],
@@ -458,6 +635,28 @@ function writeLine(stream: ScriptIo["stdout"] | ScriptIo["stderr"], value: strin
   stream.write(`${value}\n`);
 }
 
+function auditDefaultCanonicalExports(repoRoot: string): CanonicalCoercionExportAudit {
+  const canonicalModules = new Set<string>(CANONICAL_COERCION_MODULES);
+  const exportsByFile = new Map(
+    CANONICAL_COERCION_MODULES.map((file) => {
+      const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
+      return [file, findExportedCallableNames(source, file)] as const;
+    }),
+  );
+  const classifications: CanonicalCoercionExportClassification[] = [
+    ...CANONICAL_COERCION_HELPER_OWNERS.filter(({ file }) => canonicalModules.has(file)).flatMap(
+      ({ file, names }) => names.map((name) => ({ file, name, status: "enforced" as const })),
+    ),
+    ...DEFERRED_CANONICAL_COERCION_EXPORTS.map(({ file, name, reason }) => ({
+      file,
+      name,
+      reason,
+      status: "deferred" as const,
+    })),
+  ];
+  return auditCanonicalCoercionExports(exportsByFile, classifications);
+}
+
 /** Runs the full tracked-source declaration guard. */
 export function runCoercionHelperDeclarationGuard(
   options: {
@@ -481,10 +680,17 @@ export function runCoercionHelperDeclarationGuard(
     return findBannedCoercionHelperDeclarations(fs.readFileSync(absolutePath, "utf8"), file);
   });
   const audit = auditCoercionHelperDeclarations(declarations, carveOuts);
+  const exportAudit =
+    options.carveOuts === undefined
+      ? auditDefaultCanonicalExports(repoRoot)
+      : { invalidClassifications: [], staleClassifications: [], unclassifiedExports: [] };
   const failed =
     audit.excessDeclarations.length > 0 ||
     audit.invalidCarveOuts.length > 0 ||
-    audit.staleCarveOuts.length > 0;
+    audit.staleCarveOuts.length > 0 ||
+    exportAudit.invalidClassifications.length > 0 ||
+    exportAudit.staleClassifications.length > 0 ||
+    exportAudit.unclassifiedExports.length > 0;
   if (!failed) {
     writeLine(
       io.stdout,
@@ -515,6 +721,24 @@ export function runCoercionHelperDeclarationGuard(
         io.stderr,
         `- ${carveOut.file} [${carveOut.name}] expected ${carveOut.count} ${carveOut.kind} declaration(s), found ${carveOut.actualCount}; remove or reduce the carve-out`,
       );
+    }
+  }
+  if (exportAudit.invalidClassifications.length > 0) {
+    writeLine(io.stderr, "Invalid canonical-export classifications:");
+    for (const message of exportAudit.invalidClassifications) {
+      writeLine(io.stderr, `- ${message}`);
+    }
+  }
+  if (exportAudit.unclassifiedExports.length > 0) {
+    writeLine(io.stderr, "Unclassified canonical callable exports:");
+    for (const entry of exportAudit.unclassifiedExports) {
+      writeLine(io.stderr, `- ${entry.file} [${entry.name}]`);
+    }
+  }
+  if (exportAudit.staleClassifications.length > 0) {
+    writeLine(io.stderr, "Stale canonical-export classifications:");
+    for (const entry of exportAudit.staleClassifications) {
+      writeLine(io.stderr, `- ${entry.file} [${entry.name}] (${entry.status})`);
     }
   }
   writeLine(

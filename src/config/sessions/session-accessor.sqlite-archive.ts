@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { syncDirectoryBestEffortSync } from "../../infra/directory-durability.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import {
@@ -205,10 +206,6 @@ function resolveSourceWorkerExecArgv(): string[] {
   return ["--import", `data:text/javascript,${encodeURIComponent(registerTsx)}`];
 }
 
-function normalizeArchiveWorkerError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
-}
-
 function spawnSqliteTranscriptArchiveWorker(
   plans: readonly TranscriptArchiveWorkerPlan[],
 ): Promise<TranscriptArchiveWorkerResult[]> {
@@ -223,7 +220,7 @@ function spawnSqliteTranscriptArchiveWorker(
       execArgv: sourceWorkerExecArgv,
     });
   } catch (error) {
-    return Promise.reject(normalizeArchiveWorkerError(error));
+    return Promise.reject(toStringifiedError(error));
   }
 
   return new Promise((resolve, reject) => {
@@ -235,7 +232,7 @@ function spawnSqliteTranscriptArchiveWorker(
     worker.once("error", (error) => {
       // An uncaught Worker error is followed by exit. Wait for that event so
       // callers never race the Worker's SQLite/file handles on Windows.
-      workerError = normalizeArchiveWorkerError(error);
+      workerError = toStringifiedError(error);
     });
     worker.once("exit", (code) => {
       worker.removeAllListeners();

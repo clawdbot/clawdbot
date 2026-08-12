@@ -2274,9 +2274,9 @@ function parsePosixProcessRows(stdout: string) {
     ) {
       continue;
     }
-    const processId = parseStrictPositiveInteger(pidRaw);
+    const processId = parsePositivePosixProcessToken(pidRaw);
     const parentProcessId = parseStrictUnsignedInteger(ppidRaw);
-    const rssKb = parseStrictPositiveInteger(rssKbRaw);
+    const rssKb = parsePositivePosixProcessToken(rssKbRaw);
     const cpuPercent = parseStrictNonNegativeDecimal(cpuRaw);
     if (
       !Number.isInteger(processId) ||
@@ -2320,7 +2320,7 @@ function parseStrictUnsignedInteger(raw: string | undefined) {
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
-function parseStrictPositiveInteger(raw: string | undefined) {
+function parsePositivePosixProcessToken(raw: string | undefined) {
   const parsed = parseStrictUnsignedInteger(raw);
   return parsed && parsed > 0 ? parsed : null;
 }

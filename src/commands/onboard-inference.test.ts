@@ -4,8 +4,6 @@ import type { LocalCommandProbe } from "../system-agent/probes.js";
 import {
   ANTHROPIC_API_DEFAULT_MODEL_REF,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
-  CODEX_APP_SERVER_DEFAULT_MODEL_REF,
-  OPENAI_API_DEFAULT_MODEL_REF,
   detectInferenceBackends,
 } from "./onboard-inference.js";
 
@@ -17,11 +15,6 @@ function probeDeps(found: Record<string, boolean>) {
 }
 
 describe("detectInferenceBackends", () => {
-  it("uses canonical GPT-5.6 Sol defaults for direct API and Codex", () => {
-    expect(OPENAI_API_DEFAULT_MODEL_REF).toBe("openai/gpt-5.6-sol");
-    expect(CODEX_APP_SERVER_DEFAULT_MODEL_REF).toBe("openai/gpt-5.6-sol");
-  });
-
   it("returns nothing when no backend exists", async () => {
     const candidates = await detectInferenceBackends({
       env: {},
@@ -84,8 +77,8 @@ describe("detectInferenceBackends", () => {
     expect(candidates[0]?.modelRef).toBe("zai/glm-5.2");
     expect(candidates[0]?.detail).toBe("zai/glm-5.2 — already configured");
     expect(candidates[1]?.modelRef).toBe(CLAUDE_CLI_DEFAULT_MODEL_REF);
-    expect(candidates[2]?.modelRef).toBe(CODEX_APP_SERVER_DEFAULT_MODEL_REF);
-    expect(candidates[3]?.modelRef).toBe(OPENAI_API_DEFAULT_MODEL_REF);
+    expect(candidates[2]?.modelRef).toBe("openai/gpt-5.6-sol");
+    expect(candidates[3]?.modelRef).toBe("openai/gpt-5.6-sol");
     expect(candidates[4]?.modelRef).toBe(ANTHROPIC_API_DEFAULT_MODEL_REF);
   });
 

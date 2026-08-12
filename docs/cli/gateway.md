@@ -516,6 +516,36 @@ openclaw gateway call logs.tail --params '{"limit": 200}'
 `--params` must be valid JSON, and each method validates its own param shape (extra/misnamed fields are rejected). Use `--port` for a custom-port local Gateway; explicit `--url` targets still require explicit credentials.
 </Note>
 
+### `gateway suspend`
+
+Prepare an idle Gateway for a cooperative host freeze or snapshot. Without
+`--wait`, active work returns a nonzero exit with blocker details. With
+`--wait`, the CLI retries until the bounded deadline using one stable request
+ID.
+
+```bash
+openclaw gateway suspend
+openclaw gateway suspend --request-id snapshot-2026-08-11 --wait 30
+openclaw gateway suspend --port 18999 --json
+```
+
+The ready output includes the suspension ID, lease expiry, and the matching
+resume command. Common RPC options such as `--url`, `--token`, `--password`,
+`--timeout`, `--json`, and `--port` are supported.
+
+### `gateway resume <suspensionId>`
+
+Release a prepared suspension after thaw or when the host operation is
+abandoned.
+
+```bash
+openclaw gateway resume <suspensionId>
+openclaw gateway resume <suspensionId> --port 18999 --json
+```
+
+An already expired or resumed lease is a successful no-op. A different active
+suspension ID is rejected.
+
 ## Manage the Gateway service
 
 ```bash

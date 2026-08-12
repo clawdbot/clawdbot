@@ -91,7 +91,7 @@ export async function handleEmbeddedAssistantFailure(input: {
     typeof handleAssistantFailover
   >[0]["advanceRateLimitAuthProfile"];
   traceAttempts: TraceAttempt[];
-  suspendForFailure: (params: Omit<SessionSuspensionParams, "laneId">) => void;
+  suspendForFailure: (params: SessionSuspensionParams) => void;
   suspensionSessionId: string;
   agentDir: string;
   isProbeSession: boolean;

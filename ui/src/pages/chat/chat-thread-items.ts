@@ -1,4 +1,5 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
 import { escapeRegExp } from "../../../../src/shared/regexp.js";
@@ -574,8 +575,7 @@ export function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unk
 }
 
 export function rawMessageTimestamp(message: unknown): number | null {
-  const timestamp = asRecord(message)?.timestamp;
-  return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : null;
+  return asFiniteNumber(asRecord(message)?.timestamp) ?? null;
 }
 
 function chatItemTimestamp(item: ChatItem): number | null {

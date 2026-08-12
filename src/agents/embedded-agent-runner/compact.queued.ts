@@ -56,6 +56,7 @@ import { resolveContextEngineCapabilities } from "./context-engine-capabilities.
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
+import { resolveTieredModel } from "./model-resolution.js";
 import { resolveModelAsync } from "./model.js";
 import type { EmbeddedAgentQueueHandle } from "./run-state.js";
 import {
@@ -437,7 +438,6 @@ async function compactResolvedContextEngine(
   let preparedHarnessRuntime = selectedHarnessRuntime;
   let preparedParams = params;
   try {
-    const preparedStores = preparedModelRuntime.createStores();
     // Ensure the policy-selected harness plugin so selection can pick implicit codex.
     await ensureSelectedAgentHarnessPlugin({
       config: params.config,
@@ -450,15 +450,16 @@ async function compactResolvedContextEngine(
       workspaceDir: resolvedWorkspaceDir,
       pluginRegistry: requireActivePluginRegistry(),
     });
-    const {
-      model: ceModel,
-      authStorage,
-      modelRegistry,
-    } = await resolveModelAsync(ceRuntimeProvider, ceModelId, agentDir, params.config, {
+    const { resolution: modelResolution } = await resolveTieredModel({
+      provider: ceRuntimeProvider,
+      modelId: ceModelId,
+      agentDir,
+      config: params.config,
+      workspaceDir: resolvedWorkspaceDir,
       ...initialModelAuth,
-      ...preparedStores,
       preparedModelRuntime,
     });
+    const { model: ceModel, authStorage, modelRegistry } = modelResolution;
     const ceRuntimeModel = ceModel as ProviderRuntimeModel | undefined;
     // Overrides stay unset when no bound/planned/explicit harness resolved so auth-aware
     // selection can pick the credential-owning harness (codex for ChatGPT OAuth).

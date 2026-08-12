@@ -626,7 +626,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
     }
   });
 
-  it("keeps direct embedded-run lane suspension outside the outer fallback loop", async () => {
+  it("keeps direct embedded-run session suspension outside the outer fallback loop", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
       const sessionId = "session:direct-embedded-suspension";
@@ -652,9 +652,8 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
         }),
       ).rejects.toThrow();
 
-      expect(suspendSessionMock).toHaveBeenCalledWith(
-        expect.objectContaining({ laneId: "direct-lane" }),
-      );
+      expect(suspendSessionMock).toHaveBeenCalledOnce();
+      expect(suspendSessionMock.mock.calls[0]?.[0]).not.toHaveProperty("laneId");
     });
   });
 

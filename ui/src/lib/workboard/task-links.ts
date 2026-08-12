@@ -1,3 +1,4 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -50,9 +51,7 @@ export function taskLifecycleSourceUpdatedAt(task: WorkboardTaskSummary): number
 }
 
 export function sessionUpdatedAtValue(session: GatewaySessionRow): number | undefined {
-  return typeof session.updatedAt === "number" && Number.isFinite(session.updatedAt)
-    ? session.updatedAt
-    : undefined;
+  return asFiniteNumber(session.updatedAt);
 }
 
 export function taskSessionKeyMatchesCardSession(

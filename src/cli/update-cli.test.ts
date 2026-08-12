@@ -272,13 +272,14 @@ vi.mock("../process/exec.js", () => ({
 }));
 
 vi.mock("../utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../utils.js")>();
-  const isMockRecord = (value: unknown) =>
-    typeof value === "object" && value !== null && !Array.isArray(value);
+  const [actual, { isRecord }] = await Promise.all([
+    importOriginal<typeof import("../utils.js")>(),
+    import("@openclaw/normalization-core/record-coerce"),
+  ]);
   return {
     ...actual,
     displayString: (input: string) => input,
-    isRecord: isMockRecord,
+    isRecord,
     pathExists: (...args: unknown[]) => pathExists(...args),
     resolveConfigDir: () => "/tmp/openclaw-config",
     sleep: vi.fn(async () => undefined),

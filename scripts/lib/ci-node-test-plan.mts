@@ -296,7 +296,10 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   // Fork-per-file isolation parallelizes poorly on 4 vCPU; keep it on the
   // 8 vCPU class, where it still runs a measured ~90s under fleet load.
   ["core-unit-fast-isolated", 90],
-  ["core-unit-src-security", 205],
+  // In 35 green main runs on 2026-08-11/12, compact large jobs owned the
+  // critical tail 15 times and reached p90=457s. This group's former 205s
+  // hint repeatedly packed another 58s of serial work beside that tail.
+  ["core-unit-src-security", 295],
   ["core-unit-support", 17],
 ]);
 // Advisory per-file wall-clock hints (seconds) for stripe balancing, measured

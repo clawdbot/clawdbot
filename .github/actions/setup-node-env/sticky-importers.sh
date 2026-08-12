@@ -3,11 +3,12 @@ set -euo pipefail
 
 mode="${1:?mode is required}"
 sticky_root="${2:?sticky root is required}"
-workspace="${3:?workspace is required}"
+workspace="${3:-}"
 archive="$sticky_root/importer-node-modules.tar"
 archive_checksum="$sticky_root/.openclaw-importer-archive.sha256"
 importer_manifest="$sticky_root/importer-node-modules.manifest"
 marker="$sticky_root/.openclaw-deps-fingerprint"
+force_commit_sentinel="$sticky_root/.openclaw-force-commit"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 archive_sha256() {
@@ -32,7 +33,9 @@ verify_importers() {
 
 case "$mode" in
   capture)
+    workspace="${workspace:?workspace is required}"
     fingerprint="${4:?fingerprint is required}"
+    rebuild_signal="${5:?rebuild signal is required}"
     mkdir -p "$sticky_root"
     list_file="$(mktemp)"
     temp_archive="$archive.tmp.$$"
@@ -67,8 +70,10 @@ case "$mode" in
     # registry-backed importer resolution before trusting this snapshot.
     printf '%s\n' "$fingerprint" >"$temp_marker"
     mv "$temp_marker" "$marker"
+    : >"$rebuild_signal"
     ;;
   restore)
+    workspace="${workspace:?workspace is required}"
     if [[ ! -f "$archive" || ! -f "$archive_checksum" || ! -f "$importer_manifest" ]]; then
       echo "sticky importer archive, manifest, or checksum is missing under $sticky_root" >&2
       exit 1
@@ -96,6 +101,61 @@ case "$mode" in
       clear_importers
       exit 1
     fi
+    ;;
+  ensure-change)
+    initial_usage_bytes="${3:?initial usage bytes are required}"
+    if [[ ! "$initial_usage_bytes" =~ ^[0-9]+$ ]] || [[ "$initial_usage_bytes" -le 0 ]]; then
+      echo "invalid initial sticky disk usage: $initial_usage_bytes" >&2
+      exit 2
+    fi
+    current_usage_bytes() {
+      df -B1 --output=used "$sticky_root" | tail -n1 | tr -d '[:space:]'
+    }
+    allocation_delta() {
+      local current="$1"
+      if [[ "$current" -ge "$initial_usage_bytes" ]]; then
+        echo $((current - initial_usage_bytes))
+      else
+        echo $((initial_usage_bytes - current))
+      fi
+    }
+
+    # The pinned StickyDisk action commits only when the absolute whole-disk
+    # allocation delta exceeds 4096 bytes. Measure against the same baseline
+    # after store pruning, then leave a 64 KiB margin for its post phase.
+    target_delta_bytes=65536
+    max_sentinel_bytes=1048576
+    current="$(current_usage_bytes)"
+    if [[ ! "$current" =~ ^[0-9]+$ ]] || [[ "$current" -le 0 ]]; then
+      echo "could not read current sticky disk usage" >&2
+      exit 1
+    fi
+    delta="$(allocation_delta "$current")"
+    if [[ "$delta" -le "$target_delta_bytes" ]] &&
+      [[ -f "$force_commit_sentinel" ]] &&
+      [[ "$(stat -c %s "$force_commit_sentinel")" -ge "$max_sentinel_bytes" ]]; then
+      : >"$force_commit_sentinel"
+      sync
+      current="$(current_usage_bytes)"
+      delta="$(allocation_delta "$current")"
+    fi
+    for _ in 1 2 3; do
+      if [[ "$delta" -gt "$target_delta_bytes" ]]; then
+        echo "Sticky dependency rebuild changed allocation by ${delta} bytes"
+        exit 0
+      fi
+      bytes_needed=$((initial_usage_bytes + target_delta_bytes + 4096 - current))
+      blocks_needed=$(((bytes_needed + 4095) / 4096))
+      if [[ "$blocks_needed" -lt 1 ]]; then
+        blocks_needed=1
+      fi
+      dd if=/dev/zero bs=4096 count="$blocks_needed" status=none >>"$force_commit_sentinel"
+      sync
+      current="$(current_usage_bytes)"
+      delta="$(allocation_delta "$current")"
+    done
+    echo "could not force a detectable sticky disk allocation change (delta: ${delta} bytes)" >&2
+    exit 1
     ;;
   *)
     echo "unsupported sticky importer mode: $mode" >&2

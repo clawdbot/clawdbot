@@ -871,13 +871,14 @@ vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
   resolvePinnedMainDmOwnerFromAllowlist: () => mockedPinnedMainDmOwner,
 }));
 
-vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => {
-  const isMockRecord = (value: unknown): value is Record<string, unknown> =>
-    typeof value === "object" && value !== null && !Array.isArray(value);
+vi.mock("openclaw/plugin-sdk/string-coerce-runtime", async (importOriginal) => {
+  const { asOptionalRecord, isRecord } =
+    await importOriginal<typeof import("openclaw/plugin-sdk/string-coerce-runtime")>();
   const normalizeMockLowercaseString = (value?: string) => value?.toLowerCase();
   const readMockOptionalString = (value?: string) => value;
   return {
-    isRecord: isMockRecord,
+    asOptionalRecord,
+    isRecord,
     normalizeOptionalLowercaseString: normalizeMockLowercaseString,
     normalizeOptionalString: readMockOptionalString,
   };

@@ -1563,6 +1563,7 @@
     "ci:full-release": "node scripts/full-release-validation-at-sha.mjs",
     "ci:timings": "node scripts/ci-run-timings.mjs --latest-main",
     "ci:timings:recent": "node scripts/ci-run-timings.mjs --recent 10",
+    "ci:timings:trend": "node scripts/ci-run-timings.mjs --trend-hours 72 --compare-hours 12",
     "clean:dist": "node -e \"require('fs').rmSync('dist', {recursive: true, force: true})\"",
     "codex-app-server:protocol:check": "node --import tsx scripts/check-codex-app-server-protocol.ts",
     "codex-app-server:protocol:sync": "node --import tsx scripts/sync-codex-app-server-protocol.ts",

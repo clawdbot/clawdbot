@@ -84,6 +84,7 @@ import {
   detectChangedLanes,
   listChangedPathsFromGit as listChangedPathsFromGitSource,
 } from "./changed-lanes.mts";
+import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
 import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
 import { createExtensionTestProcessTargetChunks } from "./lib/extension-test-plan.mts";
 import {
@@ -2901,8 +2902,7 @@ function resolveToolingTestTargets(changedPath: string, cwd = process.cwd()) {
 }
 
 function shouldUseBroadChangedTargets(env = process.env) {
-  const value = env[BROAD_CHANGED_ENV_KEY]?.trim().toLowerCase();
-  return ["1", "true", "yes", "on"].includes(value ?? "");
+  return parsePermissiveBooleanToken(env[BROAD_CHANGED_ENV_KEY]) === true;
 }
 
 function isRoutableChangedTarget(changedPath: string) {
@@ -3153,6 +3153,11 @@ function classifyTarget(arg: string, cwd: string) {
   if (agentVitestProjectOwners.embeddedIncompleteTurn.include.includes(relative)) {
     return agentVitestProjectOwners.embeddedIncompleteTurn.kind;
   }
+  // Explicit isolation ownership wins over inferred unit-fast eligibility.
+  // Otherwise a thin wrapper can move a stateful tooling test into a shared worker.
+  if (isToolingIsolatedTestFile(relative)) {
+    return "toolingIsolated";
+  }
   if (resolveUnitFastTimerTestIncludePattern(relative)) {
     return "unitFastFakeTimers";
   }
@@ -3241,9 +3246,6 @@ function classifyTarget(arg: string, cwd: string) {
   }
   if (isBoundaryTestFile(relative)) {
     return "boundary";
-  }
-  if (isToolingIsolatedTestFile(relative)) {
-    return "toolingIsolated";
   }
   if (relative === TOOLING_DOCKER_TEST_TARGET) {
     return "toolingDocker";

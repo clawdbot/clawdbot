@@ -29,7 +29,7 @@ import { createGatewayTransportBridge } from "./server-transport-bridge.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.js";
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
-import { createReadinessChecker } from "./server/readiness.js";
+import { createReadinessChecker, createStartupChecker } from "./server/readiness.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
 type GatewayBootstrap = Awaited<ReturnType<typeof prepareGatewayServerBootstrap>>;
@@ -351,12 +351,16 @@ export async function prepareGatewayKernelState(params: {
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
   const sidecarStartup = opts.sidecarStartup ?? "start";
   const isGatewayStartupPending = () => !startupState.sidecarsReady && sidecarStartup === "start";
-  const getReadiness = createReadinessChecker({
-    channelManager,
+  const startupCheckerDeps = {
     startedAt: serverStartedAt,
     getStartupPending: isGatewayStartupPending,
     getStartupPendingReason: () => startupState.pendingReason,
     getGatewayDraining: isGatewayDraining,
+  };
+  const getStartup = createStartupChecker(startupCheckerDeps);
+  const getReadiness = createReadinessChecker({
+    channelManager,
+    ...startupCheckerDeps,
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
     shouldSkipChannelReadiness: () =>
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
@@ -407,6 +411,7 @@ export async function prepareGatewayKernelState(params: {
     logHooks,
     logPlugins,
     getReadiness,
+    getStartup,
     handleWatchNodeRequest: async (req: IncomingMessage, res: ServerResponse) =>
       (await watchNodeRequestHandler.current?.(req, res)) ?? false,
     workerIngressEnabled: Boolean(workerEnvironmentService),

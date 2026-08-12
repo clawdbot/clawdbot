@@ -2,7 +2,7 @@
 import type { Stats } from "node:fs";
 import { lstat, mkdir, rmdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { stableStringify } from "@openclaw/normalization-core";
+import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
 import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
 import { transformConfigFileWithRetry } from "../config/config.js";
@@ -312,7 +312,7 @@ export async function applyClawAddPlan(
           ? error
           : new ClawPackageInstallError(
               "package_install_failed",
-              error instanceof Error ? error.message : String(error),
+              coerceErrorMessage(error),
               packages,
             );
       const installStatus = preserveRecordedPhaseOrMarkPartial();
@@ -435,7 +435,7 @@ export async function applyClawAddPlan(
       installStatus,
       error: {
         code: error instanceof ClawBootstrapWriteError ? error.code : "bootstrap_write_failed",
-        message: error instanceof Error ? error.message : String(error),
+        message: coerceErrorMessage(error),
       },
       nowMs: options.nowMs,
     });
@@ -523,7 +523,7 @@ export async function applyClawAddPlan(
       installStatus,
       error: {
         code: error instanceof ClawAddMutationError ? error.code : "config_commit_failed",
-        message: error instanceof Error ? error.message : String(error),
+        message: coerceErrorMessage(error),
       },
       nowMs: options.nowMs,
     });
@@ -544,7 +544,7 @@ export async function applyClawAddPlan(
                 code: "workspace_file_io_error",
                 phase: "mutation",
                 path: "$.workspace",
-                message: error instanceof Error ? error.message : String(error),
+                message: coerceErrorMessage(error),
               },
             ],
             workspaceFiles,
@@ -597,11 +597,7 @@ export async function applyClawAddPlan(
     const packageError =
       error instanceof ClawPackageInstallError
         ? error
-        : new ClawPackageInstallError(
-            "package_install_failed",
-            error instanceof Error ? error.message : String(error),
-            [],
-          );
+        : new ClawPackageInstallError("package_install_failed", coerceErrorMessage(error), []);
     return partialResult({
       plan,
       installRecord,
@@ -623,11 +619,7 @@ export async function applyClawAddPlan(
     const mcpError =
       error instanceof ClawMcpInstallError
         ? error
-        : new ClawMcpInstallError(
-            "mcp_install_failed",
-            error instanceof Error ? error.message : String(error),
-            mcpServers,
-          );
+        : new ClawMcpInstallError("mcp_install_failed", coerceErrorMessage(error), mcpServers);
     markInstallStatus(plan.agent.finalId, "config_committed", ["config_committed"], options);
     return partialResult({
       plan,
@@ -650,11 +642,7 @@ export async function applyClawAddPlan(
     const cronError =
       error instanceof ClawCronInstallError
         ? error
-        : new ClawCronInstallError(
-            "cron_install_failed",
-            error instanceof Error ? error.message : String(error),
-            cronJobs,
-          );
+        : new ClawCronInstallError("cron_install_failed", coerceErrorMessage(error), cronJobs);
     markInstallStatus(plan.agent.finalId, "config_committed", ["config_committed"], options);
     return partialResult({
       plan,

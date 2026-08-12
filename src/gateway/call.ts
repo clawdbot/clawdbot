@@ -984,6 +984,11 @@ async function executeGatewayRequestWithScopes<T>(params: {
         if (settled || ignoreClose) {
           return;
         }
+        if (info?.connectError) {
+          ignoreClose = true;
+          stop(info.connectError);
+          return;
+        }
         if (
           !primaryRequestStarted &&
           info?.transientPreHelloCleanClose === true &&

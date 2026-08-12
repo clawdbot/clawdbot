@@ -136,11 +136,27 @@ function completedEvent(responseId: string, content?: string | Array<Record<stri
     typeof content === "string"
       ? [
           {
-            type: "message",
             id: `msg_${responseId}`,
-            role: "assistant",
+            type: "message",
             status: "completed",
-            content: [{ type: "output_text", text: content, annotations: [] }],
+            content: [
+              {
+                annotations: [
+                  {
+                    type: "url_citation",
+                    url: "https://example.test/source",
+                    title: "source",
+                    start_index: 0,
+                    end_index: content.length,
+                  },
+                ],
+                logprobs: [{ token: content, logprob: -0.1, bytes: [], top_logprobs: [] }],
+                text: content,
+                type: "output_text",
+              },
+            ],
+            role: "assistant",
+            phase: "final_answer",
           },
         ]
       : (content ?? []);
@@ -281,7 +297,7 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     configureAiTransportHost(initialHost);
   });
 
-  it("reuses one production-path session socket and continues with only new input", async () => {
+  it("continues past provider-only output metadata with one socket and only new input", async () => {
     transportState.responseBatches.push(
       [message(completedEvent("resp_1", "first answer"))],
       [message(completedEvent("resp_2", "second answer"))],

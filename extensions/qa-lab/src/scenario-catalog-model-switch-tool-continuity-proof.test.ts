@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { hasModelSwitchContinuitySignal } from "./model-switch-eval.js";
@@ -103,8 +104,7 @@ async function runToolContinuity(
       },
       splitModelRef,
       normalizeModelRef,
-      normalizeLowercaseStringOrEmpty: (value: unknown) =>
-        typeof value === "string" ? value.trim().toLowerCase() : "",
+      normalizeLowercaseStringOrEmpty,
       resolveQaLiveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,
       hasModelSwitchContinuitySignal,
       runAgentPrompt,

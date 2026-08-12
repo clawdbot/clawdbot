@@ -62,7 +62,10 @@ import {
 import type { SandboxWorkspaceInfo } from "../sandbox/types.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { prepareCliRunContext } from "./prepare.js";
-import { setCliRunnerPrepareTestDeps } from "./prepare.test-support.js";
+import {
+  resetCliRunnerPrepareTestDeps,
+  setCliRunnerPrepareTestDeps,
+} from "./prepare.test-support.js";
 import type { RunCliAgentParams } from "./types.js";
 
 function registerTestContextEngine(
@@ -401,6 +404,7 @@ describe("prepareCliRunContext", () => {
 
   afterEach(() => {
     cliBackendsTesting.resetDepsForTest();
+    resetCliRunnerPrepareTestDeps();
     resetCliAuthEpochTestDeps();
     getRuntimeConfigMock.mockReset();
     mockGetGlobalHookRunner.mockReset();

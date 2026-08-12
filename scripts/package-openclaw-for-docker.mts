@@ -166,7 +166,10 @@ function numericTimerValueMs(valueMs: unknown) {
   return Number.isFinite(value) ? Math.floor(value) : undefined;
 }
 
-function resolveTimerTimeoutMs(valueMs: unknown, fallbackMs: unknown = MAX_TIMER_TIMEOUT_MS) {
+function resolvePackageBuildTimeoutMs(
+  valueMs: unknown,
+  fallbackMs: unknown = MAX_TIMER_TIMEOUT_MS,
+) {
   const value = numericTimerValueMs(valueMs) ?? numericTimerValueMs(fallbackMs);
   return Math.min(Math.max(value ?? MAX_TIMER_TIMEOUT_MS, 1), MAX_TIMER_TIMEOUT_MS);
 }
@@ -175,7 +178,7 @@ function resolveOptionalTimerTimeoutMs(valueMs: unknown) {
   if (valueMs === undefined) {
     return undefined;
   }
-  return resolveTimerTimeoutMs(valueMs, 1);
+  return resolvePackageBuildTimeoutMs(valueMs, 1);
 }
 
 function readOptionValue(argv: string[], index: number, optionName: string) {
@@ -304,7 +307,7 @@ export function parseArgs(argv: string[]) {
 function run(command: string, args: string[], cwd: string, options: RunOptions = {}) {
   return new Promise<string>((resolve, reject) => {
     const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(options.timeoutMs);
-    const resolvedKillAfterMs = resolveTimerTimeoutMs(
+    const resolvedKillAfterMs = resolvePackageBuildTimeoutMs(
       options.killAfterMs,
       DEFAULT_TIMEOUT_KILL_AFTER_MS,
     );

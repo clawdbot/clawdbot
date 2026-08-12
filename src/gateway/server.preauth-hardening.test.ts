@@ -9,7 +9,11 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
-import { tryBeginGatewaySuspendAdmission } from "../process/gateway-work-admission.js";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../process/gateway-work-admission.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
@@ -43,6 +47,7 @@ const PREAUTH_HANDSHAKE_TEST_CLOSE_LIMIT_MS = 5_000;
 const cleanupEnv: Array<() => void> = [];
 
 afterEach(async () => {
+  resetGatewayWorkAdmission();
   while (cleanupEnv.length > 0) {
     cleanupEnv.pop()?.();
   }
@@ -152,6 +157,39 @@ describe("gateway pre-auth hardening", () => {
     }
   });
 
+  it("rejects worker websocket upgrades after suspension is prepared", async () => {
+    const httpServer = http.createServer();
+    const wss = new WebSocketServer({ maxPayload: 1024, noServer: true });
+    wss.on("connection", (socket) => socket.close());
+    attachWorkerGatewayUpgradeHandler({
+      httpServer,
+      wss,
+      preauthConnectionBudget: createPreauthConnectionBudget(1),
+    });
+    await new Promise<void>((resolve) => {
+      httpServer.listen(0, "127.0.0.1", resolve);
+    });
+    const address = httpServer.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+
+    try {
+      await expect(requestUpgradeRejection(port)).resolves.toEqual({
+        status: 503,
+        body: "Worker websocket admission closed",
+      });
+    } finally {
+      suspension?.release();
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("rejects upgrades before websocket handlers attach (pre-auth budget enforced, then released)", async () => {
     const clients = new Set<GatewayWsClient>();
     const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
@@ -196,10 +234,27 @@ describe("gateway pre-auth hardening", () => {
     }
   });
 
-  it("rejects core websocket upgrades while suspension admission is closed", async () => {
+  it("accepts core websocket upgrades after suspension is prepared", async () => {
     const harness = await createGatewaySuiteHarness();
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspension?.commit()).toBe(true);
+
+    try {
+      const ws = await harness.openWs();
+      await expect(readConnectChallengeNonce(ws)).resolves.toEqual(expect.any(String));
+      ws.close();
+      await new Promise<void>((resolve) => {
+        ws.once("close", () => resolve());
+      });
+    } finally {
+      suspension?.release();
+      await harness.close();
+    }
+  });
+
+  it("rejects core websocket upgrades while suspension is preparing", async () => {
+    const harness = await createGatewaySuiteHarness();
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
 
     try {
       await expect(requestUpgradeRejection(harness.port)).resolves.toEqual({
@@ -207,7 +262,21 @@ describe("gateway pre-auth hardening", () => {
         body: "Gateway websocket admission closed",
       });
     } finally {
-      suspension?.release();
+      suspension?.rollback();
+      await harness.close();
+    }
+  });
+
+  it("rejects core websocket upgrades during restart drain", async () => {
+    const harness = await createGatewaySuiteHarness();
+    markGatewayRestartDraining();
+
+    try {
+      await expect(requestUpgradeRejection(harness.port)).resolves.toEqual({
+        status: 503,
+        body: "Gateway websocket admission closed",
+      });
+    } finally {
       await harness.close();
     }
   });

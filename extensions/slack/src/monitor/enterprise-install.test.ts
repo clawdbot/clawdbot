@@ -93,16 +93,18 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
       assertEnterpriseSlackPolicyConfig({
         accountId: "org",
         config: {
-          allowFrom: ["U01234567", "slack:W01234567", "user:U12345678"],
-          dm: { groupChannels: ["G01234567", "channel:G12345678"] },
+          allowFrom: ["team:T01234567:user:U01234567"],
+          dm: {
+            groupChannels: ["team:T01234567:channel:G01234567"],
+          },
           mentionPatterns: {
             mode: "allow",
             allowIn: ["team:T01234567:channel:C01234567"],
             denyIn: ["team:T12345678:channel:C12345678"],
           },
           channels: {
-            C01234567: {
-              users: ["U01234567", "slack:W01234567", "user:U12345678"],
+            "team:T01234567:channel:C01234567": {
+              users: ["team:T01234567:user:U01234567", "team:T01234567:user:B01234567"],
               toolsBySender: {
                 U01234567: {},
                 "id:W01234567": {},
@@ -110,9 +112,11 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
                 "*": {},
               },
             },
-            "channel:C12345678": {},
+            "team:T12345678:channel:C12345678": {},
             "*": {},
           },
+          reactionNotifications: "allowlist",
+          reactionAllowlist: ["team:T01234567:user:U01234567"],
         },
       }),
     ).not.toThrow();
@@ -137,6 +141,25 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
         config: { dangerouslyAllowNameMatching: true },
       }),
     ).toThrow(/cannot use dangerouslyAllowNameMatching/);
+  });
+
+  it.each<[string, SlackAccountConfig]>([
+    ["channel ID", { channels: { C01234567: {} } }],
+    ["allowFrom user ID", { allowFrom: ["U01234567"] }],
+    ["group DM channel ID", { dm: { groupChannels: ["G01234567"] } }],
+    ["reaction user ID", { reactionNotifications: "allowlist", reactionAllowlist: ["U01234567"] }],
+    [
+      "per-channel user ID",
+      {
+        channels: {
+          "team:T01234567:channel:C01234567": { users: ["U01234567"] },
+        },
+      },
+    ],
+  ])("rejects unscoped Enterprise %s", (_label, config) => {
+    expect(() => assertEnterpriseSlackPolicyConfig({ accountId: "org", config })).toThrow(
+      /Slack Enterprise Grid/,
+    );
   });
 
   it.each<[string, SlackAccountConfig]>([
@@ -191,7 +214,7 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
           accountId: "org",
           config: {
             channels: {
-              C01234567: {
+              "team:T01234567:channel:C01234567": {
                 toolsBySender: {
                   [entry]: { deny: ["exec"] },
                   "*": { allow: ["exec"] },

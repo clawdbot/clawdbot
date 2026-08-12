@@ -11,6 +11,7 @@ import {
   type RetainedMemoryMetrics,
   type WorkerResult,
 } from "./bench-task-registry-sqlite.js";
+import { classifyBoundedUnsignedDecimal } from "./lib/arg-utils.mts";
 
 type WorkerOptions = {
   size: number;
@@ -44,14 +45,14 @@ type TaskRegistryQueryApi = Pick<
 >;
 
 function parseInteger(raw: string | undefined, flag: string, min: number, max: number): number {
-  if (!raw || !/^\d+$/u.test(raw)) {
+  const result = classifyBoundedUnsignedDecimal(raw, min, max);
+  if (result.kind === "syntax") {
     throw new Error(`${flag} must be an integer`);
   }
-  const value = Number(raw);
-  if (value < min || value > max) {
+  if (result.kind !== "value") {
     throw new Error(`${flag} must be between ${min} and ${max}`);
   }
-  return value;
+  return result.value;
 }
 
 function parseOptions(argv: string[]): WorkerOptions {
