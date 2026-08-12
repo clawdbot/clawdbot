@@ -17,6 +17,7 @@ import {
   type OpenAIRealtimeVoiceBridgeConfig,
   type RealtimeAzureDeploymentSessionUpdate,
   type RealtimeGaSessionUpdate,
+  type RealtimeTurnDetectionConfig,
 } from "./realtime-voice-session-policy.js";
 
 export abstract class OpenAIRealtimeProtocol {

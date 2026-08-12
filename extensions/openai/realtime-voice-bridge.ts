@@ -9,6 +9,7 @@ import {
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceSessionConnection,
+  RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { RealtimeVoiceSessionLifecycle } from "openclaw/plugin-sdk/realtime-voice";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";

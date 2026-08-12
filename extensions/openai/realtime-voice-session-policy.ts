@@ -182,9 +182,7 @@ export type RealtimeTurnDetectionConfig = {
   interrupt_response?: boolean;
 };
 
-export type OpenAIRealtimePolicy = RealtimeGaSessionPolicy;
-
-export type RealtimeGaSessionPolicy = {
+type RealtimeGaSessionPolicy = {
   type: "realtime";
   model: string;
   instructions?: string;
@@ -227,7 +225,7 @@ export type RealtimeAzureDeploymentSessionUpdate = {
   };
 };
 
-export type OpenAIRealtimeAudioFormatConfig =
+type OpenAIRealtimeAudioFormatConfig =
   | {
       type: "audio/pcm";
       rate: 24000;
@@ -277,9 +275,9 @@ type OpenAIRealtimeApiKeyResolution =
 
 export const OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED =
   "OpenAI Realtime voice requires an OpenAI Platform API key";
-export const OPENAI_GPT_LIVE_AUTH_REQUIRED =
+const OPENAI_GPT_LIVE_AUTH_REQUIRED =
   "GPT-Live Talk requires either an OpenAI Platform API key or a ChatGPT OAuth subscription profile";
-export const OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE =
+const OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE =
   "GPT-Live Talk requires a working OpenAI Platform API key or ChatGPT OAuth subscription profile. The selected Platform API-key source could not be resolved, so OAuth fallback was not used; fix or remove it.";
 export const OPENAI_REALTIME_API_KEY_REQUIRED = "OpenAI Realtime voice requires an API key";
 export const OPENAI_REALTIME_CONFIGURED_API_KEY_REJECTED =
@@ -438,7 +436,7 @@ export function normalizeOpenAIRealtimeTools(
   return normalized.length > 0 ? normalized : undefined;
 }
 
-export function resolveOpenAIRealtimeAudioFormat(
+function resolveOpenAIRealtimeAudioFormat(
   audioFormat: RealtimeVoiceAudioFormat = REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
 ): OpenAIRealtimeAudioFormatConfig {
   return audioFormat.encoding === "pcm16"
