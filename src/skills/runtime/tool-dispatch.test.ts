@@ -144,6 +144,34 @@ describe("resolveSkillDispatchTools", () => {
     });
   });
 
+  it("applies a provider coding profile to optional tools discovered by global full", () => {
+    const requiredPluginTool = hoisted.makeTool("required_plugin_tool");
+    const optionalPluginTool = hoisted.makeTool("optional_plugin_tool");
+    setPluginToolMeta(requiredPluginTool, { pluginId: "proof", optional: false });
+    setPluginToolMeta(optionalPluginTool, { pluginId: "proof", optional: true });
+    hoisted.createOpenClawToolsMock.mockReturnValueOnce([requiredPluginTool, optionalPluginTool]);
+
+    const tools = resolveSkillDispatchTools({
+      message: { surface: "telegram", senderId: "user-1" },
+      cfg: {
+        tools: {
+          profile: "full",
+          byProvider: { openai: { profile: "coding" } },
+        },
+      } as OpenClawConfig,
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:user-1",
+      workspaceDir: "/tmp/openclaw-skill-tool-dispatch-test",
+      provider: "openai",
+      model: "gpt-5.5",
+      senderIsOwner: true,
+    });
+
+    const args = hoisted.createOpenClawToolsMock.mock.calls.at(-1)?.[0];
+    expect(args?.pluginToolAllowlist).toEqual(["*"]);
+    expect(tools.map((tool) => tool.name)).toEqual(["required_plugin_tool"]);
+  });
+
   it("keeps required plugin tools out of minimal skill dispatch", () => {
     const pluginTool = hoisted.makeTool("required_plugin_tool");
     setPluginToolMeta(pluginTool, { pluginId: "required-plugin", optional: false });

@@ -1,4 +1,5 @@
 import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
+import { resolvePluginToolProfileMode } from "./plugin-tool-profile.js";
 import { collectExplicitAllowlist } from "./tool-policy.js";
 
 /**
@@ -11,8 +12,10 @@ export function resolvePluginToolDiscoveryAllowlist(
 ): string[] {
   const { policy } = capabilityProfile;
   return collectExplicitAllowlist([
-    policy.profile === "full" ? policy.profilePolicy : undefined,
-    policy.providerProfile === "full" ? policy.providerProfilePolicy : undefined,
+    resolvePluginToolProfileMode(policy.profile) === "all" ? policy.profilePolicy : undefined,
+    resolvePluginToolProfileMode(policy.providerProfile) === "all"
+      ? policy.providerProfilePolicy
+      : undefined,
     { allow: policy.explicitToolOverrideAllowlist },
     policy.inheritedToolPolicy,
   ]);

@@ -3,6 +3,7 @@
  * Verifies built-in profile allowlists include expected core tool groups.
  */
 import { describe, expect, it } from "vitest";
+import { resolvePluginToolProfileMode } from "./plugin-tool-profile.js";
 import {
   listCoreToolSections,
   resolveCoreToolProfilePolicy,
@@ -114,5 +115,9 @@ describe("tool-catalog", () => {
     expect(toolProfileAllowsDefaultPluginTools("coding")).toBe(true);
     expect(toolProfileAllowsDefaultPluginTools("messaging")).toBe(true);
     expect(toolProfileAllowsDefaultPluginTools("full")).toBe(true);
+    expect(resolvePluginToolProfileMode("minimal")).toBe("none");
+    expect(resolvePluginToolProfileMode("coding")).toBe("required");
+    expect(resolvePluginToolProfileMode("messaging")).toBe("required");
+    expect(resolvePluginToolProfileMode("full")).toBe("all");
   });
 });

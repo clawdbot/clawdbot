@@ -5,7 +5,8 @@
  */
 import { filterToolsByPolicy } from "./agent-tools.policy.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { isKnownCoreToolId, toolProfileAllowsDefaultPluginTools } from "./tool-catalog.js";
+import { resolvePluginToolProfileMode, type PluginToolProfileMode } from "./plugin-tool-profile.js";
+import { isKnownCoreToolId } from "./tool-catalog.js";
 import { auditToolPolicyFilter, type ToolPolicyAuditLogLevel } from "./tool-policy-audit.js";
 import {
   analyzeAllowlistByToolType,
@@ -39,12 +40,19 @@ function rememberToolPolicyWarning(warning: string): boolean {
 export type ToolPolicyPipelineStep = {
   policy: ToolPolicyLike | undefined;
   label: string;
-  preservePluginTools?: boolean;
+  preservePluginTools?: Exclude<PluginToolProfileMode, "none">;
   stripPluginOnlyAllowlist?: boolean;
   suppressUnavailableCoreToolWarning?: boolean;
   suppressUnavailableCoreToolWarningAllowlist?: string[];
   unavailableCoreToolReason?: string;
 };
+
+function resolvePreservedPluginToolMode(
+  profile: string | undefined,
+): Exclude<PluginToolProfileMode, "none"> | undefined {
+  const mode = resolvePluginToolProfileMode(profile);
+  return mode === "none" ? undefined : mode;
+}
 
 /** One policy application, exposed for diagnostics that need exclusion provenance. */
 export type ToolPolicyFilterEvent<TTool extends { name: string } = AnyAgentTool> = {
@@ -79,7 +87,7 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
     {
       policy: params.profilePolicy,
       label: profile ? `tools.profile (${profile})` : "tools.profile",
-      preservePluginTools: toolProfileAllowsDefaultPluginTools(profile),
+      preservePluginTools: resolvePreservedPluginToolMode(profile),
       stripPluginOnlyAllowlist: true,
       suppressUnavailableCoreToolWarningAllowlist: params.profileUnavailableCoreWarningAllowlist,
       unavailableCoreToolReason,
@@ -89,7 +97,7 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
       label: providerProfile
         ? `tools.byProvider.profile (${providerProfile})`
         : "tools.byProvider.profile",
-      preservePluginTools: toolProfileAllowsDefaultPluginTools(providerProfile),
+      preservePluginTools: resolvePreservedPluginToolMode(providerProfile),
       stripPluginOnlyAllowlist: true,
       suppressUnavailableCoreToolWarningAllowlist:
         params.providerProfileUnavailableCoreWarningAllowlist,
@@ -137,16 +145,23 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
 /** Applies configured policy layers to a tool list and emits deduped warnings/audit events. */
 export function applyToolPolicyPipeline<TTool extends { name: string }>(params: {
   tools: TTool[];
-  toolMeta: (tool: TTool) => { pluginId: string } | undefined;
+  toolMeta: (tool: TTool) => { pluginId: string; optional?: boolean } | undefined;
   warn: (message: string) => void;
   steps: ToolPolicyPipelineStep[];
   auditLogLevel?: ToolPolicyAuditLogLevel;
   declaredToolAllowlist?: DeclaredToolAllowlistContext;
   onFilter?: (event: ToolPolicyFilterEvent<TTool>) => void;
 }): TTool[] {
+  const requiredPluginToolNames = new Set<string>();
   const coreToolNames = new Set(
     params.tools
-      .filter((tool) => !params.toolMeta(tool))
+      .filter((tool) => {
+        const meta = params.toolMeta(tool);
+        if (meta && meta.optional !== true) {
+          requiredPluginToolNames.add(normalizeToolPolicyName(tool.name));
+        }
+        return !meta;
+      })
       .map((tool) => normalizeToolPolicyName(tool.name))
       .filter(Boolean),
   );
@@ -213,9 +228,15 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
     if (!expanded) {
       continue;
     }
+    const preservedPluginToolNames =
+      step.preservePluginTools === "all"
+        ? pluginGroups.all
+        : step.preservePluginTools === "required"
+          ? [...requiredPluginToolNames]
+          : [];
     const effectivePolicy =
-      step.preservePluginTools && expanded.allow
-        ? { ...expanded, allow: [...expanded.allow, ...pluginGroups.all] }
+      preservedPluginToolNames.length > 0 && expanded.allow
+        ? { ...expanded, allow: [...expanded.allow, ...preservedPluginToolNames] }
         : expanded;
     const before = filtered;
     filtered = filterToolsByPolicy(before, effectivePolicy);

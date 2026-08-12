@@ -1,3 +1,4 @@
+import { resolvePluginToolProfileMode } from "./plugin-tool-profile.js";
 /**
  * Core tool catalog and profile defaults.
  * Drives built-in profile allowlists, group expansion, and UI section metadata
@@ -505,8 +506,6 @@ const CORE_TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
   },
 };
 
-const DEFAULT_PLUGIN_TOOL_PROFILES = new Set<ToolProfileId>(["coding", "messaging", "full"]);
-
 function buildCoreToolGroupMap() {
   const sectionToolMap = new Map<string, string[]>();
   for (const tool of CORE_TOOL_DEFINITIONS) {
@@ -555,7 +554,7 @@ export function resolveCoreToolProfilePolicy(profile?: string): ToolProfilePolic
 
 /** Returns whether a built-in profile includes required plugin tools by default. */
 export function toolProfileAllowsDefaultPluginTools(profile?: string): boolean {
-  return Boolean(profile && DEFAULT_PLUGIN_TOOL_PROFILES.has(profile as ToolProfileId));
+  return resolvePluginToolProfileMode(profile) !== "none";
 }
 
 /** Lists core tools grouped into UI sections. */

@@ -115,6 +115,35 @@ describe("tool-policy-pipeline", () => {
     expect(filtered.map((tool) => tool.name)).toEqual(["session_status"]);
   });
 
+  test("provider coding profiles remove optional tools discovered by global full", () => {
+    const tools = [
+      { name: "exec" },
+      { name: "required_plugin_tool" },
+      { name: "optional_plugin_tool" },
+    ] as unknown as DummyTool[];
+    const filtered = applyToolPolicyPipeline({
+      tools: asPolicyTools(tools),
+      toolMeta: (tool) => {
+        if (tool.name === "required_plugin_tool") {
+          return { pluginId: "proof", optional: false };
+        }
+        if (tool.name === "optional_plugin_tool") {
+          return { pluginId: "proof", optional: true };
+        }
+        return undefined;
+      },
+      warn: () => {},
+      steps: buildDefaultToolPolicyPipelineSteps({
+        profile: "full",
+        profilePolicy: { allow: ["*"] },
+        providerProfile: "coding",
+        providerProfilePolicy: { allow: ["exec"] },
+      }),
+    });
+
+    expect(filtered.map((tool) => tool.name)).toEqual(["exec", "required_plugin_tool"]);
+  });
+
   test("explicit policies can still restrict plugin tools after a profile", () => {
     const tools = [{ name: "exec" }, { name: "plugin_tool" }] as unknown as DummyTool[];
     const filtered = applyToolPolicyPipeline({

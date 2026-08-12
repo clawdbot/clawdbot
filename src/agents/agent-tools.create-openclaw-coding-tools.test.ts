@@ -28,10 +28,11 @@ import {
   registerMemoryCapability,
   type MemoryFlushPlan,
 } from "../plugins/memory-state.js";
+import { isPluginToolAllowed } from "../plugins/tool-grant-allowlist.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
-import { isPluginToolAllowed } from "../plugins/tool-grant-allowlist.js";
+import { setPluginToolMeta } from "../plugins/tools.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { filterToolsByMessageProvider } from "./agent-tools.message-provider-policy.js";
@@ -636,6 +637,29 @@ describe("createOpenClawCodingTools", () => {
     });
 
     expect(latestCreateOpenClawToolsOptions().pluginToolAllowlist).toEqual(["*"]);
+  });
+
+  it("applies a provider coding profile to optional tools discovered by global full", () => {
+    const requiredPluginTool = stubTool("required_plugin_tool");
+    const optionalPluginTool = stubTool("optional_plugin_tool");
+    setPluginToolMeta(requiredPluginTool, { pluginId: "proof", optional: false });
+    setPluginToolMeta(optionalPluginTool, { pluginId: "proof", optional: true });
+    vi.mocked(createOpenClawTools).mockReturnValueOnce([requiredPluginTool, optionalPluginTool]);
+
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          profile: "full",
+          byProvider: { openai: { profile: "coding" } },
+        },
+      },
+      modelProvider: "openai",
+      modelId: "gpt-5.5",
+    });
+
+    expect(latestCreateOpenClawToolsOptions().pluginToolAllowlist).toEqual(["*"]);
+    expect(tools.map((tool) => tool.name)).toContain("required_plugin_tool");
+    expect(tools.map((tool) => tool.name)).not.toContain("optional_plugin_tool");
   });
 
   it("does not inherit native-harness bridge runtime allowlists", () => {
