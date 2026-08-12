@@ -270,6 +270,59 @@ describe("executeFollowupTurn", () => {
     },
   );
 
+  it("routes a queued verbose-off preamble to the draft commentary owner", async () => {
+    const onItemEvent = vi.fn(async () => true as const);
+    let preambleVisible: boolean | void = false;
+    let toolVisible: boolean | void = true;
+    const turn = createTurn({
+      session: {
+        kind: "session",
+        key: "main",
+        current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "off" }),
+        publish: () => undefined,
+        adopt: () => undefined,
+      },
+    });
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      expect(params.opts?.commentaryPayloadsEnabled).toBe(false);
+      preambleVisible = await params.opts?.onItemEvent?.({
+        kind: "preamble",
+        progressText: "Checking the queued request",
+      });
+      toolVisible = await params.opts?.onItemEvent?.({
+        kind: "tool",
+        progressText: "running exec",
+      });
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+
+    const result = await executeFollowupTurn({
+      turn,
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+        opts: {
+          commentaryPayloadsEnabled: true,
+          shouldDeliverCommentaryPayloads: () => false,
+          onItemEvent,
+        },
+      },
+      onToolResult: vi.fn(async () => {}),
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+    await result.progress.drain();
+
+    expect(result.commentaryPayloadsEnabled).toBe(false);
+    expect(preambleVisible).toBe(true);
+    expect(toolVisible).toBe(false);
+    expect(onItemEvent).toHaveBeenCalledOnce();
+    expect(onItemEvent).toHaveBeenCalledWith({
+      kind: "preamble",
+      progressText: "Checking the queued request",
+    });
+  });
+
   it("keeps room-event progress, tool summaries, and typing silent", async () => {
     const turn = createTurn({
       queued: { ...createTurn().queued, currentInboundEventKind: "room_event" },

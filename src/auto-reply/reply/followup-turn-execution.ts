@@ -225,7 +225,10 @@ export async function executeFollowupTurn(params: {
     onItemEvent: sourceOpts?.onItemEvent
       ? (item) =>
           enqueueProgressResult(async () => {
-            if (!shouldEmitToolResult()) {
+            // When durable commentary yields, the channel draft owns queued preambles.
+            const draftOwnsPreamble =
+              progressAllowed() && item.kind === "preamble" && !commentaryPayloadsEnabled;
+            if (!draftOwnsPreamble && !shouldEmitToolResult()) {
               return false;
             }
             const visible = (
