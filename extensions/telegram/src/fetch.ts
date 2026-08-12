@@ -26,6 +26,7 @@ import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Agent, fetch as undiciFetch } from "undici";
+import telegramPackageJson from "../package.json" with { type: "json" };
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import {
   resolveTelegramAutoSelectFamilyDecision,
@@ -55,6 +56,11 @@ const TELEGRAM_STICKY_FALLBACK_PRIMARY_PROBE_SUCCESS_THRESHOLD = 5;
 const TELEGRAM_TRANSPORT_ATTEMPT_FAILURE_THRESHOLD = 5;
 const TELEGRAM_TRANSPORT_ATTEMPT_INITIAL_COOLDOWN_MS = 10_000;
 const TELEGRAM_TRANSPORT_ATTEMPT_MAX_COOLDOWN_MS = 60_000;
+const TELEGRAM_PLUGIN_VERSION =
+  typeof telegramPackageJson.version === "string" && telegramPackageJson.version.trim().length > 0
+    ? telegramPackageJson.version.trim()
+    : "unknown";
+const TELEGRAM_BOT_USER_AGENT = `OpenClawBot/${TELEGRAM_PLUGIN_VERSION}`;
 
 type TelegramAgentPoolOptions = {
   allowH2: false;
@@ -557,6 +563,31 @@ async function destroyOwnedDispatchers(dispatchers: Iterable<TelegramDispatcher>
   );
 }
 
+function headersFromRequestInput(input: RequestInfo | URL): HeadersInit | undefined {
+  if (typeof Request !== "function" || !(input instanceof Request)) {
+    return undefined;
+  }
+  return input.headers;
+}
+
+function withTelegramUserAgent(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): RequestInitWithDispatcher {
+  const nextInit = { ...init } as RequestInitWithDispatcher;
+  const headers = new Headers(init?.headers ?? headersFromRequestInput(input));
+  if (!headers.has("User-Agent")) {
+    headers.set("User-Agent", TELEGRAM_BOT_USER_AGENT);
+  }
+  nextInit.headers = headers;
+  return nextInit;
+}
+
+function wrapTelegramUserAgentFetch(sourceFetch: typeof fetch): typeof fetch {
+  return ((input: RequestInfo | URL, init?: RequestInit) =>
+    sourceFetch(input, withTelegramUserAgent(input, init))) as typeof fetch;
+}
+
 export function resolveTelegramTransport(
   proxyFetch?: typeof fetch,
   options?: { network?: TelegramNetworkConfig },
@@ -586,11 +617,12 @@ export function resolveTelegramTransport(
     !effectiveProxyFetch && !hasEnvProxy ? resolveOpenClawProxyUrlForTelegram() : undefined;
   const resolvedExplicitProxyUrl = explicitProxyUrl ?? managedProxyUrl;
   const undiciSourceFetch = resolveWrappedFetch(undiciFetch as unknown as typeof fetch);
-  const sourceFetch = resolvedExplicitProxyUrl
+  const rawSourceFetch = resolvedExplicitProxyUrl
     ? undiciSourceFetch
     : effectiveProxyFetch
       ? resolveWrappedFetch(effectiveProxyFetch)
       : undiciSourceFetch;
+  const sourceFetch = wrapTelegramUserAgentFetch(rawSourceFetch);
   const dnsResultOrder = normalizeDnsResultOrder(dnsDecision.value);
   if (effectiveProxyFetch && !explicitProxyUrl) {
     // The caller owns the underlying dispatcher lifecycle; nothing to close here.
@@ -758,13 +790,14 @@ export function resolveTelegramTransport(
     let err: unknown;
 
     if (callerProvidedDispatcher) {
+      const requestInit = withTelegramUserAgent(input, init);
       try {
-        const response = await sourceFetch(input, init);
+        const response = await rawSourceFetch(input, requestInit);
         captureHttpExchange({
           url: resolveRequestUrl(input),
-          method: init?.method ?? "GET",
-          requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
-          requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
+          method: requestInit.method ?? "GET",
+          requestHeaders: requestInit.headers as Headers | Record<string, string> | undefined,
+          requestBody: requestInit.body ?? null,
           response,
           flowId: randomUUID(),
           meta: { subsystem: "telegram-fetch" },
@@ -774,7 +807,7 @@ export function resolveTelegramTransport(
         if (!shouldUseTelegramTransportFallback(caught)) {
           throw caught;
         }
-        return sourceFetch(input, init ?? {});
+        return rawSourceFetch(input, requestInit);
       }
     }
 
@@ -796,15 +829,16 @@ export function resolveTelegramTransport(
         continue;
       }
       try {
-        const response = await sourceFetch(
-          input,
-          withDispatcherIfMissing(init, attempt.createDispatcher()),
+        const requestInit = withDispatcherIfMissing(
+          withTelegramUserAgent(input, init),
+          attempt.createDispatcher(),
         );
+        const response = await rawSourceFetch(input, requestInit);
         captureHttpExchange({
           url: resolveRequestUrl(input),
-          method: init?.method ?? "GET",
-          requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
-          requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
+          method: requestInit.method ?? "GET",
+          requestHeaders: requestInit.headers as Headers | Record<string, string> | undefined,
+          requestBody: requestInit.body ?? null,
           response,
           flowId: randomUUID(),
           meta:
