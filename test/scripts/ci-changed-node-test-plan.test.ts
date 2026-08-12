@@ -78,9 +78,11 @@ describe("CI changed Node test plan", () => {
     expect(hasBuildArtifactAffectingChange(["src/agents/foo.test.ts", "test/helpers/x.ts"])).toBe(
       false,
     );
-    expect(hasBuildArtifactAffectingChange(["src/gateway/server.auth.control-ui.suite.ts"])).toBe(
-      false,
-    );
+    expect(
+      hasBuildArtifactAffectingChange([
+        "src/gateway/server.auth.control-ui.trusted-proxy.suite.ts",
+      ]),
+    ).toBe(false);
     expect(hasBuildArtifactAffectingChange(["src/agents/foo.ts"])).toBe(true);
     // Build-input classification: only sources and the build pipeline can
     // change dist bytes; repo scripts, workflows, and qa scenarios cannot.
