@@ -30,7 +30,7 @@ new directory taxonomy.
 | Area            | Prefer                                                                         | Notes                                                                                                              |
 | --------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
 | Build           | `pnpm build`                                                                   | Runs `scripts/build-all.mts`; use specific build scripts only when debugging a build stage.                        |
-| Changed checks  | `pnpm changed:lanes --json`, `pnpm check:changed`                              | Lane classification lives in `scripts/changed-lanes.mjs`; changed-file checks live in `scripts/check-changed.mjs`. |
+| Changed checks  | `pnpm changed:lanes --json`, `pnpm check:changed`                              | Lane classification lives in `scripts/changed-lanes.mjs`; changed-file checks live in `scripts/check-changed.mjs`; exact native `tsgo`/`tsgolint` work may reuse changed-check evidence receipts. |
 | Docs            | `pnpm docs:list`, `pnpm docs:check-mdx`, `pnpm docs:check-links`               | Backed by `scripts/docs-list.js`, `scripts/check-docs-mdx.mjs`, and `scripts/docs-link-audit.mjs`.                 |
 | Formatting docs | `pnpm format:docs:check`                                                       | Uses `scripts/format-docs.mts`; use write mode only when intentionally formatting docs.                            |
 | Lint            | `pnpm lint`, `pnpm lint:core`, `pnpm lint:all`                                 | Wrapper scripts keep oxlint behavior aligned with repo config.                                                     |
@@ -48,7 +48,9 @@ new directory taxonomy.
 - `check-*.mts` / `check-*.ts` / retained `check-*.mjs`: guardrails for architecture, docs, package
   contents, boundaries, workflows, and generated artifacts.
 - `run-*.mjs` / `run-*.mts`: stable wrappers and typed implementations for Node, Vitest,
-  oxlint, tsgo, and environment setup.
+  oxlint, tsgo, and environment setup. `run-tsgo` and `run-oxlint` write native
+  tool proof markers only after the native tool actually exits 0; sparse or
+  no-target exits are not reusable evidence.
 - `test-*.mts` / retained `test-*.mjs` / `test-*.sh` / `test-*.ts`: test planners, Docker lanes, live
   checks, and focused validation helpers.
 - `docs-*` and `check-docs-*`: docs listing, link auditing, MDX checks,

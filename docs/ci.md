@@ -276,6 +276,13 @@ pnpm test:extensions:memory -- --json .artifacts/openclaw-performance/source/moc
 pnpm perf:kova:summary --report .artifacts/kova/reports/mock-provider/report.json --output .artifacts/kova/summary.md
 ```
 
+`pnpm check:changed` also performs exact-target evidence reuse for native
+`tsgo` and `tsgolint` work through changed-check evidence receipts. Reuse is
+stricter than CI cache restore: the receipt must match the current repo
+identity, refs, changed paths, lane plan, command, effective env, wrapper
+inputs, toolchain/runtime, and config closure. Use `--dry-run` to see the
+evidence SHA or force-fresh/no-reuse reason without launching heavy children.
+
 ## OpenClaw Performance
 
 `OpenClaw Performance` is the product/runtime performance workflow. It runs daily on `main` and can be dispatched manually:
@@ -702,6 +709,12 @@ Local changed-lane logic lives in `scripts/changed-lanes.mjs` and is executed by
 - public Plugin SDK or plugin-contract changes expand to extension typecheck because extensions depend on those core contracts (Vitest extension sweeps stay explicit test work);
 - release metadata-only version bumps run targeted version/config/root-dependency checks;
 - unknown root/config changes fail safe to all check lanes.
+
+Affected lanes are sufficient for changed-check evidence reuse only when every
+path is classified without `lanes.all`, refs resolve, sparse inputs are
+present, and every current required command is either run or exactly proven.
+`tsBuildInfo` files remain TypeScript compiler cache only and are never treated
+as a passed changed-check receipt.
 
 Local changed-test routing lives in `scripts/test-projects.test-support.mts` and is intentionally cheaper than `check:changed`: direct test edits run themselves, source edits prefer explicit mappings, then sibling tests and import-graph dependents. Shared group-room delivery config is one of the explicit mappings: changes to the group visible-reply config, source reply delivery mode, or the message-tool system prompt route through the core reply tests plus Discord and Slack delivery regressions so a shared default change fails before the first PR push. Use `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` only when the change is harness-wide enough that the cheap mapped set is not a trustworthy proxy.
 

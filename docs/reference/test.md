@@ -90,11 +90,37 @@ Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` sum
 | `pnpm changed:lanes`                              | Shows the architectural lanes triggered by the diff against `origin/main`.                                                                                                                                                                                                                                                                                      |
 | `pnpm check:changed`                              | Classifies the changed lanes before choosing execution. Docs-only, no-change, and small metadata plans stay local when dependencies are ready; plans with typecheck/lint fan-out, other heavy lanes, or missing local dependencies delegate to Crabbox/Testbox outside CI. Does not run Vitest; use `pnpm test:changed` or `pnpm test <target>` for test proof. |
 
-### `check:changed` proof reuse
+### `check:changed` evidence receipts
 
-`pnpm check:changed --proof-reuse` enables exact-fingerprint reuse for native `tsgo` and `tsgolint` wrapper proofs. Receipts are written under `.artifacts/check-changed-receipts` by default; use `--proof-receipt-dir <dir>` for isolated benchmark or CI experiments.
+`pnpm check:changed` writes changed-check evidence receipts for exact native
+`tsgo` and `tsgolint` targets and reuses them by default. Use `--no-reuse` or
+`--force-fresh` to rerun while still writing new receipts. Receipts live under
+`.artifacts/check-changed-receipts` by default; use `--proof-receipt-dir <dir>`
+for isolated benchmark or CI experiments.
 
-Reuse is deliberately narrow. A receipt is reusable only when it is schema-valid, `status=passed`, `exitCode=0`, `ranTool=true`, uses the same command family, and matches the current base/head, Git head/tree, changed paths, lane plan, command argv, selected resource env, package digest, wrapper identity, effective wrapper argv, and config digests. Sparse-checkout skips and no-target lint exits are recorded as `status=skipped` with `ranTool=false`; they are telemetry, not proof.
+Reuse is deliberately narrow. A receipt is reusable only when it is schema-valid,
+`status=passed`, `exitCode=0`, `ranTool=true`, uses the same command family, and
+matches the current repo identity, base/head, merge-base, Git head/tree, changed
+paths, changed path content states, lane plan, command argv, selected resource
+env, package and lockfile digests, wrapper/helper identity, effective wrapper
+argv, runtime/toolchain facts, and TypeScript/oxlint config closure digests.
+Sparse-checkout skips and no-target lint exits are non-reusable telemetry, not
+proof. A `tsgo` receipt never proves `tsgolint`/oxlint, and incremental
+`tsBuildInfo` files remain only the compiler cache; they are never evidence that
+a changed-check lane passed.
+
+`--dry-run` prints the exact-target evidence reuse decision beside each
+evidence-capable planned command, including the evidence SHA path when reusable
+and the force-fresh/no-reuse reason when it must rerun. Plans that hit
+`lanes.all`, unresolved refs, unknown root/toolchain changes, sparse missing
+inputs, or any malformed/partial/failed receipt fail closed to the current full
+plan.
+
+A Rust helper was evaluated for this owner boundary and rejected: it would not
+replace or accelerate the native `tsgo`/`tsgolint` work that dominates runtime
+and memory, while the existing TypeScript wrapper overhead is only a small
+launcher cost. Keep durable optimization work in the existing TypeScript script
+owner unless a future change removes native tool cost itself.
 
 Benchmark the cold/warm path with:
 
