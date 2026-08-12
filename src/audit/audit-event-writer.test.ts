@@ -19,6 +19,11 @@ import {
   processExecutionIdentityAdmissionWork,
 } from "./execution-identity-context.js";
 
+function defineObjectPrototypeProperties(descriptors: PropertyDescriptorMap): void {
+  // oxlint-disable-next-line no-extend-native -- Exercise hostile prototype pollution across the real worker boundary.
+  Object.defineProperties(Object.prototype, descriptors);
+}
+
 function captureExecutionIdentityAdmissionEnvelope(
   facts: ExecutionIdentityAdmissionFacts,
   options: {
@@ -229,45 +234,151 @@ describe("audit event worker", () => {
     }
   });
 
-  it("preserves explicit unknown invoker evidence through the worker clone boundary", async () => {
+  it("persists owned unknown and omits inherited evidence through the worker clone boundary", async () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const errors: string[] = [];
     const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
     const clearSink = configureExecutionIdentityAdmissionSink(writer.recordExecutionIdentity);
     const admittedAt = Date.now();
-
-    expect(
-      enqueueExecutionIdentityContextAtAdmission(
-        {
-          runId: "unknown-invoker-run",
-          agentId: "main",
-          ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
-          runtime: { kind: "embedded" },
-          invoker: { state: "unknown" },
-        },
-        {
-          enabled: true,
-          contextId: "unknown-invoker-context",
-          executionId: "unknown-invoker-execution",
-          now: admittedAt,
-          runtimeInstanceId: "private-runtime-reference",
-        },
-      ),
-    ).toEqual({
-      candidateContextId: "unknown-invoker-context",
-      candidateExecutionId: "unknown-invoker-execution",
-      accepted: true,
-    });
-    clearSink();
-    await writer.stop();
-
-    const inspected = inspectExecutionIdentityRun(
-      { executionId: "unknown-invoker-execution" },
-      { ...database, now: admittedAt },
+    const inheritedRefs = {
+      invoker: "raw-inherited-principal",
+      applicableGrants: "raw-inherited-grant",
+      assurance: "raw-inherited-assurance",
+      rawSourceRef: "raw-inherited-source",
+    } as const;
+    const prior = new Map(
+      Object.keys(inheritedRefs).map((key) => [
+        key,
+        Object.getOwnPropertyDescriptor(Object.prototype, key),
+      ]),
     );
+    let inheritedInvokerReads = 0;
+
+    try {
+      try {
+        defineObjectPrototypeProperties({
+          invoker: {
+            configurable: true,
+            enumerable: false,
+            get: () => {
+              inheritedInvokerReads += 1;
+              return {
+                state: "present",
+                kind: "local-account",
+                rawPrincipalRef: inheritedRefs.invoker,
+              };
+            },
+          },
+          applicableGrants: {
+            configurable: true,
+            enumerable: false,
+            value: [{ rawGrantRef: inheritedRefs.applicableGrants, state: "present" }],
+          },
+          assurance: {
+            configurable: true,
+            enumerable: false,
+            value: [
+              {
+                kind: "other",
+                rawEvidenceRef: inheritedRefs.assurance,
+                strength: "self-asserted",
+              },
+            ],
+          },
+          rawSourceRef: {
+            configurable: true,
+            enumerable: false,
+            value: inheritedRefs.rawSourceRef,
+          },
+        });
+        expect(
+          enqueueExecutionIdentityContextAtAdmission(
+            {
+              runId: "absent-invoker-run",
+              agentId: "main",
+              ingress: {
+                kind: "local-cli",
+                boundary: "agent-command.local",
+                state: "present",
+              },
+              runtime: { kind: "embedded" },
+            },
+            {
+              enabled: true,
+              contextId: "absent-invoker-context",
+              executionId: "absent-invoker-execution",
+              now: admittedAt,
+              runtimeInstanceId: "private-absent-runtime-reference",
+            },
+          ),
+        ).toEqual({
+          candidateContextId: "absent-invoker-context",
+          candidateExecutionId: "absent-invoker-execution",
+          accepted: true,
+        });
+      } finally {
+        for (const [key, descriptor] of prior) {
+          if (descriptor) {
+            defineObjectPrototypeProperties({ [key]: descriptor });
+          } else {
+            delete (Object.prototype as Record<string, unknown>)[key];
+          }
+        }
+      }
+
+      expect(
+        enqueueExecutionIdentityContextAtAdmission(
+          {
+            runId: "unknown-invoker-run",
+            agentId: "main",
+            ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
+            runtime: { kind: "embedded" },
+            invoker: { state: "unknown" },
+          },
+          {
+            enabled: true,
+            contextId: "unknown-invoker-context",
+            executionId: "unknown-invoker-execution",
+            now: admittedAt + 1,
+            runtimeInstanceId: "private-unknown-runtime-reference",
+          },
+        ),
+      ).toEqual({
+        candidateContextId: "unknown-invoker-context",
+        candidateExecutionId: "unknown-invoker-execution",
+        accepted: true,
+      });
+    } finally {
+      clearSink();
+      await writer.stop();
+    }
+
+    const absentInspection = inspectExecutionIdentityRun(
+      { executionId: "absent-invoker-execution" },
+      { ...database, now: admittedAt + 1 },
+    );
+    const unknownInspection = inspectExecutionIdentityRun(
+      { executionId: "unknown-invoker-execution" },
+      { ...database, now: admittedAt + 1 },
+    );
+    expect(inheritedInvokerReads).toBe(0);
     expect(errors).toEqual([]);
-    expect(inspected).toMatchObject({
+    expect(absentInspection).toMatchObject({
+      identity: {
+        state: "present",
+        context: {
+          invoker: { state: "absent" },
+          ingress: { state: "present" },
+          applicableGrants: [],
+          assurance: [{ kind: "runtime-binding", strength: "boundary-verified" }],
+          coverageState: "unattributed",
+          missingEvidence: ["invoker.principal"],
+        },
+      },
+      coverage: { state: "unattributed", missingEvidence: ["invoker.principal"] },
+    });
+    expect(unknownInspection).toMatchObject({
       identity: {
         state: "present",
         context: {
@@ -278,7 +389,24 @@ describe("audit event worker", () => {
       },
       coverage: { state: "unknown", missingEvidence: ["invoker.principal"] },
     });
-    expect(JSON.stringify(inspected)).not.toContain("private-runtime-reference");
+    const persisted = openOpenClawStateDatabase(database)
+      .db.prepare(
+        "SELECT context_json FROM execution_identity_contexts WHERE execution_id IN (?, ?) ORDER BY execution_id",
+      )
+      .all("absent-invoker-execution", "unknown-invoker-execution") as Array<{
+      context_json: string;
+    }>;
+    const publicAndStored = JSON.stringify({
+      errors,
+      absentInspection,
+      unknownInspection,
+      persisted,
+    });
+    for (const rawRef of Object.values(inheritedRefs)) {
+      expect(publicAndStored).not.toContain(rawRef);
+    }
+    expect(publicAndStored).not.toContain("private-absent-runtime-reference");
+    expect(publicAndStored).not.toContain("private-unknown-runtime-reference");
   });
 
   it("prunes expired identity contexts before preserving exact-envelope conflicts", async () => {

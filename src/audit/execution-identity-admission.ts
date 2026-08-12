@@ -25,6 +25,58 @@ const evidenceState = () =>
 const closedObject = <T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
   Type.Object(properties, { additionalProperties: false });
 
+const ingressKind = () =>
+  Type.Union([
+    Type.Literal("local-cli"),
+    Type.Literal("gateway-client"),
+    Type.Literal("channel"),
+    Type.Literal("api"),
+    Type.Literal("schedule"),
+    Type.Literal("webhook"),
+    Type.Literal("task"),
+    Type.Literal("subagent"),
+    Type.Literal("acp"),
+    Type.Literal("worker"),
+    Type.Literal("plugin"),
+    Type.Literal("recovery"),
+    Type.Literal("system"),
+  ]);
+const runtimeKind = () =>
+  Type.Union([
+    Type.Literal("gateway"),
+    Type.Literal("embedded"),
+    Type.Literal("worker"),
+    Type.Literal("plugin-harness"),
+    Type.Literal("acp"),
+  ]);
+const admissionGrant = () => closedObject({ rawGrantRef: rawRef(), state: evidenceState() });
+const admissionGrants = () =>
+  Type.Array(admissionGrant(), { maxItems: EXECUTION_IDENTITY_ADMISSION_MAX_ITEMS });
+const admissionAssurance = () =>
+  Type.Array(
+    closedObject({
+      kind: Type.Union([
+        Type.Literal("durable-profile"),
+        Type.Literal("trusted-proxy"),
+        Type.Literal("tailscale-whois"),
+        Type.Literal("device-proof"),
+        Type.Literal("channel-admission"),
+        Type.Literal("local-process"),
+        Type.Literal("spawn-lineage"),
+        Type.Literal("worker-admission"),
+        Type.Literal("runtime-binding"),
+        Type.Literal("other"),
+      ]),
+      rawEvidenceRef: rawRef(),
+      strength: Type.Union([
+        Type.Literal("self-asserted"),
+        Type.Literal("boundary-verified"),
+        Type.Literal("cryptographic"),
+      ]),
+    }),
+    { maxItems: EXECUTION_IDENTITY_ADMISSION_MAX_ITEMS },
+  );
+
 const ExecutionIdentityAdmissionInvokerSchema = Type.Union([
   closedObject({
     state: Type.Literal("present"),
@@ -53,61 +105,32 @@ const ExecutionIdentityAdmissionEnvelopeSchema = closedObject({
   runtimeInstanceId: rawRef(),
   agentId: boundedRef(),
   ingress: closedObject({
-    kind: Type.Union([
-      Type.Literal("local-cli"),
-      Type.Literal("gateway-client"),
-      Type.Literal("channel"),
-      Type.Literal("api"),
-      Type.Literal("schedule"),
-      Type.Literal("webhook"),
-      Type.Literal("task"),
-      Type.Literal("subagent"),
-      Type.Literal("acp"),
-      Type.Literal("worker"),
-      Type.Literal("plugin"),
-      Type.Literal("recovery"),
-      Type.Literal("system"),
-    ]),
+    kind: ingressKind(),
     boundary: boundedRef(),
     state: evidenceState(),
     rawSourceRef: Type.Optional(rawRef()),
   }),
   runtime: closedObject({
-    kind: Type.Union([
-      Type.Literal("gateway"),
-      Type.Literal("embedded"),
-      Type.Literal("worker"),
-      Type.Literal("plugin-harness"),
-      Type.Literal("acp"),
-    ]),
+    kind: runtimeKind(),
   }),
   invoker: Type.Optional(ExecutionIdentityAdmissionInvokerSchema),
-  applicableGrants: Type.Array(closedObject({ rawGrantRef: rawRef(), state: evidenceState() }), {
-    maxItems: EXECUTION_IDENTITY_ADMISSION_MAX_ITEMS,
+  applicableGrants: admissionGrants(),
+  assurance: admissionAssurance(),
+});
+
+const ExecutionIdentityAdmissionFactsSchema = closedObject({
+  runId: boundedRef(),
+  agentId: boundedRef(),
+  ingress: closedObject({
+    kind: ingressKind(),
+    boundary: boundedRef(),
+    state: Type.Optional(evidenceState()),
+    rawSourceRef: Type.Optional(rawRef()),
   }),
-  assurance: Type.Array(
-    closedObject({
-      kind: Type.Union([
-        Type.Literal("durable-profile"),
-        Type.Literal("trusted-proxy"),
-        Type.Literal("tailscale-whois"),
-        Type.Literal("device-proof"),
-        Type.Literal("channel-admission"),
-        Type.Literal("local-process"),
-        Type.Literal("spawn-lineage"),
-        Type.Literal("worker-admission"),
-        Type.Literal("runtime-binding"),
-        Type.Literal("other"),
-      ]),
-      rawEvidenceRef: rawRef(),
-      strength: Type.Union([
-        Type.Literal("self-asserted"),
-        Type.Literal("boundary-verified"),
-        Type.Literal("cryptographic"),
-      ]),
-    }),
-    { maxItems: EXECUTION_IDENTITY_ADMISSION_MAX_ITEMS },
-  ),
+  runtime: closedObject({ kind: runtimeKind() }),
+  invoker: Type.Optional(ExecutionIdentityAdmissionInvokerSchema),
+  applicableGrants: Type.Optional(admissionGrants()),
+  assurance: Type.Optional(admissionAssurance()),
 });
 
 const ExecutionIdentityAdmissionTokenSchema = closedObject({
@@ -166,9 +189,11 @@ function freezeEnvelope<T>(value: T, seen = new WeakSet<object>()): T {
   return Object.freeze(value);
 }
 
-function assertPlainCloneData(value: unknown, ancestors = new WeakSet<object>()): void {
+// Snapshot descriptors before schema or projection: TypeBox accepts inherited
+// keys, which would otherwise turn prototype data into diagnostic provenance.
+function copyOwnedData<T>(value: T, ancestors = new WeakSet<object>()): T {
   if (value === null || ["string", "number", "boolean"].includes(typeof value)) {
-    return;
+    return value;
   }
   if (typeof value !== "object" || isProxy(value)) {
     throw new Error("execution identity admission data must be clone-safe plain data");
@@ -180,10 +205,15 @@ function assertPlainCloneData(value: unknown, ancestors = new WeakSet<object>())
   try {
     const prototype = Object.getPrototypeOf(value);
     const keys = Reflect.ownKeys(value);
+    const array = Array.isArray(value);
     if (Array.isArray(value)) {
+      const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
       if (
         prototype !== Array.prototype ||
-        keys.length !== value.length + 1 ||
+        !lengthDescriptor ||
+        !("value" in lengthDescriptor) ||
+        typeof lengthDescriptor.value !== "number" ||
+        keys.length !== lengthDescriptor.value + 1 ||
         keys.at(-1) !== "length"
       ) {
         throw new Error("execution identity admission data must be clone-safe plain data");
@@ -191,51 +221,63 @@ function assertPlainCloneData(value: unknown, ancestors = new WeakSet<object>())
     } else if (prototype !== Object.prototype && prototype !== null) {
       throw new Error("execution identity admission data must be clone-safe plain data");
     }
+    const copy: unknown[] | Record<string, unknown> = array ? [] : Object.create(null);
     for (const [index, key] of keys.entries()) {
-      if (key === "length" && Array.isArray(value)) {
+      if (key === "length" && array) {
         continue;
       }
-      if (typeof key !== "string" || (Array.isArray(value) && key !== String(index))) {
+      if (typeof key !== "string" || (array && key !== String(index))) {
         throw new Error("execution identity admission data must be clone-safe plain data");
       }
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (!descriptor?.enumerable || !("value" in descriptor)) {
         throw new Error("execution identity admission data must be clone-safe plain data");
       }
-      assertPlainCloneData(descriptor.value, ancestors);
+      Object.defineProperty(copy, key, {
+        configurable: true,
+        enumerable: true,
+        value: copyOwnedData(descriptor.value, ancestors),
+        writable: true,
+      });
     }
+    return copy as T;
   } finally {
     ancestors.delete(value);
   }
 }
 
-function validateEnvelope(value: unknown): asserts value is ExecutionIdentityAdmissionEnvelope {
-  assertPlainCloneData(value);
+function validateEnvelope(value: unknown): ExecutionIdentityAdmissionEnvelope {
+  const owned = copyOwnedData(value);
   if (
-    !Value.Check(ExecutionIdentityAdmissionEnvelopeSchema, value) ||
-    !Number.isSafeInteger(value.createdAt)
+    !Value.Check(ExecutionIdentityAdmissionEnvelopeSchema, owned) ||
+    !Number.isSafeInteger(owned.createdAt)
   ) {
     throw new Error("execution identity admission envelope violates its bounded contract");
   }
-  const encoded = JSON.stringify(value);
+  const encoded = JSON.stringify(owned);
   if (Buffer.byteLength(encoded, "utf8") > EXECUTION_IDENTITY_ADMISSION_MAX_BYTES) {
     throw new Error("execution identity admission envelope exceeds 16 KiB");
   }
+  return owned;
 }
 
-function validateRawInvoker(value: unknown): void {
-  if (value !== undefined && !Value.Check(ExecutionIdentityAdmissionInvokerSchema, value)) {
-    throw new Error("execution identity admission invoker violates its bounded contract");
+function validateFacts(value: unknown): ExecutionIdentityAdmissionFacts {
+  const owned = copyOwnedData(value);
+  if (!Value.Check(ExecutionIdentityAdmissionFactsSchema, owned)) {
+    throw new Error("execution identity admission facts violate their bounded contract");
   }
+  return owned;
 }
 
-function validateToken(value: unknown): asserts value is ExecutionIdentityAdmissionToken {
+function validateToken(value: unknown): ExecutionIdentityAdmissionToken {
+  const owned = copyOwnedData(value);
   if (
-    !Value.Check(ExecutionIdentityAdmissionTokenSchema, value) ||
-    !Number.isSafeInteger(value.createdAt)
+    !Value.Check(ExecutionIdentityAdmissionTokenSchema, owned) ||
+    !Number.isSafeInteger(owned.createdAt)
   ) {
     throw new Error("execution identity admission token violates its bounded contract");
   }
+  return owned;
 }
 
 /** Allocate the immutable correlation owned by one outer admitted turn. */
@@ -250,15 +292,13 @@ export function createExecutionIdentityAdmissionToken(
     runId,
     createdAt: options.now ?? Date.now(),
   };
-  validateToken(token);
-  return freezeEnvelope(token);
+  return freezeEnvelope(validateToken(token));
 }
 
 export function parseExecutionIdentityAdmissionToken(
   value: unknown,
 ): ExecutionIdentityAdmissionToken {
-  validateToken(value);
-  return freezeEnvelope({ ...value });
+  return freezeEnvelope(validateToken(value));
 }
 
 function redactDisplayLabel(value: string): string {
@@ -274,22 +314,12 @@ function redactDisplayLabel(value: string): string {
 function captureExecutionIdentityAdmissionEnvelope(
   facts: ExecutionIdentityAdmissionFacts,
   options: {
-    contextId?: string;
-    executionId?: string;
-    now?: number;
     runtimeInstanceId?: string;
-    token?: ExecutionIdentityAdmissionToken;
-  } = {},
+    token: ExecutionIdentityAdmissionToken;
+  },
 ): ExecutionIdentityAdmissionEnvelope {
-  const token =
-    options.token ??
-    createExecutionIdentityAdmissionToken(facts.runId, {
-      contextId: options.contextId,
-      executionId: options.executionId,
-      now: options.now,
-    });
-  validateToken(token);
-  if (token.runId !== facts.runId) {
+  const ownedToken = validateToken(options.token);
+  if (ownedToken.runId !== facts.runId) {
     throw new Error("execution identity admission token disagrees with the admitted run");
   }
   const runtimeInstanceId = options.runtimeInstanceId ?? PROCESS_RUNTIME_INSTANCE_ID;
@@ -302,10 +332,10 @@ function captureExecutionIdentityAdmissionEnvelope(
   ];
   const envelope = {
     envelopeVersion: 1 as const,
-    contextId: token.contextId,
-    executionId: token.executionId,
-    runId: token.runId,
-    createdAt: token.createdAt,
+    contextId: ownedToken.contextId,
+    executionId: ownedToken.executionId,
+    runId: ownedToken.runId,
+    createdAt: ownedToken.createdAt,
     runtimeInstanceId,
     agentId: facts.agentId,
     ingress: { ...facts.ingress, state: facts.ingress.state ?? "present" },
@@ -337,24 +367,23 @@ function captureExecutionIdentityAdmissionEnvelope(
       strength: item.strength,
     })),
   };
-  validateEnvelope(envelope);
-  return freezeEnvelope(envelope);
+  return freezeEnvelope(validateEnvelope(envelope));
 }
 
 /** Revalidate a structured-cloned worker message before any persistence work. */
 export function parseExecutionIdentityAdmissionEnvelope(
   value: unknown,
 ): ExecutionIdentityAdmissionEnvelope {
-  validateEnvelope(value);
-  const parsed = captureExecutionIdentityAdmissionEnvelope(value, {
-    token: createExecutionIdentityAdmissionToken(value.runId, {
-      contextId: value.contextId,
-      executionId: value.executionId,
-      now: value.createdAt,
+  const envelope = validateEnvelope(value);
+  const parsed = captureExecutionIdentityAdmissionEnvelope(envelope, {
+    token: createExecutionIdentityAdmissionToken(envelope.runId, {
+      contextId: envelope.contextId,
+      executionId: envelope.executionId,
+      now: envelope.createdAt,
     }),
-    runtimeInstanceId: value.runtimeInstanceId,
+    runtimeInstanceId: envelope.runtimeInstanceId,
   });
-  if (JSON.stringify(parsed) !== JSON.stringify(value)) {
+  if (JSON.stringify(parsed) !== JSON.stringify(envelope)) {
     throw new Error("execution identity admission envelope is not canonical");
   }
   return parsed;
@@ -364,10 +393,11 @@ export function parseExecutionIdentityAdmissionEnvelope(
 export function parseExecutionIdentityAdmissionWork(
   value: unknown,
 ): ExecutionIdentityAdmissionWork {
-  if (!value || typeof value !== "object") {
+  const owned = copyOwnedData(value);
+  if (!owned || typeof owned !== "object") {
     throw new Error("execution identity admission work violates its bounded contract");
   }
-  const work = value as { kind?: unknown; envelope?: unknown; token?: unknown };
+  const work = owned as { kind?: unknown; envelope?: unknown; token?: unknown };
   if (work.kind === "capture") {
     return freezeEnvelope({
       kind: "capture" as const,
@@ -424,21 +454,20 @@ export function enqueueExecutionIdentityContextAtAdmission(
     return undefined;
   }
   try {
-    assertPlainCloneData(facts);
-    validateRawInvoker(facts.invoker);
-    const token =
+    const ownedFacts = validateFacts(facts);
+    const token = validateToken(
       options.token ??
-      createExecutionIdentityAdmissionToken(facts.runId, {
-        contextId: options.contextId,
-        executionId: options.executionId,
-        now: options.now,
-      });
-    validateToken(token);
+        createExecutionIdentityAdmissionToken(ownedFacts.runId, {
+          contextId: options.contextId,
+          executionId: options.executionId,
+          now: options.now,
+        }),
+    );
     const work: ExecutionIdentityAdmissionWork = options.retryOnly
       ? { kind: "retry-reference", token }
       : {
           kind: "capture",
-          envelope: captureExecutionIdentityAdmissionEnvelope(facts, {
+          envelope: captureExecutionIdentityAdmissionEnvelope(ownedFacts, {
             token,
             runtimeInstanceId: options.runtimeInstanceId,
           }),
