@@ -1,4 +1,4 @@
-import type { EventFrame } from "@openclaw/gateway-protocol";
+import type { EventFrame, HelloOk } from "@openclaw/gateway-protocol";
 import {
   isGatewayEventFrame,
   isGatewayResponseFrame,
