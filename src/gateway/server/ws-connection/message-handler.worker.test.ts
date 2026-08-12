@@ -157,6 +157,7 @@ function attachHarness(
     identity?: WorkerConnectionIdentity;
     liveFailure?: WorkerLiveEventErrorDetails;
     ingress?: "loopback" | "public";
+    omitPublicAdmission?: boolean;
     rateLimiter?: AuthRateLimiter;
     onInferenceLaunch?: (sink: InferenceSink) => void;
     onSessionTool?: (signal: AbortSignal | undefined) => Promise<WorkerSessionToolResult>;
@@ -223,8 +224,9 @@ function attachHarness(
     socket: socket as unknown as WebSocket,
     connId: "worker-connection",
     service,
+    ingress: options.ingress ?? "loopback",
     publicAdmission:
-      options.ingress === "public"
+      options.ingress === "public" && !options.omitPublicAdmission
         ? { clientIp: "203.0.113.10", rateLimiter: options.rateLimiter }
         : undefined,
     send: (frame) => responses.push(frame),
@@ -296,6 +298,19 @@ describe("dedicated worker websocket protocol", () => {
       `worker admission rejected reason=${reason}`,
     );
     expect(harness.setClient).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when public ingress context is missing", async () => {
+    const harness = attachHarness({ ingress: "public", omitPublicAdmission: true });
+    harness.sendConnect();
+
+    await waitForWorkerProtocol(() =>
+      expect(harness.close).toHaveBeenCalledWith(1008, "invalid-handshake"),
+    );
+    expect(harness.service.admitWorker).not.toHaveBeenCalled();
+    expect(harness.logWsControl.warn).toHaveBeenCalledWith(
+      "worker admission rejected reason=public-ingress-context-missing",
+    );
   });
 
   it.each(["invalid-credential", "environment-mismatch"] as const)(

@@ -44,8 +44,8 @@ vi.mock("../talk-session-registry.js", () => ({
   cleanupTalkConnection: cleanupTalkConnectionMock,
 }));
 
-import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 import { markPublicWorkerIngress } from "./public-worker-ingress-context.js";
+import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 import { resolveSharedGatewaySessionGeneration } from "./ws-shared-generation.js";
 import {
   GATEWAY_WS_CONNECTION_KIND_PROPERTY,
