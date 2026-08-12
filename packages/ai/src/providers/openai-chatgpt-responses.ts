@@ -899,6 +899,32 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
   const decoder = new TextDecoder();
   let buffer = "";
 
+  // Parse one complete SSE frame into its event payload. Returns undefined for
+  // comment/heartbeat frames and the [DONE] sentinel.
+  const parseFrameEvent = (chunk: string): Record<string, unknown> | undefined => {
+    const dataLines = chunk
+      .split(/\r\n|\r|\n/)
+      .filter((l) => l.startsWith("data:"))
+      .map((l) => l.slice(5).trim());
+    if (dataLines.length === 0) {
+      return undefined;
+    }
+    const data = dataLines.join("\n").trim();
+    if (!data || data === "[DONE]") {
+      return undefined;
+    }
+    try {
+      return JSON.parse(data) as Record<string, unknown>;
+    } catch (cause) {
+      if (!(cause instanceof SyntaxError)) {
+        throw cause;
+      }
+      // Align with the canonical transport contract: the shared marker is what
+      // assistant error formatting maps to the malformed-fragment retry copy.
+      throw new CodexProtocolError(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, { cause });
+    }
+  };
+
   try {
     while (true) {
       const { done, value } = await guard.read();
@@ -922,32 +948,23 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
         const chunk = buffer.slice(0, boundary.index);
         buffer = buffer.slice(boundary.index + boundary[0].length);
 
-        const dataLines = chunk
-          .split(/\r\n|\r|\n/)
-          .filter((l) => l.startsWith("data:"))
-          .map((l) => l.slice(5).trim());
-        if (dataLines.length > 0) {
-          const data = dataLines.join("\n").trim();
-          if (data && data !== "[DONE]") {
-            let event: Record<string, unknown>;
-            try {
-              event = JSON.parse(data) as Record<string, unknown>;
-            } catch (cause) {
-              if (!(cause instanceof SyntaxError)) {
-                throw cause;
-              }
-              // Align with the canonical transport contract: the shared marker is what
-              // assistant error formatting maps to the malformed-fragment retry copy.
-              throw new CodexProtocolError(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, { cause });
-            }
-            // Keep suspension outside the parse catch so iterator.throw() cannot relabel a
-            // consumer failure as malformed provider input.
-            yield event;
-          }
+        const event = parseFrameEvent(chunk);
+        if (event !== undefined) {
+          // Keep suspension outside the parse catch so iterator.throw() cannot relabel a
+          // consumer failure as malformed provider input.
+          yield event;
         }
       }
 
       if (done) {
+        // A proxy that drops the trailing blank line would otherwise silently
+        // discard the final frame (often response.completed), which surfaces
+        // downstream as a confusing "ended before a terminal response event".
+        // Parse any non-empty residue as one last frame instead.
+        const tailEvent = parseFrameEvent(buffer);
+        if (tailEvent !== undefined) {
+          yield tailEvent;
+        }
         break;
       }
     }
