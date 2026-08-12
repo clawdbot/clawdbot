@@ -441,7 +441,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
               params.logChannels.info(
                 `stopping ${channel} account ${accountId} before plugin reload`,
               );
-              await params.stopChannel(channel, accountId, { manual: false });
+              await params.stopChannel(channel, accountId, {
+                manual: false,
+                restartPending: false,
+                preserveKnownAccount: !getChannelAutostartSuppression(),
+              });
               if (isPluginReloadAborted()) {
                 pluginReloadAborted = true;
               }

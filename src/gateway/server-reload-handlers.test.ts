@@ -5456,24 +5456,26 @@ describe("gateway plugin hot reload handlers", () => {
         return makePluginReloadResult({ cancelled: true });
       },
     );
-    const handlers = createReloadHandlersForTest(
-      undefined,
-      {
-        stop: vi.fn(async (channel, accountId) => {
-          events.push(`stop:${channel}:${accountId ?? "all"}`);
-        }),
-        start: vi.fn(async (channel, accountId) => {
-          events.push(`start:${channel}:${accountId ?? "all"}`);
-        }),
-      },
-      reloadPlugins,
-    );
+    const channelHandlers = {
+      stop: vi.fn(async (channel: ChannelKind, accountId?: string) => {
+        events.push(`stop:${channel}:${accountId ?? "all"}`);
+      }),
+      start: vi.fn(async (channel: ChannelKind, accountId?: string) => {
+        events.push(`start:${channel}:${accountId ?? "all"}`);
+      }),
+    };
+    const handlers = createReloadHandlersForTest(undefined, channelHandlers, reloadPlugins);
 
     await expect(
       handlers.applyHotReload(createPluginReloadPlan(), { plugins: { enabled: true } }),
     ).rejects.toThrow("config hot reload cancelled by config supersession or in-process restart");
 
     expect(events).toEqual(["stop:discord:catalog-account", "start:discord:catalog-account"]);
+    expect(channelHandlers.stop).toHaveBeenCalledWith("discord", "catalog-account", {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
     expect(handlers.setState).not.toHaveBeenCalled();
   });
 
