@@ -3495,6 +3495,8 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 }
 
 .sidebar-agent-menu__filter input {
+  --control-ui-touch-input-size: var(--control-ui-text-sm);
+
   width: 100%;
   padding: 5px 8px;
   border-radius: 6px;

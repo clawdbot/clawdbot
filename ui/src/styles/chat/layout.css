@@ -2486,6 +2486,8 @@ button.chat-reply-preview--message:disabled {
 
 @media (hover: none) and (pointer: coarse) {
   .agent-chat__composer-combobox > :is(textarea, input) {
+    --control-ui-touch-input-size: var(--control-ui-input-text-size);
+
     font-size: var(--control-ui-input-text-size);
   }
 }
@@ -3631,6 +3633,8 @@ button.chat-reply-preview--message:disabled {
   }
 
   .agent-chat__composer-combobox > :is(textarea, input) {
+    --control-ui-touch-input-size: var(--control-ui-input-text-size);
+
     flex: 1 1 auto;
     min-height: var(--chat-composer-control-height);
     max-height: calc(7em + var(--chat-box-inset) + var(--chat-box-inset));

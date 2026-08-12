@@ -1527,6 +1527,8 @@ openclaw-session-discussion {
 }
 
 .file-view__search input {
+  --control-ui-touch-input-size: var(--control-ui-text-sm);
+
   min-width: 0;
   flex: 1;
   height: 28px;

@@ -675,13 +675,13 @@ body {
 
 /* iOS Safari zooms the viewport when a focused text control is under 16px;
    important keeps feature-local typography from silently dropping this floor.
-   The floor rides --control-ui-input-text-size (16px minimum, text-scale
-   aware) so it can never cap controls below the operator's chosen scale. */
+   Controls that manage their own touch size declare it via
+   --control-ui-touch-input-size; the floor never caps above 16px. */
 @media (pointer: coarse) {
   input,
   select,
   textarea {
-    font-size: max(var(--control-ui-input-text-size), 1em) !important;
+    font-size: max(16px, var(--control-ui-touch-input-size, 1em)) !important;
   }
 }
 
