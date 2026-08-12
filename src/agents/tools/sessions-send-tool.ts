@@ -198,17 +198,18 @@ function isConfiguredAgentMainSessionKey(params: {
   if (isUnscopedSessionKeySentinel(params.sessionKey)) {
     return false;
   }
-  const agentId =
-    params.agentId ?? resolveSessionAgentId({ config: params.cfg, sessionKey: params.sessionKey });
-  return (
-    params.sessionKey === params.mainKey ||
-    params.sessionKey ===
-      resolveConfiguredAgentMainSessionKey({
-        cfg: params.cfg,
-        agentId,
-        mainKey: params.mainKey,
-      })
-  );
+  if (params.sessionKey === params.mainKey) {
+    return true;
+  }
+  const agentId = params.agentId ?? parseAgentSessionKey(params.sessionKey)?.agentId;
+  return agentId
+    ? params.sessionKey ===
+        resolveConfiguredAgentMainSessionKey({
+          cfg: params.cfg,
+          agentId,
+          mainKey: params.mainKey,
+        })
+    : false;
 }
 
 async function createConfiguredAgentMainSession(params: {
