@@ -680,11 +680,11 @@ export async function runPreparedCliAgent(
     runFailed = true;
     runError = error;
   }
-  let cleanupError: unknown;
+  let cleanupError: Error | undefined;
   try {
     await context.preparedBackend.cleanup?.();
   } catch (error) {
-    cleanupError = error;
+    cleanupError = error as Error;
   }
   return settleCliBackendOutcome({
     runResult,
