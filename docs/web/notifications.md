@@ -7,7 +7,7 @@ read_when:
   - Comparing Control UI notifications with mobile push
 ---
 
-OpenClaw can ping you when something needs your attention — in the browser that runs the Control UI, or through native macOS notifications when you use the OpenClaw macOS app. Everything lives under **Settings → Notifications**: enable the current device, check its status, and send yourself a test.
+OpenClaw can ping you when something needs your attention — in the browser that runs the Control UI, or through native macOS notifications when you use the OpenClaw macOS app. Your first chat send may request permission automatically; **Settings → Notifications** remains the place to enable or repair the current device, check its status, and send yourself a test.
 
 This page covers those two surfaces. It does not control channel reaction notifications, Android notification forwarding, or iOS background push — the mobile apps register for push through their own node paths; see [iOS](/platforms/ios) and [Nodes](/nodes).
 

@@ -2,7 +2,10 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../test-helpers/storage.ts";
-import { autoPromptNotificationsOnSend } from "./notifications-auto-prompt.ts";
+import {
+  autoPromptNotificationsOnSend,
+  shouldAutoPromptNotificationsOnSend,
+} from "./notifications-auto-prompt.ts";
 
 const STORAGE_KEY = "openclaw.control.notificationsAutoPrompt.v1";
 
@@ -10,10 +13,13 @@ type AutoPromptContext = Parameters<typeof autoPromptNotificationsOnSend>[0];
 type NativePermission = "granted" | "denied" | "notDetermined" | "unknown";
 
 let storage: Storage;
+let browserRequestPermission: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   storage = createStorageMock();
   vi.stubGlobal("localStorage", storage);
+  browserRequestPermission = vi.fn(() => Promise.resolve("granted" as NotificationPermission));
+  vi.stubGlobal("Notification", { requestPermission: browserRequestPermission });
 });
 
 afterEach(() => {
@@ -53,13 +59,29 @@ function createContext(
 }
 
 describe("notification auto-prompt", () => {
-  it("enables eligible web push only once", () => {
+  it("requests browser permission synchronously and enables web push only once", async () => {
     const { context, enable } = createContext();
 
     autoPromptNotificationsOnSend(context);
     autoPromptNotificationsOnSend(context);
 
+    expect(browserRequestPermission).toHaveBeenCalledOnce();
+    expect(enable).not.toHaveBeenCalled();
+    await Promise.resolve();
     expect(enable).toHaveBeenCalledOnce();
+    expect(storage.getItem(STORAGE_KEY)).toBe("1");
+  });
+
+  it("records a dismissed browser prompt without enabling web push", async () => {
+    browserRequestPermission.mockResolvedValue("default");
+    const { context, enable } = createContext();
+
+    autoPromptNotificationsOnSend(context);
+    autoPromptNotificationsOnSend(context);
+    await Promise.resolve();
+
+    expect(browserRequestPermission).toHaveBeenCalledOnce();
+    expect(enable).not.toHaveBeenCalled();
     expect(storage.getItem(STORAGE_KEY)).toBe("1");
   });
 
@@ -136,5 +158,31 @@ describe("notification auto-prompt", () => {
     expect(() => autoPromptNotificationsOnSend(context)).not.toThrow();
     expect(requestPermission).not.toHaveBeenCalled();
     expect(enable).not.toHaveBeenCalled();
+  });
+});
+
+describe("notification auto-prompt send boundary", () => {
+  const candidate = {
+    connected: true,
+    directComposerSend: true,
+    message: "hello",
+    hasAttachments: false,
+    isCommand: false,
+  };
+
+  it("accepts a direct composer prompt or attachment", () => {
+    expect(shouldAutoPromptNotificationsOnSend(candidate)).toBe(true);
+    expect(
+      shouldAutoPromptNotificationsOnSend({ ...candidate, message: "", hasAttachments: true }),
+    ).toBe(true);
+  });
+
+  it.each([
+    ["programmatic send", { directComposerSend: false }],
+    ["recognized command", { isCommand: true }],
+    ["disconnected composer", { connected: false }],
+    ["empty composer", { message: "" }],
+  ])("rejects a %s", (_name, override) => {
+    expect(shouldAutoPromptNotificationsOnSend({ ...candidate, ...override })).toBe(false);
   });
 });

@@ -2,9 +2,13 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import { fetchAssistantIdentity } from "../../app/assistant-identity.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { autoPromptNotificationsOnSend } from "../../app/notifications-auto-prompt.ts";
+import {
+  autoPromptNotificationsOnSend,
+  shouldAutoPromptNotificationsOnSend,
+} from "../../app/notifications-auto-prompt.ts";
 import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
+import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import {
   canonicalUiSessionKeyForPersistence,
@@ -30,7 +34,7 @@ import {
 } from "./input-history.ts";
 import { beginQueuedMessageEdit, cancelQueuedMessageEdit } from "./queued-message-edit.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
-import { handleAbortChat } from "./run-lifecycle.ts";
+import { handleAbortChat, hasAbortableSessionRun, isChatStopCommand } from "./run-lifecycle.ts";
 import { handleChatScroll, resetChatScroll, scheduleChatScroll } from "./scroll.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import {
@@ -279,9 +283,18 @@ export function createPageState(
   attachChatRealtimeActions(state);
   state.loadAssistantIdentity = () => loadPageAssistantIdentity(state);
   state.handleSendChat = (messageOverride, options) => {
+    const message = messageOverride ?? state.chatMessage;
+    const isCommand =
+      parseSlashCommand(message) !== null ||
+      (isChatStopCommand(message) && hasAbortableSessionRun(state));
     if (
-      state.connected &&
-      ((messageOverride ?? state.chatMessage).trim().length > 0 || state.chatAttachments.length > 0)
+      shouldAutoPromptNotificationsOnSend({
+        connected: state.connected,
+        directComposerSend: messageOverride === undefined && options === undefined,
+        message,
+        hasAttachments: state.chatAttachments.length > 0,
+        isCommand,
+      })
     ) {
       autoPromptNotificationsOnSend(context);
     }

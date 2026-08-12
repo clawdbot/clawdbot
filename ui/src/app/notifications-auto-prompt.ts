@@ -4,6 +4,25 @@ const NOTIFICATIONS_AUTO_PROMPT_KEY = "openclaw.control.notificationsAutoPrompt.
 
 type NotificationsContext = Pick<ApplicationContext, "nativeNotifications" | "webPush">;
 
+type NotificationsAutoPromptCandidate = {
+  connected: boolean;
+  directComposerSend: boolean;
+  message: string;
+  hasAttachments: boolean;
+  isCommand: boolean;
+};
+
+export function shouldAutoPromptNotificationsOnSend(
+  candidate: NotificationsAutoPromptCandidate,
+): boolean {
+  return (
+    candidate.connected &&
+    candidate.directComposerSend &&
+    !candidate.isCommand &&
+    (candidate.message.trim().length > 0 || candidate.hasAttachments)
+  );
+}
+
 function markAutoPrompted(storage: Storage): void {
   // Persist the one-shot contract before asking so re-entrant sends cannot prompt twice.
   try {
@@ -52,7 +71,16 @@ export function autoPromptNotificationsOnSend(context: NotificationsContext): vo
   }
   markAutoPrompted(storage);
   try {
-    void context.webPush.enable();
+    // Invoke the browser prompt before leaving the user-gesture tick. Web-push
+    // subscription can continue asynchronously after permission is granted.
+    const permission = Notification.requestPermission();
+    void permission
+      .then((next) => {
+        if (next === "granted") {
+          void context.webPush.enable();
+        }
+      })
+      .catch(() => {});
   } catch {
     // Notification prompting must never interrupt chat sending.
   }
