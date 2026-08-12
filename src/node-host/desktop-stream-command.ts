@@ -19,7 +19,6 @@ const TICKET_PATTERN = /^[a-f0-9]{48}$/u;
 type NodeDesktopStreamCommandParams = {
   ticket: string;
   attachPath: string;
-  target?: NodeDesktopStreamTarget;
 };
 
 type NodeDesktopStreamTarget = {
@@ -49,18 +48,10 @@ function decodeDesktopStreamParams(raw?: string | null): NodeDesktopStreamComman
   if (attachUrl.searchParams.get("ticket") !== ticket) {
     throw new Error("INVALID_REQUEST: desktop stream ticket does not match attachPath");
   }
-  let target: NodeDesktopStreamTarget | undefined;
-  if (value.target !== undefined) {
-    if (
-      !isRecord(value.target) ||
-      typeof value.target.host !== "string" ||
-      typeof value.target.port !== "number"
-    ) {
-      throw new Error("INVALID_REQUEST: desktop stream target is malformed");
-    }
-    target = { host: value.target.host, port: value.target.port };
+  if (Object.keys(value).some((key) => key !== "ticket" && key !== "attachPath")) {
+    throw new Error("INVALID_REQUEST: desktop stream params contain unsupported fields");
   }
-  return { ticket, attachPath, ...(target ? { target } : {}) };
+  return { ticket, attachPath };
 }
 
 function websocketDataBuffer(data: RawData): Buffer {
@@ -359,7 +350,7 @@ export async function invokeNodeDesktopStream(params: {
     ...(params.gatewayTlsFingerprint
       ? { gatewayTlsFingerprint: params.gatewayTlsFingerprint }
       : {}),
-    target: command.target ?? {
+    target: {
       host: "127.0.0.1",
       port: params.config.port ?? DEFAULT_DESKTOP_PORT,
     },

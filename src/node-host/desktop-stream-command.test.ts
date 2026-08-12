@@ -12,7 +12,7 @@ afterEach(async () => {
 });
 
 describe("node desktop stream command", () => {
-  it("refuses a non-loopback RFB target before dialing", async () => {
+  it("refuses a caller-selected RFB target before dialing", async () => {
     await expect(
       invokeNodeDesktopStream({
         paramsJSON: JSON.stringify({
@@ -24,7 +24,7 @@ describe("node desktop stream command", () => {
         config: { enabled: true },
         signal: new AbortController().signal,
       }),
-    ).rejects.toThrow("must be loopback");
+    ).rejects.toThrow("unsupported fields");
   });
 
   it("refuses an attach path that changes the connected gateway origin", async () => {
@@ -94,10 +94,9 @@ describe("node desktop stream command", () => {
       paramsJSON: JSON.stringify({
         ticket: TICKET,
         attachPath: `/node-desktop/attach?ticket=${TICKET}`,
-        target: { host: "127.0.0.1", port: rfbAddress.port },
       }),
       gatewayUrl: `ws://127.0.0.1:${gatewayAddress.port}`,
-      config: { enabled: true },
+      config: { enabled: true, port: rfbAddress.port },
       signal: controller.signal,
       emitStatus,
     });

@@ -44,6 +44,14 @@ async function stopActiveStream(active: ActiveNodeDesktopStream): Promise<void> 
   if (active.stopped) {
     return;
   }
+  retireActiveStream(active);
+  await active.invocation?.catch(() => undefined);
+}
+
+function retireActiveStream(active: ActiveNodeDesktopStream): void {
+  if (active.stopped) {
+    return;
+  }
   active.stopped = true;
   clearTimeout(active.unclaimedTimer);
   active.ticket?.cancel();
@@ -52,7 +60,6 @@ async function stopActiveStream(active: ActiveNodeDesktopStream): Promise<void> 
     active.reservation?.release();
   }
   active.stream?.destroy();
-  await active.invocation?.catch(() => undefined);
 }
 
 /** Combines node command policy, ticket redemption, and desktop session ownership. */
@@ -113,6 +120,13 @@ export function createNodeDesktopService(params: {
   };
 
   return {
+    async stopNode(nodeId: string): Promise<void> {
+      const sourceKey = `node:${nodeId}`;
+      const session = sessions.get(sourceKey);
+      if (session) {
+        await params.desktopRegistry.stop(sourceKey, session.ownerEpoch);
+      }
+    },
     async observe(request: {
       nodeId: string;
       control: boolean;
@@ -255,7 +269,7 @@ export function createNodeDesktopService(params: {
       active.unclaimedTimer.unref?.();
       void active.invocation
         .finally(() => {
-          clearTimeout(active.unclaimedTimer);
+          retireActiveStream(active);
           session.active.delete(active);
         })
         .catch(() => undefined);

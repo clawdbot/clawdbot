@@ -159,10 +159,9 @@ describe("paired node desktop observe integration", () => {
           await invokeNodeDesktopStream({
             paramsJSON: JSON.stringify({
               ...(request.params as { ticket: string; attachPath: string }),
-              target: { host: "127.0.0.1", port: rfbAddress.port },
             }),
             gatewayUrl,
-            config: { enabled: true },
+            config: { enabled: true, port: rfbAddress.port },
             signal: request.signal ?? new AbortController().signal,
             emitStatus: async (status) => request.onProgress?.(status),
           });
@@ -252,5 +251,16 @@ describe("paired node desktop observe integration", () => {
 
     await expect(rfbScript).resolves.toBeUndefined();
     await vi.waitFor(() => expect(connectionCount).toBe(4));
+    const firstClosed = new Promise<void>((resolve) => {
+      ws.once("close", () => resolve());
+    });
+    const secondClosed = new Promise<void>((resolve) => {
+      secondWs.once("close", () => resolve());
+    });
+
+    await service.stopNode(nodeSession.nodeId);
+
+    await Promise.all([firstClosed, secondClosed]);
+    await vi.waitFor(() => expect(rfbPeers.size).toBe(0));
   });
 });
