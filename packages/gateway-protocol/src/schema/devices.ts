@@ -55,16 +55,31 @@ export const ScopeUpgradeWaitSchema = closedObject({ requestId: NonEmptyString }
 /** Registers a pending scope upgrade without exposing device credentials. */
 export const ScopeUpgradeRegistrationSchema = closedObject({ requestId: NonEmptyString });
 
+/** Returns an approved scope upgrade with the freshly rotated credential. */
+export const ScopeUpgradeApprovedSchema = closedObject({
+  status: Type.Literal("approved"),
+  requestId: NonEmptyString,
+  deviceToken: NonEmptyString,
+  scopes: Type.Array(NonEmptyString, { minItems: 1, maxItems: 8, uniqueItems: true }),
+});
+
+/** Reports that an administrator rejected the pending scope upgrade. */
+export const ScopeUpgradeRejectedSchema = closedObject({
+  status: Type.Literal("rejected"),
+  requestId: NonEmptyString,
+});
+
+/** Reports that the pending scope upgrade expired before approval. */
+export const ScopeUpgradeExpiredSchema = closedObject({
+  status: Type.Literal("expired"),
+  requestId: NonEmptyString,
+});
+
 /** Returns the terminal scope-upgrade state to the identity-bound waiter. */
 export const ScopeUpgradeResultSchema = Type.Union([
-  closedObject({
-    status: Type.Literal("approved"),
-    requestId: NonEmptyString,
-    deviceToken: NonEmptyString,
-    scopes: Type.Array(NonEmptyString, { minItems: 1, maxItems: 8, uniqueItems: true }),
-  }),
-  closedObject({ status: Type.Literal("rejected"), requestId: NonEmptyString }),
-  closedObject({ status: Type.Literal("expired"), requestId: NonEmptyString }),
+  ScopeUpgradeApprovedSchema,
+  ScopeUpgradeRejectedSchema,
+  ScopeUpgradeExpiredSchema,
 ]);
 
 /** Event emitted when a client opens or refreshes a pairing request. */
