@@ -57,6 +57,29 @@ describe("clawhub skills", () => {
     ]);
   });
 
+  it("normalizes upstream ownerHandle: null to omission", async () => {
+    const results = await searchClawHubSkills({
+      query: "assistant",
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            results: [
+              {
+                score: 1,
+                slug: "home-assistant",
+                ownerHandle: null,
+                displayName: "Home Assistant",
+              },
+              { score: 0.9, slug: "weather", ownerHandle: "alice", displayName: "Weather" },
+            ],
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+    });
+    expect(results[0]!.ownerHandle).toBeUndefined();
+    expect(results[1]!.ownerHandle).toBe("alice");
+  });
+
   it("rejects skill icons outside the configured hosted-icon route", async () => {
     const fetchImpl: typeof fetch = async () =>
       new Response(
