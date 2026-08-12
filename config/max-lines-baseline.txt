@@ -921,7 +921,6 @@ ui/src/pages/chat/tool-stream.ts
 ui/src/pages/config/config-page.ts
 ui/src/pages/config/view.browser.test.ts
 ui/src/pages/cron/view.ts
-ui/src/pages/new-session/new-session-page.ts
 ui/src/pages/plugins/plugins-page.ts
 ui/src/pages/plugins/view.ts
 ui/src/pages/sessions/sessions-page.ts
