@@ -394,7 +394,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       if (typeof archived === "boolean") {
         const expectedSessionId =
           normalizeOptionalString(readToolStringParam(params, "expectedSessionId")) ??
-          (key === requesterKey ? normalizeOptionalString(opts.agentSessionId) : undefined);
+          (isRequesterSession ? normalizeOptionalString(opts.agentSessionId) : undefined);
         if (!expectedSessionId) {
           throw new ToolInputError("Session lifecycle action requires a durable session identity");
         }

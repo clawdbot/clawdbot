@@ -14,8 +14,8 @@ import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { updateChatRunProvider } from "../chat-abort.js";
 import { chatRunBelongsToSelectedAgent } from "../chat-run-owner.js";
-import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
@@ -323,8 +323,10 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                     // Register for any other active runs *in the same session* so
                     // late-joining clients (e.g. page refresh mid-response) receive
                     // in-progress tool events without leaking cross-session data.
-                    const compatibilityOwnerAgentId =
-                      tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey);
+                    const compatibilityOwnerAgentId = tryResolveSessionCompatibilityOwnerAgentId(
+                      cfg,
+                      sessionKey,
+                    );
                     const selectedSessionAgentId = selectedAgent.agentId;
                     for (const [activeRunId, active] of context.chatAbortControllers) {
                       const sameSelectedAgent =

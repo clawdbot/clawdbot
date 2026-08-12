@@ -119,7 +119,10 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   core: 3,
   "plugin-entry": 1,
   routing: 1,
-  health: 0,
+  // +1 each: the shipped default-agent resolver remains available through
+  // compatibility barrels while callers migrate to explicit/sole selection.
+  health: 1,
+  "agent-scope-runtime": 1,
   // +1: shipped channel setup state-migration declaration during its migration window.
   "channel-entry-contract": 1,
   "approval-gateway-runtime": 1,
@@ -140,7 +143,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "agent-media-payload": 3,
   // +2: deprecated media projection type and builder.
   "reply-payload": 2,
-  "agent-runtime": 2,
+  "agent-runtime": 3,
+  "memory-host-core": 1,
   // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
   // +4: legacy AgentHarness, attempt, embedded-run, and side-question contracts remain
   // deprecated while external harnesses migrate to required-capability V2 contracts.
@@ -348,7 +352,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
       // +7: restore still-existing deprecated inbound-dispatch compatibility re-exports.
       // +6: source-compatible harness contracts retained during the V2 migration window.
-      1142,
+      // +1: shipped default-agent resolver retained during explicit-owner migration.
+      1143,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
