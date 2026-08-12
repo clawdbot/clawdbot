@@ -77,6 +77,12 @@ type SlackProgressCommentaryExpectation = {
   toolProgress: "absent" | "draft" | "standalone";
 };
 
+const SLACK_COMMENTARY_DIAGNOSTIC_MAX_OBSERVATIONS = 16;
+const SLACK_COMMENTARY_DIAGNOSTIC_MAX_BLOCK_ENTRIES = 16;
+const SLACK_COMMENTARY_DIAGNOSTIC_MAX_BYTES = 512;
+const SLACK_COMMENTARY_DIAGNOSTIC_FALLBACK =
+  'expected commentary in the Slack progress commentary lane; portable renderer expected one exact italic line; observed {"v":1,"observed":0,"sampled":0,"observationsTruncated":false,"withBlocks":0,"sampledBlockEntries":0,"blockEntriesTruncated":false,"italicText":0,"glyphText":0,"multilineText":0,"otherText":0,"withUpdateBlock":0}';
+
 function observedSlackText(message: { blockText?: string[]; text: string }) {
   return [message.text, ...(message.blockText ?? [])].join("\n");
 }
@@ -85,7 +91,8 @@ function hasSlackCommentaryLaneMarker(
   message: { blockText?: string[]; text: string },
   marker: string,
 ) {
-  if (message.text.includes(`💬 ${marker}`) || message.text.trim() === `_${marker}_`) {
+  const portableCommentary = /^_([^\r\n]+)_$/u.exec(message.text.trim())?.[1];
+  if (message.text.includes(`💬 ${marker}`) || portableCommentary === marker) {
     return true;
   }
   const blockText = message.blockText ?? [];
@@ -93,6 +100,68 @@ function hasSlackCommentaryLaneMarker(
     blockText.some((text) => text.trim() === "Update") &&
     blockText.some((text) => text.includes(marker))
   );
+}
+
+function describeSlackCommentaryLaneMismatch(
+  messages: ReadonlyArray<{ blockText?: string[]; text: string }>,
+) {
+  const sampledMessages = messages.slice(0, SLACK_COMMENTARY_DIAGNOSTIC_MAX_OBSERVATIONS);
+  let withBlocks = 0;
+  let sampledBlockEntries = 0;
+  let blockEntriesTruncated = false;
+  let italicText = 0;
+  let glyphText = 0;
+  let multilineText = 0;
+  let otherText = 0;
+  let withUpdateBlock = 0;
+
+  for (const message of sampledMessages) {
+    const text = message.text.trim();
+    if (/[\r\n]/u.test(text)) {
+      multilineText += 1;
+    } else if (/^_[^\r\n]+_$/u.test(text)) {
+      italicText += 1;
+    } else if (/^(?:🧠|💬)\s/u.test(text)) {
+      glyphText += 1;
+    } else {
+      otherText += 1;
+    }
+
+    const blockText = message.blockText ?? [];
+    if (blockText.length > 0) {
+      withBlocks += 1;
+    }
+    const sampledBlocks = blockText.slice(0, SLACK_COMMENTARY_DIAGNOSTIC_MAX_BLOCK_ENTRIES);
+    sampledBlockEntries += sampledBlocks.length;
+    blockEntriesTruncated ||= blockText.length > sampledBlocks.length;
+    withUpdateBlock += sampledBlocks.some((entry) => entry.trim() === "Update") ? 1 : 0;
+  }
+
+  const observationsTruncated = messages.length > sampledMessages.length;
+  const summary = {
+    v: 1,
+    observed: observationsTruncated
+      ? (`${SLACK_COMMENTARY_DIAGNOSTIC_MAX_OBSERVATIONS}+` as const)
+      : messages.length,
+    sampled: sampledMessages.length,
+    observationsTruncated,
+    withBlocks,
+    sampledBlockEntries,
+    blockEntriesTruncated,
+    italicText,
+    glyphText,
+    multilineText,
+    otherText,
+    withUpdateBlock,
+  };
+  const diagnostic = [
+    "expected commentary in the Slack progress commentary lane",
+    "portable renderer expected one exact italic line",
+    `observed ${JSON.stringify(summary)}`,
+  ].join("; ");
+  return new TextEncoder().encode(diagnostic).byteLength <= SLACK_COMMENTARY_DIAGNOSTIC_MAX_BYTES
+    ? diagnostic
+    : SLACK_COMMENTARY_DIAGNOSTIC_FALLBACK;
 }
 
 export function buildSlackProgressCommentaryRun(
@@ -150,7 +219,7 @@ export function buildSlackProgressCommentaryRun(
           expectation.commentary === "lane" &&
           (commentaryLaneTimestamps.size !== 1 || !commentaryLaneTimestamps.has(commentaryTs))
         ) {
-          throw new Error("expected commentary in the Slack progress commentary lane");
+          throw new Error(describeSlackCommentaryLaneMismatch(commentaryMessages));
         }
         if (expectation.commentary === "headline" && commentaryLaneTimestamps.size !== 0) {
           throw new Error("expected the preamble as the Slack progress status headline");

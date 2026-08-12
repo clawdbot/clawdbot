@@ -25,6 +25,7 @@ import {
   reconcileSlackNativeTaskChunks,
   type SlackNativeTaskSnapshot,
 } from "../../progress-blocks.js";
+import { createSlackProgressDraftPresentation } from "../../progress-draft-presentation.js";
 import { applyAppendOnlyStreamUpdate } from "../../stream-mode.js";
 import {
   appendSlackStream,
@@ -32,7 +33,6 @@ import {
   stopSlackStream,
   type SlackStreamSession,
 } from "../../streaming.js";
-import { escapeSlackMrkdwn } from "../mrkdwn.js";
 import {
   resolveExplicitSlackProgressTitle,
   resolveSlackStreamRecipientTeamId,
@@ -323,16 +323,14 @@ export function createSlackProgressRuntime(runtimeParams: {
     progressReceiptCollapsed = await collapseSlackProgressReceipt({ setup, edit: params });
   };
 
+  const progressDraftPresentation = createSlackProgressDraftPresentation();
   const progressDraft = createChannelProgressDraftCompositor({
     entry: account.config,
     mode: slackStreaming.mode,
     active: progressDraftActive,
     seed: progressSeed,
-    formatLine: formatSlackProgressDraftLine,
-    reasoningLinePrefix: "🧠 ",
-    commentaryLinePrefix: "",
+    ...progressDraftPresentation,
     reasoningGate: previewToolProgressEnabled,
-    commentaryItalics: true,
     buildProgressEventLine: (input, options) =>
       input.event === "tool" || input.event === "item" || input.event === "command-output"
         ? buildChannelProgressDraftLineForEntry(account.config, input, options)
@@ -447,7 +445,7 @@ export function createSlackProgressRuntime(runtimeParams: {
       entry: account.config,
       lines: [...progressDraft.getSnapshot().lines],
       seed: progressSeed,
-      formatLine: formatSlackProgressDraftLine,
+      formatLine: progressDraftPresentation.formatLine,
       narration: explanation,
       plan: steps,
     });
@@ -660,32 +658,4 @@ export function createSlackProgressRuntime(runtimeParams: {
     },
     shouldYieldDraftProgress: () => shouldYieldDraftProgress(),
   };
-}
-
-function formatSlackProgressDraftLine(line: string): string {
-  if (/^(?:🧠|💬)\s/u.test(line)) {
-    return line;
-  }
-
-  const italicCommentary = /^_(.*)_$/su.exec(line);
-  if (!italicCommentary) {
-    return escapeSlackMrkdwn(line);
-  }
-
-  const content = italicCommentary[1]!
-    .split(/(`[^`\n]+`)/u)
-    .map((segment, index) => {
-      if (index % 2 === 0) {
-        return escapeSlackMrkdwn(segment);
-      }
-      const code = segment
-        .slice(1, -1)
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;");
-      return `\`${code}\``;
-    })
-    .join("");
-
-  return `_${content}_`;
 }

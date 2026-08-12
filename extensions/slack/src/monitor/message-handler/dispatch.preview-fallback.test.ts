@@ -2,6 +2,7 @@ import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-ru
 // Slack tests cover dispatch.preview fallback plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSlackProgressDraftPresentation } from "../../progress-draft-presentation.js";
 
 const FINAL_REPLY_TEXT = "final answer";
 const THREAD_TS = "thread-1";
@@ -61,6 +62,14 @@ let mockedReplyThreadTs: string | undefined = THREAD_TS;
 let mockedReplyThreadTsSequence: Array<string | undefined> | undefined;
 let mockedSlackReplyBlocks: unknown[] | undefined;
 let mockedSlackIsThreadReply = true;
+let capturedProgressDraftPresentation:
+  | {
+      commentaryItalics: boolean | undefined;
+      commentaryLinePrefix: string | undefined;
+      formatLine: ((line: string) => string) | undefined;
+      reasoningLinePrefix: string | undefined;
+    }
+  | undefined;
 let capturedTyping:
   | {
       start: () => Promise<void>;
@@ -452,8 +461,14 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
     ...actual,
     createChannelProgressDraftCompositor: (
       params: Parameters<typeof actual.createChannelProgressDraftCompositor>[0],
-    ) =>
-      actual.createChannelProgressDraftCompositor({
+    ) => {
+      capturedProgressDraftPresentation = {
+        commentaryItalics: params.commentaryItalics,
+        commentaryLinePrefix: params.commentaryLinePrefix,
+        formatLine: params.formatLine,
+        reasoningLinePrefix: params.reasoningLinePrefix,
+      };
+      return actual.createChannelProgressDraftCompositor({
         ...params,
         // Gate timing lives in the compositor suite; dispatch tests exercise
         // Slack rendering and delivery after work admits the draft.
@@ -462,7 +477,8 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
           return 0 as never;
         }) as unknown as typeof setTimeout,
         clearTimeoutFn: (() => {}) as typeof clearTimeout,
-      }),
+      });
+    },
     createChannelMessageReplyPipeline: (params: {
       transformReplyPayload?: (payload: TestReplyPayload) => TestReplyPayload | null;
       typing?: {
@@ -1143,6 +1159,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     mockedSlackDraftMode = "append";
     mockedPinnedMainDmOwner = undefined;
     capturedReplyOptions = undefined;
+    capturedProgressDraftPresentation = undefined;
     capturedStatusReactionOptions = undefined;
     capturedTyping = undefined;
     mockedReplyThreadTs = THREAD_TS;
@@ -3986,6 +4003,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       }),
     );
 
+    expect(capturedProgressDraftPresentation).toEqual(createSlackProgressDraftPresentation());
     expect(draftStream.update).toHaveBeenLastCalledWith(
       "_I’m using the `monorepo` skill on Linux x86\\_64._",
     );

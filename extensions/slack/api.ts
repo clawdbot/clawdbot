@@ -98,6 +98,7 @@ export {
   hasSlackThreadParticipation,
   recordSlackThreadParticipation,
 } from "./src/sent-thread-cache.js";
+export { createSlackProgressDraftPresentation } from "./src/progress-draft-presentation.js";
 export {
   looksLikeSlackTargetId,
   normalizeSlackMessagingTarget,

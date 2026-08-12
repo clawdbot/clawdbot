@@ -1,3 +1,5 @@
+import { createSlackProgressDraftPresentation } from "@openclaw/slack/api.js";
+import { createChannelProgressDraftCompositor } from "openclaw/plugin-sdk/channel-outbound";
 // Qa Lab tests cover slack live plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readQaScenarioById } from "../../scenario-catalog.js";
@@ -697,7 +699,7 @@ describe("Slack live QA runtime helpers", () => {
     }
   });
 
-  it("classifies only exact Slack commentary lane presentations", () => {
+  it("classifies only exact Slack commentary lane presentations", async () => {
     const scenario = testing.findScenario(["slack-progress-commentary-true"])[0];
     const run = scenario?.buildRun("U999999999");
     const input = run && "input" in run ? run.input : "";
@@ -706,6 +708,27 @@ describe("Slack live QA runtime helpers", () => {
     const verifyObserved = run && "verifyObserved" in run ? run.verifyObserved : undefined;
     if (!commentaryMarker || !finalMarker || !verifyObserved) {
       throw new Error("missing Slack progress commentary lane verifier");
+    }
+    let portableCommentary = "";
+    const presentation = createSlackProgressDraftPresentation();
+    const progress = createChannelProgressDraftCompositor({
+      entry: {
+        streaming: {
+          mode: "progress",
+          progress: { commentary: true, label: false, toolProgress: false },
+        },
+      },
+      mode: "progress",
+      active: true,
+      seed: "slack-qa",
+      ...presentation,
+      update: (text) => {
+        portableCommentary = text;
+      },
+    });
+    await progress.pushCommentaryProgress(commentaryMarker, { itemId: "commentary" });
+    if (!portableCommentary) {
+      throw new Error("shared commentary renderer produced no Slack QA presentation");
     }
     const verifyCommentaryMessage = (message: { blockText?: string[]; text: string }) =>
       verifyObserved({
@@ -725,8 +748,8 @@ describe("Slack live QA runtime helpers", () => {
       });
 
     for (const message of [
-      { text: `_${commentaryMarker}_` },
-      { text: ` \n_${commentaryMarker}_\t` },
+      { text: portableCommentary },
+      { text: ` \n${portableCommentary}\t` },
       { text: `💬 ${commentaryMarker}` },
       { blockText: ["Update", commentaryMarker], text: "Working…" },
     ]) {
@@ -734,12 +757,106 @@ describe("Slack live QA runtime helpers", () => {
     }
     for (const text of [
       commentaryMarker,
-      `prefix _${commentaryMarker}_ suffix`,
-      `_${commentaryMarker}_\nmore`,
+      `prefix ${portableCommentary} suffix`,
+      `${portableCommentary}\nmore`,
     ]) {
       expect(() => verifyCommentaryMessage({ text })).toThrow(
         "expected commentary in the Slack progress commentary lane",
       );
+    }
+    expect(() => verifyCommentaryMessage({ text: commentaryMarker })).toThrow(
+      "portable renderer expected one exact italic line",
+    );
+  });
+
+  it("bounds Slack commentary mismatch diagnostics to structural counts", () => {
+    const scenario = testing.findScenario(["slack-progress-commentary-true"])[0];
+    const run = scenario?.buildRun("U999999999");
+    const input = run && "input" in run ? run.input : "";
+    const commentaryMarker = input.match(/SLACK-QA-COMMENTARY-[0-9A-F]{8}/u)?.[0];
+    const finalMarker = input.match(/SLACK-QA-COMMENTARY-DONE-[0-9A-F]{8}/u)?.[0];
+    const verifyObserved = run && "verifyObserved" in run ? run.verifyObserved : undefined;
+    if (!commentaryMarker || !finalMarker || !verifyObserved) {
+      throw new Error("missing Slack progress commentary lane verifier");
+    }
+
+    const privateSentinel = "PRIVATE_SENTINEL";
+    const textSentinel = "TEXT_SENTINEL";
+    const blockSentinel = "BLOCK_SENTINEL";
+    const idSentinel = "ID_SENTINEL";
+    const timestampSentinel = "TIMESTAMP_SENTINEL";
+    const hashSentinel = "HASH_SENTINEL";
+    const messages = Array.from({ length: 20 }, (_observation, index) => {
+      const content = `${privateSentinel}_${index} ${textSentinel}_${index} ${hashSentinel}_${index} ${commentaryMarker}`;
+      const text =
+        index % 4 === 0
+          ? `_${content}_`
+          : index % 4 === 1
+            ? `🧠 ${content}`
+            : index % 4 === 2
+              ? `${content}\nmultiline`
+              : content;
+      return {
+        botId: `${idSentinel}_BOT_${index}`,
+        channelId: `${idSentinel}_CHANNEL_${index}`,
+        scenarioId: `${idSentinel}_SCENARIO_${index}`,
+        text,
+        blockText: [
+          "Update",
+          ...Array.from(
+            { length: 19 },
+            (_blockEntry, blockIndex) => `${blockSentinel}_${index}_${blockIndex}`,
+          ),
+        ],
+        threadTs: `${timestampSentinel}_THREAD_${index}`,
+        ts: timestampSentinel,
+      };
+    });
+
+    let diagnostic = "";
+    try {
+      verifyObserved({
+        finalMessage: { text: finalMarker, ts: "2.000000" },
+        messages: [
+          ...messages,
+          {
+            channelId: "C_FINAL",
+            text: finalMarker,
+            ts: "2.000000",
+          },
+        ],
+      });
+    } catch (error) {
+      diagnostic = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(new TextEncoder().encode(diagnostic).byteLength).toBeLessThanOrEqual(512);
+    const summary = JSON.parse(diagnostic.slice(diagnostic.indexOf("observed ") + 9));
+    expect(summary).toEqual({
+      v: 1,
+      observed: "16+",
+      sampled: 16,
+      observationsTruncated: true,
+      withBlocks: 16,
+      sampledBlockEntries: 256,
+      blockEntriesTruncated: true,
+      italicText: 4,
+      glyphText: 4,
+      multilineText: 4,
+      otherText: 4,
+      withUpdateBlock: 16,
+    });
+    for (const sentinel of [
+      privateSentinel,
+      textSentinel,
+      blockSentinel,
+      commentaryMarker,
+      finalMarker,
+      idSentinel,
+      timestampSentinel,
+      hashSentinel,
+    ]) {
+      expect(diagnostic).not.toContain(sentinel);
     }
   });
 
