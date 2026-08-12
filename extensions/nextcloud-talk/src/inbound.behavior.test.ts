@@ -6,7 +6,6 @@ import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import { setNextcloudTalkRuntime } from "./runtime.js";
 import type { CoreConfig, NextcloudTalkInboundMessage } from "./types.js";
-import { NextcloudTalkRetryableWebhookError } from "./webhook-spool.js";
 
 const {
   createChannelPairingControllerMock,
@@ -294,7 +293,7 @@ describe("nextcloud-talk inbound behavior", () => {
       }),
     ).resolves.toMatchObject({
       kind: "failed-retryable",
-      error: expect.any(NextcloudTalkRetryableWebhookError),
+      error: expect.any(Error),
     });
 
     await expect(
@@ -320,7 +319,7 @@ describe("nextcloud-talk inbound behavior", () => {
       }),
     ).resolves.toMatchObject({
       kind: "failed-retryable",
-      error: expect.any(NextcloudTalkRetryableWebhookError),
+      error: expect.any(Error),
     });
 
     expect(lifecycle.onDeferred).not.toHaveBeenCalled();

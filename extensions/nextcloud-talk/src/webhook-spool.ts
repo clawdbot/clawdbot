@@ -1,6 +1,7 @@
 // Nextcloud Talk plugin module owns durable webhook admission and replay draining.
 import {
   createChannelIngressMonitor,
+  type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressQueue,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -61,23 +62,6 @@ const NextcloudTalkWebhookPayloadSchema: z.ZodType<NextcloudTalkWebhookPayload> 
 });
 
 export type NextcloudTalkIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
-export class NextcloudTalkRetryableWebhookError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "NextcloudTalkRetryableWebhookError";
-  }
-}
-
-function isNextcloudTalkRetryableWebhookError(
-  error: unknown,
-): error is NextcloudTalkRetryableWebhookError {
-  return error instanceof NextcloudTalkRetryableWebhookError;
-}
-
-type NextcloudTalkIngressDispatchResult =
-  | { kind: "completed" }
-  | { kind: "deferred" }
-  | { kind: "failed-retryable"; error: unknown };
 
 type NextcloudTalkIngressMonitor = {
   receive: (rawEvent: string) => Promise<"accepted" | "ignored">;
@@ -125,9 +109,6 @@ function parseClaimedMessage(
 }
 
 function resolveNonRetryableFailure(error: unknown) {
-  if (isNextcloudTalkRetryableWebhookError(error)) {
-    return null;
-  }
   if (error instanceof NextcloudTalkWebhookPayloadError) {
     return { reason: "invalid-event", message: error.message };
   }
@@ -147,7 +128,7 @@ export function createNextcloudTalkWebhookSpool(options: {
   deliver: (
     message: NextcloudTalkInboundMessage,
     lifecycle: NextcloudTalkIngressLifecycle,
-  ) => Promise<NextcloudTalkIngressDispatchResult | void>;
+  ) => Promise<ChannelIngressMonitorDeliveryResult | void>;
   runtime: Pick<RuntimeEnv, "error" | "log">;
   pollIntervalMs?: number;
   adoptionStallTimeoutMs?: number;

@@ -9,10 +9,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
 import { migrateNextcloudTalkLegacyReplayState } from "./webhook-spool-state.js";
-import {
-  createNextcloudTalkWebhookSpool,
-  NextcloudTalkRetryableWebhookError,
-} from "./webhook-spool.js";
+import { createNextcloudTalkWebhookSpool } from "./webhook-spool.js";
 
 type NextcloudTalkIngressQueue = NonNullable<
   Parameters<typeof createNextcloudTalkWebhookSpool>[0]["queue"]
@@ -193,7 +190,7 @@ describe("Nextcloud Talk durable ingress", () => {
       const delivered: string[] = [];
       const interrupted = startSpool(queue, async (message) => {
         delivered.push(message.messageId);
-        throw new NextcloudTalkRetryableWebhookError("room lookup unavailable");
+        throw new Error("room lookup unavailable");
       });
       await interrupted.receive(createRawEvent({ messageId: "msg-retry-marker" }));
       await interrupted.waitForIdle();

@@ -5,7 +5,6 @@ import { describe, expect, it, vi } from "vitest";
 import { monitorNextcloudTalkProvider } from "./monitor-runtime.js";
 import { setNextcloudTalkRuntime } from "./runtime.js";
 import type { NextcloudTalkInboundMessage } from "./types.js";
-import { NextcloudTalkRetryableWebhookError } from "./webhook-spool.js";
 
 describe("Nextcloud Talk monitor abort", () => {
   it("stops both the webhook listener and durable spool after startup", async () => {
@@ -109,7 +108,7 @@ describe("Nextcloud Talk monitor abort", () => {
 
   it("returns retryable monitor delivery results to the durable spool", async () => {
     setNextcloudTalkRuntime(createPluginRuntimeMock() as unknown as PluginRuntime);
-    const expectedError = new NextcloudTalkRetryableWebhookError("room lookup unavailable");
+    const expectedError = new Error("room lookup unavailable");
     const expectedResult = { kind: "failed-retryable" as const, error: expectedError };
     let deliver:
       | Parameters<
