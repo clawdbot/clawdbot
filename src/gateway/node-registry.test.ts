@@ -403,6 +403,63 @@ describe("gateway/node-registry", () => {
     }
   });
 
+  it("keeps the shared fallback post-dispatch when the caller omits a budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const frames: string[] = [];
+      let releasePairingLookup: (() => void) | undefined;
+      const resolveCurrentPairingState = vi.fn(
+        () =>
+          new Promise<{ identity: string; generation: string }>((resolve) => {
+            releasePairingLookup = () =>
+              resolve({ identity: "identity-a", generation: "generation-a" });
+          }),
+      );
+      const registry = createNodeRegistry({ resolveCurrentPairingState });
+      const client = makeClient("conn-omitted", "node-omitted", frames);
+      registerNodeSession(registry, client, {
+        pairingIdentity: "identity-a",
+        pairingGeneration: "generation-a",
+      });
+      const onDispatchReady = vi.fn();
+
+      // fs.listDir and the exec-approval paths reach the registry without a
+      // timeoutMs of their own.
+      const invocation = registry.invoke({
+        nodeId: "node-omitted",
+        expectedConnId: "conn-omitted",
+        expectedPairingGeneration: "generation-a",
+        command: "system.run",
+        onDispatchReady,
+      });
+      // Outlast the shared fallback while the pairing lease is still in flight.
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(resolveCurrentPairingState).toHaveBeenCalledOnce();
+      releasePairingLookup?.();
+      await vi.advanceTimersByTimeAsync(1);
+
+      // An omitted budget is a pending-timer default, not a dispatch admission
+      // check, so slow revalidation must not turn it into an undispatched
+      // TIMEOUT the caller never had before.
+      expect(onDispatchReady).toHaveBeenCalledOnce();
+      expect(frames).toHaveLength(1);
+      expect(JSON.parse(frames[0] as string)).toMatchObject({
+        event: "node.invoke.request",
+        payload: { timeoutMs: 30_000 },
+      });
+
+      // The fallback still bounds the wait, only from dispatch rather than from
+      // the moment the caller entered.
+      await vi.advanceTimersByTimeAsync(30_000);
+      await expect(invocation).resolves.toEqual({
+        ok: false,
+        error: { code: "TIMEOUT", message: "node invoke timed out" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not dispatch when request serialization outlives the invoke budget", async () => {
     vi.useFakeTimers();
     try {

@@ -1090,7 +1090,13 @@ export class NodeRegistry {
     const invokeStartedAtMs = Date.now();
     // Keep node and Gateway on the same timer-safe value; zero disables both deadlines.
     const budgetMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000, 0);
-    const dispatchDeadlineAtMs = budgetMs > 0 ? invokeStartedAtMs + budgetMs : undefined;
+    // Only a caller that supplied a positive budget is waiting on a deadline the
+    // pre-dispatch work can overrun. Callers that omit timeoutMs keep the shared
+    // fallback as a post-dispatch pending timer, so their answer never changes
+    // from a dispatched command to an undispatched TIMEOUT.
+    const suppliedBudgetMs = resolveTimerTimeoutMs(params.timeoutMs, 0, 0);
+    const dispatchDeadlineAtMs =
+      suppliedBudgetMs > 0 ? invokeStartedAtMs + suppliedBudgetMs : undefined;
     let node = this.nodesById.get(params.nodeId);
     if (!node) {
       return {
