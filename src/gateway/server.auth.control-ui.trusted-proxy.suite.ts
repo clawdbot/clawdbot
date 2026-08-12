@@ -54,6 +54,35 @@ export function registerControlUiTrustedProxySuite(): void {
   ];
   const trustedProxyControlUiResults = new Map<string, Awaited<ReturnType<typeof connectReq>>>();
 
+  const withTrustedProxyControlUiServer = async (
+    run: (port: number) => Promise<void>,
+  ): Promise<void> => {
+    const { replaceConfigFile } = await import("../config/config.js");
+    testState.gatewayAuth = undefined;
+    testState.gatewayControlUi = {
+      ...testState.gatewayControlUi,
+      allowedOrigins: ["https://localhost"],
+    };
+    await replaceConfigFile({
+      nextConfig: {
+        gateway: {
+          auth: {
+            mode: "trusted-proxy",
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+              requiredHeaders: ["x-forwarded-proto"],
+              allowLoopback: true,
+            },
+          },
+          trustedProxies: ["127.0.0.1"],
+          controlUi: { allowedOrigins: ["https://localhost"] },
+        },
+      },
+      afterWrite: { mode: "auto" },
+    });
+    await withControlUiGatewayServer(async ({ port }) => await run(port));
+  };
+
   beforeAll(async () => {
     await configureTrustedProxyControlUiAuth();
     await withControlUiGatewayServer(async ({ port }) => {
@@ -147,32 +176,7 @@ export function registerControlUiTrustedProxySuite(): void {
   });
 
   test("requires pairing for trusted-proxy control ui device identity", async () => {
-    const { replaceConfigFile } = await import("../config/config.js");
-    testState.gatewayAuth = undefined;
-    testState.gatewayControlUi = {
-      ...testState.gatewayControlUi,
-      allowedOrigins: ["https://localhost"],
-    };
-    await replaceConfigFile({
-      nextConfig: {
-        gateway: {
-          auth: {
-            mode: "trusted-proxy",
-            trustedProxy: {
-              userHeader: "x-forwarded-user",
-              requiredHeaders: ["x-forwarded-proto"],
-              allowLoopback: true,
-            },
-          },
-          trustedProxies: ["127.0.0.1"],
-          controlUi: {
-            allowedOrigins: ["https://localhost"],
-          },
-        },
-      },
-      afterWrite: { mode: "auto" },
-    });
-    await withControlUiGatewayServer(async ({ port }) => {
+    await withTrustedProxyControlUiServer(async (port) => {
       const ws = await openWs(port, TRUSTED_PROXY_CONTROL_UI_HEADERS);
       try {
         const challengeNonce = await readConnectChallengeNonce(ws);
@@ -202,32 +206,7 @@ export function registerControlUiTrustedProxySuite(): void {
   });
 
   test("clears trusted-proxy control ui scopes without device identity", async () => {
-    const { replaceConfigFile } = await import("../config/config.js");
-    testState.gatewayAuth = undefined;
-    testState.gatewayControlUi = {
-      ...testState.gatewayControlUi,
-      allowedOrigins: ["https://localhost"],
-    };
-    await replaceConfigFile({
-      nextConfig: {
-        gateway: {
-          auth: {
-            mode: "trusted-proxy",
-            trustedProxy: {
-              userHeader: "x-forwarded-user",
-              requiredHeaders: ["x-forwarded-proto"],
-              allowLoopback: true,
-            },
-          },
-          trustedProxies: ["127.0.0.1"],
-          controlUi: {
-            allowedOrigins: ["https://localhost"],
-          },
-        },
-      },
-      afterWrite: { mode: "auto" },
-    });
-    await withControlUiGatewayServer(async ({ port }) => {
+    await withTrustedProxyControlUiServer(async (port) => {
       const ws = await openWs(port, TRUSTED_PROXY_CONTROL_UI_HEADERS);
       try {
         const res = await connectReq(ws, {
@@ -255,32 +234,7 @@ export function registerControlUiTrustedProxySuite(): void {
   });
 
   test("bounds trusted-proxy control ui scopes to proxy-declared scope header", async () => {
-    const { replaceConfigFile } = await import("../config/config.js");
-    testState.gatewayAuth = undefined;
-    testState.gatewayControlUi = {
-      ...testState.gatewayControlUi,
-      allowedOrigins: ["https://localhost"],
-    };
-    await replaceConfigFile({
-      nextConfig: {
-        gateway: {
-          auth: {
-            mode: "trusted-proxy",
-            trustedProxy: {
-              userHeader: "x-forwarded-user",
-              requiredHeaders: ["x-forwarded-proto"],
-              allowLoopback: true,
-            },
-          },
-          trustedProxies: ["127.0.0.1"],
-          controlUi: {
-            allowedOrigins: ["https://localhost"],
-          },
-        },
-      },
-      afterWrite: { mode: "auto" },
-    });
-    await withControlUiGatewayServer(async ({ port }) => {
+    await withTrustedProxyControlUiServer(async (port) => {
       const seeded = await seedApprovedOperatorReadPairing({
         identityPrefix: "openclaw-control-ui-trusted-proxy-bounded-",
         clientId: CONTROL_UI_CLIENT.id,

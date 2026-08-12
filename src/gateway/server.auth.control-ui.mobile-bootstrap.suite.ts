@@ -3,6 +3,7 @@ import {
   createOperatorIdentityFixture,
   REMOTE_BOOTSTRAP_HEADERS,
   startControlUiServer,
+  withControlUiServer,
 } from "./server.auth.control-ui.fixtures.test-support.js";
 import {
   connectReq,
@@ -13,6 +14,15 @@ import {
 } from "./server.auth.test-helpers.js";
 
 export function registerControlUiMobileBootstrapSuite(): void {
+  const FULL_OPERATOR_SCOPES = [
+    "operator.admin",
+    "operator.approvals",
+    "operator.questions",
+    "operator.read",
+    "operator.talk.secrets",
+    "operator.write",
+  ];
+
   const connectSetupCodeBootstrapNode = async (params: {
     identityPrefix: string;
     client: {
@@ -23,33 +33,35 @@ export function registerControlUiMobileBootstrapSuite(): void {
       deviceFamily: string;
     };
     limited?: boolean;
+    identityFixture?: Awaited<ReturnType<typeof createOperatorIdentityFixture>>;
   }) => {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
     const { FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE, PAIRING_SETUP_BOOTSTRAP_PROFILE } =
       await import("../shared/device-bootstrap-profile.js");
-    const { server, port, prevToken } = await startControlUiServer("secret");
-    const { identityPath, identity } = await createOperatorIdentityFixture(params.identityPrefix);
-    const wsBootstrap = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
-    try {
-      const issued = await issueDeviceBootstrapToken({
-        profile: params.limited
-          ? PAIRING_SETUP_BOOTSTRAP_PROFILE
-          : FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-      });
-      const initial = await connectReq(wsBootstrap, {
-        skipDefaultAuth: true,
-        bootstrapToken: issued.token,
-        role: "node",
-        scopes: [],
-        client: params.client,
-        deviceIdentityPath: identityPath,
-      });
-      return { identity, initial };
-    } finally {
-      wsBootstrap.close();
-      await server.close();
-      restoreGatewayToken(prevToken);
-    }
+    const identityFixture =
+      params.identityFixture ?? (await createOperatorIdentityFixture(params.identityPrefix));
+    const { identityPath, identity } = identityFixture;
+    return await withControlUiServer(async ({ port }) => {
+      const wsBootstrap = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      try {
+        const issued = await issueDeviceBootstrapToken({
+          profile: params.limited
+            ? PAIRING_SETUP_BOOTSTRAP_PROFILE
+            : FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+        });
+        const initial = await connectReq(wsBootstrap, {
+          skipDefaultAuth: true,
+          bootstrapToken: issued.token,
+          role: "node",
+          scopes: [],
+          client: params.client,
+          deviceIdentityPath: identityPath,
+        });
+        return { identity, initial };
+      } finally {
+        wsBootstrap.close();
+      }
+    });
   };
   test("voice-node setup code reconnects with node and Talk-only operator tokens", async () => {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
@@ -226,15 +238,7 @@ export function registerControlUiMobileBootstrapSuite(): void {
       if (!issuedOperatorToken) {
         throw new Error("expected handed-off operator device token");
       }
-      expect(operatorHandoff?.scopes).toEqual([
-        "operator.admin",
-        "operator.approvals",
-        "operator.questions",
-        "operator.read",
-        "operator.talk.secrets",
-        "operator.write",
-      ]);
-      expect(operatorHandoff?.scopes).toContain("operator.admin");
+      expect(operatorHandoff?.scopes).toEqual(FULL_OPERATOR_SCOPES);
 
       const pendingAfterInitial = await listDevicePairing();
       const pendingForDevice = pendingAfterInitial.pending.filter(
@@ -243,31 +247,13 @@ export function registerControlUiMobileBootstrapSuite(): void {
       expect(pendingForDevice).toEqual([]);
       wsBootstrap.close();
 
-      const afterBootstrap = await listDevicePairing();
-      expect(
-        afterBootstrap.pending.filter((entry) => entry.deviceId === identity.deviceId),
-      ).toEqual([]);
       const paired = await getPairedDevice(identity.deviceId);
       expect(paired?.roles).toEqual(["node", "operator"]);
-      expect(paired?.approvedScopes).toEqual([
-        "operator.admin",
-        "operator.approvals",
-        "operator.questions",
-        "operator.read",
-        "operator.talk.secrets",
-        "operator.write",
-      ]);
+      expect(paired?.approvedScopes).toEqual(FULL_OPERATOR_SCOPES);
       expect(paired?.tokens?.node?.token).toBe(issuedDeviceToken);
       expect(paired?.tokens?.node?.scopes).toEqual([]);
       expect(paired?.tokens?.operator?.token).toBe(issuedOperatorToken);
-      expect(paired?.tokens?.operator?.scopes).toEqual([
-        "operator.admin",
-        "operator.approvals",
-        "operator.questions",
-        "operator.read",
-        "operator.talk.secrets",
-        "operator.write",
-      ]);
+      expect(paired?.tokens?.operator?.scopes).toEqual(FULL_OPERATOR_SCOPES);
 
       const wsReplay = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
       const replay = await connectReq(wsReplay, {
@@ -401,15 +387,7 @@ export function registerControlUiMobileBootstrapSuite(): void {
         (entry) => entry.role === "operator",
       );
       expect(operatorHandoff?.deviceToken).toBeTruthy();
-      expect(operatorHandoff?.scopes).toEqual([
-        "operator.admin",
-        "operator.approvals",
-        "operator.questions",
-        "operator.read",
-        "operator.talk.secrets",
-        "operator.write",
-      ]);
-      expect(operatorHandoff?.scopes).toContain("operator.admin");
+      expect(operatorHandoff?.scopes).toEqual(FULL_OPERATOR_SCOPES);
 
       const pendingAfterInitial = await listDevicePairing();
       expect(
@@ -417,14 +395,7 @@ export function registerControlUiMobileBootstrapSuite(): void {
       ).toEqual([]);
       const paired = await getPairedDevice(identity.deviceId);
       expect(paired?.roles).toEqual(["node", "operator"]);
-      expect(paired?.approvedScopes).toEqual([
-        "operator.admin",
-        "operator.approvals",
-        "operator.questions",
-        "operator.read",
-        "operator.talk.secrets",
-        "operator.write",
-      ]);
+      expect(paired?.approvedScopes).toEqual(FULL_OPERATOR_SCOPES);
     },
   );
 
@@ -493,12 +464,18 @@ export function registerControlUiMobileBootstrapSuite(): void {
       mode: "node" as const,
       deviceFamily: "iPhone",
     };
+    const identityFixture = await createOperatorIdentityFixture(identityPrefix);
     const limited = await connectSetupCodeBootstrapNode({
       identityPrefix,
       client,
       limited: true,
+      identityFixture,
     });
-    const upgraded = await connectSetupCodeBootstrapNode({ identityPrefix, client });
+    const upgraded = await connectSetupCodeBootstrapNode({
+      identityPrefix,
+      client,
+      identityFixture,
+    });
     expect(upgraded.identity.deviceId).toBe(limited.identity.deviceId);
     expect(upgraded.initial.ok).toBe(true);
 

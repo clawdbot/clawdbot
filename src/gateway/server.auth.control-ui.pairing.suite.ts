@@ -1,13 +1,12 @@
 import { expect, test } from "vitest";
-import { WebSocket } from "ws";
 import {
   buildSignedDeviceForIdentity,
   createOperatorIdentityFixture,
   expectArrayIncludes,
   seedApprovedOperatorReadPairing,
   startControlUiServer,
-  startControlUiServerWithClient,
   startControlUiServerWithOperatorIdentity,
+  withControlUiServer,
 } from "./server.auth.control-ui.fixtures.test-support.js";
 import {
   BACKEND_GATEWAY_CLIENT,
@@ -15,7 +14,6 @@ import {
   CONTROL_UI_CLIENT,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
-  onceMessage,
   openTailscaleWs,
   openWs,
   originForPort,
@@ -287,63 +285,55 @@ export function registerControlUiPairingSuite(): void {
 
   test("auto-approves local-direct node pairing, then queues operator scope approval", async () => {
     const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
-    const { server, port, prevToken } = await startControlUiServer("secret");
     const { identityPath, identity, client } =
       await createOperatorIdentityFixture("openclaw-device-scope-");
-    const connectWithNonce = async (role: "operator" | "node", scopes: string[]) => {
-      const socket = new WebSocket(`ws://127.0.0.1:${port}`, {
-        headers: { host: "gateway.example" },
-      });
-      const challengePromise = onceMessage(
-        socket,
-        (o) => o.type === "event" && o.event === "connect.challenge",
+    await withControlUiServer(async ({ port }) => {
+      const connectWithNonce = async (role: "operator" | "node", scopes: string[]) => {
+        const socket = await openWs(port, { host: "gateway.example" });
+        try {
+          const nonce = await readConnectChallengeNonce(socket);
+          return await connectReq(socket, {
+            token: "secret",
+            role,
+            scopes,
+            client,
+            device: await buildSignedDeviceForIdentity({
+              identityPath,
+              client,
+              role,
+              scopes,
+              nonce,
+            }),
+          });
+        } finally {
+          socket.close();
+        }
+      };
+
+      const nodeConnect = await connectWithNonce("node", []);
+      expect(nodeConnect.ok).toBe(true);
+
+      const operatorConnect = await connectWithNonce("operator", [
+        "operator.read",
+        "operator.write",
+      ]);
+      expect(operatorConnect.ok).toBe(false);
+      expect(operatorConnect.error?.message ?? "").toContain("pairing required");
+
+      const pending = await listDevicePairing();
+      const pendingForTestDevice = pending.pending.filter(
+        (entry) => entry.deviceId === identity.deviceId,
       );
-      await new Promise<void>((resolve) => {
-        socket.once("open", resolve);
-      });
-      const challenge = await challengePromise;
-      const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
-      expect(typeof nonce).toBe("string");
-      const result = await connectReq(socket, {
-        token: "secret",
-        role,
-        scopes,
-        client,
-        device: await buildSignedDeviceForIdentity({
-          identityPath,
-          client,
-          role,
-          scopes,
-          nonce: String(nonce),
-        }),
-      });
-      socket.close();
-      return result;
-    };
+      expect(pendingForTestDevice).toHaveLength(1);
+      expectArrayIncludes(pendingForTestDevice[0]?.scopes, ["operator.read", "operator.write"]);
 
-    const nodeConnect = await connectWithNonce("node", []);
-    expect(nodeConnect.ok).toBe(true);
+      const paired = await getPairedDevice(identity.deviceId);
+      expectArrayIncludes(paired?.roles, ["node", "operator"]);
+      expectArrayIncludes(paired?.approvedScopes, ["operator.read", "operator.write"]);
 
-    const operatorConnect = await connectWithNonce("operator", ["operator.read", "operator.write"]);
-    expect(operatorConnect.ok).toBe(false);
-    expect(operatorConnect.error?.message ?? "").toContain("pairing required");
-
-    const pending = await listDevicePairing();
-    const pendingForTestDevice = pending.pending.filter(
-      (entry) => entry.deviceId === identity.deviceId,
-    );
-    expect(pendingForTestDevice).toHaveLength(1);
-    expectArrayIncludes(pendingForTestDevice[0]?.scopes, ["operator.read", "operator.write"]);
-
-    const paired = await getPairedDevice(identity.deviceId);
-    expectArrayIncludes(paired?.roles, ["node", "operator"]);
-    expectArrayIncludes(paired?.approvedScopes, ["operator.read", "operator.write"]);
-
-    const approvedOperatorConnect = await connectWithNonce("operator", ["operator.read"]);
-    expect(approvedOperatorConnect.ok).toBe(true);
-
-    await server.close();
-    restoreGatewayToken(prevToken);
+      const approvedOperatorConnect = await connectWithNonce("operator", ["operator.read"]);
+      expect(approvedOperatorConnect.ok).toBe(true);
+    });
   });
 
   test("allows operator.read connect when device is paired with operator.admin", async () => {
@@ -539,38 +529,34 @@ export function registerControlUiPairingSuite(): void {
     }
   });
 
-  test("allows gateway backend loopback shared-auth connections without device pairing", async () => {
-    const { server, ws, port, prevToken } = await startControlUiServerWithClient("secret");
-    const sockets = [ws];
-    try {
-      const backendCases: Array<{
-        name: string;
-        headers?: Record<string, string>;
-        socket?: WebSocket;
-      }> = [
-        { name: "default host", socket: ws },
-        { name: "remote-looking host", headers: { host: "gateway.example" } },
-        { name: "private host", headers: { host: "172.17.0.2:18789" } },
-      ];
-
-      for (const backendCase of backendCases) {
-        const socket = backendCase.socket ?? (await openWs(port, backendCase.headers));
-        if (!backendCase.socket) {
-          sockets.push(socket);
+  test.each([
+    {
+      name: "allows gateway backend loopback shared-auth connections without device pairing",
+      client: BACKEND_GATEWAY_CLIENT,
+      hosts: [undefined, "gateway.example", "172.17.0.2:18789"],
+    },
+    {
+      name: "allows CLI clients on loopback even when the host header is not private-or-loopback",
+      client: {
+        id: GATEWAY_CLIENT_NAMES.CLI,
+        version: "1.0.0",
+        platform: "linux",
+        mode: GATEWAY_CLIENT_MODES.CLI,
+      },
+      hosts: ["gateway.example"],
+    },
+  ])("$name", async ({ client, hosts }) => {
+    await withControlUiServer(async ({ port }) => {
+      for (const host of hosts) {
+        const socket = await openWs(port, host ? { host } : undefined);
+        try {
+          const result = await connectReq(socket, { token: "secret", client });
+          expect(result.ok, host ?? "default host").toBe(true);
+        } finally {
+          socket.close();
         }
-        const backendConnect = await connectReq(socket, {
-          token: "secret",
-          client: BACKEND_GATEWAY_CLIENT,
-        });
-        expect(backendConnect.ok, backendCase.name).toBe(true);
       }
-    } finally {
-      for (const socket of sockets) {
-        socket.close();
-      }
-      await server.close();
-      restoreGatewayToken(prevToken);
-    }
+    });
   });
 
   test("auto-approves Docker-style CLI connects on loopback with a private host header", async () => {
@@ -607,27 +593,6 @@ export function registerControlUiPairingSuite(): void {
       }
     } finally {
       wsDockerCli.close();
-      await server.close();
-      restoreGatewayToken(prevToken);
-    }
-  });
-
-  test("allows CLI clients on loopback even when the host header is not private-or-loopback", async () => {
-    const { server, port, prevToken } = await startControlUiServer("secret");
-    const wsRemoteLike = await openWs(port, { host: "gateway.example" });
-    try {
-      const remoteCli = await connectReq(wsRemoteLike, {
-        token: "secret",
-        client: {
-          id: GATEWAY_CLIENT_NAMES.CLI,
-          version: "1.0.0",
-          platform: "linux",
-          mode: GATEWAY_CLIENT_MODES.CLI,
-        },
-      });
-      expect(remoteCli.ok).toBe(true);
-    } finally {
-      wsRemoteLike.close();
       await server.close();
       restoreGatewayToken(prevToken);
     }

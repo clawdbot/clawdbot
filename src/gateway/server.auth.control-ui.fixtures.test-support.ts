@@ -1,16 +1,16 @@
+import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect } from "vitest";
 import {
   createSignedDevice,
+  restoreGatewayToken,
   startTestGatewayServer,
   startServer,
   startServerWithClient,
   TEST_OPERATOR_CLIENT,
   withGatewayServer,
 } from "./server.auth.test-helpers.js";
-
-const operatorIdentityPathByPrefix = new Map<string, string>();
 
 export function expectArrayIncludes(actual: unknown, expectedValues: string[]): void {
   expect(Array.isArray(actual)).toBe(true);
@@ -45,12 +45,8 @@ export const REMOTE_BOOTSTRAP_HEADERS = {
 
 export const createOperatorIdentityFixture = async (identityPrefix: string) => {
   const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
-  let identityPath = operatorIdentityPathByPrefix.get(identityPrefix);
-  if (!identityPath) {
-    const poolId = process.env.VITEST_POOL_ID ?? "0";
-    identityPath = path.join(os.tmpdir(), `${identityPrefix}${process.pid}-${poolId}.sqlite`);
-    operatorIdentityPathByPrefix.set(identityPrefix, identityPath);
-  }
+  const identityDir = await mkdtemp(path.join(os.tmpdir(), identityPrefix));
+  const identityPath = path.join(identityDir, "identity.sqlite");
   const identity = loadOrCreateDeviceIdentity({ path: identityPath });
   return {
     identityPath,
@@ -78,6 +74,23 @@ export const withControlUiGatewayServer = async <T>(
   });
 };
 
+export const withControlUiServer = async <T>(
+  fn: (ctx: { port: number }) => Promise<T>,
+  token = "secret",
+  opts?: Parameters<typeof startServer>[1],
+): Promise<T> => {
+  const { server, port, prevToken } = await startServer(token, {
+    ...opts,
+    controlUiEnabled: true,
+  });
+  try {
+    return await fn({ port });
+  } finally {
+    await server.close();
+    restoreGatewayToken(prevToken);
+  }
+};
+
 export const startControlUiServerWithClient = async (
   token?: string,
   opts?: Parameters<typeof startServerWithClient>[1],
@@ -97,8 +110,6 @@ export const startControlUiServer = async (
     controlUiEnabled: true,
   });
 };
-
-// Tampers with the persisted paired record through the store seam to
 
 export const seedApprovedOperatorReadPairing = async (params: {
   identityPrefix: string;
