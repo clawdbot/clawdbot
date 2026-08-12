@@ -488,6 +488,10 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
   };
   const base: PluginRuntime = {
     version: "1.0.0-test",
+    codexReconciliation: {
+      register: vi.fn(),
+      get: vi.fn(() => undefined),
+    },
     gateway: {
       isAvailable: vi.fn(async () => false),
       request: vi.fn(),

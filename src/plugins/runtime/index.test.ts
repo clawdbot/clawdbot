@@ -495,3 +495,18 @@ describe("plugin runtime command execution", () => {
     expect(nodes.invoke).toHaveBeenCalledWith({ nodeId: "node-1", command: "browser.proxy" });
   });
 });
+
+describe("plugin runtime Codex reconciliation source", () => {
+  it("keeps one provider in-process without a Gateway method", () => {
+    const runtime = createPluginRuntime();
+    const provider = {
+      list: vi.fn(async () => ({ hostId: "gateway:local", sessions: [] })),
+      withTranscript: vi.fn(async () => undefined),
+    };
+
+    expect(runtime.codexReconciliation.get()).toBeUndefined();
+    runtime.codexReconciliation.register(provider);
+    expect(runtime.codexReconciliation.get()).toBe(provider);
+    expect(() => runtime.codexReconciliation.register(provider)).toThrow("already registered");
+  });
+});

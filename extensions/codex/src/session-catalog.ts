@@ -704,6 +704,7 @@ async function enumerateCodexSessionHistory(params: {
   clientScopes?: readonly string[];
   archived: boolean;
   limit?: number;
+  signal?: AbortSignal;
 }): Promise<CodexSessionCatalogPage> {
   if (params.clientScopes?.includes("operator.admin") !== true) {
     throw new CatalogParamsError("Codex history enumeration requires operator.admin");
@@ -729,13 +730,16 @@ async function enumerateCodexSessionHistory(params: {
     const seenCursors = new Set<string>();
     let cursor: string | undefined;
     for (let pageIndex = 0; pageIndex < MAX_ACTION_CATALOG_PAGES; pageIndex += 1) {
+      params.signal?.throwIfAborted();
       const raw = await params.runtime.nodes.invoke({
         nodeId,
         command: CODEX_APP_SERVER_THREADS_HISTORY_LIST_COMMAND,
         params: { archived: params.archived, limit, ...(cursor ? { cursor } : {}) },
         timeoutMs: NODE_INVOKE_TIMEOUT_MS,
         scopes: ["operator.admin"],
+        ...(params.signal ? { signal: params.signal } : {}),
       });
+      params.signal?.throwIfAborted();
       const page = parseCatalogPage(unwrapNodeInvokePayload(raw), {
         expectedArchived: params.archived,
       });
@@ -757,6 +761,37 @@ async function enumerateCodexSessionHistory(params: {
     }
     throw new Error("Codex history is unavailable");
   }
+}
+
+async function enumerateLocalCodexSessionHistory(params: {
+  control: CodexSessionCatalogControl;
+  archived: boolean;
+  limit: number;
+  signal?: AbortSignal;
+}): Promise<CodexSessionCatalogPage> {
+  const sessions: CodexSessionCatalogSession[] = [];
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+  for (let pageIndex = 0; pageIndex < MAX_ACTION_CATALOG_PAGES; pageIndex += 1) {
+    params.signal?.throwIfAborted();
+    const page = await params.control.listHistoryPage({
+      archived: params.archived,
+      limit: params.limit,
+      ...(cursor ? { cursor } : {}),
+    });
+    params.signal?.throwIfAborted();
+    sessions.push(...page.sessions);
+    const nextCursor = page.nextCursor?.trim();
+    if (!nextCursor) {
+      return { sessions };
+    }
+    if (seenCursors.has(nextCursor)) {
+      throw new Error("history cursor loop");
+    }
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  }
+  throw new Error("history page limit exceeded");
 }
 
 /** Builds the node-local read-only Codex app-server catalog command. */
@@ -902,6 +937,14 @@ function readReconciliationListRequest(value: unknown) {
   };
 }
 
+function normalizeReconciliationTranscriptLimit(value: unknown): number {
+  const limit = normalizeLimit(value, "limit");
+  if (limit > MAX_TRANSCRIPT_PAGE_LIMIT) {
+    throw new CatalogParamsError(`limit must be an integer from 1 to ${MAX_TRANSCRIPT_PAGE_LIMIT}`);
+  }
+  return limit;
+}
+
 function readReconciliationTranscriptRequest(value: unknown) {
   if (!isRecord(value)) {
     throw new CatalogParamsError("Codex reconciliation parameters must be an object");
@@ -915,7 +958,7 @@ function readReconciliationTranscriptRequest(value: unknown) {
   return {
     hostId: readReconciliationHostId(value.hostId),
     threadId,
-    limit: normalizeLimit(value.limit, "limit"),
+    limit: normalizeReconciliationTranscriptLimit(value.limit),
     ...(cursor ? { cursor } : {}),
   };
 }
@@ -972,6 +1015,7 @@ async function readCodexReconciliationTranscript(params: {
     },
     timeoutMs: NODE_INVOKE_TIMEOUT_MS,
     scopes: ["operator.admin"],
+    ...(params.signal ? { signal: params.signal } : {}),
   });
   const page = parseTranscriptPage(unwrapNodeInvokePayload(raw));
   assertReconciliationNotAborted(params.signal);
@@ -990,56 +1034,55 @@ function registerCodexSessionReconciliation(params: {
   api: OpenClawPluginApi;
   control: CodexSessionCatalogControl;
 }): void {
-  params.api.registerGatewayMethod(
-    "codex.reconciliation.threads.list",
-    async ({ params: requestParams, respond, signal }) => {
-      try {
-        const request = readReconciliationListRequest(requestParams);
-        assertReconciliationNotAborted(signal);
-        const page =
-          request.hostId === CODEX_LOCAL_SESSION_HOST_ID
-            ? await params.control.listHistoryPage({
-                archived: request.archived,
-                limit: request.limit,
-              })
-            : await enumerateCodexSessionHistory({
-                runtime: params.api.runtime,
-                nodeId: request.hostId.slice("node:".length),
-                clientScopes: ["operator.admin"],
-                archived: request.archived,
-                limit: request.limit,
-              });
-        assertReconciliationNotAborted(signal);
-        respond(true, { hostId: request.hostId, ...page });
-      } catch {
-        respond(false, undefined, {
-          code: "codex_reconciliation_unavailable",
-          message: "Codex reconciliation source is unavailable",
-        });
-      }
+  params.api.runtime.codexReconciliation.register({
+    list: async (input) => {
+      const request = readReconciliationListRequest({
+        hostId: input.hostId,
+        archived: input.archived,
+        ...(input.limit !== undefined ? { limit: input.limit } : {}),
+      });
+      assertReconciliationNotAborted(input.signal);
+      const page =
+        request.hostId === CODEX_LOCAL_SESSION_HOST_ID
+          ? await enumerateLocalCodexSessionHistory({
+              control: params.control,
+              archived: request.archived,
+              limit: request.limit,
+              signal: input.signal,
+            })
+          : await enumerateCodexSessionHistory({
+              runtime: params.api.runtime,
+              nodeId: request.hostId.slice("node:".length),
+              clientScopes: ["operator.admin"],
+              archived: request.archived,
+              limit: request.limit,
+              signal: input.signal,
+            });
+      assertReconciliationNotAborted(input.signal);
+      return { hostId: request.hostId, sessions: page.sessions };
     },
-    { scope: "operator.admin" },
-  );
-  params.api.registerGatewayMethod(
-    "codex.reconciliation.transcript.read",
-    async ({ params: requestParams, respond, signal }) => {
-      try {
-        const page = await readCodexReconciliationTranscript({
-          runtime: params.api.runtime,
-          control: params.control,
-          request: readReconciliationTranscriptRequest(requestParams),
-          signal,
-        });
-        respond(true, page);
-      } catch {
-        respond(false, undefined, {
-          code: "codex_reconciliation_unavailable",
-          message: "Codex reconciliation source is unavailable",
-        });
-      }
+    withTranscript: async (input, consume) => {
+      const page = await readCodexReconciliationTranscript({
+        runtime: params.api.runtime,
+        control: params.control,
+        request: readReconciliationTranscriptRequest({
+          hostId: input.hostId,
+          threadId: input.threadId,
+          ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
+          ...(input.limit !== undefined ? { limit: input.limit } : {}),
+        }),
+        signal: input.signal,
+      });
+      const items = page.items.flatMap((item) => {
+        const id = boundedCatalogString(item.id, 512);
+        const type = boundedCatalogString(item.type, 128);
+        const text = boundedCatalogString(item.text, 32_000, "truncate");
+        return id && type ? [{ id, type, ...(text ? { text } : {}) }] : [];
+      });
+      assertReconciliationNotAborted(input.signal);
+      await consume(items);
     },
-    { scope: "operator.admin" },
-  );
+  });
 }
 
 /** Reads the persisted transcript for a Gateway-local or paired-node Codex session. */

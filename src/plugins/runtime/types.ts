@@ -106,8 +106,38 @@ export type RuntimeGatewayRequestOptions = {
   scopes?: OperatorScope[];
 };
 
+export type CodexReconciliationTranscriptItem = {
+  id: string;
+  type: string;
+  text?: string;
+};
+
+export type CodexReconciliationProvider = {
+  list(params: {
+    hostId: string;
+    archived: boolean;
+    limit?: number;
+    signal?: AbortSignal;
+  }): Promise<{ hostId: string; sessions: unknown[] }>;
+  withTranscript(
+    params: {
+      hostId: string;
+      threadId: string;
+      cursor?: string;
+      limit?: number;
+      signal?: AbortSignal;
+    },
+    consume: (items: readonly CodexReconciliationTranscriptItem[]) => Promise<void>,
+  ): Promise<void>;
+};
+
 /** Trusted in-process runtime surface injected into native plugins. */
 export type PluginRuntime = PluginRuntimeCore & {
+  /** Trusted in-process Codex source for the personal reconciliation plugin; never a Gateway RPC. */
+  codexReconciliation: {
+    register: (provider: CodexReconciliationProvider) => void;
+    get: () => CodexReconciliationProvider | undefined;
+  };
   gateway: {
     /** Whether this process owns an active Gateway request context. */
     isAvailable: () => Promise<boolean>;

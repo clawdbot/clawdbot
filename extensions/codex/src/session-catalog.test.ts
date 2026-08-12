@@ -472,28 +472,15 @@ function archiveTestSession(params: {
 
 function createGatewayApi(runtime: PluginRuntime, apiConfig: OpenClawConfig = {}) {
   let provider: SessionCatalogProvider | undefined;
-  const gatewayMethods = new Map<
-    string,
-    {
-      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
-      options: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
-    }
-  >();
   const registerSessionCatalog = vi.fn((candidate: SessionCatalogProvider) => {
     provider = candidate;
   });
-  const registerGatewayMethod = vi.fn<OpenClawPluginApi["registerGatewayMethod"]>(
-    (method, handler, options) => {
-      gatewayMethods.set(method, { handler, options });
-    },
-  );
   const api = {
     config: apiConfig,
     runtime,
     registerSessionCatalog,
-    registerGatewayMethod,
   } as unknown as OpenClawPluginApi;
-  return { api, getProvider: () => provider, registerSessionCatalog, gatewayMethods };
+  return { api, getProvider: () => provider, registerSessionCatalog };
 }
 
 beforeEach(() => {
@@ -1455,7 +1442,7 @@ describe("Codex supervision catalog", () => {
     expect(invoke).toHaveBeenCalledTimes(2);
   });
 
-  it("registers admin-only reconciliation history without changing the sidebar catalog", async () => {
+  it("registers an in-process reconciliation source without Gateway exposure or sidebar changes", async () => {
     const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async (request) => ({
       payloadJSON: JSON.stringify({
         sessions: [
@@ -1478,26 +1465,31 @@ describe("Codex supervision catalog", () => {
       ],
       invoke,
     });
-    const { api, gatewayMethods } = createGatewayApi(runtime);
+    let reconciliationProvider:
+      | {
+          list: (input: { hostId: string; archived: boolean; limit: number }) => Promise<unknown>;
+        }
+      | undefined;
+    (
+      runtime as PluginRuntime & {
+        codexReconciliation: { register: (provider: typeof reconciliationProvider) => void };
+      }
+    ).codexReconciliation = {
+      register: (provider) => {
+        reconciliationProvider = provider;
+      },
+    };
+    const { api } = createGatewayApi(runtime);
     if (!registerCodexSessionReconciliationRuntime) {
       throw new Error("Codex reconciliation source is not registered");
     }
 
     registerCodexSessionReconciliationRuntime({ api, control: createControl() });
 
-    expect([...gatewayMethods.keys()]).toEqual([
-      "codex.reconciliation.threads.list",
-      "codex.reconciliation.transcript.read",
-    ]);
-    expect(gatewayMethods.get("codex.reconciliation.threads.list")?.options).toEqual({
-      scope: "operator.admin",
-    });
-    const respond = vi.fn();
-    await gatewayMethods.get("codex.reconciliation.threads.list")?.handler({
-      params: { hostId: "node:devbox", archived: true, limit: 1 },
-      respond,
-    } as never);
-    expect(respond).toHaveBeenCalledWith(true, {
+    expect((api as { registerGatewayMethod?: unknown }).registerGatewayMethod).toBeUndefined();
+    await expect(
+      reconciliationProvider?.list({ hostId: "node:devbox", archived: true, limit: 1 }),
+    ).resolves.toEqual({
       hostId: "node:devbox",
       sessions: [{ threadId: "archived-thread", status: "idle", archived: true }],
     });
@@ -1521,7 +1513,7 @@ describe("Codex supervision catalog", () => {
     );
   });
 
-  it("reads reconciliation transcripts only on explicit demand and sanitizes unavailable nodes", async () => {
+  it("delivers projected reconciliation transcripts only to the explicit consumer", async () => {
     const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async (request) => {
       if (request.command === CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND) {
         return {
@@ -1529,7 +1521,14 @@ describe("Codex supervision catalog", () => {
             data: [
               {
                 id: "turn-1",
-                items: [{ id: "item-1", type: "userMessage", text: "private prompt" }],
+                items: [
+                  {
+                    id: "item-1",
+                    type: "userMessage",
+                    text: "private prompt",
+                    secret: "must-not-leave-provider",
+                  },
+                ],
               },
             ],
           }),
@@ -1548,37 +1547,204 @@ describe("Codex supervision catalog", () => {
       ],
       invoke,
     });
-    const { api, gatewayMethods } = createGatewayApi(runtime);
+    let reconciliationProvider:
+      | {
+          withTranscript: (
+            input: { hostId: string; threadId: string; limit: number },
+            consume: (items: Array<{ id: string; type: string; text?: string }>) => Promise<void>,
+          ) => Promise<void>;
+        }
+      | undefined;
+    (
+      runtime as PluginRuntime & {
+        codexReconciliation: { register: (provider: typeof reconciliationProvider) => void };
+      }
+    ).codexReconciliation = {
+      register: (provider) => {
+        reconciliationProvider = provider;
+      },
+    };
+    const { api } = createGatewayApi(runtime);
     if (!registerCodexSessionReconciliationRuntime) {
       throw new Error("Codex reconciliation source is not registered");
     }
     registerCodexSessionReconciliationRuntime({ api, control: createControl() });
     expect(invoke).not.toHaveBeenCalled();
 
-    const respond = vi.fn();
-    await gatewayMethods.get("codex.reconciliation.transcript.read")?.handler({
-      params: { hostId: "node:devbox", threadId: "archived-thread", limit: 1 },
-      respond,
-    } as never);
-    expect(respond).toHaveBeenCalledWith(true, {
-      hostId: "node:devbox",
-      label: "devbox",
-      threadId: "archived-thread",
-      items: [{ id: "item-1", type: "userMessage", text: "private prompt" }],
-    });
+    const consume = vi.fn(async () => undefined);
+    await reconciliationProvider?.withTranscript(
+      { hostId: "node:devbox", threadId: "archived-thread", limit: 1 },
+      consume,
+    );
+    expect(consume).toHaveBeenCalledWith([
+      { id: "item-1", type: "userMessage", text: "private prompt" },
+    ]);
     expect(invoke).toHaveBeenCalledOnce();
+  });
 
-    const unavailable = createGatewayApi(createRuntime().runtime);
-    registerCodexSessionReconciliationRuntime({ api: unavailable.api, control: createControl() });
-    const unavailableRespond = vi.fn();
-    await unavailable.gatewayMethods.get("codex.reconciliation.transcript.read")?.handler({
-      params: { hostId: "node:missing", threadId: "thread-1", limit: 1 },
-      respond: unavailableRespond,
-    } as never);
-    expect(unavailableRespond).toHaveBeenCalledWith(false, undefined, {
-      code: "codex_reconciliation_unavailable",
-      message: "Codex reconciliation source is unavailable",
+  it("bounds reconciliation transcript demand to one safe page and forwards cancellation", async () => {
+    const controller = new AbortController();
+    const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async (request) => {
+      expect(request.signal).toBe(controller.signal);
+      throw new Error("aborted node request");
     });
+    const { runtime } = createRuntime({
+      nodes: [
+        {
+          nodeId: "devbox",
+          connected: true,
+          commands: [CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND],
+          invocableCommands: [CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND],
+        },
+      ],
+      invoke,
+    });
+    let reconciliationProvider:
+      | {
+          withTranscript: (
+            input: { hostId: string; threadId: string; limit: number; signal?: AbortSignal },
+            consume: (items: Array<{ id: string; type: string; text?: string }>) => Promise<void>,
+          ) => Promise<void>;
+        }
+      | undefined;
+    (
+      runtime as PluginRuntime & {
+        codexReconciliation: { register: (provider: typeof reconciliationProvider) => void };
+      }
+    ).codexReconciliation = {
+      register: (provider) => {
+        reconciliationProvider = provider;
+      },
+    };
+    const { api } = createGatewayApi(runtime);
+    if (!registerCodexSessionReconciliationRuntime) {
+      throw new Error("Codex reconciliation source is not registered");
+    }
+    registerCodexSessionReconciliationRuntime({ api, control: createControl() });
+    await expect(
+      reconciliationProvider?.withTranscript(
+        { hostId: "node:devbox", threadId: "thread-1", limit: 51 },
+        async () => undefined,
+      ),
+    ).rejects.toThrow("from 1 to 50");
+    controller.abort();
+    await expect(
+      reconciliationProvider?.withTranscript(
+        { hostId: "node:devbox", threadId: "thread-1", limit: 1, signal: controller.signal },
+        async () => undefined,
+      ),
+    ).rejects.toThrow();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("enumerates all local current and archived reconciliation pages without cursor loops", async () => {
+    const listHistoryPage = vi.fn(
+      async ({ archived, cursor }: { archived: boolean; cursor?: string }) => {
+        if (!cursor) {
+          return {
+            sessions: [
+              { threadId: archived ? "archived-1" : "current-1", status: "idle", archived },
+            ],
+            nextCursor: "page-2",
+          };
+        }
+        return {
+          sessions: [{ threadId: archived ? "archived-2" : "current-2", status: "idle", archived }],
+        };
+      },
+    );
+    const { runtime } = createRuntime();
+    let reconciliationProvider:
+      | {
+          list: (input: { hostId: string; archived: boolean; limit: number }) => Promise<unknown>;
+        }
+      | undefined;
+    (
+      runtime as PluginRuntime & {
+        codexReconciliation: { register: (provider: typeof reconciliationProvider) => void };
+      }
+    ).codexReconciliation = {
+      register: (provider) => {
+        reconciliationProvider = provider;
+      },
+    };
+    const { api } = createGatewayApi(runtime);
+    if (!registerCodexSessionReconciliationRuntime) {
+      throw new Error("Codex reconciliation source is not registered");
+    }
+    registerCodexSessionReconciliationRuntime({ api, control: createControl({ listHistoryPage }) });
+    await expect(
+      reconciliationProvider?.list({
+        hostId: CODEX_LOCAL_SESSION_HOST_ID,
+        archived: false,
+        limit: 1,
+      }),
+    ).resolves.toMatchObject({
+      sessions: [{ threadId: "current-1" }, { threadId: "current-2" }],
+    });
+    await expect(
+      reconciliationProvider?.list({
+        hostId: CODEX_LOCAL_SESSION_HOST_ID,
+        archived: true,
+        limit: 1,
+      }),
+    ).resolves.toMatchObject({
+      sessions: [{ threadId: "archived-1" }, { threadId: "archived-2" }],
+    });
+    expect(listHistoryPage).toHaveBeenCalledTimes(4);
+  });
+
+  it("forwards in-flight reconciliation history cancellation to node invocation", async () => {
+    const controller = new AbortController();
+    const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async (request) => {
+      expect(request.signal).toBe(controller.signal);
+      controller.abort();
+      return { payloadJSON: JSON.stringify({ sessions: [] }) };
+    });
+    const { runtime } = createRuntime({
+      nodes: [
+        {
+          nodeId: "devbox",
+          connected: true,
+          commands: [CODEX_APP_SERVER_THREADS_HISTORY_LIST_COMMAND],
+          invocableCommands: [CODEX_APP_SERVER_THREADS_HISTORY_LIST_COMMAND],
+        },
+      ],
+      invoke,
+    });
+    let reconciliationProvider:
+      | {
+          list: (input: {
+            hostId: string;
+            archived: boolean;
+            limit: number;
+            signal?: AbortSignal;
+          }) => Promise<unknown>;
+        }
+      | undefined;
+    (
+      runtime as PluginRuntime & {
+        codexReconciliation: { register: (provider: typeof reconciliationProvider) => void };
+      }
+    ).codexReconciliation = {
+      register: (provider) => {
+        reconciliationProvider = provider;
+      },
+    };
+    const { api } = createGatewayApi(runtime);
+    if (!registerCodexSessionReconciliationRuntime) {
+      throw new Error("Codex reconciliation source is not registered");
+    }
+    registerCodexSessionReconciliationRuntime({ api, control: createControl() });
+    await expect(
+      reconciliationProvider?.list({
+        hostId: "node:devbox",
+        archived: true,
+        limit: 1,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow();
+    expect(invoke).toHaveBeenCalledOnce();
   });
 
   it("omits the Gateway's same-install node host from native discovery", async () => {

@@ -262,10 +262,24 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     managedTaskFlow: taskFlow,
   });
   const agent = createRuntimeAgent();
+  let codexReconciliation: PluginRuntime["codexReconciliation"] extends {
+    get: () => infer Provider;
+  }
+    ? Provider
+    : never;
   const runtime = {
     // Sourced from the shared OpenClaw version resolver (#52899) so plugins
     // always see the same version the CLI reports, avoiding API-version drift.
     version: VERSION,
+    codexReconciliation: {
+      register: (provider) => {
+        if (codexReconciliation) {
+          throw new Error("Codex reconciliation provider is already registered");
+        }
+        codexReconciliation = provider;
+      },
+      get: () => codexReconciliation,
+    },
     gateway: createRuntimeGateway(),
     config: createRuntimeConfig(),
     agent,
