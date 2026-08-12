@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
+import { setPreparedModelRuntimeAuthStoreLoader } from "../agents/prepared-model-runtime-auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveDeferredAuthStore } from "./server-model-catalog-auth.js";
 import {
   loadGatewayModelCatalog,
   loadGatewayModelCatalogSnapshot,
@@ -92,6 +94,36 @@ describe("gateway prepared model catalog", () => {
       readOnly: true,
       workspaceDir: "/tmp/gateway-workspace",
     });
+  });
+
+  it("refreshes auth only for the explicit deferred projection", async () => {
+    const config = ownerConfig();
+    const candidate = ownerSnapshot(config);
+    const loadAuthStore = vi.fn(async () => ({
+      version: 1 as const,
+      profiles: {
+        "openai:refreshed": { type: "api_key" as const, provider: "openai", key: "refreshed" },
+      },
+    }));
+    setPreparedModelRuntimeAuthStoreLoader(candidate, loadAuthStore);
+    const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => candidate);
+
+    const prepared = await loadGatewayModelCatalogSnapshot({
+      getConfig: () => config,
+      loadPublishedPreparedModelCatalogOwnerSnapshot,
+    });
+    expect(prepared.authStore).toEqual(candidate.authStore);
+    expect(loadAuthStore).not.toHaveBeenCalled();
+
+    const deferred = await loadGatewayModelCatalogSnapshot({
+      deferAuthRefresh: true,
+      getConfig: () => config,
+      loadPublishedPreparedModelCatalogOwnerSnapshot,
+    });
+    await expect(resolveDeferredAuthStore(deferred)).resolves.toEqual(
+      expect.objectContaining({ profiles: { "openai:refreshed": expect.any(Object) } }),
+    );
+    expect(loadAuthStore).toHaveBeenCalledWith(["openai"]);
   });
 
   it("rejects an ambiguous owner without an authoritative agent identity", async () => {

@@ -103,19 +103,16 @@ export async function loadGatewayModelCatalogSnapshot(
   params?: LoadGatewayModelCatalogParams,
 ): Promise<GatewayModelCatalogSnapshot> {
   const { candidate, owner } = await loadGatewayModelCatalogOwnerSnapshot(params);
-  const pendingAuthStore = loadPreparedModelRuntimeAuthStore(
-    candidate,
-    owner.modelCatalog.entries.map((entry) => entry.provider),
-  );
   if (params?.deferAuthRefresh) {
+    const pendingAuthStore = loadPreparedModelRuntimeAuthStore(
+      candidate,
+      owner.modelCatalog.entries.map((entry) => entry.provider),
+    );
     const snapshot = projectGatewayModelCatalogSnapshot(owner);
     setPendingGatewayModelCatalogAuthStore(snapshot, pendingAuthStore);
     return snapshot;
   }
-  return projectGatewayModelCatalogSnapshot({
-    ...owner,
-    authStore: (await pendingAuthStore) ?? owner.authStore,
-  });
+  return projectGatewayModelCatalogSnapshot(owner);
 }
 
 export async function loadGatewayModelCatalog(
@@ -158,11 +155,6 @@ export async function readPreparedGatewayModelCatalogSnapshot(
   const owner = resolvePublishedModelCatalogOwner(candidate);
   return projectGatewayModelCatalogSnapshot({
     ...owner,
-    authStore:
-      (await loadPreparedModelRuntimeAuthStore(
-        candidate,
-        owner.modelCatalog.entries.map((entry) => entry.provider),
-      )) ?? owner.authStore,
     authMaterializations: getPreparedModelRuntimeAuthMaterializations(candidate),
   });
 }
