@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { heartbeatMonitorAgentId } from "../cron/heartbeat-monitor.js";
 import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
@@ -149,14 +150,17 @@ describe("heartbeat cadence cron migration", () => {
 
   it("keeps multi-agent updates and creates scoped to their declared monitors", async () => {
     const fixture = await createFixture();
-    const initialCfg = {
-      agents: {
-        list: [
-          { id: "alpha", heartbeat: { every: "15m" } },
-          { id: "beta", heartbeat: { every: "20m" } },
-        ],
-      },
-    } as OpenClawConfig;
+    const initialCfg = retainLegacyDefaultAgentId(
+      {
+        agents: {
+          list: [
+            { id: "alpha", heartbeat: { every: "15m" } },
+            { id: "beta", heartbeat: { every: "20m" } },
+          ],
+        },
+      } as OpenClawConfig,
+      "alpha",
+    );
     await maybeMigrateHeartbeatCadenceToCron({
       cfg: initialCfg,
       shouldRepair: true,
@@ -165,14 +169,17 @@ describe("heartbeat cadence cron migration", () => {
     const alphaBefore = await loadMonitor(fixture.storePath, "alpha");
     const betaBefore = await loadMonitor(fixture.storePath, "beta");
 
-    const updatedCfg = {
-      agents: {
-        list: [
-          { id: "alpha", heartbeat: { every: "45m" } },
-          { id: "gamma", heartbeat: { every: "30m" } },
-        ],
-      },
-    } as OpenClawConfig;
+    const updatedCfg = retainLegacyDefaultAgentId(
+      {
+        agents: {
+          list: [
+            { id: "alpha", heartbeat: { every: "45m" } },
+            { id: "gamma", heartbeat: { every: "30m" } },
+          ],
+        },
+      } as OpenClawConfig,
+      "alpha",
+    );
     const result = await maybeMigrateHeartbeatCadenceToCron({
       cfg: updatedCfg,
       shouldRepair: true,

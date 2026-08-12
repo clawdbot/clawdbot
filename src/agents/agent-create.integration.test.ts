@@ -62,7 +62,7 @@ describe("agent roster persistence", () => {
   it("writes injected main and a new worker as one complete keyed roster", async () => {
     const persisted = await addWorkerToConfig({ gateway: { mode: "local" } });
 
-    expect(persisted.agents?.entries?.main).toEqual({});
+    expect(persisted.agents?.entries?.main).toMatchObject({ workspace: expect.any(String) });
     expect(persisted.agents?.entries?.worker).toMatchObject({ workspace: expect.any(String) });
     expect(Object.values(persisted.agents?.entries ?? {})).not.toContainEqual(
       expect.objectContaining({ default: expect.anything() }),
@@ -80,7 +80,7 @@ describe("agent roster persistence", () => {
     });
 
     expect(persisted.agents).not.toHaveProperty("list");
-    expect(persisted.agents?.entries?.main).toEqual({});
+    expect(persisted.agents?.entries?.main).toMatchObject({ workspace: expect.any(String) });
     expect(persisted.agents?.entries).toMatchObject({
       ops: { workspace: "/srv/ops" },
       worker: { workspace: expect.any(String) },

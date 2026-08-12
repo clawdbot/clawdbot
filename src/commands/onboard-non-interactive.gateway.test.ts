@@ -497,7 +497,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       const warningRuntime = { ...runtime, error: vi.fn() };
       const passwordRef = { source: "env" as const, provider: "default", id: "GATEWAY_PASSWORD" };
       const seededAgents = [
-        { id: "alpha", model: "anthropic/claude-3-5-sonnet" },
+        { id: "alpha", default: true, model: "anthropic/claude-3-5-sonnet" },
         { id: "beta", model: "openai/gpt-4o" },
       ];
       const seededBindings = [
