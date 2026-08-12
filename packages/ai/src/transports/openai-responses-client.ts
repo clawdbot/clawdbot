@@ -27,6 +27,7 @@ import {
 import {
   AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS,
   OpenAIResponsesWebSocketPreDispatchError,
+  OpenAIResponsesWebSocketSafeRetryError,
   type OpenAIResponsesOptions,
 } from "./openai-responses-contracts.js";
 import {
@@ -333,8 +334,10 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             `apiKey=${apiKey ? "present" : "missing"} ${summarizeResponsesPayload(params)}`,
         );
         let continuationBaseline: ResponsesContinuationRequest | undefined;
-        const createSseStream = async (): Promise<AsyncIterable<unknown>> => {
-          const initialRequest = (continuationClaim?.request ?? params) as typeof params;
+        const createSseStream = async (
+          initialRequest = (continuationClaim?.request ?? params) as typeof params,
+          initialAttemptKind: "initial" | "continuation-rejected" = "initial",
+        ): Promise<AsyncIterable<unknown>> => {
           const {
             stream: rawResponseStream,
             response,
@@ -345,6 +348,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             requestOptions,
             model,
             observePrompt,
+            initialAttemptKind,
             buildFullHistoryRequest: () => buildRequest("full-history"),
             onCompactionRejected: () =>
               suppressOpenAIResponsesCompaction(output, model, {
@@ -416,6 +420,19 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
                     yield event;
                   }
                 } catch (error) {
+                  if (error instanceof OpenAIResponsesWebSocketSafeRetryError) {
+                    finishWebSocket?.({ keep: false });
+                    finishWebSocket = undefined;
+                    transport = "sse";
+                    logWebSocketFallback(
+                      `safe_server_error code=${error.code} status=${safeDebugValue(error.status)} param=${safeDebugValue(error.param)}`,
+                    );
+                    yield* await createSseStream(
+                      await buildRequest("full-history"),
+                      "continuation-rejected",
+                    );
+                    return;
+                  }
                   if (
                     websocketSignal.aborted ||
                     !(error instanceof OpenAIResponsesWebSocketPreDispatchError)

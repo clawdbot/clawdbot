@@ -136,6 +136,7 @@ export const lineSetupContract = defineChannelSetupContract({
     useEnv: {
       kind: "boolean",
       cli: { flags: "--use-env", description: "Use LINE environment credentials" },
+      envVars: ["LINE_CHANNEL_ACCESS_TOKEN", "LINE_CHANNEL_SECRET"],
     },
   },
   legacyAdapter: lineSetupAdapter,

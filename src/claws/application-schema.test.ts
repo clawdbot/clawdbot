@@ -50,7 +50,7 @@ describe("Claw application schema v1", () => {
     expect(
       parseClawOpenClawProfile({
         schemaVersion: 1,
-        agent: { tools: { profile: "coding" } },
+        agent: { tools: { profile: "coding", allow: ["read"] } },
         extensions: [extension],
       }),
     ).toMatchObject({

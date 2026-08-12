@@ -21,6 +21,7 @@ openclaw backup create --verify
 openclaw backup create --no-include-workspace
 openclaw backup create --only-config
 openclaw backup verify ./2026-03-09T08-00-00.000+08-00-openclaw-backup.tar.gz
+openclaw backup restore ./2026-03-09T08-00-00.000+08-00-openclaw-backup.tar.gz --target ./restored-openclaw
 openclaw backup sqlite create --global --repository ~/Backups/openclaw-sqlite
 openclaw backup sqlite create --agent main --repository ~/Backups/openclaw-sqlite
 openclaw backup sqlite list --repository ~/Backups/openclaw-sqlite
@@ -36,10 +37,8 @@ openclaw backup enable --repository ~/Backups/openclaw-git --every 24h --push
 openclaw backup disable
 ```
 
-Archive `create` and `verify`, plus SQLite `create`, `list`, `verify`, and
+Archive `create`, `verify`, and `restore`, plus SQLite `create`, `list`, `verify`, and
 `restore`, accept `--json` for one machine-readable result on stdout.
-
-OpenClaw does not currently provide an `openclaw backup restore` command. Follow [Restore a full archive](/install/backups#restore-a-full-archive) for the manual, manifest-driven copy-back flow.
 
 ## Notes
 
@@ -48,6 +47,38 @@ OpenClaw does not currently provide an `openclaw backup restore` command. Follow
 - Existing archive files are never overwritten. Output paths inside the source state/workspace trees are rejected to avoid self-inclusion.
 - `openclaw backup verify <archive>` checks that the archive contains exactly one root manifest, rejects traversal-style archive paths and SQLite sidecars, confirms every manifest-declared payload exists, validates every SQLite snapshot's file shape, and runs full integrity and role checks on canonical OpenClaw databases. Dedicated plugin schemas remain opaque because they may require owner-defined SQLite capabilities. `openclaw backup create --verify` runs that validation immediately after writing the archive.
 - `openclaw backup create --only-config` backs up just the active JSON config file.
+
+## Restore a full archive
+
+Restore a complete archive into a fresh staging directory without touching the
+live state directory:
+
+```bash
+openclaw backup restore <archive.tar.gz> --target <fresh-directory>
+```
+
+The target must not exist or must be an empty directory. Restore verifies the
+archive and its SQLite databases before creating or writing the target, refuses
+a non-empty target, and removes an incomplete extraction if anything fails. It
+never restores in place and has no `--force` mode. The extracted layout retains
+the archive root, manifest, and `payload/` paths exactly as recorded in the
+archive.
+
+<Warning>
+  Restoring an archive is time travel. Messaging-channel credentials with
+  ratchet state, especially WhatsApp, may desynchronize after rollback and need
+  relinking. Approvals and delivery/dedupe state also roll back, so review
+  pending approvals before resuming the Gateway. Plugin `node_modules` trees
+  are not archived; after activation, run `openclaw plugins update <id>` or
+  reinstall with `openclaw plugins install <spec> --force`.
+</Warning>
+
+Activation is a separate offline operator step. Stop the Gateway, move the
+restored state asset into place or point `OPENCLAW_STATE_DIR` at that asset,
+then run `openclaw doctor` before restarting. Use `manifest.json` as the source
+of truth for the state, config, credentials, and workspace asset paths. See
+[Restore a full archive](/install/backups#restore-a-full-archive) for the full
+disaster-recovery sequence.
 
 ## SQLite snapshots
 

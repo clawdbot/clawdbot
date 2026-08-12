@@ -9,6 +9,7 @@ import {
   validateAuditListParams,
   validateAuditRunInspectParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { parsePositiveAuditCursor } from "../../audit/audit-cursor.js";
 import { listAuditEvents } from "../../audit/audit-event-store.js";
 import type {
   AgentRunAuditEventRecord,
@@ -25,18 +26,6 @@ import { assertValidParams } from "./validation.js";
 
 const DEFAULT_AUDIT_LIST_LIMIT = 100;
 const MAX_AUDIT_LIST_LIMIT = 500;
-
-function parsePositiveCursor(cursor: string | undefined): number | undefined | null {
-  if (cursor === undefined) {
-    return undefined;
-  }
-  const trimmed = cursor.trim();
-  if (!/^\d+$/.test(trimmed)) {
-    return null;
-  }
-  const parsed = Number(trimmed);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
-}
 
 /** Preserve the shipped audit.list result shape for run/tool-only clients. */
 function mapLegacyAuditEvent(
@@ -74,7 +63,7 @@ function invalidRangeOrCursor(params: { cursor?: string; after?: number; before?
   cursor?: number;
   invalid: boolean;
 } {
-  const cursor = parsePositiveCursor(params.cursor);
+  const cursor = parsePositiveAuditCursor(params.cursor);
   return {
     ...(cursor !== undefined && cursor !== null ? { cursor } : {}),
     invalid:
@@ -171,9 +160,9 @@ export const auditHandlers: GatewayRequestHandlers = {
       typeof params.runId !== "string" ||
       (params.executionCursor === decisionCursor &&
         decisionCursor !== undefined &&
-        isExecutionDecisionCursor(decisionCursor))
+        (decisionCursor.startsWith("a:") || decisionCursor.startsWith("g:")))
         ? undefined
-        : parsePositiveCursor(params.executionCursor);
+        : parsePositiveAuditCursor(params.executionCursor);
     if (
       (decisionCursor !== undefined && !isExecutionDecisionCursor(decisionCursor)) ||
       executionOffset === null

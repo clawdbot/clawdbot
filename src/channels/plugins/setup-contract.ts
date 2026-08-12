@@ -22,6 +22,8 @@ type ChannelSetupStringField = {
 type ChannelSetupBooleanField = {
   kind: "boolean";
   cli: ChannelSetupCliOption;
+  envVars?: readonly string[];
+  envVarMode?: "all" | "any";
 };
 
 type ChannelSetupIntegerField = {
@@ -48,9 +50,11 @@ type ChannelSetupField =
   | ChannelSetupStringListField
   | ChannelSetupChoiceField;
 
-export type ChannelSetupFieldMetadata = ChannelSetupField & {
-  key: string;
-};
+type ChannelSetupFieldMetadataFor<Field extends ChannelSetupField> = Field extends ChannelSetupField
+  ? Field & { key: string }
+  : never;
+
+export type ChannelSetupFieldMetadata = ChannelSetupFieldMetadataFor<ChannelSetupField>;
 
 export type ChannelSetupMetadata = {
   fields: readonly ChannelSetupFieldMetadata[];

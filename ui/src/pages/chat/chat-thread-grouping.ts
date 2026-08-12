@@ -8,7 +8,7 @@ import type { ChatItem, MessageGroup, ToolCard } from "../../lib/chat/chat-types
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
-import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
+import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { resolveMessageToolUseId, resolveToolBlockId } from "./chat-thread-items.ts";
 import {
   assistantGroupIsForwardedBoundary,
@@ -460,52 +460,6 @@ export function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
   return coalesced.filter((_, index) => !suppressedIndexes.has(index));
 }
 
-function assistantGroupHasReplyText(group: MessageGroup): boolean {
-  return group.messages.some(({ message }) => {
-    if (extractTextCached(message)?.trim()) {
-      return true;
-    }
-    return safeNormalizeMessage(message)?.content.some((block) => block.type === "canvas") ?? false;
-  });
-}
-
-export function annotateToolTurnOutcome(
-  items: Array<ChatItem | MessageGroup>,
-): Array<ChatItem | MessageGroup> {
-  let sawAssistantReply = false;
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index];
-    if (!item || item.kind !== "group") {
-      if (item && chatItemStartsUserTurn(item)) {
-        sawAssistantReply = false;
-      }
-      continue;
-    }
-    const role = item.role.toLowerCase();
-    const forwardedBoundary = role === "assistant" && assistantGroupIsForwardedBoundary(item);
-    const startsTurn = chatItemStartsUserTurn(item);
-    if (role === "user") {
-      sawAssistantReply = false;
-    } else if (role === "assistant") {
-      if (forwardedBoundary) {
-        // Gateway preserves sessions_send provenance when projecting inputs as assistant groups.
-        // Those groups start a new autonomous turn; they are not replies to an earlier tool.
-        sawAssistantReply = false;
-      } else if (assistantGroupHasReplyText(item)) {
-        sawAssistantReply = true;
-      }
-    } else if (role === "tool") {
-      item.turnSucceeded = sawAssistantReply;
-    }
-    if (role !== "user" && !forwardedBoundary && startsTurn) {
-      // This group belongs to the new hidden-input turn. Reset only after
-      // processing it so replies from this turn cannot classify older tools.
-      sawAssistantReply = false;
-    }
-  }
-  return items;
-}
-
 type RenderChatItem = ChatItem | MessageGroup;
 type StreamRunRenderItem = {
   kind: "stream-run";
@@ -549,7 +503,6 @@ type WorkGroupRenderItem = {
   key: string;
   groups: MessageGroup[];
   durationMs: number | null;
-  hasError: boolean;
 };
 
 type ActivityRunRenderItem = {
@@ -604,17 +557,6 @@ function isFinalReplyGroup(item: TurnRenderItem): boolean {
     isCollapsibleWorkGroup(item) &&
     item.role.toLowerCase() === "assistant" &&
     assistantGroupHasVisibleReplyContent(item)
-  );
-}
-
-function workGroupHasError(groups: MessageGroup[]): boolean {
-  return groups.some(
-    (group) =>
-      group.role.toLowerCase() === "tool" &&
-      group.turnSucceeded !== true &&
-      group.messages.some((entry) =>
-        extractToolCardsCached(entry.message, entry.key).some(isToolCardError),
-      ),
   );
 }
 
@@ -717,7 +659,6 @@ export function collapseCompletedTurnWork(
       key: `work:${finalReply.key}`,
       groups,
       durationMs,
-      hasError: workGroupHasError(groups),
     });
     result.push(...turn.slice(segmentEnd + 1));
   }

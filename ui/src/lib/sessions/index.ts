@@ -128,7 +128,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   // UI-owned facts the capability keeps beside them, so every published result
   // passes through the same overlay: swarm notes, then in-flight pin intents.
   const decorateRows = (result: SessionsListResult | null): SessionsListResult | null =>
-    mutations.applyPendingPins(swarmActivity.decorate(result));
+    mutations.applyConfirmedArchives(mutations.applyPendingPins(swarmActivity.decorate(result)));
 
   const roster = createSessionRosterRefresh({
     connection,
@@ -288,15 +288,25 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     };
   };
 
+  const reconcileChangedEvent = (payload: unknown, options?: SessionReconcileOptions) => {
+    const previous = state.result;
+    const eventInfo = readSessionChangedEvent(payload);
+    const reconciled = reconcileSessionChanged(
+      previous,
+      payload,
+      reconcileChangedOptions(payload, options),
+    );
+    if (reconciled.result !== previous && reconciled.key && eventInfo) {
+      mutations.observeArchiveState(reconciled.key, eventInfo.archived, reconciled.row);
+    }
+    return { eventInfo, reconciled };
+  };
+
   const reconcileChanged = (
     payload: unknown,
     options?: SessionReconcileOptions,
   ): SessionChangedResult => {
-    const base = reconcileSessionChanged(
-      state.result,
-      payload,
-      reconcileChangedOptions(payload, options),
-    );
+    const { reconciled: base } = reconcileChangedEvent(payload, options);
     const result = decorateRows(base.result);
     const reconciled =
       result === base.result
@@ -402,12 +412,16 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (decoratedResult !== state.result) {
       publish({ ...state, result: decoratedResult });
     }
-    const eventInfo = readSessionChangedEvent(event.payload);
-    const reconcileOptions = reconcileChangedOptions(event.payload, {
+    const { eventInfo, reconciled } = reconcileChangedEvent(event.payload, {
       resultAgentId: state.agentId,
       archivedFilter: roster.lastOptions().archivedFilter,
     });
-    const reconciled = reconcileSessionChanged(state.result, event.payload, reconcileOptions);
+    if (eventInfo?.archived !== null) {
+      const result = decorateRows(reconciled.result);
+      if (result !== state.result) {
+        publishReconciledState({ ...state, result });
+      }
+    }
     const eventReason = (event.payload as { reason?: unknown } | null)?.reason;
     const payloadAgentId = (event.payload as { agentId?: unknown } | null)?.agentId;
     if (eventReason === "groups") {

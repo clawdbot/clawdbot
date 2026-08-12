@@ -41,6 +41,7 @@ import {
   type SourceReplyDeliveryRuntimeOptions,
 } from "./source-reply-delivery-runtime.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
+import { withReplySystemEventSessionKey } from "./system-event-session-key.js";
 import { resolveTypingMode } from "./typing-mode.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
@@ -2469,12 +2470,73 @@ describe("runPreparedReply media-only handling", () => {
 
     nextRun.complete();
   });
-  it("re-drains system events after waiting behind an active run", async () => {
+  it("keeps route and dispatch system events queued when busy admission returns", async () => {
+    vi.useFakeTimers();
+    const actualSystemEvents = await vi.importActual<typeof import("./session-system-events.js")>(
+      "./session-system-events.js",
+    );
+    vi.mocked(drainFormattedSystemEvents).mockImplementation(
+      actualSystemEvents.drainFormattedSystemEvents,
+    );
     const queueSettings = await import("./queue/settings-runtime.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
-    vi.mocked(drainFormattedSystemEvents)
-      .mockResolvedValueOnce("System: [t] Initial event.")
-      .mockResolvedValueOnce("System: [t] Post-compaction context.");
+    const routeSessionKey = "agent:main:slack:channel:c123";
+    const dispatchSessionKey = `${routeSessionKey}:thread:123.456`;
+    enqueueSystemEvent("Slack reaction added: :eyes:", { sessionKey: routeSessionKey });
+    enqueueSystemEvent("Slack message in #claw-test from Alice", {
+      sessionKey: dispatchSessionKey,
+    });
+    const previousRun = createReplyOperation({
+      sessionId: "session-before-wait",
+      sessionKey: dispatchSessionKey,
+      resetTriggered: false,
+    });
+    previousRun.setPhase("running");
+
+    const runPromise = runPrepared({
+      isNewSession: false,
+      sessionId: "session-before-wait",
+      sessionKey: dispatchSessionKey,
+      opts: withReplySystemEventSessionKey({}, routeSessionKey),
+      provider: "",
+      model: "",
+      resolvedThinkLevel: "off",
+    });
+
+    await Promise.resolve();
+    previousRun.complete();
+    const nextRun = createReplyOperation({
+      sessionId: "session-after-wait",
+      sessionKey: dispatchSessionKey,
+      resetTriggered: false,
+    });
+    nextRun.setPhase("running");
+
+    const assertion = expect(runPromise).resolves.toEqual({
+      text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
+    });
+    await vi.advanceTimersByTimeAsync(15_000);
+    await assertion;
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+    expect(peekSystemEventEntries(routeSessionKey).map((event) => event.text)).toEqual([
+      "Slack reaction added: :eyes:",
+    ]);
+    expect(peekSystemEventEntries(dispatchSessionKey).map((event) => event.text)).toEqual([
+      "Slack message in #claw-test from Alice",
+    ]);
+
+    nextRun.complete();
+  });
+  it("drains system events only after waiting behind an active run", async () => {
+    const actualSystemEvents = await vi.importActual<typeof import("./session-system-events.js")>(
+      "./session-system-events.js",
+    );
+    vi.mocked(drainFormattedSystemEvents).mockImplementation(
+      actualSystemEvents.drainFormattedSystemEvents,
+    );
+    const queueSettings = await import("./queue/settings-runtime.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+    enqueueSystemEvent("System event after active run", { sessionKey: "session-key" });
 
     const previousRun = createReplyOperation({
       sessionId: "session-events-after-wait",
@@ -2486,19 +2548,24 @@ describe("runPreparedReply media-only handling", () => {
     const runPromise = runPrepared({
       isNewSession: false,
       sessionId: "session-events-after-wait",
+      provider: "",
+      model: "",
+      resolvedThinkLevel: "off",
     });
 
     await Promise.resolve();
+    expect(peekSystemEventEntries("session-key").map((event) => event.text)).toEqual([
+      "System event after active run",
+    ]);
     previousRun.complete();
 
     await expect(runPromise).resolves.toEqual({ text: "ok" });
     const call = requireLastRunReplyAgentCall();
-    expect(call?.commandBody).toContain("System: [t] Initial event.");
-    expect(call?.commandBody).not.toContain("System: [t] Post-compaction context.");
-    expect(call?.transcriptCommandBody).not.toContain("System: [t] Initial event.");
-    expect(call?.followupRun.prompt).toContain("System: [t] Initial event.");
-    expect(call?.followupRun.prompt).not.toContain("System: [t] Post-compaction context.");
-    expect(call?.followupRun.transcriptPrompt).not.toContain("System: [t] Initial event.");
+    expect(call?.commandBody).toContain("System event after active run");
+    expect(call?.transcriptCommandBody).not.toContain("System event after active run");
+    expect(call?.followupRun.prompt).toContain("System event after active run");
+    expect(call?.followupRun.transcriptPrompt).not.toContain("System event after active run");
+    expect(peekSystemEventEntries("session-key")).toStrictEqual([]);
   });
 
   it("threads inbound context as current-turn context without changing transcript text", async () => {
@@ -3775,6 +3842,38 @@ describe("runPreparedReply media-only handling", () => {
     const call = requireRunReplyAgentCall();
     expect(call.commandBody).toContain("System: [t] Model switched.");
     expect(call.followupRun.run.extraSystemPrompt ?? "").not.toContain("Runtime System Events");
+  });
+
+  it("includes route system events in a thread-scoped turn", async () => {
+    const actualSystemEvents = await vi.importActual<typeof import("./session-system-events.js")>(
+      "./session-system-events.js",
+    );
+    vi.mocked(drainFormattedSystemEvents).mockImplementation(
+      actualSystemEvents.drainFormattedSystemEvents,
+    );
+    enqueueSystemEvent("Slack reaction added: :eyes:", {
+      sessionKey: "agent:main:slack:channel:c123",
+    });
+    enqueueSystemEvent("Slack message in #claw-test from Alice", {
+      sessionKey: "agent:main:slack:channel:c123:thread:123.456",
+    });
+
+    await runPrepared({
+      ctx: createInboundBody("report queued reactions"),
+      opts: withReplySystemEventSessionKey({}, "agent:main:slack:channel:c123"),
+      provider: "",
+      model: "",
+      resolvedThinkLevel: "off",
+      sessionKey: "agent:main:slack:channel:c123:thread:123.456",
+    });
+
+    const prompt = requireRunReplyAgentCall().followupRun.prompt;
+    expect(prompt).toContain("Slack reaction added: :eyes:");
+    expect(prompt).toContain("Slack message in #claw-test from Alice");
+    expect(peekSystemEventEntries("agent:main:slack:channel:c123")).toStrictEqual([]);
+    expect(peekSystemEventEntries("agent:main:slack:channel:c123:thread:123.456")).toStrictEqual(
+      [],
+    );
   });
 
   it("keeps sender ownership when queued system events are prepended", async () => {

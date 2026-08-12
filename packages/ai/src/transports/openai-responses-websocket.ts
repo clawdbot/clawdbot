@@ -13,9 +13,11 @@ import {
   type ResponsesContinuationStatus,
 } from "./openai-responses-continuation.js";
 import {
+  parseOpenAIResponsesWebSocketServerError,
   OpenAIResponsesWebSocketPostDispatchError,
   OpenAIResponsesWebSocketPreDispatchError,
   OpenAIResponsesWebSocketResponseFailedError,
+  OpenAIResponsesWebSocketSafeRetryError,
 } from "./openai-responses-contracts.js";
 import { transportAbortError } from "./transport-stream-shared.js";
 import { sha256Hex } from "./transport-utils.js";
@@ -302,7 +304,10 @@ function readServerEvent(
     return message.message;
   }
   if (message.type === "error") {
-    throw new Error("OpenAI Responses WebSocket transport failed", { cause: message.error });
+    throw (
+      parseOpenAIResponsesWebSocketServerError(message.error) ??
+      new Error("OpenAI Responses WebSocket transport failed", { cause: message.error })
+    );
   }
   if (message.type === "close") {
     throw new Error(`OpenAI Responses WebSocket closed before completion (code ${message.code})`);
@@ -438,7 +443,8 @@ export function createOpenAIResponsesWebSocketStream(params: {
         if (lease.entry) {
           lease.entry.continuation = undefined;
         }
-        if (!params.callerSignal?.aborted) {
+        const safeRetry = error instanceof OpenAIResponsesWebSocketSafeRetryError;
+        if (!params.callerSignal?.aborted && !safeRetry) {
           markDegraded();
         }
         if (!requestDispatched && !params.signal?.aborted) {
@@ -447,7 +453,8 @@ export function createOpenAIResponsesWebSocketStream(params: {
         if (
           !requestDispatched ||
           params.callerSignal?.aborted ||
-          error instanceof OpenAIResponsesWebSocketResponseFailedError
+          error instanceof OpenAIResponsesWebSocketResponseFailedError ||
+          safeRetry
         ) {
           throw error;
         }

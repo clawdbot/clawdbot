@@ -320,9 +320,6 @@ describe("managed Linux desktop", () => {
     });
     expect(observer).toBeDefined();
     observer?.release();
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 10);
-    });
-    expect(desktop.status()).toEqual({ state: "not-started" });
+    await vi.waitFor(() => expect(desktop.status()).toEqual({ state: "not-started" }));
   });
 });

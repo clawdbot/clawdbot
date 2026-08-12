@@ -165,6 +165,13 @@ const COMPACT_NODE_TEST_JOB_SECONDS = 310;
 const COMPACT_NODE_TEST_JOB_GROUPS = 10;
 const COMPACT_TOOLING_NODE_TEST_GROUPS = 4;
 const COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES = 120;
+// Route measured queue-tail bins to existing 8-vCPU capacity after packing so
+// the planner keeps the same groups, coverage, and runner-registration count.
+const COMPACT_8VCPU_CHECK_NAMES = new Set([
+  "checks-node-compact-small-2",
+  "checks-node-compact-small-5",
+  "checks-node-compact-small-8",
+]);
 const AUTO_REPLY_COMMANDS_STRIPES = 3;
 const AGENTS_CORE_RUNNER_CLI_STRIPES = 3;
 const UNIT_FAST_NODE_TEST_STRIPES = 2;
@@ -1763,11 +1770,18 @@ function createCompactNodeTestShardBundles(
       }
       const runnerClass = firstGroup.runner.includes("-8vcpu-") ? "large" : "small";
       const distSuffix = firstGroup.requiresDist ? "-dist" : "";
+      const checkName = `checks-node-compact-${runnerClass}${distSuffix}-${index + 1}`;
+      const runner = COMPACT_8VCPU_CHECK_NAMES.has(checkName)
+        ? DEFAULT_NODE_TEST_RUNNER
+        : firstGroup.runner;
+      for (const group of bin.groups) {
+        group.runner = runner;
+      }
       compactJobs.push({
-        checkName: `checks-node-compact-${runnerClass}${distSuffix}-${index + 1}`,
+        checkName,
         groups: bin.groups,
         requiresDist: firstGroup.requiresDist,
-        runner: firstGroup.runner,
+        runner,
         shardName: `compact-${runnerClass}${distSuffix}-${index + 1}`,
         // Whole-config groups run entire suites; keep their generous timeout.
         ...(bin.hasWholeConfigGroup
