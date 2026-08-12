@@ -1442,7 +1442,18 @@ describe("openclaw state database", () => {
       const { DatabaseSync } = requireNodeSqlite();
       const foreign = new DatabaseSync(databasePath);
       foreign.exec(`
-        CREATE TABLE commitments (marker TEXT NOT NULL PRIMARY KEY) STRICT;
+        CREATE TABLE commitments (
+          id TEXT NOT NULL PRIMARY KEY,
+          agent_id TEXT NOT NULL,
+          session_key TEXT NOT NULL,
+          channel TEXT NOT NULL,
+          status TEXT NOT NULL,
+          due_earliest_ms INTEGER NOT NULL,
+          due_latest_ms INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL,
+          record_json TEXT NOT NULL
+        );
+        CREATE INDEX foreign_commitments_status ON commitments(status);
         CREATE TABLE foreign_commitment_index_owner (marker TEXT NOT NULL) STRICT;
         CREATE INDEX idx_commitments_scope_due
           ON foreign_commitment_index_owner(marker);
@@ -1467,10 +1478,13 @@ describe("openclaw state database", () => {
             .get(),
         ).toEqual({ schema_version: 6 });
         expect(
-          preserved.prepare("SELECT sql FROM sqlite_schema WHERE name = 'commitments'").get(),
-        ).toEqual({
-          sql: "CREATE TABLE commitments (marker TEXT NOT NULL PRIMARY KEY) STRICT",
-        });
+          preserved.prepare("SELECT name FROM sqlite_schema WHERE name = 'commitments'").get(),
+        ).toEqual({ name: "commitments" });
+        expect(
+          preserved
+            .prepare("SELECT tbl_name FROM sqlite_schema WHERE name = 'foreign_commitments_status'")
+            .get(),
+        ).toEqual({ tbl_name: "commitments" });
         expect(
           preserved
             .prepare("SELECT tbl_name FROM sqlite_schema WHERE name = 'idx_commitments_scope_due'")

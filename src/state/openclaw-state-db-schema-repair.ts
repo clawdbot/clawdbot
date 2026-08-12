@@ -93,10 +93,46 @@ CREATE TABLE commitments (
 );
 `;
 
+const RETIRED_COMMITMENTS_INDEX_NAMES = [
+  "idx_commitments_agent_due",
+  "idx_commitments_agent_sent",
+  "idx_commitments_scope_dedupe",
+  "idx_commitments_scope_due",
+  "idx_commitments_status_due",
+] as const;
+
+function hasExactRetiredCommitmentsSchema(
+  db: DatabaseSync,
+  schemaSql: string,
+  expectedIndexNames: readonly string[],
+): boolean {
+  if (collectSqliteSchemaIssues(db, schemaSql).length > 0) {
+    return false;
+  }
+  const actualIndexNames = (
+    db
+      .prepare(
+        `SELECT name
+           FROM sqlite_schema
+          WHERE type = 'index' AND tbl_name = 'commitments' AND sql IS NOT NULL
+          ORDER BY name`,
+      )
+      .all() as Array<{ name: string }>
+  ).map((row) => row.name);
+  return (
+    actualIndexNames.length === expectedIndexNames.length &&
+    actualIndexNames.every((name, index) => name === expectedIndexNames[index])
+  );
+}
+
 function assertRecognizedRetiredCommitmentsSchema(db: DatabaseSync): void {
   if (
-    collectSqliteSchemaIssues(db, RETIRED_COMMITMENTS_SCHEMA_SQL).length === 0 ||
-    collectSqliteSchemaIssues(db, EARLY_RETIRED_COMMITMENTS_SCHEMA_SQL).length === 0
+    hasExactRetiredCommitmentsSchema(
+      db,
+      RETIRED_COMMITMENTS_SCHEMA_SQL,
+      RETIRED_COMMITMENTS_INDEX_NAMES,
+    ) ||
+    hasExactRetiredCommitmentsSchema(db, EARLY_RETIRED_COMMITMENTS_SCHEMA_SQL, [])
   ) {
     return;
   }
