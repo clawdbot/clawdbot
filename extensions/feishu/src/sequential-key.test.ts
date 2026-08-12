@@ -91,4 +91,47 @@ describe("getFeishuSequentialKey", () => {
       }),
     ).toBe("feishu:default:oc_dm_chat");
   });
+
+  it("selects the control lane for a group /stop with the bot's own mention kept", () => {
+    const event = createTextEvent({ text: "@_bot_1 /stop", chatId: "oc_group_chat" });
+    event.message.chat_type = "group";
+    event.message.mentions = [
+      {
+        key: "@_bot_1",
+        id: { open_id: "ou_bot_1" },
+        name: "OpenClaw",
+      },
+    ];
+
+    expect(
+      getFeishuSequentialKey({
+        accountId: "default",
+        event,
+        botOpenId: "ou_bot_1",
+      }),
+    ).toBe("feishu:default:oc_group_chat:control");
+  });
+
+  it("selects the btw lane for a group /btw with the bot's own mention kept", () => {
+    const event = createTextEvent({
+      text: "@_bot_1 /btw what changed?",
+      chatId: "oc_group_chat",
+    });
+    event.message.chat_type = "group";
+    event.message.mentions = [
+      {
+        key: "@_bot_1",
+        id: { open_id: "ou_bot_1" },
+        name: "OpenClaw",
+      },
+    ];
+
+    expect(
+      getFeishuSequentialKey({
+        accountId: "default",
+        event,
+        botOpenId: "ou_bot_1",
+      }),
+    ).toBe("feishu:default:oc_group_chat:btw");
+  });
 });
