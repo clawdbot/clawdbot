@@ -119,11 +119,11 @@ async fn duplex_runtime_routes_ordered_input_and_progress() {
     let public_key = signing_key.verifying_key().to_bytes();
     let session = NodeClient::connect(
         NodeClientConfig::new(format!("ws://{address}")),
-        move |nonce| async move {
+        move |challenge| async move {
             let options = connect_runtime.activate(
                 NodeConnectOptions::new("test", "linux").auth(ConnectAuth::token("test-token")),
             );
-            let request = options.external_signing_request(public_key, &nonce)?;
+            let request = options.external_signing_request(public_key, &challenge)?;
             let signature = signing_key.sign(request.payload().as_bytes());
             Ok::<_, openclaw_node_host::IdentityError>(
                 options.device(request.finish(signature.to_bytes())?),
@@ -146,7 +146,7 @@ async fn duplex_input_overflow_forces_a_terminal_failure() {
         let mut socket = accept_async(tcp).await.unwrap();
         send_json(
             &mut socket,
-            json!({"type":"event","event":"connect.challenge","payload":{"nonce":"node-nonce"}}),
+            json!({"type":"event","event":"connect.challenge","payload":{"nonce":"node-nonce","ts":1_700_000_000_123_u64}}),
         )
         .await;
         let connect = receive_json(&mut socket).await;
@@ -202,7 +202,7 @@ async fn direct_dispatch_rejects_duplex_without_running_an_event_loop() {
         let mut socket = accept_async(tcp).await.unwrap();
         send_json(
             &mut socket,
-            json!({"type":"event","event":"connect.challenge","payload":{"nonce":"node-nonce"}}),
+            json!({"type":"event","event":"connect.challenge","payload":{"nonce":"node-nonce","ts":1_700_000_000_123_u64}}),
         )
         .await;
         let connect = receive_json(&mut socket).await;
@@ -238,11 +238,11 @@ async fn direct_dispatch_rejects_duplex_without_running_an_event_loop() {
     let public_key = signing_key.verifying_key().to_bytes();
     let session = NodeClient::connect(
         NodeClientConfig::new(format!("ws://{address}")),
-        move |nonce| async move {
+        move |challenge| async move {
             let options = connect_runtime.activate(
                 NodeConnectOptions::new("test", "linux").auth(ConnectAuth::token("test-token")),
             );
-            let request = options.external_signing_request(public_key, &nonce)?;
+            let request = options.external_signing_request(public_key, &challenge)?;
             let signature = signing_key.sign(request.payload().as_bytes());
             Ok::<_, openclaw_node_host::IdentityError>(
                 options.device(request.finish(signature.to_bytes())?),
@@ -275,7 +275,7 @@ async fn runtime_enforces_the_manifest_of_each_connection() {
             send_json(
                 &mut socket,
                 json!({"type":"event","event":"connect.challenge",
-                    "payload":{"nonce":"node-nonce"}}),
+                    "payload":{"nonce":"node-nonce","ts":1_700_000_000_123_u64}}),
             )
             .await;
             let connect = receive_json(&mut socket).await;
@@ -357,14 +357,14 @@ async fn connect_with_command(
 ) -> NodeSession {
     NodeClient::connect(
         NodeClientConfig::new(format!("ws://{address}")),
-        move |nonce| async move {
+        move |challenge| async move {
             let signing_key = SigningKey::from_bytes(&[7; 32]);
             let options = NodeConnectOptions::new("test", "linux")
                 .command(advertised)
                 .activate()
                 .auth(ConnectAuth::token("test-token"));
-            let request =
-                options.external_signing_request(signing_key.verifying_key().to_bytes(), &nonce)?;
+            let request = options
+                .external_signing_request(signing_key.verifying_key().to_bytes(), &challenge)?;
             let signature = signing_key.sign(request.payload().as_bytes());
             Ok::<_, openclaw_node_host::IdentityError>(
                 options.device(request.finish(signature.to_bytes())?),
@@ -381,7 +381,7 @@ async fn serve_duplex_runtime(listener: TcpListener, fixture: Value) {
     send_json(
         &mut socket,
         json!({"type":"event", "event":"connect.challenge",
-            "payload":{"nonce":"node-nonce"}}),
+            "payload":{"nonce":"node-nonce","ts":1_700_000_000_123_u64}}),
     )
     .await;
     let connect = receive_json(&mut socket).await;

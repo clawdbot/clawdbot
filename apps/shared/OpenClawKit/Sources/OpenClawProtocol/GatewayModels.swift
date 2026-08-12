@@ -3795,17 +3795,19 @@ public struct NodeInvokeRequestEvent: Codable, Sendable {
     public let id: String
     public let nodeid: String
     public let command: String
-    public let paramsjson: String?
+    public let paramsjson: AnyCodable?
     public let timeoutms: Int?
     public let idempotencykey: String?
+    public let sessionkey: String?
 
     public init(
         id: String,
         nodeid: String,
         command: String,
-        paramsjson: String? = nil,
+        paramsjson: AnyCodable? = nil,
         timeoutms: Int? = nil,
-        idempotencykey: String? = nil)
+        idempotencykey: String? = nil,
+        sessionkey: String? = nil)
     {
         self.id = id
         self.nodeid = nodeid
@@ -3813,6 +3815,7 @@ public struct NodeInvokeRequestEvent: Codable, Sendable {
         self.paramsjson = paramsjson
         self.timeoutms = timeoutms
         self.idempotencykey = idempotencykey
+        self.sessionkey = sessionkey
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -3822,6 +3825,7 @@ public struct NodeInvokeRequestEvent: Codable, Sendable {
         case paramsjson = "paramsJSON"
         case timeoutms = "timeoutMs"
         case idempotencykey = "idempotencyKey"
+        case sessionkey = "sessionKey"
     }
 }
 

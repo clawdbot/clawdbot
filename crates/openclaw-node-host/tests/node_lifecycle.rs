@@ -43,15 +43,15 @@ async fn lifecycle_reacquires_each_attempt_delivers_token_and_stops_cleanly() {
                 }
                 NodeClient::connect(
                     NodeClientConfig::new(format!("ws://{address}")),
-                    move |nonce| async move {
-                        assert_eq!(nonce, "fresh-nonce");
+                    move |challenge| async move {
+                        assert_eq!(challenge.nonce, "fresh-nonce");
                         let signing_key = SigningKey::from_bytes(&[7; 32]);
                         let options = NodeConnectOptions::new("test", "linux")
                             .auth(ConnectAuth::token(format!("fresh-token-{attempt}")))
                             .activate();
                         let request = options.external_signing_request(
                             signing_key.verifying_key().to_bytes(),
-                            &nonce,
+                            &challenge,
                         )?;
                         let signature = signing_key.sign(request.payload().as_bytes());
                         Ok::<_, IdentityError>(
@@ -102,7 +102,7 @@ async fn gateway_fixture() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>
         send_json(
             &mut socket,
             json!({
-                "type":"event", "event":"connect.challenge", "payload":{"nonce":"fresh-nonce"}
+                "type":"event", "event":"connect.challenge", "payload":{"nonce":"fresh-nonce","ts":1_700_000_000_123_u64}
             }),
         )
         .await;
