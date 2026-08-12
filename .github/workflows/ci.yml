@@ -1293,6 +1293,8 @@ jobs:
         run: node openclaw.mjs status --json --timeout 1
 
       - name: Verify built Doctor plugin index persistence
+        env:
+          OPENCLAW_E2E_USE_PREBUILT_DIST: "1"
         run: |
           if [[ -f test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts ]]; then
             # Cold hosted runners can spend over five minutes in E2E setup before
