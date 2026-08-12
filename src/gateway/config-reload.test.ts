@@ -3489,6 +3489,73 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
+  it("keeps planner deferral cancellable after a rejected explicit restart admission", async () => {
+    const configA = { gateway: { reload: {} } } satisfies OpenClawConfig;
+    const configB = { gateway: { reload: {}, port: 18792 } } satisfies OpenClawConfig;
+    const configC = { gateway: { reload: {}, port: 18794 } } satisfies OpenClawConfig;
+    const makeWrite = (
+      config: OpenClawConfig,
+      persistedHash: string,
+      afterWrite?: ConfigWriteAfterWrite,
+    ): ConfigWriteNotification => ({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: config,
+      runtimeConfig: config,
+      persistedHash,
+      revision: 1,
+      fingerprint: `runtime-${persistedHash}`,
+      sourceFingerprint: `source-${persistedHash}`,
+      writtenAtMs: Date.now(),
+      ...(afterWrite ? { afterWrite } : {}),
+    });
+    const harness = createReloaderHarness(
+      vi.fn(async () => makeSnapshot()),
+      {
+        initialConfig: configA,
+      },
+    );
+    // The managed coordinator rejects only the explicit restart admission.
+    harness.onRestart.mockImplementation(async (_plan, nextConfig) => {
+      if ((nextConfig as { gateway?: { port?: number } }).gateway?.port === 18794) {
+        throw new Error("restart admission failed");
+      }
+    });
+
+    // Planner-derived restart-required edit A -> B defers a restart.
+    harness.emitWrite(makeWrite(configB, "hash-b"));
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    expect(harness.onRestart.mock.calls[0]?.[1]).toEqual(configB);
+
+    // Explicit writer restart B -> C is rejected by the coordinator. The
+    // rejected admission must not leave stale explicit provenance behind.
+    harness.emitWrite(
+      makeWrite(configC, "hash-c", { mode: "restart", reason: "writer requires bounce" }),
+    );
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(2);
+    expect(harness.onRestart.mock.calls[1]?.[1]).toEqual(configC);
+    expect(
+      harness.log.error.mock.calls.some((call) =>
+        call.some((arg) => String(arg).includes("restart admission failed")),
+      ),
+    ).toBe(true);
+
+    // Exact revert C -> A still cancels the planner-derived deferral: the
+    // rejected explicit restart must not convert it into non-cancellable debt.
+    harness.emitWrite(makeWrite(configA, "hash-a"));
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(2);
+    expect(
+      harness.log.info.mock.calls.some((call) =>
+        call.some((arg) => String(arg).includes("reverted to running config")),
+      ),
+    ).toBe(true);
+    expect(harness.onConfigAccepted).toHaveBeenCalled();
+
+    await harness.reloader.stop();
+  });
+
   it("preserves an explicit writer-required restart when a revert matches the running config", async () => {
     const configA = { gateway: { reload: {} } } satisfies OpenClawConfig;
     const configB = { gateway: { reload: {}, port: 18791 } } satisfies OpenClawConfig;

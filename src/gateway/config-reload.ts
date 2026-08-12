@@ -833,10 +833,14 @@ export function startGatewayConfigReloader(opts: {
         restartGateway: true,
         restartReasons: [...plan.restartReasons, followUp.reason],
       };
-      pendingRestartWasExplicit = true;
-      pendingRestartBaseCompareConfig ??= runtimeAppliedCompareConfig;
       await opts.onConfigChange?.(restartPlan, nextConfig);
       await prepareRestart(restartPlan, nextConfig, ownership, nextSourceConfig);
+      // Commit explicit provenance only after restart admission succeeds. A
+      // rejected explicit restart must not leave stale explicit provenance
+      // behind: otherwise it would block a later revert from cancelling
+      // planner-derived deferral debt armed before the rejected write.
+      pendingRestartWasExplicit = true;
+      pendingRestartBaseCompareConfig ??= runtimeAppliedCompareConfig;
       await commitReloadBaseline();
       return;
     }
@@ -845,9 +849,11 @@ export function startGatewayConfigReloader(opts: {
       // NOT downgrade explicit writer provenance: once an explicit restart is
       // pending, only an explicit revert-cancel path may retire that debt, and
       // the reverting write's followUp can never speak for the earlier writer.
-      pendingRestartBaseCompareConfig ??= runtimeAppliedCompareConfig;
       await opts.onConfigChange?.(plan, nextConfig);
       await prepareRestart(plan, nextConfig, ownership, nextSourceConfig);
+      // Capture the revert baseline only after admission succeeds so a
+      // rejected planner-derived restart cannot stale the cancellation base.
+      pendingRestartBaseCompareConfig ??= runtimeAppliedCompareConfig;
       await commitReloadBaseline();
       return;
     }
