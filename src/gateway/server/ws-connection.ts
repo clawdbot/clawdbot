@@ -28,6 +28,7 @@ import {
 } from "../server-constants.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
+import { resolveWsKeepaliveSettings } from "../ws-keepalive.js";
 import { formatForLog, logWs } from "../ws-log.js";
 import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
 import type { PreauthConnectionBudget } from "./preauth-connection-budget.js";
@@ -355,6 +356,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     let pingTimer: ReturnType<typeof setInterval> | undefined;
     let cleanupWorkerConnection: (() => void) | undefined;
     let awaitingPong = false;
+    let missedPongs = 0;
+    const wsKeepalive = resolveWsKeepaliveSettings(getRuntimeConfig().gateway?.ws);
     const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs({
       configuredTimeoutMs: params.preauthHandshakeTimeoutMs,
     });
@@ -456,6 +459,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
 
     socket.on("pong", () => {
       awaitingPong = false;
+      missedPongs = 0;
       if (client?.presenceKey) {
         touchPresence(client.presenceKey);
       }
@@ -620,15 +624,27 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       clients.add(next);
       pingTimer = setInterval(() => {
         // A half-open TCP connection can remain OPEN indefinitely. Terminate
-        // after one missed pong so the normal close handler releases node state.
+        // after enough consecutive missed pongs (grace period) so the normal
+        // close handler releases node state, while tolerating transient
+        // network stalls (mobile radio handoff, VPN path blips) that drop a
+        // single pong but recover before the grace window expires.
         if (awaitingPong) {
-          setCloseCause("heartbeat-timeout");
-          try {
-            socket.terminate();
-          } catch {
-            close();
+          missedPongs += 1;
+          if (missedPongs >= wsKeepalive.maxMissedPongs) {
+            setCloseCause("heartbeat-timeout", {
+              missedPongs,
+              maxMissedPongs: wsKeepalive.maxMissedPongs,
+              pingIntervalMs: wsKeepalive.pingIntervalMs,
+            });
+            try {
+              socket.terminate();
+            } catch {
+              close();
+            }
+            return;
           }
-          return;
+        } else {
+          missedPongs = 0;
         }
         awaitingPong = true;
         try {
@@ -636,7 +652,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         } catch {
           // close() clears the timer; ping can race with a socket already entering CLOSING.
         }
-      }, 25_000);
+      }, wsKeepalive.pingIntervalMs);
       return true;
     };
 
