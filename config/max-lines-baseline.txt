@@ -247,8 +247,6 @@ extensions/slack/src/send.ts
 extensions/telegram/src/action-runtime.test.ts
 extensions/telegram/src/action-runtime.ts
 extensions/telegram/src/bot-message-context.session.ts
-extensions/telegram/src/bot-native-commands.session-meta.test.ts
-extensions/telegram/src/bot-native-commands.ts
 extensions/telegram/src/bot.create-telegram-bot.test.ts
 extensions/telegram/src/bot.test.ts
 extensions/telegram/src/bot/delivery.replies.ts
