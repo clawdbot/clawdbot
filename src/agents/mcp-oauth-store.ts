@@ -185,6 +185,12 @@ function assertAuthorizationAttempt(storeKey: string, value: unknown): void {
       "authorizationAttempt error metadata is invalid",
     );
   }
+  if (value.preserveExistingCredential !== undefined && value.preserveExistingCredential !== true) {
+    throw new McpOAuthStoreCorruptionError(
+      storeKey,
+      "authorizationAttempt preserve intent is invalid",
+    );
+  }
 }
 
 /** Parse a canonical row without discarding SDK extension fields. */

@@ -292,9 +292,16 @@ class McpServersCard extends OpenClawLightDomElement {
     return t(`mcpServers.oauth.error.${category}`);
   }
 
-  private renderOauthControls(server: McpServerSummary): TemplateResult | typeof nothing {
-    if (!this.isSharedOauthServer(server)) {
-      return nothing;
+  private renderOauthControls(
+    server: McpServerSummary,
+    fallbackCommand: string,
+  ): TemplateResult | typeof nothing {
+    if (
+      !this.isSharedOauthServer(server) ||
+      !this.canMutate() ||
+      !this.context?.gateway.snapshot.client
+    ) {
+      return html`<code>${fallbackCommand}</code>`;
     }
     const status = this.oauthStatuses[server.name];
     if (!status) {
@@ -446,7 +453,8 @@ class McpServersCard extends OpenClawLightDomElement {
   }
 
   private renderRow(server: McpServerSummary): TemplateResult {
-    const command = `openclaw mcp probe ${quoteShellArg(server.name)}`;
+    const subcommand = server.auth === "oauth" ? "login" : "probe";
+    const command = `openclaw mcp ${subcommand} ${quoteShellArg(server.name)}`;
     const meta = [
       server.transport,
       server.auth,
@@ -471,7 +479,7 @@ class McpServersCard extends OpenClawLightDomElement {
             label: server.enabled ? t("common.enabled") : t("common.disabled"),
           })}
           ${server.auth === "oauth"
-            ? this.renderOauthControls(server)
+            ? this.renderOauthControls(server, command)
             : html`<code>${command}</code>`}
           <button
             type="button"

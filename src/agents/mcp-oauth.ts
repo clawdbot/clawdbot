@@ -30,6 +30,7 @@ import {
   updateMcpOAuthStore,
   writeMcpOAuthPendingAuthorization,
   MCP_OAUTH_PENDING_STATE_TTL_MS,
+  type McpOAuthAuthorizationAttempt,
   type McpOAuthAuthorizationErrorCategory,
   type McpOAuthStore,
 } from "./mcp-oauth-store.js";
@@ -53,7 +54,7 @@ type McpOAuthAuthorizationStartResult =
     };
 
 /** Safe lifecycle projection for Control UI and Gateway callers. */
-export type McpOAuthControlStatus =
+type McpOAuthControlStatus =
   | { state: "authorization-required"; credentialPresent: false }
   | {
       state: "authorizing";
@@ -79,6 +80,20 @@ const LOCALHOST_REDIRECT_URL = "http://localhost:8989/oauth/callback";
 const TOKEN_EXPIRY_SKEW_MS = 30_000;
 const MCP_OAUTH_LEASE_MS = 60_000;
 const MCP_OAUTH_LEASE_WAIT_MS = 30_000;
+
+// Durable internal intent bridges browser callback and SDK exchange without exposing credentials.
+function withPreserveIntent(
+  attempt: McpOAuthAuthorizationAttempt,
+  preserve: boolean,
+): McpOAuthAuthorizationAttempt {
+  return preserve
+    ? Object.assign({}, attempt, { preserveExistingCredential: true as const })
+    : attempt;
+}
+
+function preservesExistingCredential(attempt: McpOAuthAuthorizationAttempt | undefined): boolean {
+  return Reflect.get(attempt ?? {}, "preserveExistingCredential") === true;
+}
 
 function isMcpOAuthRedirectRegistrationError(error: unknown): boolean {
   return /invalid_client_metadata|redirect_uri/i.test(String(error));
@@ -464,6 +479,8 @@ export async function startMcpOAuthAuthorization(
   return await withMcpOAuthLease(storeKey, async (lease) => {
     const store = readMcpOAuthStore(storeKey);
     const pendingChallenge = store.pendingAuthorizationChallenge;
+    const preserveExistingCredential =
+      opts.forceAuthorization === true && hasUsableMcpOAuthCredential(store);
     const configuredRedirectUrl =
       normalizeOptionalString(opts.redirectUrl) ??
       normalizeOptionalString(config.oauth?.redirectUrl) ??
@@ -481,7 +498,7 @@ export async function startMcpOAuthAuthorization(
         : undefined,
       scope: normalizeOptionalString(pendingChallenge?.scope),
       suppressStoredTokens:
-        opts.forceAuthorization === true || pendingChallenge?.requiresAuthorization === true,
+        preserveExistingCredential || pendingChallenge?.requiresAuthorization === true,
     };
     let result: "authorized" | "redirect";
     try {
@@ -525,11 +542,14 @@ export async function startMcpOAuthAuthorization(
       storeKey,
       (current) => ({
         ...current,
-        authorizationAttempt: {
-          id: authorizationId,
-          startedAt: Date.now(),
-          status: "pending",
-        },
+        authorizationAttempt: withPreserveIntent(
+          {
+            id: authorizationId,
+            startedAt: Date.now(),
+            status: "pending",
+          },
+          preserveExistingCredential,
+        ),
       }),
       assertLeaseOwned,
     );
@@ -585,12 +605,15 @@ function settleMcpOAuthAuthorizationError(
     status: "pending" as const,
   };
   const next = clearMcpOAuthAuthorizationFields(current);
-  next.authorizationAttempt = {
-    id: authorizationAttempt.id,
-    startedAt: authorizationAttempt.startedAt,
-    status: "error",
-    error: category,
-  };
+  next.authorizationAttempt = withPreserveIntent(
+    {
+      id: authorizationAttempt.id,
+      startedAt: authorizationAttempt.startedAt,
+      status: "error",
+      error: category,
+    },
+    preservesExistingCredential(authorizationAttempt),
+  );
   return next;
 }
 
@@ -695,7 +718,9 @@ async function completeMcpOAuthAuthorizationUnderLease(
         ? new URL(pendingChallenge.resourceMetadataUrl)
         : undefined,
       scope: normalizeOptionalString(pendingChallenge?.scope),
-      suppressStoredTokens: pendingChallenge?.requiresAuthorization === true,
+      suppressStoredTokens:
+        preservesExistingCredential(store.authorizationAttempt) ||
+        pendingChallenge?.requiresAuthorization === true,
     },
     lease,
   );

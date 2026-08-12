@@ -249,6 +249,64 @@ describe("openclaw-mcp-servers-card", () => {
     expect(hostile.textContent).toContain("openclaw mcp probe 'docs; echo unsafe'");
   });
 
+  it.each([
+    {
+      label: "disabled OAuth",
+      server: {
+        url: "https://mcp.example.com/mcp",
+        auth: "oauth",
+        enabled: false,
+      },
+    },
+    {
+      label: "per-requester OAuth",
+      server: {
+        url: "https://mcp.example.com/mcp",
+        auth: "oauth",
+        oauth: { identity: "per-requester" },
+      },
+    },
+    {
+      label: "stdio OAuth",
+      server: { command: "node", auth: "oauth" },
+    },
+    {
+      label: "invalid OAuth",
+      server: { auth: "oauth" },
+    },
+  ])("keeps the CLI login fallback for $label rows", async ({ server }) => {
+    const request = vi.fn();
+    const { card } = await mountCard({
+      request,
+      config: { mcp: { servers: { docs: server } } },
+    });
+
+    const row = expectDefined(card.querySelector('[data-mcp-name="docs"]'), "docs row");
+    expect(row.textContent).toContain("openclaw mcp login docs");
+    expect(row.textContent).not.toContain("Loading");
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("keeps the CLI login fallback for a connected non-admin operator", async () => {
+    const request = vi.fn();
+    const { card } = await mountCard({
+      admin: false,
+      request,
+      config: {
+        mcp: {
+          servers: {
+            docs: { url: "https://mcp.example.com/mcp", auth: "oauth" },
+          },
+        },
+      },
+    });
+
+    const row = expectDefined(card.querySelector('[data-mcp-name="docs"]'), "docs row");
+    expect(row.textContent).toContain("openclaw mcp login docs");
+    expect(row.textContent).not.toContain("Loading");
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("renders the empty state when no servers are configured", async () => {
     const { card } = await mountCard();
 
