@@ -2,9 +2,11 @@ import { isNixMode } from "../config/paths.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeAmbientEnvTriggers,
+  getRuntimeConfigAppliedHash,
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
   setRuntimeAmbientEnvTriggers,
+  setRuntimeConfigAppliedHash,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
@@ -145,6 +147,7 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
   const priorRegistryWorkspaceDir = getActivePluginRegistryWorkspaceDir();
   const priorSnapshot = getRuntimeConfigSnapshot();
   const priorSourceSnapshot = getRuntimeConfigSourceSnapshot();
+  const priorAppliedHash = getRuntimeConfigAppliedHash();
   const priorAmbientEnvTriggers = getRuntimeAmbientEnvTriggers();
   try {
     const bootstrap = await prepareGatewayServerBootstrap({
@@ -231,12 +234,17 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
           if (priorSnapshot) {
             setRuntimeConfigSnapshot(priorSnapshot, priorSourceSnapshot ?? undefined);
           }
+          // The plain setter never touches the applied hash: put back the revision the
+          // surviving Gateway's loader accepted (null when none ran), or config.get reports
+          // appliedConfigHash: null for a fully restored configuration.
+          setRuntimeConfigAppliedHash(priorAppliedHash);
         }
         // The ambient env-trigger slot travels with the snapshot family: bootstrap can
-        // overwrite it even when the snapshot itself is reused, and clearing resets it — a
-        // surviving embedded Gateway's schema and validation projections must keep honoring
-        // the policy its loader actually applied.
-        if (priorAmbientEnvTriggers && getRuntimeAmbientEnvTriggers() !== priorAmbientEnvTriggers) {
+        // overwrite it even when the snapshot itself is reused, and clearing resets it. Restore
+        // the exact prior value — including null when no gateway ran before this attempt — so
+        // schema and validation projections honor the surviving loader's policy, or the
+        // default one.
+        if (getRuntimeAmbientEnvTriggers() !== priorAmbientEnvTriggers) {
           setRuntimeAmbientEnvTriggers(priorAmbientEnvTriggers);
         }
       }

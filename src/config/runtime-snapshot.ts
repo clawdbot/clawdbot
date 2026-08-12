@@ -234,8 +234,9 @@ export function getRuntimeConfigSnapshot(): OpenClawConfig | null {
   return runtimeConfigSnapshot;
 }
 
-/** Records the gateway's ambient env-trigger policy for projection reads. */
-export function setRuntimeAmbientEnvTriggers(policy: AmbientEnvTriggerPolicy): void {
+/** Records the gateway's ambient env-trigger policy for projection reads; null returns
+ * projections to the default policy. */
+export function setRuntimeAmbientEnvTriggers(policy: AmbientEnvTriggerPolicy | null): void {
   runtimeAmbientEnvTriggers = policy;
 }
 
