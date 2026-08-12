@@ -4940,6 +4940,33 @@ describe("task-registry", () => {
     });
   });
 
+  it("keeps opaque CLI child-session keys containing a subagent marker registry-only", async () => {
+    await withTaskRegistryTempDir(async () => {
+      hoisted.cancelSessionMock.mockClear();
+      hoisted.killSubagentRunAdminMock.mockClear();
+
+      const task = createTaskFixture("cli", {
+        childSessionKey: "agent:main:matrix:group:!opaque:subagent:example.org",
+        runId: "run-cli-opaque-child-key",
+        task: "Cancel opaque CLI child-key task",
+        deliveryStatus: "not_applicable",
+      });
+
+      const result = await cancelTask(task.taskId);
+
+      expect(hoisted.cancelSessionMock).not.toHaveBeenCalled();
+      expect(hoisted.killSubagentRunAdminMock).not.toHaveBeenCalled();
+      expectRecordFields(result, {
+        found: true,
+        cancelled: true,
+      });
+      expectRecordFields(getTaskById(task.taskId), {
+        status: "cancelled",
+        error: "Cancelled by operator.",
+      });
+    });
+  });
+
   it("preserves CLI-tracked subagent success that wins during cancellation", async () => {
     await withTaskRegistryTempDir(async () => {
       hoisted.cancelSessionMock.mockClear();

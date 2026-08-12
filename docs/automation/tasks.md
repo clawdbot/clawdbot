@@ -239,6 +239,7 @@ openclaw tasks notify <lookup> state_changes
     accepts 1-10 task lookups. Retry preserves the canonical result and starts a
     new fenced queue generation; dismiss keeps the task blocked and records that
     the operator intentionally stopped delivery.
+
   </Accordion>
   <Accordion title="tasks notify">
     ```bash

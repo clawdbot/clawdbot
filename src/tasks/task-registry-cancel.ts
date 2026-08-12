@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { isBackgroundExecTask } from "./background-exec-task-contract.js";
 import { CRON_TASK_KIND } from "./cron-task-contract.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
@@ -216,7 +217,11 @@ export async function cancelTaskById(params: {
   const childSessionKey = task.childSessionKey?.trim();
   try {
     ensureTaskCancellationReady(task);
-    if (task.runtime === "cli" && childSessionKey?.includes(":subagent:")) {
+    if (
+      task.runtime === "cli" &&
+      typeof childSessionKey === "string" &&
+      isSubagentSessionKey(childSessionKey)
+    ) {
       const { killSubagentRunAdmin } = await loadTaskRegistryControlRuntime();
       const result = await killSubagentRunAdmin({
         cfg: params.cfg,
