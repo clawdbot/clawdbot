@@ -810,7 +810,7 @@ describe("monitorSlackProvider tool results", () => {
     );
   });
 
-  it("keeps the error reaction when dispatch fails before any reply is delivered", async () => {
+  it("shows then restores the error reaction when dispatch fails before any reply is delivered", async () => {
     replyMock.mockRejectedValue(new Error("boom"));
     setMentionGatedAckConfig(true);
     mockGeneralChannelInfo();
@@ -822,7 +822,7 @@ describe("monitorSlackProvider tool results", () => {
         expectReactionFlow({
           startsWith: ["eyes", "x"],
           includes: "x",
-          endsWith: "x",
+          endsWith: "eyes",
         }),
       { timeout: 5_000 },
     );
