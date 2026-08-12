@@ -2,6 +2,8 @@ use crate::gateway_device_identity::{
     GatewayAuth, GatewayDeviceIdentity, GatewayDeviceIdentityStore, CLIENT_DEVICE_FAMILY,
     CLIENT_ID, CLIENT_MODE, CLIENT_PLATFORM, CLIENT_ROLE, CLIENT_SCOPES,
 };
+#[cfg(any(target_os = "linux", test))]
+use crate::gateway_sleep::SleepPrepareOutcome;
 use crate::quickchat::QUICKCHAT_LABEL;
 use futures_util::{SinkExt, StreamExt};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
@@ -14,10 +16,14 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fmt;
 use std::io::ErrorKind;
+#[cfg(any(target_os = "linux", test))]
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
+#[cfg(any(target_os = "linux", test))]
+use tauri::Url;
 use tauri::{AppHandle, Emitter, Manager, Webview};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::{Error as TungsteniteError, Message};
@@ -35,6 +41,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(35);
+#[cfg(target_os = "linux")]
+const SUSPEND_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 const DRIVER_TICK: Duration = Duration::from_secs(1);
 const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(30);
 const PAIRING_REQUIRED_DETAIL_CODE: &str = "PAIRING_REQUIRED";
@@ -248,16 +256,56 @@ struct PluginSurfaceRefreshResponse {
     plugin_surface_urls: Option<HashMap<String, String>>,
 }
 
+#[cfg(any(target_os = "linux", test))]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SuspendPrepareResponse {
+    status: Option<String>,
+    suspension_id: Option<String>,
+}
+
+#[cfg(any(target_os = "linux", test))]
+impl SuspendPrepareResponse {
+    fn into_outcome(self) -> SleepPrepareOutcome {
+        match (self.status.as_deref(), self.suspension_id) {
+            (Some("ready"), Some(suspension_id)) if !suspension_id.trim().is_empty() => {
+                SleepPrepareOutcome::Ready { suspension_id }
+            }
+            _ => SleepPrepareOutcome::Busy,
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+#[derive(Deserialize)]
+struct SuspendResumeResponse {
+    resumed: bool,
+}
+
 enum GatewayRequest {
     AgentsList,
     ChatSend(ChatSendParams),
-    RefreshCanvasSurface { observed_url: Option<String> },
+    RefreshCanvasSurface {
+        observed_url: Option<String>,
+    },
+    #[cfg(target_os = "linux")]
+    SuspendPrepare {
+        request_id: String,
+    },
+    #[cfg(target_os = "linux")]
+    SuspendResume {
+        suspension_id: String,
+    },
 }
 
 enum GatewayResponse {
     AgentsList(AgentsListResult),
     ChatSend(ChatSendAck),
     CanvasSurface(Option<String>),
+    #[cfg(target_os = "linux")]
+    SuspendPrepare(SuspendPrepareResponse),
+    #[cfg(target_os = "linux")]
+    SuspendResume(SuspendResumeResponse),
 }
 
 enum DriverCommand {
@@ -581,10 +629,65 @@ impl GatewayClient {
         Ok(Some(refreshed))
     }
 
+    #[cfg(target_os = "linux")]
+    pub async fn suspend_prepare(&self, request_id: String) -> Result<SleepPrepareOutcome, String> {
+        let response = tokio::time::timeout(
+            SUSPEND_REQUEST_TIMEOUT,
+            self.request(GatewayRequest::SuspendPrepare { request_id }),
+        )
+        .await
+        .map_err(|_| "Gateway sleep preparation timed out.".to_string())??;
+        let GatewayResponse::SuspendPrepare(response) = response else {
+            return Err(
+                "Gateway returned the wrong response for gateway.suspend.prepare.".to_string(),
+            );
+        };
+        Ok(response.into_outcome())
+    }
+
+    #[cfg(target_os = "linux")]
+    pub async fn suspend_resume(&self, suspension_id: String) -> Result<bool, String> {
+        let response = tokio::time::timeout(
+            SUSPEND_REQUEST_TIMEOUT,
+            self.request(GatewayRequest::SuspendResume { suspension_id }),
+        )
+        .await
+        .map_err(|_| "Gateway sleep resume timed out.".to_string())??;
+        let GatewayResponse::SuspendResume(response) = response else {
+            return Err(
+                "Gateway returned the wrong response for gateway.suspend.resume.".to_string(),
+            );
+        };
+        Ok(response.resumed)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn route_token(&self) -> Option<String> {
+        self.inner
+            .config
+            .lock()
+            .expect("gateway config mutex poisoned")
+            .as_ref()
+            .map(|config| config.ws_url.clone())
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn is_loopback_route(&self) -> bool {
+        self.loopback_route_token().is_some()
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn loopback_route_token(&self) -> Option<String> {
+        self.inner
+            .config
+            .lock()
+            .expect("gateway config mutex poisoned")
+            .as_ref()
+            .map(|config| config.ws_url.clone())
+            .filter(|route| is_loopback_ws_url(route))
+    }
+
     pub fn resume_reconnect(&self) {
-        if !self.inner.reconnect_paused.load(Ordering::SeqCst) {
-            return;
-        }
         if let Some(commands) = self
             .inner
             .commands
@@ -593,6 +696,12 @@ impl GatewayClient {
             .as_ref()
         {
             let _ = commands.try_send(DriverCommand::Reconfigure);
+        }
+    }
+
+    pub fn resume_paused_reconnect(&self) {
+        if self.inner.reconnect_paused.load(Ordering::SeqCst) {
+            self.resume_reconnect();
         }
     }
 
@@ -1251,7 +1360,58 @@ async fn perform_request(
                 .filter(|url| !url.is_empty());
             Ok(GatewayResponse::CanvasSurface(canvas))
         }
+        #[cfg(target_os = "linux")]
+        GatewayRequest::SuspendPrepare { request_id } => {
+            let payload = request_on_socket(
+                app,
+                socket,
+                "gateway.suspend.prepare",
+                json!({ "requestId": request_id }),
+            )
+            .await?;
+            serde_json::from_value(payload)
+                .map(GatewayResponse::SuspendPrepare)
+                .map_err(|error| {
+                    RequestFailure::transport(format!(
+                        "Invalid gateway.suspend.prepare response: {error}"
+                    ))
+                })
+        }
+        #[cfg(target_os = "linux")]
+        GatewayRequest::SuspendResume { suspension_id } => {
+            let payload = request_on_socket(
+                app,
+                socket,
+                "gateway.suspend.resume",
+                json!({ "suspensionId": suspension_id }),
+            )
+            .await?;
+            serde_json::from_value(payload)
+                .map(GatewayResponse::SuspendResume)
+                .map_err(|error| {
+                    RequestFailure::transport(format!(
+                        "Invalid gateway.suspend.resume response: {error}"
+                    ))
+                })
+        }
     }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn is_loopback_ws_url(raw: &str) -> bool {
+    let Ok(url) = Url::parse(raw) else {
+        return false;
+    };
+    if !matches!(url.scheme(), "ws" | "wss") {
+        return false;
+    }
+    url.host_str().is_some_and(|host| {
+        host.eq_ignore_ascii_case("localhost")
+            || host
+                .trim_matches(['[', ']'])
+                .parse::<IpAddr>()
+                .is_ok_and(|address| address.is_loopback())
+    })
 }
 
 async fn request_agents_list(
@@ -1751,6 +1911,64 @@ mod tests {
                 .as_deref(),
             Some("https://gateway.example/__openclaw__/cap/refreshed-capability")
         );
+    }
+
+    #[test]
+    fn sleep_gateway_routes_are_loopback_only() {
+        for route in [
+            "ws://localhost:18789",
+            "ws://127.0.0.1:18789",
+            "wss://[::1]:18789",
+        ] {
+            assert!(
+                is_loopback_ws_url(route),
+                "expected loopback route: {route}"
+            );
+        }
+        for route in [
+            "ws://192.168.1.10:18789",
+            "wss://gateway.example:18789",
+            "https://127.0.0.1:18789",
+            "not a URL",
+        ] {
+            assert!(!is_loopback_ws_url(route), "expected remote route: {route}");
+        }
+    }
+
+    #[test]
+    fn suspend_wire_results_decode_leniently() {
+        let ready: SuspendPrepareResponse = serde_json::from_value(json!({
+            "status": "ready",
+            "suspensionId": "suspension-1",
+            "expiresAtMs": 1_800_000_000_000_u64,
+            "activeCount": 0,
+            "blockers": []
+        }))
+        .expect("ready suspension response");
+        assert_eq!(
+            ready.into_outcome(),
+            SleepPrepareOutcome::Ready {
+                suspension_id: "suspension-1".into()
+            }
+        );
+
+        let busy: SuspendPrepareResponse = serde_json::from_value(json!({
+            "status": "busy",
+            "reason": "active-work",
+            "retryAfterMs": 1000,
+            "activeCount": 1,
+            "blockers": []
+        }))
+        .expect("busy suspension response");
+        assert_eq!(busy.into_outcome(), SleepPrepareOutcome::Busy);
+
+        let resumed: SuspendResumeResponse = serde_json::from_value(json!({
+            "ok": true,
+            "status": "running",
+            "resumed": false
+        }))
+        .expect("resume response");
+        assert!(!resumed.resumed);
     }
 
     #[test]
