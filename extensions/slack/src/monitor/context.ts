@@ -101,6 +101,7 @@ export type SlackMonitorContext = {
   threadHistoryScope: "thread" | "channel";
   threadInheritParent: boolean;
   slashCommand: Required<import("openclaw/plugin-sdk/config-contracts").SlackSlashCommandConfig>;
+  selfJoinIntro?: import("openclaw/plugin-sdk/config-contracts").SlackAccountConfig["selfJoinIntro"];
   textLimit: number;
   ackReactionScope: string;
   typingReaction: string;
@@ -195,6 +196,7 @@ export function createSlackMonitorContext(params: {
   threadHistoryScope: SlackMonitorContext["threadHistoryScope"];
   threadInheritParent: SlackMonitorContext["threadInheritParent"];
   slashCommand: SlackMonitorContext["slashCommand"];
+  selfJoinIntro?: SlackMonitorContext["selfJoinIntro"];
   textLimit: number;
   ackReactionScope: string;
   typingReaction: string;
@@ -530,6 +532,7 @@ export function createSlackMonitorContext(params: {
     threadHistoryScope: params.threadHistoryScope,
     threadInheritParent: params.threadInheritParent,
     slashCommand: params.slashCommand,
+    selfJoinIntro: params.selfJoinIntro,
     textLimit: params.textLimit,
     ackReactionScope: params.ackReactionScope,
     typingReaction: params.typingReaction,

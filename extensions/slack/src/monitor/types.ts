@@ -41,6 +41,8 @@ export type SlackMemberChannelEvent = {
   channel?: string;
   channel_type?: SlackMessageEvent["channel_type"];
   event_ts?: string;
+  /** User who invited the joining member, when Slack provides it. */
+  inviter?: string;
 };
 
 export type SlackChannelCreatedEvent = {

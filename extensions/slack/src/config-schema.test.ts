@@ -165,6 +165,20 @@ describe("slack config schema", () => {
     expectSlackConfigIssue({ presenceEvents: { mode: "enabled" } }, "presenceEvents.mode");
   });
 
+  it("keeps self-join intro off by default and accepts account overrides", () => {
+    const absent = SlackConfigSchema.safeParse({});
+    expect(absent.success).toBe(true);
+    if (absent.success) {
+      expect(absent.data.selfJoinIntro).toBeUndefined();
+    }
+    expectSlackConfigValid({ selfJoinIntro: { enabled: true } });
+    expectSlackConfigValid({
+      accounts: { ops: { selfJoinIntro: { enabled: true, prompt: "Introduce yourself." } } },
+    });
+    expectSlackConfigIssue({ selfJoinIntro: { enabled: "yes" } }, "selfJoinIntro.enabled");
+    expectSlackConfigIssue({ selfJoinIntro: { mode: "on" } }, "selfJoinIntro");
+  });
+
   it("accepts historyLimit overrides per account", () => {
     const res = SlackConfigSchema.safeParse({
       historyLimit: 7,

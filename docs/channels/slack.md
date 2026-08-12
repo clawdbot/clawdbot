@@ -1870,7 +1870,7 @@ Same-chat `/approve` also works in Slack channels and DMs that already support c
 - Message edits/deletes are mapped into system events.
 - Thread broadcasts ("Also send to channel" thread replies) are processed as normal user messages.
 - Reaction add/remove events are mapped into system events.
-- Member join/leave, channel created/renamed, and pin add/remove events are mapped into system events.
+- Member join/leave, channel created/renamed, and pin add/remove events are mapped into system events. The bot's own channel join can instead dispatch an immediate introduction turn — see [Channel-join introductions](#channel-join-introductions).
 - Optional presence polling can map an observed human participant's `away` to `active` transition into the participant's most recently active eligible Slack session. The default is off.
 - `channel_id_changed` can migrate channel config keys when `configWrites` is enabled.
 - Channel topic/purpose metadata is treated as untrusted context and can be injected into routing context.
@@ -1911,6 +1911,30 @@ OpenClaw polls at most 45 unique workspace-user pairs per minute per Slack accou
 
 The bot token needs `users:read`, which is already included in the recommended manifest. Enterprise Grid org-wide installs create a workspace-scoped polling client only after an authorized event identifies that workspace; presence state, cooldowns, and delivery targets remain partitioned by workspace.
 
+### Channel-join introductions
+
+By default, the bot being added to a channel only records a passive `member_joined_channel` system event, delivered on the next heartbeat. With `selfJoinIntro.enabled`, OpenClaw instead dispatches an immediate agent turn through the normal message pipeline so the agent can introduce itself right away. The turn is attributed to the user who invited the bot and carries an explicitly automated instruction text.
+
+```json5
+{
+  channels: {
+    slack: {
+      selfJoinIntro: {
+        enabled: true,
+        // Optional: replace the default introduction instruction.
+        prompt: "Read the recent channel history, introduce yourself, and offer up to three concrete ways you can help, in a thread.",
+      },
+    },
+  },
+}
+```
+
+- Default: off — joins stay passive system events; nothing changes for existing configs.
+- Only the bot's own join dispatches a turn; other members' joins are unchanged.
+- The channel must pass the same access checks as any other system event (`groupPolicy`, channel allowlists).
+- When Slack omits the `inviter` (for example, the bot joined via API on its own), OpenClaw falls back to the passive system event.
+- Requires the `member_joined_channel` bot event, which is already in the recommended manifest.
+
 ## Configuration reference
 
 Primary reference: [Configuration reference - Slack](/gateway/config-channels#slack).
@@ -1923,6 +1947,7 @@ Primary reference: [Configuration reference - Slack](/gateway/config-channels#sl
 - channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`, `implicitMentions.*`
 - threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - presence wakes: `presenceEvents.mode`, `channels.*.presenceEvents.mode` (`off|auto|on`; default `off`)
+- self-join intro: `selfJoinIntro.enabled`, `selfJoinIntro.prompt` (immediate agent turn when the bot is added to a channel; default off)
 - delivery: `textChunkLimit`, `streaming.chunkMode`, `mediaMaxMb`, `streaming`, `streaming.nativeTransport`, `streaming.preview.toolProgress`
 - unfurls: `unfurlLinks` (default: `false`), `unfurlMedia` for `chat.postMessage` link/media preview control; set `unfurlLinks: true` to opt back into link previews
 - ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `userToken`, `userTokenReadOnly`

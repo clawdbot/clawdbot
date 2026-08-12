@@ -113,6 +113,18 @@ export const slackChannelConfigUiHints = {
     label: "Slack Channel Presence Event Mode",
     help: 'Override presence events for one Slack channel. Use "on" to include large threads or top-level channel sessions.',
   },
+  selfJoinIntro: {
+    label: "Slack Self-Join Intro",
+    help: "Dispatch an agent turn when the bot is added to a channel so it can introduce itself. Default: off (joins stay passive system events).",
+  },
+  "selfJoinIntro.enabled": {
+    label: "Slack Self-Join Intro Enabled",
+    help: "Enable the immediate agent turn on the bot's own channel join. Requires the member_joined_channel bot event subscription.",
+  },
+  "selfJoinIntro.prompt": {
+    label: "Slack Self-Join Intro Prompt",
+    help: "Optional instruction injected for the join turn, replacing the default introduction request.",
+  },
   "execApprovals.enabled": {
     label: "Slack Exec Approvals Enabled",
     help: 'Controls Slack native exec approvals for this account: unset or "auto" enables DM-first native approvals when approvers can be resolved, true forces native approvals on, and false disables them.',

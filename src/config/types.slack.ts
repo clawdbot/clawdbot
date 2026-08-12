@@ -62,6 +62,13 @@ type SlackPresenceEventsConfig = {
   mode?: SlackPresenceEventsMode;
 };
 
+type SlackSelfJoinIntroConfig = {
+  /** Dispatch an agent turn when the bot itself is added to a channel. Default: false. */
+  enabled?: boolean;
+  /** Optional instruction for the join turn. Replaces the default introduction request. */
+  prompt?: string;
+};
+
 export type SlackReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 export type SlackStreamingMode = "off" | "partial" | "block" | "progress";
 export type SlackStreamingProgressConfig = ChannelStreamingProgressConfig & {
@@ -169,6 +176,8 @@ export type SlackAccountConfig = Omit<
     thread?: SlackThreadConfig;
     /** Poll Slack presence and wake the routed agent on away-to-active transitions. Default: off. */
     presenceEvents?: SlackPresenceEventsConfig;
+    /** Dispatch an agent turn when the bot is added to a channel so it can introduce itself. Default: off. */
+    selfJoinIntro?: SlackSelfJoinIntroConfig;
     actions?: SlackActionConfig;
     slashCommand?: SlackSlashCommandConfig;
     dm?: SlackDmConfig;

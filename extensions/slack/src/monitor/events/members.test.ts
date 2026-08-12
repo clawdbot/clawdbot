@@ -233,4 +233,114 @@ describe("registerSlackMemberEvents", () => {
     expect(trackEvent).not.toHaveBeenCalled();
     expect(memberMocks.enqueue).not.toHaveBeenCalled();
   });
+
+  describe("self-join intro", () => {
+    type SelfJoinIntroConfig = { enabled?: boolean; prompt?: string };
+
+    function makeSelfJoinEvent(overrides?: { user?: string; inviter?: string }) {
+      return {
+        type: "member_joined_channel",
+        user: overrides?.user ?? "U_BOT",
+        channel: "C1",
+        channel_type: "channel",
+        event_ts: "123.456",
+        ...(overrides && "inviter" in overrides ? { inviter: overrides.inviter } : {}),
+      };
+    }
+
+    async function runSelfJoinCase(params: {
+      selfJoinIntro?: SelfJoinIntroConfig;
+      event?: Record<string, unknown>;
+      withHandler?: boolean;
+    }) {
+      memberMocks.enqueue.mockClear();
+      const harness = initSlackHarness({ channelType: "channel" });
+      harness.ctx.selfJoinIntro = params.selfJoinIntro;
+      const handleSlackMessage = vi.fn(async () => {});
+      registerSlackMemberEvents({
+        ctx: harness.ctx,
+        handleSlackMessage:
+          params.withHandler === false
+            ? undefined
+            : (handleSlackMessage as unknown as import("../message-handler.js").SlackMessageHandler),
+      });
+      const handler = harness.getHandler("member_joined_channel");
+      if (!handler) {
+        throw new Error("expected Slack member joined handler");
+      }
+      await handler({
+        event: params.event ?? makeSelfJoinEvent({ inviter: "U1" }),
+        body: { event_id: "Ev-self-join" },
+      });
+      return { handleSlackMessage };
+    }
+
+    it("dispatches an intro turn attributed to the inviter when enabled", async () => {
+      const { handleSlackMessage } = await runSelfJoinCase({
+        selfJoinIntro: { enabled: true },
+      });
+
+      expect(handleSlackMessage).toHaveBeenCalledTimes(1);
+      expect(memberMocks.enqueue).not.toHaveBeenCalled();
+      const [message, opts] = handleSlackMessage.mock.calls[0] as [
+        Record<string, unknown>,
+        Record<string, unknown>,
+      ];
+      expect(message.channel).toBe("C1");
+      expect(message.channel_type).toBe("channel");
+      expect(message.user).toBe("U1");
+      expect(message.text).toContain("<@U_BOT>");
+      expect(message.text).toContain("Introduce yourself");
+      expect(message.ts).toEqual(expect.any(String));
+      expect(message.ts).not.toBe("123.456");
+      expect(opts).toMatchObject({ source: "message", wasMentioned: true });
+    });
+
+    it("uses the configured prompt instead of the default instruction", async () => {
+      const { handleSlackMessage } = await runSelfJoinCase({
+        selfJoinIntro: { enabled: true, prompt: "Run the channel briefing." },
+      });
+
+      const [message] = handleSlackMessage.mock.calls[0] as [Record<string, unknown>];
+      expect(message.text).toContain("Run the channel briefing.");
+      expect(message.text).not.toContain("Introduce yourself");
+    });
+
+    it("keeps the passive system event when not enabled", async () => {
+      const { handleSlackMessage } = await runSelfJoinCase({});
+
+      expect(handleSlackMessage).not.toHaveBeenCalled();
+      expect(memberMocks.enqueue).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls back to the system event when Slack omits the inviter", async () => {
+      const { handleSlackMessage } = await runSelfJoinCase({
+        selfJoinIntro: { enabled: true },
+        event: makeSelfJoinEvent(),
+      });
+
+      expect(handleSlackMessage).not.toHaveBeenCalled();
+      expect(memberMocks.enqueue).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls back to the system event when no message handler is wired", async () => {
+      const { handleSlackMessage } = await runSelfJoinCase({
+        selfJoinIntro: { enabled: true },
+        withHandler: false,
+      });
+
+      expect(handleSlackMessage).not.toHaveBeenCalled();
+      expect(memberMocks.enqueue).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not intercept other members' joins", async () => {
+      const { handleSlackMessage } = await runSelfJoinCase({
+        selfJoinIntro: { enabled: true },
+        event: makeSelfJoinEvent({ user: "U2", inviter: "U1" }),
+      });
+
+      expect(handleSlackMessage).not.toHaveBeenCalled();
+      expect(memberMocks.enqueue).toHaveBeenCalledTimes(1);
+    });
+  });
 });

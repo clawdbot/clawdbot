@@ -26,7 +26,11 @@ export function registerSlackCommonEvents(params: {
   });
   registerSlackReactionEvents({ ctx: params.ctx, trackEvent: params.trackEvent });
   registerSlackPinEvents({ ctx: params.ctx, trackEvent: params.trackEvent });
-  registerSlackMemberEvents({ ctx: params.ctx, trackEvent: params.trackEvent });
+  registerSlackMemberEvents({
+    ctx: params.ctx,
+    handleSlackMessage: params.handleSlackMessage,
+    trackEvent: params.trackEvent,
+  });
   registerSlackChannelEvents({ ctx: params.ctx, trackEvent: params.trackEvent });
   registerSlackInteractionEvents({ ctx: params.ctx, trackEvent: params.trackEvent });
 }

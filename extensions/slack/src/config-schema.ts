@@ -44,6 +44,13 @@ const SlackPresenceEventsSchema = z
   })
   .strict();
 
+const SlackSelfJoinIntroSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    prompt: z.string().optional(),
+  })
+  .strict();
+
 const SlackChannelSchema = buildGroupEntrySchema(
   {
     ignoreOtherMentions: z.boolean().optional(),
@@ -114,6 +121,7 @@ const SlackAccountSchema = z
     replyToModeByChatType: ReplyToModeByChatTypeSchema.optional(),
     thread: SlackThreadSchema.optional(),
     presenceEvents: SlackPresenceEventsSchema.optional(),
+    selfJoinIntro: SlackSelfJoinIntroSchema.optional(),
     actions: z
       .object({
         reactions: z.boolean().optional(),
