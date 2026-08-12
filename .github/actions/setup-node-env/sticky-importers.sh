@@ -8,6 +8,7 @@ archive="$sticky_root/importer-node-modules.tar"
 archive_checksum="$sticky_root/.openclaw-importer-archive.sha256"
 importer_manifest="$sticky_root/importer-node-modules.manifest"
 marker="$sticky_root/.openclaw-deps-fingerprint"
+generation_ledger="$sticky_root/.openclaw-snapshot-generation"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 archive_sha256() {
@@ -63,6 +64,16 @@ case "$mode" in
     mv "$temp_archive" "$archive"
     mv "$temp_manifest" "$importer_manifest"
     mv "$temp_checksum" "$archive_checksum"
+    # Blacksmith's on-change mode compares allocated bytes rather than file
+    # content. Guarantee every successful rebuild changes usage by more than
+    # its one-block tolerance, even when the refreshed tree has the same size.
+    # Bound the writer-owned ledger so a long-lived sticky key cannot grow
+    # indefinitely; truncation is itself a detectable allocation change.
+    if [[ -f "$generation_ledger" ]] &&
+      [[ "$(stat -c %s "$generation_ledger")" -ge 1048576 ]]; then
+      : >"$generation_ledger"
+    fi
+    dd if=/dev/zero bs=8192 count=1 status=none >>"$generation_ledger"
     # The marker lands last. Consumers also verify the archive bytes and every
     # registry-backed importer resolution before trusting this snapshot.
     printf '%s\n' "$fingerprint" >"$temp_marker"

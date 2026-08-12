@@ -139,12 +139,12 @@ runs:
         # disk here, this gate binds cooperating code, not hostile code: the
         # enforced trust boundary is the fork/dispatch runner gate in ci.yml,
         # and same-repo PR authors already hold repository write access.
-        # Explicit true (not on-change) because the allocated-byte heuristic
-        # can miss a fingerprint refresh whose reinstall keeps disk usage
-        # stable, permanently stranding consumers on a stale marker. The action
-        # skips commit after failed/cancelled steps, so a broken install cannot
-        # seed this key.
-        commit: ${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'true' || 'false' }}
+        # Warm validated snapshots stay read-only so asynchronous publication
+        # does not perpetually chase no-op commits. A successful rebuild grows
+        # the bounded generation ledger by more than stickydisk's one-block
+        # on-change tolerance, so same-size fingerprint refreshes still commit.
+        # The action also skips commit after failed/cancelled steps.
+        commit: ${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'on-change' || 'false' }}
 
     - name: Restore and save Vitest transform cache
       if: inputs.vitest-fs-cache == 'true' && inputs.save-vitest-fs-cache == 'true' && runner.os != 'Windows'

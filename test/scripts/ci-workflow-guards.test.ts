@@ -9,6 +9,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -3024,7 +3025,7 @@ NODE
       "${{ github.repository }}-node-deps-bind-v6-${{ inputs.node-version }}",
     );
     expect(mountStep.with.commit).toBe(
-      "${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'true' || 'false' }}",
+      "${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'on-change' || 'false' }}",
     );
     expect(cleanupStep).toMatchObject({
       if: "inputs.sticky-disk == 'true'",
@@ -3325,6 +3326,8 @@ NODE
       writeFileSync(path.join(rootModules, "root-sentinel"), "before", "utf8");
 
       execFileSync("bash", [helper, "capture", stickyRoot, workspace, "fingerprint-a"]);
+      const generationLedger = path.join(stickyRoot, ".openclaw-snapshot-generation");
+      expect(statSync(generationLedger).size).toBe(8192);
       rmSync(importerModules, { recursive: true });
       writeFileSync(path.join(rootModules, "root-sentinel"), "after", "utf8");
       execFileSync("bash", [helper, "restore", stickyRoot, workspace]);
@@ -3335,6 +3338,13 @@ NODE
       expect(readFileSync(path.join(rootModules, "root-sentinel"), "utf8")).toBe("after");
       expect(readFileSync(path.join(stickyRoot, ".openclaw-deps-fingerprint"), "utf8")).toBe(
         "fingerprint-a\n",
+      );
+      expect(statSync(generationLedger).size).toBe(8192);
+
+      execFileSync("bash", [helper, "capture", stickyRoot, workspace, "fingerprint-b"]);
+      expect(statSync(generationLedger).size).toBe(16384);
+      expect(readFileSync(path.join(stickyRoot, ".openclaw-deps-fingerprint"), "utf8")).toBe(
+        "fingerprint-b\n",
       );
 
       // Recreate the reported failure shape: a marker-matching archive can be
@@ -3362,10 +3372,11 @@ NODE
 
       const failedCapture = spawnSync(
         "bash",
-        [helper, "capture", stickyRoot, workspace, "fingerprint-b"],
+        [helper, "capture", stickyRoot, workspace, "fingerprint-c"],
         { encoding: "utf8" },
       );
       expect(failedCapture.status).toBe(1);
+      expect(statSync(generationLedger).size).toBe(16384);
       expect(failedCapture.stderr).toContain(
         "ipaddr.js expected ipaddr.js@2.4.0, resolved ipaddr.js@1.9.1",
       );
