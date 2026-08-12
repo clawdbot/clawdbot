@@ -717,7 +717,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       expectRuntimeErrorIncludes(runtime, "is missing a provider id");
       expectRuntimeErrorIncludes(runtime, '"provider-plugin:<provider-id>"');
       // Rejection happens before provider discovery, so no plugin is resolved.
-      expect(resolvePluginProviders).not.toHaveBeenCalled();
+      expect(resolvePluginProvidersCore).not.toHaveBeenCalled();
       expect(resolvePreferredProviderForAuthChoice).not.toHaveBeenCalled();
     },
   );
