@@ -33,7 +33,6 @@ vi.mock("./bot-native-commands.runtime.js", () => ({
   finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
   getAgentScopedMediaLocalRoots: vi.fn(() => []),
   getSessionEntry: loginSessionMocks.getSessionEntry,
-  recordInboundSessionMetaSafe: vi.fn(async () => undefined),
   resolveChunkMode: vi.fn(() => "length"),
   resolveThreadSessionKeys: vi.fn(
     ({

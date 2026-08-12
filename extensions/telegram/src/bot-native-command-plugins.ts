@@ -128,7 +128,6 @@ async function resolveTelegramCommandTranscriptContext(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
-  threadId?: string | number;
 }): Promise<{ sessionId?: string; sessionFile?: string; authProfileId?: string }> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -215,7 +214,6 @@ export async function executeTelegramPluginCommand(
     cfg: dispatch.runtimeCfg,
     agentId: dispatch.route.agentId,
     sessionKey: dispatch.targetSessionKey,
-    threadId: dispatch.threadSpec.id,
   });
   const result = normalizeTelegramNativeReplyPayload(
     await pluginCommandDispatch.execute({

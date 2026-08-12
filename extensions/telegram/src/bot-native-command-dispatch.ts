@@ -44,12 +44,11 @@ import {
   resolveTelegramGroupAllowFromContext,
   resolveTelegramMessageThreadSpec,
   resolveTelegramThreadSpec,
-  shouldUseTelegramDmThreadSession,
 } from "./bot/helpers.js";
 import type { TelegramGetChat } from "./bot/types.js";
 import {
-  resolveTelegramConversationBaseSessionKey,
   resolveTelegramConversationRoute,
+  resolveTelegramTargetSession,
 } from "./conversation-route.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import {
@@ -434,25 +433,15 @@ export async function prepareTelegramCommandDispatch(
     supportsBlockTables: true,
   });
   const chunkMode = nativeCommandRuntime.resolveChunkMode(runtimeCfg, "telegram", route.accountId);
-  const baseSessionKey = resolveTelegramConversationBaseSessionKey({
+  const targetSessionKey = resolveTelegramTargetSession({
     cfg: runtimeCfg,
     route,
     chatId: auth.chatId,
     isGroup: auth.isGroup,
     senderId: auth.senderId,
+    dmThreadId: threadSpec.scope === "dm" ? threadSpec.id : undefined,
+    botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(params.botUser),
   });
-  const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
-  const threadKeys =
-    shouldUseTelegramDmThreadSession({
-      dmThreadId,
-      botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(params.botUser),
-    }) && dmThreadId != null
-      ? nativeCommandRuntime.resolveThreadSessionKeys({
-          baseSessionKey,
-          threadId: `${auth.chatId}:${dmThreadId}`,
-        })
-      : null;
-  const targetSessionKey = threadKeys?.sessionKey ?? baseSessionKey;
   const buildDeliveryBaseOptions = (keys?: {
     sessionKeyForInternalHooks?: string;
     policySessionKey?: string;

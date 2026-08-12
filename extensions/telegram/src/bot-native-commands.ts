@@ -36,8 +36,6 @@ import {
   TELEGRAM_COMMAND_NAME_PATTERN,
 } from "./command-config.js";
 
-export { parseTelegramNativeCommandCallbackData } from "./native-command-callback-data.js";
-
 const loadTelegramBuiltinCommandExecutor = createLazyRuntimeModule(
   () => import("./bot-native-command-builtins.js"),
 );

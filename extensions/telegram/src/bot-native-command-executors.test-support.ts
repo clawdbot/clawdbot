@@ -201,28 +201,6 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
       };
     },
     ensureConfiguredBindingRouteReady: persistentBindingMocks.ensureConfiguredBindingRouteReady,
-    recordInboundSessionMetaSafe: vi.fn(
-      async (params: {
-        cfg: OpenClawConfig;
-        agentId: string;
-        sessionKey: string;
-        ctx: unknown;
-        onError?: (error: unknown) => void;
-      }) => {
-        const storePath = sessionMocks.resolveStorePath(params.cfg.session?.store, {
-          agentId: params.agentId,
-        });
-        try {
-          await sessionMocks.recordSessionMetaFromInbound({
-            storePath,
-            sessionKey: params.sessionKey,
-            ctx: params.ctx,
-          });
-        } catch (error) {
-          params.onError?.(error);
-        }
-      },
-    ),
     readChannelAllowFromStore: conversationStoreMocks.readChannelAllowFromStore,
     upsertChannelPairingRequest: conversationStoreMocks.upsertChannelPairingRequest,
     getSessionBindingService: () => ({
@@ -276,28 +254,6 @@ vi.mock("./bot-native-commands.runtime.js", () => {
     finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
     getAgentScopedMediaLocalRoots,
     getSessionEntry: sessionMocks.getSessionEntry,
-    recordInboundSessionMetaSafe: vi.fn(
-      async (params: {
-        cfg: OpenClawConfig;
-        agentId: string;
-        sessionKey: string;
-        ctx: unknown;
-        onError?: (error: unknown) => void;
-      }) => {
-        const storePath = sessionMocks.resolveStorePath(params.cfg.session?.store, {
-          agentId: params.agentId,
-        });
-        try {
-          await sessionMocks.recordSessionMetaFromInbound({
-            storePath,
-            sessionKey: params.sessionKey,
-            ctx: params.ctx,
-          });
-        } catch (error) {
-          params.onError?.(error);
-        }
-      },
-    ),
     resolveChunkMode,
     resolveThreadSessionKeys,
     dispatchChannelInboundTurn: dispatchChannelInboundTurnMock as unknown as NonNullable<
