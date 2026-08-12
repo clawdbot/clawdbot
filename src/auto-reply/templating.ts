@@ -150,6 +150,11 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   /** Effective routed DM scope, including binding overrides. */
   DmScope?: DmScope;
   /**
+   * Route session that owns channel-scoped system events when this turn is
+   * dispatched through a child or thread session.
+   */
+  SystemEventSessionKey?: string;
+  /**
    * Session-like key used for runtime policy (sandbox/tool policy) when the
    * conversation key intentionally remains broader, such as a main-session DM.
    */

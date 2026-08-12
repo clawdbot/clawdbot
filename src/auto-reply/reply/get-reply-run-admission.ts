@@ -132,16 +132,24 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   const drainedSystemEventBlocks: string[] = [];
   const rebuildPromptBodies = async () => {
     if (!useFastReplyRuntime) {
-      const eventsBlock = await drainFormattedSystemEvents({
-        cfg,
-        agentId,
-        sessionKey,
-        isMainSession,
-        isNewSession,
-        suppressHeartbeatOwnedEvents: context.isHeartbeat,
-      });
-      if (eventsBlock) {
-        drainedSystemEventBlocks.push(eventsBlock);
+      const routeSystemEventSessionKey = normalizeOptionalString(ctx.SystemEventSessionKey);
+      const systemEventSessionKeys =
+        routeSystemEventSessionKey && routeSystemEventSessionKey !== sessionKey
+          ? [routeSystemEventSessionKey, sessionKey]
+          : [sessionKey];
+      for (const systemEventSessionKey of systemEventSessionKeys) {
+        const isCurrentSession = systemEventSessionKey === sessionKey;
+        const eventsBlock = await drainFormattedSystemEvents({
+          cfg,
+          agentId,
+          sessionKey: systemEventSessionKey,
+          isMainSession: isCurrentSession && isMainSession,
+          isNewSession: isCurrentSession && isNewSession,
+          suppressHeartbeatOwnedEvents: context.isHeartbeat,
+        });
+        if (eventsBlock) {
+          drainedSystemEventBlocks.push(eventsBlock);
+        }
       }
     }
     const { activeGoalContext, inboundUserContext } = context.getInboundContext();
