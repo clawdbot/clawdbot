@@ -1626,7 +1626,7 @@ describe("Codex supervision catalog", () => {
         { hostId: "node:devbox", threadId: "thread-1", limit: 51 },
         async () => undefined,
       ),
-    ).rejects.toThrow("from 1 to 50");
+    ).rejects.toThrow("Codex reconciliation transcript is unavailable");
     controller.abort();
     await expect(
       reconciliationProvider?.withTranscript(

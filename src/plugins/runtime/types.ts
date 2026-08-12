@@ -136,7 +136,8 @@ export type PluginRuntime = PluginRuntimeCore & {
   /** Trusted in-process Codex source for the personal reconciliation plugin; never a Gateway RPC. */
   codexReconciliation: {
     register: (provider: CodexReconciliationProvider) => void;
-    get: () => CodexReconciliationProvider | undefined;
+    /** Returns the provider only when this runtime is bound to the approved consumer plugin. */
+    claim: () => CodexReconciliationProvider | undefined;
   };
   gateway: {
     /** Whether this process owns an active Gateway request context. */

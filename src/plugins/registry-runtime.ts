@@ -874,6 +874,17 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           scopedAgentRuntime = scopedAgent;
           return scopedAgentRuntime;
         }
+        if (prop === "codexReconciliation") {
+          const base = getRuntimeProperty() as PluginRuntime["codexReconciliation"] & {
+            claimFor?: (
+              consumerId: string,
+            ) => ReturnType<PluginRuntime["codexReconciliation"]["claim"]>;
+          };
+          return {
+            register: base.register,
+            claim: () => base.claimFor?.(pluginId),
+          } satisfies PluginRuntime["codexReconciliation"];
+        }
         if (prop !== "subagent") {
           return getRuntimeProperty();
         }

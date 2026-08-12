@@ -262,11 +262,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     managedTaskFlow: taskFlow,
   });
   const agent = createRuntimeAgent();
-  let codexReconciliation: PluginRuntime["codexReconciliation"] extends {
-    get: () => infer Provider;
-  }
-    ? Provider
-    : never;
+  let codexReconciliation: import("./types.js").CodexReconciliationProvider | undefined;
   const runtime = {
     // Sourced from the shared OpenClaw version resolver (#52899) so plugins
     // always see the same version the CLI reports, avoiding API-version drift.
@@ -278,8 +274,12 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
         }
         codexReconciliation = provider;
       },
-      get: () => codexReconciliation,
-    },
+      claim: () => undefined,
+      // The registry resolver captures the caller plugin id and is the only
+      // path that can read this callback. Do not expose a general getter.
+      claimFor: (consumerId: string) =>
+        consumerId === "codex-workboard-reconciler" ? codexReconciliation : undefined,
+    } as PluginRuntime["codexReconciliation"],
     gateway: createRuntimeGateway(),
     config: createRuntimeConfig(),
     agent,

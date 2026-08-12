@@ -131,6 +131,7 @@ const boundCatalogSessionId = (value: unknown) =>
 const CODEX_SUPERVISION_SESSION_KEY_PREFIX = "harness:codex:supervision:";
 const CODEX_SESSION_CATALOG_LIST_TTL_MS = 32_000;
 const CODEX_SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES = 32;
+const MAX_RECONCILIATION_TRANSCRIPT_ITEMS = 1000;
 
 type CodexCatalogRequestOptions = {
   config: OpenClawConfig | undefined;
@@ -967,6 +968,13 @@ function assertReconciliationNotAborted(signal: AbortSignal | undefined): void {
   signal?.throwIfAborted();
 }
 
+function rethrowReconciliationError(error: unknown, message: string): never {
+  if (error instanceof DOMException && error.name === "AbortError") {
+    throw error;
+  }
+  throw new Error(message);
+}
+
 async function readCodexReconciliationTranscript(params: {
   runtime: PluginRuntime;
   control: CodexSessionCatalogControl;
@@ -1036,51 +1044,62 @@ function registerCodexSessionReconciliation(params: {
 }): void {
   params.api.runtime.codexReconciliation.register({
     list: async (input) => {
-      const request = readReconciliationListRequest({
-        hostId: input.hostId,
-        archived: input.archived,
-        ...(input.limit !== undefined ? { limit: input.limit } : {}),
-      });
-      assertReconciliationNotAborted(input.signal);
-      const page =
-        request.hostId === CODEX_LOCAL_SESSION_HOST_ID
-          ? await enumerateLocalCodexSessionHistory({
-              control: params.control,
-              archived: request.archived,
-              limit: request.limit,
-              signal: input.signal,
-            })
-          : await enumerateCodexSessionHistory({
-              runtime: params.api.runtime,
-              nodeId: request.hostId.slice("node:".length),
-              clientScopes: ["operator.admin"],
-              archived: request.archived,
-              limit: request.limit,
-              signal: input.signal,
-            });
-      assertReconciliationNotAborted(input.signal);
-      return { hostId: request.hostId, sessions: page.sessions };
+      try {
+        const request = readReconciliationListRequest({
+          hostId: input.hostId,
+          archived: input.archived,
+          ...(input.limit !== undefined ? { limit: input.limit } : {}),
+        });
+        assertReconciliationNotAborted(input.signal);
+        const page =
+          request.hostId === CODEX_LOCAL_SESSION_HOST_ID
+            ? await enumerateLocalCodexSessionHistory({
+                control: params.control,
+                archived: request.archived,
+                limit: request.limit,
+                signal: input.signal,
+              })
+            : await enumerateCodexSessionHistory({
+                runtime: params.api.runtime,
+                nodeId: request.hostId.slice("node:".length),
+                clientScopes: ["operator.admin"],
+                archived: request.archived,
+                limit: request.limit,
+                signal: input.signal,
+              });
+        assertReconciliationNotAborted(input.signal);
+        return { hostId: request.hostId, sessions: page.sessions };
+      } catch (error) {
+        return rethrowReconciliationError(error, "Codex reconciliation catalog is unavailable");
+      }
     },
     withTranscript: async (input, consume) => {
-      const page = await readCodexReconciliationTranscript({
-        runtime: params.api.runtime,
-        control: params.control,
-        request: readReconciliationTranscriptRequest({
-          hostId: input.hostId,
-          threadId: input.threadId,
-          ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
-          ...(input.limit !== undefined ? { limit: input.limit } : {}),
-        }),
-        signal: input.signal,
-      });
-      const items = page.items.flatMap((item) => {
-        const id = boundedCatalogString(item.id, 512);
-        const type = boundedCatalogString(item.type, 128);
-        const text = boundedCatalogString(item.text, 32_000, "truncate");
-        return id && type ? [{ id, type, ...(text ? { text } : {}) }] : [];
-      });
-      assertReconciliationNotAborted(input.signal);
-      await consume(items);
+      try {
+        const page = await readCodexReconciliationTranscript({
+          runtime: params.api.runtime,
+          control: params.control,
+          request: readReconciliationTranscriptRequest({
+            hostId: input.hostId,
+            threadId: input.threadId,
+            ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
+            ...(input.limit !== undefined ? { limit: input.limit } : {}),
+          }),
+          signal: input.signal,
+        });
+        if (page.items.length > MAX_RECONCILIATION_TRANSCRIPT_ITEMS) {
+          throw new Error("reconciliation transcript item limit exceeded");
+        }
+        const items = page.items.flatMap((item) => {
+          const id = boundedCatalogString(item.id, 512);
+          const type = boundedCatalogString(item.type, 128);
+          const text = boundedCatalogString(item.text, 32_000, "truncate");
+          return id && type ? [{ id, type, ...(text ? { text } : {}) }] : [];
+        });
+        assertReconciliationNotAborted(input.signal);
+        await consume(items);
+      } catch (error) {
+        return rethrowReconciliationError(error, "Codex reconciliation transcript is unavailable");
+      }
     },
   });
 }

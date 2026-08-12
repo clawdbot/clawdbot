@@ -504,9 +504,9 @@ describe("plugin runtime Codex reconciliation source", () => {
       withTranscript: vi.fn(async () => undefined),
     };
 
-    expect(runtime.codexReconciliation.get()).toBeUndefined();
+    expect(runtime.codexReconciliation.claim()).toBeUndefined();
     runtime.codexReconciliation.register(provider);
-    expect(runtime.codexReconciliation.get()).toBe(provider);
+    expect(runtime.codexReconciliation.claim()).toBeUndefined();
     expect(() => runtime.codexReconciliation.register(provider)).toThrow("already registered");
   });
 });
