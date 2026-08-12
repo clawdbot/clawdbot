@@ -3,7 +3,12 @@ import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema
 import type { ConfigUiHints, ModelCatalogEntry } from "../../api/types.ts";
 import type { NativeNotificationsPermission } from "../../app/native-notifications.ts";
 import type { ServerUiPrefProvenance } from "../../app/server-prefs.ts";
-import type { ChatFollowUpMode, ChatSendShortcut, CatalogOpenTarget } from "../../app/settings.ts";
+import type {
+  AssistantMessageSurface,
+  ChatFollowUpMode,
+  ChatSendShortcut,
+  CatalogOpenTarget,
+} from "../../app/settings.ts";
 import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import type { JsonSchema } from "../../components/config-form.shared.ts";
@@ -132,6 +137,8 @@ export type ConfigProps = {
   setSessionCatalogHidden: (catalogId: string, hidden: boolean) => void;
   chatMessageMaxWidth?: string;
   setChatMessageMaxWidth: (value: string | undefined) => void;
+  assistantMessageSurface: AssistantMessageSurface;
+  setAssistantMessageSurface: (value: AssistantMessageSurface) => void;
   showAdvancedSettings: boolean;
   setShowAdvancedSettings: (enabled: boolean) => void;
   forceShowAdvanced?: boolean;
