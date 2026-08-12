@@ -27,6 +27,8 @@ export type CompactEmbeddedAgentSessionParams = {
   agentId?: string;
   /** Session key used only for runtime policy/sandbox resolution. Defaults to sessionKey. */
   sandboxSessionKey?: string;
+  /** Host-owned session-exclusive sandbox lifetime for this persisted session. */
+  sandboxSessionIsolation?: true;
   messageChannel?: string;
   messageProvider?: string;
   /** Capabilities declared by the gateway client that originated this run. */

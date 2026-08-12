@@ -55,7 +55,11 @@ describe("resolveSandboxWorkspaceLayoutPaths", () => {
   const sessionKey = "agent:poly:msteams:channel-1";
   const workspaceA = "/tmp/openclaw-customers/atica/agents/poly/workspace";
   const workspaceB = "/tmp/openclaw-customers/polytopic/agents/poly/workspace";
-  const createLayout = (scope: "session" | "agent" | "shared", workspaceDir: string) =>
+  const createLayout = (
+    scope: "session" | "agent" | "shared",
+    workspaceDir: string,
+    sessionIsolation?: true,
+  ) =>
     resolveSandboxWorkspaceLayoutPaths({
       cfg: {
         scope,
@@ -63,6 +67,7 @@ describe("resolveSandboxWorkspaceLayoutPaths", () => {
         workspaceRoot: "/tmp/openclaw-sandboxes",
       },
       rawSessionKey: sessionKey,
+      sessionIsolation,
       workspaceDir,
     });
 
@@ -79,4 +84,14 @@ describe("resolveSandboxWorkspaceLayoutPaths", () => {
     expect(createLayout("shared", workspaceA).scopeKey).toBe("shared");
     expect(createLayout("shared", workspaceB).scopeKey).toBe("shared");
   });
+
+  it.each(["agent", "shared"] as const)(
+    "uses the exact session key for host-owned isolation under %s scope",
+    (scope) => {
+      const isolated = createLayout(scope, workspaceA, true);
+
+      expect(isolated.scopeKey).toMatch(/^agent:poly:msteams:channel-1:workspace:[a-f0-9]{32}$/);
+      expect(isolated.sandboxWorkspaceDir).not.toBe("/tmp/openclaw-sandboxes");
+    },
+  );
 });

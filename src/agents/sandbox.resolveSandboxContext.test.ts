@@ -365,6 +365,68 @@ describe("resolveSandboxContext", () => {
     }
   }, 15_000);
 
+  it.each(["agent", "shared"] as const)(
+    "creates distinct session runtimes when host isolation overrides %s lifetime",
+    async (scope) => {
+      const scopeKeys: string[] = [];
+      const restore = registerSandboxBackend("isolated-session-backend", async (params) => {
+        scopeKeys.push(params.scopeKey);
+        return {
+          id: "isolated-session-backend",
+          runtimeId: `runtime-${scopeKeys.length}`,
+          runtimeLabel: "Isolated Session Runtime",
+          workdir: "/workspace",
+          buildExecSpec: async () => ({
+            argv: ["isolated-session-backend", "exec"],
+            env: process.env,
+            stdinMode: "pipe-closed",
+          }),
+          runShellCommand: async () => ({
+            stdout: Buffer.alloc(0),
+            stderr: Buffer.alloc(0),
+            code: 0,
+          }),
+        };
+      });
+      try {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "all",
+                backend: "isolated-session-backend",
+                scope,
+                workspaceAccess: "rw",
+                prune: { idleHours: 0, maxAgeDays: 0 },
+              },
+            },
+          },
+        };
+        const workspaceDir = await createSandboxFixtureDir(`isolated-${scope}`);
+
+        await resolveSandboxContext({
+          config: cfg,
+          sessionKey: "agent:poly:subagent:first",
+          sessionIsolation: true,
+          workspaceDir,
+        });
+        await resolveSandboxContext({
+          config: cfg,
+          sessionKey: "agent:poly:subagent:second",
+          sessionIsolation: true,
+          workspaceDir,
+        });
+
+        expect(scopeKeys[0]).toMatch(/^agent:poly:subagent:first:workspace:[a-f0-9]{32}$/);
+        expect(scopeKeys[1]).toMatch(/^agent:poly:subagent:second:workspace:[a-f0-9]{32}$/);
+        expect(scopeKeys[0]).not.toBe(scopeKeys[1]);
+      } finally {
+        restore();
+      }
+    },
+    15_000,
+  );
+
   it("types backend creation failures as sandbox provisioning errors", async () => {
     const backendFailure = new Error("Sandbox image not found: missing:test");
     const restore = registerSandboxBackend("broken-backend", async () => {

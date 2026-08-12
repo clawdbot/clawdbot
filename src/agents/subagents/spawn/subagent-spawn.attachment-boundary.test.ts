@@ -15,6 +15,7 @@ describe("subagent attachment owner boundaries", () => {
   const ctx = { agentSessionKey: "agent:main:main" };
   let workspaceDir = "";
   let config = createSubagentSpawnTestConfig();
+  let sessionStore: Record<string, Record<string, unknown>> = {};
 
   beforeEach(() => {
     workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-attachment-boundary-"));
@@ -25,10 +26,10 @@ describe("subagent attachment owner boundaries", () => {
     });
     callGatewayMock.mockReset();
     updateSessionStoreMock.mockReset();
+    sessionStore = {};
     updateSessionStoreMock.mockImplementation(async (_path: unknown, mutate: unknown) => {
-      const store: Record<string, Record<string, unknown>> = {};
-      await (mutate as (value: typeof store) => unknown)(store);
-      return store;
+      await (mutate as (value: typeof sessionStore) => unknown)(sessionStore);
+      return sessionStore;
     });
     setupAcceptedSubagentGatewayMock(callGatewayMock);
   });
@@ -59,7 +60,7 @@ describe("subagent attachment owner boundaries", () => {
     );
 
   it.each(["agent", "shared"] as const)(
-    "rejects attachment staging in a %s-scoped sandbox runtime",
+    "isolates attachment staging from a configured %s-scoped sandbox lifetime",
     async (scope) => {
       config = createSubagentSpawnTestConfig(workspaceDir, {
         agents: {
@@ -69,7 +70,16 @@ describe("subagent attachment owner boundaries", () => {
           },
         },
       });
-      const resolveSandboxContext = vi.fn();
+      const bridge = {
+        resolvePath: ({ filePath }: { filePath: string }) => ({
+          relativePath: "",
+          containerPath: filePath,
+        }),
+        mkdirp: vi.fn(async () => undefined),
+        createFileExclusive: vi.fn(async () => "created" as const),
+        remove: vi.fn(async () => undefined),
+      };
+      const resolveSandboxContext = vi.fn(async () => runtimeLocalSandbox(bridge));
       const registerSubagentRunMock = vi.fn();
       const module = await loadSubagentSpawnModuleForTest({
         callGatewayMock,
@@ -78,15 +88,21 @@ describe("subagent attachment owner boundaries", () => {
         workspaceDir,
         resolveSandboxRuntimeStatus: () => ({ sandboxed: true, agentId: "main" }) as never,
         resolveSandboxContext,
+        getSandboxBackendManager: () => ({
+          prepareFsCleanupLocator: async () => ({ runtime: "runtime-main" }),
+          createFsCleanupBridge: async () => bridge,
+        }),
         registerSubagentRunMock,
       });
 
-      expect(await spawnAttachments(module)).toMatchObject({
-        status: "error",
-        error: expect.stringContaining('sandbox.scope="session"'),
-      });
-      expect(resolveSandboxContext).not.toHaveBeenCalled();
-      expect(registerSubagentRunMock).not.toHaveBeenCalled();
+      const result = await spawnAttachments(module);
+
+      expect(result.status).toBe("accepted");
+      expect(resolveSandboxContext).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionIsolation: true }),
+      );
+      expect(sessionStore[result.childSessionKey as string]?.sandboxSessionIsolation).toBe(true);
+      expect(registerSubagentRunMock).toHaveBeenCalledOnce();
     },
   );
 

@@ -1140,6 +1140,7 @@ export function runAgentAttempt(params: {
     chatType: params.sessionEntry?.chatType,
     sessionTarget: params.sessionTarget,
     sandboxSessionKey: params.sessionKey,
+    sandboxSessionIsolation: params.sessionEntry?.sandboxSessionIsolation,
     agentId: params.sessionAgentId,
     trigger: "user",
     messageChannel: params.messageChannel,

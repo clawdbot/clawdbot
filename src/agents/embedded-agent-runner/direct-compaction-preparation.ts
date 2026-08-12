@@ -326,6 +326,7 @@ export async function prepareDirectCompactionAttempt(
     config: params.config,
     execOverrides: params.execOverrides,
     sessionKey: sandboxSessionKey,
+    sessionIsolation: params.sandboxSessionIsolation,
     workspaceDir: resolvedWorkspace,
   });
   const effectiveWorkspace = sandbox?.enabled

@@ -362,6 +362,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     completionOwnerSessionKey?: string;
     /** Workspace inherited by spawned sessions and reused on later turns for the same child session. */
     spawnedWorkspaceDir?: string;
+    /** This child owns a session-exclusive sandbox runtime despite broader configured lifetimes. */
+    sandboxSessionIsolation?: true;
     /** Task working directory inherited by spawned sessions and reused on later turns. */
     spawnedCwd?: string;
     /** Content-free fingerprints for checkout changes that predate this session generation. */

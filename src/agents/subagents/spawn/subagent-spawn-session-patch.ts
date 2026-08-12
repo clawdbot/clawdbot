@@ -50,6 +50,9 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   if (typeof patch.spawnedWorkspaceDir === "string" && patch.spawnedWorkspaceDir.trim()) {
     entry.spawnedWorkspaceDir = patch.spawnedWorkspaceDir.trim();
   }
+  if (patch.sandboxSessionIsolation === true) {
+    entry.sandboxSessionIsolation = true;
+  }
   if (typeof patch.spawnedCwd === "string" && patch.spawnedCwd.trim()) {
     entry.spawnedCwd = patch.spawnedCwd.trim();
   }
@@ -112,6 +115,7 @@ export async function createInitialSubagentSession(params: {
   requesterInternalKey: string;
   completionOwnerSessionKey: string;
   spawnedWorkspaceDir?: string;
+  sandboxSessionIsolation?: true;
   spawnedCwd?: string;
   admissionPatch?: Record<string, unknown>;
   inheritedToolAllowlist?: string[];
@@ -128,6 +132,7 @@ export async function createInitialSubagentSession(params: {
     // launch failure cannot leave a durable but parentless child row.
     parentSessionKey: params.requesterInternalKey,
     ...(params.spawnedWorkspaceDir ? { spawnedWorkspaceDir: params.spawnedWorkspaceDir } : {}),
+    ...(params.sandboxSessionIsolation ? { sandboxSessionIsolation: true } : {}),
     ...(params.spawnedCwd ? { spawnedCwd: params.spawnedCwd } : {}),
     ...params.admissionPatch,
     inheritedToolPolicyVersion: 1,

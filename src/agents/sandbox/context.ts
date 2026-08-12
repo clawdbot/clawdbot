@@ -87,6 +87,7 @@ async function ensureSandboxWorkspaceLayout(params: {
   config?: OpenClawConfig;
   execOverrides?: ExecPolicyOverrides;
   skillsSnapshot?: SkillSnapshot;
+  sessionIsolation?: true;
   workspaceDir?: string;
 }): Promise<{
   agentWorkspaceDir: string;
@@ -102,6 +103,7 @@ async function ensureSandboxWorkspaceLayout(params: {
     resolveSandboxWorkspaceLayoutPaths({
       cfg,
       rawSessionKey,
+      sessionIsolation: params.sessionIsolation,
       workspaceDir: params.workspaceDir,
     });
 
@@ -193,6 +195,8 @@ type ResolveSandboxContextParams = {
   execOverrides?: ExecPolicyOverrides;
   requireCurrentConfig?: boolean;
   sessionKey?: string;
+  /** Host-owned request for a session-exclusive runtime under broader configured scopes. */
+  sessionIsolation?: true;
   skillsSnapshot?: SkillSnapshot;
   workspaceDir?: string;
 };
@@ -239,6 +243,7 @@ async function resolveProvisionedSandboxContext(
     config: params.config,
     execOverrides: params.execOverrides,
     skillsSnapshot: params.skillsSnapshot,
+    sessionIsolation: params.sessionIsolation,
     workspaceDir: params.workspaceDir,
   });
 
@@ -351,6 +356,7 @@ export async function resolveSandboxContext(params: {
   execOverrides?: ExecPolicyOverrides;
   requireCurrentConfig?: boolean;
   sessionKey?: string;
+  sessionIsolation?: true;
   skillsSnapshot?: SkillSnapshot;
   workspaceDir?: string;
 }): Promise<SandboxContext | null> {

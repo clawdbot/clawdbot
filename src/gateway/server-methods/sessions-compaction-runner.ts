@@ -96,6 +96,7 @@ export async function runGatewaySessionCompaction(
   return await compactEmbeddedAgentSession({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    sandboxSessionIsolation: params.entry.sandboxSessionIsolation,
     agentId: params.agentId,
     sessionTarget: {
       agentId: params.agentId,

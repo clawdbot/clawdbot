@@ -162,6 +162,9 @@ export async function spawnSubagentDirect(
       requesterInternalKey,
       completionOwnerSessionKey: ownership.completionRequesterSessionKey,
       spawnedWorkspaceDir,
+      ...(childRuntimeSandboxed && params.attachments?.length
+        ? { sandboxSessionIsolation: true }
+        : {}),
       spawnedCwd,
       admissionPatch: admission.childSessionPatch,
       inheritedToolAllowlist: ctx.inheritedToolAllowlist,

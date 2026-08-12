@@ -94,6 +94,8 @@ export function resolveSandboxAgentId(scopeKey: string): string | undefined {
 export function resolveSandboxWorkspaceLayoutPaths(params: {
   cfg: Pick<SandboxConfig, "scope" | "workspaceAccess" | "workspaceRoot">;
   rawSessionKey: string;
+  /** Host-owned isolation for one session without changing operator sandbox policy. */
+  sessionIsolation?: true;
   workspaceDir?: string;
 }) {
   const agentWorkspaceDir = resolveUserPath(
@@ -101,12 +103,12 @@ export function resolveSandboxWorkspaceLayoutPaths(params: {
   );
   const workspaceRoot = resolveUserPath(params.cfg.workspaceRoot);
   const scopeKey = resolveSandboxScopeKey(
-    params.cfg.scope,
+    params.sessionIsolation ? "session" : params.cfg.scope,
     params.rawSessionKey,
     agentWorkspaceDir,
   );
   const sandboxWorkspaceDir =
-    params.cfg.scope === "shared"
+    params.cfg.scope === "shared" && !params.sessionIsolation
       ? workspaceRoot
       : resolveSandboxWorkspaceDir(workspaceRoot, scopeKey);
   const workspaceDir =

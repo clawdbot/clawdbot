@@ -30,6 +30,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "spawnedBy",
   "completionOwnerSessionKey",
   "spawnedWorkspaceDir",
+  "sandboxSessionIsolation",
   "spawnedCwd",
   "sessionDiffBaseline",
   "worktree",

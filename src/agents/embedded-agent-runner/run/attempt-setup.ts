@@ -96,6 +96,7 @@ type AttemptWorkspaceParams = Pick<
   | "cwd"
   | "execOverrides"
   | "sandboxSessionKey"
+  | "sandboxSessionIsolation"
   | "sessionId"
   | "sessionKey"
   | "skillWorkshopCollectionReconcile"
@@ -117,6 +118,7 @@ export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspacePar
         config: params.config,
         execOverrides: params.execOverrides,
         sessionKey: sandboxSessionKey,
+        sessionIsolation: params.sandboxSessionIsolation,
         skillsSnapshot: params.skillsSnapshot,
         workspaceDir: resolvedWorkspace,
       });

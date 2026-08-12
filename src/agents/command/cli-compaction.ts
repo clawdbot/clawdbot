@@ -106,6 +106,7 @@ type CliTranscriptCompactionOutcome = {
 };
 type CliCompactionRuntimeContextParams = {
   sessionKey: string;
+  sandboxSessionIsolation?: true;
   messageChannel?: string;
   agentAccountId?: string;
   authProfileId?: string;
@@ -232,6 +233,7 @@ function buildCliCompactionRuntimeContext(params: CliCompactionRuntimeContextPar
   return {
     ...buildEmbeddedCompactionRuntimeContext({
       sessionKey: params.sessionKey,
+      sandboxSessionIsolation: params.sandboxSessionIsolation,
       messageChannel: params.messageChannel,
       messageProvider: params.messageChannel,
       agentAccountId: params.agentAccountId,
@@ -260,6 +262,7 @@ async function compactCliTranscript(params: {
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey: string;
+  sandboxSessionIsolation?: true;
   sessionFile: string;
   sessionManager: SessionManagerLike;
   storePath: string;
@@ -284,6 +287,7 @@ async function compactCliTranscript(params: {
 }): Promise<CliTranscriptCompactionOutcome> {
   const runtimeContext = buildCliCompactionRuntimeContext({
     sessionKey: params.sessionKey,
+    sandboxSessionIsolation: params.sandboxSessionIsolation,
     messageChannel: params.messageChannel,
     agentAccountId: params.agentAccountId,
     authProfileId: params.authProfileId,
@@ -468,6 +472,7 @@ async function compactNativeHarnessCliTranscript(params: {
           cliCompactionDeps.maybeCompactAgentHarnessSession({
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
+            sandboxSessionIsolation: params.sessionEntry.sandboxSessionIsolation,
             sessionFile: params.sessionFile,
             workspaceDir: params.workspaceDir,
             cwd: params.cwd,
@@ -493,6 +498,7 @@ async function compactNativeHarnessCliTranscript(params: {
                   contextEngine: params.contextEngine,
                   contextEngineRuntimeContext: buildCliCompactionRuntimeContext({
                     sessionKey: params.sessionKey,
+                    sandboxSessionIsolation: params.sessionEntry.sandboxSessionIsolation,
                     messageChannel: params.messageChannel,
                     agentAccountId: params.agentAccountId,
                     authProfileId,
@@ -726,6 +732,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       contextEngine,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      sandboxSessionIsolation: params.sessionEntry?.sandboxSessionIsolation,
       sessionFile,
       sessionManager,
       storePath: params.storePath,

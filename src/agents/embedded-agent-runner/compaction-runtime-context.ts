@@ -336,6 +336,7 @@ export function buildEmbeddedCompactionRuntimeContext(
     });
   return {
     sessionKey: params.sessionKey ?? undefined,
+    sandboxSessionIsolation: params.sandboxSessionIsolation,
     messageChannel: params.messageChannel ?? undefined,
     messageProvider: params.messageProvider ?? undefined,
     clientCaps: params.clientCaps,

@@ -225,6 +225,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     ? await resolveSandboxContext({
         config: params.config,
         sessionKey: params.sandboxSessionKey ?? runtime.sessionKey ?? runtime.sessionId,
+        sessionIsolation: params.sandboxSessionIsolation,
         workspaceDir: runtime.workspaceDir,
       })
     : undefined;
@@ -240,6 +241,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     conversationRecall: params.conversationRecall,
     promptCacheKey: params.promptCacheKey,
     sandboxSessionKey: params.sandboxSessionKey,
+    sandboxSessionIsolation: params.sandboxSessionIsolation,
     trigger: params.trigger,
     memoryFlushWritePath: params.memoryFlushWritePath,
     messageChannel: params.messageChannel,
