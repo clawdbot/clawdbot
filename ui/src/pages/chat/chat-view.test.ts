@@ -3254,6 +3254,39 @@ describe("chat composer IME composition", () => {
     expect(onHistoryKeydown).not.toHaveBeenCalled();
   });
 
+  it("restores keyboard handling when composition ends by losing focus", () => {
+    const onHistoryKeydown = vi.fn(() => ({
+      handled: true,
+      preventDefault: true,
+      restoreCaret: null,
+      decision: "handled:history-up" as const,
+      historyNavigationActiveBefore: false,
+      historyNavigationActiveAfter: true,
+      selectionStart: 0,
+      selectionEnd: 0,
+      valueLength: 0,
+    }));
+    const onSend = vi.fn();
+    const container = renderChatView({ onHistoryKeydown, onSend });
+    const textarea = getComposerTextarea(container);
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    textarea.value = "dangqian";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
+    // Some IMEs never deliver compositionend once focus leaves mid-composition.
+    textarea.dispatchEvent(new FocusEvent("blur"));
+
+    const arrowEvent = new KeyboardEvent("keydown", {
+      key: "ArrowUp",
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(arrowEvent);
+
+    expect(onHistoryKeydown).toHaveBeenCalledOnce();
+    expect(arrowEvent.defaultPrevented).toBe(true);
+  });
+
   it("invalidates after handled input history navigation", () => {
     const onRequestUpdate = vi.fn();
     const onHistoryKeydown = vi.fn(() => ({

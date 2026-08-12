@@ -480,6 +480,10 @@ export function renderChatComposer(props: ChatComposerProps) {
   };
   const handleBlur = (event: FocusEvent) => {
     const target = event.target as HTMLTextAreaElement;
+    // Some IMEs drop compositionend when focus leaves mid-composition. Composition
+    // cannot outlive focus, so clear it here or every later keydown (history recall,
+    // Enter to send) stays suppressed until the next composition happens to end.
+    state.composerComposing = false;
     if (state.composingDraft?.key === draftKey) {
       state.composingDraft = null;
     }
