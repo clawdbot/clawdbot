@@ -5,6 +5,10 @@ import path from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import {
+  isPluginCandidateInstallOwnerAmbiguous,
+  resolvePluginCandidateInstallOwner,
+} from "./candidate-install-owner.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import * as pluginHardlinkPolicy from "./hardlink-policy.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
@@ -351,24 +355,20 @@ function expectNoDiagnostic(params: {
   expect(matched).toBe(false);
 }
 
-function expectCandidateFields(
-  candidate:
-    | {
-        idHint?: string;
-        format?: string;
-        bundleFormat?: string;
-        source?: string;
-        rootDir?: string;
-        origin?: string;
-      }
-    | undefined,
-  expected: Record<string, unknown>,
-) {
+function expectCandidateFields(candidate: object | undefined, expected: Record<string, unknown>) {
   if (!candidate) {
     throw new Error("Expected plugin candidate");
   }
   for (const [key, value] of Object.entries(expected)) {
-    expect(candidate[key as keyof typeof candidate], key).toBe(value);
+    if (key === "installOwner") {
+      expect(resolvePluginCandidateInstallOwner(candidate), key).toBe(value);
+      continue;
+    }
+    if (key === "installOwnerAmbiguous") {
+      expect(isPluginCandidateInstallOwnerAmbiguous(candidate), key).toBe(value);
+      continue;
+    }
+    expect((candidate as Record<string, unknown>)[key], key).toBe(value);
   }
 }
 
@@ -1033,13 +1033,111 @@ describe("discoverOpenClawPlugins", () => {
     );
     expectCandidateFields(requireCandidateById(result.candidates, "linked-source-pack"), {
       setupSource: fs.realpathSync(path.join(pluginDir, "src", "setup-entry.ts")),
+      installOwner: "linked-source-pack",
     });
     expectNoDiagnostic({
       diagnostics: result.diagnostics,
       pluginId: "linked-source-pack",
       messageIncludes: "requires compiled runtime output",
     });
+
+    const configured = await discoverWithStateDir(stateDir, {
+      extraPaths: [pluginDir],
+      installRecords,
+    });
+    expectCandidateFields(requireCandidateById(configured.candidates, "linked-source-pack"), {
+      origin: "config",
+      installOwner: "linked-source-pack",
+    });
+
+    const ambiguous = await discoverWithStateDir(stateDir, {
+      installRecords: {
+        ...installRecords,
+        "other-owner": installRecords["linked-source-pack"],
+      },
+    });
+    const ambiguousCandidate = requireCandidateById(ambiguous.candidates, "linked-source-pack");
+    expect(resolvePluginCandidateInstallOwner(ambiguousCandidate)).toBeUndefined();
+    expect(isPluginCandidateInstallOwnerAmbiguous(ambiguousCandidate)).toBe(true);
+    expect(
+      ambiguous.diagnostics.some((diagnostic) =>
+        diagnostic.message.includes("multiple plugin install records claim the same package path"),
+      ),
+    ).toBe(true);
   });
+
+  it.runIf(canCreateDirectorySymlinks)(
+    "fails closed when aliased install paths claim the same package",
+    async () => {
+      const stateDir = makeTempDir();
+      const pluginDir = path.join(stateDir, "extensions", "aliased-pack");
+      const aliasDir = path.join(stateDir, "aliased-pack-link");
+      mkdirSafe(pluginDir);
+      writePluginPackageManifest({
+        packageDir: pluginDir,
+        packageName: "@openclaw/aliased-pack",
+        extensions: ["./index.ts"],
+      });
+      writePluginManifest({ pluginDir, id: "aliased-pack" });
+      writePluginEntry(path.join(pluginDir, "index.ts"));
+      symlinkDirectory(pluginDir, aliasDir);
+
+      const result = await discoverWithStateDir(stateDir, {
+        installRecords: {
+          "owner-one": { source: "path", sourcePath: pluginDir, installPath: pluginDir },
+          "owner-two": { source: "path", sourcePath: aliasDir, installPath: aliasDir },
+        },
+      });
+
+      const candidate = requireCandidateById(result.candidates, "aliased-pack");
+      expect(resolvePluginCandidateInstallOwner(candidate)).toBeUndefined();
+      expect(isPluginCandidateInstallOwnerAmbiguous(candidate)).toBe(true);
+      expect(
+        result.diagnostics.some((diagnostic) =>
+          diagnostic.message.includes(
+            "multiple plugin install records claim the same package path",
+          ),
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it.runIf(canCreateDirectorySymlinks)(
+    "keeps configured-path precedence while inheriting one physical package owner",
+    async () => {
+      const stateDir = makeTempDir();
+      const pluginDir = path.join(stateDir, "extensions", "configured-alias-pack");
+      const aliasDir = path.join(stateDir, "configured-alias-pack-link");
+      mkdirSafe(pluginDir);
+      writePluginPackageManifest({
+        packageDir: pluginDir,
+        packageName: "@openclaw/configured-alias-pack",
+        extensions: ["./one.ts", "./two.ts"],
+      });
+      writePluginManifest({ pluginDir, id: "configured-alias-pack" });
+      writePluginEntry(path.join(pluginDir, "one.ts"));
+      writePluginEntry(path.join(pluginDir, "two.ts"));
+      symlinkDirectory(pluginDir, aliasDir);
+
+      const result = await discoverWithStateDir(stateDir, {
+        extraPaths: [aliasDir],
+        installRecords: {
+          "configured-alias-pack": {
+            source: "path",
+            sourcePath: pluginDir,
+            installPath: pluginDir,
+          },
+        },
+      });
+
+      for (const pluginId of ["configured-alias-pack/one", "configured-alias-pack/two"]) {
+        expectCandidateFields(requireCandidateById(result.candidates, pluginId), {
+          origin: "config",
+          installOwner: "configured-alias-pack",
+        });
+      }
+    },
+  );
 
   it("still requires compiled runtime output for tracked installed package plugins", async () => {
     const stateDir = makeTempDir();
@@ -2406,6 +2504,30 @@ describe("discoverOpenClawPlugins", () => {
       bundleFormat,
       source: bundleDir,
       expectRootDir,
+    });
+  });
+
+  it("preserves the package install owner for managed bundle candidates", async () => {
+    const stateDir = makeTempDir();
+    const bundleDir = path.join(stateDir, "extensions", "package-owner");
+    createBundleRoot(bundleDir, ".codex-plugin/plugin.json", {
+      name: "runtime-child",
+      skills: "skills",
+    });
+    mkdirSafe(path.join(bundleDir, "skills"));
+
+    const { candidates } = await discoverWithStateDir(stateDir, {
+      installRecords: {
+        "package-owner": {
+          source: "path",
+          sourcePath: bundleDir,
+          installPath: bundleDir,
+        },
+      },
+    });
+
+    expectCandidateFields(requireCandidateById(candidates, "runtime-child"), {
+      installOwner: "package-owner",
     });
   });
 

@@ -11,8 +11,13 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
+import {
+  isInstalledPluginIndexInstallOwnerAmbiguous,
+  resolveInstalledPluginIndexInstallOwner,
+} from "./installed-plugin-index-install-owner.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index.js";
 import {
@@ -508,27 +513,32 @@ function toPluginCandidate(
 ): PluginCandidate {
   const rootDir = resolveInstalledPluginRootDir(record);
   const packageMetadata = resolveInstalledPackageMetadata(record, realpathCache);
-  return {
-    idHint: record.pluginId,
-    source: record.source ?? resolveFallbackPluginSource(record),
-    ...(record.setupSource ? { setupSource: record.setupSource } : {}),
-    rootDir,
-    origin: record.origin,
-    ...(record.format ? { format: record.format } : {}),
-    ...(record.bundleFormat ? { bundleFormat: record.bundleFormat } : {}),
-    ...(record.packageName ? { packageName: record.packageName } : {}),
-    ...(record.packageVersion ? { packageVersion: record.packageVersion } : {}),
-    ...(packageMetadata.packageManifest
-      ? { packageManifest: packageMetadata.packageManifest }
-      : {}),
-    ...(packageMetadata.packageDependencies
-      ? { packageDependencies: packageMetadata.packageDependencies }
-      : {}),
-    ...(packageMetadata.packageOptionalDependencies
-      ? { packageOptionalDependencies: packageMetadata.packageOptionalDependencies }
-      : {}),
-    packageDir: rootDir,
-  };
+  return recordPluginCandidateInstallOwner(
+    {
+      idHint: record.pluginId,
+      effectivePluginId: record.pluginId,
+      source: record.source ?? resolveFallbackPluginSource(record),
+      ...(record.setupSource ? { setupSource: record.setupSource } : {}),
+      rootDir,
+      origin: record.origin,
+      ...(record.format ? { format: record.format } : {}),
+      ...(record.bundleFormat ? { bundleFormat: record.bundleFormat } : {}),
+      ...(record.packageName ? { packageName: record.packageName } : {}),
+      ...(record.packageVersion ? { packageVersion: record.packageVersion } : {}),
+      ...(packageMetadata.packageManifest
+        ? { packageManifest: packageMetadata.packageManifest }
+        : {}),
+      ...(packageMetadata.packageDependencies
+        ? { packageDependencies: packageMetadata.packageDependencies }
+        : {}),
+      ...(packageMetadata.packageOptionalDependencies
+        ? { packageOptionalDependencies: packageMetadata.packageOptionalDependencies }
+        : {}),
+      packageDir: rootDir,
+    },
+    resolveInstalledPluginIndexInstallOwner(record),
+    isInstalledPluginIndexInstallOwnerAmbiguous(record),
+  );
 }
 
 export function loadPluginManifestRegistryForInstalledIndex(params: {

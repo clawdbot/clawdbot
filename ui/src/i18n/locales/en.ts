@@ -2770,7 +2770,7 @@ export const en: TranslationMap = {
     remove: "Remove",
     removing: "Removing…",
     removeNamed: "Remove {name}",
-    removeConfirm: "Remove this plugin?",
+    removeConfirm: "Remove this plugin package and all of its entries?",
     cancel: "Cancel",
     removedRestart: "Removed {name}. A Gateway restart is required to apply the change.",
     verifiedSource: "Verified source",

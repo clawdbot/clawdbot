@@ -20,6 +20,11 @@ import { resolveCompatibilityHostVersion } from "../version.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
+import {
+  isInstalledPluginIndexInstallOwnerAmbiguous,
+  recordInstalledPluginIndexInstallOwner,
+  resolveInstalledPluginIndexInstallOwner,
+} from "./installed-plugin-index-install-owner.js";
 import { resolveCompatRegistryVersion } from "./installed-plugin-index-policy.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-cache.js";
 import {
@@ -42,6 +47,7 @@ import {
   type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
+import { hasMissingInstalledPluginOwnerMetadata } from "./installed-plugin-package-ownership.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 export {
   resolveInstalledPluginIndexStorePath,
@@ -98,6 +104,8 @@ const InstalledPluginFileSignatureSchema = z.object({
 
 const InstalledPluginIndexRecordSchema = z.object({
   pluginId: z.string(),
+  installOwner: z.string().optional(),
+  installOwnerAmbiguous: z.literal(true).optional(),
   packageName: z.string().optional(),
   packageVersion: z.string().optional(),
   installRecord: PluginInstallRecordSchema.optional(),
@@ -159,8 +167,14 @@ const InstalledPluginIndexSchema = z.object({
 
 export function parseInstalledPluginIndex(value: unknown): InstalledPluginIndex | null {
   const parsed = safeParseWithSchema(InstalledPluginIndexSchema, value) as
-    | (Omit<InstalledPluginIndex, "installRecords"> & {
+    | (Omit<InstalledPluginIndex, "installRecords" | "plugins"> & {
         installRecords?: unknown;
+        plugins: Array<
+          InstalledPluginIndex["plugins"][number] & {
+            installOwner?: string;
+            installOwnerAmbiguous?: true;
+          }
+        >;
       })
     | null;
   if (!parsed) {
@@ -182,7 +196,9 @@ export function parseInstalledPluginIndex(value: unknown): InstalledPluginIndex 
     generatedAtMs: parsed.generatedAtMs,
     ...(parsed.refreshReason ? { refreshReason: parsed.refreshReason } : {}),
     installRecords,
-    plugins: parsed.plugins,
+    plugins: parsed.plugins.map(({ installOwner, installOwnerAmbiguous, ...plugin }) =>
+      recordInstalledPluginIndexInstallOwner(plugin, installOwner, installOwnerAmbiguous === true),
+    ),
     diagnostics: parsed.diagnostics,
   };
 }
@@ -317,7 +333,18 @@ function writePersistedInstalledPluginIndexRow(
       generated_at_ms: index.generatedAtMs,
       refresh_reason: index.refreshReason ?? null,
       install_records_json: serializePluginInstallRecordMap(index.installRecords),
-      plugins_json: JSON.stringify(index.plugins),
+      plugins_json: JSON.stringify(
+        index.plugins.map((plugin) => {
+          const installOwner = resolveInstalledPluginIndexInstallOwner(plugin);
+          return {
+            ...plugin,
+            ...(installOwner ? { installOwner } : {}),
+            ...(isInstalledPluginIndexInstallOwnerAmbiguous(plugin)
+              ? { installOwnerAmbiguous: true }
+              : {}),
+          };
+        }),
+      ),
       diagnostics_json: JSON.stringify(index.diagnostics),
       warning: index.warning ?? INSTALLED_PLUGIN_INDEX_WARNING,
       updated_at_ms: revision,
@@ -488,7 +515,8 @@ function canRefreshPersistedPolicyState(
     persisted.hostContractVersion !== resolveCompatibilityHostVersion(env) ||
     persisted.compatRegistryVersion !== resolveCompatRegistryVersion() ||
     persisted.migrationVersion !== INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION ||
-    hasMissingConfigPathActivationMetadata(persisted)
+    hasMissingConfigPathActivationMetadata(persisted) ||
+    hasMissingInstalledPluginOwnerMetadata(persisted, env)
   ) {
     return false;
   }
