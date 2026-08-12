@@ -6,9 +6,9 @@ import {
 } from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeChatChannelId } from "../channels/ids.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
-import { normalizeManifestChannelId } from "./channel-claimant-plugins.js";
 import { containsEnvVarReference } from "./env-substitution.js";
 import {
   replaceSensitiveValuesInRaw,
@@ -205,7 +205,7 @@ function redactValue(
     // Hint paths carry the CANONICAL channel id while validation admits declared variant
     // spellings as authored keys — the lookup canonicalizes the channel segment so a plugin's
     // `sensitive: true` hint reaches every admitted spelling; output keys stay authored.
-    const lookupKey = prefix === "channels" ? normalizeManifestChannelId(key) : key;
+    const lookupKey = prefix === "channels" ? (normalizeChatChannelId(key) ?? key) : key;
     const path = prefix ? `${prefix}.${lookupKey}` : key;
     const wildcardPath = prefix ? `${prefix}.*` : "*";
     const candidate = context.lookup
@@ -642,7 +642,7 @@ function restoreRedactedValue(
     // Mirrors the redaction walk: the channel segment canonicalizes for hint lookups so a
     // sentinel written under an authored variant spelling restores through the same canonical
     // hint that redacted it.
-    const lookupKey = prefix === "channels" ? normalizeManifestChannelId(key) : key;
+    const lookupKey = prefix === "channels" ? (normalizeChatChannelId(key) ?? key) : key;
     const path = prefix ? `${prefix}.${lookupKey}` : key;
     const wildcardPath = prefix ? `${prefix}.*` : "*";
     const candidate = context.lookup
