@@ -113,11 +113,6 @@ export async function recoverGatewaySession(params: {
     agentId: sourceTarget.agentId,
   });
   const successorSessionId = randomUUID();
-  const successorEntry = buildRestartRecoverySuccessorEntry({
-    sessionId: successorSessionId,
-    source: initialSource,
-    ...(params.actor ? { actor: params.actor } : {}),
-  });
 
   const committed = await runExclusiveSessionLifecycleMutation({
     targets: [
@@ -143,13 +138,21 @@ export async function recoverGatewaySession(params: {
       if (currentOwnershipError) {
         return { ok: false as const, error: currentOwnershipError };
       }
+      if (!currentSource?.sessionId) {
+        return {
+          ok: false as const,
+          error: errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "Session changed before recovery; refresh and retry.",
+          ),
+        };
+      }
       if (
-        currentSource?.sessionId &&
-        (isEmbeddedAgentRunActive(currentSource.sessionId) ||
-          isSessionWorkAdmissionActive(sourceTarget.storePath, [
-            sourceTarget.canonicalKey,
-            currentSource.sessionId,
-          ]))
+        isEmbeddedAgentRunActive(currentSource.sessionId) ||
+        isSessionWorkAdmissionActive(sourceTarget.storePath, [
+          sourceTarget.canonicalKey,
+          currentSource.sessionId,
+        ])
       ) {
         return {
           ok: false as const,
@@ -159,6 +162,11 @@ export async function recoverGatewaySession(params: {
           ),
         };
       }
+      const successorEntry = buildRestartRecoverySuccessorEntry({
+        sessionId: successorSessionId,
+        source: currentSource,
+        ...(params.actor ? { actor: params.actor } : {}),
+      });
 
       const result = await recoverSessionEntryFromRestartTombstone({
         agentId: sourceTarget.agentId,
