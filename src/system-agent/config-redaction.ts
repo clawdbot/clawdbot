@@ -4,19 +4,17 @@ import {
   isSensitiveUrlConfigPath,
   redactSensitiveUrlLikeString,
 } from "@openclaw/net-policy/redact-sensitive-url";
+import { parseConfigSetPath } from "../cli/config-cli-path.js";
 import { REDACTED_SENTINEL, redactConfigObject } from "../config/redact-snapshot.js";
 import { buildConfigSchemaCore } from "../config/schema.js";
 import { findWildcardHintMatch } from "../config/schema.shared.js";
 import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
 import type { ConfigUiHint } from "../shared/config-ui-hints-types.js";
 
-function splitConfigPath(path: string): string[] {
-  const normalized = path
-    .trim()
-    .replace(/\[(\*|\d*)\]/g, (_match, segment: string) => `.${segment || "*"}`)
-    .replace(/^\.+|\.+$/g, "")
-    .replace(/\.+/g, ".");
-  return normalized ? normalized.split(".").filter(Boolean) : [];
+function splitConfigHintPath(path: string): string[] {
+  // Schema hint paths use `[]` as an array wildcard; config writes spell the
+  // same segment as `[*]`.
+  return parseConfigSetPath(path.replace(/\[\]/g, "[*]"));
 }
 
 function resolveConfigUiHint(path: string): ConfigUiHint | undefined {
@@ -24,20 +22,29 @@ function resolveConfigUiHint(path: string): ConfigUiHint | undefined {
     findWildcardHintMatch({
       uiHints: buildConfigSchemaCore().uiHints,
       path,
-      splitPath: splitConfigPath,
+      splitPath: splitConfigHintPath,
     })?.hint ?? undefined
   );
 }
 
 /** Return whether a config value must stay out of model-visible command text. */
 export function isSystemAgentSensitiveConfigValue(path: string, value: unknown): boolean {
-  const hint = resolveConfigUiHint(path);
-  if (hint?.sensitive === true || isSensitiveConfigPath(path)) {
+  let canonicalPath: string;
+  try {
+    canonicalPath = parseConfigSetPath(path).join(".");
+  } catch {
+    // The command parser accepts a broader path surface than config writes do.
+    // Keep malformed paths out of model-visible text instead of guessing how a
+    // future writer or normalizer might interpret them.
+    return true;
+  }
+  const hint = resolveConfigUiHint(canonicalPath);
+  if (hint?.sensitive === true || isSensitiveConfigPath(canonicalPath)) {
     return true;
   }
   return (
     typeof value === "string" &&
-    (hasSensitiveUrlHintTag(hint) || isSensitiveUrlConfigPath(path)) &&
+    (hasSensitiveUrlHintTag(hint) || isSensitiveUrlConfigPath(canonicalPath)) &&
     redactSensitiveUrlLikeString(value) !== value
   );
 }

@@ -651,7 +651,11 @@ describe("SystemAgentChatEngine approval", () => {
     expect(observedInput).toContain("<redacted>");
   });
 
-  it("keeps an exact hint-sensitive config set away from every model path", async () => {
+  it.each([
+    "channels.synology-chat.webhookUrl",
+    "channels.synology-chat[webhookUrl]",
+    "channels.synology-chat.accounts[work].webhookUrl",
+  ])("keeps hint-sensitive config set %s away from every model path", async (path) => {
     useTempStateDir();
     const runAgentTurn = vi.fn(async () => ({ text: "should never run" }));
     const planner = vi.fn(async () => ({ reply: "should never run" }));
@@ -663,7 +667,7 @@ describe("SystemAgentChatEngine approval", () => {
     });
 
     const proposed = await engine.handle(
-      "config set channels.synology-chat.webhookUrl https://gateway.example/webhook/synology?access_token=very-secret",
+      `config set ${path} https://gateway.example/webhook/synology?access_token=very-secret`,
     );
 
     expect(runAgentTurn).not.toHaveBeenCalled();
@@ -677,7 +681,11 @@ describe("SystemAgentChatEngine approval", () => {
     expect(applied.text).toContain("[openclaw] done: config.set");
   });
 
-  it("redacts sensitive config-set values from the AI-visible history", async () => {
+  it.each([
+    "channels.telegram.botToken",
+    "channels.synology-chat[webhookUrl]",
+    "channels.synology-chat.accounts[work].webhookUrl",
+  ])("redacts config-set value at %s from the AI-visible history", async (path) => {
     const planner = vi.fn(async (_params: { history?: Array<{ role: string; text: string }> }) => ({
       reply: "noted",
     }));
@@ -688,7 +696,7 @@ describe("SystemAgentChatEngine approval", () => {
       deps: { loadOverview: fakeOverviewLoader() },
     });
 
-    await engine.handle("config set channels.telegram.botToken 123:very-secret");
+    await engine.handle(`config set ${path} 123:very-secret`);
     await engine.handle("did that work?");
 
     const history = planner.mock.calls.at(-1)?.[0]?.history ?? [];
