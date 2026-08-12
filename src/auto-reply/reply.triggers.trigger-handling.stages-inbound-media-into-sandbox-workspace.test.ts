@@ -4,10 +4,7 @@ import path, { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MEDIA_MAX_BYTES } from "../media/store.js";
-import {
-  stageSandboxMedia,
-  STAGED_MEDIA_PRUNE_MAX_REMOVALS_PER_PASS,
-} from "./reply/stage-sandbox-media.js";
+import { stageSandboxMedia } from "./reply/stage-sandbox-media.js";
 import {
   createSandboxMediaContexts,
   createSandboxMediaStageConfig,
@@ -401,8 +398,10 @@ describe("stageSandboxMedia", () => {
       );
 
       // Exactly the per-pass removal budget was reclaimed; the remainder is
-      // left for later passes instead of delaying this staging run.
-      expect(await countStaleRemaining()).toBe(24 - STAGED_MEDIA_PRUNE_MAX_REMOVALS_PER_PASS);
+      // left for later passes instead of delaying this staging run. The budget
+      // constant is module-private (production dead-code check), so the test
+      // pins the contract value explicitly: 24 stale dirs - 16 per-pass budget.
+      expect(await countStaleRemaining()).toBe(24 - 16);
 
       // A later pass sweeps the next batch, so the backlog is eventually
       // reclaimed without any single staging run doing unbounded work.
