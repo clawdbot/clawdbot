@@ -733,16 +733,16 @@ describe("exec tool backgrounding", () => {
 
       const sessionId = requireRunningSessionId(result);
 
-      let output = "";
+      const outputs: string[] = [];
       await expect
         .poll(async () => {
           const pollResult = await pollProcessSession({ tool: processTool, sessionId });
-          output = pollResult.output ?? "";
+          outputs.push(pollResult.output ?? "");
           return pollResult.status;
         }, BACKGROUND_POLL_OPTIONS)
         .toBe(PROCESS_STATUS_COMPLETED);
 
-      expect(output).toContain(OUTPUT_DONE);
+      expect(outputs.join("\n")).toContain(OUTPUT_DONE);
     },
     isWin ? 15_000 : 5_000,
   );
