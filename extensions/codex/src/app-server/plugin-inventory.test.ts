@@ -6,7 +6,16 @@ import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
 } from "./config.js";
-import { findOpenAiCuratedPluginSummary, readCodexPluginInventory } from "./plugin-inventory.js";
+import { findCodexMarketplacePluginSummary, readCodexPluginInventory } from "./plugin-inventory.js";
+import {
+  appInfo,
+  appSummary,
+  asPluginInstalled,
+  pluginDetail,
+  pluginInstalled,
+  pluginList,
+  pluginSummary,
+} from "./plugin-inventory.test-helpers.js";
 import { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import type { v2 } from "./protocol.js";
 
@@ -167,9 +176,10 @@ describe("Codex plugin inventory", () => {
         enabled: true,
       }),
     ]);
-    expect(findOpenAiCuratedPluginSummary(listed, "github")?.summary.id).toBe(
-      "openai-curated/github",
-    );
+    expect(
+      findCodexMarketplacePluginSummary(listed, CODEX_PLUGINS_MARKETPLACE_NAME, "github")?.summary
+        .id,
+    ).toBe("openai-curated/github");
 
     const inventory = await readCodexPluginInventory({
       pluginConfig: {
@@ -337,6 +347,38 @@ describe("Codex plugin inventory", () => {
     expect(inventory.records[0]?.apps[0]?.accessible).toBe(true);
     expect(inventory.diagnostics).toStrictEqual([]);
   });
+
+  it.each(["openai-curated-remote", "openai-api-curated"])(
+    "normalizes configured %s aliases to the canonical curated marketplace",
+    async (configuredMarketplaceName) => {
+      const inventory = await readCodexPluginInventory({
+        pluginConfig: {
+          codexPlugins: {
+            enabled: true,
+            plugins: {
+              github: {
+                marketplaceName: configuredMarketplaceName,
+                pluginName: "github",
+              },
+            },
+          },
+        },
+        readPluginDetails: false,
+        request: async (method) => {
+          if (method === "plugin/installed") {
+            return pluginInstalled([pluginSummary("github", { installed: true, enabled: true })]);
+          }
+          throw new Error(`unexpected request ${method}`);
+        },
+      });
+
+      expect(inventory.records[0]).toMatchObject({
+        policy: { marketplaceName: configuredMarketplaceName },
+        summary: { id: "github", installed: true, enabled: true },
+      });
+      expect(inventory.diagnostics).toEqual([]);
+    },
+  );
 
   it("fails closed when an installed remote curated plugin omits its opaque id", async () => {
     const calls: string[] = [];
@@ -817,96 +859,36 @@ describe("Codex plugin inventory", () => {
   });
 });
 
-function asPluginInstalled(listed: v2.PluginListResponse): v2.PluginInstalledResponse {
-  const { featuredPluginIds: _featuredPluginIds, ...installed } = listed;
-  return installed;
+type ConfiguredPlugin = {
+  enabled?: boolean;
+  marketplaceName:
+    | typeof CODEX_PLUGINS_MARKETPLACE_NAME
+    | typeof CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME;
+  pluginName: string;
+};
+
+function pluginConfig(plugins: Record<string, ConfiguredPlugin>) {
+  return { codexPlugins: { enabled: true, plugins } };
 }
 
-function pluginInstalled(
-  plugins: v2.PluginSummary[],
-  marketplace: { name?: string; path?: string | null } = {},
-): v2.PluginInstalledResponse {
-  return asPluginInstalled(pluginList(plugins, marketplace));
+function curatedPlugin(pluginName: string, options: { enabled?: boolean } = {}): ConfiguredPlugin {
+  return { marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME, pluginName, ...options };
 }
 
-function pluginList(
-  plugins: v2.PluginSummary[],
-  marketplace: { name?: string; path?: string | null } = {},
-): v2.PluginListResponse {
-  return {
-    marketplaces: [
-      {
-        name: marketplace.name ?? CODEX_PLUGINS_MARKETPLACE_NAME,
-        path: marketplace.path === undefined ? "/marketplaces/openai-curated" : marketplace.path,
-        interface: null,
-        plugins,
-      },
-    ],
-    marketplaceLoadErrors: [],
-    featuredPluginIds: [],
-  };
+function workspacePlugin(pluginName: string): ConfiguredPlugin {
+  return { marketplaceName: CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME, pluginName };
 }
 
-function pluginSummary(id: string, overrides: Partial<v2.PluginSummary> = {}): v2.PluginSummary {
-  return {
-    id,
-    name: id,
-    source: { type: "remote" },
-    installed: false,
-    enabled: false,
-    installPolicy: "AVAILABLE",
-    authPolicy: "ON_USE",
-    availability: "AVAILABLE",
-    interface: null,
-    ...overrides,
-  };
+async function cachedApps(...apps: v2.AppInfo[]): Promise<CodexAppInventoryCache> {
+  const cache = new CodexAppInventoryCache();
+  await cache.refreshNow({
+    key: "runtime",
+    nowMs: 0,
+    request: async (method, params) => codexAppInventoryResponse(method, apps, params),
+  });
+  return cache;
 }
 
-function pluginDetail(
-  pluginName: string,
-  apps: v2.AppSummary[],
-  marketplace: { marketplaceName?: string; marketplacePath?: string | null } = {},
-): v2.PluginReadResponse {
-  return {
-    plugin: {
-      marketplaceName: marketplace.marketplaceName ?? CODEX_PLUGINS_MARKETPLACE_NAME,
-      marketplacePath:
-        marketplace.marketplacePath === undefined
-          ? "/marketplaces/openai-curated"
-          : marketplace.marketplacePath,
-      summary: pluginSummary(pluginName, { installed: true, enabled: true }),
-      description: null,
-      skills: [],
-      apps,
-      mcpServers: [],
-    },
-  };
-}
-
-function appSummary(id: string): v2.AppSummary {
-  return {
-    id,
-    name: id,
-    description: null,
-    installUrl: null,
-    category: null,
-  };
-}
-
-function appInfo(id: string, accessible: boolean): v2.AppInfo {
-  return {
-    id,
-    name: id,
-    description: null,
-    logoUrl: null,
-    logoUrlDark: null,
-    distributionChannel: null,
-    branding: null,
-    appMetadata: null,
-    labels: null,
-    installUrl: null,
-    isAccessible: accessible,
-    isEnabled: true,
-    pluginDisplayNames: [],
-  };
+function activePlugin(id: string, overrides: Partial<v2.PluginSummary> = {}): v2.PluginSummary {
+  return pluginSummary(id, { installed: true, enabled: true, ...overrides });
 }

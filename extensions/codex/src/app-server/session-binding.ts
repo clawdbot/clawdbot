@@ -16,11 +16,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { z } from "zod";
-import {
-  CODEX_PLUGINS_MARKETPLACE_NAME,
-  CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
-  normalizeCodexServiceTier,
-} from "./config.js";
+import { CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN, normalizeCodexServiceTier } from "./config.js";
 import type { PluginAppPolicyContext } from "./plugin-thread-config.js";
 import type { CodexServiceTier } from "./protocol.js";
 
@@ -185,10 +181,7 @@ const pluginAppPolicyEntrySchema = z
   .object({
     source: z.literal("plugin").optional(),
     configKey: z.string(),
-    marketplaceName: z.enum([
-      CODEX_PLUGINS_MARKETPLACE_NAME,
-      CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
-    ]),
+    marketplaceName: z.string().regex(CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN),
     pluginName: z.string(),
     allowDestructiveActions: z.boolean(),
     destructiveApprovalMode: destructiveApprovalModeSchema,
@@ -1437,8 +1430,8 @@ function readPluginAppPolicyContext(
       "appId" in entry ||
       (entry.source !== undefined && entry.source !== "plugin") ||
       typeof entry.configKey !== "string" ||
-      (entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME &&
-        entry.marketplaceName !== CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME) ||
+      typeof entry.marketplaceName !== "string" ||
+      !CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN.test(entry.marketplaceName) ||
       typeof entry.pluginName !== "string" ||
       typeof entry.allowDestructiveActions !== "boolean" ||
       destructiveApprovalMode === "invalid" ||
