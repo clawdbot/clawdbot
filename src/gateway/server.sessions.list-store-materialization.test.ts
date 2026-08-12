@@ -9,6 +9,7 @@ import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { scheduleGatewayHandlerPrewarm } from "./server-startup-handler-prewarm.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -18,9 +19,6 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
-type GatewayHandlerPrewarmHandle = ReturnType<
-  (typeof import("./server-startup-handler-prewarm.js"))["scheduleGatewayHandlerPrewarm"]
->;
 
 const LIST_PARAMS = {
   agentId: "main",
@@ -116,14 +114,9 @@ test("startup prewarm fills session snapshot and title caches before the first l
     sessionKey,
     storePath,
   });
-  // The full gateway shard may have loaded the title reader before this file. Reset the module
-  // graph so its accessor binding and these probes always share the same instance.
-  vi.resetModules();
-  const isolatedSessionAccessor = await import("../config/sessions/session-accessor.js");
-  const { scheduleGatewayHandlerPrewarm } = await import("./server-startup-handler-prewarm.js");
-  const titleBatchSpy = vi.spyOn(isolatedSessionAccessor, "readSessionTranscriptTitleProbeBatch");
-  const titlePageSpy = vi.spyOn(isolatedSessionAccessor, "readSessionTranscriptMessageEventPage");
-  let sidecar: GatewayHandlerPrewarmHandle | undefined;
+  const titleBatchSpy = vi.spyOn(sessionAccessor, "readSessionTranscriptTitleProbeBatch");
+  const titlePageSpy = vi.spyOn(sessionAccessor, "readSessionTranscriptMessageEventPage");
+  let sidecar: ReturnType<typeof scheduleGatewayHandlerPrewarm> | undefined;
   vi.useFakeTimers();
   try {
     const cfg = {
@@ -157,7 +150,7 @@ test("startup prewarm fills session snapshot and title caches before the first l
     titleBatchSpy.mockClear();
     titlePageSpy.mockClear();
     vi.useRealTimers();
-    const cachedEntries = isolatedSessionAccessor.listSessionEntriesReadOnly({
+    const cachedEntries = sessionAccessor.listSessionEntriesReadOnly({
       agentId: "main",
       clone: false,
       projection: "list",
@@ -172,7 +165,7 @@ test("startup prewarm fills session snapshot and title caches before the first l
     expect(result.ok).toBe(true);
     expect(titleBatchSpy).not.toHaveBeenCalled();
     expect(titlePageSpy).not.toHaveBeenCalled();
-    const afterListEntries = isolatedSessionAccessor.listSessionEntriesReadOnly({
+    const afterListEntries = sessionAccessor.listSessionEntriesReadOnly({
       agentId: "main",
       clone: false,
       projection: "list",
@@ -198,11 +191,8 @@ test("startup skips a large session prewarm while request-time listing remains a
     ),
   });
   const info = vi.fn();
-  vi.resetModules();
-  const isolatedSessionAccessor = await import("../config/sessions/session-accessor.js");
-  const { scheduleGatewayHandlerPrewarm } = await import("./server-startup-handler-prewarm.js");
-  const listSpy = vi.spyOn(isolatedSessionAccessor, "listSessionEntriesReadOnly");
-  let sidecar: GatewayHandlerPrewarmHandle | undefined;
+  const listSpy = vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly");
+  let sidecar: ReturnType<typeof scheduleGatewayHandlerPrewarm> | undefined;
   vi.useFakeTimers();
   try {
     let resolveSessionPrewarm!: () => void;
