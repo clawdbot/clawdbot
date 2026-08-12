@@ -10,10 +10,12 @@ import {
 
 const suite = createNewSessionPageE2eSuite();
 const SESSION_KEY = "agent:main:transition-proof-0f403cb8-3920-4cf1-8eb7-79f2f00ce488";
+const RUN_ID = "transition-proof-run";
 const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "new-session-transition");
+const captureProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 async function captureProof(page: import("playwright").Page, fileName: string) {
-  if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
+  if (!captureProofEnabled) {
     return;
   }
   await mkdir(proofDir, { recursive: true });
@@ -21,7 +23,7 @@ async function captureProof(page: import("playwright").Page, fileName: string) {
 }
 
 suite.define(() => {
-  it("keeps startup progress active while preparing the exact chat route", async () => {
+  it("keeps the new-session view live until the focused chat is ready", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -40,7 +42,12 @@ suite.define(() => {
     });
     const gateway = await installMockGateway(page, {
       methodResponses: {
-        "sessions.create": { key: SESSION_KEY, runStarted: true },
+        "sessions.create": {
+          key: SESSION_KEY,
+          messageSeq: 1,
+          runId: RUN_ID,
+          runStarted: true,
+        },
         "sessions.list": createdSessionListResult(SESSION_KEY),
       },
     });
@@ -56,17 +63,88 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.create");
       await gateway.resolveDeferred("sessions.create", {
         key: SESSION_KEY,
+        messageSeq: 1,
+        runId: RUN_ID,
         runStarted: true,
       });
       await expect.poll(() => chatModuleRequested).toBe(true);
 
       await expect.poll(() => start.getAttribute("aria-busy")).toBe("true");
+      const spinner = start.locator("svg");
+      const initialSpinnerTransform = await spinner.evaluate(
+        (element) => getComputedStyle(element).transform,
+      );
+      await expect
+        .poll(() => spinner.evaluate((element) => getComputedStyle(element).transform))
+        .not.toBe(initialSpinnerTransform);
       await captureProof(page, "01-chat-route-preparing.png");
 
+      await page.evaluate(() => {
+        const frames = { invalid: 0, running: true };
+        Reflect.set(globalThis, "__openclawSessionTransitionFrames", frames);
+        const sample = () => {
+          const outlet = document.querySelector("openclaw-router-outlet");
+          const handoffCover = outlet?.classList.contains("session-route-handoff") === true;
+          const newSessionVisible = Boolean(
+            document.querySelector(".new-session-page__start-submit")?.getClientRects().length,
+          );
+          const chatVisible = Boolean(
+            document.querySelector(".agent-chat__composer-combobox")?.getClientRects().length,
+          );
+          if (handoffCover || (!newSessionVisible && !chatVisible)) {
+            frames.invalid += 1;
+          }
+          if (frames.running) {
+            requestAnimationFrame(sample);
+          }
+        };
+        requestAnimationFrame(sample);
+      });
+
+      await gateway.deferNext("chat.startup");
       releaseChatModule();
+      await gateway.waitForRequest("chat.startup");
+      await expect
+        .poll(() =>
+          page.evaluate(() => ({
+            activeViewTransition: Boolean(document.activeViewTransition),
+            chatSurfaceReady: Boolean(document.querySelector(".agent-chat__composer-combobox")),
+            routeAnimation: document.getAnimations().some((animation) => {
+              const effect = animation.effect as KeyframeEffect | null;
+              return (
+                effect?.target instanceof HTMLElement &&
+                effect.target.tagName === "OPENCLAW-ROUTER-OUTLET" &&
+                effect.getKeyframes().every((keyframe) => keyframe.opacity === undefined)
+              );
+            }),
+          })),
+        )
+        .toEqual({ activeViewTransition: false, chatSurfaceReady: true, routeAnimation: true });
+      await expect
+        .poll(() => page.getByText("keep progress moving", { exact: true }).count())
+        .toBe(1);
+      const invalidFrames = await page.evaluate(() => {
+        const frames = Reflect.get(globalThis, "__openclawSessionTransitionFrames") as {
+          invalid: number;
+          running: boolean;
+        };
+        frames.running = false;
+        return frames.invalid;
+      });
+      expect(invalidFrames).toBe(0);
+      await captureProof(page, "02-session-route-transition.png");
+      await gateway.resolveDeferred("chat.startup");
       await waitForCommittedChatRoute(page);
       await page.locator("openclaw-chat-page").waitFor();
-      await captureProof(page, "02-chat-route-ready.png");
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              document.activeElement?.matches(".agent-chat__composer-combobox textarea") === true,
+          ),
+        )
+        .toBe(true);
+      await captureProof(page, "03-chat-route-ready.png");
     } finally {
       releaseChatModule();
       await context.close();

@@ -1,5 +1,21 @@
-import { describe, expect, it, vi } from "vitest";
-import { navigateWithRouteTransition } from "./route-transition.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { CHAT_ROUTE_READY_EVENT, navigateWithRouteTransition } from "./route-transition.ts";
+
+function testDocumentWithOutlet(animate = vi.fn()) {
+  const outlet = document.createElement("openclaw-router-outlet") as HTMLElement & {
+    updateComplete: Promise<void>;
+  };
+  outlet.updateComplete = Promise.resolve();
+  outlet.animate = animate;
+  document.body.append(outlet);
+  return {
+    animate,
+    document,
+    outlet,
+  };
+}
+
+afterEach(() => document.body.replaceChildren());
 
 describe("navigateWithRouteTransition", () => {
   it("keeps the outgoing view live until the destination is prepared", async () => {
@@ -11,17 +27,9 @@ describe("navigateWithRouteTransition", () => {
         }),
     );
     const navigate = vi.fn(async () => undefined);
-    const startViewTransition = vi.fn((update: () => void | Promise<void>) => {
-      return { finished: Promise.resolve(update()).then(() => undefined) };
-    });
-    const testDocument = {
-      documentElement: document.documentElement,
-      querySelector: () => null,
-      startViewTransition,
-    } as unknown as Document & { startViewTransition: typeof startViewTransition };
-
+    const test = testDocumentWithOutlet();
     const transition = navigateWithRouteTransition({
-      document: testDocument,
+      document: test.document,
       from: "new-session",
       to: "chat",
       navigate,
@@ -31,76 +39,54 @@ describe("navigateWithRouteTransition", () => {
     await Promise.resolve();
 
     expect(prepare).toHaveBeenCalledOnce();
-    expect(startViewTransition).not.toHaveBeenCalled();
     expect(navigate).not.toHaveBeenCalled();
 
     finishPreparation();
+    await vi.waitFor(() => expect(navigate).toHaveBeenCalledOnce());
+    document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT));
     await transition;
 
-    expect(startViewTransition).toHaveBeenCalledOnce();
     expect(navigate).toHaveBeenCalledOnce();
   });
 
-  it("crossfades the new-session route into chat", async () => {
-    const navigate = vi.fn(async () => undefined);
-    const startViewTransition = vi.fn((update: () => void | Promise<void>) => {
-      return { finished: Promise.resolve(update()).then(() => undefined) };
-    });
-    const outlet = document.createElement("openclaw-router-outlet") as HTMLElement & {
-      updateComplete: Promise<void>;
-    };
-    outlet.updateComplete = Promise.resolve();
-    const testDocument = {
-      documentElement: document.documentElement,
-      querySelector: () => outlet,
-      startViewTransition,
-    } as unknown as Document & { startViewTransition: typeof startViewTransition };
+  it("animates the rendered chat pane without freezing the outgoing document", async () => {
+    const finished = Promise.resolve({} as Animation);
+    const animate = vi.fn(() => ({ finished }) as Animation);
+    const test = testDocumentWithOutlet(animate);
+    let finishNavigation!: () => void;
+    const navigate = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishNavigation = resolve;
+        }),
+    );
 
-    await navigateWithRouteTransition({
-      document: testDocument,
+    const transition = navigateWithRouteTransition({
+      document: test.document,
       from: "new-session",
       to: "chat",
       navigate,
       prefersReducedMotion: false,
     });
-
-    expect(startViewTransition).toHaveBeenCalledOnce();
-    expect(navigate).toHaveBeenCalledOnce();
-    expect(document.documentElement.classList.contains("session-route-transition")).toBe(false);
-  });
-
-  it("falls back to direct navigation when the browser declines the transition", async () => {
-    const navigate = vi.fn(async () => undefined);
-    const startViewTransition = vi.fn(() => {
-      throw new Error("transition unavailable");
-    });
-    const testDocument = {
-      documentElement: document.documentElement,
-      startViewTransition,
-    } as unknown as Document & { startViewTransition: typeof startViewTransition };
-
-    await navigateWithRouteTransition({
-      document: testDocument,
-      from: "new-session",
-      to: "chat",
-      navigate,
-      prefersReducedMotion: false,
-    });
+    await vi.waitFor(() => expect(navigate).toHaveBeenCalledOnce());
+    expect(animate).not.toHaveBeenCalled();
+    finishNavigation();
+    document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT));
+    await transition;
 
     expect(navigate).toHaveBeenCalledOnce();
-    expect(document.documentElement.classList.contains("session-route-transition")).toBe(false);
+    expect(animate).toHaveBeenCalledWith(
+      [{ transform: "translateY(5px) scale(0.997)" }, { transform: "none" }],
+      { duration: 180, easing: "cubic-bezier(0.16, 1, 0.3, 1)" },
+    );
   });
 
   it("navigates directly when destination preparation fails", async () => {
+    const test = testDocumentWithOutlet();
     const navigate = vi.fn(async () => undefined);
-    const startViewTransition = vi.fn();
-    const testDocument = {
-      documentElement: document.documentElement,
-      startViewTransition,
-    } as unknown as Document & { startViewTransition: typeof startViewTransition };
 
     await navigateWithRouteTransition({
-      document: testDocument,
+      document: test.document,
       from: "new-session",
       to: "chat",
       navigate,
@@ -110,31 +96,44 @@ describe("navigateWithRouteTransition", () => {
       prefersReducedMotion: false,
     });
 
-    expect(startViewTransition).not.toHaveBeenCalled();
     expect(navigate).toHaveBeenCalledOnce();
+    expect(test.animate).not.toHaveBeenCalled();
   });
 
   it.each([
     { from: "about" as const, to: "chat" as const, prefersReducedMotion: false },
     { from: "new-session" as const, to: "about" as const, prefersReducedMotion: false },
-    { from: "new-session" as const, to: "chat" as const, prefersReducedMotion: true },
   ])("navigates directly for $from to $to", async ({ from, to, prefersReducedMotion }) => {
+    const test = testDocumentWithOutlet();
     const navigate = vi.fn(async () => undefined);
-    const startViewTransition = vi.fn();
-    const testDocument = {
-      documentElement: document.documentElement,
-      startViewTransition,
-    } as unknown as Document & { startViewTransition: typeof startViewTransition };
 
     await navigateWithRouteTransition({
-      document: testDocument,
+      document: test.document,
       from,
       to,
       navigate,
       prefersReducedMotion,
     });
 
-    expect(startViewTransition).not.toHaveBeenCalled();
     expect(navigate).toHaveBeenCalledOnce();
+    expect(test.animate).not.toHaveBeenCalled();
+  });
+
+  it("waits for the chat route without animating when motion is reduced", async () => {
+    const test = testDocumentWithOutlet();
+    const navigate = vi.fn(async () => undefined);
+    const transition = navigateWithRouteTransition({
+      document: test.document,
+      from: "new-session",
+      to: "chat",
+      navigate,
+      prefersReducedMotion: true,
+    });
+
+    await vi.waitFor(() => expect(navigate).toHaveBeenCalledOnce());
+    document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT));
+    await transition;
+
+    expect(test.animate).not.toHaveBeenCalled();
   });
 });

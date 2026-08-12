@@ -535,6 +535,7 @@ export class DraftSubmissionFlow {
             face: "chat",
             sessionKey: result.key,
             agentId: this.place.agentId,
+            focusComposer: true,
           }).options,
         );
         return;
@@ -578,6 +579,7 @@ export class DraftSubmissionFlow {
           face: "chat",
           sessionKey: result.key,
           agentId: this.place.agentId,
+          focusComposer: true,
         }).options,
       );
     } finally {

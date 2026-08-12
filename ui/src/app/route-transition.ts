@@ -1,13 +1,7 @@
 import type { RouteId } from "../app-routes.ts";
 
-type ViewTransitionDocument = Document & {
-  startViewTransition?: (update: () => void | Promise<void>) => {
-    finished: Promise<void>;
-  };
-};
-
 type RouteTransitionOptions = {
-  document: ViewTransitionDocument;
+  document: Document;
   from: RouteId | undefined;
   navigate: () => Promise<void>;
   prepare?: () => Promise<void>;
@@ -15,24 +9,58 @@ type RouteTransitionOptions = {
   to: RouteId;
 };
 
-const SESSION_ROUTE_TRANSITION_CLASS = "session-route-transition";
+export const CHAT_ROUTE_READY_EVENT = "openclaw-chat-route-ready";
+const SESSION_ROUTE_ENTER_KEYFRAMES: Keyframe[] = [
+  { transform: "translateY(5px) scale(0.997)" },
+  { transform: "none" },
+];
+const SESSION_ROUTE_ENTER_OPTIONS: KeyframeAnimationOptions = {
+  duration: 180,
+  easing: "cubic-bezier(0.16, 1, 0.3, 1)",
+};
 
-async function navigateAndRender(document: ViewTransitionDocument, navigate: () => Promise<void>) {
-  await navigate();
+function waitForChatRouteReady(document: Document) {
+  if (document.querySelector(".agent-chat__composer-combobox")) {
+    return { cancel: () => undefined, ready: Promise.resolve() };
+  }
+  let resolve!: () => void;
+  const ready = new Promise<void>((next) => {
+    resolve = next;
+  });
+  const handleReady = () => resolve();
+  document.addEventListener(CHAT_ROUTE_READY_EVENT, handleReady, { once: true });
+  return {
+    cancel: () => document.removeEventListener(CHAT_ROUTE_READY_EVENT, handleReady),
+    ready,
+  };
+}
+
+async function navigateAndAnimate(
+  document: Document,
+  navigate: () => Promise<void>,
+  prefersReducedMotion: boolean,
+) {
   const outlet = document.querySelector<HTMLElement & { updateComplete?: Promise<unknown> }>(
     "openclaw-router-outlet",
   );
-  await outlet?.updateComplete;
+  const chatReady = waitForChatRouteReady(document);
+  try {
+    await navigate();
+    await outlet?.updateComplete;
+    await chatReady.ready;
+  } finally {
+    chatReady.cancel();
+  }
+  if (prefersReducedMotion) {
+    return;
+  }
+  const animation = outlet?.animate?.(SESSION_ROUTE_ENTER_KEYFRAMES, SESSION_ROUTE_ENTER_OPTIONS);
+  await animation?.finished.catch(() => undefined);
 }
 
 export async function navigateWithRouteTransition(options: RouteTransitionOptions): Promise<void> {
   const { document, from, navigate, prepare, prefersReducedMotion, to } = options;
-  if (
-    from !== "new-session" ||
-    to !== "chat" ||
-    prefersReducedMotion ||
-    typeof document.startViewTransition !== "function"
-  ) {
+  if (from !== "new-session" || to !== "chat") {
     return navigate();
   }
 
@@ -44,17 +72,5 @@ export async function navigateWithRouteTransition(options: RouteTransitionOption
     return navigate();
   }
 
-  document.documentElement.classList.add(SESSION_ROUTE_TRANSITION_CLASS);
-  let navigation: Promise<void> | undefined;
-  try {
-    const transition = document.startViewTransition(
-      () => (navigation ??= navigateAndRender(document, navigate)),
-    );
-    return transition.finished.finally(() => {
-      document.documentElement.classList.remove(SESSION_ROUTE_TRANSITION_CLASS);
-    });
-  } catch {
-    document.documentElement.classList.remove(SESSION_ROUTE_TRANSITION_CLASS);
-    return navigation ?? navigate();
-  }
+  return navigateAndAnimate(document, navigate, prefersReducedMotion);
 }
