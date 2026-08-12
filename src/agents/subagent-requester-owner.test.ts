@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  countActiveRunsForSessionFromRuns,
-  listRunsForRequesterFromRuns,
-} from "./subagent-registry-queries.js";
-import { markRequesterTurnYieldedInRuns } from "./subagent-registry-requester-yield.js";
-import {
   backfillSubagentRequesterAgentIds,
   resolveSubagentRequesterAgentId,
 } from "./subagent-requester-owner.js";
 import { createSubagentRunRecord } from "./subagent-test-fixtures.test-helpers.js";
+import {
+  countActiveRunsForSessionFromRuns,
+  listRunsForRequesterFromRuns,
+} from "./subagents/registry/subagent-registry-queries.js";
+import { markRequesterTurnYieldedInRuns } from "./subagents/registry/subagent-registry-requester-yield.js";
 
 describe("resolveSubagentRequesterAgentId", () => {
   it("attributes a legacy bare requester row only to the persisted fixed-store owner", () => {

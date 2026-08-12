@@ -296,8 +296,8 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
     if (!provider || provider.source !== "exec") {
       continue;
     }
-      const execProvider = isPluginIntegrationSecretProviderConfig(provider)
-        ? (() => {
+    const execProvider = isPluginIntegrationSecretProviderConfig(provider)
+      ? (() => {
           manifestRegistry ??= resolveConfigWidePluginManifestRegistry({
             config: params.config,
             env: params.env,

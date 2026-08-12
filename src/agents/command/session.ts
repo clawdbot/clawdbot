@@ -560,7 +560,7 @@ export function resolveExistingSessionKeyForRequest(opts: {
 }
 
 /** Resolves the session key/store targeted by one command request. */
-export function resolveSessionKeyForRequest(opts: {
+function resolveSessionKeyForRequest(opts: {
   cfg: OpenClawConfig;
   to?: string;
   sessionId?: string;

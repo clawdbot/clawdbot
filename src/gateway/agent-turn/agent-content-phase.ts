@@ -31,9 +31,9 @@ import {
   parseMessageWithAttachments,
   type ChatAttachment,
 } from "../chat-attachments.js";
-import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import {
   loadSessionEntry,
   resolveGatewayModelSupportsImages,

@@ -217,12 +217,15 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
           list: [{ id: "ops" }, { id: "research" }],
         },
       };
-      await seedSessionStore(resolveStorePath(cfg.session?.store, { agentId: "ops" }), {
+      await seedSessionStore(resolveSessionStorePathCore(cfg.session?.store, { agentId: "ops" }), {
         global: { sessionId: "session-ops", updatedAt: freshUpdatedAt() },
       });
-      await seedSessionStore(resolveStorePath(cfg.session?.store, { agentId: "research" }), {
-        global: { sessionId: "session-research", updatedAt: freshUpdatedAt() },
-      });
+      await seedSessionStore(
+        resolveSessionStorePathCore(cfg.session?.store, { agentId: "research" }),
+        {
+          global: { sessionId: "session-research", updatedAt: freshUpdatedAt() },
+        },
+      );
 
       await expect(
         resolveSessionKeyFromResolveParams({
@@ -236,7 +239,7 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
   it("selects the deterministic winner within one agent before cross-agent checks", async () => {
     await withStateDirEnv("openclaw-sessions-resolve-same-agent-", async () => {
       const cfg: OpenClawConfig = { agents: { list: [{ id: "main" }] } };
-      const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
+      const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" });
       await seedSessionStore(storePath, {
         "agent:main:older": { sessionId: "session-duplicate", updatedAt: 10 },
         "agent:main:newer": { sessionId: "session-duplicate", updatedAt: 20 },

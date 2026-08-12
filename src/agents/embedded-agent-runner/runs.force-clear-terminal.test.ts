@@ -294,7 +294,7 @@ describe("force-clear terminal state persistence", () => {
         entries: { ops: {}, research: {} },
       },
     });
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "ops", sessionKey, storePath },
       { sessionId, updatedAt: startedAt, startedAt, status: "running" },
     );

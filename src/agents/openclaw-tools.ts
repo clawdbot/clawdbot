@@ -701,7 +701,7 @@ export function createOpenClawTools(
       sessionId: options?.sessionId,
       onBeforeYield:
         requesterSessionKey && requesterTurnRunId
-            ? async () => {
+          ? async () => {
               const { markRequesterTurnYielded } =
                 await import("./subagents/registry/subagent-registry.js");
               markRequesterTurnYielded({

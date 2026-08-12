@@ -72,16 +72,6 @@ export function createSubagentRegistryPublicApi(config: {
     return updated;
   }
 
-  function listSubagentRunsForController(
-    controllerSessionKey: string,
-    controllerAgentId?: string,
-  ): SubagentRunRecord[] {
-    return listRunsForControllerFromRuns(
-      deps().getSubagentRunsSnapshotForController(runs, controllerSessionKey),
-      controllerSessionKey,
-      controllerAgentId,
-    );
-  }
   function getSubagentRunByRunId(runId: string): SubagentRunRecord | undefined {
     return findRunById(readRuns(), runId.trim());
   }

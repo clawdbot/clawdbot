@@ -11,8 +11,8 @@ import { canReviewOperatorApproval } from "../operator-approval-authorization.js
 import { APPROVALS_SCOPE } from "../operator-scopes.js";
 import { sessionObserverScopeKey } from "../session-observer-model.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { resolveSessionSubscriptionKey } from "../session-subscription-keys.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
+import { resolveSessionSubscriptionKey } from "../session-subscription-keys.js";
 import { resolveSessionStoreKey } from "../session-utils.js";
 import { requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";

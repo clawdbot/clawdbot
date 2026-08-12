@@ -310,6 +310,7 @@ export function createAgentTurnService({
 
       if (requestedSessionKey) {
         const preparedSession = prepareAgentSession({
+          cfg,
           requestedSessionKey,
           requestedSessionId,
           expectedExistingSessionId,

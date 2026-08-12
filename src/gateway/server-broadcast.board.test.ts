@@ -3,6 +3,7 @@ import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
   createSessionEventSubscriberRegistry,
@@ -159,7 +160,8 @@ describe("collaboration event scope guards", () => {
     const audience = createSessionObserverAudience({
       subscribers,
       isVisible: () => true,
-      getDefaultAgentId: () => "main",
+      getConfig: () =>
+        ({ agents: { list: [{ id: "main", default: true }, { id: "work" }] } }) as OpenClawConfig,
     });
     const { broadcastToConnIds } = createGatewayBroadcaster({
       clients: new Set([main.client, legacy.client, both.client, work.client, workRaw.client]),
@@ -197,7 +199,8 @@ describe("collaboration event scope guards", () => {
       subscribers,
       sessionEventSubscribers,
       isVisible: () => true,
-      getDefaultAgentId: () => "main",
+      getConfig: () =>
+        ({ agents: { list: [{ id: "main", default: true }, { id: "work" }] } }) as OpenClawConfig,
     });
     const { broadcastToConnIds } = createGatewayBroadcaster({
       clients: new Set([message.client, eventOnly.client, unrelated.client]),

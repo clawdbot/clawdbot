@@ -61,7 +61,8 @@ vi.mock("../daemon/service-env.js", () => ({
 }));
 
 vi.mock("../config/io.plugin-metadata.js", () => ({
-  resolveConfigWidePluginManifestRegistry: mocks.loadPluginManifestRegistry,
+  resolveConfigWidePluginManifestRegistry: (...args: unknown[]) =>
+    mocks.loadPluginManifestRegistryCore(...args),
 }));
 
 vi.mock("../daemon/launchd-exec.js", async (importActual) => ({

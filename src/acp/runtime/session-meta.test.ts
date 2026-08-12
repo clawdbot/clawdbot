@@ -54,7 +54,7 @@ describe("ACP session metadata SQLite store", () => {
   });
 
   it("persists bare global metadata under a configured fixed-store owner", async () => {
-    await withTempDir({ prefix: "openclaw-acp-global-owner-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-acp-global-owner-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const cfg = {
         session: { scope: "global", store: storePath },
@@ -126,7 +126,7 @@ describe("ACP session metadata SQLite store", () => {
   });
 
   it("keeps identical bare keys isolated by explicit agent owner", async () => {
-    await withTempDir({ prefix: "openclaw-acp-pair-owner-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-acp-pair-owner-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const databasePath = path.join(dir, "state", "openclaw.sqlite");
       const cfg = {
@@ -178,7 +178,7 @@ describe("ACP session metadata SQLite store", () => {
   });
 
   it("batch-loads and rekeys legacy bare metadata for the stable store owner", async () => {
-    await withTempDir({ prefix: "openclaw-acp-batch-owner-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-acp-batch-owner-" }, async (dir) => {
       const databasePath = path.join(dir, "state", "openclaw.sqlite");
       const cfg = {
         session: { store: path.join(dir, "sessions.json") },
@@ -230,7 +230,7 @@ describe("ACP session metadata SQLite store", () => {
   });
 
   it("deletes the legacy row selected by fallback when metadata is cleared", async () => {
-    await withTempDir({ prefix: "openclaw-acp-clear-legacy-owner-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-acp-clear-legacy-owner-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const databasePath = path.join(dir, "state", "openclaw.sqlite");
       const cfg = {
@@ -276,7 +276,7 @@ describe("ACP session metadata SQLite store", () => {
   });
 
   it("escapes composite identities from legacy raw keys that use the old prefix", async () => {
-    await withTempDir({ prefix: "openclaw-acp-prefix-collision-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-acp-prefix-collision-" }, async (dir) => {
       const databasePath = path.join(dir, "state", "openclaw.sqlite");
       const rawSessionKey = "@agent:research:foo";
       const rawEntry: SessionEntry = {

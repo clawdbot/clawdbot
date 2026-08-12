@@ -12,7 +12,10 @@ import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createAgentPatchedSessionModelRunGuard } from "../session-model-auto-revert.js";
+import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { createSessionsTool } from "./sessions-tool.js";
+
+type AgentToolGatewayRequest = Parameters<AgentToolGatewayRequestCaller>[0];
 
 const overlongUnicode = (unit: string, maxLength: number) => `${unit.repeat(maxLength - 1)}🦞tail`;
 
@@ -103,19 +106,20 @@ describe("sessions tool", () => {
 
     await tool.execute("owned-patch", { action: "patch", label: "Ops" });
 
-    expect(callGateway).toHaveBeenCalledWith("sessions.patch", {
-      key: "global",
-      agentId: "ops",
-      label: "Ops",
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.patch",
+      params: { key: "global", agentId: "ops", label: "Ops" },
     });
   });
 
   it("resolves current under the requester instead of the persisted bare-row owner", async () => {
-    const resolveGateway = vi.fn(async () => {
-      throw new Error("current must resolve locally under the requester");
-    });
-    sessionsResolutionTesting.setDepsForTest({ callGateway: resolveGateway as never });
-    const callGateway = vi.fn(async () => ({ ok: true }));
+    const requests: AgentToolGatewayRequest[] = [];
+    const callGateway: AgentToolGatewayRequestCaller = async <T>(
+      request: AgentToolGatewayRequest,
+    ) => {
+      requests.push(request);
+      return { ok: true } as T;
+    };
     const tool = createSessionsTool({
       agentSessionKey: "agent:research:main",
       requesterAgentIdOverride: "research",
@@ -127,7 +131,7 @@ describe("sessions tool", () => {
           entries: { ops: {}, research: {} },
         },
       },
-      callGateway: callGateway as never,
+      callGateway,
     });
 
     await tool.execute("research-current", {
@@ -136,19 +140,26 @@ describe("sessions tool", () => {
       label: "Research",
     });
 
-    expect(resolveGateway).not.toHaveBeenCalled();
-    expect(callGateway).toHaveBeenCalledWith("sessions.patch", {
-      key: "agent:research:main",
-      label: "Research",
+    expect(requests).toContainEqual({
+      method: "sessions.patch",
+      params: { key: "agent:research:main", label: "Research" },
     });
+    expect(requests.some((request) => request.method === "sessions.resolve")).toBe(false);
   });
 
   it.each(["patch", "reset", "delete"] as const)(
     "does not treat another agent's bare global row as self for %s",
     async (action) => {
-      const resolveGateway = vi.fn(async () => ({ agentId: "ops", key: "global" }));
-      sessionsResolutionTesting.setDepsForTest({ callGateway: resolveGateway as never });
-      const callGateway = vi.fn();
+      const requests: AgentToolGatewayRequest[] = [];
+      const callGateway: AgentToolGatewayRequestCaller = async <T>(
+        request: AgentToolGatewayRequest,
+      ) => {
+        requests.push(request);
+        if (request.method === "sessions.resolve") {
+          return { agentId: "ops", key: "global" } as T;
+        }
+        throw new Error(`unexpected gateway mutation: ${request.method}`);
+      };
       const tool = createSessionsTool({
         agentSessionKey: "global",
         requesterAgentIdOverride: "research",
@@ -168,7 +179,12 @@ describe("sessions tool", () => {
           ...(action === "patch" ? { label: "Ops" } : {}),
         }),
       ).rejects.toThrow("Session status visibility is restricted");
-      expect(callGateway).not.toHaveBeenCalled();
+      expect(requests).toContainEqual(expect.objectContaining({ method: "sessions.resolve" }));
+      expect(
+        requests.some((request) =>
+          ["sessions.patch", "sessions.reset", "sessions.delete"].includes(request.method),
+        ),
+      ).toBe(false);
     },
   );
 

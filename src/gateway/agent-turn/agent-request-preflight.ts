@@ -19,12 +19,12 @@ import {
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../sessions/input-provenance.js";
 import { isSubagentSessionKey } from "../../sessions/session-key-utils.js";
-import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   resolveExpectedExistingSessionConstraint,
   type ExpectedExistingSessionConstraint,
 } from "../server-methods/agent-expected-session.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { readGatewayDedupeEntry, resolveAgentDedupeKeys } from "./agent-dedupe.js";
 import {
   resolveAllowModelOverrideFromClient,
@@ -75,7 +75,7 @@ export function prepareAgentRequestPreflight(params: {
       ? resolveRequestedSessionAgentId(cfg, requestSessionKey, request.agentId)
       : undefined;
   if (bareSessionAgent && !bareSessionAgent.ok) {
-    params.respond(false, undefined, bareSessionAgent.error);
+    params.io.emitAcceptance([false, undefined, bareSessionAgent.error]);
     return undefined;
   }
   const selectedAgentId = requestSessionKey

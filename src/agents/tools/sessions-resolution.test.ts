@@ -293,6 +293,7 @@ describe("resolved session visibility checks", () => {
           resolvedViaSessionId: false,
         },
         requesterSessionKey: "agent:main:main",
+        requesterAgentId: "main",
         restrictToSpawned: true,
         visibilitySessionKey: "agent:main:subagent:worker",
       }),

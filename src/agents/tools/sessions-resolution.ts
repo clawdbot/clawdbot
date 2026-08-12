@@ -117,9 +117,9 @@ async function isRequesterSpawnedSessionVisible(params: {
     // Older Gateways can reject exact spawned-session resolution.
   }
   const keys = await listSpawnedSessionKeys({
-      requesterSessionKey: params.requesterSessionKey,
-      callGateway: gatewayCall,
-    });
+    requesterSessionKey: params.requesterSessionKey,
+    callGateway: gatewayCall,
+  });
   return (
     (!params.targetAgentId || params.targetAgentId === params.requesterAgentId) &&
     keys.has(params.targetSessionKey)

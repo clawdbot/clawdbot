@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
+import { resolveRequesterStoreKey } from "./subagents/announce/subagent-requester-store-key.js";
 
 describe("resolveRequesterStoreKey", () => {
   it("scopes a custom main alias to the persisted fixed-store owner", () => {

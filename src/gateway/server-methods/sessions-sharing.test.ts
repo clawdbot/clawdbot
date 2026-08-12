@@ -124,7 +124,7 @@ describe("session sharing handlers", () => {
   it("admits bare fixed-store keys only through their persisted owner", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const storePath = state.path("shared-sessions.sqlite");
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "ops", sessionKey: "global", storePath },
         { sessionId: "session-ops-global", updatedAt: 1, visibility: "shared" },
       );

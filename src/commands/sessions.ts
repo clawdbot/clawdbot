@@ -405,10 +405,10 @@ export async function sessionsCommand(
       acpRuntime,
       agentRuntime,
       displayModelRef: modelRef,
-          kind: classifySessionKind(row.key, entry),
-          runtimePolicySessionKey: resolveDisplayRuntimePolicySessionKey({
-            agentId,
-            cfg,
+      kind: classifySessionKind(row.key, entry),
+      runtimePolicySessionKey: resolveDisplayRuntimePolicySessionKey({
+        agentId,
+        cfg,
         key: row.key,
         entry,
       }),

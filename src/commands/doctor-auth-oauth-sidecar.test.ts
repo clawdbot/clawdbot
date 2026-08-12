@@ -1,4 +1,5 @@
 // Doctor OAuth sidecar tests cover encrypted sidecar detection and auth repair guidance.
+import { createCipheriv, hash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -50,6 +51,32 @@ function writeLegacyAuthProfiles(
   agentId = "main",
 ): Promise<string> {
   return state.writeJson(path.join("agents", agentId, "agent", "auth-profiles.json"), store);
+}
+
+function encryptLegacySidecarMaterial(params: {
+  ref: { id: string };
+  profileId: string;
+  provider: string;
+  seed: string;
+  material: Record<string, string>;
+}) {
+  const iv = Buffer.alloc(12, 7);
+  const cipher = createCipheriv(
+    "aes-256-gcm",
+    hash("sha256", `openclaw:auth-profile-oauth:${params.seed}`, "buffer"),
+    iv,
+  );
+  cipher.setAAD(Buffer.from(`${params.ref.id}\0${params.profileId}\0${params.provider}`, "utf8"));
+  const ciphertext = Buffer.concat([
+    cipher.update(JSON.stringify(params.material), "utf8"),
+    cipher.final(),
+  ]);
+  return {
+    algorithm: "aes-256-gcm",
+    iv: iv.toString("base64url"),
+    tag: cipher.getAuthTag().toString("base64url"),
+    ciphertext: ciphertext.toString("base64url"),
+  };
 }
 
 afterEach(async () => {

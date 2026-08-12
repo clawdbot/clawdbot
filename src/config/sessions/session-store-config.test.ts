@@ -2,14 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { tryResolvePathCaseInsensitive } from "../../infra/path-case.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { isSameFixedSessionStoreConfig } from "./session-store-config.js";
 
 describe("fixed session store identity", () => {
   it.runIf(process.platform !== "win32")(
     "canonicalizes dangling leaf and ancestor aliases for a missing owned store",
     async () => {
-      await withTempDir({ prefix: "openclaw-fixed-store-alias-" }, async (root) => {
+      await withTestDir({ prefix: "openclaw-fixed-store-alias-" }, async (root) => {
         const ownedStore = path.join(root, "future", "sessions.sqlite");
         const leafAlias = path.join(root, "leaf-alias.sqlite");
         const ancestorAlias = path.join(root, "ancestor-alias");
@@ -36,7 +36,7 @@ describe("fixed session store identity", () => {
   );
 
   it("treats pre-creation case variants as owned on case-insensitive filesystems", async () => {
-    await withTempDir({ prefix: "openclaw-fixed-store-case-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-fixed-store-case-" }, async (root) => {
       const ownedStore = path.join(root, "Future", "Sessions.sqlite");
       const caseVariantStore = path.join(root, "future", "sessions.sqlite");
       await expect(fs.stat(ownedStore)).rejects.toMatchObject({ code: "ENOENT" });

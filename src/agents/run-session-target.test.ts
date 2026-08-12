@@ -109,7 +109,7 @@ describe("agent run session target", () => {
   it("resolves an existing bare row through its persisted fixed-store owner", async () => {
     const storePath = path.join(tempDir, "fixed-owner", "sessions.json");
     const sessionId = "fixed-owner-session";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "ops", sessionKey: "global", storePath },
       { sessionId, updatedAt: 1 },
     );
@@ -138,7 +138,7 @@ describe("agent run session target", () => {
     const storePath = path.join(tempDir, "retired-owner", "sessions.json");
     const sessionId = "research-session";
     const sessionKey = "agent:research:work";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "research", sessionKey, storePath },
       { sessionId, updatedAt: 1 },
     );
@@ -162,7 +162,7 @@ describe("agent run session target", () => {
     const storePath = path.join(tempDir, "ownerless", "sessions.json");
     const sessionId = "research-session";
     const sessionKey = "agent:research:work";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "research", sessionKey, storePath },
       { sessionId, updatedAt: 1 },
     );

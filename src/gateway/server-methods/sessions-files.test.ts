@@ -137,7 +137,7 @@ describe("sessions.files RPC handlers", () => {
 
     expect(payload.root).toBe(workspaceRoot);
     expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "ops" });
-    expect(hoisted.readSessionTranscriptVisibleMessageDelta).toHaveBeenCalledWith(
+    expect(hoisted.readSessionTranscriptVisibleMessageDeltaCore).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "ops", sessionKey: "global" }),
       expect.any(Object),
     );

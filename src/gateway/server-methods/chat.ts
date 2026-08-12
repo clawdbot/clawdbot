@@ -20,7 +20,6 @@ import {
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
-import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import {
   resolveGlobalAwareNodeChatDeliveryKeys,
   sendGlobalAwareNodeChatPayload,

@@ -12,7 +12,7 @@ import {
   resolveTranscriptSessionKeyBySessionId,
 } from "../config/sessions/session-accessor.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
@@ -261,13 +261,9 @@ async function handleTranscriptUpdateBroadcast(
   const compatibilityDefaultAgentId = tryResolveCompatibilityDefaultAgentId();
   const persistedOwner = resolvePersistedSessionStoreOwnerForKey(getRuntimeConfig(), sessionKey);
   const stableCompatibilityAgentId =
-    persistedOwner.kind === "configured"
-      ? persistedOwner.agentId
-      : compatibilityDefaultAgentId;
+    persistedOwner.kind === "configured" ? persistedOwner.agentId : compatibilityDefaultAgentId;
   const stableUnscopedOwner =
-    !parseAgentSessionKey(sessionKey) && !effectiveAgentId
-      ? stableCompatibilityAgentId
-      : undefined;
+    !parseAgentSessionKey(sessionKey) && !effectiveAgentId ? stableCompatibilityAgentId : undefined;
   const storageAgentId = effectiveAgentId ?? stableUnscopedOwner;
   const visibleAgentId = effectiveAgentId;
   const routingAgentId = effectiveAgentId ?? stableUnscopedOwner;

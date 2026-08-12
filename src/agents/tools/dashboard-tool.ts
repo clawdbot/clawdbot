@@ -309,11 +309,11 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
         const size = readToolStringParam(params, "size");
         const after = readToolStringParam(params, "after");
         const props = readPluginProps(params);
-          return snapshotResult(
-            await gatewayCall<BoardSnapshot>("board.widget.put", {
-              sessionKey,
-              agentId: opts.agentId,
-              name: readToolStringParam(params, "name", { required: true }),
+        return snapshotResult(
+          await gatewayCall<BoardSnapshot>("board.widget.put", {
+            sessionKey,
+            agentId: opts.agentId,
+            name: readToolStringParam(params, "name", { required: true }),
             ...(title !== undefined ? { title } : {}),
             content: {
               kind: "plugin",

@@ -57,7 +57,6 @@ function requestModelsList(params: {
     workspaceDir?: string;
   }) => Promise<Array<Record<string, unknown>>>;
   reqId?: string;
-  agentId?: string;
   includeProviderCapabilities?: boolean;
 }) {
   const respond = params.respond ?? vi.fn();

@@ -40,6 +40,7 @@ vi.mock("../agent-scope.js", async () => ({
 
 const { resolveSessionKeyForRequestCore, resolveStoredSessionKeyForSessionId } =
   await import("./session.js");
+const resolveSessionKeyForRequest = resolveSessionKeyForRequestCore;
 
 function mockSessionStores(storesByPath: Record<string, Record<string, SessionEntry>>): void {
   hoisted.listSessionEntriesMock.mockImplementation((scope) =>

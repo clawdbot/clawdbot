@@ -2,7 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
 import { isExecApprovalFollowupSessionRebound } from "../../agents/bash-tools.exec-approval-followup-state.js";
-import { resolveSessionKeyForRequest } from "../../agents/command/session.js";
+import { resolveSessionKeyForRequestCore } from "../../agents/command/session.js";
 import { resolveExplicitAgentSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitDiagnosticEvent } from "../../infra/diagnostic-events.js";
@@ -12,7 +12,6 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
-import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   validateExpectedExistingSessionTarget,
   type ExpectedExistingSessionConstraint,
@@ -20,6 +19,7 @@ import {
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "../server-methods/attachment-normalize.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadSessionEntry, resolveSessionStoreKey } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
@@ -113,10 +113,10 @@ export async function prepareAgentRequestRouting(params: {
     }
     agentId = requestedSessionAgent.agentId;
   }
-  let sessionIdTarget: ReturnType<typeof resolveSessionKeyForRequest> | undefined;
+  let sessionIdTarget: ReturnType<typeof resolveSessionKeyForRequestCore> | undefined;
   if (requestedSessionId && !requestedSessionKeyRaw) {
     try {
-      sessionIdTarget = resolveSessionKeyForRequest({
+      sessionIdTarget = resolveSessionKeyForRequestCore({
         cfg: params.cfg,
         sessionId: requestedSessionId,
         agentId,

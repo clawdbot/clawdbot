@@ -171,7 +171,7 @@ describe("session suggestion handlers", () => {
   it("admits bare fixed-store keys only through their persisted owner", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const storePath = state.path("shared-sessions.sqlite");
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "ops", sessionKey: "global", storePath },
         {
           sessionId: "session-ops-global",
@@ -217,7 +217,7 @@ describe("session suggestion handlers", () => {
   it("attributes an ownerless active run to the persisted bare-key owner", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const storePath = state.path("shared-sessions.sqlite");
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "ops", sessionKey: "global", storePath },
         {
           sessionId: "session-ops-global",

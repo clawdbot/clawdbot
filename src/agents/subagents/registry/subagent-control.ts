@@ -42,6 +42,7 @@ import {
   readLatestAssistantReplySnapshot,
   waitForAgentRunAndReadUpdatedAssistantReply,
 } from "../../run-wait.js";
+import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -71,7 +72,6 @@ import {
   replaceSubagentRunAfterSteerCore,
 } from "./subagent-registry.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 
 /** Recent-run default window used by subagent control UI/tools. */
 export const DEFAULT_RECENT_MINUTES = 30;

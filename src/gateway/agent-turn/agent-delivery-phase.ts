@@ -16,9 +16,9 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
-import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { formatForLog } from "../ws-log.js";
 import type { AgentTurnContext, AgentTurnPrincipal } from "./types.js";
 

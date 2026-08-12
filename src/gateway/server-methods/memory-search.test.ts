@@ -154,7 +154,7 @@ describe("memory.search gateway method", () => {
         message: expect.stringContaining("agent"),
       }),
     );
-    expect(getActiveMemorySearchManager).not.toHaveBeenCalled();
+    expect(getActiveMemorySearchManagerCore).not.toHaveBeenCalled();
   });
 
   it("rejects a non-string agentId without acquiring a manager", async () => {
