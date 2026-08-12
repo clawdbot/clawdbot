@@ -826,7 +826,7 @@ img.chat-avatar.chat-avatar--logo {
   box-shadow: none;
 }
 
-:root[data-theme-mode="light"][data-assistant-message-surface="white"]
+:root[data-theme-mode="light"]:not([data-theme="custom-light"])[data-assistant-message-surface="white"]
   .chat-group.assistant
   .chat-bubble--assistant-surface {
   background: #fff;
