@@ -1,4 +1,5 @@
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
+import { resolveAgentEntry } from "../agents/agent-scope-config.js";
 import { refreshContextWindowCache } from "../agents/context.js";
 import { warmCurrentProviderAuthStateOffMainThread } from "../agents/model-provider-auth.js";
 import {
@@ -60,14 +61,15 @@ const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
  * Machine-managed metadata paths (e.g. `meta.*`) are scope-neutral: they are filtered out before
  * the agent-scope decision so they never disable agent-scoped reloads.
  *
- * Whole-entry changes (added or removed `agents.entries.<id>` with no leaf suffix) and changes to
- * an agent's `default` marker or `agentDir` affect the default-agent-derived `inheritedAuthDir`
- * shared by every configured owner, so they force a full refresh (undefined). This covers adding
- * or removing a `default: true` agent entry, which otherwise would leave other owners retaining
- * stale default-derived auth artifacts.
+ * Whole-entry additions of a non-default agent are safe to scope: the added agent does not affect
+ * the default-agent-derived `inheritedAuthDir` shared by every configured owner. Adding a
+ * `default: true` agent, removing any agent (the removed agent's default status cannot be verified
+ * from the next config alone), or changing an agent's `default` marker or `agentDir` all affect
+ * `inheritedAuthDir`, so they force a full refresh (undefined).
  */
 function resolveModelRuntimeAgentIdsFromChangedPaths(
   changedPaths: readonly string[],
+  nextConfig: OpenClawConfig,
 ): ReadonlySet<string> | undefined {
   if (changedPaths.length === 0) {
     return undefined;
@@ -82,15 +84,23 @@ function resolveModelRuntimeAgentIdsFromChangedPaths(
       return undefined;
     }
     const field = path.slice(`agents.entries.${match[1]}`.length + 1);
-    // Whole-entry changes (no leaf) may add or remove a default agent, which reshapes the
-    // shared `inheritedAuthDir` every configured owner derives from. Fall back to a full
-    // refresh instead of risking other owners retaining stale default-derived artifacts.
-    if (
-      field === "" ||
-      field === "default" ||
-      field === "agentDir" ||
-      field.startsWith("agentDir.")
-    ) {
+    // Changes to an agent's `default` marker or `agentDir` affect the
+    // default-agent-derived `inheritedAuthDir` shared by every configured owner,
+    // so they force a full refresh (undefined).
+    if (field === "default" || field === "agentDir" || field.startsWith("agentDir.")) {
+      return undefined;
+    }
+    if (field === "") {
+      // Whole-entry change. Adding a non-default agent is safe to scope because
+      // the default-agent-derived `inheritedAuthDir` is unchanged. Adding a
+      // `default: true` agent or removing any agent (the removed agent's default
+      // status cannot be verified from the next config alone) may reshape the
+      // shared `inheritedAuthDir`, so fall back to a full refresh.
+      const entry = resolveAgentEntry(nextConfig, match[1]!);
+      if (entry && entry.default !== true) {
+        agentIds.add(normalizeAgentId(match[1]!));
+        continue;
+      }
       return undefined;
     }
     agentIds.add(normalizeAgentId(match[1]!));
@@ -154,7 +164,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     // Scope the prepared-model runtime refresh to only the agents this reload actually touched.
     // Undefined (no-scope / global config change) keeps the current full rebuild of all owners.
-    const modelRuntimeAgentIds = resolveModelRuntimeAgentIdsFromChangedPaths(plan.changedPaths);
+    const modelRuntimeAgentIds = resolveModelRuntimeAgentIdsFromChangedPaths(
+      plan.changedPaths,
+      nextConfig,
+    );
     const modelRuntimeRefreshScope =
       modelRuntimeAgentIds === undefined ? undefined : { agentIds: modelRuntimeAgentIds };
 

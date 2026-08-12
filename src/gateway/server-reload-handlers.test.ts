@@ -1225,13 +1225,64 @@ describe("gateway hot reload model state", () => {
     });
   });
 
-  it("falls back to full refresh for a whole-agent entry change (add or remove)", async () => {
-    // Adding or removing a whole `agents.entries.<id>` may introduce or retire a default agent,
-    // which reshapes the `inheritedAuthDir` shared by every configured owner. A scoped refresh
-    // would leave other owners bound to stale default-derived auth artifacts.
+  it("scopes a safe whole-agent entry addition (non-default agent)", async () => {
+    // Adding a non-default `agents.entries.<id>` does not change the default agent, so the
+    // shared `inheritedAuthDir` is unchanged and only the new agent needs a runtime snapshot.
     const logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const { applyHotReload } = createReloadHandlersForTest(logReload);
-    const nextConfig = {} as OpenClawConfig;
+    const nextConfig = {
+      agents: {
+        entries: {
+          agentA: { model: "maas/qwen3-32b", name: "a", default: true },
+          agentD: { model: "maas/qwen3-32b", name: "d" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await applyHotReload(buildGatewayReloadPlan(["agents.entries.agentD"]), nextConfig);
+
+    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
+      allowGatewaySubagentBinding: true,
+      catalogMode: "static",
+      agentIds: new Set(["agentd"]),
+    });
+  });
+
+  it("falls back to full refresh when a whole-agent entry addition is a default agent", async () => {
+    // Adding a `default: true` agent reshapes the shared `inheritedAuthDir` every configured
+    // owner derives from, so a scoped refresh would leave other owners with stale artifacts.
+    const logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { applyHotReload } = createReloadHandlersForTest(logReload);
+    const nextConfig = {
+      agents: {
+        entries: {
+          agentA: { model: "maas/qwen3-32b", name: "a" },
+          agentD: { model: "maas/qwen3-32b", name: "d", default: true },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await applyHotReload(buildGatewayReloadPlan(["agents.entries.agentD"]), nextConfig);
+
+    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
+      allowGatewaySubagentBinding: true,
+      catalogMode: "static",
+    });
+  });
+
+  it("falls back to full refresh for a whole-agent entry removal", async () => {
+    // Removing an agent may retire a default agent, which reshapes the shared
+    // `inheritedAuthDir`. The removed agent's default status cannot be verified from the
+    // next config alone, so fall back to a full refresh for safety.
+    const logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { applyHotReload } = createReloadHandlersForTest(logReload);
+    const nextConfig = {
+      agents: {
+        entries: {
+          agentA: { model: "maas/qwen3-32b", name: "a", default: true },
+        },
+      },
+    } as unknown as OpenClawConfig;
 
     await applyHotReload(buildGatewayReloadPlan(["agents.entries.agentD"]), nextConfig);
 
