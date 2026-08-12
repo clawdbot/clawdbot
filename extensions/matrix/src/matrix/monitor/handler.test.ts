@@ -3853,6 +3853,92 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
+  it("keeps the draft visible when media replacement delivery fails and redaction would succeed", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "Visible preview" });
+    await waitForMatrixState(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    deliverMatrixRepliesMock.mockRejectedValueOnce(new Error("media send failed"));
+    const error = await deliver(
+      { mediaUrl: "https://example.com/image.png" },
+      { kind: "final" },
+    ).catch((caught: unknown) => caught);
+
+    // The draft must not be redacted before the replacement delivery is
+    // confirmed: a successful redaction here would delete the only visible
+    // content (silent message loss).
+    expect(redactEventMock).not.toHaveBeenCalled();
+    expect(error).toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: {
+        messageIds: ["$draft1"],
+        visibleReplySent: true,
+        content: "Visible preview",
+        receipt: { primaryPlatformMessageId: "$draft1" },
+      },
+    });
+    await finish();
+  });
+
+  it("keeps the draft visible when an error-notice fallback delivery fails and redaction would succeed", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "Visible preview" });
+    await waitForMatrixState(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    deliverMatrixRepliesMock.mockRejectedValueOnce(new Error("fallback send failed"));
+    const error = await deliver({ text: "Something failed", isError: true } as never, {
+      kind: "final",
+    }).catch((caught: unknown) => caught);
+
+    expect(redactEventMock).not.toHaveBeenCalled();
+    expect(error).toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: {
+        messageIds: ["$draft1"],
+        visibleReplySent: true,
+        content: "Visible preview",
+        receipt: { primaryPlatformMessageId: "$draft1" },
+      },
+    });
+    await finish();
+  });
+
+  it("keeps the draft visible when the final-edit fallback delivery fails and redaction would succeed", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "Visible preview" });
+    await waitForMatrixState(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    editMessageMatrixMock.mockRejectedValueOnce(new Error("final edit failed"));
+    deliverMatrixRepliesMock.mockRejectedValueOnce(new Error("fallback send failed"));
+    const error = await deliver({ text: "Final text" }, { kind: "final" }).catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(redactEventMock).not.toHaveBeenCalled();
+    expect(error).toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: {
+        messageIds: ["$draft1"],
+        visibleReplySent: true,
+        content: "Visible preview",
+        receipt: { primaryPlatformMessageId: "$draft1" },
+      },
+    });
+    await finish();
+  });
+
   it("falls back with visible text when TTS supplement preview has no event id", async () => {
     const { dispatch, redactEventMock } = createStreamingHarness({
       blockStreamingEnabled: true,
