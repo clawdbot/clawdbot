@@ -269,6 +269,25 @@ describe("resolveConversationCapabilityProfile", () => {
     expect(profile.policy.pluginToolDiscoveryAllowlist).toEqual(["pdf"]);
   });
 
+  it("preserves full-profile wildcards for plugin discovery", () => {
+    const globalProfile = resolveConversationCapabilityProfile({
+      config: { tools: { profile: "full" } },
+    });
+    const providerProfile = resolveConversationCapabilityProfile({
+      config: {
+        tools: {
+          profile: "coding",
+          byProvider: { openai: { profile: "full" } },
+        },
+      },
+      modelProvider: "openai",
+      modelId: "gpt-5.5",
+    });
+
+    expect(globalProfile.policy.pluginToolDiscoveryAllowlist).toEqual(["*"]);
+    expect(providerProfile.policy.pluginToolDiscoveryAllowlist).toEqual(["*"]);
+  });
+
   it("adds runtime tools without replacing the configured tool surface", () => {
     const profile = resolveConversationCapabilityProfile({
       config: {

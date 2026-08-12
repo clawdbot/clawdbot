@@ -616,7 +616,7 @@ describe("createOpenClawCodingTools", () => {
     expectListIncludes(options.pluginToolAllowlist, ["memory_search", "memory_get"]);
   });
 
-  it("does not use built-in profiles to restrict plugin discovery", () => {
+  it("does not use the coding profile to restrict plugin discovery", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
 
@@ -625,6 +625,17 @@ describe("createOpenClawCodingTools", () => {
     });
 
     expect(latestCreateOpenClawToolsOptions().pluginToolAllowlist).toEqual([]);
+  });
+
+  it("uses the full-profile wildcard for optional plugin discovery", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: { tools: { profile: "full" } },
+    });
+
+    expect(latestCreateOpenClawToolsOptions().pluginToolAllowlist).toEqual(["*"]);
   });
 
   it("does not inherit native-harness bridge runtime allowlists", () => {

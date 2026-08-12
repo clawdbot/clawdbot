@@ -269,7 +269,15 @@ export function resolveConversationCapabilityProfile(
     return merged.length > 0 ? merged : undefined;
   };
   const explicitOverridePolicies = [...configuredOverridePolicies, runtimeToolPolicy];
-  const pluginToolDiscoveryPolicies = [...explicitOverridePolicies, inheritedToolPolicy];
+  // Restrictive built-in profiles contain core-tool grants and must not gate
+  // plugin materialization. Full is the exception: its wildcard preserves the
+  // existing unrestricted surface, including optional plugin tools.
+  const pluginToolDiscoveryPolicies = [
+    effective.profile === "full" ? profilePolicy : undefined,
+    effective.providerProfile === "full" ? providerProfilePolicy : undefined,
+    ...explicitOverridePolicies,
+    inheritedToolPolicy,
+  ];
   const explicitToolAllowlistPolicies = [
     profilePolicy,
     providerProfilePolicy,
