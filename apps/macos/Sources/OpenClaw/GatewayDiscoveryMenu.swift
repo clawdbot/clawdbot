@@ -94,24 +94,3 @@ struct GatewayDiscoveryInlineList: View {
         value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 }
-
-struct GatewayDiscoveryMenu: View {
-    var discovery: GatewayDiscoveryModel
-    var onSelect: (GatewayDiscoveryModel.DiscoveredGateway) -> Void
-
-    var body: some View {
-        Menu {
-            if self.discovery.gateways.isEmpty {
-                Button(self.discovery.statusText) {}
-                    .disabled(true)
-            } else {
-                ForEach(self.discovery.gateways) { gateway in
-                    Button(gateway.displayName) { self.onSelect(gateway) }
-                }
-            }
-        } label: {
-            Image(systemName: "dot.radiowaves.left.and.right")
-        }
-        .help("Discover OpenClaw gateways on your LAN")
-    }
-}

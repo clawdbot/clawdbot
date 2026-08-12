@@ -334,6 +334,7 @@ export async function sendSlackMessage(
   opts: Omit<SlackActionClientOpts, "cfg"> & {
     cfg: OpenClawConfig;
     mediaUrl?: string;
+    forceDocument?: boolean;
     mediaAccess?: {
       localRoots?: readonly string[];
       readFile?: (filePath: string) => Promise<Buffer>;
@@ -356,6 +357,7 @@ export async function sendSlackMessage(
     cfg: opts.cfg,
     token: opts.token,
     mediaUrl: opts.mediaUrl,
+    ...(opts.forceDocument ? { forceDocument: true } : {}),
     mediaAccess: opts.mediaAccess,
     mediaLocalRoots: opts.mediaLocalRoots,
     mediaReadFile: opts.mediaReadFile,

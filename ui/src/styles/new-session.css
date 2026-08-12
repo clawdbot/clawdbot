@@ -370,6 +370,53 @@ wa-popover.new-session-page__place-popover::part(body) {
   stroke-linejoin: round;
 }
 
+.new-session-page__connect-machine .session-menu__icon {
+  color: var(--muted);
+}
+
+.connect-machine-dialog {
+  --openclaw-modal-width: 480px;
+}
+
+.connect-machine-dialog__card {
+  padding: 18px;
+}
+
+.connect-machine-dialog__card h2,
+.connect-machine-dialog__card p {
+  margin-block: 0;
+}
+
+.connect-machine-dialog__body {
+  margin-top: 16px;
+}
+
+.connect-machine-dialog__status,
+.connect-machine-dialog__hint {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.connect-machine-dialog__hint {
+  margin-top: 8px;
+}
+
+.connect-machine-dialog .login-gate__command {
+  min-width: 0;
+}
+
+.connect-machine-dialog .login-gate__command code {
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  user-select: all;
+}
+
+.connect-machine-dialog__actions {
+  justify-content: space-between;
+}
+
 /* The chip row already spaces itself; keep the composer snug beneath it. */
 .new-session-page__composer.agent-chat__composer-shell {
   position: relative;

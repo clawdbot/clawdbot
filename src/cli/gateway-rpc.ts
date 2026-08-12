@@ -47,6 +47,12 @@ export async function callGatewayFromCli(
   return await callGatewayFromCliWithTransport(method, opts, params, extra);
 }
 
+/** Resolve whether CLI Gateway options select the implicit local Gateway. */
+export async function isImplicitLocalGatewayTargetFromCli(opts: GatewayRpcOpts): Promise<boolean> {
+  const runtime = await loadGatewayRpcRuntime();
+  return await runtime.isImplicitLocalGatewayTargetFromCliRuntime(opts);
+}
+
 /** Internal CLI facade for callers that need transport or auth policy overrides. */
 export async function callGatewayFromCliWithTransport(
   method: string,

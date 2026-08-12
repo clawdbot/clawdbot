@@ -68,7 +68,7 @@ describe("chat pane terminal action", () => {
     }
   });
 
-  it("renders the desktop controls only for cloud sessions and opens the panel", () => {
+  it("renders desktop controls for local sessions when the source RPC is available", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
     const localSession = {
@@ -105,16 +105,16 @@ describe("chat pane terminal action", () => {
     renderHeader(cloudSession);
     expect(container.querySelector('[aria-label="Toggle desktop panel"]')).toBeNull();
 
-    snapshot.hello = desktopHello(["worker.desktop.observe"], ["operator.admin"]);
+    snapshot.hello = desktopHello(["desktop.observe"], ["operator.admin"]);
     renderHeader(localSession);
-    expect(container.querySelector('[aria-label="Toggle desktop panel"]')).toBeNull();
-    expect(panelActionIds()).not.toContain("desktop");
+    expect(container.querySelector('[aria-label="Toggle desktop panel"]')).not.toBeNull();
+    expect(panelActionIds()).toContain("desktop");
 
     const events: CustomEvent<DesktopPanelToggleDetail>[] = [];
     const listener = (event: Event) => events.push(event as CustomEvent<DesktopPanelToggleDetail>);
     window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, listener);
     try {
-      renderHeader(cloudSession);
+      renderHeader(localSession);
       const button = container.querySelector<HTMLButtonElement>(
         '[aria-label="Toggle desktop panel"]',
       );
@@ -124,7 +124,7 @@ describe("chat pane terminal action", () => {
       expect(events).toHaveLength(1);
       expect(events[0]?.detail).toEqual({ open: true });
 
-      snapshot.hello = desktopHello(["worker.desktop.observe"], ["operator.read"]);
+      snapshot.hello = desktopHello(["desktop.observe"], ["operator.read"]);
       renderHeader(cloudSession);
       expect(container.querySelector('[aria-label="Toggle desktop panel"]')).toBeNull();
     } finally {

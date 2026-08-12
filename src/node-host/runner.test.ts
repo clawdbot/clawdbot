@@ -333,6 +333,38 @@ describe("runNodeHost", () => {
     }
   });
 
+  it("stops the canonical runtime after a service enrollment hello", async () => {
+    mocks.useFakeRuntime = true;
+    mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce({
+      ready: true,
+      aborted: false,
+      elapsedMs: 0,
+    });
+    const previousExitCode = process.exitCode;
+    try {
+      const running = runNodeHost({
+        gatewayHost: "gateway.example",
+        gatewayPort: 443,
+        gatewayTls: true,
+        gatewayBootstrapToken: "bootstrap-token",
+        preferGatewayBootstrapToken: true,
+        stopAfterFirstConnect: true,
+      });
+      await vi.waitFor(() => expect(lastCapturedOptions()?.onHelloOk).toBeTypeOf("function"));
+      lastCapturedOptions()?.onHelloOk?.({
+        protocol: 1,
+        features: { methods: [], events: [] },
+      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+      await running;
+
+      expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalledOnce();
+      expect(mocks.activeRuntime.close).toHaveBeenCalledOnce();
+      expect(mocks.capturedGatewayClients[0]?.request).not.toHaveBeenCalled();
+    } finally {
+      process.exitCode = previousExitCode;
+    }
+  });
+
   it("routes invoke input, cancellation, and connection close to the runtime", async () => {
     mocks.useFakeRuntime = true;
     await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(

@@ -577,6 +577,13 @@ CREATE TABLE IF NOT EXISTS device_bootstrap_tokens (
 CREATE INDEX IF NOT EXISTS idx_device_bootstrap_tokens_ts
   ON device_bootstrap_tokens(ts);
 
+CREATE TABLE IF NOT EXISTS device_pairing_join_codes (
+  shortcode TEXT,
+  payload_json TEXT,
+  created_at_ms INTEGER,
+  expires_at_ms INTEGER
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS device_identities (
   identity_key TEXT NOT NULL PRIMARY KEY,
   device_id TEXT NOT NULL,

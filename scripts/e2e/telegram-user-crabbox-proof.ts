@@ -69,6 +69,7 @@ type Options = {
   envFile?: string;
   expect: string[];
   gatewayPort: number;
+  humanDelayFixedMs?: number;
   idleTimeout: string;
   keepBox: boolean;
   leaseId?: string;
@@ -223,6 +224,7 @@ function usageText() {
     "Useful options:",
     "  --class <name>                Crabbox machine class. Default: standard.",
     "  --desktop-chat-title <name>   Telegram Desktop chat to select before recording.",
+    "  --human-delay-fixed-ms <ms>   Set a fixed custom human delay before Gateway startup.",
     "  --id <cbx_id>                 Reuse an existing Crabbox desktop lease.",
     "  --keep-box                    Leave the Crabbox lease running for VNC debugging.",
     "  --link-preview <true|false>   Set channels.telegram.linkPreview before Gateway startup.",
@@ -402,6 +404,8 @@ export function parseArgs(argvInput: string[]): Options {
       opts.expect.push(readValue({ repeatable: true }));
     } else if (arg === "--gateway-port") {
       opts.gatewayPort = parseTcpPort(readValue(), "--gateway-port");
+    } else if (arg === "--human-delay-fixed-ms") {
+      opts.humanDelayFixedMs = parsePositiveTimerMs(readValue(), "--human-delay-fixed-ms");
     } else if (arg === "--id") {
       opts.leaseId = readValue();
     } else if (arg === "--idle-timeout") {
@@ -502,6 +506,9 @@ export function parseArgs(argvInput: string[]): Options {
   }
   if (command === "publish" && !opts.publishPr) {
     throw new Error("publish requires --pr.");
+  }
+  if (command !== "start" && opts.humanDelayFixedMs !== undefined) {
+    throw new Error("--human-delay-fixed-ms is available only for start sessions.");
   }
   if (opts.mcpAppFixture && command !== "start") {
     throw new Error("--mcp-app-fixture is available only for start sessions.");
@@ -1241,6 +1248,7 @@ function telegramResultObject(value: unknown, label: string): JsonObject {
 export function writeSutConfig(params: {
   gatewayPort: number;
   groupId: string;
+  humanDelayFixedMs?: number;
   linkPreview?: boolean;
   mcpAppFixture?: boolean;
   mockPort: number;
@@ -1257,6 +1265,15 @@ export function writeSutConfig(params: {
   const config = {
     agents: {
       defaults: {
+        ...(params.humanDelayFixedMs === undefined
+          ? {}
+          : {
+              humanDelay: {
+                maxMs: params.humanDelayFixedMs,
+                minMs: params.humanDelayFixedMs,
+                mode: "custom",
+              },
+            }),
         model: { primary: "openai/gpt-5.6-luna" },
         models: {
           "openai/gpt-5.6-luna": { params: { openaiWsWarmup: false, transport: "sse" } },
@@ -1368,6 +1385,7 @@ export async function startLocalSut(
   params: {
     gatewayPort: number;
     groupId: string;
+    humanDelayFixedMs?: number;
     mockResponseText: string;
     mockPort: number;
     linkPreview?: boolean;
@@ -1668,6 +1686,7 @@ async function startLocalSutDaemon(params: {
   funnelBridge?: FunnelBridge;
   gatewayPort: number;
   groupId: string;
+  humanDelayFixedMs?: number;
   mockResponseText: string;
   mockPort: number;
   linkPreview?: boolean;
@@ -2888,6 +2907,7 @@ async function startSession(root: string, opts: Options, outputDir: string) {
       funnelBridge,
       gatewayPort: opts.gatewayPort,
       groupId: credential.groupId,
+      humanDelayFixedMs: opts.humanDelayFixedMs,
       linkPreview: opts.linkPreview,
       mockResponseText: opts.mockResponseText,
       mockResponseChunkDelayMs: opts.mockResponseChunkDelayMs,
@@ -3508,6 +3528,7 @@ async function main() {
     const sutRuntime = await startLocalSut({
       gatewayPort: opts.gatewayPort,
       groupId: credential.groupId,
+      humanDelayFixedMs: opts.humanDelayFixedMs,
       linkPreview: opts.linkPreview,
       mockResponseText: opts.mockResponseText,
       mockResponseChunkDelayMs: opts.mockResponseChunkDelayMs,

@@ -794,6 +794,31 @@ function getToolResultProjectionKeys(
   });
 }
 
+/** Drops projections whose source messages no longer exist in canonical session history. */
+export function reconcileToolResultPromptProjectionState(
+  messages: AgentMessage[],
+  projectionState: ToolResultPromptProjectionState,
+): void {
+  const canonicalKeys = new Set(getToolResultProjectionKeys(messages, projectionState));
+  for (const key of [
+    ...projectionState.frozen,
+    ...projectionState.replacements.keys(),
+    ...projectionState.sourceTextByKey.keys(),
+  ]) {
+    if (!canonicalKeys.has(key)) {
+      projectionState.frozen.delete(key);
+      projectionState.replacements.delete(key);
+      projectionState.sourceTextByKey.delete(key);
+    }
+  }
+  const representedBaseKeys = new Set(messages.map(getToolResultProjectionBaseKey));
+  for (const baseKey of projectionState.ambiguousBaseKeys) {
+    if (!representedBaseKeys.has(baseKey)) {
+      projectionState.ambiguousBaseKeys.delete(baseKey);
+    }
+  }
+}
+
 function mergeProjectedToolResultMessage(
   message: AgentMessage,
   projectedMessage: AgentMessage,

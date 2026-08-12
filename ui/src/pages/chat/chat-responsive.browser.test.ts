@@ -2114,19 +2114,28 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             const punctuationRect = range.getBoundingClientRect();
             range.detach();
             const chipRect = (node as HTMLElement).getBoundingClientRect();
+            const paragraph = (node as HTMLElement).parentElement;
+            if (!paragraph) {
+              throw new Error("Expected inline code inside a paragraph");
+            }
             return {
               horizontalGap: punctuationRect.left - textRect.right,
-              heightDelta: chipRect.height - punctuationRect.height,
+              chipHeight: chipRect.height,
+              lineHeight: Number.parseFloat(getComputedStyle(paragraph).lineHeight),
             };
           }),
         );
 
         expect(spacing).toHaveLength(2);
-        for (const { horizontalGap, heightDelta } of spacing) {
-          // Include the chip border/inset, but keep both measurements within a
-          // quarter of the 14px prose size across browser font metrics.
+        for (const { horizontalGap, chipHeight, lineHeight } of spacing) {
+          // The gap is the chip's em-derived inset plus its border, so a quarter of
+          // the 14px prose size holds on every platform.
           expect(horizontalGap).toBeLessThanOrEqual(3.75);
-          expect(heightDelta).toBeLessThanOrEqual(3.75);
+          // Measure the chip against the paragraph's CSS line box rather than a text
+          // rect: the chip's content height follows the monospace font's default line
+          // spacing, which differs by several px between macOS and Linux.
+          expect(lineHeight).toBeGreaterThan(0);
+          expect(chipHeight).toBeLessThanOrEqual(lineHeight + 1);
         }
       } finally {
         await closeBrowserPage(page);

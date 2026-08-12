@@ -71,6 +71,14 @@ function mockContext(
       ],
     },
     workerEnvironmentService,
+    getRuntimeConfig: () => ({
+      cloudWorkers: {
+        profiles: {
+          zeta: { provider: "static-ssh", settings: {} },
+          aws: { provider: "crabbox", settings: {} },
+        },
+      },
+    }),
     ...(workerEnvironmentService
       ? {
           workerPlacementDispatchService: {
@@ -78,14 +86,6 @@ function mockContext(
             forceDestroyEnvironment,
             reconcileActive,
           },
-          getRuntimeConfig: () => ({
-            cloudWorkers: {
-              profiles: {
-                zeta: { provider: "static-ssh", settings: {} },
-                aws: { provider: "crabbox", settings: {} },
-              },
-            },
-          }),
         }
       : {}),
   };

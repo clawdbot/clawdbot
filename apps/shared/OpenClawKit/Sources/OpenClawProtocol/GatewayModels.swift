@@ -1908,6 +1908,7 @@ public struct EnvironmentSummary: Codable, Sendable {
     public let sessionhost: Bool?
     public let trust: String?
     public let capabilities: [String]?
+    public let desktop: Bool?
     public let worker: WorkerEnvironmentMetadata?
 
     public init(
@@ -1919,6 +1920,7 @@ public struct EnvironmentSummary: Codable, Sendable {
         sessionhost: Bool? = nil,
         trust: String? = nil,
         capabilities: [String]? = nil,
+        desktop: Bool? = nil,
         worker: WorkerEnvironmentMetadata? = nil)
     {
         self.id = id
@@ -1929,6 +1931,7 @@ public struct EnvironmentSummary: Codable, Sendable {
         self.sessionhost = sessionhost
         self.trust = trust
         self.capabilities = capabilities
+        self.desktop = desktop
         self.worker = worker
     }
 
@@ -1941,6 +1944,7 @@ public struct EnvironmentSummary: Codable, Sendable {
         case sessionhost = "sessionHost"
         case trust
         case capabilities
+        case desktop
         case worker
     }
 }
@@ -1972,6 +1976,7 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
     public let sessionhost: Bool?
     public let trust: String?
     public let capabilities: [String]?
+    public let desktop: Bool?
     public let worker: WorkerEnvironmentMetadata?
 
     public init(
@@ -1983,6 +1988,7 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
         sessionhost: Bool? = nil,
         trust: String? = nil,
         capabilities: [String]? = nil,
+        desktop: Bool? = nil,
         worker: WorkerEnvironmentMetadata? = nil)
     {
         self.id = id
@@ -1993,6 +1999,7 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
         self.sessionhost = sessionhost
         self.trust = trust
         self.capabilities = capabilities
+        self.desktop = desktop
         self.worker = worker
     }
 
@@ -2005,6 +2012,7 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
         case sessionhost = "sessionHost"
         case trust
         case capabilities
+        case desktop
         case worker
     }
 }
@@ -2036,6 +2044,7 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
     public let sessionhost: Bool?
     public let trust: String?
     public let capabilities: [String]?
+    public let desktop: Bool?
     public let worker: WorkerEnvironmentMetadata?
 
     public init(
@@ -2047,6 +2056,7 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
         sessionhost: Bool? = nil,
         trust: String? = nil,
         capabilities: [String]? = nil,
+        desktop: Bool? = nil,
         worker: WorkerEnvironmentMetadata? = nil)
     {
         self.id = id
@@ -2057,6 +2067,7 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
         self.sessionhost = sessionhost
         self.trust = trust
         self.capabilities = capabilities
+        self.desktop = desktop
         self.worker = worker
     }
 
@@ -2069,6 +2080,7 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
         case sessionhost = "sessionHost"
         case trust
         case capabilities
+        case desktop
         case worker
     }
 }
@@ -2116,6 +2128,7 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
     public let sessionhost: Bool?
     public let trust: String?
     public let capabilities: [String]?
+    public let desktop: Bool?
     public let worker: WorkerEnvironmentMetadata?
 
     public init(
@@ -2127,6 +2140,7 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
         sessionhost: Bool? = nil,
         trust: String? = nil,
         capabilities: [String]? = nil,
+        desktop: Bool? = nil,
         worker: WorkerEnvironmentMetadata? = nil)
     {
         self.id = id
@@ -2137,6 +2151,7 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
         self.sessionhost = sessionhost
         self.trust = trust
         self.capabilities = capabilities
+        self.desktop = desktop
         self.worker = worker
     }
 
@@ -2149,6 +2164,7 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
         case sessionhost = "sessionHost"
         case trust
         case capabilities
+        case desktop
         case worker
     }
 }
@@ -2278,6 +2294,58 @@ public struct ProjectSummary: Codable, Sendable {
         case originurl = "originUrl"
         case checkouts
         case lastusedat = "lastUsedAt"
+    }
+}
+
+public struct DesktopObserveResult: Codable, Sendable {
+    public let transport: String
+    public let wspath: String
+    public let expiresatms: Int
+    public let control: Bool
+    public let vncpassword: String?
+    public let auth: String?
+
+    public init(
+        transport: String,
+        wspath: String,
+        expiresatms: Int,
+        control: Bool,
+        vncpassword: String? = nil,
+        auth: String? = nil)
+    {
+        self.transport = transport
+        self.wspath = wspath
+        self.expiresatms = expiresatms
+        self.control = control
+        self.vncpassword = vncpassword
+        self.auth = auth
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case transport
+        case wspath = "wsPath"
+        case expiresatms = "expiresAtMs"
+        case control
+        case vncpassword = "vncPassword"
+        case auth
+    }
+}
+
+public struct DesktopLaunchParams: Codable, Sendable {
+    public let source: [String: AnyCodable]
+    public let app: WorkerDesktopAppId
+
+    public init(
+        source: [String: AnyCodable],
+        app: WorkerDesktopAppId)
+    {
+        self.source = source
+        self.app = app
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case source
+        case app
     }
 }
 
@@ -17908,17 +17976,20 @@ public struct DevicePairSetupCodeParams: Codable, Sendable {
     public let preferremoteurl: Bool?
     public let includeqr: Bool?
     public let bootstrapprofile: String?
+    public let joinurl: Bool?
 
     public init(
         publicurl: String? = nil,
         preferremoteurl: Bool? = nil,
         includeqr: Bool? = nil,
-        bootstrapprofile: String? = nil)
+        bootstrapprofile: String? = nil,
+        joinurl: Bool? = nil)
     {
         self.publicurl = publicurl
         self.preferremoteurl = preferremoteurl
         self.includeqr = includeqr
         self.bootstrapprofile = bootstrapprofile
+        self.joinurl = joinurl
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -17926,11 +17997,13 @@ public struct DevicePairSetupCodeParams: Codable, Sendable {
         case preferremoteurl = "preferRemoteUrl"
         case includeqr = "includeQr"
         case bootstrapprofile = "bootstrapProfile"
+        case joinurl = "joinUrl"
     }
 }
 
 public struct DevicePairSetupCodeResult: Codable, Sendable {
     public let setupcode: String
+    public let joinurl: String?
     public let qrdataurl: String?
     public let gatewayurl: String
     public let gatewayurls: [String]?
@@ -17942,6 +18015,7 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
 
     public init(
         setupcode: String,
+        joinurl: String? = nil,
         qrdataurl: String? = nil,
         gatewayurl: String,
         gatewayurls: [String]? = nil,
@@ -17952,6 +18026,7 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
         expiresatms: Int? = nil)
     {
         self.setupcode = setupcode
+        self.joinurl = joinurl
         self.qrdataurl = qrdataurl
         self.gatewayurl = gatewayurl
         self.gatewayurls = gatewayurls
@@ -17964,6 +18039,7 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case setupcode = "setupCode"
+        case joinurl = "joinUrl"
         case qrdataurl = "qrDataUrl"
         case gatewayurl = "gatewayUrl"
         case gatewayurls = "gatewayUrls"

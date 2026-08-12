@@ -9,6 +9,7 @@ import {
 import { createServer as createHttpsServer } from "node:https";
 import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
+import { WORKER_PUBLIC_INGRESS_PATH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { isCanvasDocumentHttpPath } from "../canvas/constants.js";
 import { resolveBundledChannelGatewayAuthBypassPaths } from "../channels/plugins/gateway-auth-bypass.js";
@@ -18,6 +19,7 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { parseDevicePairingJoinRequestPath } from "../pairing/join-code.js";
 import {
   getGatewaySuspendAdmissionPhase,
   isGatewayRestartDraining,
@@ -75,6 +77,7 @@ import type { ReadinessChecker, StartupChecker, StartupResult } from "./server/r
 import {
   GATEWAY_WS_CONNECTION_KIND_PROPERTY,
   GATEWAY_WS_PREAUTH_BUDGET_PROPERTY,
+  GATEWAY_WS_WORKER_INGRESS_PROPERTY,
   type GatewayIngressWebSocket,
   type GatewayWsClient,
 } from "./server/ws-types.js";
@@ -131,6 +134,9 @@ const getSessionHistoryHttpModule = createLazyRuntimeModule(
 const getSessionKillHttpModule = createLazyRuntimeModule(() => import("./session-kill-http.js"));
 const getToolsInvokeHttpModule = createLazyRuntimeModule(() => import("./tools-invoke-http.js"));
 const getUserProfilesHttpModule = createLazyRuntimeModule(() => import("./user-profiles-http.js"));
+const getDevicePairingJoinHttpModule = createLazyRuntimeModule(
+  () => import("./device-pairing-join-http.js"),
+);
 const getPluginNodeCapabilityAuthModule = createLazyRuntimeModule(
   () => import("./server/plugin-node-capability-auth.js"),
 );
@@ -398,6 +404,8 @@ export function createGatewayHttpServer(opts: {
   getResolvedAuth?: () => ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
+  /** Strict limiter for the public join-code exchange, including loopback. */
+  joinRateLimiter?: AuthRateLimiter;
   getReadiness?: ReadinessChecker;
   getStartup?: StartupChecker;
   getRuntimeConfig?: () => OpenClawConfig;
@@ -421,6 +429,7 @@ export function createGatewayHttpServer(opts: {
     resolvePluginNodeCapabilityRoute,
     resolvedAuth,
     rateLimiter,
+    joinRateLimiter,
     getReadiness,
     getStartup,
   } = opts;
@@ -549,6 +558,19 @@ export function createGatewayHttpServer(opts: {
         enabled: boolean,
         run: GatewayHttpRequestStage["run"],
       ) => addRequestStage(name, enabled, run, true);
+
+      const devicePairingJoinShortcode = parseDevicePairingJoinRequestPath(scopedRequestPath);
+      if (devicePairingJoinShortcode !== null) {
+        addAdmittedStage("device-pairing-join", true, async () =>
+          (await getDevicePairingJoinHttpModule()).handleDevicePairingJoinHttpRequest({
+            req,
+            res,
+            shortcode: devicePairingJoinShortcode,
+            clientIp: resolveRequestClientIp(req, trustedProxies, allowRealIpFallback),
+            rateLimiter: joinRateLimiter,
+          }),
+        );
+      }
 
       // Before hooks: an operator hooks.path of "/oauth" would otherwise claim
       // this exact GET and 405 every provider redirect. The claim is exact-path
@@ -906,6 +928,7 @@ export function attachGatewayUpgradeHandler(opts: {
   rateLimiter?: AuthRateLimiter;
   /** Optional logger for error diagnostics. */
   log?: { warn: (msg: string) => void };
+  workerIngressEnabled?: boolean;
   desktopSessionRegistry?: DesktopSessionRegistry;
 }) {
   const {
@@ -938,6 +961,31 @@ export function attachGatewayUpgradeHandler(opts: {
       }
       const resolvedAuthLocal = getResolvedAuth();
       const requestPath = scopedNodeCapability.pathname;
+      if (requestPath === WORKER_PUBLIC_INGRESS_PATH) {
+        if (!opts.workerIngressEnabled) {
+          writeGatewayUpgradeServiceUnavailable(socket, "Worker websocket ingress unavailable");
+          socket.destroy();
+          return;
+        }
+        try {
+          handleBudgetedGatewayWebSocketUpgrade({
+            req,
+            socket,
+            head,
+            wss,
+            preauthConnectionBudget,
+            preauthBudgetKey: requestClientIp,
+            ingressName: "Worker",
+            prepareSocket: (workerSocket) => {
+              workerSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] = "worker";
+              workerSocket[GATEWAY_WS_WORKER_INGRESS_PROPERTY] = "public";
+            },
+          });
+        } catch {
+          throw new Error("public worker websocket upgrade failed");
+        }
+        return;
+      }
       const pathContext = resolvePluginRoutePathContext(requestPath);
       const nodeCapability = resolvePluginNodeCapabilityRoute?.(pathContext);
       if (nodeCapability) {
@@ -1070,6 +1118,7 @@ export function attachWorkerGatewayUpgradeHandler(params: {
         prepareSocket: (workerSocket) => {
           workerSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] = "worker";
           workerSocket[GATEWAY_WS_PREAUTH_BUDGET_PROPERTY] = params.preauthConnectionBudget;
+          workerSocket[GATEWAY_WS_WORKER_INGRESS_PROPERTY] = "loopback";
         },
       });
     } catch (error) {

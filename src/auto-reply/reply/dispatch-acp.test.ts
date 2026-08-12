@@ -3086,6 +3086,61 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(dispatcherCall(dispatcher.sendFinalReply).text).toBe("Visible.  Done.");
   });
 
+  it.each([
+    {
+      expectedText: "Private ACP speech.",
+      ttsReply: { text: "Private ACP speech." },
+      finalReply: {},
+      streamedText: "[[tts:text]]Private ACP speech.[[/tts:text]]",
+    },
+    {
+      expectedText: undefined,
+      ttsReply: {
+        text: "Private ACP speech.",
+        mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+        audioAsVoice: true,
+      },
+      finalReply: {
+        mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+        audioAsVoice: true,
+      },
+      streamedText: "[[tts:text]]Private ACP speech.[[/tts:text]]",
+    },
+    {
+      expectedText: "Visible ACP answer. ",
+      ttsReply: { text: "Visible ACP answer." },
+      finalReply: undefined,
+      streamedText: "Visible ACP answer. [[tts:text]]Private speech.[[/tts:text]]",
+    },
+  ])("keeps tagged ACP TTS delivery single for $streamedText", async (testCase) => {
+    setReadyAcpResolution();
+    queueTtsReplies(testCase.ttsReply as MockTtsReply);
+    mockVisibleTextTurn(testCase.streamedText);
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      cfg: createAcpTestConfig({
+        acp: { enabled: true, stream: { deliveryMode: "live" } },
+        tts: { auto: "tagged" },
+      }),
+      dispatcher,
+      ctxOverrides: { Provider: "telegram", Surface: "telegram" },
+    });
+
+    const blockReply = vi.mocked(dispatcher.sendBlockReply).mock.calls[0]?.[0];
+    const deliveredPayload = testCase.finalReply
+      ? dispatcherCall(dispatcher.sendFinalReply)
+      : blockReply;
+    expect(deliveredPayload?.text).toBe(testCase.expectedText);
+    if (testCase.finalReply) {
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+      expect(deliveredPayload).toMatchObject(testCase.finalReply);
+    } else {
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    }
+  });
+
   it("falls back to Telegram ACP text when a routed captioned voice is suppressed", async () => {
     setReadyAcpResolution();
     ttsCapabilityMocks.captionedFinalText = true;

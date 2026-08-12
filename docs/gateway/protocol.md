@@ -275,17 +275,22 @@ go through normal pairing and scope-upgrade checks.
 
 ### Worker role and closed protocol
 
-Cloud workers use a dedicated loopback ingress through the gateway-owned,
-host-key-pinned SSH tunnel. It accepts only worker identity and never dispatches
-general auth, node events, operator RPCs, or plugin methods. A strict `connect`
-verifies a hash-at-rest, short-lived credential bound to the environment, bundle
-hash, owner epoch, RPC-set version, expiry, and one nullable session; it
-separately checks the current version and feature set. Success returns minimal
-`worker-hello-ok`; feature negotiation is independent of the general protocol
-version. Frames stay under 64 KiB, except a negotiated `worker.inference.start`
-frame may be up to 25 MiB. The closed allowlist contains `worker.heartbeat`,
-`worker.transcript.commit`, `worker.live-event`, `worker.inference.start`, and
-`worker.inference.cancel`.
+Workers use a closed protocol through either the public
+`/__openclaw__/worker` WebSocket path on the main TLS endpoint or the dedicated
+loopback ingress reached through the gateway-owned, host-key-pinned SSH tunnel.
+The route selects worker mode before reading frames, so it never dispatches
+general auth, node events, operator RPCs, or plugin methods. Public admission
+shares the main per-client pre-auth budget and authentication rate limiter; its
+wire errors collapse credential and environment details to
+`admission-rejected`, while trusted gateway diagnostics retain the internal
+reason. A strict `connect` verifies a hash-at-rest, short-lived credential bound
+to the environment, bundle hash, owner epoch, RPC-set version, expiry, and one
+nullable session; it separately checks the current version and feature set.
+Success returns minimal `worker-hello-ok`; feature negotiation is independent of
+the general protocol version. Frames stay under 64 KiB, except a negotiated
+`worker.inference.start` frame may be up to 25 MiB. The closed allowlist contains
+`worker.heartbeat`, `worker.transcript.commit`, `worker.live-event`,
+`worker.inference.start`, and `worker.inference.cancel`.
 
 Transcript commits use owner-epoch fencing, a gateway-owned session binding,
 base-leaf compare-and-swap, and durable sequence replay; the gateway generates

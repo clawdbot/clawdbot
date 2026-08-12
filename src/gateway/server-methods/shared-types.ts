@@ -341,6 +341,8 @@ type GatewayResidentBridgeContext = {
   }) => Promise<HealthSummary>;
   /** Durable cloud-worker lifecycle; absent from lightweight in-process contexts. */
   workerEnvironmentService?: WorkerEnvironmentServiceContract;
+  /** Gateway-host desktop acquisition and observation; present only after enabled startup. */
+  hostDesktopService?: import("../desktop/host-source.js").HostDesktopService;
   /** Durable per-session worker placement; absent only from lightweight in-process contexts. */
   workerSessionPlacementService?: WorkerSessionPlacementReader &
     Partial<WorkerSessionPlacementRetirementService>;

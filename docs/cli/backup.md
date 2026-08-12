@@ -1,8 +1,9 @@
 ---
-summary: "CLI reference for `openclaw backup` (archives and SQLite snapshots)"
+summary: "CLI reference for `openclaw backup` (archives, SQLite snapshots, and Git history)"
 read_when:
   - You want a first-class backup archive for local OpenClaw state
   - You need a compact, verified snapshot of one OpenClaw SQLite database
+  - You want scheduled, versioned database backups in an operator-owned Git repository
   - You want to preview which paths would be included before reset or uninstall
   - You want to restore from a `.tar.gz` archive previously created by `openclaw backup`
 title: "Backup"
@@ -26,6 +27,13 @@ openclaw backup sqlite list --repository ~/Backups/openclaw-sqlite
 openclaw backup sqlite verify ~/Backups/openclaw-sqlite/<snapshot-id>
 openclaw backup sqlite verify ~/Backups/openclaw-sqlite/<snapshot-id> --scratch ~/Private/openclaw-scratch
 openclaw backup sqlite restore ~/Backups/openclaw-sqlite/<snapshot-id> --target ./restored/openclaw.sqlite
+openclaw backup git init --repository ~/Backups/openclaw-git --remote <private-git-url>
+openclaw backup git create --repository ~/Backups/openclaw-git --all --push
+openclaw backup git log --repository ~/Backups/openclaw-git
+openclaw backup git verify --repository ~/Backups/openclaw-git --global
+openclaw backup git restore --repository ~/Backups/openclaw-git --agent main --target ./restored/agent.sqlite
+openclaw backup enable --repository ~/Backups/openclaw-git --every 24h --push
+openclaw backup disable
 ```
 
 Archive `create` and `verify`, plus SQLite `create`, `list`, `verify`, and
@@ -79,6 +87,115 @@ Snapshot creation applies the same owner, ACL, ancestor, and path-identity check
 Restore repeats verification and writes only to a fresh target. It refuses an existing target, `-wal`, `-shm`, or `-journal` sidecar and never performs an in-place replacement of a live OpenClaw database. The target parent has the same path-security requirements as verification scratch. Activating a restored database remains an explicit offline operator step.
 
 Snapshot repositories are local directories. Scheduling, upload, retention, incremental WAL bundles, failover, and restore-on-boot behavior are intentionally outside this command.
+
+## Versioned Git backups
+
+`openclaw backup git` stores deterministic, per-table JSONL dumps in a plain Git repository owned by the operator. One repository can hold the shared database and every per-agent database:
+
+```text
+global/manifest.json
+global/schema.sql
+global/tables/<table>.jsonl
+agents/<agentId>/manifest.json
+agents/<agentId>/schema.sql
+agents/<agentId>/tables/<table>.jsonl
+```
+
+Initialize the repository, then create a snapshot of all registered databases:
+
+```bash
+openclaw backup git init --repository ~/Backups/openclaw-git --remote <private-git-url>
+openclaw backup git create --repository ~/Backups/openclaw-git --all --push
+```
+
+The repository root must be owned by the current user and must not be group- or
+world-writable. OpenClaw checks this when initializing or adopting a repository
+and before every create. On POSIX systems, repair unsafe permissions with
+`chmod 700 <repository>` after confirming its ownership.
+
+The repository must be dedicated to OpenClaw backups. An existing `global/` or
+`agents/<agentId>/` scope is backup-owned only when it is empty or contains a
+valid schema-version-1 `manifest.json`. OpenClaw refuses to replace any other
+scope. With `--all`, it validates every existing entry under `agents/` before
+removing stale backup-owned agent scopes, so an unowned entry aborts the cleanup
+before anything is deleted.
+
+You can also select `--global`, repeat `--agent <id>`, or combine the shared database with selected agents. Snapshot creation uses the same online backup, sanitizer, `VACUUM`, owner validation, and integrity checks as `backup sqlite create`; it never reads live SQLite files directly. Rows and schema entries have deterministic ordering, and integers and blobs use lossless encodings. The command creates one commit named `openclaw backup <ISO8601>`. If the database content is unchanged, it prints `no changes` and creates no commit.
+
+Git staging is restricted to the backup-owned `global` and `agents` paths;
+unrelated files elsewhere in an adopted repository are never staged.
+
+`--push` pushes the current branch to `origin`. A push failure after a successful local commit is a warning and does not discard or mark the local backup as failed.
+
+<Warning>
+  Git history is durable. Without `--exclude-secrets`, snapshots include
+  credential material and any pushed remote must be private.
+
+`src/state/secret-state-tables.ts` is the source of truth for redaction. At this revision, `--exclude-secrets` omits these shared-state tables:
+
+- `audit_identity_keys`
+- `auth_profile_state`
+- `auth_profile_stores`
+- `apns_registrations`
+- `channel_ingress_events`
+- `channel_pairing_requests`
+- `clawhub_promotion_claims`
+- `device_auth_tokens`
+- `device_bootstrap_tokens`
+- `device_identities`
+- `device_pairing_join_codes`
+- `device_pairing_paired`
+- `gateway_origin_device_tokens`
+- `mcp_oauth_pending_authorizations`
+- `mcp_oauth_stores`
+- `native_hook_relay_bridges`
+- `node_host_config`
+- `secret_store_entries`
+- `web_push_subscriptions`
+- `web_push_vapid_keys`
+- `worker_environment_credentials`
+
+It omits these per-agent tables:
+
+- `auth_profile_state`
+- `auth_profile_store`
+- `session_suggestions`
+
+Restore reports the omitted tables so a redacted snapshot cannot be mistaken
+for a complete credential backup.
+</Warning>
+
+Inspect or verify history without changing the live databases:
+
+```bash
+openclaw backup git log --repository ~/Backups/openclaw-git --limit 20
+openclaw backup git verify --repository ~/Backups/openclaw-git --ref <commit> --global
+openclaw backup git verify --repository ~/Backups/openclaw-git --ref <commit> --agent main
+```
+
+Verification restores the selected snapshot into private scratch space, checks each table's row count and SHA-256, runs `PRAGMA integrity_check` and `PRAGMA foreign_key_check`, and removes the scratch copy. Restore writes only to a fresh target and refuses existing `-wal`, `-shm`, and `-journal` sidecars:
+
+```bash
+openclaw backup git restore --repository ~/Backups/openclaw-git --ref <commit> --global --target ./restored/openclaw.sqlite
+```
+
+Restore rebuilds content-backed FTS5 indexes after loading their content tables. It deliberately omits the derived `session_transcript_index_state` projection so Gateway startup reconciliation rebuilds transcript search. `vec0` virtual tables are not materialized because the extension is unavailable in the restore process; memory indexing recreates them and schedules a full reindex.
+
+## Schedule backups
+
+Provision one Gateway-owned automation with a fixed name:
+
+```bash
+openclaw backup enable --repository ~/Backups/openclaw-git --every 24h --push
+```
+
+The default scope is every database. Use `--global-only` or `--agent <id>` to narrow it, and add `--exclude-secrets` for a redacted history. Pushed schedules (`--push`) redact credential-bearing tables by default because an unattended recurring push retains them durably in remote history; pass `--include-secrets` for explicit full-fidelity remote backups (restores from redacted history need device re-pairing and provider re-authentication). `--push` also requires the repository to already have an `origin` remote. Re-running `backup enable` updates the existing automation instead of creating a duplicate. `openclaw backup disable` removes it; disabling an already-missing job is a successful no-op. Backup scheduling currently requires a local Gateway because the command job runs on the Gateway host; for a remote Gateway, create the cron job manually with `openclaw cron add`.
+
+## Recorded runs and freshness
+
+Every real archive, SQLite snapshot, and Git create attempt records a compact outcome in the existing shared state database. Dry runs are not recorded. The log retains the newest 200 attempts, so frequent schedules remain bounded.
+
+`openclaw status` shows one `Backups` overview row, and `openclaw status --json` includes the latest attempt and latest successful run. `openclaw doctor` prints an informational hint when no successful backup is recorded or the newest successful backup is more than 14 days old. Recording is best-effort: a record-write failure prints a warning but never changes a successful backup into a failed command.
 
 ## What gets backed up
 

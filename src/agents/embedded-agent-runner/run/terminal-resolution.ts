@@ -341,7 +341,8 @@ export async function resolveEmbeddedRunTerminal(input: {
   if (
     !emptyAssistantReplyIsSilent &&
     !settledTurnFinalizationAttempted &&
-    input.attemptCompactionCount > 0 &&
+    (input.attemptCompactionCount > 0 ||
+      attempt.currentAttemptAssistant?.providerReplay?.type === "openai-responses-compaction") &&
     payloadCount === 0 &&
     !terminalInterrupted &&
     !promptError &&

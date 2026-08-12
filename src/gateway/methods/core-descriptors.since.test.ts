@@ -96,6 +96,8 @@ const CURRENT_TRAIN_METHODS = [
   "secrets.store.delete",
   "users.prefs.get",
   "users.prefs.set",
+  "desktop.observe",
+  "desktop.launch",
 ] as const;
 
 describe("core gateway method release trains", () => {

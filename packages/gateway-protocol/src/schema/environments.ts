@@ -73,6 +73,7 @@ function createEnvironmentSummarySchema() {
     sessionHost: Type.Optional(Type.Boolean()),
     trust: Type.Optional(EnvironmentTrustSchema),
     capabilities: Type.Optional(Type.Array(NonEmptyString)),
+    desktop: Type.Optional(Type.Boolean()),
     worker: Type.Optional(WorkerEnvironmentMetadataSchema),
   });
 }

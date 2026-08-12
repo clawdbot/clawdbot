@@ -33082,14 +33082,6 @@
       "id": "native.apple.2a5e0e9e073b8db1"
     },
     {
-      "kind": "ui-modifier",
-      "line": 115,
-      "path": "apps/macos/Sources/OpenClaw/GatewayDiscoveryMenu.swift",
-      "source": "Discover OpenClaw gateways on your LAN",
-      "surface": "apple",
-      "id": "native.apple.66ad783199ef9729"
-    },
-    {
       "kind": "conditional-branch",
       "line": 220,
       "path": "apps/macos/Sources/OpenClaw/GatewayEnvironment.swift",
