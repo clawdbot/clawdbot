@@ -65,6 +65,7 @@ function assertAgentsDeleteResult([outputPath]) {
     [parsed.workspace, process.env.SHARED_WORKSPACE, "workspace"],
     [parsed.workspaceRetained, true, "workspaceRetained"],
     [parsed.workspaceRetainedReason, "shared", "workspaceRetainedReason"],
+    [parsed.transport, "gateway", "transport"],
   ];
   for (const [actual, expected, label] of comparisons) {
     assert(actual === expected, `${label} mismatch: ${JSON.stringify(actual)}`);
