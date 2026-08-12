@@ -1,7 +1,7 @@
 // Creates temporary OpenClaw directories for runtime scratch work.
 
 /** Preferred shared OpenClaw temp root on POSIX systems when ownership and permissions are safe. */
-export const DEFAULT_POSIX_TMP_ROOT = "/tmp/openclaw";
+export const DEFAULT_POSIX_TMP_ROOT = "/tmp/opencrustacean";
 
 type SecureDirStat = {
   isDirectory(): boolean;
@@ -59,9 +59,9 @@ export function resolvePreferredOpenClawTmpDir(
   return loadResolveSecureTempRoot()({
     ...options,
     preferredDir: DEFAULT_POSIX_TMP_ROOT,
-    fallbackPrefix: "openclaw",
-    warningPrefix: "[openclaw]",
-    unsafeFallbackLabel: "OpenClaw temp dir",
+    fallbackPrefix: "opencrustacean",
+    warningPrefix: "[opencrustacean]",
+    unsafeFallbackLabel: "OpenCrustacean temp dir",
     skipPreferredOnWindows: true,
   });
 }
