@@ -23,7 +23,9 @@ async function readFilesystemEntryOrMissing<T>(
     if (hasErrnoCode(error, "ENOENT")) {
       return null;
     }
-    throw new Error(`${shortenHomePath(filePath)}: ${formatErrorMessage(error)}`);
+    throw new Error(`${shortenHomePath(filePath)}: ${formatErrorMessage(error)}`, {
+      cause: error,
+    });
   }
 }
 
@@ -84,7 +86,7 @@ async function maybeRemoveLegacyUsageCostCacheFiles(params: {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
 }): Promise<void> {
-  const files = await detectLegacyUsageCostCacheFiles(params).catch((error) => {
+  const files = await detectLegacyUsageCostCacheFiles(params).catch((error: unknown) => {
     const command = params.shouldRepair ? "openclaw doctor --fix" : "openclaw doctor";
     const action = params.shouldRepair ? "scan and cleanup" : "scan";
     note(
