@@ -603,6 +603,7 @@ Live is opt-in, so there is no fixed "CI model list." `OPENCLAW_LIVE_MODELS=mode
 | `openrouter/minimax/minimax-m2.7`             |            |
 | `opencode-go/glm-5`                           |            |
 | `openrouter/ai21/jamba-large-1.7`             |            |
+| `xai/grok-4.6`                                |            |
 | `xai/grok-4.5`                                |            |
 | `xai/grok-4.20-0309-reasoning`                |            |
 | `zai/glm-5.1`                                 |            |
