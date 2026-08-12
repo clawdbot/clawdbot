@@ -191,7 +191,7 @@
   left: calc(50% - 200px);
   padding: 16px 20px;
   background: var(--accent-subtle);
-  border: 1px solid rgba(255, 92, 92, 0.12);
+  border: 1px solid rgba(74, 222, 128, 0.12);
   border-radius: 20px;
   display: flex;
   flex-direction: column;
@@ -235,7 +235,7 @@
   position: absolute;
   border-radius: 50%;
   background: var(--accent-subtle);
-  border: 1px solid rgba(255, 92, 92, 0.1);
+  border: 1px solid rgba(74, 222, 128, 0.1);
   animation: dreams-bubble-float 6s ease-in-out infinite;
 }
 

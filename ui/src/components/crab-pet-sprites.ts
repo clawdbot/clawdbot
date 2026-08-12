@@ -184,7 +184,7 @@ const MECHA_PLATES = svg`
       <circle cx="60" cy="64" r="1.4" />
       <circle cx="84" cy="61" r="1.4" />
     </g>
-    <circle class="crab-led" cx="89" cy="7" r="3" fill="#ff4444" />
+    <circle class="crab-led" cx="89" cy="7" r="3" fill="#4ade80" />
   </g>
 `;
 
