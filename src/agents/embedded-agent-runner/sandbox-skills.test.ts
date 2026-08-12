@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createSyntheticSourceInfo } from "../../skills/loading/skill-contract.js";
+import { createSyntheticSourceInfo, escapeSkillXml } from "../../skills/loading/skill-contract.js";
 import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import type { SkillSnapshot } from "../../skills/types.js";
@@ -126,6 +126,64 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     expect(resolved.skillsPromptWorkspaceDir).toBe("/workspace/.openclaw/sandbox-skills");
     expect(resolved.skillsWorkspaceDir).toBe("/state/sandbox-skills");
     expect(resolved.workspaceOnly).toBe(true);
+  });
+
+  it("remaps XML-escaped special-character locations in published sandbox catalogs", () => {
+    const hostFilePath = "/state/sandbox-skills/skills/demo&alpha/SKILL.md";
+    const hostBaseDir = "/state/sandbox-skills/skills/demo&alpha";
+    const containerFilePath = "/workspace/.openclaw/sandbox-skills/skills/demo&alpha/SKILL.md";
+    const materializedSnapshot: SkillSnapshot = {
+      prompt: [
+        "<available_skills>",
+        "  <skill>",
+        "    <name>demo&amp;alpha</name>",
+        "    <description>Demo &amp; alpha</description>",
+        `    <location>${escapeSkillXml(hostFilePath)}</location>`,
+        "  </skill>",
+        "</available_skills>",
+      ].join("\n"),
+      skills: [{ name: "demo&alpha", skillKey: "demo&alpha" }],
+      resolvedSkills: [
+        {
+          name: "demo&alpha",
+          description: "Demo & alpha",
+          filePath: hostFilePath,
+          baseDir: hostBaseDir,
+          source: "openclaw-workspace",
+          sourceInfo: createSyntheticSourceInfo(hostFilePath, {
+            source: "openclaw-workspace",
+            baseDir: hostBaseDir,
+          }),
+          disableModelInvocation: false,
+        },
+      ],
+      version: 8,
+    };
+
+    const resolved = resolveSandboxSkillRuntimeInputs({
+      sandbox: {
+        enabled: true,
+        containerWorkdir: "/workspace",
+        skillsWorkspaceDir: "/state/sandbox-skills",
+        skillsSnapshot: materializedSnapshot,
+        workspaceAccess: "rw",
+      },
+      effectiveWorkspace: "/workspace",
+      skillsSnapshot: snapshot,
+    });
+    const prompt = resolveSkillsPrompt({
+      skillsSnapshot: resolved.skillsSnapshot,
+      workspaceDir: resolved.skillsPromptWorkspaceDir,
+    });
+
+    expect(resolved.skillsSnapshot?.resolvedSkills?.[0]?.filePath).toBe(containerFilePath);
+    expect(resolved.skillsSnapshot?.prompt).toContain(
+      `<location>${escapeSkillXml(containerFilePath)}</location>`,
+    );
+    expect(resolved.skillsSnapshot?.prompt).not.toContain(escapeSkillXml(hostFilePath));
+    expect(prompt).toContain(`<location>${escapeSkillXml(containerFilePath)}</location>`);
+    expect(prompt).not.toContain("/state/sandbox-skills/");
+    expect(prompt).not.toContain(hostSkillPath);
   });
 
   it("falls back to the effective workspace for older sandbox contexts", () => {

@@ -5,6 +5,7 @@
  * copies instead of reusing host-path snapshots.
  */
 import path from "node:path";
+import { escapeSkillXml } from "../../skills/loading/skill-contract.js";
 import type { SkillEligibilityContext, SkillSnapshot, SkillUsagePath } from "../../skills/types.js";
 import type { SkillEntry } from "../../skills/types.js";
 import type { SandboxContext } from "../sandbox/types.js";
@@ -151,11 +152,24 @@ function remapMaterializedSkillsSnapshotForPrompt(params: {
     if (!hostPath || !mappedPath || hostPath === mappedPath) {
       continue;
     }
-    prompt = prompt.replaceAll(hostPath, mappedPath);
+    // Available-skills catalogs XML-escape <location> values, so remap must
+    // substitute the escaped host path with the escaped container path.
+    const replacements: Array<[string, string]> = [
+      [escapeSkillXml(hostPath), escapeSkillXml(mappedPath)],
+      [hostPath, mappedPath],
+    ];
     const hostPosix = hostPath.replaceAll("\\", "/");
     const mappedPosix = mappedPath.replaceAll("\\", "/");
     if (hostPosix !== hostPath) {
-      prompt = prompt.replaceAll(hostPosix, mappedPosix);
+      replacements.push(
+        [escapeSkillXml(hostPosix), escapeSkillXml(mappedPosix)],
+        [hostPosix, mappedPosix],
+      );
+    }
+    for (const [from, to] of replacements) {
+      if (from && from !== to) {
+        prompt = prompt.replaceAll(from, to);
+      }
     }
   }
   return {
