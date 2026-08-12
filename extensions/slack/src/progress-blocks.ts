@@ -256,7 +256,7 @@ function buildSlackProgressStreamChunks(params: {
   return chunks;
 }
 
-export type SlackProgressCardState = "working" | "success" | "error";
+type SlackProgressCardState = "working" | "success" | "error";
 type SlackProgressDiffStat = NonNullable<ChannelProgressDraftCompositorSnapshot["diffStat"]>;
 
 function formatDiffStat(diffStat: SlackProgressDiffStat | undefined): string | undefined {
