@@ -344,6 +344,11 @@ describe("openclaw launcher", () => {
       JSON.stringify({ rootHelpText: "PRECOMPUTED help\n" }),
       "utf8",
     );
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      "throw new Error('root help fast path must not import runtime resource owners');\n",
+      "utf8",
+    );
 
     const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs"), "--help"], {
       cwd: fixtureRoot,
@@ -364,6 +369,11 @@ describe("openclaw launcher", () => {
     await fs.writeFile(
       path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
       JSON.stringify({ [params.metadataKey]: `PRECOMPUTED ${params.command} help\n` }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      "throw new Error('command help fast path must not import runtime resource owners');\n",
       "utf8",
     );
 
@@ -388,6 +398,11 @@ describe("openclaw launcher", () => {
       await fs.writeFile(
         path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
         JSON.stringify({ subcommandHelpText: { [command]: `PRECOMPUTED ${command} help\n` } }),
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(fixtureRoot, "dist", "entry.js"),
+        "throw new Error('subcommand help fast path must not import runtime resource owners');\n",
         "utf8",
       );
 
