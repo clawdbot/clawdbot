@@ -121,20 +121,39 @@ function rejectsNestedKey(
  * against the generated schema. Presence checks alone would pass on a leaf typed
  * as something other than boolean, which real config loading would refuse.
  */
+/** Every `healthMonitor` sub-schema reachable through composition, not just the first. */
+function collectHealthMonitorSchemas(schema: JsonSchemaLike | undefined): JsonSchemaLike[] {
+  if (!schema) {
+    return [];
+  }
+  const direct = asSchema(schema.properties?.healthMonitor);
+  const branches = [
+    ...(schema.anyOf ?? []),
+    ...(schema.oneOf ?? []),
+    ...(schema.allOf ?? []),
+  ].flatMap((branch) => collectHealthMonitorSchemas(asSchema(branch)));
+  return direct ? [direct, ...branches] : branches;
+}
+
 function acceptsDocumentedOverride(schema: JsonSchemaLike | undefined, cacheKey: string): boolean {
   // Validate the healthMonitor sub-schema rather than the channel object: a
   // channel schema has its own required credentials, so a partial object would
-  // fail for reasons unrelated to this leaf.
-  const healthMonitor = propertySchema(schema, "healthMonitor");
-  if (!healthMonitor) {
+  // fail for reasons unrelated to this leaf. Every composed occurrence has to
+  // accept the value, since allOf is an intersection and taking the first match
+  // would miss a sibling branch that types the leaf differently.
+  const candidates = collectHealthMonitorSchemas(schema);
+  if (candidates.length === 0) {
     return false;
   }
-  return validateJsonSchemaValue({
-    cacheKey: `health-monitor-contract.${cacheKey}`,
-    schema: healthMonitor as Parameters<typeof validateJsonSchemaValue>[0]["schema"],
-    value: { enabled: false },
-    cache: false,
-  }).ok;
+  return candidates.every(
+    (candidate, index) =>
+      validateJsonSchemaValue({
+        cacheKey: `health-monitor-contract.${cacheKey}.${index}`,
+        schema: candidate as Parameters<typeof validateJsonSchemaValue>[0]["schema"],
+        value: { enabled: false },
+        cache: false,
+      }).ok,
+  );
 }
 
 function schemaFor(channelId: string): JsonSchemaLike | undefined {
@@ -166,6 +185,41 @@ describe("channel healthMonitor contract", () => {
 
     expect(propertySchema(composed, "healthMonitor")).toBeDefined();
     expect(rejectsNestedKey(composed, "healthMonitor", "enabled")).toBe(true);
+  });
+
+  it("rejects the documented value when a sibling branch types the leaf differently", () => {
+    // allOf is an intersection, so a second branch that requires a string for
+    // `enabled` refuses the documented boolean even though the first branch
+    // accepts it. Taking the first matching branch would report acceptance.
+    const conflicting: JsonSchemaLike = {
+      allOf: [
+        {
+          properties: {
+            healthMonitor: {
+              type: "object",
+              properties: { enabled: { type: "boolean" } },
+              additionalProperties: false,
+            },
+          },
+          additionalProperties: false,
+        },
+        {
+          properties: {
+            healthMonitor: {
+              type: "object",
+              properties: { enabled: { type: "string" } },
+              additionalProperties: false,
+            },
+          },
+          additionalProperties: false,
+        },
+      ],
+    };
+
+    // Key presence alone still reports the leaf as accepted, which is why the
+    // value check has to look at every branch.
+    expect(rejectsNestedKey(conflicting, "healthMonitor", "enabled")).toBe(false);
+    expect(acceptsDocumentedOverride(conflicting, "conflicting-branches")).toBe(false);
   });
 
   it("treats a closed sibling that omits the parent as refusing the leaf", () => {
