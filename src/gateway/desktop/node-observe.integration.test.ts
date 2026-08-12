@@ -13,6 +13,12 @@ import { createDesktopSessionRegistry } from "./session-registry.js";
 const VERSION = Buffer.from("RFB 003.008\n", "ascii");
 const cleanups: Array<() => Promise<void>> = [];
 
+function handleExpectedPeerTeardownError(error: NodeJS.ErrnoException): void {
+  if (error.code !== "ECONNRESET" && error.code !== "EPIPE") {
+    throw error;
+  }
+}
+
 afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
 });
@@ -86,6 +92,8 @@ describe("paired node desktop observe integration", () => {
     const rfbServer = net.createServer((socket) => {
       rfbPeers.add(socket);
       socket.once("close", () => rfbPeers.delete(socket));
+      // Session teardown destroys client sockets; the synthetic server owns the matching resets.
+      socket.on("error", handleExpectedPeerTeardownError);
       connectionCount += 1;
       const connectionIndex = connectionCount;
       const reader = new SocketReader(socket);

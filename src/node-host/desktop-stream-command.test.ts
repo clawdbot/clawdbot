@@ -7,6 +7,12 @@ import { invokeNodeDesktopStream } from "./desktop-stream-command.js";
 const TICKET = "a".repeat(48);
 const cleanups: Array<() => Promise<void>> = [];
 
+function handleExpectedPeerTeardownError(error: NodeJS.ErrnoException): void {
+  if (error.code !== "ECONNRESET" && error.code !== "EPIPE") {
+    throw error;
+  }
+}
+
 afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
 });
@@ -46,6 +52,8 @@ describe("node desktop stream command", () => {
     const rfbServer = net.createServer((socket) => {
       rfbPeers.add(socket);
       socket.once("close", () => rfbPeers.delete(socket));
+      // Cancellation destroys the client socket; the synthetic server owns the matching reset.
+      socket.on("error", handleExpectedPeerTeardownError);
       socket.write(Buffer.from("RFB 003.008\n", "ascii"));
       socket.once("data", () => socket.write(Buffer.from([1, 2])));
     });
