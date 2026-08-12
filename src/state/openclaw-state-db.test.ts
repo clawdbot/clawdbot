@@ -3436,16 +3436,20 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const databasePath = materializeCurrentStateDatabase(stateDir);
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const { DatabaseSync } = requireNodeSqlite();
-    const olderV6 = new DatabaseSync(databasePath);
+    const currentSchema = new DatabaseSync(databasePath);
     try {
-      olderV6.exec("DROP INDEX idx_operator_approvals_source_run_resolved;");
-      expect(olderV6.prepare("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+      currentSchema.exec("DROP INDEX idx_operator_approvals_source_run_resolved;");
+      expect(currentSchema.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
     } finally {
-      olderV6.close();
+      currentSchema.close();
     }
 
     const beforeRepair = await openExistingOpenClawStateDatabaseReadOnly(options);
-    expect(beforeRepair?.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+    expect(beforeRepair?.db.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+    });
     beforeRepair?.walMaintenance.close();
 
     const writable = openOpenClawStateDatabase(options);
@@ -3454,11 +3458,15 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         .prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND name = ?")
         .get("idx_operator_approvals_source_run_resolved"),
     ).toEqual({ name: "idx_operator_approvals_source_run_resolved" });
-    expect(writable.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+    expect(writable.db.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+    });
     closeOpenClawStateDatabaseForTest();
 
     const afterRepair = await openExistingOpenClawStateDatabaseReadOnly(options);
-    expect(afterRepair?.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+    expect(afterRepair?.db.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+    });
     afterRepair?.walMaintenance.close();
   });
 
