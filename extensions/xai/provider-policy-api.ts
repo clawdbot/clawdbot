@@ -4,7 +4,7 @@ import type {
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveXaiCatalogEntry } from "./model-definitions.js";
-import { normalizeXaiModelId } from "./model-id.js";
+import { isXaiFrontierModelId, isXaiGrok46ModelId, normalizeXaiModelId } from "./model-id.js";
 import { isXaiProviderId } from "./provider-id.js";
 
 export function resolveThinkingProfile(
@@ -15,10 +15,12 @@ export function resolveThinkingProfile(
     return { levels: [{ id: "off" }], defaultLevel: "off" };
   }
   const modelId = normalizeXaiModelId(ctx.modelId.trim().toLowerCase());
-  const isGrok45 = modelId === "grok-4.5" || modelId.startsWith("grok-4.5-");
-  if (isGrok45) {
+  if (isXaiFrontierModelId(modelId)) {
+    const levels: ProviderThinkingProfile["levels"] = isXaiGrok46ModelId(modelId)
+      ? [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }]
+      : [{ id: "low" }, { id: "medium" }, { id: "high" }];
     return {
-      levels: [{ id: "low" }, { id: "medium" }, { id: "high" }],
+      levels,
       defaultLevel: "high",
     };
   }

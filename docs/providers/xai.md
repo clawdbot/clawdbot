@@ -115,6 +115,7 @@ see [legacy compatibility and moving aliases](#legacy-compatibility-and-moving-a
 
 | Family         | Model ids                                                    |
 | -------------- | ------------------------------------------------------------ |
+| Grok 4.6       | `grok-4.6`                                                   |
 | Grok 4.5       | `grok-4.5` (aliases: `grok-4.5-latest`, `grok-build-latest`) |
 | Grok Build 0.1 | `grok-build-0.1`                                             |
 | Grok 4.3       | `grok-4.3` (aliases: `grok-4.3-latest`, `grok-latest`)       |
@@ -122,9 +123,9 @@ see [legacy compatibility and moving aliases](#legacy-compatibility-and-moving-a
 
 <Tip>
 Use `xai/auto` to follow xAI's authenticated OAuth default, or select a concrete
-id such as `xai/grok-4.5` to remain pinned. API-key setup keeps Grok 4.3 as the
-regional-safe default; `grok-build-0.1` and both dated Grok 4.20 variants remain
-selectable.
+id such as `xai/grok-4.6` to remain pinned. API-key setup keeps Grok 4.3 as the
+regional-safe default; Grok 4.6, Grok 4.5, `grok-build-0.1`, and both dated Grok 4.20 variants
+remain selectable.
 </Tip>
 
 Catalog context and token-cost metadata follows xAI's live
@@ -628,8 +629,9 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
       to disable it.
     - The bundled xAI wrapper strips unsupported contains-count schema bounds
       and unsupported reasoning *effort* payload keys before sending native
-      xAI requests. Grok 4.5 supports low, medium, and
-      high effort (default high). Grok 4.3 supports none, low, medium, and high
+      xAI requests. Grok 4.6 supports low, medium, high, and xhigh effort
+      (default high). Grok 4.5 supports low, medium, and high effort
+      (default high). Grok 4.3 supports none, low, medium, and high
       effort (default low). Other reasoning-capable xAI models do not expose a
       configurable effort control, but still request
       `include: ["reasoning.encrypted_content"]` so prior encrypted reasoning
@@ -659,7 +661,7 @@ OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_TEST_QUIET=1 pnpm test:live -- extensions/xai
 OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_XAI_VIDEO=1 pnpm test:live -- extensions/xai/xai.live.test.ts -t "classic Grok Imagine"
 OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_XAI_VIDEO=1 pnpm test:live -- extensions/xai/xai.live.test.ts -t "Grok Imagine Video 1.5"
 OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_TEST_QUIET=1 pnpm test:live -- extensions/xai/x-search.live.test.ts
-OPENCLAW_LIVE_GATEWAY_MODELS="xai/grok-4.5,xai/grok-build-0.1,xai/grok-4.3,xai/grok-4.20-0309-reasoning,xai/grok-4.20-0309-non-reasoning" OPENCLAW_LIVE_GATEWAY_MAX_MODELS=0 OPENCLAW_LIVE_GATEWAY_SMOKE=0 pnpm test:live -- src/gateway/gateway-models.profiles.live.test.ts
+OPENCLAW_LIVE_GATEWAY_MODELS="xai/grok-4.6,xai/grok-4.5,xai/grok-build-0.1,xai/grok-4.3,xai/grok-4.20-0309-reasoning,xai/grok-4.20-0309-non-reasoning" OPENCLAW_LIVE_GATEWAY_MAX_MODELS=0 OPENCLAW_LIVE_GATEWAY_SMOKE=0 pnpm test:live -- src/gateway/gateway-models.profiles.live.test.ts
 OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_TEST_QUIET=1 OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS=xai pnpm test:live -- test/image-generation.runtime.live.test.ts
 ```
 

@@ -45,6 +45,13 @@ describe("xai provider thinking policy", () => {
     });
   });
 
+  it.each(["xai", "x-ai"])("exposes Grok 4.6 xhigh reasoning for %s", (provider) => {
+    expect(resolveThinkingProfile({ provider, modelId: "grok-4.6" })).toEqual({
+      levels: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }],
+      defaultLevel: "high",
+    });
+  });
+
   it("keeps non-reasoning and non-xai routes off-only", () => {
     expect(
       resolveThinkingProfile({

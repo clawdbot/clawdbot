@@ -4,13 +4,13 @@ import {
   asOptionalRecord,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeXaiModelId } from "./model-id.js";
+import { isXaiFrontierModelId, normalizeXaiModelId } from "./model-id.js";
 
 export const XAI_BASE_URL = "https://api.x.ai/v1";
 export const XAI_DEFAULT_IMAGE_MODEL = "grok-imagine-image";
 export const XAI_IMAGE_MODELS = ["grok-imagine-image", "grok-imagine-image-quality"] as const;
 export const XAI_DEFAULT_CONTEXT_WINDOW = 1_000_000;
-const XAI_GROK_45_CONTEXT_WINDOW = 500_000;
+const XAI_FRONTIER_CONTEXT_WINDOW = 500_000;
 const XAI_CODE_CONTEXT_WINDOW = 256_000;
 export const XAI_DEFAULT_MAX_TOKENS = 64_000;
 export const XAI_DEFAULT_MODEL_ID = "grok-4.3";
@@ -54,7 +54,7 @@ const XAI_GROK_43_COST = {
   cacheWrite: 0,
 } satisfies XaiCost;
 
-const XAI_GROK_45_COST = {
+const XAI_FRONTIER_COST = {
   input: 2,
   output: 6,
   cacheRead: 0.5,
@@ -70,11 +70,18 @@ const XAI_GROK_BUILD_COST = {
 
 const XAI_MODEL_CATALOG_ROWS: readonly XaiCatalogModelRow[] = [
   [
+    "grok-4.6",
+    "Grok 4.6",
+    true,
+    ["text", "image"],
+    { contextWindow: XAI_FRONTIER_CONTEXT_WINDOW, cost: XAI_FRONTIER_COST },
+  ],
+  [
     "grok-4.5",
     "Grok 4.5",
     true,
     ["text", "image"],
-    { contextWindow: XAI_GROK_45_CONTEXT_WINDOW, cost: XAI_GROK_45_COST },
+    { contextWindow: XAI_FRONTIER_CONTEXT_WINDOW, cost: XAI_FRONTIER_COST },
   ],
   [
     "grok-build-0.1",
@@ -128,6 +135,7 @@ const XAI_MODEL_CATALOG: readonly XaiCatalogEntry[] = XAI_MODEL_CATALOG_ROWS.map
 );
 
 const XAI_SELECTABLE_MODEL_IDS = new Set<string>([
+  "grok-4.6",
   "grok-4.5",
   "grok-build-0.1",
   "grok-4.3",
@@ -310,7 +318,7 @@ export function resolveXaiCatalogEntry(modelId: string) {
     });
   }
   if (
-    lower.startsWith("grok-4.5") ||
+    isXaiFrontierModelId(lower) ||
     lower.startsWith("grok-4.3") ||
     lower.startsWith("grok-4.20") ||
     lower.startsWith("grok-4-1") ||
@@ -321,17 +329,17 @@ export function resolveXaiCatalogEntry(modelId: string) {
       name: trimmed,
       reasoning: !lower.includes("non-reasoning"),
       input: ["text", "image"],
-      contextWindow: lower.startsWith("grok-4.5")
-        ? XAI_GROK_45_CONTEXT_WINDOW
+      contextWindow: isXaiFrontierModelId(lower)
+        ? XAI_FRONTIER_CONTEXT_WINDOW
         : XAI_DEFAULT_CONTEXT_WINDOW,
       maxTokens:
-        lower.startsWith("grok-4.5") || lower.startsWith("grok-4.3")
+        isXaiFrontierModelId(lower) || lower.startsWith("grok-4.3")
           ? XAI_DEFAULT_MAX_TOKENS
           : lower.startsWith("grok-4.20")
             ? 30_000
             : XAI_DEFAULT_MAX_TOKENS,
-      cost: lower.startsWith("grok-4.5")
-        ? XAI_GROK_45_COST
+      cost: isXaiFrontierModelId(lower)
+        ? XAI_FRONTIER_COST
         : lower.startsWith("grok-4.3")
           ? XAI_GROK_43_COST
           : lower.startsWith("grok-4.20")
