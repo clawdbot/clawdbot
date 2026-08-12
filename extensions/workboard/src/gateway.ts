@@ -60,7 +60,8 @@ export function registerWorkboardGatewayMethods(params: {
     "workboard.reconciliation.list",
     async ({ params: requestParams, respond }) => {
       try {
-        respond(true, await reconciler.list(requestParams));
+        const page = await reconciler.list(requestParams);
+        respond(true, { ...page, cards: page.cards.map(redactClaimToken) });
       } catch (error) {
         respondError(respond, error);
       }

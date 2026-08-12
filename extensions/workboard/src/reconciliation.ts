@@ -69,10 +69,6 @@ function tenantFor(card: WorkboardCard): string | undefined {
   return card.metadata?.automation?.tenant;
 }
 
-function sourceUpdatedAtFor(card: WorkboardCard): number | undefined {
-  return card.metadata?.lifecycleStatusSourceUpdatedAt;
-}
-
 function isProtected(card: WorkboardCard): boolean {
   return RECONCILIATION_PROTECTED_STATUSES.has(card.status);
 }
@@ -87,10 +83,6 @@ function linkFor(observation: WorkboardReconciliationObservation): WorkboardExte
       ? { title: observation.link.title.trim() }
       : {}),
   };
-}
-
-function result(card: WorkboardCard, applied: boolean, link: WorkboardExternalExecutionLink) {
-  return { card, applied, link } satisfies WorkboardReconciliationApplyResult;
 }
 
 export class WorkboardReconciler {
@@ -126,88 +118,6 @@ export class WorkboardReconciler {
     observation: WorkboardReconciliationObservation,
   ): Promise<WorkboardReconciliationApplyResult> {
     const link = linkFor(observation);
-    const cards = await this.store.list();
-    const duplicate = cards.find(
-      (card) =>
-        tenantFor(card) === link.tenant &&
-        card.metadata?.automation?.idempotencyKey === link.idempotencyKey,
-    );
-    if (duplicate) {
-      return result(duplicate, true, link);
-    }
-
-    const existing = observation.cardId
-      ? await this.store.get(readRequiredString(observation.cardId, "cardId"))
-      : cards.find((card) => card.sourceUrl === link.sourceUrl && tenantFor(card) === link.tenant);
-    if (existing) {
-      if (
-        observation.expectedRevision !== undefined &&
-        observation.expectedRevision !== existing.updatedAt
-      ) {
-        return result(existing, false, link);
-      }
-      if (
-        sourceUpdatedAtFor(existing) !== undefined &&
-        link.sourceUpdatedAt <= sourceUpdatedAtFor(existing)!
-      ) {
-        return result(existing, false, link);
-      }
-      if (isProtected(existing)) {
-        return result(existing, false, link);
-      }
-      const patch = observation.card ?? {};
-      const status = patch.status;
-      const updated = await this.store.update(existing.id, {
-        ...patch,
-        ...(RECONCILIATION_PROTECTED_STATUSES.has(status as WorkboardStatus)
-          ? { status: existing.status }
-          : {}),
-        sourceUrl: link.sourceUrl,
-        tenant: link.tenant,
-        idempotencyKey: link.idempotencyKey,
-        metadata: {
-          ...existing.metadata,
-          lifecycleStatusSourceUpdatedAt: link.sourceUpdatedAt,
-          links: [
-            ...(existing.metadata?.links ?? []),
-            {
-              id: `external:${link.idempotencyKey}`,
-              type: "relates_to",
-              createdAt: Date.now(),
-              url: link.sourceUrl,
-              title: link.title,
-            },
-          ],
-        },
-      });
-      return result(updated, true, link);
-    }
-
-    const card = observation.card ?? {};
-    if (typeof card.title !== "string" || card.title.trim() === "") {
-      throw new Error("card.title is required when creating a card.");
-    }
-    const created = await this.store.create({
-      ...card,
-      ...(RECONCILIATION_PROTECTED_STATUSES.has(card.status as WorkboardStatus)
-        ? { status: "todo" }
-        : {}),
-      sourceUrl: link.sourceUrl,
-      tenant: link.tenant,
-      idempotencyKey: link.idempotencyKey,
-      metadata: {
-        lifecycleStatusSourceUpdatedAt: link.sourceUpdatedAt,
-        links: [
-          {
-            id: `external:${link.idempotencyKey}`,
-            type: "relates_to",
-            createdAt: Date.now(),
-            url: link.sourceUrl,
-            title: link.title,
-          },
-        ],
-      },
-    });
-    return result(created, true, link);
+    return await this.store.applyReconciliation(observation, link);
   }
 }

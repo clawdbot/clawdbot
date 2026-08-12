@@ -43,7 +43,8 @@ describe("workboard gateway methods", () => {
       ),
     } as unknown as OpenClawPluginApi;
 
-    registerWorkboardGatewayMethods({ api, store: new WorkboardStore(createMemoryStore()) });
+    const store = new WorkboardStore(createMemoryStore());
+    registerWorkboardGatewayMethods({ api, store });
 
     expect([...methods.keys()]).toEqual([
       "workboard.cards.list",
@@ -141,6 +142,17 @@ describe("workboard gateway methods", () => {
       cards: [expect.objectContaining({ title: "Investigate queue drift" })],
       boards: [expect.objectContaining({ id: "default", total: 1, active: 1 })],
     });
+
+    const claimedCardId = createRespond.mock.calls[0]?.[1]?.card.id;
+    await store.claim(claimedCardId, { ownerId: "operator", token: "private-claim-token" });
+    const reconciliationRespond = vi.fn();
+    await methods.get("workboard.reconciliation.list")?.handler({
+      params: {},
+      respond: reconciliationRespond,
+    } as never);
+    expect(reconciliationRespond.mock.calls[0]?.[1]?.cards[0]?.metadata?.claim?.token).toBe(
+      "[redacted]",
+    );
 
     const eventsRespond = vi.fn();
     await methods.get("workboard.notifications.events")?.handler({

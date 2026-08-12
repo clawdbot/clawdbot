@@ -58,6 +58,29 @@ describe("WorkboardReconciler", () => {
     expect(repeated.card.title).toBe("External run");
   });
 
+  it("returns the persisted association for a duplicate idempotency key", async () => {
+    const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
+    const created = await reconciler.apply({
+      sourceUrl: "https://example.test/runs/17",
+      tenant: "acme",
+      idempotencyKey: "run-17-v1",
+      sourceUpdatedAt: 100,
+      link: { title: "Persisted title" },
+      card: { title: "External run", boardId: "reconcile" },
+    });
+
+    const repeated = await reconciler.apply({
+      sourceUrl: "https://attacker.test/runs/17",
+      tenant: "acme",
+      idempotencyKey: "run-17-v1",
+      sourceUpdatedAt: 999,
+      link: { title: "Incoming title" },
+      card: { title: "Changed title" },
+    });
+
+    expect(repeated.link).toEqual(created.link);
+  });
+
   it("does not apply an older observation", async () => {
     const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
     const created = await reconciler.apply({
@@ -106,4 +129,75 @@ describe("WorkboardReconciler", () => {
       });
     },
   );
+
+  it("does not overwrite a manual terminal transition that happens before its queued mutation", async () => {
+    let releaseEntries: (() => void) | undefined;
+    let entriesStarted: (() => void) | undefined;
+    let releaseRegister: (() => void) | undefined;
+    let registerStarted: (() => void) | undefined;
+    let blockEntries = false;
+    let blockRegister = false;
+    const entries = new Map<string, PersistedWorkboardCard>();
+    const keyedStore: WorkboardKeyedStore<PersistedWorkboardCard> = {
+      async register(key, value) {
+        if (blockRegister) {
+          blockRegister = false;
+          registerStarted?.();
+          await new Promise<void>((resolve) => {
+            releaseRegister = resolve;
+          });
+        }
+        entries.set(key, value);
+      },
+      async lookup(key) {
+        return entries.get(key);
+      },
+      async delete(key) {
+        return entries.delete(key);
+      },
+      async entries() {
+        const snapshot = [...entries].map(([key, value]) => ({ key, value }));
+        if (blockEntries) {
+          blockEntries = false;
+          entriesStarted?.();
+          await new Promise<void>((resolve) => {
+            releaseEntries = resolve;
+          });
+        }
+        return snapshot;
+      },
+    };
+    const store = new WorkboardStore(keyedStore);
+    const card = await store.create({ title: "Manual transition", boardId: "reconcile" });
+    const reconciler = new WorkboardReconciler(store);
+    blockRegister = true;
+    blockEntries = true;
+    const manualMutationStarted = new Promise<void>((resolve) => {
+      registerStarted = resolve;
+    });
+    const reconciliationPreparationStarted = new Promise<void>((resolve) => {
+      entriesStarted = resolve;
+    });
+    const manual = store.update(card.id, { status: "blocked" });
+    await manualMutationStarted;
+    const applying = reconciler.apply({
+      sourceUrl: "https://example.test/runs/race",
+      tenant: "acme",
+      idempotencyKey: "race-v1",
+      sourceUpdatedAt: 100,
+      cardId: card.id,
+      expectedRevision: card.updatedAt,
+      card: { title: "External overwrite" },
+    });
+    releaseRegister?.();
+    await manual;
+    await reconciliationPreparationStarted;
+    releaseEntries?.();
+
+    await expect(applying).resolves.toMatchObject({ applied: false, card: { status: "blocked" } });
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      status: "blocked",
+      title: "Manual transition",
+    });
+  });
 });

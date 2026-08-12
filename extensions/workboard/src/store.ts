@@ -1,6 +1,13 @@
 // Workboard plugin module implements store behavior.
 import { randomUUID } from "node:crypto";
-import type { WorkboardAttachment, WorkboardCard } from "@openclaw/workboard-contract";
+import type {
+  WorkboardAttachment,
+  WorkboardCard,
+  WorkboardExternalExecutionLink,
+  WorkboardReconciliationApplyResult,
+  WorkboardReconciliationObservation,
+  WorkboardStatus,
+} from "@openclaw/workboard-contract";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -43,8 +50,133 @@ import { WorkboardNotificationStore } from "./store-notifications.js";
 
 export type { WorkboardDispatchResult } from "./store-inputs.js";
 
+const RECONCILIATION_PROTECTED_STATUSES = new Set<WorkboardStatus>(["blocked", "review", "done"]);
+
+function reconciliationLinkFor(
+  card: WorkboardCard,
+  fallback: WorkboardExternalExecutionLink,
+): WorkboardExternalExecutionLink {
+  const idempotencyKey = card.metadata?.automation?.idempotencyKey;
+  const link = idempotencyKey
+    ? card.metadata?.links?.find((entry) => entry.id === `external:${idempotencyKey}`)
+    : undefined;
+  return {
+    sourceUrl: link?.url ?? card.sourceUrl ?? fallback.sourceUrl,
+    tenant: card.metadata?.automation?.tenant ?? fallback.tenant,
+    idempotencyKey: idempotencyKey ?? fallback.idempotencyKey,
+    sourceUpdatedAt: card.metadata?.lifecycleStatusSourceUpdatedAt ?? fallback.sourceUpdatedAt,
+    ...(link?.title ? { title: link.title } : {}),
+  };
+}
+
+function reconciliationResult(
+  card: WorkboardCard,
+  applied: boolean,
+  link: WorkboardExternalExecutionLink,
+): WorkboardReconciliationApplyResult {
+  return { card, applied, link };
+}
+
 // Capability layers split review boundaries only; the core still owns persistence and mutation order.
 export class WorkboardStore extends WorkboardNotificationStore {
+  /**
+   * Applies an externally observed execution within the store mutation queue.
+   * Every precondition is evaluated from the same card snapshot that is mutated.
+   */
+  async applyReconciliation(
+    observation: WorkboardReconciliationObservation,
+    link: WorkboardExternalExecutionLink,
+  ): Promise<WorkboardReconciliationApplyResult> {
+    return await this.enqueueMutation(async () => {
+      const cards = await this.list();
+      const duplicate = cards.find(
+        (card) =>
+          card.metadata?.automation?.tenant === link.tenant &&
+          card.metadata?.automation?.idempotencyKey === link.idempotencyKey,
+      );
+      if (duplicate) {
+        return reconciliationResult(duplicate, true, reconciliationLinkFor(duplicate, link));
+      }
+
+      const existing = observation.cardId
+        ? await this.get(observation.cardId)
+        : cards.find(
+            (card) =>
+              card.sourceUrl === link.sourceUrl &&
+              card.metadata?.automation?.tenant === link.tenant,
+          );
+      if (existing) {
+        if (
+          observation.expectedRevision !== undefined &&
+          observation.expectedRevision !== existing.updatedAt
+        ) {
+          return reconciliationResult(existing, false, link);
+        }
+        if (
+          existing.metadata?.lifecycleStatusSourceUpdatedAt !== undefined &&
+          link.sourceUpdatedAt <= existing.metadata.lifecycleStatusSourceUpdatedAt
+        ) {
+          return reconciliationResult(existing, false, link);
+        }
+        if (RECONCILIATION_PROTECTED_STATUSES.has(existing.status)) {
+          return reconciliationResult(existing, false, link);
+        }
+        const patch = observation.card ?? {};
+        const updated = await this.updateCard(existing.id, {
+          ...patch,
+          ...(RECONCILIATION_PROTECTED_STATUSES.has(patch.status as WorkboardStatus)
+            ? { status: existing.status }
+            : {}),
+          sourceUrl: link.sourceUrl,
+          tenant: link.tenant,
+          idempotencyKey: link.idempotencyKey,
+          metadata: {
+            ...existing.metadata,
+            lifecycleStatusSourceUpdatedAt: link.sourceUpdatedAt,
+            links: [
+              ...(existing.metadata?.links ?? []),
+              {
+                id: `external:${link.idempotencyKey}`,
+                type: "relates_to",
+                createdAt: Date.now(),
+                url: link.sourceUrl,
+                ...(link.title ? { title: link.title } : {}),
+              },
+            ],
+          },
+        });
+        return reconciliationResult(updated, true, reconciliationLinkFor(updated, link));
+      }
+
+      const card = observation.card ?? {};
+      if (typeof card.title !== "string" || card.title.trim() === "") {
+        throw new Error("card.title is required when creating a card.");
+      }
+      const created = await this.createDirect({
+        ...card,
+        ...(RECONCILIATION_PROTECTED_STATUSES.has(card.status as WorkboardStatus)
+          ? { status: "todo" }
+          : {}),
+        sourceUrl: link.sourceUrl,
+        tenant: link.tenant,
+        idempotencyKey: link.idempotencyKey,
+        metadata: {
+          lifecycleStatusSourceUpdatedAt: link.sourceUpdatedAt,
+          links: [
+            {
+              id: `external:${link.idempotencyKey}`,
+              type: "relates_to",
+              createdAt: Date.now(),
+              url: link.sourceUrl,
+              ...(link.title ? { title: link.title } : {}),
+            },
+          ],
+        },
+      });
+      return reconciliationResult(created, true, reconciliationLinkFor(created, link));
+    });
+  }
+
   private async shouldAutoOrchestrate(card: WorkboardCard): Promise<boolean> {
     if (
       card.status !== "triage" ||
