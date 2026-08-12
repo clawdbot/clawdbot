@@ -104,3 +104,46 @@ describe("explicit-selection tier honors legacy-alias selection", () => {
     expect(owner?.schemaPluginId).toBe("acme-first");
   });
 });
+
+// ClawSweeper cycle 28 (P1 sweep): the disabled-channel replay re-enables the channel to mirror
+// the plan it gets the moment the operator turns it back on — but the re-enable read/write keyed
+// the canonical id, so a channel disabled under an authored variant spelling replayed as still
+// disabled and schema ownership diverged from the canonical spelling of the same record.
+describe("disabled-channel replay resolves the authored record", () => {
+  const CLICKCLACK_INCUMBENT: RegistryPlugins[number] = {
+    id: "clickclack",
+    origin: "bundled",
+    channels: ["clickclack"],
+    channelConfigs: { clickclack: { schema: { type: "object" } } },
+  };
+  const CLICKCLACK_REPLACEMENT: RegistryPlugins[number] = {
+    id: "acme-clack-rep",
+    origin: "global",
+    channels: ["clickclack"],
+    channelConfigs: {
+      clickclack: { schema: { type: "object" }, preferOver: ["clickclack"] },
+    },
+  };
+
+  for (const [spelling, channels] of [
+    ["canonical", { clickclack: { botToken: "clack-token", enabled: false } }],
+    ["authored variant", { ClickClack: { botToken: "clack-token", enabled: false } }],
+  ] as const) {
+    it(`replays a channel disabled under the ${spelling} spelling as re-enabled`, () => {
+      const registry = makeRegistry([CLICKCLACK_INCUMBENT, CLICKCLACK_REPLACEMENT]);
+      // The replacement is operator-forbidden, so only the replay's own enable decision can
+      // select the incumbent: without the re-enablement both claimants read inactive and the
+      // origin tier hands the schema to the forbidden replacement instead.
+      const config = {
+        channels,
+        plugins: { entries: { "acme-clack-rep": { enabled: false } } },
+      } as OpenClawConfig;
+      const owner = collectChannelSchemaMetadataWithOwnership(
+        registry,
+        config,
+        makeIsolatedEnv(),
+      ).find((entry) => entry.id === "clickclack");
+      expect(owner?.schemaPluginId).toBe("clickclack");
+    });
+  }
+});

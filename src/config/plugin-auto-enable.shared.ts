@@ -52,7 +52,10 @@ import {
   type ChannelClaimCandidate,
   type ChannelClaimantDecision,
 } from "./channel-claimant-plugins.js";
-import { resolveChannelConfigRecord } from "./channel-configured-shared.js";
+import {
+  resolveChannelConfigKey,
+  resolveChannelConfigRecord,
+} from "./channel-configured-shared.js";
 import { isChannelConfigured } from "./channel-configured.js";
 import { resolveChannelClaimPreferOver } from "./plugin-auto-enable.prefer-over.js";
 import type {
@@ -952,9 +955,10 @@ function disableImplicitPreferredOverPlugin(params: {
   };
 }
 
+// The guard reads the same record the enablement write below merges into: an exact canonical
+// read misses an authored variant record and re-registers the channel on every pass.
 function isBuiltInChannelAlreadyEnabled(cfg: OpenClawConfig, channelId: string): boolean {
-  const channels = cfg.channels as Record<string, unknown> | undefined;
-  return asOptionalRecord(channels?.[channelId])?.enabled === true;
+  return resolveChannelConfigRecord(cfg, channelId)?.enabled === true;
 }
 
 function resolveAutoEnableChannelId(params: {
@@ -1000,12 +1004,16 @@ function registerPluginEntry(
   const builtInChannelId = resolveAutoEnableChannelId({ entry, manifestRegistry });
   if (builtInChannelId) {
     const channels = cfg.channels as Record<string, unknown> | undefined;
+    // Enablement merges into the record the config resolver reads: a fresh canonical-key record
+    // beside an authored variant spelling would win the resolver's exact-key priority and shadow
+    // the operator's credential-bearing record.
+    const channelKey = resolveChannelConfigKey(cfg, builtInChannelId);
     return {
       ...cfg,
       channels: {
         ...cfg.channels,
-        [builtInChannelId]: {
-          ...asOptionalRecord(channels?.[builtInChannelId]),
+        [channelKey]: {
+          ...asOptionalRecord(channels?.[channelKey]),
           enabled: true,
         },
       },

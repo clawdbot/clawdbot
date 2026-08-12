@@ -19,6 +19,7 @@ import {
   normalizePluginsConfigWithManifestAliases,
   type ChannelClaimantDecision,
 } from "./channel-claimant-plugins.js";
+import { resolveChannelConfigKey } from "./channel-configured-shared.js";
 import { widenOfficialExternalChannelSecretSchema } from "./official-external-channel-secret-schema.js";
 import { detectPluginAutoEnableCandidates } from "./plugin-auto-enable.detect.js";
 import {
@@ -400,14 +401,16 @@ function planChannelClaimantDecisions(params: {
       }));
       // A disabled channel replays as if enabled: validating its saved keys must mirror the plan
       // the channel gets the moment the operator re-enables it, not the activation unrelated
-      // candidates produced while it was off.
+      // candidates produced while it was off. The disable lives on the resolver's section key —
+      // an exact canonical read misses an authored variant record and skips the re-enablement.
       const channelsRecord = params.config.channels as Record<string, unknown> | undefined;
-      const channelEntry = asOptionalRecord(channelsRecord?.[rawChannelId]);
+      const channelKey = resolveChannelConfigKey(params.config, rawChannelId);
+      const channelEntry = asOptionalRecord(channelsRecord?.[channelKey]);
       const replayConfig =
         channelEntry?.enabled === false
           ? {
               ...params.config,
-              channels: { ...channelsRecord, [rawChannelId]: { ...channelEntry, enabled: true } },
+              channels: { ...channelsRecord, [channelKey]: { ...channelEntry, enabled: true } },
             }
           : params.config;
       const replayClaims = [

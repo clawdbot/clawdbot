@@ -4,18 +4,16 @@ import { getChannelEnvVars } from "../secrets/channel-env-vars.js";
 import { isRecord } from "../utils.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
-/** Returns a channel config object when `channels.<id>` is present and object-shaped. */
-export function resolveChannelConfigRecord(
-  cfg: OpenClawConfig,
-  channelId: string,
-): Record<string, unknown> | null {
+/**
+ * Returns the `channels.*` section key whose record `resolveChannelConfigRecord` reads for this
+ * channel. Writers must land updates on this key: a fresh canonical-key record minted beside an
+ * authored variant spelling takes exact-key priority on the next read and shadows the operator's
+ * credential-bearing record.
+ */
+export function resolveChannelConfigKey(cfg: OpenClawConfig, channelId: string): string {
   const channels = cfg.channels as Record<string, unknown> | undefined;
-  if (!channels) {
-    return null;
-  }
-  const entry = channels[channelId];
-  if (isRecord(entry)) {
-    return entry;
+  if (!channels || isRecord(channels[channelId])) {
+    return channelId;
   }
   // Validation admits any declared spelling of a channel against canonical identity — the
   // config record resolves the AUTHORED key through the same identity, or an authored variant
@@ -26,8 +24,17 @@ export function resolveChannelConfigRecord(
   const authoredKey = Object.keys(channels).find(
     (key) => (normalizeChatChannelId(key) ?? key) === canonical,
   );
-  const authored = authoredKey === undefined ? undefined : channels[authoredKey];
-  return isRecord(authored) ? authored : null;
+  return authoredKey !== undefined && isRecord(channels[authoredKey]) ? authoredKey : channelId;
+}
+
+/** Returns a channel config object when `channels.<id>` is present and object-shaped. */
+export function resolveChannelConfigRecord(
+  cfg: OpenClawConfig,
+  channelId: string,
+): Record<string, unknown> | null {
+  const channels = cfg.channels as Record<string, unknown> | undefined;
+  const entry = channels?.[resolveChannelConfigKey(cfg, channelId)];
+  return isRecord(entry) ? entry : null;
 }
 
 /** Checks whether a shallow channel config contains activation-relevant values. */

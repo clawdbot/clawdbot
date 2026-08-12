@@ -890,3 +890,51 @@ describe("alias-spelled explicit disables reach the planner", () => {
     });
   }
 });
+
+// ClawSweeper cycle 28 (P1): presence detection admits an authored variant spelling
+// (`channels.ClickClack`) as the canonical channel's record, but the built-in enablement write
+// still keyed the canonical id — auto-enable minted a fresh `channels.clickclack: { enabled:
+// true }` beside the operator's record, and the resolver's exact-key priority then shadowed the
+// credential-bearing record with the empty one. The write (and its already-enabled guard) must
+// land on the record the resolver reads.
+describe("built-in enablement writes land on the authored channel record", () => {
+  const CLICKCLACK_INCUMBENT: Parameters<typeof makeRegistry>[0][number] = {
+    id: "clickclack",
+    origin: "bundled",
+    channels: ["clickclack"],
+    channelConfigs: { clickclack: { schema: { type: "object" } } },
+  };
+
+  for (const [spelling, authoredKey] of [
+    ["canonical", "clickclack"],
+    ["authored variant", "ClickClack"],
+  ] as const) {
+    it(`merges enablement into the ${spelling} record without a duplicate`, () => {
+      const result = applyPluginAutoEnable({
+        config: { channels: { [authoredKey]: { botToken: "clack-token" } } } as OpenClawConfig,
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([CLICKCLACK_INCUMBENT]),
+      });
+
+      // Exactly one clickclack record survives — the authored one, credentials intact.
+      expect(Object.keys(result.config.channels ?? {})).toStrictEqual([authoredKey]);
+      expect(result.config.channels?.[authoredKey as "clickclack"]).toStrictEqual({
+        botToken: "clack-token",
+        enabled: true,
+      });
+      expect(result.changes.join("\n")).toContain("ClickClack configured, enabled automatically.");
+    });
+
+    it(`treats an ${spelling} record with enabled: true as already enabled`, () => {
+      const channels = { [authoredKey]: { botToken: "clack-token", enabled: true } };
+      const result = applyPluginAutoEnable({
+        config: { channels } as OpenClawConfig,
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([CLICKCLACK_INCUMBENT]),
+      });
+
+      expect(result.config.channels).toStrictEqual(channels);
+      expect(result.changes).toStrictEqual([]);
+    });
+  }
+});
