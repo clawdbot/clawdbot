@@ -2496,6 +2496,7 @@ describe("runPreparedReply media-only handling", () => {
     previousRun.setPhase("running");
 
     const runPromise = runPrepared({
+      agentId: "main",
       isNewSession: false,
       sessionId: "session-before-wait",
       sessionKey: dispatchSessionKey,
@@ -3861,6 +3862,7 @@ describe("runPreparedReply media-only handling", () => {
     });
 
     await runPrepared({
+      agentId: "main",
       ctx: createInboundBody("report queued reactions"),
       opts: withReplySystemEventSessionKey({}, "agent:main:slack:channel:c123"),
       provider: "",
