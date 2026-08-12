@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
 import pMap from "p-map";
 import { parse as parseYaml } from "yaml";
+import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { listChangedPathsFromGit, listStagedChangedPaths } from "./changed-lanes.mts";
 import { resolveNpmRunner, type NpmRunnerParams } from "./npm-runner.mts";
 
@@ -92,7 +93,7 @@ function normalizeOverrides(overrides: unknown): OverrideMap {
       const dependencyName = key.slice(scopedSeparator + 1).trim();
       if (parentSelector && dependencyName) {
         const current = normalized[parentSelector];
-        const nested = isPlainObject(current) ? current : {};
+        const nested = isRecord(current) ? current : {};
         nested[dependencyName] = normalizeOverrideValue(value);
         normalized[parentSelector] = nested;
         continue;
@@ -103,18 +104,14 @@ function normalizeOverrides(overrides: unknown): OverrideMap {
   return normalized;
 }
 
-function isPlainObject(value: unknown): value is UnknownRecord {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 function recordAt(value: unknown, key: string) {
-  const nested = isPlainObject(value) ? value[key] : undefined;
-  return isPlainObject(nested) ? nested : undefined;
+  const nested = isRecord(value) ? value[key] : undefined;
+  return isRecord(nested) ? nested : undefined;
 }
 
 function parseJsonObject(text: string): UnknownRecord {
   const value: unknown = JSON.parse(text);
-  if (!isPlainObject(value)) {
+  if (!isRecord(value)) {
     throw new Error("expected a JSON object");
   }
   return value;
@@ -124,7 +121,7 @@ function readWorkspace() {
   const workspace: unknown = parseYaml(
     readFileSync(path.join(ROOT_DIR, "pnpm-workspace.yaml"), "utf8"),
   );
-  return isPlainObject(workspace) ? workspace : {};
+  return isRecord(workspace) ? workspace : {};
 }
 
 function readPnpmLock() {
@@ -171,7 +168,7 @@ function readPnpmLockPackages() {
       continue;
     }
     lockPackages.add(`${parsed.name}@${parsed.version}`);
-    if (isPlainObject(metadata) && typeof metadata.version === "string") {
+    if (isRecord(metadata) && typeof metadata.version === "string") {
       lockPackages.add(`${parsed.name}@${metadata.version}`);
     }
   }
@@ -189,7 +186,7 @@ function readPnpmLockPackageIntegrities() {
       continue;
     }
     const versions = new Set([parsed.version]);
-    if (isPlainObject(metadata) && typeof metadata.version === "string") {
+    if (isRecord(metadata) && typeof metadata.version === "string") {
       versions.add(metadata.version);
     }
     for (const version of versions) {
@@ -294,7 +291,7 @@ function expandScopedOverrideValue(
     return version;
   }
   const childOverrides = overrides[childSelector];
-  if (!isPlainObject(childOverrides)) {
+  if (!isRecord(childOverrides)) {
     return version;
   }
   const childSeen = new Set(seen);
@@ -316,7 +313,7 @@ function expandScopedOverrideChildren(overrides: OverrideMap): OverrideMap {
   return Object.fromEntries(
     Object.entries(overrides)
       .map<[string, unknown]>(([parentSelector, nestedOverrides]) => {
-        if (isPlainObject(nestedOverrides)) {
+        if (isRecord(nestedOverrides)) {
           return [
             parentSelector,
             Object.fromEntries(
@@ -335,10 +332,7 @@ function expandScopedOverrideChildren(overrides: OverrideMap): OverrideMap {
           return [parentSelector, nestedOverrides];
         }
         const exactVersion = exactVersionFromOverrideSpec(nestedOverrides);
-        if (
-          exactVersion === null ||
-          !isPlainObject(overrides[`${parentSelector}@${exactVersion}`])
-        ) {
+        if (exactVersion === null || !isRecord(overrides[`${parentSelector}@${exactVersion}`])) {
           return [parentSelector, nestedOverrides];
         }
         return [parentSelector, expandScopedOverrideValue(overrides, parentSelector, exactVersion)];
@@ -431,7 +425,7 @@ function mergeOverrideEntry(merged: OverrideMap, name: string, spec: unknown): v
     merged[name] = spec;
     return;
   }
-  if (isPlainObject(current) && isPlainObject(spec)) {
+  if (isRecord(current) && isRecord(spec)) {
     for (const [nestedName, nestedSpec] of Object.entries(spec)) {
       mergeOverrideEntry(current, nestedName, nestedSpec);
     }
@@ -439,7 +433,7 @@ function mergeOverrideEntry(merged: OverrideMap, name: string, spec: unknown): v
   }
   if (
     typeof current === "string" &&
-    isPlainObject(spec) &&
+    isRecord(spec) &&
     typeof spec["."] === "string" &&
     exactOverrideVersionsMatch(current, spec["."])
   ) {
@@ -454,7 +448,7 @@ function mergeOverrideEntry(merged: OverrideMap, name: string, spec: unknown): v
     return;
   }
   if (
-    isPlainObject(current) &&
+    isRecord(current) &&
     typeof spec === "string" &&
     typeof current["."] === "string" &&
     exactOverrideVersionsMatch(current["."], spec)
@@ -551,7 +545,7 @@ function copyLocalFileDependencies(
     }
     for (const field of ["dependencies", "optionalDependencies"]) {
       const dependencies = current.manifest[field];
-      for (const spec of Object.values(isPlainObject(dependencies) ? dependencies : {})) {
+      for (const spec of Object.values(isRecord(dependencies) ? dependencies : {})) {
         if (typeof spec !== "string" || !spec.startsWith("file:")) {
           continue;
         }
@@ -654,7 +648,7 @@ function packageExtensionMarksOptionalPeer(packageExtension: unknown) {
   const peerMetadata = recordAt(packageExtension, "peerDependenciesMeta");
   return (
     peerMetadata !== undefined &&
-    Object.values(peerMetadata).some((meta) => isPlainObject(meta) && meta.optional === true)
+    Object.values(peerMetadata).some((meta) => isRecord(meta) && meta.optional === true)
   );
 }
 
@@ -667,7 +661,7 @@ function shouldUseLegacyPeerDepsForNpmLock(
   ) {
     return true;
   }
-  const dependencies = isPlainObject(packageJson.dependencies)
+  const dependencies = isRecord(packageJson.dependencies)
     ? Object.keys(packageJson.dependencies)
     : [];
   if (dependencies.length === 0) {
@@ -696,7 +690,7 @@ function applyPackageExtensionPeerMetadata<T>(
   }
 
   for (const [lockPath, metadata] of Object.entries(packages)) {
-    if (!isPlainObject(metadata)) {
+    if (!isRecord(metadata)) {
       continue;
     }
     const packageName = metadata.name ?? parseLockPackagePath(lockPath).at(-1)?.name;
@@ -713,13 +707,13 @@ function applyPackageExtensionPeerMetadata<T>(
         continue;
       }
       for (const [peerName, peerMeta] of Object.entries(peerDependenciesMeta)) {
-        if (peerDependencies[peerName] === undefined || !isPlainObject(peerMeta)) {
+        if (peerDependencies[peerName] === undefined || !isRecord(peerMeta)) {
           continue;
         }
         const metadataByPeer = recordAt(metadata, "peerDependenciesMeta") ?? {};
         metadata.peerDependenciesMeta = metadataByPeer;
         const existingPeerMeta = metadataByPeer[peerName];
-        metadataByPeer[peerName] = isPlainObject(existingPeerMeta)
+        metadataByPeer[peerName] = isRecord(existingPeerMeta)
           ? { ...existingPeerMeta, ...peerMeta }
           : { ...peerMeta };
       }
@@ -808,9 +802,7 @@ function collectOverrideViolations(
     }
     const expectedVersion = overrideRules[packageName];
     const actualVersion =
-      isPlainObject(metadata) && typeof metadata.version === "string"
-        ? metadata.version
-        : undefined;
+      isRecord(metadata) && typeof metadata.version === "string" ? metadata.version : undefined;
     if (!expectedVersion || actualVersion === expectedVersion) {
       continue;
     }
@@ -838,13 +830,13 @@ function disableDependencyShrinkwrapOverrideConflictSources(
     const ancestors = violation.packagePath.slice(0, -1).toReversed();
     const shrinkwrappedAncestor = ancestors.find((ancestor) => {
       const metadata = packages[ancestor.path];
-      return isPlainObject(metadata) && metadata.hasShrinkwrap === true;
+      return isRecord(metadata) && metadata.hasShrinkwrap === true;
     });
     if (!shrinkwrappedAncestor) {
       continue;
     }
     const ancestorMetadata = packages[shrinkwrappedAncestor.path];
-    if (isPlainObject(ancestorMetadata)) {
+    if (isRecord(ancestorMetadata)) {
       delete ancestorMetadata.hasShrinkwrap;
     }
     disabled.add(shrinkwrappedAncestor.path);
@@ -915,7 +907,7 @@ function normalizeNpmVersionDrift<T>(lockfile: T): T {
     return lockfile;
   }
   for (const metadata of Object.values(packages)) {
-    if (!isPlainObject(metadata)) {
+    if (!isRecord(metadata)) {
       continue;
     }
     // npm versions and mutable registry metadata disagree on these package-lock
@@ -999,7 +991,7 @@ function collectPnpmLockViolations(
   for (const [lockPath, metadata] of Object.entries(packages)) {
     if (
       lockPath === "" ||
-      !isPlainObject(metadata) ||
+      !isRecord(metadata) ||
       typeof metadata.version !== "string" ||
       !metadata.version ||
       metadata.link === true
@@ -1249,7 +1241,7 @@ async function runPackageWorker(packageDir: string) {
       },
     });
     worker.once("message", (message: unknown) => {
-      if (!isPlainObject(message)) {
+      if (!isRecord(message)) {
         reject(new Error("npm-lock worker returned an invalid response"));
       } else if (typeof message.error === "string") {
         reject(new Error(message.error));

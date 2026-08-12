@@ -103,6 +103,7 @@ class MockGatewayClient {
         phase: "pre-hello",
         socketOpened: gatewayClientState.socketOpened,
         transportValidated: gatewayClientState.transportValidated,
+        connectRequestSent: true,
         transientPreHelloCleanClose: false,
       });
     }

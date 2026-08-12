@@ -87,7 +87,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
           agentId: runParams.agentId,
           modelId: params.modelId,
           workspaceDir: params.workspaceDir,
-          userLockedAuthProfileId:
+          userPinnedAuthProfileId:
             runParams.authProfileIdSource === "user" ? runParams.authProfileId : undefined,
         });
   let noExternalAuthStore: AuthProfileStore | undefined;
@@ -102,7 +102,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       modelId: params.modelId,
       workspaceDir: params.workspaceDir,
       store: noExternalAuthStore,
-      userLockedAuthProfileId:
+      userPinnedAuthProfileId:
         runParams.authProfileIdSource === "user" ? runParams.authProfileId : undefined,
     });
   }

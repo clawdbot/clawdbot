@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ExecutionDecisionCursorError } from "../../audit/execution-decision-receipts.js";
 import { auditHandlers } from "./audit.js";
 
 const { inspectExecutionIdentityRun, listAuditEvents } = vi.hoisted(() => ({
@@ -270,14 +271,14 @@ describe("audit gateway methods", () => {
       runId: "run-1",
       executionCursor: " 2 ",
       executionLimit: 10,
-      decisionCursor: " 1 ",
+      decisionCursor: "a:2000:42",
       decisionLimit: 25,
     });
     expect(inspectExecutionIdentityRun).toHaveBeenLastCalledWith({
       runId: "run-1",
       executionOffset: 2,
       executionLimit: 10,
-      decisionOffset: 1,
+      decisionCursor: "a:2000:42",
       decisionLimit: 25,
     });
 
@@ -305,5 +306,25 @@ describe("audit gateway methods", () => {
       }),
     ).toHaveBeenCalledWith(false, undefined, expect.any(Object));
     expect(inspectExecutionIdentityRun).not.toHaveBeenCalled();
+  });
+
+  it("tells the operator how to recover from an expired decision cursor", async () => {
+    inspectExecutionIdentityRun.mockImplementationOnce(() => {
+      throw new ExecutionDecisionCursorError(
+        "decision cursor is no longer retained; restart inspection without --cursor",
+      );
+    });
+
+    const respond = await runAuditHandler("audit.run.inspect", {
+      runId: "run-1",
+      decisionCursor: "a:2000:42",
+    });
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "decision cursor is no longer retained; restart inspection without --cursor",
+      }),
+    );
   });
 });

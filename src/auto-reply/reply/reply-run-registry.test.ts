@@ -1163,6 +1163,73 @@ describe("reply run registry", () => {
     operation.complete();
   });
 
+  it.each([
+    {
+      name: "user abort while queued",
+      abort: (operation: ReturnType<typeof createTestReplyOperation>) => operation.abortByUser(),
+      code: "aborted_by_user",
+      reason: "user_abort",
+      phase: "queued",
+    },
+    {
+      name: "restart abort while queued",
+      abort: (operation: ReturnType<typeof createTestReplyOperation>) =>
+        operation.abortForRestart(),
+      code: "aborted_for_restart",
+      reason: "restart",
+      phase: "queued",
+    },
+    {
+      name: "user abort while running",
+      abort: (operation: ReturnType<typeof createTestReplyOperation>) => operation.abortByUser(),
+      code: "aborted_by_user",
+      reason: "user_abort",
+      phase: "running",
+    },
+    {
+      name: "restart abort while running",
+      abort: (operation: ReturnType<typeof createTestReplyOperation>) =>
+        operation.abortForRestart(),
+      code: "aborted_for_restart",
+      reason: "restart",
+      phase: "running",
+    },
+  ] as const)("preserves cleanup when backend cancellation throws: $name", async (testCase) => {
+    await withFakeReplyTimers(async () => {
+      const cancelError = new Error("cancel failed");
+      const cancel = vi.fn(() => {
+        throw cancelError;
+      });
+      const operation = createTestReplyOperation({
+        sessionKey: `agent:main:${testCase.reason}-${testCase.phase}`,
+        sessionId: `session-${testCase.reason}-${testCase.phase}`,
+      });
+      operation.attachBackend({ kind: "embedded", cancel, isStreaming: () => true });
+      operation.setPhase(testCase.phase);
+      const afterClear = vi.fn();
+      runAfterReplyOperationClear(operation, afterClear);
+
+      expect(() => testCase.abort(operation)).toThrow(cancelError);
+      expect(operation.result).toEqual({ kind: "aborted", code: testCase.code });
+      expect(operation.phase).toBe("aborted");
+      expect(operation.abortSignal.aborted).toBe(true);
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(cancel).toHaveBeenCalledWith(testCase.reason);
+
+      const retained = testCase.phase === "running";
+      expect(replyRunRegistry.isActive(operation.key)).toBe(retained);
+      expect(afterClear).toHaveBeenCalledTimes(retained ? 0 : 1);
+      expect(vi.getTimerCount()).toBe(retained ? 1 : 0);
+
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS);
+      expect(replyRunRegistry.isActive(operation.key)).toBe(false);
+      expect(afterClear).toHaveBeenCalledOnce();
+      operation.complete();
+      expect(afterClear).toHaveBeenCalledOnce();
+      expect(cancel).toHaveBeenCalledOnce();
+    });
+  });
+
   it("force-releases a running aborted operation when the owner never returns", async () => {
     await withFakeReplyTimers(async () => {
       const cancel = vi.fn();

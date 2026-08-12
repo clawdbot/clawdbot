@@ -164,7 +164,6 @@ export type ChatComposerState = {
   slashMenuMode: "command" | "args";
   slashMenuCommand: SlashCommandDef | null;
   slashMenuArgItems: string[];
-  slashMenuExpanded: boolean;
   slashCommandRefreshPending: boolean;
   skillMenuOpen: boolean;
   skillMenuItems: SlashCommandDef[];

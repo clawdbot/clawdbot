@@ -560,6 +560,8 @@ wa-radio-group.settings-segmented::part(radios) {
 
 .settings-input,
 .settings-select {
+  --control-ui-touch-input-size: var(--control-ui-input-text-size);
+
   width: 100%;
   min-width: 0;
   font: inherit;

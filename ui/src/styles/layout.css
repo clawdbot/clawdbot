@@ -391,6 +391,8 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 }
 
 .settings-sidebar__search-input {
+  --control-ui-touch-input-size: calc(12.5px * var(--control-ui-text-scale));
+
   width: 100%;
   min-width: 0;
   height: 34px;
@@ -421,12 +423,6 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 
 .settings-sidebar__search-input::-webkit-search-cancel-button {
   appearance: none;
-}
-
-@media (hover: none) and (pointer: coarse) {
-  .settings-sidebar__search-input {
-    font-size: max(16px, calc(12.5px * var(--control-ui-text-scale)));
-  }
 }
 
 .settings-sidebar__search-clear {
@@ -2789,7 +2785,8 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 /* Keycap hint, not content: the app's quiet mono shortcut idiom (see
    .chat-question-panel__option kbd), fixed-width so letters and digits share
    one rail beside the labels. */
-.session-menu__shortcut {
+.session-menu__shortcut,
+.chat-controls__model-option-action kbd {
   flex: 0 0 auto;
   min-width: 12px;
   color: var(--muted);
@@ -3494,6 +3491,8 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 }
 
 .sidebar-agent-menu__filter input {
+  --control-ui-touch-input-size: var(--control-ui-text-sm);
+
   width: 100%;
   padding: 5px 8px;
   border-radius: 6px;
@@ -3502,12 +3501,6 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   color: inherit;
   font: inherit;
   font-size: var(--control-ui-text-sm);
-}
-
-@media (hover: none) and (pointer: coarse) {
-  .sidebar-agent-menu__filter input {
-    font-size: max(16px, var(--control-ui-text-sm));
-  }
 }
 
 .sidebar-agent-menu__empty {

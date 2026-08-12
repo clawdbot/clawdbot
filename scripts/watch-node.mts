@@ -25,10 +25,6 @@ const AUTO_DOCTOR_DISABLE_VALUES = new Set(["0", "false", "no", "off"]);
 type ProcessSignal = `SIG${string}`;
 type TimerHandle = ReturnType<typeof setTimeout>;
 
-function coerceWatchError(value: unknown, fallbackMessage: string): Error {
-  return toErrorObject(value, fallbackMessage);
-}
-
 type WatchChild = {
   pid?: number;
   kill(signal?: ProcessSignal | number): boolean | void;
@@ -543,7 +539,7 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<number
       if (onSigTerm) {
         deps.process.off("SIGTERM", onSigTerm);
       }
-      reject(coerceWatchError(err, "Non-Error rejection"));
+      reject(toErrorObject(err, "Non-Error rejection"));
     };
 
     const resolveCreateWatcher = async () => {

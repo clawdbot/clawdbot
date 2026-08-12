@@ -12,6 +12,10 @@ import { createRequire } from "node:module";
 import path, { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  MAX_TIMER_TIMEOUT_MS,
+  resolveTimerTimeoutMs,
+} from "../packages/normalization-core/src/number-coercion.ts";
+import {
   ensureRepoToolNodeModulesLink,
   isLocalCheckEnabled,
   resolveRepoToolBinPath,
@@ -34,7 +38,6 @@ const ROOT_SHIMS_MAX_OLD_SPACE_SIZE =
 const ROOT_SHIMS_NODE_OPTIONS =
   `${process.env.NODE_OPTIONS ?? ""} --max-old-space-size=${ROOT_SHIMS_MAX_OLD_SPACE_SIZE}`.trim();
 const DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS = 1_000;
-const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 type NodeStepSignal = "SIGHUP" | "SIGINT" | "SIGKILL" | "SIGTERM";
 const NODE_STEP_PARENT_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"] satisfies NodeStepSignal[];
 const NODE_STEP_PARENT_SIGNAL_EXIT_CODES = new Map([
@@ -611,13 +614,6 @@ function installNodeStepParentSignalForwarders() {
   });
 }
 
-function resolveNodeStepTimerTimeoutMs(valueMs: number) {
-  if (!Number.isFinite(valueMs)) {
-    return MAX_TIMER_TIMEOUT_MS;
-  }
-  return Math.min(Math.max(Math.floor(valueMs), 1), MAX_TIMER_TIMEOUT_MS);
-}
-
 /**
  * Runs one artifact step with timeout, abort propagation, and prefixed output.
  */
@@ -627,7 +623,7 @@ export function runNodeStep(
   timeoutMs: number,
   params: NodeStepParams = {},
 ) {
-  const resolvedTimeoutMs = resolveNodeStepTimerTimeoutMs(timeoutMs);
+  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, MAX_TIMER_TIMEOUT_MS);
   const abortKillGraceMs = Math.max(
     0,
     Math.floor(params.abortKillGraceMs ?? DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS),

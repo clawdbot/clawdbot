@@ -325,7 +325,7 @@ describe("renderPlugins", () => {
     );
 
     const confirm = container.querySelector<HTMLElement>(".plugins-remove-confirm");
-    expect(normalizedText(confirm)).toContain("Remove this plugin?");
+    expect(normalizedText(confirm)).toContain("Remove this plugin package and all of its entries?");
     confirm?.querySelector<HTMLButtonElement>(".btn.danger")?.click();
     expect(onUninstall).toHaveBeenCalledWith("community-thing", rowKey);
     confirm?.querySelectorAll<HTMLButtonElement>("button")[1]?.click();

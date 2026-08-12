@@ -67,7 +67,7 @@ vi.mock("./http-utils.js", () => ({
 
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: loadSessionEntryMock,
-  loadSessionEntryReadOnly: loadSessionEntryMock,
+  loadGatewaySessionEntryReadOnly: loadSessionEntryMock,
   resolveSessionHistoryTranscriptPathAsync: resolveSessionHistoryTranscriptPathMock,
 }));
 

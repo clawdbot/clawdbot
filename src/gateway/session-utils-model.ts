@@ -44,6 +44,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
 import {
   createSessionRowModelCacheKey,
+  type GatewayModelThinkingProfile,
   type SessionListRowContext,
 } from "./session-utils-contracts.js";
 import type { GatewaySessionsDefaults, SessionsPatchResult } from "./session-utils.types.js";
@@ -114,10 +115,7 @@ export function resolveGatewayModelThinkingProfile(params: {
   modelCatalog?: ModelCatalogEntry[];
   rowContext?: SessionListRowContext;
   sessionKey?: string;
-}): {
-  levels: ReturnType<typeof listThinkingLevelOptions>;
-  defaultLevel: ReturnType<typeof resolveGatewaySessionThinkingDefault>;
-} {
+}): GatewayModelThinkingProfile {
   const catalogEntry = params.modelCatalog
     ? findModelCatalogEntry(params.modelCatalog, {
         provider: params.provider,
@@ -137,13 +135,13 @@ export function resolveGatewayModelThinkingProfile(params: {
     });
   if (!params.rowContext) {
     return {
-      levels: listThinkingLevelOptions(
+      thinkingLevels: listThinkingLevelOptions(
         params.provider,
         params.model,
         params.modelCatalog,
         agentRuntime,
       ),
-      defaultLevel: resolveGatewaySessionThinkingDefault({
+      thinkingDefault: resolveGatewaySessionThinkingDefault({
         cfg: params.cfg,
         provider: params.provider,
         model: params.model,
@@ -162,13 +160,13 @@ export function resolveGatewayModelThinkingProfile(params: {
     return cached;
   }
   const metadata = {
-    levels: listThinkingLevelOptions(
+    thinkingLevels: listThinkingLevelOptions(
       params.provider,
       params.model,
       params.modelCatalog,
       agentRuntime,
     ),
-    defaultLevel: resolveGatewaySessionThinkingDefault({
+    thinkingDefault: resolveGatewaySessionThinkingDefault({
       cfg: params.cfg,
       provider: params.provider,
       model: params.model,
@@ -264,10 +262,11 @@ export function resolveGatewaySessionThinkingProjectionInternal(
   return {
     agentRuntime,
     thinkingLevel,
-    effectiveThinkingLevel: thinkingLevel ?? metadata.defaultLevel,
-    thinkingLevels: metadata.levels,
-    thinkingOptions: metadata.levels.map((level) => level.label),
-    thinkingDefault: metadata.defaultLevel,
+    effectiveThinkingLevel: thinkingLevel ?? metadata.thinkingDefault,
+    // Preserve the established serialized projection order for byte-stable responses.
+    thinkingLevels: metadata.thinkingLevels,
+    thinkingOptions: metadata.thinkingLevels.map((level) => level.label),
+    thinkingDefault: metadata.thinkingDefault,
   };
 }
 
@@ -309,9 +308,10 @@ export function getSessionDefaults(
     model: resolved.model ?? null,
     contextTokens: contextTokens ?? null,
     agentRuntime,
-    thinkingLevels: thinkingProfile.levels,
-    thinkingOptions: thinkingProfile.levels.map((level) => level.label),
-    thinkingDefault: thinkingProfile.defaultLevel,
+    // Preserve the established serialized projection order for byte-stable responses.
+    thinkingLevels: thinkingProfile.thinkingLevels,
+    thinkingOptions: thinkingProfile.thinkingLevels.map((level) => level.label),
+    thinkingDefault: thinkingProfile.thinkingDefault,
   };
 }
 

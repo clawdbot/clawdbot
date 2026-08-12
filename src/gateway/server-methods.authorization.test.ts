@@ -106,6 +106,34 @@ describe("gateway method authorization", () => {
     });
   });
 
+  it("allows read-only projects.list to reach its redacting handler", async () => {
+    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { projects: [] }));
+    const respond = vi.fn();
+
+    await handleGatewayRequest({
+      req: { type: "req", id: "req-projects-read", method: "projects.list", params: {} },
+      respond,
+      client: {
+        connId: "conn-projects-read",
+        connect: {
+          role: "operator",
+          scopes: ["operator.read"],
+          client: { id: "test", version: "1", platform: "test", mode: "test" },
+          minProtocol: 1,
+          maxProtocol: 1,
+        },
+      } as Parameters<typeof handleGatewayRequest>[0]["client"],
+      isWebchatConnect: () => false,
+      context: { logGateway: { warn: vi.fn() } } as unknown as Parameters<
+        typeof handleGatewayRequest
+      >[0]["context"],
+      extraHandlers: { "projects.list": handler },
+    });
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith(true, { projects: [] });
+  });
+
   it("rejects every node RPC when its connection no longer owns the pairing generation", async () => {
     const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
     const respond = vi.fn();
@@ -401,6 +429,7 @@ describe("sessions.patchMany orchestration", () => {
           key: "agent:main:batch-1",
           error: {
             code: "INVALID_REQUEST",
+            details: { reason: "session-changed" },
             message: "Session agent:main:batch-1 changed before patch. Retry.",
           },
         },
@@ -839,6 +868,7 @@ describe("sessions.patchMany orchestration", () => {
         params: {
           targets: [0, 1, 2].map((index) => ({
             key: `agent:main:archive-auth-${index}`,
+            expectedSessionId: `session-archive-auth-${index}`,
           })),
           patch: { archived: true },
         },

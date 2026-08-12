@@ -72,7 +72,11 @@ export class DiscordVoiceMembershipTracker {
         return;
       }
       // A newer roster update already replaced this startup snapshot.
-      if (!state.active || state.revision !== activationRevision || entry.isStopped()) {
+      if (
+        !state.active ||
+        state.revision !== activationRevision ||
+        entry.sessionLifecycle.status === "stopped"
+      ) {
         return;
       }
       if (!this.publish(entry, this.initialRosterEvent(entry, lines))) {

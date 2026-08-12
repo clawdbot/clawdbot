@@ -14,6 +14,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
+import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import { isLoopbackHost } from "./net.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
 import { resolveGatewayPluginConfig } from "./runtime-plugin-config.js";
@@ -29,7 +30,7 @@ import { createGatewayTransportBridge } from "./server-transport-bridge.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.js";
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
-import { createReadinessChecker } from "./server/readiness.js";
+import { createReadinessChecker, createStartupChecker } from "./server/readiness.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
 type GatewayBootstrap = Awaited<ReturnType<typeof prepareGatewayServerBootstrap>>;
@@ -117,13 +118,17 @@ export async function prepareGatewayKernelState(params: {
   const workerGatewayEndpoint = {
     resolve: (() => undefined) as () => { host: "127.0.0.1" | "::1"; port: number } | undefined,
   };
+  const desktopSessionRegistry = shouldStartWorkerEnvironmentService
+    ? createDesktopSessionRegistry()
+    : undefined;
   const workerEnvironmentRuntime =
-    workerEnvironmentStartup && shouldStartWorkerEnvironmentService
+    workerEnvironmentStartup && desktopSessionRegistry
       ? await startupTrace.measure("worker-environments.runtime-imports", async () => {
           const workerModule = await loadWorkerEnvironmentStartupModule();
           return await workerModule.createGatewayWorkerEnvironmentRuntime({
             getPluginRegistry: () => pluginRuntime.registry,
             resolveWorkerGateway: () => workerGatewayEndpoint.resolve(),
+            desktopSessionRegistry,
             startup: workerEnvironmentStartup,
             log,
           });
@@ -351,12 +356,16 @@ export async function prepareGatewayKernelState(params: {
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
   const sidecarStartup = opts.sidecarStartup ?? "start";
   const isGatewayStartupPending = () => !startupState.sidecarsReady && sidecarStartup === "start";
-  const getReadiness = createReadinessChecker({
-    channelManager,
+  const startupCheckerDeps = {
     startedAt: serverStartedAt,
     getStartupPending: isGatewayStartupPending,
     getStartupPendingReason: () => startupState.pendingReason,
     getGatewayDraining: isGatewayDraining,
+  };
+  const getStartup = createStartupChecker(startupCheckerDeps);
+  const getReadiness = createReadinessChecker({
+    channelManager,
+    ...startupCheckerDeps,
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
     shouldSkipChannelReadiness: () =>
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
@@ -407,10 +416,11 @@ export async function prepareGatewayKernelState(params: {
     logHooks,
     logPlugins,
     getReadiness,
+    getStartup,
     handleWatchNodeRequest: async (req: IncomingMessage, res: ServerResponse) =>
       (await watchNodeRequestHandler.current?.(req, res)) ?? false,
     workerIngressEnabled: Boolean(workerEnvironmentService),
-    workerDesktopTunnels: workerTunnelManager?.desktop,
+    desktopSessionRegistry: workerTunnelManager ? desktopSessionRegistry : undefined,
     clients: connectionState.clients,
   });
   const {

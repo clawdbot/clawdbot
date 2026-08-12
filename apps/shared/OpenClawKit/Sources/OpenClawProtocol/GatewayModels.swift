@@ -182,6 +182,12 @@ public enum SessionDiffFileStatus: String, Codable, Sendable {
     case renamed = "renamed"
 }
 
+public enum SessionDiffScope: String, Codable, Sendable {
+    case all = "all"
+    case uncommitted = "uncommitted"
+    case commit = "commit"
+}
+
 public enum TaskSuggestionResolution: String, Codable, Sendable {
     case dismissed = "dismissed"
     case accepted = "accepted"
@@ -1583,6 +1589,24 @@ public struct WizardNotFoundErrorDetails: Codable, Sendable {
     }
 }
 
+public struct ProjectCloneErrorDetails: Codable, Sendable {
+    public let code: String
+    public let cause: String
+
+    public init(
+        code: String,
+        cause: String)
+    {
+        self.code = code
+        self.cause = cause
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case code
+        case cause
+    }
+}
+
 public struct GatewaySuspendTaskBlocker: Codable, Sendable {
     public let taskid: String
     public let status: String
@@ -1800,6 +1824,28 @@ public struct GatewaySuspendResumeResult: Codable, Sendable {
         case ok
         case status
         case resumed
+    }
+}
+
+public struct UserPrefsLimitExceededErrorDetails: Codable, Sendable {
+    public let code: String
+    public let limit: Int
+    public let currentcount: Int
+
+    public init(
+        code: String,
+        limit: Int,
+        currentcount: Int)
+    {
+        self.code = code
+        self.limit = limit
+        self.currentcount = currentcount
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case code
+        case limit
+        case currentcount = "currentCount"
     }
 }
 
@@ -2140,6 +2186,50 @@ public struct WorkerDesktopLaunchResult: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case app
         case status
+    }
+}
+
+public struct ProjectCheckout: Codable, Sendable {
+    public let runnerid: String
+    public let path: String
+
+    public init(
+        runnerid: String,
+        path: String)
+    {
+        self.runnerid = runnerid
+        self.path = path
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case runnerid = "runnerId"
+        case path
+    }
+}
+
+public struct ProjectSummary: Codable, Sendable {
+    public let name: String
+    public let originurl: String?
+    public let checkouts: [ProjectCheckout]
+    public let lastusedat: Double
+
+    public init(
+        name: String,
+        originurl: String? = nil,
+        checkouts: [ProjectCheckout],
+        lastusedat: Double)
+    {
+        self.name = name
+        self.originurl = originurl
+        self.checkouts = checkouts
+        self.lastusedat = lastusedat
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case originurl = "originUrl"
+        case checkouts
+        case lastusedat = "lastUsedAt"
     }
 }
 
@@ -3077,19 +3167,87 @@ public struct ProjectRecord: Codable, Sendable {
     }
 }
 
-public struct ProjectsListParams: Codable, Sendable {}
-
-public struct ProjectsListResult: Codable, Sendable {
-    public let projects: [ProjectsRegisterResult]
+public struct ProjectRecentFolder: Codable, Sendable {
+    public let kind: String
+    public let folder: String
+    public let displayname: String
+    public let execnode: String?
 
     public init(
-        projects: [ProjectsRegisterResult])
+        kind: String,
+        folder: String,
+        displayname: String,
+        execnode: String? = nil)
+    {
+        self.kind = kind
+        self.folder = folder
+        self.displayname = displayname
+        self.execnode = execnode
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case folder
+        case displayname = "displayName"
+        case execnode = "execNode"
+    }
+}
+
+public struct ProjectRecentProject: Codable, Sendable {
+    public let kind: String
+    public let projectid: String
+    public let displayname: String
+
+    public init(
+        kind: String,
+        projectid: String,
+        displayname: String)
+    {
+        self.kind = kind
+        self.projectid = projectid
+        self.displayname = displayname
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case projectid = "projectId"
+        case displayname = "displayName"
+    }
+}
+
+public struct ProjectsListParams: Codable, Sendable {
+    public let includeobserved: Bool?
+
+    public init(
+        includeobserved: Bool? = nil)
+    {
+        self.includeobserved = includeobserved
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case includeobserved = "includeObserved"
+    }
+}
+
+public struct ProjectsListResult: Codable, Sendable {
+    public let projects: [ProjectsAddResult]
+    public let recents: [ProjectRecent]?
+    public let observedprojects: [ProjectSummary]?
+
+    public init(
+        projects: [ProjectsAddResult],
+        recents: [ProjectRecent]? = nil,
+        observedprojects: [ProjectSummary]? = nil)
     {
         self.projects = projects
+        self.recents = recents
+        self.observedprojects = observedprojects
     }
 
     private enum CodingKeys: String, CodingKey {
         case projects
+        case recents
+        case observedprojects = "observedProjects"
     }
 }
 
@@ -3145,17 +3303,139 @@ public struct ProjectsRegisterResult: Codable, Sendable {
     }
 }
 
-public struct ProjectsRemoveParams: Codable, Sendable {
-    public let id: String
+public struct ProjectsAddParams: Codable, Sendable {
+    public let giturl: String
+    public let name: String?
 
     public init(
-        id: String)
+        giturl: String,
+        name: String? = nil)
+    {
+        self.giturl = giturl
+        self.name = name
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case giturl = "gitUrl"
+        case name
+    }
+}
+
+public struct ProjectsAddResult: Codable, Sendable {
+    public let id: String
+    public let displayname: String
+    public let reporoot: String?
+    public let originurl: String?
+    public let source: String
+    public let agentid: String?
+
+    public init(
+        id: String,
+        displayname: String,
+        reporoot: String? = nil,
+        originurl: String? = nil,
+        source: String,
+        agentid: String? = nil)
     {
         self.id = id
+        self.displayname = displayname
+        self.reporoot = reporoot
+        self.originurl = originurl
+        self.source = source
+        self.agentid = agentid
     }
 
     private enum CodingKeys: String, CodingKey {
         case id
+        case displayname = "displayName"
+        case reporoot = "repoRoot"
+        case originurl = "originUrl"
+        case source
+        case agentid = "agentId"
+    }
+}
+
+public struct RemoteProject: Codable, Sendable {
+    public let name: String
+    public let fullname: String
+    public let description: String?
+    public let cloneurl: String
+    public let weburl: String
+    public let _private: Bool
+
+    public init(
+        name: String,
+        fullname: String,
+        description: String? = nil,
+        cloneurl: String,
+        weburl: String,
+        _private: Bool)
+    {
+        self.name = name
+        self.fullname = fullname
+        self.description = description
+        self.cloneurl = cloneurl
+        self.weburl = weburl
+        self._private = _private
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case fullname = "fullName"
+        case description
+        case cloneurl = "cloneUrl"
+        case weburl = "webUrl"
+        case _private = "private"
+    }
+}
+
+public struct ProjectsSearchRemoteParams: Codable, Sendable {
+    public let query: String
+
+    public init(
+        query: String)
+    {
+        self.query = query
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case query
+    }
+}
+
+public struct ProjectsSearchRemoteResult: Codable, Sendable {
+    public let credential: AnyCodable
+    public let projects: [RemoteProject]
+
+    public init(
+        credential: AnyCodable,
+        projects: [RemoteProject])
+    {
+        self.credential = credential
+        self.projects = projects
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case credential
+        case projects
+    }
+}
+
+public struct ProjectsRemoveParams: Codable, Sendable {
+    public let id: String
+    public let deletecheckout: Bool?
+
+    public init(
+        id: String,
+        deletecheckout: Bool? = nil)
+    {
+        self.id = id
+        self.deletecheckout = deletecheckout
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case deletecheckout = "deleteCheckout"
     }
 }
 
@@ -7731,21 +8011,47 @@ public struct SessionDiffFile: Codable, Sendable {
     }
 }
 
+public struct SessionDiffCommit: Codable, Sendable {
+    public let sha: String
+    public let subject: String
+
+    public init(
+        sha: String,
+        subject: String)
+    {
+        self.sha = sha
+        self.subject = subject
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sha
+        case subject
+    }
+}
+
 public struct SessionsDiffParams: Codable, Sendable {
     public let sessionkey: String
     public let agentid: String?
+    public let scope: SessionDiffScope?
+    public let commit: String?
 
     public init(
         sessionkey: String,
-        agentid: String? = nil)
+        agentid: String? = nil,
+        scope: SessionDiffScope? = nil,
+        commit: String? = nil)
     {
         self.sessionkey = sessionkey
         self.agentid = agentid
+        self.scope = scope
+        self.commit = commit
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
         case agentid = "agentId"
+        case scope
+        case commit
     }
 }
 
@@ -7754,6 +8060,9 @@ public struct SessionsDiffResult: Codable, Sendable {
     public let root: String?
     public let branch: String?
     public let baseref: String?
+    public let aheadcount: Int?
+    public let commits: [SessionDiffCommit]?
+    public let mergebase: SessionDiffCommit?
     public let files: [SessionDiffFile]
     public let additions: Int
     public let deletions: Int
@@ -7765,6 +8074,9 @@ public struct SessionsDiffResult: Codable, Sendable {
         root: String? = nil,
         branch: String? = nil,
         baseref: String? = nil,
+        aheadcount: Int? = nil,
+        commits: [SessionDiffCommit]? = nil,
+        mergebase: SessionDiffCommit? = nil,
         files: [SessionDiffFile],
         additions: Int,
         deletions: Int,
@@ -7775,6 +8087,9 @@ public struct SessionsDiffResult: Codable, Sendable {
         self.root = root
         self.branch = branch
         self.baseref = baseref
+        self.aheadcount = aheadcount
+        self.commits = commits
+        self.mergebase = mergebase
         self.files = files
         self.additions = additions
         self.deletions = deletions
@@ -7787,6 +8102,9 @@ public struct SessionsDiffResult: Codable, Sendable {
         case root
         case branch
         case baseref = "baseRef"
+        case aheadcount = "aheadCount"
+        case commits
+        case mergebase = "mergeBase"
         case files
         case additions
         case deletions
@@ -17572,6 +17890,7 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
     public let urlsource: String
     public let access: AnyCodable?
     public let accessdowngraded: Bool?
+    public let expiresatms: Int?
 
     public init(
         setupcode: String,
@@ -17581,7 +17900,8 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
         auth: AnyCodable,
         urlsource: String,
         access: AnyCodable? = nil,
-        accessdowngraded: Bool? = nil)
+        accessdowngraded: Bool? = nil,
+        expiresatms: Int? = nil)
     {
         self.setupcode = setupcode
         self.qrdataurl = qrdataurl
@@ -17591,6 +17911,7 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
         self.urlsource = urlsource
         self.access = access
         self.accessdowngraded = accessdowngraded
+        self.expiresatms = expiresatms
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -17602,6 +17923,7 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
         case urlsource = "urlSource"
         case access
         case accessdowngraded = "accessDowngraded"
+        case expiresatms = "expiresAtMs"
     }
 }
 
@@ -18689,6 +19011,8 @@ public enum BoardCommand: Codable, Sendable {
 public enum GatewayErrorDetails: Codable, Sendable {
     case missingScope(MissingScopeErrorDetails)
     case mcpAppViewExpired(McpAppViewExpiredErrorDetails)
+    case userPrefsLimitExceeded(UserPrefsLimitExceededErrorDetails)
+    case projectCloneFailed(ProjectCloneErrorDetails)
     case unknownAgentId(UnknownAgentIdErrorDetails)
     case wizardNotFound(WizardNotFoundErrorDetails)
 
@@ -18706,6 +19030,8 @@ public enum GatewayErrorDetails: Codable, Sendable {
         switch self {
         case .missingScope(let value): value.code
         case .mcpAppViewExpired(let value): value.code
+        case .userPrefsLimitExceeded(let value): value.code
+        case .projectCloneFailed(let value): value.code
         case .unknownAgentId(let value): value.code
         case .wizardNotFound(let value): value.code
         }
@@ -18731,6 +19057,8 @@ public enum GatewayErrorDetails: Codable, Sendable {
         switch discriminator {
         case "MISSING_SCOPE": self = try .missingScope(MissingScopeErrorDetails(from: decoder))
         case "MCP_APP_VIEW_EXPIRED": self = try .mcpAppViewExpired(McpAppViewExpiredErrorDetails(from: decoder))
+        case "USER_PREFS_LIMIT_EXCEEDED": self = try .userPrefsLimitExceeded(UserPrefsLimitExceededErrorDetails(from: decoder))
+        case "PROJECT_CLONE_FAILED": self = try .projectCloneFailed(ProjectCloneErrorDetails(from: decoder))
         case "UNKNOWN_AGENT_ID": self = try .unknownAgentId(UnknownAgentIdErrorDetails(from: decoder))
         case "WIZARD_NOT_FOUND": self = try .wizardNotFound(WizardNotFoundErrorDetails(from: decoder))
         default:
@@ -18746,6 +19074,8 @@ public enum GatewayErrorDetails: Codable, Sendable {
         switch self {
         case .missingScope(let value): try value.encode(to: encoder)
         case .mcpAppViewExpired(let value): try value.encode(to: encoder)
+        case .userPrefsLimitExceeded(let value): try value.encode(to: encoder)
+        case .projectCloneFailed(let value): try value.encode(to: encoder)
         case .unknownAgentId(let value): try value.encode(to: encoder)
         case .wizardNotFound(let value): try value.encode(to: encoder)
         }
@@ -18810,6 +19140,37 @@ public enum GatewaySuspendStatusResult: Codable, Sendable {
         switch self {
         case .running(let value): try value.encode(to: encoder)
         case .ready(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public enum ProjectRecent: Codable, Sendable {
+    case project(ProjectRecentProject)
+    case folder(ProjectRecentFolder)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "kind"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "project": self = try .project(ProjectRecentProject(from: decoder))
+        case "folder": self = try .folder(ProjectRecentFolder(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown ProjectRecent discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .project(let value): try value.encode(to: encoder)
+        case .folder(let value): try value.encode(to: encoder)
         }
     }
 }

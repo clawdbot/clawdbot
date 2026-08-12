@@ -89,27 +89,6 @@ struct SettingsViewSmokeTests {
         _ = view.body
     }
 
-    @Test func `instances settings builds body`() {
-        let store = InstancesStore(isPreview: true)
-        store.instances = [
-            InstanceInfo(
-                id: "local",
-                host: "this-mac",
-                ip: "127.0.0.1",
-                version: "1.0",
-                platform: "macos 15.0",
-                deviceFamily: "Mac",
-                modelIdentifier: "MacPreview",
-                lastInputSeconds: 12,
-                mode: "local",
-                reason: "test",
-                text: "test instance",
-                ts: Date().timeIntervalSince1970 * 1000),
-        ]
-        let view = InstancesSettings(store: store)
-        _ = view.body
-    }
-
     @Test func `permissions settings builds body`() {
         let state = AppState(preview: true)
         let view = PermissionsSettings(

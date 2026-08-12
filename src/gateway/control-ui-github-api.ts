@@ -2,6 +2,7 @@
 // previews, session pull request chips): pinned origin, manual redirects,
 // bounded bodies, and normalized upstream error statuses.
 export { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { readResponseWithLimit } from "../infra/http-body.js";
 
 export const GITHUB_API_ORIGIN = "https://api.github.com";
@@ -37,12 +38,11 @@ export function readOptionalGitHubString(
 }
 
 export function optionalNumber(record: Record<string, unknown>, key: string): number | undefined {
-  const value = record[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(record[key]);
 }
 
-export function githubApiToken(): string | undefined {
-  return process.env.GH_TOKEN?.trim() || process.env.GITHUB_TOKEN?.trim() || undefined;
+export function githubApiToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return env.GH_TOKEN?.trim() || env.GITHUB_TOKEN?.trim() || undefined;
 }
 
 function githubApiHeaders(token?: string): Record<string, string> {

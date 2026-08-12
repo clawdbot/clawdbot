@@ -92,6 +92,7 @@ type TestDispatchSequenceEntry =
 let mockedDispatchSequence: TestDispatchSequenceEntry[] = [];
 let mockedQueuedDispatchCounts: TestDispatchCounts = { tool: 0, block: 0, final: 0 };
 let mockedDispatcherCapturesDeliveryErrors = false;
+let mockedAgentRunTerminalOutcome: "completed" | "failed" | undefined;
 
 let mockedProgressEvents: string[] = [];
 let mockedEmptyProgressToolName: string | undefined;
@@ -872,13 +873,10 @@ vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
 
 vi.mock("openclaw/plugin-sdk/string-coerce-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/string-coerce-runtime")>();
-  const isMockRecord = (value: unknown): value is Record<string, unknown> =>
-    typeof value === "object" && value !== null && !Array.isArray(value);
   const normalizeMockLowercaseString = (value?: string) => value?.toLowerCase();
   const readMockOptionalString = (value?: string) => value;
   return {
     ...actual,
-    isRecord: isMockRecord,
     normalizeOptionalLowercaseString: normalizeMockLowercaseString,
     normalizeOptionalString: readMockOptionalString,
   };
@@ -982,6 +980,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   type DispatchParams = Parameters<typeof actual.dispatchChannelInboundTurn>[0];
   return {
     ...actual,
+    readAgentRunTerminalOutcome: () => mockedAgentRunTerminalOutcome,
     dispatchChannelInboundTurn: async (params: DispatchParams) => {
       capturedReplyOptions = params.replyOptions as typeof capturedReplyOptions;
       if (mockedReplyOptionEvents.length > 0) {
@@ -1151,6 +1150,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
     mockedQueuedDispatchCounts = { tool: 0, block: 0, final: 0 };
     mockedDispatcherCapturesDeliveryErrors = false;
+    mockedAgentRunTerminalOutcome = undefined;
     mockedProgressEvents = [];
     mockedEmptyProgressToolName = undefined;
     mockedReplyOptionEvents = [];
@@ -1955,6 +1955,42 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     });
     expect(statusReactionControllerMock.setQueued).toHaveBeenCalledTimes(1);
     expect(statusReactionControllerMock.setDone).toHaveBeenCalledTimes(1);
+    expect(statusReactionControllerMock.restoreInitial).toHaveBeenCalledTimes(1);
+    expect(statusReactionControllerMock.setDone.mock.invocationCallOrder[0]).toBeLessThan(
+      statusReactionControllerMock.restoreInitial.mock.invocationCallOrder[0] ?? 0,
+    );
+  });
+
+  it("marks a recovered agent failure as failed then restores its initial reaction", async () => {
+    mockedAgentRunTerminalOutcome = "failed";
+    mockedNativeStreaming = true;
+    mockedSlackStreamingMode = "progress";
+    mockedReplyOptionEvents = [{ kind: "item", progressText: "Recovering failed run" }];
+    mockedDispatchSequence = [
+      { kind: "final", payload: { text: "Something failed", isError: true } },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        cfg: { messages: { statusReactions: { enabled: true } } },
+        accountConfig: {
+          streaming: { mode: "progress", progress: { nativeTaskCards: true, render: "rich" } },
+        },
+        ackReactionMessageTs: "171234.111",
+        ackReactionPromise: Promise.resolve(true),
+      }),
+    );
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expect(startSlackStreamMock).toHaveBeenCalledTimes(1);
+    expect(stopSlackStreamMock).toHaveBeenCalledTimes(1);
+    expect(collectNativeTaskUpdates().at(-1)).toEqual(expect.objectContaining({ status: "error" }));
+    expect(statusReactionControllerMock.setError).toHaveBeenCalledTimes(1);
+    expect(statusReactionControllerMock.setDone).not.toHaveBeenCalled();
+    expect(statusReactionControllerMock.restoreInitial).toHaveBeenCalledTimes(1);
+    expect(statusReactionControllerMock.setError.mock.invocationCallOrder[0]).toBeLessThan(
+      statusReactionControllerMock.restoreInitial.mock.invocationCallOrder[0] ?? 0,
+    );
   });
 
   it("keeps Slack lifecycle reactions off by default when an ack reaction exists", async () => {

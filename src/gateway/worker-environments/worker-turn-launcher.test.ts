@@ -793,7 +793,7 @@ describe("worker turn launcher", () => {
           ownerEpoch: OWNER_EPOCH,
           runId: "run-worker-turn",
           transcriptSeq: 2,
-          workspaceResultPending: true,
+          liveSeq: 1,
         });
         return {
           stdout: JSON.stringify({
@@ -1027,7 +1027,7 @@ describe("worker turn launcher", () => {
           ownerEpoch: OWNER_EPOCH,
           runId: "run-persisted-user",
           transcriptSeq: 2,
-          workspaceResultPending: true,
+          liveSeq: 1,
         });
         return {
           stdout: JSON.stringify({
@@ -1161,7 +1161,7 @@ describe("worker turn launcher", () => {
           ownerEpoch: OWNER_EPOCH,
           runId: "run-reconcile-tunnel-loss",
           transcriptSeq: 2,
-          workspaceResultPending: true,
+          liveSeq: 1,
         });
         return {
           stdout: JSON.stringify({
@@ -1286,7 +1286,7 @@ describe("worker turn launcher", () => {
             ownerEpoch: OWNER_EPOCH,
             runId: "run-worker-usage",
             transcriptSeq: 2,
-            workspaceResultPending: true,
+            liveSeq: 1,
           });
           return {
             stdout: JSON.stringify({
@@ -1487,7 +1487,6 @@ describe("worker turn launcher", () => {
         ownerEpoch: OWNER_EPOCH,
         runId: "run-terminal-child-failure",
         liveSeq: 1,
-        workspaceResultPending: true,
       });
       return {
         stdout: "",
@@ -2011,7 +2010,7 @@ describe("worker turn launcher", () => {
       ownerEpoch: OWNER_EPOCH,
       runId: "run-overlap",
       transcriptSeq: 2,
-      workspaceResultPending: true,
+      liveSeq: 1,
     });
     const active = placements.get(SESSION_ID);
     if (active?.state !== "active") {
@@ -2089,7 +2088,7 @@ describe("worker turn launcher", () => {
               ownerEpoch: OWNER_EPOCH,
               runId: "run-model-failed",
               transcriptSeq: 2,
-              workspaceResultPending: true,
+              liveSeq: 1,
             });
             return {
               stdout: JSON.stringify({
@@ -2118,7 +2117,7 @@ describe("worker turn launcher", () => {
             ownerEpoch: OWNER_EPOCH,
             runId: "run-model-recovered",
             transcriptSeq: 2,
-            workspaceResultPending: true,
+            liveSeq: 1,
           });
           return {
             stdout: JSON.stringify({
@@ -2240,7 +2239,7 @@ describe("worker turn launcher", () => {
         ownerEpoch: OWNER_EPOCH,
         runId,
         transcriptSeq: 2,
-        workspaceResultPending: true,
+        liveSeq: 1,
       });
       return {
         stdout: JSON.stringify({

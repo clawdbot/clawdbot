@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { SessionManager } from "../../src/agents/sessions/session-manager.js";
 import type { OpenClawConfig } from "../../src/config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../src/config/model-input.js";
@@ -672,7 +673,7 @@ type UsageRecord = {
 };
 
 function finite(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+  return asFiniteNumber(value) ?? null;
 }
 
 type OpenAILongContextTurnMetric = {

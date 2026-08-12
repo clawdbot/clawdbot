@@ -22,7 +22,7 @@ import { reactivateCompletedSubagentSession } from "../session-subagent-reactiva
 import { readSessionMessageCountAsync } from "../session-transcript-readers.js";
 import {
   loadSessionEntry,
-  loadSessionEntryReadOnly,
+  loadGatewaySessionEntryReadOnly,
   resolveDeletedAgentIdFromSessionKey,
 } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
@@ -193,7 +193,7 @@ async function createAgentMainSessionForSend(params: {
   }
 
   const createdKey = normalizeOptionalString(createResult.payload?.key) ?? params.canonicalKey;
-  const loaded = loadSessionEntryReadOnly(createdKey);
+  const loaded = loadGatewaySessionEntryReadOnly(createdKey);
   if (!loaded.entry?.sessionId) {
     return {
       ok: false,

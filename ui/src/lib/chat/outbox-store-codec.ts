@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString as normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentId } from "../sessions/session-key.ts";
 import type { ChatAttachment, ChatQueueItem } from "./chat-types.ts";
@@ -24,10 +25,10 @@ function normalizeOptionalBoolean(value: unknown): boolean | undefined {
 }
 
 function normalizeChatAttachment(value: unknown): ChatAttachment | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return null;
   }
-  const entry = value as Record<string, unknown>;
+  const entry = value;
   const id = normalizeOptionalString(entry.id);
   const mimeType = normalizeOptionalString(entry.mimeType);
   if (!id || !mimeType) {
@@ -49,10 +50,10 @@ function normalizeChatAttachment(value: unknown): ChatAttachment | null {
 }
 
 export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return null;
   }
-  const entry = value as Record<string, unknown>;
+  const entry = value;
   if (entry.skillWorkshopRevision !== undefined) {
     return null;
   }
@@ -138,10 +139,10 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
 }
 
 export function normalizeStoredSession(value: unknown): StoredComposerSession | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return null;
   }
-  const entry = value as Record<string, unknown>;
+  const entry = value;
   const draft = typeof entry.draft === "string" ? entry.draft : undefined;
   const normalizedQueue = Array.isArray(entry.queue)
     ? entry.queue

@@ -248,19 +248,33 @@ function runCiManifestFixture(options: {
           ? `throw new Error("planner import failure");\n`
           : `
           export const createChangedNodeTestShards = (changedPaths) =>
-            changedPaths.includes("src/focused.ts")
+            changedPaths.includes("src/focused.ts") ||
+            changedPaths.includes("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts")
               ? [{
                   checkName: "changed-node-plan",
                   configs: [],
                   requiresDist: false,
                   runner: "ubuntu-24.04",
                   shardName: "changed-node-plan",
-                  targets: ["src/focused.test.ts"],
+                  targets: changedPaths.includes("src/focused.ts")
+                    ? ["src/focused.test.ts"]
+                    : ["test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"],
                 }]
               : null;
+          export const hasBuildArtifactAffectingChange = (changedPaths) =>
+            !changedPaths.includes("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts");
+          export const hasSqliteSessionLifecycleAffectingChange = (changedPaths) =>
+            changedPaths.includes("src/sqlite-session-owner.ts") ||
+            changedPaths.includes("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts");
         `,
         "utf8",
       );
+      const sqliteLifecycleProof = path.join(
+        root,
+        "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
+      );
+      mkdirSync(path.dirname(sqliteLifecycleProof), { recursive: true });
+      writeFileSync(sqliteLifecycleProof, "export {};\n");
       writeFileSync(
         path.join(scriptsDir, "channel-contract-test-plan.mts"),
         `export const createChannelContractTestShards = () => [{ checkName: "channel-contracts" }];\n`,
@@ -1622,7 +1636,17 @@ NODE
       'node scripts/ci-changed-scope.mjs --base "$BASE" --head "$HEAD_SHA"',
     );
     expect(workflow.jobs.preflight.permissions).toEqual({ contents: "read" });
-    expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
+    expect(workflow.jobs.preflight.outputs.run_ios_screenshots).toBe(
+      "${{ steps.changed_scope.outputs.run_ios_screenshots }}",
+    );
+    const workflowSource = readFileSync(".github/workflows/ci.yml", "utf8");
+    expect(workflowSource).toContain(
+      "OPENCLAW_CI_RUN_MACOS: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_macos || 'false' }}",
+    );
+    expect(workflowSource).toContain(
+      "OPENCLAW_CI_RUN_IOS_BUILD: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_ios_build || 'false' }}",
+    );
+    expect(workflowSource).toContain(
       "OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
     );
 
@@ -2866,6 +2890,7 @@ NODE
       "control-ui-i18n",
       "native-i18n",
       "qa-smoke-ci-profile",
+      "sqlite-session-lifecycle",
     ]);
     const hostedRetryJobs = new Set(["checks-ui-e2e", "checks-ui-e2e-real-gateway"]);
     for (const { jobName, stepWith } of stickyConsumers) {
@@ -2911,6 +2936,9 @@ NODE
     expect(maintainStep.run).toContain('store_dir="${PNPM_CONFIG_STORE_DIR:?}"');
     expect(maintainStep.run).toContain('PNPM_CONFIG_STORE_DIR="$store_dir" pnpm store prune');
     expect(maintainStep.run).toContain('>> "$GITHUB_STEP_SUMMARY"');
+    expect(maintainStep.run).toContain('if [ -f "${OPENCLAW_STICKY_REBUILD_SIGNAL:?}" ]');
+    expect(maintainStep.run).toContain("ensure-change /var/tmp/openclaw-node-deps");
+    expect(maintainStep.run).toContain('"${OPENCLAW_STICKY_INITIAL_USAGE_BYTES:?}"');
     expect(workflow.jobs["pnpm-store-warmup"].if).toContain("github.ref == 'refs/heads/main'");
     expect(workflow.jobs["pnpm-store-warmup"].if).toContain(
       "github.repository == 'openclaw/openclaw'",
@@ -2949,6 +2977,9 @@ NODE
     );
     const mountStep = action.runs.steps.find(
       (step: WorkflowStep) => step.name === "Mount dependency sticky disk",
+    );
+    const baselineStep = action.runs.steps.find(
+      (step: WorkflowStep) => step.name === "Record sticky disk allocation baseline",
     );
     const cleanupStep = action.runs.steps.find(
       (step: WorkflowStep) => step.name === "Register sticky bind cleanup",
@@ -2999,7 +3030,18 @@ NODE
       "${{ github.repository }}-node-deps-bind-v6-${{ inputs.node-version }}",
     );
     expect(mountStep.with.commit).toBe(
-      "${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'true' || 'false' }}",
+      "${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'on-change' || 'false' }}",
+    );
+    expect(baselineStep).toMatchObject({
+      if: "inputs.sticky-disk == 'true' && inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request'",
+    });
+    expect(baselineStep.run).toContain('df -B1 --output=used "$sticky_root"');
+    expect(baselineStep.run).toContain(
+      'echo "OPENCLAW_STICKY_INITIAL_USAGE_BYTES=$initial_usage_bytes"',
+    );
+    expect(baselineStep.run).toContain('echo "OPENCLAW_STICKY_REBUILD_SIGNAL=$rebuild_signal"');
+    expect(action.runs.steps.indexOf(mountStep)).toBeLessThan(
+      action.runs.steps.indexOf(baselineStep),
     );
     expect(cleanupStep).toMatchObject({
       if: "inputs.sticky-disk == 'true'",
@@ -3090,6 +3132,7 @@ NODE
         'bash "$GITHUB_ACTION_PATH/sticky-importers.sh" capture "$STICKY_ROOT" "$GITHUB_WORKSPACE" "$OPENCLAW_STICKY_DEPS_FINGERPRINT"',
       ),
     );
+    expect(installStep.run).toContain('"${OPENCLAW_STICKY_REBUILD_SIGNAL:?}"');
     // The content-validated snapshot or successful install already owns
     // dependency validation. pnpm's redundant check sees intentionally pruned
     // plugin importers as stale, so it must not mutate during shard fanout.
@@ -3165,6 +3208,14 @@ NODE
       OPENCLAW_BUILD_PRIVATE_QA: "1",
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
     });
+    expect(releaseChecks.jobs.validate_repo_e2e["timeout-minutes"]).toBe(90);
+    const repoE2eSteps = releaseChecks.jobs.validate_repo_e2e.steps as WorkflowStep[];
+    const sandboxSetupIndex = repoE2eSteps.findIndex(
+      (step) => step.name === "Build sandbox image" && step.run === "scripts/sandbox-setup.sh",
+    );
+    const repoE2eIndex = repoE2eSteps.findIndex((step) => step.name === "Run repo E2E suite");
+    expect(sandboxSetupIndex).toBeGreaterThanOrEqual(0);
+    expect(repoE2eIndex).toBeGreaterThan(sandboxSetupIndex);
     const targetedGroupStep = releaseChecks.jobs.plan_docker_lane_groups.steps.find(
       (step: WorkflowStep) => step.name === "Build targeted Docker lane groups",
     );
@@ -3231,6 +3282,7 @@ NODE
       const rootOptionalDependency = path.join(rootModules, "optional-ipaddr");
       const importerDependency = path.join(importerModules, "ipaddr.js");
       const helper = path.resolve(".github/actions/setup-node-env/sticky-importers.sh");
+      const rebuildSignal = path.join(root, "rebuilt");
       const lockfile = [
         "lockfileVersion: '9.0'",
         "importers:",
@@ -3299,7 +3351,15 @@ NODE
       );
       writeFileSync(path.join(rootModules, "root-sentinel"), "before", "utf8");
 
-      execFileSync("bash", [helper, "capture", stickyRoot, workspace, "fingerprint-a"]);
+      execFileSync("bash", [
+        helper,
+        "capture",
+        stickyRoot,
+        workspace,
+        "fingerprint-a",
+        rebuildSignal,
+      ]);
+      expect(existsSync(rebuildSignal)).toBe(true);
       rmSync(importerModules, { recursive: true });
       writeFileSync(path.join(rootModules, "root-sentinel"), "after", "utf8");
       execFileSync("bash", [helper, "restore", stickyRoot, workspace]);
@@ -3310,6 +3370,19 @@ NODE
       expect(readFileSync(path.join(rootModules, "root-sentinel"), "utf8")).toBe("after");
       expect(readFileSync(path.join(stickyRoot, ".openclaw-deps-fingerprint"), "utf8")).toBe(
         "fingerprint-a\n",
+      );
+      rmSync(rebuildSignal);
+      execFileSync("bash", [
+        helper,
+        "capture",
+        stickyRoot,
+        workspace,
+        "fingerprint-b",
+        rebuildSignal,
+      ]);
+      expect(existsSync(rebuildSignal)).toBe(true);
+      expect(readFileSync(path.join(stickyRoot, ".openclaw-deps-fingerprint"), "utf8")).toBe(
+        "fingerprint-b\n",
       );
 
       // Recreate the reported failure shape: a marker-matching archive can be
@@ -3335,15 +3408,70 @@ NODE
       );
       expect(existsSync(importerModules)).toBe(false);
 
+      rmSync(rebuildSignal);
       const failedCapture = spawnSync(
         "bash",
-        [helper, "capture", stickyRoot, workspace, "fingerprint-b"],
+        [helper, "capture", stickyRoot, workspace, "fingerprint-c", rebuildSignal],
         { encoding: "utf8" },
       );
       expect(failedCapture.status).toBe(1);
+      expect(existsSync(rebuildSignal)).toBe(false);
       expect(failedCapture.stderr).toContain(
         "ipaddr.js expected ipaddr.js@2.4.0, resolved ipaddr.js@1.9.1",
       );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("forces StickyDisk's allocation delta after a successful rebuild", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-sticky-allocation-"));
+    try {
+      const fakeBin = path.join(root, "bin");
+      const stickyRoot = path.join(root, "sticky");
+      const usageFile = path.join(root, "usage");
+      const helper = path.resolve(".github/actions/setup-node-env/sticky-importers.sh");
+      mkdirSync(fakeBin, { recursive: true });
+      mkdirSync(stickyRoot, { recursive: true });
+      // Start one allocation block below the action's baseline. A fixed append
+      // can be cancelled by this shrink; the helper must measure the net delta.
+      writeFileSync(usageFile, "995904\n", "utf8");
+      writeFileSync(
+        path.join(fakeBin, "df"),
+        '#!/usr/bin/env bash\necho Used\ncat "$OPENCLAW_TEST_USAGE_FILE"\n',
+        "utf8",
+      );
+      writeFileSync(
+        path.join(fakeBin, "dd"),
+        `#!/usr/bin/env bash
+set -euo pipefail
+count=0
+for arg in "$@"; do
+  case "$arg" in count=*) count="\${arg#count=}" ;; esac
+done
+usage="$(<"$OPENCLAW_TEST_USAGE_FILE")"
+printf '%s\n' "$((usage + count * 4096))" > "$OPENCLAW_TEST_USAGE_FILE"
+`,
+        "utf8",
+      );
+      writeFileSync(path.join(fakeBin, "sync"), "#!/usr/bin/env bash\nexit 0\n", "utf8");
+      for (const command of ["df", "dd", "sync"]) {
+        chmodSync(path.join(fakeBin, command), 0o755);
+      }
+
+      const result = spawnSync("bash", [helper, "ensure-change", stickyRoot, "1000000"], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_TEST_USAGE_FILE: usageFile,
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        },
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      const finalUsage = Number(readFileSync(usageFile, "utf8").trim());
+      expect(Math.abs(finalUsage - 1_000_000)).toBeGreaterThan(65_536);
+      expect(result.stdout).toContain("Sticky dependency rebuild changed allocation");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -3692,6 +3820,7 @@ NODE
           ...process.env,
           GITHUB_STEP_SUMMARY: summaryPath,
           OPENCLAW_PNPM_STORE_MAX_KIB: "-1",
+          OPENCLAW_STICKY_REBUILD_SIGNAL: path.join(maintenanceRoot, "not-rebuilt"),
           PNPM_CONFIG_STORE_DIR: storeDir,
         },
       });
@@ -5005,6 +5134,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(checksFastRun.run).toContain("max-lines-ratchet)");
     expect(checksFastRun.run).toContain("coercion-helpers)");
     expect(checksFastRun.run).toContain("pnpm check:coercion-helpers");
+    expect(checksFastRun.run).toContain("bun-launcher)");
+    expect(checksFastRun.run).toContain(
+      "OPENCLAW_E2E_SKIP_BUILD=1 OPENCLAW_TEST_BUN_LAUNCHER=1 pnpm test test/openclaw-launcher.e2e.test.ts",
+    );
     expect(checksFastRun.run).toContain('has_package_script "check:max-lines-ratchet"');
     expect(checksFastRun.env.RATCHET_PR_HEAD_SHA).toBe(
       "${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}",
@@ -5151,6 +5284,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(current.outputs.run_native_i18n).toBe("true");
     expect(current.outputs.run_openclawkit_tests).toBe("true");
     expect(current.outputs.run_qa_smoke_ci).toBe("true");
+    expect(current.outputs.run_sqlite_session_lifecycle).toBe("true");
     expect(current.outputs.run_channel_contracts_shards).toBe("true");
     expect(current.outputs.run_protocol_event_coverage).toBe("true");
     expect(current.outputs.run_format_check).toBe("true");
@@ -5233,6 +5367,25 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       }),
     ]);
     expect(changedPullRequest.outputs.run_checks_node_core_dist).toBe("true");
+    expect(changedPullRequest.outputs.run_sqlite_session_lifecycle).toBe("false");
+
+    const sqliteLifecyclePullRequest = runCiManifestFixture({
+      bundledPlanner: true,
+      changedPaths: ["src/sqlite-session-owner.ts"],
+      eventName: "pull_request",
+    });
+    expect(sqliteLifecyclePullRequest.status, sqliteLifecyclePullRequest.output).toBe(0);
+    expect(sqliteLifecyclePullRequest.outputs.run_sqlite_session_lifecycle).toBe("true");
+    expect(sqliteLifecyclePullRequest.outputs.run_build_artifacts).toBe("true");
+
+    const sqliteLifecycleTestPullRequest = runCiManifestFixture({
+      bundledPlanner: true,
+      changedPaths: ["test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"],
+      eventName: "pull_request",
+    });
+    expect(sqliteLifecycleTestPullRequest.status, sqliteLifecycleTestPullRequest.output).toBe(0);
+    expect(sqliteLifecycleTestPullRequest.outputs.run_sqlite_session_lifecycle).toBe("true");
+    expect(sqliteLifecycleTestPullRequest.outputs.run_build_artifacts).toBe("true");
 
     const plannerImportFailure = runCiManifestFixture({
       bundledPlanner: true,
@@ -5811,6 +5964,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       (step: WorkflowStep) => step.name === "Verify built Doctor plugin index persistence",
     );
 
+    expect(proofStep.env.OPENCLAW_E2E_USE_PREBUILT_DIST).toBe("1");
     expect(proofStep.run).toContain(
       "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
     );
@@ -5821,18 +5975,40 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(proofStep.run).toContain("Selected target predates");
   });
 
-  it("scopes cold-runner watchdog headroom to the SQLite flip proof", () => {
+  it("runs the scoped SQLite lifecycle proof against the exact built artifact", () => {
     const workflow = readCiWorkflow();
     const additionalJob = workflow.jobs["check-additional-shard"];
-    const runStep = additionalJob.steps.find(
+    const additionalRunStep = additionalJob.steps.find(
       (step: WorkflowStep) => step.name === "Run additional check shard",
     );
-
-    expect(runStep.run).toContain("sqlite-session-flip-proof)");
-    expect(runStep.run).toContain(
-      'run_check "sqlite sessions/transcripts flip proof" env OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=660000 node scripts/run-vitest.mjs run',
+    const lifecycleJob = workflow.jobs["sqlite-session-lifecycle"];
+    const downloadStep = lifecycleJob.steps.find(
+      (step: WorkflowStep) => step.name === "Download exact-run built runtime",
     );
-    expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBeUndefined();
+    const extractStep = lifecycleJob.steps.find(
+      (step: WorkflowStep) => step.name === "Extract built runtime",
+    );
+    const proofStep = lifecycleJob.steps.find(
+      (step: WorkflowStep) => step.name === "Verify SQLite session lifecycle",
+    );
+
+    expect(additionalJob.strategy.matrix.include).not.toContainEqual(
+      expect.objectContaining({ group: "sqlite-session-flip-proof" }),
+    );
+    expect(additionalRunStep.run).not.toContain("sqlite-session-flip-proof)");
+    expect(lifecycleJob.needs).toEqual(["preflight", "build-artifacts"]);
+    expect(lifecycleJob.if).toContain(
+      "needs.preflight.outputs.run_sqlite_session_lifecycle == 'true'",
+    );
+    expect(downloadStep.uses).toBe(DOWNLOAD_ARTIFACT_V8);
+    expect(downloadStep.with.name).toBe("dist-runtime-build");
+    expect(extractStep.run).toContain("dist-runtime-build.tar.zst");
+    expect(proofStep.env.OPENCLAW_E2E_USE_PREBUILT_DIST).toBe("1");
+    expect(proofStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("660000");
+    expect(proofStep.run).toContain(
+      "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
+    );
+    expect(workflow.jobs["ci-gate"].needs).toContain("sqlite-session-lifecycle");
   });
 
   it("restores the dist build cache before building and saves only cache misses", () => {
@@ -6058,6 +6234,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const selectedJobs = [
       "pnpm-store-warmup",
       "build-artifacts",
+      "sqlite-session-lifecycle",
       "native-i18n",
       "checks-ui",
       "checks-ui-e2e",
@@ -7118,6 +7295,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const fullReleaseWorkflow = readWorkflow(".github/workflows/full-release-validation.yml");
     const releaseWorkflow = readReleaseChecksWorkflow();
     const telegramWorkflow = readWorkflow(".github/workflows/openclaw-release-telegram-qa.yml");
+    const telegramProvenanceHelper = readFileSync("scripts/release-telegram-provenance.sh", "utf8");
     const fullReleaseDispatchStep = fullReleaseWorkflow.jobs.release_checks.steps.find(
       (step: WorkflowStep) => step.name === "Dispatch and monitor release checks",
     );
@@ -7169,29 +7347,48 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     for (const provenanceStep of provenanceSteps) {
       expect(provenanceStep.env.TARGET_CONTEXT_REF).toBe("${{ inputs.target_context_ref }}");
-      expect(provenanceStep.run).toContain("frozen-release-branch-head");
-      expect(provenanceStep.run).toContain(
-        'elif [[ "$candidate_version" =~ ^${release_version_pattern}-beta\\.[0-9]+$ ]]',
-      );
-      expect(provenanceStep.run).toContain(
-        'frozen_release_branch_pattern="^release/${candidate_version_pattern}-code-frozen(-r[1-9][0-9]*)?$"',
-      );
-      expect(provenanceStep.run).toContain('elif [[ -z "$frozen_release_branch_pattern" ]]; then');
-      expect(provenanceStep.run).toContain(
-        "Telegram candidate version ${candidate_version} does not belong to release ${release_version}.",
-      );
-      expect(provenanceStep.run).toContain(
-        "Telegram candidate version ${candidate_version} does not match context ${normalized_context_ref}.",
-      );
-      expect(provenanceStep.run).toContain('context_release_branch="$normalized_context_ref"');
-      expect(provenanceStep.run).toContain('context_release_tag="$normalized_context_ref"');
-      expect(provenanceStep.run).toContain(
-        "Frozen release candidate ${candidate_sha} requires a valid maintainer signature.",
-      );
-      expect(provenanceStep.run).toContain(
-        'select(.state == "OPEN" and .headRepository.nameWithOwner == $repo and',
+      expect(provenanceStep.run.trim()).toBe(
+        'bash "${GITHUB_WORKSPACE}/scripts/release-telegram-provenance.sh"',
       );
     }
+    expect(telegramProvenanceHelper).toContain(
+      'if [[ "$candidate_version" == "$release_version" ]]; then',
+    );
+    expect(telegramProvenanceHelper).toContain(
+      'elif [[ "$candidate_version" =~ ^${release_version_pattern}-beta\\.[0-9]+$ ]]; then',
+    );
+    expect(telegramProvenanceHelper).toContain(
+      'frozen_release_branch_pattern="^release/${candidate_version_pattern}-code-frozen(-r[1-9][0-9]*)?$"',
+    );
+    expect(telegramProvenanceHelper).toContain(
+      '"$TARGET_REF" =~ ^[a-f0-9]{40}$ && "$TARGET_REF" == "$candidate_sha"',
+    );
+    expect(telegramProvenanceHelper).toContain('trusted_reason="frozen-release-branch-head"');
+    expect(telegramProvenanceHelper).toContain(
+      '"$signature_status" != "valid" || "$signer" == "web-flow"',
+    );
+    expect(telegramProvenanceHelper).toContain('context_release_branch="$normalized_context_ref"');
+    expect(telegramProvenanceHelper).toContain('context_release_tag="$normalized_context_ref"');
+    expect(telegramProvenanceHelper).toContain(
+      "Telegram candidate version ${candidate_version} does not belong to release ${release_version}.",
+    );
+    expect(telegramProvenanceHelper).toContain(
+      "Telegram candidate version ${candidate_version} does not match context ${normalized_context_ref}.",
+    );
+    expect(telegramProvenanceHelper).toContain(
+      'select(.state == "OPEN" and .headRepository.nameWithOwner == $repo and',
+    );
+    expect(telegramProvenanceHelper).toContain(
+      'select(.state == "MERGED" and .baseRepository.nameWithOwner == $repo and',
+    );
+    expect(telegramProvenanceHelper).toContain(".mergeCommit.oid == $sha)]");
+    expect(telegramProvenanceHelper).toContain(
+      'if [[ "$(jq \'length\' <<<"$matching_merge_prs")" != "1" ]]; then',
+    );
+    expect(telegramProvenanceHelper).toContain(
+      'if [[ "$permission" != "admin" && "$role_name" != "maintain" ]]; then',
+    );
+    expect(telegramProvenanceHelper).not.toContain(".baseRefName ==");
   });
 
   it("keeps maturity scorecard release docs opt-in from release checks", () => {

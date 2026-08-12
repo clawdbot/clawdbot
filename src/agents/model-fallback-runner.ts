@@ -205,8 +205,6 @@ async function runWithModelFallbackInternal<T>(
   let exhaustionResult: ModelFallbackExhaustionResult<T> | undefined;
   const cooldownProbeUsedProviders = new Set<string>();
   const tlsFailedProviders = new Set<string>();
-  const resolveTerminalSuspensionLane = () =>
-    deferredSuspension.pending ? deferredSuspension.pending.laneId : params.lane;
   const observeDecision = async (decision: ModelFallbackDecisionParams) => {
     if (!params.onFallbackStep && !isModelFallbackDecisionLogEnabled()) {
       return;
@@ -322,12 +320,19 @@ async function runWithModelFallbackInternal<T>(
           profileId: userLockedAuthProfileId,
         }).eligible;
       if (!candidateHarnessAuth.skipsProviderAuthCooldown) {
-        candidateAuthProfileIds = authRuntime.resolveAuthProfileOrder({
+        const orderedProfileIds = authRuntime.resolveAuthProfileOrder({
           cfg: params.cfg,
           store: authStore,
           provider: candidate.provider,
           forModel: candidate.model,
         });
+        candidateAuthProfileIds =
+          userLockedAuthProfileEligible && userLockedAuthProfileId
+            ? [
+                userLockedAuthProfileId,
+                ...orderedProfileIds.filter((profileId) => profileId !== userLockedAuthProfileId),
+              ]
+            : orderedProfileIds;
         authRuntime.maybeReprobeWhamBlockedProfiles({
           store: authStore,
           profileIds: candidateAuthProfileIds,
@@ -388,7 +393,7 @@ async function runWithModelFallbackInternal<T>(
         (id) => !authRuntime.isProfileInCooldown(authStore, id, undefined, candidate.model),
       );
 
-      if (profileIds.length > 0 && !isAnyProfileAvailable && !userLockedAuthProfileEligible) {
+      if (profileIds.length > 0 && !isAnyProfileAvailable) {
         // All profiles for this provider are in cooldown.
         const now = Date.now();
         const probeThrottleKey = resolveProbeThrottleKey(candidate.provider, params.agentDir);
@@ -408,13 +413,12 @@ async function runWithModelFallbackInternal<T>(
             ? resolveSubscriptionAuthModeForProfiles({ store: authStore, profileIds })
             : undefined;
 
-        if (decision.type === "suspend_lanes") {
-          const error = `Provider ${candidate.provider} is in cooldown (suspending lanes)`;
+        if (decision.type === "suspend_session") {
+          const error = `Provider ${candidate.provider} is in cooldown`;
           pushAttempt(error, decision.reason, { authMode });
 
-          // Only lock the lane when no remaining candidates can serve as
-          // fallbacks. Per-provider cooldown state already prevents
-          // re-attempting the failed provider on subsequent turns.
+          // Only record terminal session suspension when no remaining candidate
+          // can serve the turn. Provider cooldown state prevents repeat probes.
           const hasRemainingCandidates = hasRemainingCandidate;
           if (params.sessionId) {
             emitFailoverEvent({
@@ -426,14 +430,12 @@ async function runWithModelFallbackInternal<T>(
               suspended: !hasRemainingCandidates,
             });
             if (!hasRemainingCandidates) {
-              const laneId = resolveTerminalSuspensionLane();
               deferredSuspension.pending = undefined;
               void suspendSession({
                 cfg: params.cfg,
                 agentId: params.agentId,
                 agentDir: params.agentDir,
                 sessionId: params.sessionId,
-                laneId,
                 reason: resolveSessionSuspensionReason(decision.reason),
                 failedProvider: candidate.provider,
                 failedModel: candidate.model,
@@ -767,7 +769,7 @@ async function runWithModelFallbackInternal<T>(
       cfg: params.cfg,
       candidates,
     }),
-    attribution: { sessionId: params.sessionId, lane: resolveTerminalSuspensionLane() },
+    attribution: { sessionId: params.sessionId, lane: params.lane },
     cfg: params.cfg,
     agentId: params.agentId,
     agentDir: params.agentDir,

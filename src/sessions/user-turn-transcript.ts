@@ -18,6 +18,7 @@ import {
   normalizeStructuredMediaEntryForTranscript,
   resolveTranscriptMediaPath,
 } from "./user-turn-transcript.media-normalize.js";
+import { buildPersistedUserTurnMetadata } from "./user-turn-transcript.metadata.js";
 import type {
   CreateUserTurnTranscriptRecorderParams,
   PersistUserTurnTranscriptParams,
@@ -59,11 +60,7 @@ function resolveTranscriptMediaType(params: {
 export function buildPersistedUserTurnMediaInputsFromFields(
   fields: PersistedUserTurnMessage | null | undefined,
 ): PersistedUserTurnMediaInput[] {
-  if (!fields) {
-    return [];
-  }
-
-  const facts = readPersistedMediaFacts(fields) ?? [];
+  const facts = fields ? (readPersistedMediaFacts(fields) ?? []) : [];
   const normalizedMedia = facts.map((fact) => {
     const rawPath = normalizeOptionalString(fact.path);
     const mediaPath = rawPath
@@ -123,26 +120,9 @@ export function buildLateMediaAttachedProjection(message: AgentMessage): {
   return { ...(text ? { text } : {}), media };
 }
 
-function buildUserTurnSenderMeta(
-  sender: UserTurnInput["sender"],
-): Record<string, string> | undefined {
-  const senderId = normalizeOptionalString(sender?.id);
-  const senderName = normalizeOptionalString(sender?.name);
-  const senderUsername = normalizeOptionalString(sender?.username);
-  if (!senderId && !senderName && !senderUsername) {
-    return undefined;
-  }
-  return {
-    ...(senderId ? { senderId } : {}),
-    ...(senderName ? { senderName } : {}),
-    ...(senderUsername ? { senderUsername } : {}),
-  };
-}
-
 function readOpenClawMessageMeta(message: AgentMessage): Record<string, unknown> | undefined {
   return asOptionalRecord((message as unknown as Record<string, unknown>)["__openclaw"]);
 }
-
 export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurnMessage {
   const normalizedMedia = (params.media ?? []).map(normalizeStructuredMediaEntryForTranscript);
   const text = params.text ?? "";
@@ -152,32 +132,7 @@ export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedU
   // every historical turn serialize identically on the wire. Persisting a stamp
   // here would NOT match the bare-current arrival (the gateway no longer stamps
   // the live turn) — see https://github.com/openclaw/openclaw/issues/3658.
-  const senderMeta = buildUserTurnSenderMeta(params.sender);
-  const openClawMeta = {
-    // Privileged synthetic handoffs may execute owner tools but never author trusted memory.
-    ...(params.senderIsOwner === undefined
-      ? {}
-      : {
-          senderIsOwner:
-            params.senderIsOwner &&
-            (!params.provenance || params.provenance.kind === "external_user"),
-        }),
-    ...senderMeta,
-    ...(params.transport ? { transport: params.transport } : {}),
-    ...(normalizedMedia.length > 0 ? { media: normalizedMedia } : {}),
-    ...(params.mediaImageLayout
-      ? {
-          mediaImageLayout: {
-            slots: params.mediaImageLayout.slots.map((slot) => ({ ...slot })),
-            ...(params.mediaImageLayout.suppressedFactIndexes?.length
-              ? {
-                  suppressedFactIndexes: [...params.mediaImageLayout.suppressedFactIndexes],
-                }
-              : {}),
-          },
-        }
-      : {}),
-  };
+  const openClawMeta = buildPersistedUserTurnMetadata(params, normalizedMedia);
   const message = {
     role: "user",
     content: text,
@@ -314,12 +269,23 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const provenance = normalizeInputProvenance(
     (message as unknown as { provenance?: unknown }).provenance,
   );
-  const senderIsOwner = readOpenClawMessageMeta(message)?.senderIsOwner;
-  const originalTransport = readOpenClawMessageMeta(message)?.transport;
-  const lateMedia = readOpenClawMessageMeta(message)?.lateMedia === true;
-  const originalMedia = readOpenClawMessageMeta(message)?.media;
+  const originalMeta = readOpenClawMessageMeta(message);
+  const senderIsOwner = originalMeta?.senderIsOwner;
+  const replyToId = normalizeOptionalString(originalMeta?.replyToId);
+  const originalReplyPreview = asOptionalRecord(originalMeta?.replyToPreview);
+  const replyPreviewText = normalizeOptionalString(originalReplyPreview?.text);
+  const replyPreviewSender = normalizeOptionalString(originalReplyPreview?.senderLabel);
+  const replyToPreview = replyPreviewText
+    ? {
+        text: replyPreviewText,
+        ...(replyPreviewSender ? { senderLabel: replyPreviewSender } : {}),
+      }
+    : undefined;
+  const originalTransport = originalMeta?.transport;
+  const lateMedia = originalMeta?.lateMedia === true;
+  const originalMedia = originalMeta?.media;
   const media = Array.isArray(originalMedia) ? structuredClone(originalMedia) : undefined;
-  const originalMediaImageLayout = readOpenClawMessageMeta(message)?.mediaImageLayout;
+  const originalMediaImageLayout = originalMeta?.mediaImageLayout;
   const mediaImageLayout =
     originalMediaImageLayout === undefined ? undefined : structuredClone(originalMediaImageLayout);
   // Hooks receive the original message object and may mutate nested metadata in
@@ -340,6 +306,8 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   if (
     !idempotencyKey &&
     typeof senderIsOwner !== "boolean" &&
+    !replyToId &&
+    !replyToPreview &&
     !transport &&
     !lateMedia &&
     media === undefined &&
@@ -350,6 +318,8 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const protectedMeta = {
     ...readOpenClawMessageMeta(nextUserMessage),
     ...(typeof senderIsOwner === "boolean" ? { senderIsOwner } : {}),
+    ...(replyToId ? { replyToId } : {}),
+    ...(replyToPreview ? { replyToPreview } : {}),
     ...(transport ? { transport } : {}),
     ...(lateMedia ? { lateMedia: true } : {}),
     ...(media === undefined ? {} : { media }),

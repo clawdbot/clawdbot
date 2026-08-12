@@ -4,6 +4,7 @@
  * Sanitizes provider payloads, merges metadata, and formats streamed assistant events.
  */
 import type { Usage } from "@openclaw/llm-core";
+import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
 import { projectProviderError, type ProviderErrorProjection } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
@@ -46,15 +47,13 @@ export function sanitizeNonEmptyTransportPayloadText(
 }
 
 export function coerceTransportToolCallArguments(argumentsValue: unknown): Record<string, unknown> {
-  if (argumentsValue && typeof argumentsValue === "object" && !Array.isArray(argumentsValue)) {
-    return argumentsValue as Record<string, unknown>;
+  const argumentsRecord = asOptionalRecord(argumentsValue);
+  if (argumentsRecord) {
+    return argumentsRecord;
   }
   if (typeof argumentsValue === "string") {
     try {
-      const parsed = JSON.parse(argumentsValue);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>;
-      }
+      return asNonArrayRecord(JSON.parse(argumentsValue));
     } catch {
       // Preserve malformed strings in stored history, but send object-shaped payloads to
       // providers that require structured tool-call arguments.
@@ -82,10 +81,7 @@ export function mergeTransportMetadata<T extends Record<string, unknown>>(
   if (!metadata || Object.keys(metadata).length === 0) {
     return payload;
   }
-  const existingMetadata =
-    payload.metadata && typeof payload.metadata === "object" && !Array.isArray(payload.metadata)
-      ? (payload.metadata as Record<string, string>)
-      : undefined;
+  const existingMetadata = asOptionalRecord(payload.metadata) as Record<string, string> | undefined;
   return {
     ...payload,
     metadata: {

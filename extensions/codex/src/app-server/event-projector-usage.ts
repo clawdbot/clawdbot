@@ -1,14 +1,13 @@
 import { normalizeUsage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   asFiniteNumber,
+  asSafeIntegerInRange,
   readStringField as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { readNonNegativeInteger } from "./event-projector-values.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
 
 function readTokenCount(record: JsonObject, key: string): number | undefined {
-  const value = readNonNegativeInteger(record, key);
-  return value !== undefined && Number.isSafeInteger(value) ? value : undefined;
+  return asSafeIntegerInRange(record[key], { min: 0 });
 }
 
 function readCodexThreadTokenUsage(params: JsonObject): ReturnType<typeof normalizeUsage> {

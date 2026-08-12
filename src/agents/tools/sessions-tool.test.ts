@@ -164,10 +164,19 @@ describe("sessions tool", () => {
       callGateway: callGateway as never,
     });
 
-    await tool.execute("delete-session", { action: "delete", sessionKey });
+    await tool.execute("delete-session", {
+      action: "delete",
+      sessionKey,
+      expectedSessionId: sessionId,
+    });
 
     expect(callGateway.mock.calls).toEqual([
-      [{ method: "sessions.patch", params: { key: sessionKey, archived: true } }],
+      [
+        {
+          method: "sessions.patch",
+          params: { key: sessionKey, archived: true, expectedSessionId: sessionId },
+        },
+      ],
       [
         {
           method: "sessions.delete",
@@ -181,6 +190,23 @@ describe("sessions tool", () => {
         },
       ],
     ]);
+  });
+
+  it("does not discover a lifecycle identity while deleting another session", async () => {
+    const callGateway = vi.fn();
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:main:main",
+      config: { tools: { sessions: { visibility: "agent" } } },
+      callGateway,
+    });
+
+    await expect(
+      tool.execute("delete-without-identity", {
+        action: "delete",
+        sessionKey: "agent:main:dashboard:finished",
+      }),
+    ).rejects.toThrow("requires a durable session identity");
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("forwards an explicit transcript-preservation choice on deletion", async () => {
@@ -200,6 +226,7 @@ describe("sessions tool", () => {
     await tool.execute("delete-preserve", {
       action: "delete",
       sessionKey,
+      expectedSessionId: sessionId,
       deleteTranscript: false,
     });
 
@@ -216,6 +243,7 @@ describe("sessions tool", () => {
 
   it("does not delete a session when archive cannot identify its generation", async () => {
     const sessionKey = "agent:main:dashboard:finished";
+    const sessionId = "finished-session";
     const callGateway = vi.fn(async () => ({ ok: true }));
     const tool = createSessionsTool({
       agentSessionKey: "agent:main:main",
@@ -224,7 +252,11 @@ describe("sessions tool", () => {
     });
 
     await expect(
-      tool.execute("delete-missing-generation", { action: "delete", sessionKey }),
+      tool.execute("delete-missing-generation", {
+        action: "delete",
+        sessionKey,
+        expectedSessionId: sessionId,
+      }),
     ).rejects.toThrow("archive did not return its session identity");
 
     expect(callGateway).toHaveBeenCalledTimes(1);
@@ -233,6 +265,7 @@ describe("sessions tool", () => {
       params: {
         key: sessionKey,
         archived: true,
+        expectedSessionId: sessionId,
       },
     });
   });
@@ -818,6 +851,7 @@ describe("sessions tool", () => {
       }));
       const tool = createSessionsTool({
         agentSessionKey: sessionKey,
+        agentSessionId: sessionId,
         config: { session: { store: storePath } },
         callGateway: callGateway as never,
       });
@@ -874,6 +908,7 @@ describe("sessions tool", () => {
     const callGateway = vi.fn(async () => ({ ok: true }));
     const tool = createSessionsTool({
       agentSessionKey: "agent:main:main",
+      agentSessionId: "session-main",
       config: {},
       callGateway: callGateway as never,
     });
@@ -899,6 +934,7 @@ describe("sessions tool", () => {
             attention: "key",
             ttlMinutes: 45,
             archived: true,
+            expectedSessionId: "session-main",
           },
         },
       ],

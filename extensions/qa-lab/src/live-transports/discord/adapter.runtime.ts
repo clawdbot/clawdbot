@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import {
   acquireQaCredentialLease,
@@ -96,7 +97,7 @@ export async function createDiscordQaTransportAdapter(
     }
   })().catch((error: unknown) => {
     if (!stopped) {
-      pollingError = error instanceof Error ? error : new Error(String(error));
+      pollingError = toStringifiedError(error);
     }
   });
   const scenarioEnvironment = createDiscordQaScenarioEnvironment({

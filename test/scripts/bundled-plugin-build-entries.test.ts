@@ -183,7 +183,7 @@ describe("bundled plugin build entries", () => {
       expectSomePrefixMatch(Object.keys(entries), `extensions/${pluginId}/`);
       expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
     }
-    for (const pluginId of ["qqbot", "whatsapp"]) {
+    for (const pluginId of ["whatsapp"]) {
       expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
       expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
     }
@@ -298,12 +298,11 @@ describe("bundled plugin build entries", () => {
     const selectedEntries = listBundledPluginBuildEntries({
       env: {
         ...baselineEnv,
-        [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "whatsapp,qqbot",
+        [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "whatsapp",
       },
     });
 
     expect(selectedEntries).toEqual(baselineEntries);
-    expectNoPrefixMatches(Object.keys(selectedEntries), "extensions/qqbot/");
     expectNoPrefixMatches(Object.keys(selectedEntries), "extensions/whatsapp/");
   });
 

@@ -188,6 +188,8 @@ type GatewayKernelContext = {
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
+  /** Prepared listener certificate pin; undefined when Gateway TLS is disabled. */
+  gatewayTlsFingerprint?: string;
   sessionCompanion?: import("../session-companion.js").SessionCompanionService;
   sessionObserver?: SessionObserverService;
   resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;

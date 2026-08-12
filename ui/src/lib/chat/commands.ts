@@ -531,11 +531,6 @@ export function getSkillCommandCompletions(filter: string): SlashCommandDef[] {
     .toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
-/** Count of commands hidden by tier filtering (for "Show N more" UI). */
-export function getHiddenCommandCount(): number {
-  return SLASH_COMMANDS.filter((cmd) => (cmd.tier ?? "standard") === "power").length;
-}
-
 type ParsedSlashCommand = {
   command: SlashCommandDef;
   args: string;

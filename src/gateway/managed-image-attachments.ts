@@ -68,7 +68,7 @@ import {
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { readSessionMessagesWithSourceAsync } from "./session-transcript-readers.js";
 import {
-  loadSessionEntryReadOnly,
+  loadGatewaySessionEntryReadOnly,
   resolveSessionHistoryTranscriptPathAsync,
 } from "./session-utils.js";
 
@@ -974,7 +974,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
   }
   const usesRuntimeState = !stateDir || path.resolve(stateDir) === path.resolve(resolveStateDir());
   const env = stateDir ? { ...process.env, OPENCLAW_STATE_DIR: stateDir } : process.env;
-  type SessionEntry = ReturnType<typeof loadSessionEntryReadOnly>["entry"];
+  type SessionEntry = ReturnType<typeof loadGatewaySessionEntryReadOnly>["entry"];
   let matched: { entry: NonNullable<SessionEntry>; storePath: string } | undefined;
   for (const target of discovery.targets) {
     const exact = loadExactSessionEntryReadOnlyResult({
@@ -1014,7 +1014,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
   let entry: SessionEntry = matched?.entry;
   let storePath = matched?.storePath ?? discovery.targets[0]?.storePath ?? "";
   if (!entry && usesRuntimeState) {
-    const loaded = loadSessionEntryReadOnly(sessionKey, { agentId: ownerAgentId });
+    const loaded = loadGatewaySessionEntryReadOnly(sessionKey, { agentId: ownerAgentId });
     const exact = loadExactSessionEntryReadOnlyResult({
       agentId: ownerAgentId,
       clone: false,

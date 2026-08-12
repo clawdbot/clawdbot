@@ -124,10 +124,6 @@ if (process.env.VITEST === "true") {
   });
 }
 
-function readConfigBoolean(config: ComfyProviderConfig, key: string): boolean | undefined {
-  return asBoolean(config[key]);
-}
-
 function readConfigInteger(config: ComfyProviderConfig, key: string): number | undefined {
   const value = config[key];
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
@@ -710,8 +706,7 @@ export async function runComfyWorkflow(params: {
     throw new Error("Comfy Cloud API key missing");
   }
 
-  const explicitAllowPrivateNetwork =
-    readConfigBoolean(capabilityConfig, "allowPrivateNetwork") === true;
+  const explicitAllowPrivateNetwork = asBoolean(capabilityConfig.allowPrivateNetwork) === true;
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
     resolveProviderHttpRequestConfig({
       baseUrl: normalizeOptionalString(capabilityConfig.baseUrl),

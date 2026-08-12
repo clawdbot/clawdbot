@@ -454,7 +454,6 @@ openclaw-chat-sidebar-region,
   gap: 6px;
 }
 
-.chat-workspace-rail__terminal,
 .chat-workspace-rail__refresh,
 .chat-workspace-rail__dock,
 .chat-workspace-rail__collapse-toggle {
@@ -476,24 +475,6 @@ openclaw-chat-sidebar-region,
   cursor: grabbing;
 }
 
-.chat-workspace-rail__terminal {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  /* Chromeless at rest like the sibling ghost buttons; chrome on hover only. */
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--muted);
-}
-
-.chat-workspace-rail__terminal:hover,
-.chat-workspace-rail__terminal:focus-visible {
-  color: var(--text);
-  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-}
-
 /* Overrides the shared .nav-collapse-toggle chrome (border, elevated
    background, inset highlight): rail header buttons only show chrome on
    hover. */
@@ -510,7 +491,6 @@ openclaw-chat-sidebar-region,
   transform: none;
 }
 
-.chat-workspace-rail__terminal svg,
 .chat-workspace-rail__refresh svg,
 .chat-workspace-rail__dock svg,
 .chat-workspace-rail__collapse-toggle svg,
@@ -1527,6 +1507,8 @@ openclaw-session-discussion {
 }
 
 .file-view__search input {
+  --control-ui-touch-input-size: var(--control-ui-text-sm);
+
   min-width: 0;
   flex: 1;
   height: 28px;
@@ -1538,12 +1520,6 @@ openclaw-session-discussion {
   color: var(--text);
   font: inherit;
   font-size: var(--control-ui-text-sm);
-}
-
-@media (hover: none) and (pointer: coarse) {
-  .file-view__search input {
-    font-size: max(16px, var(--control-ui-text-sm));
-  }
 }
 
 .file-view__search input:focus-visible {
@@ -1947,15 +1923,24 @@ openclaw-session-discussion {
 
 .session-diff {
   display: flex;
+  min-height: 100%;
   flex-direction: column;
-  gap: 10px;
+  gap: 0;
+  margin: -8px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .session-diff__summary {
+  position: sticky;
+  top: -16px;
+  z-index: 3;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding-bottom: 2px;
+  gap: 6px;
+  min-height: 38px;
+  padding: 4px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  background: var(--panel);
 }
 
 .session-diff__branch {
@@ -1963,7 +1948,7 @@ openclaw-session-discussion {
   align-items: center;
   gap: 6px;
   min-width: 0;
-  font-weight: 600;
+  font-weight: 550;
   font-size: var(--control-ui-text-sm);
 }
 
@@ -1975,35 +1960,93 @@ openclaw-session-discussion {
 }
 
 .session-diff__branch-label {
+  max-width: 170px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--mono);
 }
 
+.session-diff__summary-spacer {
+  flex: 1;
+}
+
+.session-diff__toolbar-button,
+.session-diff__toolbar-icon,
 .session-diff__refresh {
-  margin-left: auto;
+  min-width: 26px;
+  height: 26px;
+  min-height: 26px;
+  padding: 4px;
+}
+
+.session-diff__toolbar-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding-inline: 7px;
+}
+
+.session-diff__toolbar-button svg,
+.session-diff__toolbar-icon svg,
+.session-diff__refresh svg {
+  width: 14px;
+  height: 14px;
+}
+
+.session-diff__section-title {
+  padding: 11px 8px 6px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.session-diff__files {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 8px;
 }
 
 .session-diff__file {
-  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  border-radius: var(--radius-sm);
+  border-block: 1px solid transparent;
   overflow: hidden;
+}
+
+.session-diff__file:focus-within,
+.session-diff__file:hover {
+  border-color: color-mix(in srgb, var(--border) 68%, transparent);
+  background: color-mix(in srgb, var(--secondary) 42%, transparent);
 }
 
 .session-diff__file-header {
   display: flex;
   align-items: center;
-  gap: 8px;
   width: 100%;
-  padding: 6px 10px;
-  border: 0;
-  background: color-mix(in srgb, var(--secondary) 70%, transparent);
+  min-height: 34px;
+}
+
+.session-diff__file-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  flex: 1;
+  padding: 6px 4px 6px 8px;
+  border: none;
+  background: transparent;
   color: var(--text);
   font: inherit;
   font-size: var(--control-ui-text-sm);
   text-align: left;
   cursor: var(--cursor-action);
+}
+
+.session-diff__file-toggle:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 
 .session-diff__chevron {
@@ -2023,38 +2066,71 @@ openclaw-session-discussion {
 }
 
 .session-diff__status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--muted);
+  width: 18px;
+  height: 18px;
+  border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
 }
 
 .session-diff__status--added {
-  background: var(--ok);
+  color: var(--ok);
 }
 
 .session-diff__status--deleted {
-  background: var(--destructive);
+  color: var(--destructive);
 }
 
 .session-diff__status--renamed {
-  background: var(--accent);
+  color: var(--accent);
 }
 
 .session-diff__status--modified {
-  background: var(--warn);
+  color: var(--warn);
 }
 
 .session-diff__path {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
   flex: 1;
   min-width: 0;
-  overflow-wrap: anywhere;
   font-family: var(--mono);
+  white-space: nowrap;
 }
 
 .session-diff__old-path {
+  overflow: hidden;
+  max-width: 110px;
+  flex-shrink: 1;
+  text-overflow: ellipsis;
   color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.session-diff__filename {
+  overflow: hidden;
+  flex-shrink: 0;
+  max-width: 48%;
+  text-overflow: ellipsis;
+  color: var(--text-strong);
+  font-weight: 550;
+}
+
+.session-diff__directory {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
 }
 
 .session-diff__badge {
@@ -2066,14 +2142,276 @@ openclaw-session-discussion {
   font-size: calc(var(--control-ui-text-sm) - 2px);
 }
 
+.session-diff .chat-diffstat {
+  gap: 5px;
+  font-size: var(--control-ui-text-xs);
+}
+
+.session-diff .chat-diffstat__mod {
+  color: var(--warn);
+}
+
+.session-diff__file-menu {
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  min-height: 26px;
+  margin-right: 4px;
+  padding: 4px;
+  opacity: 0;
+}
+
+.session-diff__file:focus-within .session-diff__file-menu,
+.session-diff__file:hover .session-diff__file-menu {
+  opacity: 1;
+}
+
+.session-diff__file-menu svg {
+  width: 14px;
+  height: 14px;
+}
+
+.session-diff__file-body {
+  content-visibility: auto;
+}
+
 .session-diff__file .chat-diff {
   margin-top: 0;
   border-radius: 0;
   max-height: none;
+  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  background: color-mix(in srgb, var(--secondary) 45%, transparent);
+  line-height: 1.45;
+}
+
+.session-diff__file .chat-diff__row {
+  padding-right: 8px;
+}
+
+.session-diff--wrap .chat-diff__row {
+  min-width: 0;
+}
+
+.session-diff--wrap .chat-diff__text,
+.session-diff--wrap .session-diff-split__text {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .session-diff__note {
-  padding: 2px 2px 4px;
+  padding: 10px;
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
+}
+
+.session-diff__footer {
+  position: sticky;
+  bottom: -16px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 36px;
+  margin-top: auto;
+  padding: 7px 10px;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  background: var(--panel);
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--control-ui-text-xs);
+  text-align: left;
+  cursor: var(--cursor-action);
+}
+
+.session-diff__footer:hover,
+.session-diff__footer:focus-visible {
+  background: color-mix(in srgb, var(--secondary) 62%, var(--panel));
+  color: var(--text);
+}
+
+.session-diff__footer svg {
+  width: 14px;
+  height: 14px;
+}
+
+.session-diff-split {
+  overflow: auto;
+  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  background: color-mix(in srgb, var(--secondary) 45%, transparent);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.session-diff-split__row--pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  min-width: 640px;
+}
+
+.session-diff-split__side,
+.session-diff-split__row--context {
+  display: grid;
+  grid-template-columns: 42px 16px minmax(max-content, 1fr);
+  align-items: baseline;
+  min-width: 0;
+}
+
+.session-diff-split__side--left {
+  border-right: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+
+.session-diff-split__side--left.session-diff-split__side--filled {
+  background: color-mix(in srgb, var(--destructive) 12%, transparent);
+}
+
+.session-diff-split__side--right.session-diff-split__side--filled {
+  background: color-mix(in srgb, var(--ok) 13%, transparent);
+}
+
+.session-diff-split__row--context {
+  min-width: max-content;
+}
+
+.session-diff-split__row--skip {
+  padding-left: 58px;
+  color: var(--muted);
+  user-select: none;
+}
+
+.session-diff-split__gutter {
+  padding-right: 8px;
+  text-align: right;
+  color: color-mix(in srgb, var(--muted) 75%, transparent);
+  user-select: none;
+}
+
+.session-diff-split__sign {
+  text-align: center;
+  font-weight: 600;
+  user-select: none;
+}
+
+.session-diff-split__side--left .session-diff-split__sign {
+  color: var(--destructive);
+}
+
+.session-diff-split__side--right .session-diff-split__sign {
+  color: var(--ok);
+}
+
+.session-diff-split__text {
+  padding-right: 8px;
+  color: var(--text);
+  white-space: pre;
+  tab-size: 4;
+}
+
+openclaw-session-diff-menu[popover] {
+  width: 0;
+  height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  background: transparent;
+}
+
+wa-dropdown.session-diff-menu::part(menu) {
+  width: min(var(--session-diff-menu-width), calc(100vw - 16px));
+  min-width: min(var(--session-diff-menu-width), calc(100vw - 16px));
+  max-width: min(var(--session-diff-menu-width), calc(100vw - 16px));
+}
+
+.session-diff-menu__scope-item .session-menu__text {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+
+.session-diff-menu__sha {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+}
+
+.session-diff-menu__subject {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-diff-menu__head {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.session-diff-menu__merge-base {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  gap: 7px;
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.session-diff-menu__sync {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+}
+
+.session-diff-menu__sync p {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.4;
+}
+
+.session-diff-menu__copy-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.session-diff-menu__copy-label {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.session-diff-menu__copy-row code {
+  overflow: hidden;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--secondary) 70%, transparent);
+  color: var(--text);
+  font-size: var(--control-ui-text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-diff-menu__copy-row.is-command code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.session-diff-menu__copy-row .chat-copy-btn {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 5px;
 }

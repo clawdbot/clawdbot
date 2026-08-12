@@ -93,6 +93,7 @@ jobs:
       frozen_target: ${{ steps.manifest.outputs.frozen_target }}
       run_qa_smoke_ci: ${{ steps.manifest.outputs.run_qa_smoke_ci }}
       run_prompt_snapshots: ${{ steps.manifest.outputs.run_prompt_snapshots }}
+      run_sqlite_session_lifecycle: ${{ steps.manifest.outputs.run_sqlite_session_lifecycle }}
       checks_fast_core_matrix: ${{ steps.manifest.outputs.checks_fast_core_matrix }}
       run_plugin_contracts_shards: ${{ steps.manifest.outputs.run_plugin_contracts_shards }}
       plugin_contracts_matrix: ${{ steps.manifest.outputs.plugin_contracts_matrix }}
@@ -119,6 +120,7 @@ jobs:
       run_macos_swift: ${{ steps.manifest.outputs.run_macos_swift }}
       run_openclawkit_tests: ${{ steps.manifest.outputs.run_openclawkit_tests }}
       run_ios_build: ${{ steps.manifest.outputs.run_ios_build }}
+      run_ios_screenshots: ${{ steps.changed_scope.outputs.run_ios_screenshots }}
       run_android_job: ${{ steps.manifest.outputs.run_android_job }}
       use_compatible_android_ci: ${{ steps.manifest.outputs.use_compatible_android_ci }}
       run_protocol_event_coverage: ${{ steps.manifest.outputs.run_protocol_event_coverage }}
@@ -427,8 +429,10 @@ jobs:
           OPENCLAW_CI_DOCS_ONLY: ${{ github.event_name == 'workflow_dispatch' && 'false' || steps.docs_scope.outputs.docs_only }}
           OPENCLAW_CI_DOCS_CHANGED: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.docs_scope.outputs.docs_changed }}
           OPENCLAW_CI_RUN_NODE: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_node || 'false' }}
-          OPENCLAW_CI_RUN_MACOS: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_macos || 'false' }}
-          OPENCLAW_CI_RUN_IOS_BUILD: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ios_build || 'false' }}
+          # Ordinary manual/release validation stays full. A release_gate is a
+          # hosted substitute for PR CI, so it must retain the exact Apple scope.
+          OPENCLAW_CI_RUN_MACOS: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_macos || 'false' }}
+          OPENCLAW_CI_RUN_IOS_BUILD: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_ios_build || 'false' }}
           OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}
           OPENCLAW_CI_RUN_WINDOWS: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_windows || 'false' }}
           OPENCLAW_CI_RUN_NODE_FAST_ONLY: ${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_only || 'false' }}
@@ -681,7 +685,20 @@ jobs:
             eventName !== "pull_request" ||
             typeof changedNodeTestPlan.hasPromptSnapshotAffectingChange !== "function" ||
             changedNodeTestPlan.hasPromptSnapshotAffectingChange(changedPaths);
-          const runBuildArtifacts = runNodeFull && changedScopeHasBuildImpact;
+          const supportsSqliteSessionLifecycleProof = existsSync(
+            "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
+          );
+          const changedScopeHasSqliteSessionLifecycleImpact =
+            changedPaths === null ||
+            eventName === "workflow_dispatch" ||
+            typeof changedNodeTestPlan.hasSqliteSessionLifecycleAffectingChange !== "function" ||
+            changedNodeTestPlan.hasSqliteSessionLifecycleAffectingChange(changedPaths);
+          const runSqliteSessionLifecycle =
+            runNodeFull &&
+            supportsSqliteSessionLifecycleProof &&
+            changedScopeHasSqliteSessionLifecycleImpact;
+          const runBuildArtifacts =
+            runNodeFull && (changedScopeHasBuildImpact || runSqliteSessionLifecycle);
           const runQaSmokeCi =
             runNodeFull &&
             changedScopeHasQaImpact &&
@@ -752,6 +769,7 @@ jobs:
             compatibility_target: compatibilityTarget,
             run_qa_smoke_ci: runQaSmokeCi,
             run_prompt_snapshots: runNodeFull && changedScopeHasPromptSnapshotImpact,
+            run_sqlite_session_lifecycle: runSqliteSessionLifecycle,
             checks_fast_core_matrix: createMatrix(checksFastCoreTasks),
             run_plugin_contracts_shards: runPluginContractShards,
             plugin_contracts_matrix: createMatrix(
@@ -878,6 +896,17 @@ jobs:
 
           if [ "$after_kib" -gt "$OPENCLAW_PNPM_STORE_MAX_KIB" ]; then
             echo "::warning::pnpm store remains above its 8 GiB maintenance ceiling after prune"
+          fi
+
+          # StickyDisk's pinned on-change mode compares whole-filesystem
+          # allocation to its mount-time baseline. Only a successful real
+          # dependency capture creates this runner-local signal. Force and
+          # verify the delta after pruning so a same-size rebuild commits while
+          # validated warm restores remain read-only.
+          if [ -f "${OPENCLAW_STICKY_REBUILD_SIGNAL:?}" ]; then
+            bash "$GITHUB_WORKSPACE/.github/actions/setup-node-env/sticky-importers.sh" \
+              ensure-change /var/tmp/openclaw-node-deps \
+              "${OPENCLAW_STICKY_INITIAL_USAGE_BYTES:?}"
           fi
 
   # Run dependency-free security checks on a hosted runner in parallel with
@@ -1264,6 +1293,8 @@ jobs:
         run: node openclaw.mjs status --json --timeout 1
 
       - name: Verify built Doctor plugin index persistence
+        env:
+          OPENCLAW_E2E_USE_PREBUILT_DIST: "1"
         run: |
           if [[ -f test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts ]]; then
             # Cold hosted runners can spend over five minutes in E2E setup before
@@ -1436,6 +1467,38 @@ jobs:
           name: gateway-watch-regression
           path: .local/gateway-watch-regression/
           retention-days: 7
+
+  sqlite-session-lifecycle:
+    permissions:
+      contents: read
+    name: check-sqlite-session-lifecycle
+    needs: [preflight, build-artifacts]
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_sqlite_session_lifecycle == 'true' && needs.build-artifacts.result == 'success' }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    timeout-minutes: 20
+    steps:
+      - *linux_node_checkout_step
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+
+      - name: Download exact-run built runtime
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: dist-runtime-build
+          path: .artifacts/dist-runtime-build
+
+      - name: Extract built runtime
+        run: tar --extract --file .artifacts/dist-runtime-build/dist-runtime-build.tar.zst --use-compress-program unzstd
+
+      - name: Verify SQLite session lifecycle
+        env:
+          OPENCLAW_E2E_USE_PREBUILT_DIST: "1"
+          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "660000"
+        run: node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts
 
   native-i18n:
     permissions:
@@ -1795,7 +1858,7 @@ jobs:
               fi
               ;;
             bun-launcher)
-              OPENCLAW_TEST_BUN_LAUNCHER=1 pnpm test test/openclaw-launcher.e2e.test.ts
+              OPENCLAW_E2E_SKIP_BUILD=1 OPENCLAW_TEST_BUN_LAUNCHER=1 pnpm test test/openclaw-launcher.e2e.test.ts
               ;;
             *)
               echo "Unsupported checks-fast task: $TASK" >&2
@@ -2068,6 +2131,7 @@ jobs:
       - name: Run channel contract shard
         env:
           OPENCLAW_CONTRACT_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
+          OPENCLAW_TEST_PROJECTS_PARALLEL: "4"
         shell: bash
         run: |
           set -euo pipefail
@@ -2545,9 +2609,6 @@ jobs:
           - check_name: check-plugin-sdk-api-baseline
             group: plugin-sdk-api-baseline
             runner: blacksmith-4vcpu-ubuntu-2404
-          - check_name: check-sqlite-session-flip-proof
-            group: sqlite-session-flip-proof
-            runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-additional-extension-package-boundary
             group: extension-package-boundary
             # Light-run critical-path pole: cold runs spend ~100s in nine
@@ -2773,15 +2834,6 @@ jobs:
               ;;
             plugin-sdk-api-baseline)
               run_check "plugin-sdk:api:check" pnpm run plugin-sdk:api:check
-              ;;
-            sqlite-session-flip-proof)
-              if [ ! -f test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts ]; then
-                echo "[skip] SQLite sessions/transcripts flip proof is not present in this checkout"
-              else
-                # This lane owns a 420-second E2E case plus cold hosted-runner setup;
-                # keep the global watchdog strict and scope compatibility headroom here.
-                run_check "sqlite sessions/transcripts flip proof" env OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=660000 node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts
-              fi
               ;;
             extension-package-boundary)
               run_check "test:extensions:package-boundary:compile" pnpm run test:extensions:package-boundary:compile
@@ -3519,11 +3571,13 @@ jobs:
           retention-days: 14
 
       - name: Capture iOS release screenshots
-        if: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.preflight.outputs.run_macos == 'true')) && env.HISTORICAL_TARGET != 'true' }}
+        # Full manual/release validation always captures. PRs and their exact-head
+        # release-gate substitutes use the same conservative screenshot-risk scope.
+        if: ${{ ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && env.HISTORICAL_TARGET != 'true' }}
         run: pnpm ios:screenshots
 
       - name: Upload iOS release screenshot evidence
-        if: ${{ always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.preflight.outputs.run_macos == 'true')) && env.HISTORICAL_TARGET != 'true' }}
+        if: ${{ always() && ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && env.HISTORICAL_TARGET != 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ios-release-screenshots-${{ needs.preflight.outputs.checkout_revision }}
@@ -3751,6 +3805,7 @@ jobs:
       - security-fast
       - pnpm-store-warmup
       - build-artifacts
+      - sqlite-session-lifecycle
       - native-i18n
       - checks-ui
       - checks-ui-e2e
@@ -3784,6 +3839,7 @@ jobs:
           SELECTED_RESULTS: |
             pnpm-store-warmup=${{ needs.pnpm-store-warmup.result }}
             build-artifacts=${{ needs.build-artifacts.result }}
+            sqlite-session-lifecycle=${{ needs.sqlite-session-lifecycle.result }}
             native-i18n=${{ needs.native-i18n.result }}
             checks-ui=${{ needs.checks-ui.result }}
             checks-ui-e2e=${{ needs.checks-ui-e2e.result }}

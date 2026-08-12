@@ -2,6 +2,8 @@ import { createHmac, randomBytes } from "node:crypto";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
+  asOptionalRecord as readRecord,
+  normalizeOptionalString as readNonEmptyString,
   normalizeTrimmedStringList,
   parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -12,11 +14,7 @@ const START_OPTIONS_KEY_SECRET_SYMBOL = Symbol.for("openclaw.codexAppServerStart
 const START_OPTIONS_KEY_SECRET = getStartOptionsKeySecret();
 const PLAIN_DECIMAL_NUMBER_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))$/;
 
-export function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
+export { readNonEmptyString, readRecord };
 
 export function normalizeCodexServiceTier(value: unknown): CodexServiceTier | undefined {
   if (typeof value !== "string") {
@@ -106,14 +104,6 @@ export function resolveArgs(configArgs: unknown, envArgs: string | undefined): s
     return splitShellWords(configArgs);
   }
   return splitShellWords(envArgs ?? "");
-}
-
-export function readNonEmptyString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
 }
 
 export function hashSecretForKey(value: string | undefined, label: string): string | null {

@@ -78,7 +78,9 @@ vi.mock("./doctor/shared/channel-legacy-config-migrate.js", () => ({
   }),
 }));
 
-vi.mock("../secrets/target-registry.js", () => {
+vi.mock("../secrets/target-registry.js", async () => {
+  const { asNullableRecord: readRecord } =
+    await import("@openclaw/normalization-core/record-coerce");
   const entry = {
     id: "channels.discord.token",
     targetType: "channels.discord.token",
@@ -90,11 +92,6 @@ vi.mock("../secrets/target-registry.js", () => {
     includeInConfigure: true,
     includeInAudit: true,
   };
-
-  const readRecord = (value: unknown): Record<string, unknown> | null =>
-    value && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : null;
 
   return {
     discoverConfigSecretTargets: (cfg: OpenClawConfig) => {

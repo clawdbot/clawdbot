@@ -180,6 +180,14 @@ export async function projectSessionsPatchEntry(params: {
   if (harnessSessionError) {
     return invalid(harnessSessionError);
   }
+  if (typeof patch.archived === "boolean") {
+    if (!params.existingEntry?.sessionId) {
+      return invalid(`session not found: ${storeKey}`);
+    }
+    if (patch.expectedSessionId === undefined) {
+      return invalid(`expectedSessionId required for session lifecycle patch: ${storeKey}`);
+    }
+  }
   if ("model" in patch && isModelSelectionLocked(params.existingEntry)) {
     return invalid(MODEL_SELECTION_LOCKED_MESSAGE);
   }

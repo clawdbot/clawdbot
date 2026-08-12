@@ -88,10 +88,21 @@ describe("transformMessages", () => {
     expect(advertised[0]?.content).toEqual([
       { type: "text", text: "before" },
       { type: "image", data: "image-one", mimeType: "image/png" },
-      { type: "text", text: "(video omitted: provider does not support video input)" },
+      { type: "video", data: sentinel, mimeType: "video/mp4" },
       { type: "text", text: "after" },
       { type: "image", data: "image-two", mimeType: "image/jpeg" },
     ]);
+
+    const responsesModel = {
+      ...advertisedVideoModel,
+      api: "openai-responses" as const,
+    } as ProviderModel<"openai-responses">;
+    const responses = transformProviderMessages(messages, responsesModel);
+    expect(responses[0]?.content).toContainEqual({
+      type: "text",
+      text: "(video omitted: provider does not support video input)",
+    });
+    expect(JSON.stringify(responses)).not.toContain(sentinel);
   });
 
   it("preserves structured tool blocks while projecting only real images", () => {

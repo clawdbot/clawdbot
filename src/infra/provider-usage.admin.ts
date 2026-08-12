@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readProviderJsonObjectResponse } from "../agents/provider-http-errors.js";
 import type {
   ProviderUsageCostDaily,
@@ -48,9 +49,7 @@ export function decodeProviderUsageAdminToken(prefix: string, raw: string): stri
 }
 
 export function asProviderUsageObject(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+  return asOptionalRecord(value);
 }
 
 export function parseProviderUsageNumber(value: unknown): number | undefined {

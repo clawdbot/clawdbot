@@ -323,10 +323,6 @@ function finalizeCompletion(params: {
   return { ...params.result, usage };
 }
 
-function finiteOption(value: number | undefined): number | undefined {
-  return asFiniteNumber(value);
-}
-
 function normalizeAllowedModelRef(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -716,8 +712,8 @@ export function createRuntimeLlm(
         cfg,
         context,
         options: {
-          maxTokens: finiteOption(params.maxTokens),
-          temperature: finiteOption(params.temperature),
+          maxTokens: asFiniteNumber(params.maxTokens),
+          temperature: asFiniteNumber(params.temperature),
           ...(params.reasoning !== undefined ? { reasoning: params.reasoning } : {}),
           signal: params.signal,
         },
