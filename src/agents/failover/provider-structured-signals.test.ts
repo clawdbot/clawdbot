@@ -399,4 +399,26 @@ describe("provider failover hook structured signals", () => {
       });
     }
   });
+
+  it("routes a preserved server_error code to server_error instead of timeout (#117609)", () => {
+    // The OpenAI provider hook maps SERVER_ERROR -> server_error. When the
+    // structured code is preserved at the transport boundary, the hook outranks
+    // the prose classifier that would otherwise match "server_error" substring
+    // and misclassify as timeout.
+    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockImplementation(
+      ({ context }) =>
+        context.provider === "openai" && context.code === "server_error"
+          ? "server_error"
+          : undefined,
+    );
+
+    expect(
+      classifyFailoverSignal({
+        provider: "openai",
+        code: "server_error",
+        message: "server_error: provider failed",
+      }),
+    ).toEqual({ kind: "reason", reason: "server_error" });
+    expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).toHaveBeenCalledTimes(1);
+  });
 });
