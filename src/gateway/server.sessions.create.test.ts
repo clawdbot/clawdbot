@@ -276,6 +276,15 @@ test("sessions.reset preserves the session sidebar category", async () => {
   expect(reset.payload?.entry?.category).toBe("Operations");
   expect(loadSessionEntry({ agentId: "main", sessionKey: key })?.category).toBe("Operations");
 
+  const newSession = await directSessionReq<{ entry?: { category?: string } }>("sessions.reset", {
+    agentId: "main",
+    key,
+    reason: "new",
+  });
+  expect(newSession.ok).toBe(true);
+  expect(newSession.payload?.entry?.category).toBeUndefined();
+  expect(loadSessionEntry({ agentId: "main", sessionKey: key })?.category).toBeUndefined();
+
   const deleted = await directSessionReq("sessions.delete", { agentId: "main", key });
   expect(deleted.ok).toBe(true);
 });
