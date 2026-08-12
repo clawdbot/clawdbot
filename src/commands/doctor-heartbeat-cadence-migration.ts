@@ -1,7 +1,6 @@
 /** Doctor-owned materialization of heartbeat cadence config into cron monitor rows. */
 import { isDeepStrictEqual } from "node:util";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { resolveSoleAgentId } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -43,7 +42,7 @@ function createDoctorCronService(storePath: string, cfg: OpenClawConfig): CronSe
     storePath,
     cronEnabled: false,
     cronConfig: cfg.cron,
-    defaultAgentId: tryResolveLegacyCompatibilityAgentId(cfg) ?? resolveSoleAgentId(cfg),
+    resolveDefaultAgentId: () => tryResolveLegacyCompatibilityAgentId(cfg),
     log,
     enqueueSystemEvent: () => false,
     requestHeartbeat: noop,
