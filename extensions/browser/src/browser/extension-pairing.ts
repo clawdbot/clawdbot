@@ -3,7 +3,7 @@ import { type BrowserConfig, type OpenClawConfig, resolveGatewayPort } from "../
 import { resolveBrowserConfig } from "./config.js";
 import { ensureExtensionRelayToken } from "./extension-relay/relay-auth.js";
 
-/** Gateway route for direct extension-only remote pairing. */
+/** Gateway route for extension pairing that must wake Browser control. */
 const GATEWAY_EXTENSION_RELAY_PATH = "/browser/extension";
 
 type BrowserExtensionPairing = {
@@ -26,8 +26,8 @@ function firstExtensionRelayPort(cfg: PairingConfig): number {
   return resolved.extensionRelayDefaultPort;
 }
 
-/** Resolve a safe direct-Gateway relay URL with the v2-bound route path. */
-function buildDirectGatewayRelayUrl(raw: string): string {
+/** Resolve a safe Gateway relay URL with the v2-bound route path. */
+function buildGatewayExtensionRelayUrl(raw: string): string {
   let url: URL;
   try {
     url = new URL(raw.trim());
@@ -65,7 +65,7 @@ export async function buildBrowserExtensionPairing(params: {
   const token = await (params.ensureToken ?? ensureExtensionRelayToken)();
   const gateway = params.gatewayUrl?.trim();
   if (gateway) {
-    const relayUrl = new URL(buildDirectGatewayRelayUrl(gateway));
+    const relayUrl = new URL(buildGatewayExtensionRelayUrl(gateway));
     relayUrl.searchParams.set("gateway", gateway);
     return {
       pairingString: `${relayUrl.toString()}#${token}`,
@@ -80,7 +80,11 @@ export async function buildBrowserExtensionPairing(params: {
     throw new Error("Gateway TLS pairing requires --gateway-url wss://<certificate-host>[:port]");
   }
   const gatewayHint = configuredRemote || `ws://127.0.0.1:${resolveGatewayPort(params.cfg)}`;
-  const relayUrl = new URL(`ws://127.0.0.1:${relayPort}/extension`);
+  // The local Gateway route owns lazy Browser startup. Browser nodes already
+  // own their relay runtime, so they keep connecting to the host-local port.
+  const relayUrl = configuredRemote
+    ? new URL(`ws://127.0.0.1:${relayPort}/extension`)
+    : new URL(buildGatewayExtensionRelayUrl(gatewayHint));
   relayUrl.searchParams.set("gateway", gatewayHint);
   return {
     pairingString: `${relayUrl.toString()}#${token}`,
