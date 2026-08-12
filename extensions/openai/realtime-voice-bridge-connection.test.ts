@@ -543,42 +543,45 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(bridge.isConnected()).toBe(false);
   });
 
-  it("can disable automatic audio turn responses for agent-routed voice loops", async () => {
-    const bridge = createNativeBridge({
+  it.each([
+    {
+      $name: "automatic audio turn responses disabled",
       autoRespondToAudio: false,
-    });
-    const { connecting, socket } = beginBridgeConnection(bridge);
-
-    openSocket(socket);
-    emitSessionUpdated(socket);
-    await connecting;
-
-    expectRecordFields(
-      requireNestedRecord(requireSession(socket), ["audio", "input", "turn_detection"]),
-      "turn detection",
-      {
-        create_response: false,
-        interrupt_response: false,
-      },
-    );
-  });
-
-  it("can disable realtime response interruption while keeping audio responses enabled", async () => {
-    const bridge = createNativeBridge({
+      interruptResponseOnInputAudio: false,
+      expectedCreateResponse: false,
+      expectedInterruptResponse: false,
+    },
+    {
+      $name: "realtime response interruption disabled",
       autoRespondToAudio: true,
       interruptResponseOnInputAudio: false,
-    });
-    const socket = await connectReadyBridge(bridge);
+      expectedCreateResponse: true,
+      expectedInterruptResponse: false,
+    },
+  ])(
+    "$name",
+    async ({
+      autoRespondToAudio,
+      interruptResponseOnInputAudio,
+      expectedCreateResponse,
+      expectedInterruptResponse,
+    }) => {
+      const bridge = createNativeBridge({
+        autoRespondToAudio,
+        interruptResponseOnInputAudio,
+      });
+      const socket = await connectReadyBridge(bridge);
 
-    expectRecordFields(
-      requireNestedRecord(requireSession(socket), ["audio", "input", "turn_detection"]),
-      "turn detection",
-      {
-        create_response: true,
-        interrupt_response: false,
-      },
-    );
-  });
+      expectRecordFields(
+        requireNestedRecord(requireSession(socket), ["audio", "input", "turn_detection"]),
+        "turn detection",
+        {
+          create_response: expectedCreateResponse,
+          interrupt_response: expectedInterruptResponse,
+        },
+      );
+    },
+  );
 
   it("can request PCM16 24 kHz realtime audio for Chrome command-pair bridges", async () => {
     const bridge = createNativeBridge({

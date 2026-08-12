@@ -50,34 +50,19 @@ describe("OpenAI realtime voice bridge events", () => {
     restoreTestEnvironment();
   });
 
-  it("does not locally clear playback on speech-start events when input interruption is disabled", async () => {
+  it.each([
+    {
+      $name: "input interruption disabled",
+      bridgeOptions: { autoRespondToAudio: true, interruptResponseOnInputAudio: false },
+    },
+    {
+      $name: "automatic audio responses disabled",
+      bridgeOptions: { autoRespondToAudio: false },
+    },
+  ])("$name", async ({ bridgeOptions }) => {
     const onAudio = vi.fn();
     const onClearAudio = vi.fn();
-    const bridge = createNativeBridge({
-      autoRespondToAudio: true,
-      interruptResponseOnInputAudio: false,
-      onAudio,
-      onClearAudio,
-    });
-    const socket = await connectReadyBridge(bridge);
-
-    emitAssistantPlayback(socket);
-    emitServerEvent(socket, { type: "input_audio_buffer.speech_started" });
-
-    expect(onAudio).toHaveBeenCalledTimes(1);
-    expect(onClearAudio).not.toHaveBeenCalled();
-    expect(hasSentEventType(socket, "response.cancel")).toBe(false);
-    expect(hasSentEventType(socket, "conversation.item.truncate")).toBe(false);
-  });
-
-  it("keeps assistant playback active on server VAD when automatic audio responses are disabled", async () => {
-    const onAudio = vi.fn();
-    const onClearAudio = vi.fn();
-    const bridge = createNativeBridge({
-      autoRespondToAudio: false,
-      onAudio,
-      onClearAudio,
-    });
+    const bridge = createNativeBridge({ ...bridgeOptions, onAudio, onClearAudio });
     const socket = await connectReadyBridge(bridge);
 
     emitAssistantPlayback(socket);

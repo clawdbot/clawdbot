@@ -84,35 +84,75 @@ describe("OpenAI realtime voice browser authentication", () => {
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
-  it("uses OPENAI_API_KEY for default GPT realtime bridges", async () => {
-    vi.stubEnv("OPENAI_API_KEY", "test-api-key-env");
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const bridge = provider.createBridge({
-      cfg: {} as never,
-      providerConfig: { model: "gpt-realtime-2" },
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-    });
+  it.each([
+    {
+      $name: "environment API key",
+      environmentKey: "test-api-key-env",
+      profileKey: undefined,
+      configuredProfile: false,
+      expectedAuthorization: "Bearer test-api-key-env",
+      assertion: "environment" as const,
+    },
+    {
+      $name: "API-key profile",
+      environmentKey: undefined,
+      profileKey: "test-api-key-profile",
+      configuredProfile: false,
+      expectedAuthorization: "Bearer test-api-key-profile",
+      assertion: "profile" as const,
+    },
+    {
+      $name: "environment fallback after an unresolved configured profile",
+      environmentKey: "test-api-key-env",
+      profileKey: undefined,
+      configuredProfile: true,
+      expectedAuthorization: "Bearer test-api-key-env",
+      assertion: "fallback" as const,
+    },
+  ])(
+    "$name",
+    async ({ environmentKey, profileKey, configuredProfile, expectedAuthorization, assertion }) => {
+      if (environmentKey) {
+        vi.stubEnv("OPENAI_API_KEY", environmentKey);
+      }
+      resolveProviderAuthProfileApiKeyMock.mockResolvedValueOnce(profileKey);
+      if (configuredProfile) {
+        isProviderAuthProfileConfiguredMock.mockReturnValueOnce(true);
+      }
+      const provider = buildOpenAIRealtimeVoiceProvider();
+      const bridge = provider.createBridge({
+        cfg: {} as never,
+        providerConfig: { model: "gpt-realtime-2" },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+      });
 
-    void bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
-    bridge.close();
+      void bridge.connect();
+      await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+      bridge.close();
 
-    expect(resolveProviderAuthProfileApiKeyMock.mock.calls).toEqual([
-      [
-        {
-          provider: "openai",
-          cfg: {},
-          profileTypes: ["api_key"],
-          includeExternalCliAuth: false,
-        },
-      ],
-    ]);
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-    const socket = FakeWebSocket.instances[0];
-    const options = socket?.args[1] as { headers?: Record<string, string> } | undefined;
-    expect(options?.headers?.Authorization).toBe("Bearer test-api-key-env");
-  });
+      if (assertion === "fallback") {
+        expect(resolveProviderAuthProfileApiKeyMock).toHaveBeenCalledTimes(1);
+      } else {
+        expect(resolveProviderAuthProfileApiKeyMock.mock.calls).toEqual([
+          [
+            {
+              provider: "openai",
+              cfg: {},
+              profileTypes: ["api_key"],
+              includeExternalCliAuth: false,
+            },
+          ],
+        ]);
+      }
+      if (assertion === "environment") {
+        expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+      }
+      const socket = FakeWebSocket.instances[0];
+      const options = socket?.args[1] as { headers?: Record<string, string> } | undefined;
+      expect(options?.headers?.Authorization).toBe(expectedAuthorization);
+    },
+  );
 
   it("does not use Codex OAuth profiles for default GPT realtime bridges", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
@@ -139,57 +179,6 @@ describe("OpenAI realtime voice browser authentication", () => {
     ]);
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
     expect(FakeWebSocket.instances).toHaveLength(0);
-  });
-
-  it("uses OPENAI_API_KEY when a configured API-key profile cannot be resolved", async () => {
-    vi.stubEnv("OPENAI_API_KEY", "test-api-key-env");
-    resolveProviderAuthProfileApiKeyMock.mockResolvedValueOnce(undefined);
-    isProviderAuthProfileConfiguredMock.mockReturnValueOnce(true);
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const bridge = provider.createBridge({
-      cfg: {} as never,
-      providerConfig: { model: "gpt-realtime-2" },
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-    });
-
-    void bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
-    bridge.close();
-
-    expect(resolveProviderAuthProfileApiKeyMock).toHaveBeenCalledTimes(1);
-    const socket = FakeWebSocket.instances[0];
-    const options = socket?.args[1] as { headers?: Record<string, string> } | undefined;
-    expect(options?.headers?.Authorization).toBe("Bearer test-api-key-env");
-  });
-
-  it("uses OpenAI API-key auth profiles", async () => {
-    resolveProviderAuthProfileApiKeyMock.mockResolvedValueOnce("test-api-key-profile");
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const bridge = provider.createBridge({
-      cfg: {} as never,
-      providerConfig: { model: "gpt-realtime-2" },
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-    });
-
-    void bridge.connect();
-    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
-    bridge.close();
-
-    expect(resolveProviderAuthProfileApiKeyMock.mock.calls).toEqual([
-      [
-        {
-          provider: "openai",
-          cfg: {},
-          profileTypes: ["api_key"],
-          includeExternalCliAuth: false,
-        },
-      ],
-    ]);
-    const socket = FakeWebSocket.instances[0];
-    const options = socket?.args[1] as { headers?: Record<string, string> } | undefined;
-    expect(options?.headers?.Authorization).toBe("Bearer test-api-key-profile");
   });
 
   it("keeps explicit OpenAI realtime API keys as the advanced override", () => {
@@ -596,59 +585,57 @@ describe("OpenAI realtime voice browser authentication", () => {
     expect(bridge.isConnected()).toBe(false);
   });
 
-  it("normalizes structured direct OpenAI startup auth errors", async () => {
-    const bridge = createNativeBridge();
-    const { connecting, socket } = beginBridgeConnection(bridge);
-
-    openSocket(socket);
-    emitServerEvent(socket, {
-      type: "error",
-      error: {
-        type: "invalid_request_error",
-        code: "invalid_api_key",
-        message: "Invalid API key",
-      },
-    });
-
-    await expect(connecting).rejects.toThrow(OPENAI_REALTIME_REJECTED_KEY_MESSAGE);
-    expect(bridge.isConnected()).toBe(false);
-  });
-
-  it("normalizes direct OpenAI socket handshake auth errors", async () => {
-    const bridge = createNativeBridge();
-    const { connecting, socket } = beginBridgeConnection(bridge);
-
-    socket.emit("error", new Error("Unexpected server response: 401"));
-
-    await expect(connecting).rejects.toThrow(OPENAI_REALTIME_REJECTED_KEY_MESSAGE);
-    expect(bridge.isConnected()).toBe(false);
-  });
-
   it.each([
-    [
-      "Azure deployment",
-      {
+    {
+      $name: "structured direct error expects normalization",
+      event: "structured" as const,
+      providerConfig: undefined,
+      expectedMessage: OPENAI_REALTIME_REJECTED_KEY_MESSAGE,
+    },
+    {
+      $name: "direct handshake error expects normalization",
+      event: "handshake" as const,
+      providerConfig: undefined,
+      expectedMessage: OPENAI_REALTIME_REJECTED_KEY_MESSAGE,
+    },
+    {
+      $name: "Azure handshake error expects raw preservation",
+      event: "handshake" as const,
+      providerConfig: {
         apiKey: "test-api-key-test",
         azureEndpoint: "https://example.openai.azure.com",
         azureDeployment: "realtime-prod",
       },
-    ],
-    [
-      "custom endpoint",
-      {
+      expectedMessage: "Unexpected server response: 401",
+    },
+    {
+      $name: "custom-endpoint handshake error expects raw preservation",
+      event: "handshake" as const,
+      providerConfig: {
         apiKey: "test-api-key-test",
         azureEndpoint: "https://realtime-proxy.example.com",
       },
-    ],
-  ])("preserves %s startup auth errors", async (_label, providerConfig) => {
-    const bridge = createNativeBridge({
-      providerConfig,
-    });
+      expectedMessage: "Unexpected server response: 401",
+    },
+  ])("$name", async ({ event, providerConfig, expectedMessage }) => {
+    const bridge = createNativeBridge(providerConfig ? { providerConfig } : {});
     const { connecting, socket } = beginBridgeConnection(bridge);
 
-    socket.emit("error", new Error("Unexpected server response: 401"));
+    if (event === "structured") {
+      openSocket(socket);
+      emitServerEvent(socket, {
+        type: "error",
+        error: {
+          type: "invalid_request_error",
+          code: "invalid_api_key",
+          message: "Invalid API key",
+        },
+      });
+    } else {
+      socket.emit("error", new Error("Unexpected server response: 401"));
+    }
 
-    await expect(connecting).rejects.toThrow("Unexpected server response: 401");
+    await expect(connecting).rejects.toThrow(expectedMessage);
     expect(bridge.isConnected()).toBe(false);
   });
 });
