@@ -53,7 +53,23 @@ describe("cron edit command", () => {
     const help = editCommand?.helpInformation() ?? "";
 
     expect(help).toContain("--best-effort-deliver");
+    expect(help).toContain("--display-name <name>");
     expect(help).toMatch(/also\s+implies --announce when used alone/);
+  });
+
+  it("updates the human-readable display name without changing the job name", async () => {
+    await createCronProgram().parseAsync(["edit", "job-1", "--display-name", "Daily summary"], {
+      from: "user",
+    });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: { displayName: "Daily summary" },
+    });
+  });
+
+  it.each(["", "   "])("rejects a blank --display-name value", async (value) => {
+    await expectCronEditRejection(["--display-name", value], "--display-name must not be blank");
   });
 
   it("updates one pacing bound while preserving the other", async () => {

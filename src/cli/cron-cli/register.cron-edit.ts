@@ -59,6 +59,7 @@ export function registerCronEditCommand(cron: Command) {
       .description("Edit an automation (patch fields)")
       .argument("<id>", "Job id")
       .option("--name <name>", "Set name")
+      .option("--display-name <name>", "Set human-readable display name")
       .option("--description <text>", "Set description")
       .option("--enable", "Enable job", false)
       .option("--disable", "Disable job", false)
@@ -242,6 +243,13 @@ export function registerCronEditCommand(cron: Command) {
           const patch: Record<string, unknown> = {};
           if (typeof opts.name === "string") {
             patch.name = opts.name;
+          }
+          const displayName = normalizeOptionalString(opts.displayName);
+          if (typeof opts.displayName === "string" && !displayName) {
+            throw new Error("--display-name must not be blank");
+          }
+          if (displayName) {
+            patch.displayName = displayName;
           }
           if (typeof opts.description === "string") {
             patch.description = opts.description;
