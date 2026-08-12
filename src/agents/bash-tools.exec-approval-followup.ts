@@ -414,7 +414,7 @@ async function sendDirectFollowupFallback(params: {
           Math.max(0, directText.length - Math.max(1, availableBodyUnits)),
         )}`;
   const deliveryIntentId = `exec-approval-followup:${params.approvalId}`;
-  await sendMessage({
+  const sendResult = await sendMessage({
     channel: params.deliveryTarget.channel,
     to: params.deliveryTarget.to ?? "",
     accountId: params.deliveryTarget.accountId,
@@ -427,6 +427,16 @@ async function sendDirectFollowupFallback(params: {
     reusePendingDeliveryIntent: true,
     completionRetention: DIRECT_FOLLOWUP_COMPLETION_RETENTION,
   });
+  if (sendResult.deliveryStatus === "suppressed") {
+    if (sendResult.suppressionReason === "adapter_returned_no_identity") {
+      throw new Error(
+        "exec approval followup delivery could not be confirmed: adapter returned no identity",
+      );
+    }
+    throw new Error(
+      `exec approval followup delivery was suppressed: ${sendResult.suppressionReason ?? "unknown reason"}`,
+    );
+  }
   return true;
 }
 

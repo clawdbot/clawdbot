@@ -309,7 +309,7 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
       }
       const requesterAgentId = parseAgentSessionKey(ownerSessionKey)?.agentId;
       const idempotencyKey = resolveTaskTerminalIdempotencyKey(latest);
-      await sendMessage({
+      const sendResult = await sendMessage({
         channel: owner.requesterOrigin?.channel,
         to: owner.requesterOrigin?.to ?? "",
         accountId: owner.requesterOrigin?.accountId,
@@ -326,6 +326,23 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
       const afterSend = tasks.get(taskId);
       if (!afterSend || !shouldAutoDeliverTaskTerminalUpdate(afterSend)) {
         return afterSend ? cloneTaskRecord(afterSend) : null;
+      }
+      if (sendResult.deliveryStatus === "suppressed") {
+        if (sendResult.suppressionReason === "adapter_returned_no_identity") {
+          taskRegistryLog.warn("Background task update delivery was not confirmed", {
+            taskId,
+            ownerKey: ownerSessionKey,
+            requesterOrigin: owner.requesterOrigin,
+            suppressionReason: sendResult.suppressionReason,
+          });
+          return updateTask(taskId, {
+            deliveryStatus: "failed",
+            lastEventAt: Date.now(),
+          });
+        }
+        throw new Error(
+          `background task update suppressed: ${sendResult.suppressionReason ?? "unknown reason"}`,
+        );
       }
       if (afterSend.terminalOutcome === "blocked") {
         queueBlockedTaskFollowup(afterSend);
@@ -420,7 +437,7 @@ async function maybeDeliverTaskStateChangeUpdateUnderAdmission(
       latestEvent,
       owner,
     });
-    await sendMessage({
+    const sendResult = await sendMessage({
       channel: owner.requesterOrigin?.channel,
       to: owner.requesterOrigin?.to ?? "",
       accountId: owner.requesterOrigin?.accountId,
@@ -434,6 +451,11 @@ async function maybeDeliverTaskStateChangeUpdateUnderAdmission(
         idempotencyKey,
       },
     });
+    if (sendResult.deliveryStatus === "suppressed") {
+      throw new Error(
+        `background task state change suppressed: ${sendResult.suppressionReason ?? "unknown reason"}`,
+      );
+    }
     upsertTaskDeliveryState({
       taskId,
       requesterOrigin: deliveryState?.requesterOrigin,

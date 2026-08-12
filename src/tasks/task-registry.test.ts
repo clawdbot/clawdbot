@@ -2269,6 +2269,41 @@ describe("task-registry", () => {
     });
   });
 
+  it.each([
+    {
+      name: "intentional suppression queues the session fallback",
+      suppressionReason: "cancelled_by_message_sending_hook",
+      expectedFallbackCount: 1,
+    },
+    {
+      name: "adapter ambiguity avoids a duplicate session fallback",
+      suppressionReason: "adapter_returned_no_identity",
+      expectedFallbackCount: 0,
+    },
+  ] as const)("records terminal non-delivery when $name", async (testCase) => {
+    await withTaskRegistryTempDir(async () => {
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "notifychat",
+        to: "notifychat:123",
+        via: "direct",
+        deliveryStatus: "suppressed",
+        suppressionReason: testCase.suppressionReason,
+      });
+      const task = createTaskFixture("acp", {
+        requesterOrigin: NOTIFYCHAT_ORIGIN,
+        runId: `run-terminal-${testCase.suppressionReason}`,
+        task: "Investigate suppressed delivery",
+        deliveryStatus: "pending",
+      });
+      markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 250 });
+
+      await maybeDeliverTaskTerminalUpdate(task.taskId);
+
+      expectRecordFields(requireTaskById(task.taskId), { deliveryStatus: "failed" });
+      expect(peekSystemEvents("agent:main:main")).toHaveLength(testCase.expectedFallbackCount);
+    });
+  });
+
   it("still wakes the parent when blocked delivery misses the outward channel", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
@@ -3962,6 +3997,32 @@ describe("task-registry", () => {
       });
       await maybeDeliverTaskStateChangeUpdate(task.taskId);
       expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("retries the same state-change event after explicit suppression", async () => {
+    await withTaskRegistryTempDir(async () => {
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "guildchat",
+        to: "guildchat:123",
+        via: "direct",
+        deliveryStatus: "suppressed",
+        suppressionReason: "cancelled_by_message_sending_hook",
+      });
+      const task = createTaskFixture("acp", {
+        deliveryStatus: undefined,
+        requesterOrigin: GUILDCHAT_ORIGIN,
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-state-change-suppressed",
+        task: "Investigate suppressed state change",
+        notifyPolicy: "state_changes",
+      });
+      const event = { at: 250, kind: "progress" as const, summary: "Still working." };
+
+      await maybeDeliverTaskStateChangeUpdate(task.taskId, event);
+      await maybeDeliverTaskStateChangeUpdate(task.taskId, event);
+
+      expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(2);
     });
   });
 
