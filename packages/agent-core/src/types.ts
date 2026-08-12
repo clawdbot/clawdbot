@@ -264,6 +264,47 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
   toolExecution?: ToolExecutionMode;
 
   /**
+   * Optional maximum number of tool calls allowed in a single assistant
+   * message. When the assistant emits more than this many tool calls in one
+   * response, the agent loop rejects the entire batch — no tools execute —
+   * and emits a synthetic error tool result for each call instructing the
+   * model to report findings as text and resubmit one block at a time.
+   *
+   * Default behavior when unset: no cap is enforced (legacy behavior).
+   *
+   * Recommended value for coordinator-style agents that frequently exceed
+   * loopback correlation buffers (see `run error: unknown`): 2.
+   *
+   * @see {@link TOOL_BLOCK_CAP_REJECTION_MESSAGE}
+   */
+  maxCallsPerBlock?: number;
+
+  /**
+   * When true and the previous turn exceeded the cap, tighten the effective
+   * cap to 1 for the next turn. Catches the "just-one-more creep" failure
+   * pattern: a model that just got blocked tends to retry the same oversized
+   * block unless forced into a single-call turn boundary.
+   *
+   * Default: true. Has no effect when `maxCallsPerBlock` is unset.
+   *
+   * State tracking: cooldown state lives on `AgentLoopConfig` because the
+   * 0790d9f agent-loop does not have a `ToolLoopRecoveryState` object. The
+   * agent wiring reads the consumer's option and writes it into the running
+   * config during construction. The cooldown counter is mutated in place.
+   */
+  maxCallsPerBlockCooldown?: boolean;
+
+  /**
+   * Internal mutable counter used by the tool-block-cap cooldown when
+   * `maxCallsPerBlockCooldown` is enabled. `0` means no recent violation;
+   * `1` means the previous turn violated (cooldown fires next turn); `2`
+   * means the cooldown already fired and the next turn restores the
+   * configured cap. Optional because consumers may not register a hand
+   * and the absence is treated as `0`.
+   */
+  toolBlockCapCooldownTurns?: number;
+
+  /**
    * Called before a tool is executed, after arguments have been validated.
    *
    * Return `{ block: true }` to prevent execution. The loop emits an error tool result instead.
@@ -543,3 +584,19 @@ export type AgentEvent =
       errorKind?: "argument-validation";
       hideFromChannelProgress?: boolean;
     };
+
+/**
+ * Tool-block-cap rejection reason returned to the model via synthetic
+ * tool result messages. The model sees this string as the "result" of any
+ * tool call that was rejected because the per-response cap was exceeded.
+ *
+ * Designed to be directive: it tells the model exactly what to do next
+ * (report findings as text, not as another tool call block).
+ */
+export const TOOL_BLOCK_CAP_REJECTION_MESSAGE =
+  `BLOCKED: {count} tool calls in this block exceeds the per-response cap of {cap}. ` +
+  `None of the tools in this block were executed. ` +
+  `Report your findings NOW as text to the user. ` +
+  `Do not emit another tool call in your next output. ` +
+  `If you just discovered something that changes the plan, your next output MUST be a text message — NOT another tool call. ` +
+  `Resubmit one block at a time.`;

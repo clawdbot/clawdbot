@@ -9,6 +9,7 @@ import {
   resolveThinkingDefaultForModel,
   type ThinkingCatalogEntry,
 } from "../../auto-reply/thinking.js";
+import { getRuntimeConfig } from "../../config/io.js";
 import { streamSimple } from "../../llm/stream.js";
 import type { Message, Model } from "../../llm/types.js";
 import { getAgentDir } from "../config.js";
@@ -70,6 +71,42 @@ function projectThinkingCatalogCompat(compat: Model["compat"]) {
     projected.supportedReasoningEfforts = record.supportedReasoningEfforts;
   }
   return Object.keys(projected).length > 0 ? projected : undefined;
+}
+
+/**
+ * Resolve the per-session tool-call cap from openclaw.json. Per-agent override
+ * (agents.<agentId>.tools.maxCallsPerBlock) wins over the global default
+ * (tools.maxCallsPerBlock). Cooldown is similarly resolved per-agent then
+ * global. Returns undefined cap when no override is configured — that means
+ * "no cap enforced", which preserves legacy behavior for everyone who hasn't
+ * opted in.
+ *
+ * Env-var substitution `${OPENCLAW_AGENT_TOOL_BLOCK_CAP}` is honored by the
+ * upstream config loader, so users can drop the value into .env without
+ * editing openclaw.json directly.
+ */
+function resolveToolBlockCapFromConfig(agentId: string): {
+  cap: number | undefined;
+  cooldown: boolean | undefined;
+} {
+  let cfg: ReturnType<typeof getRuntimeConfig> | undefined;
+  try {
+    cfg = getRuntimeConfig();
+  } catch {
+    // getRuntimeConfig throws outside the gateway runtime (e.g. tests). Treat
+    // as "no cap" rather than crashing the session.
+    return { cap: undefined, cooldown: undefined };
+  }
+  // 0790d9f's AgentsConfig exposes agents as a list (`list?: AgentConfig[]`) with
+  // each agent carrying its own `id`. The modern `entries` Record shape ships in
+  // openclaw/main but is not present here. The lookup pattern is therefore an
+  // array find, not a Record lookup.
+  const agentEntry = cfg.agents?.list?.find((a) => a.id === agentId);
+  const agentTools = agentEntry?.tools;
+  const globalTools = cfg.tools;
+  const cap = agentTools?.maxCallsPerBlock ?? globalTools?.maxCallsPerBlock;
+  const cooldown = agentTools?.maxCallsPerBlockCooldown ?? globalTools?.maxCallsPerBlockCooldown;
+  return { cap, cooldown };
 }
 
 export interface CreateAgentSessionOptions {
@@ -403,6 +440,12 @@ export async function createAgentSession(
   const runWithSessionWriteLock = async <T>(run: () => Promise<T> | T): Promise<T> =>
     options.withSessionWriteLock ? await options.withSessionWriteLock(run) : await run();
 
+  // Resolve per-session tool-call cap from openclaw.json. Per-agent override
+  // (agents.<id>.tools.maxCallsPerBlock) wins over the global default
+  // (tools.maxCallsPerBlock). Env-var substitution `${OPENCLAW_AGENT_TOOL_BLOCK_CAP}`
+  // is honored by the upstream config loader, so users can drop the value
+  // into .env without editing openclaw.json.
+  const resolvedToolBlockCap = resolveToolBlockCapFromConfig("main");
   const agent: Agent = new Agent({
     initialState: {
       systemPrompt: "",
@@ -410,6 +453,8 @@ export async function createAgentSession(
       thinkingLevel,
       tools: [],
     },
+    maxCallsPerBlock: resolvedToolBlockCap.cap,
+    maxCallsPerBlockCooldown: resolvedToolBlockCap.cooldown,
     convertToLlm: convertToLlmWithBlockImages,
     streamFn: async (modelResult, context, optionsLocal) => {
       const auth = await modelRegistry.getApiKeyAndHeaders(modelResult);

@@ -151,6 +151,22 @@ export interface AgentOptions {
   maxRetryDelayMs?: number;
   /** Default strategy for executing multiple tool calls in one assistant message. */
   toolExecution?: ToolExecutionMode;
+  /**
+   * Optional maximum number of tool calls allowed in a single assistant
+   * message. When exceeded, the entire batch is rejected with a synthetic
+   * error per call and the model is told to report findings as text. See
+   * `AgentLoopConfig.maxCallsPerBlock` for full semantics.
+   *
+   * Default: undefined (no cap enforced).
+   */
+  maxCallsPerBlock?: number;
+  /**
+   * When true and the previous turn exceeded the cap, tighten the effective
+   * cap to 1 for the next turn. See `AgentLoopConfig.maxCallsPerBlockCooldown`.
+   *
+   * Default: true.
+   */
+  maxCallsPerBlockCooldown?: boolean;
 }
 
 class PendingMessageQueue {
@@ -243,6 +259,14 @@ export class Agent {
   public maxRetryDelayMs?: number;
   /** Tool execution strategy for assistant messages that contain multiple tool calls. */
   public toolExecution: ToolExecutionMode;
+  /**
+   * Per-response tool-call cap. See AgentOptions.maxCallsPerBlock.
+   */
+  public maxCallsPerBlock?: number;
+  /**
+   * Cap-tightening cooldown after a violation. See AgentOptions.maxCallsPerBlockCooldown.
+   */
+  public maxCallsPerBlockCooldown?: boolean;
 
   constructor(options: AgentOptions = {}) {
     this.mutableState = createMutableAgentState(options.initialState);
@@ -264,6 +288,8 @@ export class Agent {
     this.transport = options.transport ?? "auto";
     this.maxRetryDelayMs = options.maxRetryDelayMs;
     this.toolExecution = options.toolExecution ?? "parallel";
+    this.maxCallsPerBlock = options.maxCallsPerBlock;
+    this.maxCallsPerBlockCooldown = options.maxCallsPerBlockCooldown ?? true;
   }
 
   /**
@@ -488,6 +514,8 @@ export class Agent {
       thinkingBudgets: this.thinkingBudgets,
       maxRetryDelayMs: this.maxRetryDelayMs,
       toolExecution: this.toolExecution,
+      maxCallsPerBlock: this.maxCallsPerBlock,
+      maxCallsPerBlockCooldown: this.maxCallsPerBlockCooldown,
       beforeToolCall: this.beforeToolCall,
       resolveDeferredTool: this.resolveDeferredTool,
       afterToolCall: this.afterToolCall,

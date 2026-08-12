@@ -12,6 +12,8 @@ import type { EventStream as SourceEventStream } from "../../llm-core/src/index.
 import { TranscriptNotContinuableError } from "./errors.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
+import { TOOL_BLOCK_CAP_REJECTION_MESSAGE } from "./types.js";
+import type { AgentToolResult } from "./types.js";
 import type {
   AgentContext,
   AgentEvent,
@@ -19,7 +21,6 @@ import type {
   AgentMessage,
   AgentTool,
   AgentToolCall,
-  AgentToolResult,
   StreamFn,
 } from "./types.js";
 import { validateToolArguments } from "./validation.js";
@@ -544,6 +545,103 @@ async function streamAssistantResponse(
 }
 
 /**
+ * Resolve the effective tool-call cap for this turn, applying the cooldown
+ * tightening when the previous turn violated.
+ *
+ * - When `maxCallsPerBlock` is unset, returns `undefined` (no cap enforced).
+ * - When `maxCallsPerBlockCooldown` is true (default) and the previous turn
+ *   violated, tightens the effective cap to 1 for one turn only.
+ */
+function resolveEffectiveToolCallCap(config: AgentLoopConfig): number | undefined {
+  const configured = config.maxCallsPerBlock;
+  if (configured === undefined) {
+    return undefined;
+  }
+  const cooldownEnabled = config.maxCallsPerBlockCooldown !== false;
+  const cooldownTurns = config.toolBlockCapCooldownTurns ?? 0;
+  if (cooldownEnabled && cooldownTurns === 1) {
+    return Math.min(1, configured);
+  }
+  return configured;
+}
+
+/**
+ * Build a synthetic `ExecutedToolCallBatch` that rejects every tool call in
+ * the assistant message with the cap-rejection reason. No tools execute.
+ *
+ * Mirrors the shape of the early-error branches in `executeToolCallsSequential`
+ * and `executeToolCallsParallel` (the `preparation.kind === "immediate"`
+ * branch). Each blocked call gets:
+ *   - a `tool_execution_start` event (with `hideFromChannelProgress: true`
+ *     so the rejection doesn't spam the TUI)
+ *   - a synthesized `FinalizedToolCallOutcome` with `isError: true`,
+ *     `executionStarted: false`, and the rejection message as the tool result
+ *   - a `tool_execution_end` event
+ *   - a synthesized `ToolResultMessage` per the loop convention
+ *
+ * Sets `toolBlockCapCooldownTurns = 1` so the cooldown logic in
+ * `resolveEffectiveToolCallCap` tightens the cap to 1 for the next turn.
+ */
+async function completeToolBlockCapRejectionBatch(params: {
+  currentContext: AgentContext;
+  assistantMessage: AssistantMessage;
+  toolCalls: AgentToolCall[];
+  config: AgentLoopConfig;
+  signal: AbortSignal | undefined;
+  emit: AgentEventSink;
+  cap: number;
+  count: number;
+}): Promise<ExecutedToolCallBatch> {
+  const messages: ToolResultMessage[] = [];
+  const text = TOOL_BLOCK_CAP_REJECTION_MESSAGE.replace("{count}", String(params.count)).replace(
+    "{cap}",
+    String(params.cap),
+  );
+  for (const toolCall of params.toolCalls) {
+    await params.emit({
+      type: "tool_execution_start",
+      toolCallId: toolCall.id,
+      toolName: toolCall.name,
+      args: toolCall.arguments,
+      hideFromChannelProgress: true,
+    });
+    const finalized: FinalizedToolCallOutcome = {
+      toolCall,
+      result: {
+        content: [{ type: "text", text }],
+        details: {
+          status: "blocked",
+          deniedReason: "tool-block-cap",
+          cap: params.cap,
+          attempted: params.count,
+        },
+      },
+      isError: true,
+      executionStarted: false,
+      hideFromChannelProgress: true,
+    };
+    await emitToolExecutionEnd(finalized, params.emit);
+    const toolResultMessage = createToolResultMessage(finalized);
+    await emitToolResultMessage(toolResultMessage, params.emit);
+    messages.push(toolResultMessage);
+  }
+  if (typeof params.config.toolBlockCapCooldownTurns === "number") {
+    params.config.toolBlockCapCooldownTurns = 1;
+  } else {
+    params.config.toolBlockCapCooldownTurns = 1;
+  }
+  return {
+    messages,
+    // terminate: true so the agent loop interprets the rejected batch as
+    // "this turn is done; do not call the model again for more tool calls."
+    // The model has been told to report findings as text in its next output;
+    // the next turn is gated by the agent's normal user-prompt flow
+    // (controlled by `shouldStopAfterTurn` / `getSteeringMessages`).
+    terminate: true,
+  };
+}
+
+/**
  * Execute tool calls from an assistant message.
  */
 async function executeToolCalls(
@@ -554,6 +652,28 @@ async function executeToolCalls(
   emit: AgentEventSink,
 ): Promise<ExecutedToolCallBatch> {
   const toolCalls = assistantMessage.content.filter((c) => c.type === "toolCall");
+  // Per-response cap enforcement. When the cap is exceeded, reject the entire
+  // batch with a synthetic error per call. No tools execute. The model sees
+  // the rejection as if it were the result of each call and is instructed to
+  // report findings as text in its next output. See TOOL_BLOCK_CAP_REJECTION_MESSAGE.
+  const effectiveCap = resolveEffectiveToolCallCap(config);
+  if (effectiveCap !== undefined && toolCalls.length > effectiveCap) {
+    return await completeToolBlockCapRejectionBatch({
+      currentContext,
+      assistantMessage,
+      toolCalls,
+      config,
+      signal,
+      emit,
+      cap: effectiveCap,
+      count: toolCalls.length,
+    });
+  }
+  // Successful pass through this point ages the previous-violation counter
+  // by one turn. Cooldown expires after exactly one clean turn.
+  if (config.toolBlockCapCooldownTurns !== undefined && config.toolBlockCapCooldownTurns > 0) {
+    config.toolBlockCapCooldownTurns += 1;
+  }
   const resolvedToolCalls = new Map<AgentToolCall, ResolvedToolCallOutcome>();
   let hasSequentialToolCall = false;
   if (config.toolExecution !== "sequential") {

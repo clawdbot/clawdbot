@@ -421,6 +421,23 @@ export type AgentToolsConfig = {
   fs?: FsToolsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
+  /**
+   * Optional maximum number of tool calls allowed in a single assistant
+   * message. When the assistant emits more than this many tool calls in one
+   * response, the entire batch is rejected and the model is told to report
+   * findings as text. Mitigates the `run error: unknown` failure mode caused
+   * by the OpenClaw CLI loopback correlation buffer overflowing on dense
+   * tool-call blocks. Recommended value: 2 for coordinator-style agents.
+   *
+   * Default: undefined (no cap).
+   */
+  maxCallsPerBlock?: number;
+  /**
+   * When true, a violation in the previous turn tightens the effective cap to 1
+   * for the next turn. Catches the "just-one-more creep" failure pattern.
+   * Default: true.
+   */
+  maxCallsPerBlockCooldown?: boolean;
   /** Message tool configuration for this agent. */
   message?: MessageToolsConfig;
   sandbox?: {
@@ -721,6 +738,25 @@ export type ToolsConfig = {
   fs?: FsToolsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
+  /**
+   * Optional maximum number of tool calls allowed in a single assistant
+   * message. When the assistant emits more than this many tool calls in one
+   * response, the entire batch is rejected and the model is told to report
+   * findings as text. Mitigates the `run error: unknown` failure mode caused
+   * by the OpenClaw CLI loopback correlation buffer overflowing on dense
+   * tool-call blocks. Recommended value: 2 for coordinator-style agents.
+   *
+   * Per-agent override: `agents.<id>.tools.maxCallsPerBlock`.
+   *
+   * Default: undefined (no cap).
+   */
+  maxCallsPerBlock?: number;
+  /**
+   * When true, a violation in the previous turn tightens the effective cap to 1
+   * for the next turn. Catches the "just-one-more creep" failure pattern.
+   * Default: true.
+   */
+  maxCallsPerBlockCooldown?: boolean;
   /** Compact large OpenClaw, MCP, and client tool catalogs behind search/call tools. */
   toolSearch?: ToolSearchConfig;
   /** Generic code mode: expose exec/wait and hide normal tools behind a QuickJS catalog bridge. */
