@@ -66,7 +66,6 @@ const GATEWAY_SCOPES = [
 
 type ProducerOptions = {
   artifactBase: string;
-  i1Only: boolean;
   repoRoot: string;
 };
 
@@ -311,7 +310,6 @@ function parseOptions(argv: readonly string[]): ProducerOptions {
   }
   return {
     artifactBase: path.resolve(artifactBase),
-    i1Only: argv.includes("--i1-only"),
     repoRoot: path.resolve(readValue("--repo-root") ?? process.cwd()),
   };
 }
@@ -628,19 +626,17 @@ async function runProof(options: ProducerOptions): Promise<string> {
         PATH: `${fakeTailscale.binaryDir}${path.delimiter}${process.env.PATH ?? ""}`,
       },
     });
-    if (!options.i1Only) {
-      await gateway.restartAfterStateMutation(async () => {
-        await runLocalTurn(gateway!, "Reply exactly: IDENTITY-DISABLED-FRESH");
-      });
-      if (inspectExecutionIdentityStorage(gateway).tablePresent) {
-        throw new Error("fresh-install default unexpectedly created execution identity storage");
-      }
-      await gateway.restartAfterStateMutation(async () => {
-        await runLocalTurn(gateway!, "Reply exactly: IDENTITY-DISABLED-UPGRADE");
-      });
-      if (inspectExecutionIdentityStorage(gateway).tablePresent) {
-        throw new Error("existing-install restart unexpectedly created execution identity storage");
-      }
+    await gateway.restartAfterStateMutation(async () => {
+      await runLocalTurn(gateway!, "Reply exactly: IDENTITY-DISABLED-FRESH");
+    });
+    if (inspectExecutionIdentityStorage(gateway).tablePresent) {
+      throw new Error("fresh-install default unexpectedly created execution identity storage");
+    }
+    await gateway.restartAfterStateMutation(async () => {
+      await runLocalTurn(gateway!, "Reply exactly: IDENTITY-DISABLED-UPGRADE");
+    });
+    if (inspectExecutionIdentityStorage(gateway).tablePresent) {
+      throw new Error("existing-install restart unexpectedly created execution identity storage");
     }
     await gateway.restartAfterStateMutation(async ({ configPath }) => {
       await updateExecutionIdentityConfig(configPath, { executionIdentity: true });
@@ -797,58 +793,54 @@ async function runProof(options: ProducerOptions): Promise<string> {
     const repeatedRunId = `identity-repeated-${randomUUID()}`;
     let repeatedRows: ReturnType<typeof findRunExecutions> = [];
     const repeatedBeforeRestart = new Map<string, string>();
-    if (!options.i1Only) {
-      await runRepeatedIngressTurns(gateway, options.repoRoot, repeatedRunId);
-      repeatedRows = findRunExecutions(gateway, repeatedRunId);
-      if (
-        repeatedRows.length !== 2 ||
-        new Set(repeatedRows.map((row) => row.execution_id)).size !== 2 ||
-        new Set(repeatedRows.map((row) => row.context_id)).size !== 2
-      ) {
-        throw new Error(
-          `repeated same-session run recorded ${String(repeatedRows.length)} non-distinct executions`,
-        );
-      }
-      const discoveryText = await gateway.runCli(["audit", "--run", repeatedRunId, "--explain"]);
-      if (
-        !discoveryText.includes("execution_selection_required") ||
-        !discoveryText.includes("--execution <id> --explain")
-      ) {
-        throw new Error("ambiguous run discovery omitted exact-execution selection guidance");
-      }
-      const discovery = parseJson(
-        await gateway.runCli(["audit", "--run", repeatedRunId, "--explain", "--json"]),
-        "repeated-run discovery",
+    await runRepeatedIngressTurns(gateway, options.repoRoot, repeatedRunId);
+    repeatedRows = findRunExecutions(gateway, repeatedRunId);
+    if (
+      repeatedRows.length !== 2 ||
+      new Set(repeatedRows.map((row) => row.execution_id)).size !== 2 ||
+      new Set(repeatedRows.map((row) => row.context_id)).size !== 2
+    ) {
+      throw new Error(
+        `repeated same-session run recorded ${String(repeatedRows.length)} non-distinct executions`,
+      );
+    }
+    const discoveryText = await gateway.runCli(["audit", "--run", repeatedRunId, "--explain"]);
+    if (
+      !discoveryText.includes("execution_selection_required") ||
+      !discoveryText.includes("--execution <id> --explain")
+    ) {
+      throw new Error("ambiguous run discovery omitted exact-execution selection guidance");
+    }
+    const discovery = parseJson(
+      await gateway.runCli(["audit", "--run", repeatedRunId, "--explain", "--json"]),
+      "repeated-run discovery",
+    ) as AuditRunInspectResult;
+    if (discovery.identity.state !== "ambiguous" || discovery.identity.candidates.length !== 2) {
+      throw new Error("repeated same-session run was not reported as two ambiguous executions");
+    }
+    for (const row of repeatedRows) {
+      const text = await gateway.runCli(["audit", "--execution", row.execution_id, "--explain"]);
+      assertTextProjection(text);
+      const exact = parseJson(
+        await gateway.runCli(["audit", "--execution", row.execution_id, "--explain", "--json"]),
+        `execution ${row.execution_id}`,
       ) as AuditRunInspectResult;
-      if (discovery.identity.state !== "ambiguous" || discovery.identity.candidates.length !== 2) {
-        throw new Error("repeated same-session run was not reported as two ambiguous executions");
+      const context = requireIdentityContext(exact);
+      if (
+        exact.run.executionId !== row.execution_id ||
+        context.executionId !== row.execution_id ||
+        context.contextId !== row.context_id ||
+        context.runId !== repeatedRunId ||
+        context.ingress.kind !== "api" ||
+        context.ingress.state !== "unknown"
+      ) {
+        throw new Error(`exact execution inspection selected the wrong turn: ${row.execution_id}`);
       }
-      for (const row of repeatedRows) {
-        const text = await gateway.runCli(["audit", "--execution", row.execution_id, "--explain"]);
-        assertTextProjection(text);
-        const exact = parseJson(
-          await gateway.runCli(["audit", "--execution", row.execution_id, "--explain", "--json"]),
-          `execution ${row.execution_id}`,
-        ) as AuditRunInspectResult;
-        const context = requireIdentityContext(exact);
-        if (
-          exact.run.executionId !== row.execution_id ||
-          context.executionId !== row.execution_id ||
-          context.contextId !== row.context_id ||
-          context.runId !== repeatedRunId ||
-          context.ingress.kind !== "api" ||
-          context.ingress.state !== "unknown"
-        ) {
-          throw new Error(
-            `exact execution inspection selected the wrong turn: ${row.execution_id}`,
-          );
-        }
-        const exactContextJson = normalizedContextJson(exact);
-        if (exactContextJson !== row.context_json) {
-          throw new Error(`RPC context bytes differ from persisted bytes: ${row.execution_id}`);
-        }
-        repeatedBeforeRestart.set(row.execution_id, exactContextJson);
+      const exactContextJson = normalizedContextJson(exact);
+      if (exactContextJson !== row.context_json) {
+        throw new Error(`RPC context bytes differ from persisted bytes: ${row.execution_id}`);
       }
+      repeatedBeforeRestart.set(row.execution_id, exactContextJson);
     }
 
     await gateway.restartAfterStateMutation(async () => {});
@@ -886,25 +878,23 @@ async function runProof(options: ProducerOptions): Promise<string> {
         throw new Error(`repeated execution changed across Gateway restart: ${executionId}`);
       }
     }
-    if (!options.i1Only) {
-      const retainedBeforeGlobalDisable = inspectExecutionIdentityStorage(gateway).rowCount;
-      await gateway.restartAfterStateMutation(async ({ configPath }) => {
-        await updateExecutionIdentityConfig(configPath, {
-          enabled: false,
-          executionIdentity: true,
-        });
-        await runLocalTurn(gateway!, "Reply exactly: IDENTITY-DISABLED-GLOBAL");
+    const retainedBeforeGlobalDisable = inspectExecutionIdentityStorage(gateway).rowCount;
+    await gateway.restartAfterStateMutation(async ({ configPath }) => {
+      await updateExecutionIdentityConfig(configPath, {
+        enabled: false,
+        executionIdentity: true,
       });
-      if (inspectExecutionIdentityStorage(gateway).rowCount !== retainedBeforeGlobalDisable) {
-        throw new Error("global audit disable unexpectedly retained a new execution context");
-      }
-      const afterGlobalDisable = parseJson(
-        await gateway.runCli(["audit", "--run", runId, "--explain", "--json"]),
-        "global-disabled retained inspection",
-      ) as AuditRunInspectResult;
-      if (normalizedContextJson(afterGlobalDisable) !== beforeContext) {
-        throw new Error("global audit disable hid or changed retained identity evidence");
-      }
+      await runLocalTurn(gateway!, "Reply exactly: IDENTITY-DISABLED-GLOBAL");
+    });
+    if (inspectExecutionIdentityStorage(gateway).rowCount !== retainedBeforeGlobalDisable) {
+      throw new Error("global audit disable unexpectedly retained a new execution context");
+    }
+    const afterGlobalDisable = parseJson(
+      await gateway.runCli(["audit", "--run", runId, "--explain", "--json"]),
+      "global-disabled retained inspection",
+    ) as AuditRunInspectResult;
+    if (normalizedContextJson(afterGlobalDisable) !== beforeContext) {
+      throw new Error("global audit disable hid or changed retained identity evidence");
     }
 
     const snapshotPath = path.join(options.artifactBase, SNAPSHOT_FILE);
@@ -921,15 +911,11 @@ async function runProof(options: ProducerOptions): Promise<string> {
               contextSha256: sha256(profilelessContext),
             },
           },
-          ...(!options.i1Only
-            ? {
-                repeatedRunId,
-                repeatedExecutions: repeatedRows.map((row) => ({
-                  executionId: row.execution_id,
-                  contextId: row.context_id,
-                })),
-              }
-            : {}),
+          repeatedRunId,
+          repeatedExecutions: repeatedRows.map((row) => ({
+            executionId: row.execution_id,
+            contextId: row.context_id,
+          })),
           coverage: before.coverage,
           decision: before.decisions[0]?.decision,
           contextSha256: sha256(beforeContext),
@@ -937,11 +923,11 @@ async function runProof(options: ProducerOptions): Promise<string> {
           byteEquivalentPersistedReadback: true,
           optIn: {
             explicitEnablement: true,
-            freshInstallDisabled: !options.i1Only,
-            freshInstallTableAbsent: !options.i1Only,
-            globalAuditDisabled: !options.i1Only,
-            upgradeStyleExistingInstallDisabled: !options.i1Only,
-            upgradeStyleTableAbsent: !options.i1Only,
+            freshInstallDisabled: true,
+            freshInstallTableAbsent: true,
+            globalAuditDisabled: true,
+            upgradeStyleExistingInstallDisabled: true,
+            upgradeStyleTableAbsent: true,
           },
           textSections: TEXT_SECTIONS,
           identityFields: IDENTITY_FIELDS,
@@ -951,9 +937,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
       )}\n`,
       "utf8",
     );
-    const repeatedDetails = options.i1Only
-      ? "repeated-execution checks skipped by --i1-only"
-      : `repeated run=${repeatedRunId} executions=${repeatedRows.map((row) => row.execution_id).join(",")}; exact selection passed`;
+    const repeatedDetails = `repeated run=${repeatedRunId} executions=${repeatedRows.map((row) => row.execution_id).join(",")}; exact selection passed`;
     return `local run=${runId}; profiled Gateway run=${profiledRunId}; profileless Gateway run=${profilelessRunId}; ${repeatedDetails}; Gateway pid=${gateway.pid ?? "unknown"}; text+JSON and persisted bytes passed before/after replacement; normalized context sha256=${sha256(beforeContext)}`;
   } finally {
     await gateway?.stop().catch(() => undefined);
