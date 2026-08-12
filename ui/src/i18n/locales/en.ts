@@ -5608,6 +5608,9 @@ export const en: TranslationMap = {
       resume: "Resume",
       clone: "Clone",
       remove: "Remove",
+      removeConfirmTitle: 'Remove "{name}"?',
+      removeConfirmMessage:
+        "This permanently deletes the automation and stops all future runs. This action cannot be undone.",
       more: "More actions",
     },
     runNotStarted: {
