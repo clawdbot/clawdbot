@@ -284,8 +284,7 @@ export function createSessionsListTool(opts?: {
           continue;
         }
 
-        const gatewayKind = typeof entry.kind === "string" ? entry.kind : undefined;
-        const kind = classifySessionListKind({ key, gatewayKind, alias, mainKey });
+        const kind = classifySessionListKind(entry);
         if (allowedKinds && !allowedKinds.has(kind)) {
           continue;
         }
