@@ -1,3 +1,5 @@
+import { stableStringify } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type OpenAI from "openai";
 import type {
   ResponseInput,
@@ -299,22 +301,35 @@ function sanitizeWebSocketRequest(request: Record<string, unknown>): ResponsesWe
   return websocketRequest as ResponsesWebSocketRequest;
 }
 
+function jsonValuesEqual(left: object, right: object): boolean {
+  // Round-trip first so stable key ordering retains JSON's omitted/undefined wire semantics.
+  const leftJson = JSON.parse(JSON.stringify(left) as string);
+  const rightJson = JSON.parse(JSON.stringify(right) as string);
+  return stableStringify(leftJson) === stableStringify(rightJson);
+}
+
 function normalizeAssistantReplayInput(input: readonly unknown[]): unknown[] {
   return input.map((item) => {
-    if (!item || typeof item !== "object" || Array.isArray(item)) {
+    if (!isRecord(item)) {
       return item;
     }
-    const typedItem = item as unknown as Record<string, unknown>;
-    if (typedItem.type === "reasoning") {
+    if (item.type === "reasoning") {
       return { type: "reasoning" };
     }
-    if (
-      typedItem.type !== "function_call" &&
-      !(typedItem.type === "message" && typedItem.role === "assistant")
-    ) {
+    if (item.type !== "function_call" && !(item.type === "message" && item.role === "assistant")) {
       return item;
     }
-    const { id: _id, status: _status, ...stableItem } = typedItem;
+    const { id: _id, status: _status, ...stableItem } = item;
+    if (item.type === "message" && Array.isArray(stableItem.content)) {
+      // Strip only provider delivery metadata that reconstructed assistant replay cannot contain.
+      stableItem.content = stableItem.content.map((part) => {
+        if (!isRecord(part) || part.type !== "output_text") {
+          return part;
+        }
+        const { annotations: _annotations, logprobs: _logprobs, ...stablePart } = part;
+        return stablePart;
+      });
+    }
     return stableItem;
   });
 }
@@ -340,8 +355,7 @@ function buildCachedWebSocketRequest(
     return rejectContinuation("explicit_previous_response_id");
   }
   if (
-    JSON.stringify(requestWithoutInput(request)) !==
-    JSON.stringify(requestWithoutInput(continuation.lastRequest))
+    !jsonValuesEqual(requestWithoutInput(request), requestWithoutInput(continuation.lastRequest))
   ) {
     return rejectContinuation("request_changed");
   }
@@ -353,11 +367,14 @@ function buildCachedWebSocketRequest(
     return rejectContinuation("history_shorter");
   }
   if (
-    JSON.stringify(normalizeAssistantReplayInput(currentInput.slice(0, previousInput.length))) !==
-      JSON.stringify(normalizeAssistantReplayInput(previousInput)) ||
-    JSON.stringify(
+    !jsonValuesEqual(
+      normalizeAssistantReplayInput(currentInput.slice(0, previousInput.length)),
+      normalizeAssistantReplayInput(previousInput),
+    ) ||
+    !jsonValuesEqual(
       normalizeAssistantReplayInput(currentInput.slice(previousInput.length, baselineLength)),
-    ) !== JSON.stringify(normalizeAssistantReplayInput(continuation.lastResponseItems))
+      normalizeAssistantReplayInput(continuation.lastResponseItems),
+    )
   ) {
     return rejectContinuation("history_changed");
   }
