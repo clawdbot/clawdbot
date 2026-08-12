@@ -60,6 +60,13 @@ function requireRun(jobName: string, name: string): string {
   return value;
 }
 
+const PROVENANCE_BLOCKS = [
+  { jobName: "build_candidate", stepName: "Validate candidate release provenance" },
+  { jobName: "run_telegram", stepName: "Revalidate candidate release provenance" },
+] as const;
+
+type ProvenanceBlock = (typeof PROVENANCE_BLOCKS)[number];
+
 function extractHereDocument(script: string, delimiter: string): string {
   const match = script.match(
     new RegExp(`<<'${delimiter}'\\n([\\s\\S]*?)\\n${delimiter}(?:\\n|$)`, "u"),
@@ -213,21 +220,28 @@ function runAdvisoryStatus(overrides: Record<string, string> = {}) {
 }
 
 function runCandidateProvenance(
+  provenanceBlock: ProvenanceBlock,
   params: {
-    branchHead?: string;
     candidateVersion?: string;
+    mergedPullRequests?: Array<{
+      baseRefName?: string;
+      baseRepository?: string;
+      mergeCommitOid?: string;
+      mergedBy?: string;
+    }>;
     openPr?: boolean;
+    permission?: "admin" | "maintain" | "write";
     remoteSha?: string;
+    signature?: "invalid" | "maintainer" | "missing" | "web-flow";
     targetContextRef?: string;
-    unsignedWebFlow?: boolean;
   } = {},
 ) {
   const candidateSha = "a".repeat(40);
+  const signature = params.signature ?? "maintainer";
   const targetContextRef = params.targetContextRef ?? "";
   const normalizedContextRef = targetContextRef
     .replace(/^refs\/heads\//u, "")
     .replace(/^refs\/tags\//u, "");
-  const branchHead = params.branchHead ?? "release/2026.7.1-beta.3-code-frozen-r1";
   const remoteRef = normalizedContextRef.startsWith("v")
     ? `refs/tags/${normalizedContextRef}`
     : `refs/heads/${normalizedContextRef || "release/2026.7.1"}`;
@@ -244,9 +258,18 @@ function runCandidateProvenance(
       repository: {
         object: {
           oid: candidateSha,
-          signature: params.unsignedWebFlow
-            ? null
-            : { isValid: true, state: "VALID", signer: { login: "release-maintainer" } },
+          signature:
+            signature === "missing"
+              ? null
+              : signature === "invalid"
+                ? { isValid: false, state: "INVALID", signer: { login: "release-maintainer" } }
+                : {
+                    isValid: true,
+                    state: "VALID",
+                    signer: {
+                      login: signature === "web-flow" ? "web-flow" : "release-maintainer",
+                    },
+                  },
           associatedPullRequests: {
             nodes: [
               ...(params.openPr
@@ -258,17 +281,15 @@ function runCandidateProvenance(
                     },
                   ]
                 : []),
-              ...(params.unsignedWebFlow
-                ? [
-                    {
-                      state: "MERGED",
-                      baseRefName: "release/2026.7.1",
-                      baseRepository: { nameWithOwner: "openclaw/openclaw" },
-                      mergeCommit: { oid: candidateSha },
-                      mergedBy: { login: "release-maintainer" },
-                    },
-                  ]
-                : []),
+              ...(params.mergedPullRequests ?? []).map((pullRequest) => ({
+                state: "MERGED",
+                baseRefName: pullRequest.baseRefName ?? "release/2026.7.1",
+                baseRepository: {
+                  nameWithOwner: pullRequest.baseRepository ?? "openclaw/openclaw",
+                },
+                mergeCommit: { oid: pullRequest.mergeCommitOid ?? candidateSha },
+                mergedBy: { login: pullRequest.mergedBy ?? "release-maintainer" },
+              })),
             ],
           },
         },
@@ -280,9 +301,9 @@ function runCandidateProvenance(
     `#!/usr/bin/env bash
 set -euo pipefail
 if [[ "$*" == *"api graphql"* ]]; then printf '%s\\n' "$FAKE_METADATA"; exit 0; fi
-if [[ "$*" == *"/branches-where-head"* ]]; then printf '%s\\n' "$FAKE_BRANCH_HEAD"; exit 0; fi
+if [[ "$*" == *"/branches-where-head"* ]]; then printf '%s\\n' "release/2026.7.1"; exit 0; fi
 if [[ "$*" == *"/compare/"* ]]; then printf '%s\\n' "behind"; exit 0; fi
-if [[ "$*" == *"/collaborators/release-maintainer/permission"* ]]; then printf '%s\\n' '{"permission":"write","role_name":"maintain"}'; exit 0; fi
+if [[ "$*" == *"/collaborators/"*"/permission"* ]]; then printf '%s\\n' "$FAKE_PERMISSION"; exit 0; fi
 exit 64
 `,
     { mode: 0o755 },
@@ -301,27 +322,30 @@ exit 64
 `,
     { mode: 0o755 },
   );
-  return spawnSync(
-    "bash",
-    ["-c", requireRun("build_candidate", "Validate candidate release provenance")],
-    {
-      cwd: workdir,
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        FAKE_BRANCH_HEAD: branchHead,
-        FAKE_METADATA: JSON.stringify(metadata),
-        FAKE_REMOTE_REF: remoteRef,
-        FAKE_REMOTE_SHA: params.remoteSha ?? candidateSha,
-        GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN: "HTTP 5[0-9][0-9]",
-        GITHUB_REPOSITORY: "openclaw/openclaw",
-        PATH: `${fakeBin}:${process.env.PATH}`,
-        TARGET_CONTEXT_REF: targetContextRef,
-        TARGET_REF: targetContextRef ? candidateSha : "refs/heads/release/2026.7.1",
-        TARGET_SHA: candidateSha,
-      },
+  return spawnSync("bash", ["-c", requireRun(provenanceBlock.jobName, provenanceBlock.stepName)], {
+    cwd: workdir,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      FAKE_METADATA: JSON.stringify(metadata),
+      FAKE_PERMISSION: JSON.stringify({
+        permission: params.permission === "admin" ? "admin" : "write",
+        role_name: params.permission ?? "maintain",
+      }),
+      FAKE_REMOTE_REF: remoteRef,
+      FAKE_REMOTE_SHA: params.remoteSha ?? candidateSha,
+      CANDIDATE_GIT_DIR:
+        provenanceBlock.jobName === "build_candidate" ? join(workdir, ".candidate") : "",
+      CANDIDATE_ROOT: join(workdir, ".candidate"),
+      GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN: "HTTP 5[0-9][0-9]",
+      GITHUB_WORKSPACE: process.cwd(),
+      GITHUB_REPOSITORY: "openclaw/openclaw",
+      PATH: `${fakeBin}:${process.env.PATH}`,
+      TARGET_CONTEXT_REF: targetContextRef,
+      TARGET_REF: targetContextRef ? candidateSha : "refs/heads/release/2026.7.1",
+      TARGET_SHA: candidateSha,
     },
-  );
+  });
 }
 
 describe("release Telegram QA workflow", () => {
@@ -367,6 +391,12 @@ describe("release Telegram QA workflow", () => {
     expect(requireRun("advisory_status", "Record advisory status").trim()).toBe(
       "set -euo pipefail\nnode scripts/release-telegram-qa.mjs advisory-status",
     );
+    expect(
+      PROVENANCE_BLOCKS.map(({ jobName, stepName }) => requireRun(jobName, stepName).trim()),
+    ).toEqual([
+      'bash "${GITHUB_WORKSPACE}/scripts/release-telegram-provenance.sh"',
+      'bash "${GITHUB_WORKSPACE}/scripts/release-telegram-provenance.sh"',
+    ]);
     for (const [jobName, value] of Object.entries(workflow().jobs ?? {})) {
       for (const checkout of value.steps?.filter((candidate) =>
         candidate.uses?.startsWith("actions/checkout@"),
@@ -407,47 +437,180 @@ describe("release Telegram QA workflow", () => {
   });
 
   it("accepts trusted release provenance and rejects same-repository PR heads", () => {
-    const signed = runCandidateProvenance();
-    expect(signed.status, signed.stderr).toBe(0);
+    for (const provenanceBlock of PROVENANCE_BLOCKS) {
+      const signed = runCandidateProvenance(provenanceBlock);
+      expect(signed.status, `${provenanceBlock.stepName}: ${signed.stderr}`).toBe(0);
 
-    const unsignedWebFlow = runCandidateProvenance({ unsignedWebFlow: true });
-    expect(unsignedWebFlow.status, unsignedWebFlow.stderr).toBe(0);
-
-    const openPr = runCandidateProvenance({ openPr: true });
-    expect(openPr.status).toBe(1);
-    expect(openPr.stderr).toContain("open same-repository PR head");
+      const openPr = runCandidateProvenance(provenanceBlock, { openPr: true });
+      expect(openPr.status, provenanceBlock.stepName).not.toBe(0);
+      if (provenanceBlock.jobName === "build_candidate") {
+        expect(openPr.stderr).toContain("open same-repository PR head");
+      }
+    }
   });
 
-  it("requires canonical signed frozen heads for beta release contexts", () => {
-    const matching = runCandidateProvenance({
-      candidateVersion: "2026.7.1-beta.3",
-      targetContextRef: "release/2026.7.1",
-    });
-    expect(matching.status, matching.stderr).toBe(0);
+  it("accepts canonical beta release branch heads in both provenance blocks", () => {
+    const results = PROVENANCE_BLOCKS.map((provenanceBlock) => ({
+      provenanceBlock,
+      result: runCandidateProvenance(provenanceBlock, {
+        candidateVersion: "2026.7.1-beta.3",
+        targetContextRef: "release/2026.7.1",
+      }),
+    }));
+    expect(
+      results.map(({ provenanceBlock, result }) => ({
+        block: provenanceBlock.stepName,
+        status: result.status,
+        stderr: result.stderr,
+      })),
+    ).toEqual([
+      { block: "Validate candidate release provenance", status: 0, stderr: "" },
+      { block: "Revalidate candidate release provenance", status: 0, stderr: "" },
+    ]);
+  });
 
-    const unsigned = runCandidateProvenance({
-      candidateVersion: "2026.7.1-beta.3",
-      targetContextRef: "release/2026.7.1",
-      unsignedWebFlow: true,
-    });
-    expect(unsigned.status).toBe(1);
-    expect(unsigned.stderr).toContain("requires a valid maintainer signature");
-
-    const legacyFrozen = runCandidateProvenance({
-      branchHead: "release/2026.7.1-beta.3-frozen-r1",
-      candidateVersion: "2026.7.1-beta.3",
-      targetContextRef: "release/2026.7.1",
-    });
-    expect(legacyFrozen.status).toBe(1);
-
-    const alpha = runCandidateProvenance({
-      candidateVersion: "2026.7.1-alpha.1",
-      targetContextRef: "release/2026.7.1",
-    });
-    expect(alpha.status).toBe(1);
-    expect(alpha.stderr).toContain(
-      "Telegram candidate version 2026.7.1-alpha.1 does not belong to release 2026.7.1.",
+  it("attributes web-flow release heads through a unique integration-base merge", () => {
+    const results = PROVENANCE_BLOCKS.flatMap((provenanceBlock) =>
+      ["2026.7.1", "2026.7.1-beta.3"].map((candidateVersion) => ({
+        candidateVersion,
+        provenanceBlock,
+        result: runCandidateProvenance(provenanceBlock, {
+          candidateVersion,
+          mergedPullRequests: [{ baseRefName: "release-integration/2026.7.1-repair-2" }],
+          signature: "web-flow",
+          targetContextRef: "release/2026.7.1",
+        }),
+      })),
     );
+    expect(
+      results.map(({ candidateVersion, provenanceBlock, result }) => ({
+        block: provenanceBlock.stepName,
+        candidateVersion,
+        status: result.status,
+        stderr: result.stderr,
+      })),
+    ).toEqual([
+      {
+        block: "Validate candidate release provenance",
+        candidateVersion: "2026.7.1",
+        status: 0,
+        stderr: "",
+      },
+      {
+        block: "Validate candidate release provenance",
+        candidateVersion: "2026.7.1-beta.3",
+        status: 0,
+        stderr: "",
+      },
+      {
+        block: "Revalidate candidate release provenance",
+        candidateVersion: "2026.7.1",
+        status: 0,
+        stderr: "",
+      },
+      {
+        block: "Revalidate candidate release provenance",
+        candidateVersion: "2026.7.1-beta.3",
+        status: 0,
+        stderr: "",
+      },
+    ]);
+  });
+
+  it("keeps release provenance attribution fail-closed in both blocks", () => {
+    for (const provenanceBlock of PROVENANCE_BLOCKS) {
+      const cases = [
+        {
+          label: "stale canonical branch",
+          params: {
+            candidateVersion: "2026.7.1-beta.3",
+            remoteSha: "b".repeat(40),
+            targetContextRef: "release/2026.7.1",
+          },
+        },
+        {
+          label: "missing merge attribution",
+          params: {
+            candidateVersion: "2026.7.1",
+            signature: "missing" as const,
+            targetContextRef: "release/2026.7.1",
+          },
+        },
+        {
+          label: "ambiguous merge attribution",
+          params: {
+            candidateVersion: "2026.7.1",
+            mergedPullRequests: [
+              { baseRefName: "release-integration/2026.7.1-a" },
+              { baseRefName: "release-integration/2026.7.1-b" },
+            ],
+            signature: "web-flow" as const,
+            targetContextRef: "release/2026.7.1",
+          },
+        },
+        {
+          label: "foreign repository attribution",
+          params: {
+            candidateVersion: "2026.7.1",
+            mergedPullRequests: [{ baseRepository: "fork/openclaw" }],
+            signature: "web-flow" as const,
+            targetContextRef: "release/2026.7.1",
+          },
+        },
+        {
+          label: "different merge commit attribution",
+          params: {
+            candidateVersion: "2026.7.1",
+            mergedPullRequests: [{ mergeCommitOid: "b".repeat(40) }],
+            signature: "web-flow" as const,
+            targetContextRef: "release/2026.7.1",
+          },
+        },
+        {
+          label: "insufficient actor permission",
+          params: {
+            candidateVersion: "2026.7.1",
+            mergedPullRequests: [{ baseRefName: "release-integration/2026.7.1-repair" }],
+            permission: "write" as const,
+            signature: "web-flow" as const,
+            targetContextRef: "release/2026.7.1",
+          },
+        },
+        {
+          label: "invalid signature",
+          params: {
+            candidateVersion: "2026.7.1",
+            signature: "invalid" as const,
+            targetContextRef: "release/2026.7.1",
+          },
+        },
+      ];
+      for (const testCase of cases) {
+        const rejected = runCandidateProvenance(provenanceBlock, testCase.params);
+        expect(rejected.status, `${provenanceBlock.stepName}: ${testCase.label}`).not.toBe(0);
+      }
+
+      const missingSignature = runCandidateProvenance(provenanceBlock, {
+        candidateVersion: "2026.7.1",
+        mergedPullRequests: [{ baseRefName: "release-integration/2026.7.1-repair" }],
+        permission: "admin",
+        signature: "missing",
+        targetContextRef: "release/2026.7.1",
+      });
+      expect(
+        missingSignature.status,
+        `${provenanceBlock.stepName}: ${missingSignature.stderr}`,
+      ).toBe(0);
+
+      const alpha = runCandidateProvenance(provenanceBlock, {
+        candidateVersion: "2026.7.1-alpha.1",
+        targetContextRef: "release/2026.7.1",
+      });
+      expect(alpha.status).toBe(1);
+      expect(alpha.stderr).toContain(
+        "Telegram candidate version 2026.7.1-alpha.1 does not belong to release 2026.7.1.",
+      );
+    }
   });
 
   it("binds every release context to candidate version and SHA", () => {
@@ -458,21 +621,26 @@ describe("release Telegram QA workflow", () => {
       ["v2026.7.1-alpha.2", "2026.7.1-alpha.2"],
       ["v2026.7.1-beta.3", "2026.7.1-beta.3"],
     ] as const) {
-      const accepted = runCandidateProvenance({ candidateVersion, targetContextRef });
-      expect(accepted.status, `${targetContextRef}: ${accepted.stderr}`).toBe(0);
+      for (const provenanceBlock of PROVENANCE_BLOCKS) {
+        const accepted = runCandidateProvenance(provenanceBlock, {
+          candidateVersion,
+          targetContextRef,
+        });
+        expect(accepted.status, `${provenanceBlock.stepName}:${targetContextRef}`).toBe(0);
 
-      const versionMismatch = runCandidateProvenance({
-        candidateVersion: "2026.8.1",
-        targetContextRef,
-      });
-      expect(versionMismatch.status, targetContextRef).toBe(1);
+        const versionMismatch = runCandidateProvenance(provenanceBlock, {
+          candidateVersion: "2026.8.1",
+          targetContextRef,
+        });
+        expect(versionMismatch.status, `${provenanceBlock.stepName}:${targetContextRef}`).toBe(1);
 
-      const shaMismatch = runCandidateProvenance({
-        candidateVersion,
-        remoteSha: "b".repeat(40),
-        targetContextRef,
-      });
-      expect(shaMismatch.status, targetContextRef).toBe(1);
+        const shaMismatch = runCandidateProvenance(provenanceBlock, {
+          candidateVersion,
+          remoteSha: "b".repeat(40),
+          targetContextRef,
+        });
+        expect(shaMismatch.status, `${provenanceBlock.stepName}:${targetContextRef}`).toBe(1);
+      }
     }
   });
 

@@ -454,7 +454,6 @@ openclaw-chat-sidebar-region,
   gap: 6px;
 }
 
-.chat-workspace-rail__terminal,
 .chat-workspace-rail__refresh,
 .chat-workspace-rail__dock,
 .chat-workspace-rail__collapse-toggle {
@@ -476,24 +475,6 @@ openclaw-chat-sidebar-region,
   cursor: grabbing;
 }
 
-.chat-workspace-rail__terminal {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  /* Chromeless at rest like the sibling ghost buttons; chrome on hover only. */
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--muted);
-}
-
-.chat-workspace-rail__terminal:hover,
-.chat-workspace-rail__terminal:focus-visible {
-  color: var(--text);
-  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-}
-
 /* Overrides the shared .nav-collapse-toggle chrome (border, elevated
    background, inset highlight): rail header buttons only show chrome on
    hover. */
@@ -510,7 +491,6 @@ openclaw-chat-sidebar-region,
   transform: none;
 }
 
-.chat-workspace-rail__terminal svg,
 .chat-workspace-rail__refresh svg,
 .chat-workspace-rail__dock svg,
 .chat-workspace-rail__collapse-toggle svg,

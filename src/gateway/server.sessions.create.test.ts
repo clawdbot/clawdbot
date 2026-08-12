@@ -62,8 +62,10 @@ import {
 
 type EnsureSessionDiffBaseline =
   (typeof import("../sessions/session-diff-baseline.js"))["ensureSessionDiffBaseline"];
-type GenerateDashboardSessionTitle =
-  (typeof import("./dashboard-session-title.js"))["generateDashboardSessionTitle"];
+type GenerateConversationLabelWithFallback =
+  (typeof import("../auto-reply/reply/conversation-label-generator.js"))["generateConversationLabelWithFallback"];
+type ScheduleChatDashboardSessionTitle =
+  (typeof import("./server-methods/chat-send-background.js"))["scheduleChatDashboardSessionTitle"];
 type ReadSessionMessageCountAsync =
   (typeof import("./session-transcript-readers.js"))["readSessionMessageCountAsync"];
 
@@ -72,9 +74,14 @@ const sessionDiffBaselineMocks = vi.hoisted(() => ({
   useReal: false,
 }));
 
-const dashboardTitleMocks = vi.hoisted(() => ({
-  actual: undefined as GenerateDashboardSessionTitle | undefined,
-  generate: vi.fn<GenerateDashboardSessionTitle>(),
+const dashboardTitleGenerationMocks = vi.hoisted(() => ({
+  actual: undefined as GenerateConversationLabelWithFallback | undefined,
+  generate: vi.fn<GenerateConversationLabelWithFallback>(),
+}));
+
+const dashboardTitleScheduleMocks = vi.hoisted(() => ({
+  actual: undefined as ScheduleChatDashboardSessionTitle | undefined,
+  schedule: vi.fn<ScheduleChatDashboardSessionTitle>(),
 }));
 
 const sessionTranscriptReaderMocks = vi.hoisted(() => ({
@@ -92,11 +99,24 @@ vi.mock("../sessions/session-diff-baseline.js", async (importOriginal) => {
   return { ...actual, ensureSessionDiffBaseline: sessionDiffBaselineMocks.ensure };
 });
 
-vi.mock("./dashboard-session-title.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./dashboard-session-title.js")>();
-  dashboardTitleMocks.actual = actual.generateDashboardSessionTitle;
-  dashboardTitleMocks.generate.mockImplementation(actual.generateDashboardSessionTitle);
-  return { ...actual, generateDashboardSessionTitle: dashboardTitleMocks.generate };
+vi.mock("../auto-reply/reply/conversation-label-generator.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../auto-reply/reply/conversation-label-generator.js")>();
+  dashboardTitleGenerationMocks.actual = actual.generateConversationLabelWithFallback;
+  dashboardTitleGenerationMocks.generate.mockImplementation(
+    actual.generateConversationLabelWithFallback,
+  );
+  return {
+    ...actual,
+    generateConversationLabelWithFallback: dashboardTitleGenerationMocks.generate,
+  };
+});
+
+vi.mock("./server-methods/chat-send-background.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./server-methods/chat-send-background.js")>();
+  dashboardTitleScheduleMocks.actual = actual.scheduleChatDashboardSessionTitle;
+  dashboardTitleScheduleMocks.schedule.mockImplementation(actual.scheduleChatDashboardSessionTitle);
+  return { ...actual, scheduleChatDashboardSessionTitle: dashboardTitleScheduleMocks.schedule };
 });
 
 vi.mock("./session-transcript-readers.js", async (importOriginal) => {
@@ -115,11 +135,16 @@ beforeEach(() => {
   sessionDiffBaselineMocks.ensure.mockClear();
   // Baseline capture has dedicated owner coverage and one authenticated integration below.
   sessionDiffBaselineMocks.useReal = false;
-  dashboardTitleMocks.generate.mockReset();
-  if (!dashboardTitleMocks.actual) {
+  dashboardTitleGenerationMocks.generate.mockReset();
+  if (!dashboardTitleGenerationMocks.actual) {
     throw new Error("actual dashboard title generator was not loaded");
   }
-  dashboardTitleMocks.generate.mockImplementation(dashboardTitleMocks.actual);
+  dashboardTitleGenerationMocks.generate.mockImplementation(dashboardTitleGenerationMocks.actual);
+  dashboardTitleScheduleMocks.schedule.mockReset();
+  if (!dashboardTitleScheduleMocks.actual) {
+    throw new Error("actual dashboard title scheduler was not loaded");
+  }
+  dashboardTitleScheduleMocks.schedule.mockImplementation(dashboardTitleScheduleMocks.actual);
   sessionTranscriptReaderMocks.readCount.mockReset();
   if (!sessionTranscriptReaderMocks.actual) {
     throw new Error("actual session transcript reader was not loaded");
@@ -684,6 +709,53 @@ test("createGatewaySession persists a generated title only for a new session", a
   expect(reused).toMatchObject({ ok: true, entry: { displayName: "Readable Worktree Names" } });
 });
 
+test("chat.send generates a dashboard title only after the user turn finishes", async () => {
+  await createSessionStoreDir();
+  const { ws } = await openClient();
+  let finishDispatch: (() => void) | undefined;
+  const dispatchFinished = new Promise<void>((resolve) => {
+    finishDispatch = resolve;
+  });
+  dispatchInboundMessageMock.mockImplementationOnce(async () => {
+    await dispatchFinished;
+    return {
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    };
+  });
+  try {
+    const created = await rpcReq<{ key: string }>(ws, "sessions.create", {
+      agentId: "main",
+      key: "agent:main:dashboard:title-order",
+    });
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    const sessionKey = requireNonEmptyString(created.payload?.key, "created session key");
+
+    const sent = await rpcReq(ws, "chat.send", {
+      sessionKey,
+      message: "Help me plan the release",
+      idempotencyKey: "post-dispatch-dashboard-title",
+    });
+    expect(sent.ok, JSON.stringify(sent.error)).toBe(true);
+    await waitForFast(() => expect(dispatchInboundMessageMock).toHaveBeenCalled());
+    expect(dashboardTitleScheduleMocks.schedule).not.toHaveBeenCalled();
+
+    finishDispatch?.();
+    await waitForFast(() => expect(dashboardTitleScheduleMocks.schedule).toHaveBeenCalled(), {
+      timeout: 5_000,
+    });
+    expect(dashboardTitleScheduleMocks.schedule).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({ rawMessage: "Help me plan the release" }),
+        sessionKey,
+      }),
+    );
+  } finally {
+    finishDispatch?.();
+    ws.close();
+  }
+});
+
 test("incognito operator RPCs treat identityless connections as owner-equivalent", async () => {
   const { dir } = await createSessionStoreDir();
   const admin = await openClient({
@@ -1243,7 +1315,7 @@ test("sessions.create preserves a committed worktree when initial-turn setup fai
   }
 });
 
-test("sessions.create derives its managed-worktree title from message and pasted text", async () => {
+test("sessions.create names its managed worktree without waiting for the model title", async () => {
   const openClawState = await createOpenClawTestState({
     layout: "state-only",
     prefix: "openclaw-session-worktree-title-",
@@ -1261,28 +1333,45 @@ test("sessions.create derives its managed-worktree title from message and pasted
     mimeType: "text/plain",
     content: Buffer.from(pastedText).toString("base64"),
   };
-  dashboardTitleMocks.generate.mockResolvedValueOnce("Attachment Repair");
+  let resolveTitle: ((title: string) => void) | undefined;
+  dashboardTitleGenerationMocks.generate.mockReturnValueOnce(
+    new Promise<string>((resolve) => {
+      resolveTitle = resolve;
+    }),
+  );
+  dispatchInboundMessageMock.mockResolvedValueOnce({
+    queuedFinal: false,
+    counts: { block: 0, final: 0, tool: 0 },
+  });
+  const createResult = rpcReq<{
+    key: string;
+    worktree: { id: string; branch: string };
+  }>(ws, "sessions.create", {
+    agentId: "main",
+    worktree: true,
+    message,
+    attachments: [attachment],
+  });
+  let createSettled = false;
+  void createResult.then(() => {
+    createSettled = true;
+  });
   try {
-    const created = await rpcReq<{
-      worktree: { id: string; branch: string };
-    }>(ws, "sessions.create", {
-      agentId: "main",
-      worktree: true,
-      message,
-      attachments: [attachment],
+    await waitForFast(() => expect(createSettled).toBe(true), {
+      timeout: 1_000,
     });
+    const created = await createResult;
 
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
     worktreeId = created.payload?.worktree.id;
-    expect(created.payload?.worktree.branch).toBe("openclaw/attachment-repair");
-    expect(dashboardTitleMocks.generate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "main",
-        userMessage: message,
-        attachments: [attachment],
-      }),
+    expect(created.payload?.worktree.branch).toBe(
+      "openclaw/review-this-rollout-pasted-deployment-plan-xxxxxxxxxxxxxxxxxxxxx",
     );
+    resolveTitle?.("Attachment Repair");
   } finally {
+    resolveTitle?.("Attachment Repair");
+    const created = await createResult;
+    worktreeId ??= created.payload?.worktree.id;
     if (worktreeId) {
       await managedWorktrees.remove({ id: worktreeId, reason: "test-cleanup", force: true });
     }

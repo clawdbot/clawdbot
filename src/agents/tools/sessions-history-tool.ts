@@ -3,6 +3,7 @@
  *
  * Reads bounded, redacted session transcript history after session visibility filtering.
  */
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -216,7 +217,7 @@ function readHistoryMessageSeq(message: unknown): number | undefined {
     return undefined;
   }
   const seq = (meta as Record<string, unknown>).seq;
-  return typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0 ? seq : undefined;
+  return asPositiveSafeInteger(seq);
 }
 
 function readHistoryMessageId(message: unknown): string | undefined {

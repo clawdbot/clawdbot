@@ -1793,6 +1793,9 @@ describe("chat composer workbench", () => {
     const container = renderChatView({
       sessionWorkspace: createSessionWorkspace({
         narrowLayout: true,
+        onToggleTerminal: vi.fn(),
+        onToggleBrowser: vi.fn(),
+        onOpenDiff: vi.fn(),
       }),
     });
 
@@ -1801,6 +1804,8 @@ describe("chat composer workbench", () => {
     expect(container.querySelector(".chat-workspace-rail")).not.toBeNull();
     expect(container.querySelector(".chat-workspace-rail__dock")).toBeNull();
     expect(container.querySelector(".chat-workspace-rail__grip")).toBeNull();
+    expect(container.querySelector(".chat-workspace-rail__terminal")).toBeNull();
+    expect(container.querySelector(".chat-session-diff-toggle")).toBeNull();
   });
 
   it("moves the background-tasks rail to a bottom strip on narrow panes", () => {

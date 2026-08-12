@@ -63,6 +63,14 @@ type TerminalResolution =
   | { action: "retry" }
   | { action: "complete"; result: EmbeddedAgentRunResult };
 
+function requiresVisibleTerminalReply(runParams: TerminalRunParams): boolean {
+  return (
+    runParams.terminalReplyExpectation === "required" ||
+    (runParams.terminalReplyExpectation == null &&
+      (runParams.trigger == null || runParams.trigger === "user" || runParams.trigger === "manual"))
+  );
+}
+
 export function resolveSettledTurnFinalizationRequest(input: {
   runParams: TerminalRunParams;
   attempt: EmbeddedRunAttemptResult;
@@ -131,12 +139,7 @@ export function resolveSettledTurnFinalizationRequest(input: {
     modelId: input.activeErrorContext.model,
     modelApi: input.modelApi,
     executionContract: input.executionContract,
-    allowEmptyStopContinuation:
-      input.runParams.terminalReplyExpectation === "required" ||
-      (input.runParams.terminalReplyExpectation == null &&
-        (input.runParams.trigger == null ||
-          input.runParams.trigger === "user" ||
-          input.runParams.trigger === "manual")),
+    allowEmptyStopContinuation: requiresVisibleTerminalReply(input.runParams),
     payloadCount,
     hasTerminalToolPresentation: input.hasTerminalToolPresentation,
     aborted: terminalAborted,
@@ -311,8 +314,10 @@ export async function resolveEmbeddedRunTerminal(input: {
     );
     return { action: "retry" };
   }
+  const completedEmptyFinalization = input.settledTurnFinalizationOutcome === "completed-empty";
   const incompleteTurnText =
-    emptyAssistantReplyIsSilent || input.settledTurnFinalizationOutcome === "completed-empty"
+    emptyAssistantReplyIsSilent ||
+    (completedEmptyFinalization && !requiresVisibleTerminalReply(runParams))
       ? null
       : resolveIncompleteTurnPayloadText({
           payloadCount,

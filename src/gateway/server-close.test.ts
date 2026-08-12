@@ -27,9 +27,9 @@ const mocks = vi.hoisted(() => ({
   triggerInternalHook: vi.fn<TriggerInternalHookMock>(async (_eventValue) => undefined),
   disposeAllBundleLspRuntimes: vi.fn(async () => undefined),
   drainRetainedEmbeddingProviders: vi.fn(async () => undefined),
-  clearSessionSuspensionTimers: vi.fn(() => 0),
   disposeAcpSessionManagerInstance: vi.fn(async () => undefined),
   getAcpSessionManager: vi.fn(() => ({})),
+  fenceSessionSuspensionWritesForGatewayShutdown: vi.fn(),
   closePluginStateDatabase: vi.fn(async () => undefined),
 }));
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
@@ -91,7 +91,8 @@ vi.mock("./embeddings-http.js", () => ({
 }));
 
 vi.mock("../agents/session-suspension.js", () => ({
-  clearSessionSuspensionTimers: mocks.clearSessionSuspensionTimers,
+  fenceSessionSuspensionWritesForGatewayShutdown:
+    mocks.fenceSessionSuspensionWritesForGatewayShutdown,
 }));
 
 vi.mock("../acp/control-plane/manager.lifecycle.js", () => ({
@@ -208,11 +209,10 @@ describe("createGatewayCloseHandler", () => {
     mocks.disposeAllBundleLspRuntimes.mockResolvedValue(undefined);
     mocks.drainRetainedEmbeddingProviders.mockClear();
     mocks.drainRetainedEmbeddingProviders.mockResolvedValue(undefined);
-    mocks.clearSessionSuspensionTimers.mockReset();
-    mocks.clearSessionSuspensionTimers.mockReturnValue(0);
     mocks.disposeAcpSessionManagerInstance.mockReset();
     mocks.disposeAcpSessionManagerInstance.mockResolvedValue(undefined);
     mocks.getAcpSessionManager.mockClear();
+    mocks.fenceSessionSuspensionWritesForGatewayShutdown.mockReset();
     mocks.closePluginStateDatabase.mockReset();
     mocks.closePluginStateDatabase.mockResolvedValue(undefined);
   });
@@ -315,7 +315,7 @@ describe("createGatewayCloseHandler", () => {
 
   it("joins an in-flight config reload before mutable runtime teardown", async () => {
     const events: string[] = [];
-    mocks.clearSessionSuspensionTimers.mockImplementation(() => {
+    mocks.fenceSessionSuspensionWritesForGatewayShutdown.mockImplementation(() => {
       events.push("session-suspension-timers");
       return 1;
     });
@@ -529,7 +529,7 @@ describe("createGatewayCloseHandler", () => {
 
   it("clears session suspension timers before sidecars, plugin services, and channels stop", async () => {
     const events: string[] = [];
-    mocks.clearSessionSuspensionTimers.mockImplementation(() => {
+    mocks.fenceSessionSuspensionWritesForGatewayShutdown.mockImplementation(() => {
       events.push("session-suspension-timers");
       return 1;
     });
@@ -557,7 +557,7 @@ describe("createGatewayCloseHandler", () => {
 
     await close({ reason: "test shutdown" });
 
-    expect(mocks.clearSessionSuspensionTimers).toHaveBeenCalledOnce();
+    expect(mocks.fenceSessionSuspensionWritesForGatewayShutdown).toHaveBeenCalledOnce();
     expect(events).toEqual([
       "session-suspension-timers",
       "sidecar",

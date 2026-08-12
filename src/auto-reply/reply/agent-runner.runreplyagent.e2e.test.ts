@@ -39,7 +39,11 @@ import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
-import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
+import {
+  createReplyOperation,
+  type ReplyOperation,
+  replyRunRegistry,
+} from "./reply-run-registry.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { bindReplyOperationTyping } from "./reply-run-typing.js";
 import { consumeReplyUsageState } from "./reply-usage-state.js";
@@ -558,6 +562,12 @@ describe("runReplyAgent active steering", () => {
 
   it("injects a steer without claiming a new agent reply", async () => {
     const runState: ReplyOperationRunState = {};
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    active.setPhase("running");
     state.beforeAgentReplyHasHooksMock.mockImplementation(
       (hookName) => hookName === "before_agent_reply",
     );
@@ -583,16 +593,22 @@ describe("runReplyAgent active steering", () => {
       },
     });
 
-    await expect(run()).resolves.toBeUndefined();
+    try {
+      await expect(run()).resolves.toBeUndefined();
 
-    expect(runState.admission).toEqual({ status: "accepted", mode: "steer" });
-    expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
-    expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledOnce();
-    expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledWith(
-      "session",
-      "hello",
-      expect.objectContaining({ steeringMode: "all" }),
-    );
+      expect(runState.admission).toEqual({ status: "accepted", mode: "steer" });
+      expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
+      expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledOnce();
+      expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledWith(
+        "session",
+        "hello",
+        expect.objectContaining({ steeringMode: "all" }),
+      );
+      expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(replyRunRegistry.get("main")).toBe(active);
+    } finally {
+      active.complete();
+    }
   });
 
   it("does not let before_agent_reply claim an accepted steer", async () => {

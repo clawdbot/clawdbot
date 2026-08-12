@@ -130,7 +130,7 @@ function workerService(overrides: Partial<TestWorkerService> = {}) {
     destroyUnattached: vi.fn(async () => workerRecord({ state: "destroyed" })),
     observeDesktop: vi.fn(async ({ control }) => ({
       transport: "rfb" as const,
-      wsPath: "/worker-desktop/observe?token=abc",
+      wsPath: "/desktop/observe?token=abc",
       expiresAtMs: 70_000,
       control,
     })),
@@ -474,7 +474,7 @@ describe("environment gateway methods", () => {
   it("starts desktop observation with explicit and default control modes", async () => {
     const observeDesktop = vi.fn(async ({ control }: { control: boolean }) => ({
       transport: "rfb" as const,
-      wsPath: "/worker-desktop/observe?token=abc",
+      wsPath: "/desktop/observe?token=abc",
       expiresAtMs: 70_000,
       control,
     }));
@@ -493,7 +493,7 @@ describe("environment gateway methods", () => {
       true,
       {
         transport: "rfb",
-        wsPath: "/worker-desktop/observe?token=abc",
+        wsPath: "/desktop/observe?token=abc",
         expiresAtMs: 70_000,
         control: true,
       },

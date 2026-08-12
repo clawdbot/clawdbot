@@ -8,7 +8,7 @@ import { attachDiscordGatewayLogging } from "../gateway-logging.js";
 import { isFatalGatewayCloseCode } from "../internal/gateway-close-codes.js";
 import { GatewayCloseCodes } from "../internal/gateway.js";
 import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
-import type { DiscordVoiceManager } from "../voice/manager.js";
+import type { DiscordVoiceManager } from "../voice/voice-runtime.js";
 import {
   DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT,
   type MutableDiscordGateway,

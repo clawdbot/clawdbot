@@ -20,6 +20,7 @@ import type { createCacheTrace } from "../../cache-trace.js";
 import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.js";
 import { isSignalTimeoutReason } from "../../failover-error.js";
 import { runAgentEndSideEffects } from "../../harness/agent-end-side-effects.js";
+import { finalizeHarnessContextEngineTurn } from "../../harness/context-engine-lifecycle.js";
 import { runAgentCleanupStep } from "../../run-cleanup-timeout.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
@@ -28,10 +29,7 @@ import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { log } from "../logger.js";
 import { markActiveEmbeddedRunAbandoned, type EmbeddedAgentQueueHandle } from "../runs.js";
 import { buildEmbeddedAgentEndContext } from "./agent-end-context.js";
-import {
-  finalizeAttemptContextEngineTurn,
-  type buildContextEnginePromptCacheInfo,
-} from "./attempt-context-engine-helpers.js";
+import type { buildContextEnginePromptCacheInfo } from "./attempt-context-engine-helpers.js";
 import { buildAfterTurnRuntimeContextFromUsage } from "./attempt-prompt-helpers.js";
 import { shouldPersistCompletedBootstrapTurn } from "./attempt-thread-helpers.js";
 import {
@@ -253,7 +251,7 @@ export async function completeEmbeddedAttemptAfterTurn(
       sessionManager?: SessionManager;
       withSessionManagerRewriteLock: WithOwnedTranscriptWrite;
     }) => {
-      await finalizeAttemptContextEngineTurn({
+      await finalizeHarnessContextEngineTurn({
         contextEngine: activeContextEngine,
         promptError: Boolean(state.promptError),
         aborted: lifecycleState.aborted,

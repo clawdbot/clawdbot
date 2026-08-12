@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { CommandContext } from "../auto-reply/reply/commands-types.js";
 import { clearConfigCache } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
@@ -14,13 +15,9 @@ import { runSystemAgentRescueMessage } from "./rescue-message.js";
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
 
-function truthy(value: string | undefined): boolean {
-  return /^(1|true|yes|on)$/i.test(value?.trim() ?? "");
-}
-
 const runLive =
-  truthy(process.env.OPENCLAW_LIVE_TEST) &&
-  truthy(process.env.OPENCLAW_LIVE_SYSTEM_AGENT_RESCUE_CHANNEL);
+  isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST) &&
+  isTruthyEnvValue(process.env.OPENCLAW_LIVE_SYSTEM_AGENT_RESCUE_CHANNEL);
 const describeLive = runLive ? describe : describe.skip;
 
 function commandContext(channel = process.env.OPENCLAW_LIVE_SYSTEM_AGENT_CHANNEL ?? "whatsapp") {

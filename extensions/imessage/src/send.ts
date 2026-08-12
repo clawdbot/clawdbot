@@ -22,6 +22,7 @@ import {
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { sleep as delay } from "openclaw/plugin-sdk/runtime-env";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import { normalizeOptionalString as stringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
@@ -516,10 +517,6 @@ async function runIMessageCliJson(
     dbPath,
     timeoutMs,
   });
-}
-
-function stringValue(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function resultService(value: unknown): Exclude<IMessageService, "auto"> | undefined {

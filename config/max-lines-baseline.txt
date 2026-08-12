@@ -93,9 +93,6 @@ extensions/discord/src/monitor/provider.test.ts
 extensions/discord/src/monitor/thread-bindings.lifecycle.test.ts
 extensions/discord/src/outbound-adapter.test.ts
 extensions/discord/src/send.sends-basic-channel-messages.test.ts
-extensions/discord/src/voice/manager.e2e.test.ts
-extensions/discord/src/voice/manager.ts
-extensions/discord/src/voice/realtime.ts
 extensions/fal/image-generation-provider.ts
 extensions/feishu/src/bot.test.ts
 extensions/feishu/src/bot.ts

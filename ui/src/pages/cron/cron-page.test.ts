@@ -4,8 +4,11 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
 import type { CronJob, CronJobsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import type { CronState } from "../../lib/cron/index.ts";
 import "./cron-page.ts";
+
+vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 
 type CronTestPage = HTMLElement & {
   context: ApplicationContext;
@@ -158,6 +161,7 @@ function createRequest() {
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.mocked(showConfirmDialog).mockReset();
   vi.restoreAllMocks();
 });
 
@@ -443,6 +447,7 @@ describe("CronPage editor state sync", () => {
     const removeButton = Array.from(page.querySelectorAll(".cron-job-menu__item")).find(
       (item) => item.textContent?.trim() === "Remove",
     ) as HTMLButtonElement;
+    vi.mocked(showConfirmDialog).mockResolvedValueOnce(true);
     removeButton.click();
     await waitForCronPage(() => expect(page.cron.cronEditingJobId).toBeNull());
     await waitForCronPage(() => expect(page.cron.cronRunsScope).toBe("all"));

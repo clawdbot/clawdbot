@@ -141,7 +141,7 @@ suite.define(() => {
                 match: { environmentId: "worker-desktop-1", control: false },
                 response: {
                   transport: "rfb",
-                  wsPath: "/worker-desktop/observe?token=view",
+                  wsPath: "/desktop/observe?token=view",
                   expiresAtMs: 60_000,
                   control: false,
                 },
@@ -150,7 +150,7 @@ suite.define(() => {
                 match: { environmentId: "worker-desktop-1", control: true },
                 response: {
                   transport: "rfb",
-                  wsPath: "/worker-desktop/observe?token=control",
+                  wsPath: "/desktop/observe?token=control",
                   expiresAtMs: 60_000,
                   control: true,
                 },
@@ -274,7 +274,7 @@ suite.define(() => {
           },
           "worker.desktop.observe": {
             transport: "rfb",
-            wsPath: "/worker-desktop/observe?token=view",
+            wsPath: "/desktop/observe?token=view",
             expiresAtMs: 60_000,
             control: false,
           },

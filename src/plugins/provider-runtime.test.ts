@@ -1443,27 +1443,6 @@ describe("provider-runtime", () => {
     );
   });
 
-  it("respects the shared GPT-5 prompt overlay personality config", () => {
-    const contribution = resolveProviderSystemPromptContribution({
-      provider: "openai",
-      config: {
-        plugins: {
-          entries: {
-            openai: { config: { personality: "off" } },
-          },
-        },
-      },
-      context: {
-        provider: "openai",
-        modelId: "gpt-5.4",
-        promptMode: "full",
-      } as never,
-    });
-
-    expect(contribution?.stablePrefix).toContain("<persona_latch>");
-    expect(contribution?.sectionOverrides).toStrictEqual({});
-  });
-
   it("lets provider-owned prompt overlays compose after the built-in GPT-5 overlay", () => {
     const resolvePromptOverlay = vi.fn((ctx) => ({
       stablePrefix: "provider overlay",

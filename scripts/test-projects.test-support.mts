@@ -84,6 +84,7 @@ import {
   detectChangedLanes,
   listChangedPathsFromGit as listChangedPathsFromGitSource,
 } from "./changed-lanes.mts";
+import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
 import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
 import { createExtensionTestProcessTargetChunks } from "./lib/extension-test-plan.mts";
 import {
@@ -1232,6 +1233,9 @@ function resolveExactSourceDirectoryTestTargets(targetArg: string, cwd: string) 
   if (!isExactSourceDirectoryTarget(relative)) {
     return null;
   }
+  if (isCanonicalAgentOwnerDirectoryTarget(targetArg, cwd)) {
+    return [targetArg];
+  }
   const prefix = `${relative}/`;
   const lightTargets = uniqueOrdered([
     ...getUnitFastTestFiles(),
@@ -1239,6 +1243,20 @@ function resolveExactSourceDirectoryTestTargets(targetArg: string, cwd: string) 
     ...commandsLightTestFiles,
   ]).filter((file) => file.startsWith(prefix));
   return lightTargets.length > 0 ? [...lightTargets, targetArg] : null;
+}
+
+function isCanonicalAgentOwnerDirectoryTarget(targetArg: string, cwd: string) {
+  if (!isExistingDirectoryTarget(targetArg, cwd)) {
+    return false;
+  }
+  const kind = classifyTarget(targetArg, cwd);
+  if (kind === agentVitestProjectOwners.all.kind) {
+    return false;
+  }
+  const relative = toRepoRelativeTarget(targetArg, cwd).replace(/\/+$/u, "");
+  return Object.values(agentVitestProjectOwners).some(
+    (owner) => owner.kind === kind && isPathAtOrUnder(relative, owner.root),
+  );
 }
 
 /**
@@ -2901,8 +2919,7 @@ function resolveToolingTestTargets(changedPath: string, cwd = process.cwd()) {
 }
 
 function shouldUseBroadChangedTargets(env = process.env) {
-  const value = env[BROAD_CHANGED_ENV_KEY]?.trim().toLowerCase();
-  return ["1", "true", "yes", "on"].includes(value ?? "");
+  return parsePermissiveBooleanToken(env[BROAD_CHANGED_ENV_KEY]) === true;
 }
 
 function isRoutableChangedTarget(changedPath: string) {
@@ -3153,6 +3170,11 @@ function classifyTarget(arg: string, cwd: string) {
   if (agentVitestProjectOwners.embeddedIncompleteTurn.include.includes(relative)) {
     return agentVitestProjectOwners.embeddedIncompleteTurn.kind;
   }
+  // Explicit isolation ownership wins over inferred unit-fast eligibility.
+  // Otherwise a thin wrapper can move a stateful tooling test into a shared worker.
+  if (isToolingIsolatedTestFile(relative)) {
+    return "toolingIsolated";
+  }
   if (resolveUnitFastTimerTestIncludePattern(relative)) {
     return "unitFastFakeTimers";
   }
@@ -3241,9 +3263,6 @@ function classifyTarget(arg: string, cwd: string) {
   }
   if (isBoundaryTestFile(relative)) {
     return "boundary";
-  }
-  if (isToolingIsolatedTestFile(relative)) {
-    return "toolingIsolated";
   }
   if (relative === TOOLING_DOCKER_TEST_TARGET) {
     return "toolingDocker";
@@ -3648,6 +3667,7 @@ export function buildVitestRunPlans(
     const useCliTargetArgs =
       kind === "e2e" ||
       kind === "packageDocker" ||
+      grouped.every((targetArg) => isCanonicalAgentOwnerDirectoryTarget(targetArg, cwd)) ||
       (kind === "default" &&
         grouped.every((targetArg) => isFileLikeTarget(toRepoRelativeTarget(targetArg, cwd))));
     const useWholeConfigTarget = grouped.some((targetArg) =>

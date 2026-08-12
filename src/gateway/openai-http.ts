@@ -641,8 +641,6 @@ async function resolveImagesForRequest(
 }
 
 export const testOnlyOpenAiHttp = {
-  resolveImagesForRequest,
-  resolveOpenAiChatCompletionsLimits,
   resolveChatCompletionUsage,
 };
 

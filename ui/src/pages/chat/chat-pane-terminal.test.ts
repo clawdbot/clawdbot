@@ -5,8 +5,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
+  BROWSER_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
+  type BrowserPanelToggleDetail,
   type DesktopPanelToggleDetail,
   type TerminalPanelToggleDetail,
 } from "../../components/panel-toggle-contract.ts";
@@ -127,6 +129,59 @@ describe("chat pane terminal action", () => {
       expect(container.querySelector('[aria-label="Toggle desktop panel"]')).toBeNull();
     } finally {
       window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, listener);
+    }
+  });
+
+  it("renders the browser control only when available and exposes it in the narrow menu", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const session = {
+      key: state.sessionKey,
+      kind: "direct",
+      updatedAt: 0,
+    } satisfies GatewaySessionRow;
+    const container = document.createElement("div");
+    const renderHeader = () =>
+      render(
+        pane.renderPaneHeader(
+          createSessionWorkspaceProps(state),
+          createBackgroundTasksProps(state),
+          session,
+          false,
+          undefined,
+          false,
+        ),
+        container,
+      );
+    const panelActionIds = () =>
+      container
+        .querySelector<HTMLElement & { panelActions: Array<{ id: string }> }>(
+          "openclaw-chat-header-session-menu",
+        )
+        ?.panelActions.map((action) => action.id) ?? [];
+
+    state.browserPanelAvailable = false;
+    renderHeader();
+    expect(container.querySelector(".chat-browser-panel-toggle")).toBeNull();
+    expect(panelActionIds()).not.toContain("browser");
+
+    const events: CustomEvent<BrowserPanelToggleDetail>[] = [];
+    const listener = (event: Event) => events.push(event as CustomEvent<BrowserPanelToggleDetail>);
+    window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, listener);
+    try {
+      state.browserPanelAvailable = true;
+      renderHeader();
+      const button = container.querySelector<HTMLButtonElement>(".chat-browser-panel-toggle");
+      expect(button).not.toBeNull();
+      button?.click();
+      expect(events).toHaveLength(1);
+
+      (pane as typeof pane & { narrow: boolean }).narrow = true;
+      renderHeader();
+      expect(container.querySelector(".chat-browser-panel-toggle")).toBeNull();
+      expect(panelActionIds()).toContain("browser");
+    } finally {
+      window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, listener);
     }
   });
 });

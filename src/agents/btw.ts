@@ -162,7 +162,7 @@ function resolveBtwAuthProfileStore(params: {
     };
   }
 
-  const userLockedAuthProfileId =
+  const userPinnedAuthProfileId =
     params.authProfileIdSource === "user" ? params.authProfileId : undefined;
   let externalCliAuthScope = resolveExternalCliAuthOverlayScopeFromSelection({
     provider: params.provider,
@@ -170,7 +170,7 @@ function resolveBtwAuthProfileStore(params: {
     agentId: params.agentId,
     modelId: params.modelId,
     workspaceDir: params.workspaceDir,
-    userLockedAuthProfileId,
+    userPinnedAuthProfileId,
   });
   let store: AuthProfileStore;
   if (externalCliAuthScope.providerIds) {
@@ -189,7 +189,7 @@ function resolveBtwAuthProfileStore(params: {
       modelId: params.modelId,
       workspaceDir: params.workspaceDir,
       store,
-      userLockedAuthProfileId,
+      userPinnedAuthProfileId,
     });
     if (externalCliAuthScope.providerIds) {
       store = ensureAuthProfileStore(params.agentDir, {

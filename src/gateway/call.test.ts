@@ -1703,6 +1703,34 @@ describe("callGateway error details", () => {
     });
   });
 
+  it("surfaces a websocket upgrade rejection carried by close info", async () => {
+    startMode = "silent";
+    setLocalLoopbackGatewayConfig();
+    const upgradeError = Object.assign(
+      new Error(
+        "gateway rejected websocket upgrade (HTTP 503): Gateway websocket admission closed",
+      ),
+      {
+        name: "GatewayClientRequestError",
+        gatewayCode: "UNAVAILABLE",
+        details: { reason: "websocket-upgrade-rejected", httpStatus: 503 },
+        retryable: true,
+      },
+    );
+
+    const request = callGateway({ method: "health" });
+    await waitForFast(() => expect(lastClientOptions).not.toBeNull());
+    lastClientOptions?.onClose?.(1006, "", {
+      phase: "pre-hello",
+      socketOpened: false,
+      transportValidated: false,
+      transientPreHelloCleanClose: false,
+      connectError: upgradeError,
+    });
+
+    await expect(request).rejects.toBe(upgradeError);
+  });
+
   it.each([
     {
       name: "another structured auth rejection",

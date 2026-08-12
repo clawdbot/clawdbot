@@ -32,6 +32,11 @@ export type DraftCloudProfile = {
   providerId: string;
 };
 
+export type DraftEnvironment = {
+  id: string;
+  type: "local" | "node" | "worker";
+};
+
 export type BrowserTarget = { nodeId: string; label: string };
 
 export function readDraftNodes(value: unknown): DraftNode[] {
@@ -83,14 +88,40 @@ export function readDraftNodes(value: unknown): DraftNode[] {
 
 export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
   return (Array.isArray(value) ? value : [])
-    .flatMap((raw) => {
+    .flatMap<DraftCloudProfile>((raw) => {
       if (!raw || typeof raw !== "object") {
         return [];
       }
-      const profile = raw as { id?: unknown; providerId?: unknown };
+      const profile = raw as {
+        id?: unknown;
+        providerId?: unknown;
+      };
       const id = normalizeOptionalString(profile.id);
       const providerId = normalizeOptionalString(profile.providerId);
-      return id && providerId ? [{ id, providerId }] : [];
+      if (!id || !providerId) {
+        return [];
+      }
+      return [{ id, providerId }];
+    })
+    .toSorted((left, right) => left.id.localeCompare(right.id));
+}
+
+export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
+  return (Array.isArray(value) ? value : [])
+    .flatMap<DraftEnvironment>((raw) => {
+      if (!raw || typeof raw !== "object") {
+        return [];
+      }
+      const environment = raw as {
+        id?: unknown;
+        type?: unknown;
+      };
+      const id = normalizeOptionalString(environment.id);
+      const type = normalizeOptionalString(environment.type);
+      if (!id || (type !== "local" && type !== "node" && type !== "worker")) {
+        return [];
+      }
+      return [{ id, type }];
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }

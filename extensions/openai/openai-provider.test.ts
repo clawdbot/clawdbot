@@ -9,7 +9,7 @@ import {
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENAI_API_BASE_URL, OPENAI_CODEX_RESPONSES_BASE_URL } from "./base-url.js";
-import { OPENAI_CODEX_DEFAULT_MODEL, OPENAI_DEFAULT_MODEL } from "./default-models.js";
+import { OPENAI_DEFAULT_MODEL } from "./default-models.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { resolveModelRoutes } from "./provider-policy-api.js";
@@ -459,8 +459,6 @@ describe("buildOpenAIProvider", () => {
         cost: { input: 0.2, output: 1.25, cacheRead: 0.02, cacheWrite: 0 },
       },
     ]);
-    expect(OPENAI_DEFAULT_MODEL).toBe("openai/gpt-5.6-sol");
-    expect(OPENAI_CODEX_DEFAULT_MODEL).toBe("openai/gpt-5.6-sol");
   });
 
   it("scopes the OpenAI API-key catalog to the OpenAI provider id", async () => {

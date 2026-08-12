@@ -1130,18 +1130,13 @@ function mergeUsageCacheStatus(
 
 // Exposed for unit tests (kept as a single export to avoid widening the public API surface).
 export const testApi = {
-  parseDateParts,
   parseUtcOffsetToMinutes,
-  resolveDateInterpretation,
   parseDateToMs,
   parseDays,
   resolveDateRange,
-  discoverAllSessionsForUsage,
   loadCostUsageSummaryCached,
   costUsageCache,
-  loadSessionsUsageResultCached,
   sessionsUsageCache,
-  sessionsUsageCacheKey,
 };
 
 export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };

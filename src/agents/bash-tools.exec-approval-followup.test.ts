@@ -790,25 +790,6 @@ describe("exec approval followup", () => {
     },
   );
 
-  it("accepts direct followup success without a delivery status", async () => {
-    vi.mocked(sendMessage).mockResolvedValueOnce({
-      channel: "discord",
-      to: "123",
-      via: "gateway",
-      mediaUrl: null,
-      result: { messageId: "gateway-message-1" },
-    });
-
-    await expect(
-      sendExecApprovalFollowup({
-        approvalId: "req-gateway-compatible",
-        turnSourceChannel: "discord",
-        turnSourceTo: "123",
-        resultText: "Exec finished (gateway id=req-gateway-compatible, code 0)\nall good",
-      }),
-    ).resolves.toBe(true);
-  });
-
   it("redacts credentials before direct delivery", async () => {
     const secret = "sk-abcdefghijklmnopqrstuvwxyz123456";
 

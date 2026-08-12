@@ -196,9 +196,10 @@ export function loadChannelSecretContractApi(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
+  bundledOnly?: boolean;
 }): BundledChannelSecretContractApi | undefined {
   const bundled = loadBundledChannelSecretContractApi(params.channelId);
-  if (bundled) {
+  if (bundled || params.bundledOnly) {
     return bundled;
   }
   // External contracts are considered only after bundled artifacts so core channels keep their

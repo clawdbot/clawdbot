@@ -31,6 +31,12 @@ describe("Codex agent harness supports()", () => {
     expect(harness.autoSelection?.providerIds).toEqual(["codex", "openai"]);
   });
 
+  it("keeps computer-control denies out of the native-surface exemption", () => {
+    expect(harness.conversationToolPolicySafeDenyTools).not.toEqual(
+      expect.arrayContaining(["browser", "computer", "mobile_ui", "nodes", "screen"]),
+    );
+  });
+
   const harness = createCodexAppServerAgentHarness({
     bindingStore: testCodexAppServerBindingStore,
   });
@@ -167,13 +173,6 @@ describe("Codex agent harness supports()", () => {
   });
 
   it("supports openai as the primary OpenClaw routing id", () => {
-    expect(harness.supports({ provider: "openai", requestedRuntime: "codex" })).toEqual({
-      supported: true,
-      priority: 100,
-    });
-  });
-
-  it("supports the canonical openai routing id (documented Codex path)", () => {
     expect(harness.supports({ provider: "openai", requestedRuntime: "codex" })).toEqual({
       supported: true,
       priority: 100,

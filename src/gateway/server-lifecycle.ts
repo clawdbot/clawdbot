@@ -1,5 +1,5 @@
 import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/run-state.js";
-import { clearSessionSuspensionTimers } from "../agents/session-suspension.js";
+import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/session-suspension.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { listLoadedChannelPlugins } from "../channels/plugins/registry-loaded.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
@@ -444,7 +444,7 @@ export async function prepareGatewayLifecycle(params: {
     return configReloaderStopPromise;
   };
   const beginClosePrelude = async () => {
-    clearSessionSuspensionTimers();
+    fenceSessionSuspensionWritesForGatewayShutdown();
     markClosePreludeStarted();
     // Owners are fenced synchronously above. Join them before any runtime they
     // can publish into is torn down.
