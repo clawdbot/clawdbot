@@ -929,28 +929,38 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       customInstructions,
       summarizationInstructions,
     );
-    const finalizeSummary = async (
+    let workspaceContextPromise: Promise<string> | undefined;
+    const finalizeSummaryText = async (
       body: string,
       sections: { splitTurnSection?: string; preservedTurnsSection?: string },
-    ) => ({
+    ) => {
+      workspaceContextPromise ??= readWorkspaceContextForSummary(
+        runtime?.postCompactionSections,
+        runtime?.workspaceDir,
+      );
+      const suffix = assembleSuffix({
+        ...sections,
+        toolFailureSection,
+        fileOpsSummary,
+        workspaceContext: await workspaceContextPromise,
+      });
+      return {
+        summary: capCompactionSummaryPreservingSuffix(body, suffix),
+        bodyBudget: Math.max(0, MAX_COMPACTION_SUMMARY_CHARS - suffix.length),
+      };
+    };
+    const compactionResult = (summary: string) => ({
       compaction: {
-        summary: capCompactionSummaryPreservingSuffix(
-          body,
-          assembleSuffix({
-            ...sections,
-            toolFailureSection,
-            fileOpsSummary,
-            workspaceContext: await readWorkspaceContextForSummary(
-              runtime?.postCompactionSections,
-              runtime?.workspaceDir,
-            ),
-          }),
-        ),
+        summary,
         firstKeptEntryId: preparation.firstKeptEntryId,
         tokensBefore: preparation.tokensBefore,
         details: { readFiles, modifiedFiles },
       },
     });
+    const finalizeSummary = async (
+      body: string,
+      sections: { splitTurnSection?: string; preservedTurnsSection?: string },
+    ) => compactionResult((await finalizeSummaryText(body, sections)).summary);
 
     if (providerId) {
       const compactionProvider: CompactionProvider | undefined = getCompactionProvider(providerId);
@@ -1104,6 +1114,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         }
       }
 
+      const oracleMessages = [...messagesToSummarize, ...turnPrefixMessages];
+      const latestUserAsk = extractLatestUserAsk(oracleMessages);
+      const identifiers = extractOpaqueIdentifiers(
+        oracleMessages.slice(-10).map(extractMessageText).filter(Boolean).join("\n"),
+      );
       const {
         summarizableMessages: summaryTargetMessages,
         preservedMessages: preservedRecentMessages,
@@ -1114,10 +1129,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       messagesToSummarize = summaryTargetMessages;
       const preservedTurnsSectionLocal = formatPreservedTurnsSection(preservedRecentMessages);
       const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
-      const latestUserAsk = extractLatestUserAsk(allMessages);
-      const identifiers = extractOpaqueIdentifiers(
-        allMessages.slice(-10).map(extractMessageText).filter(Boolean).join("\n"),
-      );
 
       // Use adaptive chunk ratio based on message sizes, reserving headroom for
       // the summarization prompt, system prompt, previous summary, and reasoning budget
@@ -1135,15 +1146,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       // incorporates context from pruned messages instead of losing it entirely.
       const effectivePreviousSummary = droppedSummary ?? preparation.previousSummary;
 
-      let lastHistorySummary = "";
-      let lastSplitTurnSection = "";
       let currentInstructions = structuredInstructions;
       const totalAttempts = qualityGuardEnabled ? qualityGuardMaxRetries + 1 : 1;
-      let lastSuccessfulSummary: string | null = null;
+      let lastAuditReasons: string[] = [];
 
       for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
-        let summaryWithoutPreservedTurns = "";
-        let summaryWithPreservedTurns = "";
         let splitTurnSectionLocal = "";
         let historySummary = "";
         try {
@@ -1158,7 +1165,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 })
               : buildStructuredFallbackSummary(effectivePreviousSummary);
 
-          summaryWithoutPreservedTurns = historySummary;
           if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
             const prefixSummary = await summarizeViaLLM({
               ...llmSummaryParams,
@@ -1168,62 +1174,71 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               previousSummary: undefined,
             });
             splitTurnSectionLocal = `**Turn Context (split turn):**\n\n${prefixSummary}`;
-            summaryWithoutPreservedTurns = historySummary.trim()
-              ? `${historySummary}\n\n---\n\n${splitTurnSectionLocal}`
-              : splitTurnSectionLocal;
           }
-          summaryWithPreservedTurns = appendSummarySection(
-            summaryWithoutPreservedTurns,
-            preservedTurnsSectionLocal,
-          );
         } catch (attemptError) {
-          if (lastSuccessfulSummary && attempt > 0) {
+          if (signal?.aborted) {
+            signal.throwIfAborted();
+          }
+          if (lastAuditReasons.length > 0) {
             log.warn(
-              `Compaction safeguard: quality retry failed on attempt ${attempt + 1}; ` +
-                `keeping last successful summary: ${formatErrorMessage(attemptError)}`,
+              `Compaction safeguard: corrective generation failed on attempt ${attempt + 1}: ` +
+                formatErrorMessage(attemptError),
             );
-            break;
+            setCompactionSafeguardCancelReason(
+              ctx.sessionManager,
+              "Compaction safeguard finalized summary failed quality checks and corrective generation failed.",
+            );
+            return { cancel: true };
           }
           throw attemptError;
         }
-        lastSuccessfulSummary = summaryWithPreservedTurns;
-        lastHistorySummary = historySummary;
-        lastSplitTurnSection = splitTurnSectionLocal;
+        const finalized = await finalizeSummaryText(historySummary, {
+          splitTurnSection: splitTurnSectionLocal,
+          preservedTurnsSection: preservedTurnsSectionLocal,
+        });
 
         const canRegenerate =
           messagesToSummarize.length > 0 ||
           (preparation.isSplitTurn && turnPrefixMessages.length > 0);
-        if (!qualityGuardEnabled || !canRegenerate) {
-          break;
+        if (!qualityGuardEnabled) {
+          return compactionResult(finalized.summary);
         }
         const quality = auditSummaryQuality({
-          summary: summaryWithoutPreservedTurns,
+          summary: finalized.summary,
           identifiers,
           latestAsk: latestUserAsk,
           identifierPolicy,
         });
-        if (quality.ok || attempt >= totalAttempts - 1) {
-          break;
+        if (quality.ok) {
+          return compactionResult(finalized.summary);
+        }
+        lastAuditReasons = quality.reasons;
+        if (!canRegenerate || attempt >= totalAttempts - 1) {
+          log.warn(
+            `Compaction safeguard: finalized summary failed quality checks: ${quality.reasons.join(", ")}`,
+          );
+          setCompactionSafeguardCancelReason(
+            ctx.sessionManager,
+            "Compaction safeguard finalized summary failed quality checks.",
+          );
+          return { cancel: true };
         }
         const reasons = quality.reasons.join(", ");
         const qualityFeedbackInstruction =
           identifierPolicy === "strict"
             ? "Fix all issues and include every required section with exact identifiers preserved."
             : "Fix all issues and include every required section while following the configured identifier policy.";
+        const budgetInstruction = `Keep the complete summary body within ${finalized.bodyBudget} UTF-16 code units so the finalized artifact remains valid after required suffixes.`;
         const qualityFeedbackReasons = wrapUntrustedInstructionBlock(
           "Quality check feedback",
           `Previous summary failed quality checks (${reasons}).`,
         );
         currentInstructions = qualityFeedbackReasons
-          ? `${structuredInstructions}\n\n${qualityFeedbackInstruction}\n\n${qualityFeedbackReasons}`
-          : `${structuredInstructions}\n\n${qualityFeedbackInstruction}`;
+          ? `${structuredInstructions}\n\n${qualityFeedbackInstruction}\n${budgetInstruction}\n\n${qualityFeedbackReasons}`
+          : `${structuredInstructions}\n\n${qualityFeedbackInstruction}\n${budgetInstruction}`;
       }
 
-      // Cap history before suffixes so diagnostics and workspace rules survive.
-      return await finalizeSummary(lastHistorySummary || lastSuccessfulSummary || "", {
-        splitTurnSection: lastSplitTurnSection,
-        preservedTurnsSection: preservedTurnsSectionLocal,
-      });
+      throw new Error("Compaction safeguard exhausted summary attempts without a decision.");
     } catch (error) {
       // Caller cancellation is terminal, not a safeguard failure. Preserve the
       // original abort so the runner can classify it without a false data-loss warning.

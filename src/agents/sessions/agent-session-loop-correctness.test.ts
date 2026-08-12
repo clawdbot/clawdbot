@@ -360,6 +360,27 @@ describe("AgentSession loop correctness", () => {
     });
   });
 
+  it("does not append when a compaction extension rejects the finalized summary", async () => {
+    const sessionManager = SessionManager.inMemory();
+    appendHistory(
+      sessionManager,
+      createAssistant(testModel, [{ type: "text", text: "authoritative history" }]),
+    );
+    const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
+      ["session_before_compact", [async () => ({ cancel: true })]],
+    ]);
+    const { session } = await createTestSession({
+      sessionManager,
+      resourceLoader: createResourceLoader(handlers),
+    });
+    const before = sessionManager.getBranch();
+
+    await expect(session.compact()).rejects.toThrow("Compaction cancelled");
+
+    expect(sessionManager.getBranch()).toEqual(before);
+    expect(sessionManager.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
+  });
+
   it("keeps a successful high-usage response and performs threshold maintenance without retry", async () => {
     const settingsManager = createAutoCompactionSettings();
     const compactionEvents: AgentSessionEvent[] = [];
@@ -390,6 +411,40 @@ describe("AgentSession loop correctness", () => {
     expect(compactionEvents).toContainEqual(
       expect.objectContaining({ type: "compaction_end", reason: "threshold", willRetry: false }),
     );
+  });
+
+  it("surfaces threshold safeguard rejection without appending compaction state", async () => {
+    const settingsManager = createAutoCompactionSettings();
+    const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
+      ["session_before_compact", [async () => ({ cancel: true })]],
+    ]);
+    const compactionEvents: AgentSessionEvent[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+      ),
+    );
+    const { session, sessionManager } = await createTestSession({
+      settingsManager,
+      resourceLoader: createResourceLoader(handlers),
+    });
+    session.subscribe((event) => {
+      if (event.type === "compaction_end") {
+        compactionEvents.push(event);
+      }
+    });
+
+    await session.prompt("new prompt");
+
+    expect(compactionEvents).toContainEqual(
+      expect.objectContaining({
+        type: "compaction_end",
+        reason: "threshold",
+        aborted: true,
+        willRetry: false,
+      }),
+    );
+    expect(sessionManager.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
   });
 
   it("does not pre-prompt compact from usage before a zero unavailable marker", async () => {
