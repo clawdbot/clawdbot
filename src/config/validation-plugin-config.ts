@@ -6,6 +6,7 @@ import {
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "../plugins/config-state.js";
+import { isPluginEnabledByDefaultForPlatform } from "../plugins/default-enablement.js";
 import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-command-aliases.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
@@ -360,11 +361,14 @@ export function validateExplicitPluginConfig(params: {
     seenPlugins.add(pluginId);
     const entry = normalizedPlugins.entries[pluginId];
     const entryHasConfig = Boolean(entry?.config);
+    // Honor manifest default enablement so config-only entries for default-on
+    // bundled plugins do not warn as disabled. List/runtime already pass this.
     const activationState = resolveEffectivePluginActivationState({
       id: pluginId,
       origin: record.origin,
       config: normalizedPlugins,
       rootConfig: effectiveConfig,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(record),
     });
     let enabled = activationState.activated;
     let reason = activationState.reason;

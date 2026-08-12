@@ -1879,6 +1879,53 @@ describe("config plugin validation", () => {
     });
   });
 
+  it.each([
+    {
+      pluginId: "canvas",
+      config: { host: { enabled: true } },
+      expectDisabledConfigWarning: false,
+    },
+    {
+      pluginId: "workboard",
+      config: {},
+      expectDisabledConfigWarning: true,
+    },
+  ] as const)(
+    "honors bundled default enablement for config-only $pluginId entries",
+    ({ pluginId, config, expectDisabledConfigWarning }) => {
+      const res = validateConfigObjectWithPlugins(
+        {
+          agents: { list: [{ id: "openclaw" }] },
+          plugins: {
+            entries: {
+              [pluginId]: { config },
+            },
+          },
+        },
+        {
+          env: {
+            ...suiteEnv(),
+            OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "extensions"),
+          },
+        },
+      );
+
+      expect(res.ok).toBe(true);
+      if (!res.ok) {
+        return;
+      }
+      const disabledConfigWarning = {
+        path: `plugins.entries.${pluginId}`,
+        message: "plugin disabled (bundled (disabled by default)) but config is present",
+      };
+      if (expectDisabledConfigWarning) {
+        expect(res.warnings).toContainEqual(disabledConfigWarning);
+        return;
+      }
+      expect(res.warnings).not.toContainEqual(disabledConfigWarning);
+    },
+  );
+
   it("ignores standalone helper scripts in auto-discovered global extensions", async () => {
     const helperPath = path.join(suiteHome, ".openclaw", "extensions", "my-helper.mjs");
     await mkdirSafe(path.dirname(helperPath));
