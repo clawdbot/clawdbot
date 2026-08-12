@@ -157,7 +157,9 @@ export async function prepareGatewayLifecycle(params: {
   const unsubscribeSessionMessageEvents: GatewayRequestContext["unsubscribeSessionMessageEvents"] =
     (connId, sessionKey) => sessionMessageSubscribers.unsubscribe(connId, sessionKey);
   const restartRecoveryCandidates = new Map<string, RestartRecoveryCandidate>();
-  let nodeDesktopService: import("./desktop/node-source.js").NodeDesktopService | undefined;
+  const nodeDesktopServiceRef: {
+    current?: import("./desktop/node-source.js").NodeDesktopService;
+  } = {};
   const { createGatewayNodeSessionRuntime } = await import("./server-node-session-runtime.js");
   const {
     nodeRegistry,
@@ -178,16 +180,16 @@ export async function prepareGatewayLifecycle(params: {
     nodePluginToolsEnabled: cfgAtStart.gateway?.nodes?.pluginTools?.enabled !== false,
     nodeSkillsEnabled: cfgAtStart.gateway?.nodes?.allowSkills !== false,
     onPairingInvalidated: ({ nodeId, connId }) => {
-      void nodeDesktopService?.stopNode(nodeId);
+      void nodeDesktopServiceRef.current?.stopNode(nodeId);
       upsertPresence(nodeId, { reason: "disconnect" });
       broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
       removeRemoteNodeInfoForConnection(nodeId, connId);
     },
     onPairingGenerationChanged: ({ nodeId }) => {
-      void nodeDesktopService?.stopNode(nodeId);
+      void nodeDesktopServiceRef.current?.stopNode(nodeId);
     },
   });
-  nodeDesktopService =
+  const nodeDesktopService =
     desktopSessionRegistry && nodeDesktopStreamBroker
       ? (await import("./desktop/node-source.js")).createNodeDesktopService({
           getConfig: getRuntimeConfig,
@@ -196,6 +198,7 @@ export async function prepareGatewayLifecycle(params: {
           streamBroker: nodeDesktopStreamBroker,
         })
       : undefined;
+  nodeDesktopServiceRef.current = nodeDesktopService;
   const { createWatchNodeHttpRuntime } = await import("./watch-node-http.js");
   const watchNodeHttpRuntime = createWatchNodeHttpRuntime({
     nodeRegistry,
