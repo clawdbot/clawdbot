@@ -15,6 +15,8 @@ import {
 import type { DispatchReplyWithBufferedBlockDispatcherParams } from "./bot-native-command-executors.test-support.js";
 import { createTelegramPrivateCommandContext } from "./bot-native-commands.fixture-test-support.js";
 
+type DeliverRepliesParams = Parameters<typeof import("./bot/delivery.js").deliverReplies>[0];
+
 const { deliveryMocks, replyMocks, sessionMocks } = executorTestMocks;
 
 describe("Telegram native command dispatch delivery", () => {

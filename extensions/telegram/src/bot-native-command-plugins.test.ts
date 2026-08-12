@@ -680,7 +680,7 @@ describe("registerTelegramNativeCommands", () => {
   });
 
   it("sends an empty-response fallback when a plugin command returns undefined", async () => {
-    pluginCommandHandler.mockResolvedValueOnce(undefined);
+    pluginCommandHandler.mockResolvedValueOnce(undefined as never);
     const { handler } = registerPlugCommand();
 
     await handler(createPrivateCommandContext({ match: "status" }));

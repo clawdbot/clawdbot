@@ -60,7 +60,7 @@ const persistentBindingMocks = vi.hoisted(() => ({
 }));
 const sessionMocks = vi.hoisted(() => ({
   getSessionEntry: vi.fn(),
-  loadSessionStore: vi.fn(),
+  sessionStoreEntries: vi.fn(),
   recordSessionMetaFromInbound: vi.fn(),
   resolveStorePath: vi.fn(),
   updateSessionStoreEntry: vi.fn(),
@@ -220,7 +220,7 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   return {
     ...actual,
     getSessionEntry: sessionMocks.getSessionEntry,
-    loadSessionStore: sessionMocks.loadSessionStore,
+    sessionStoreEntries: sessionMocks.sessionStoreEntries,
     resolveStorePath: sessionMocks.resolveStorePath,
     updateSessionStoreEntry: sessionMocks.updateSessionStoreEntry,
   };
@@ -547,13 +547,13 @@ export function resetSessionMetaMocks() {
     },
   ]);
   sessionMocks.getSessionEntry.mockClear().mockReturnValue(undefined);
-  sessionMocks.loadSessionStore.mockClear().mockReturnValue({});
+  sessionMocks.sessionStoreEntries.mockClear().mockReturnValue({});
   sessionMocks.getSessionEntry.mockImplementation(
     ({ storePath, sessionKey }: { storePath: string; sessionKey: string }) =>
-      sessionMocks.loadSessionStore(storePath)[sessionKey],
+      sessionMocks.sessionStoreEntries(storePath)[sessionKey],
   );
   sessionMocks.updateSessionStoreEntry.mockClear().mockImplementation(async (params) => {
-    const current = sessionMocks.loadSessionStore(params.storePath)[params.sessionKey];
+    const current = sessionMocks.sessionStoreEntries(params.storePath)[params.sessionKey];
     if (!current) {
       return null;
     }
@@ -574,7 +574,7 @@ export function resetSessionMetaMocks() {
 }
 
 activePluginRegistry = createEmptyPluginRegistry();
-export const { registerTelegramNativeCommands } = await import("./bot-native-commands.js");
+const { registerTelegramNativeCommands } = await import("./bot-native-commands.js");
 resetSessionMetaMocks();
 const warmStatusHandler = registerAndResolveStatusHandler({ cfg: {} });
 await warmStatusHandler.handler(createTelegramPrivateCommandContext());

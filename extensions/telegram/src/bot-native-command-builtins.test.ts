@@ -27,7 +27,7 @@ describe("Telegram native command built-ins", () => {
         },
       },
     } as OpenClawConfig;
-    sessionMocks.loadSessionStore.mockReturnValue({
+    sessionMocks.sessionStoreEntries.mockReturnValue({
       "agent:main:main": {
         providerOverride: "anthropic",
         modelOverride: "claude-opus-4-7",
@@ -81,7 +81,7 @@ describe("Telegram native command built-ins", () => {
           },
         },
       } as OpenClawConfig;
-      sessionMocks.loadSessionStore.mockReturnValue({
+      sessionMocks.sessionStoreEntries.mockReturnValue({
         "agent:main:main": {
           providerOverride: "openai",
           modelOverride: "gpt-5.6-luna",
@@ -117,7 +117,7 @@ describe("Telegram native command built-ins", () => {
     const cfg = {
       agents: { defaults: { models: { "ollama/*": {} } } },
     } as OpenClawConfig;
-    sessionMocks.loadSessionStore.mockReturnValue({
+    sessionMocks.sessionStoreEntries.mockReturnValue({
       "agent:main:main": {
         providerOverride: "ollama",
         modelOverride: "glm-5.2:cloud",
@@ -153,7 +153,7 @@ describe("Telegram native command built-ins", () => {
     const cfg = {
       agents: { defaults: { model: "ollama/glm-5.2:cloud", models: { "ollama/*": {} } } },
     } as OpenClawConfig;
-    sessionMocks.loadSessionStore.mockReturnValue({});
+    sessionMocks.sessionStoreEntries.mockReturnValue({});
     const runtimeCatalog = [
       { provider: "ollama", id: "glm-5.2:cloud", name: "glm-5.2:cloud", reasoning: true },
     ];
@@ -177,7 +177,7 @@ describe("Telegram native command built-ins", () => {
 
   it("inherits the parent session model when building DM thread native argument menus", async () => {
     const cfg: OpenClawConfig = {};
-    sessionMocks.loadSessionStore.mockReturnValue({
+    sessionMocks.sessionStoreEntries.mockReturnValue({
       "agent:main:main": {
         providerOverride: "anthropic",
         modelOverride: "claude-opus-4-7",
@@ -220,7 +220,7 @@ describe("Telegram native command built-ins", () => {
         },
       },
     } as OpenClawConfig;
-    sessionMocks.loadSessionStore.mockReturnValue({
+    sessionMocks.sessionStoreEntries.mockReturnValue({
       "agent:main:main": {
         providerOverride: "anthropic",
         modelOverride: "claude-opus-4-7",
@@ -269,7 +269,7 @@ describe("Telegram native command built-ins", () => {
         },
       },
     } as OpenClawConfig;
-    sessionMocks.loadSessionStore.mockReturnValue({
+    sessionMocks.sessionStoreEntries.mockReturnValue({
       "agent:main:main": {
         modelProvider: "openai-codex",
         model: "gpt-5.5",
@@ -322,7 +322,7 @@ describe("Telegram native command built-ins", () => {
         },
       },
     } as OpenClawConfig;
-    sessionMocks.loadSessionStore.mockReturnValue({});
+    sessionMocks.sessionStoreEntries.mockReturnValue({});
     agentRuntimeMocks.loadModelCatalog.mockImplementation(async (params) => {
       if (!params?.readOnly) {
         throw new Error("native /think must not start full model discovery");
@@ -377,7 +377,7 @@ describe("Telegram native command built-ins", () => {
         },
       },
     } as OpenClawConfig;
-    sessionMocks.loadSessionStore.mockReturnValue({
+    sessionMocks.sessionStoreEntries.mockReturnValue({
       "agent:main:main": {
         providerOverride: "anthropic",
         modelOverride: "claude-opus-4-7",
@@ -423,7 +423,7 @@ describe("Telegram native command built-ins", () => {
         ],
       },
     } as OpenClawConfig;
-    sessionMocks.loadSessionStore.mockReturnValue({});
+    sessionMocks.sessionStoreEntries.mockReturnValue({});
 
     const { handler, sendMessage } = registerAndResolveCommandHandler({
       commandName: "think",
@@ -450,7 +450,7 @@ describe("Telegram native command built-ins", () => {
     });
     await handler(createTelegramPrivateCommandContext({ match: "high" }));
 
-    expect(sessionMocks.loadSessionStore).not.toHaveBeenCalled();
+    expect(sessionMocks.sessionStoreEntries).not.toHaveBeenCalled();
     expect(agentRuntimeMocks.loadModelCatalog).not.toHaveBeenCalled();
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
   });
