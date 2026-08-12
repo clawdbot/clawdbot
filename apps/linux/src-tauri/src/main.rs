@@ -9,6 +9,8 @@ mod gateway_operation_queue;
 mod gateway_sleep;
 #[cfg(target_os = "linux")]
 mod gateway_sleep_logind;
+#[cfg(target_os = "linux")]
+mod gateway_sleep_logind_listener;
 mod gateway_ws;
 mod installer;
 mod notify;
