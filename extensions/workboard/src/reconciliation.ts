@@ -91,12 +91,21 @@ function isProtected(card: WorkboardCard): boolean {
 function redactReconciliationApplyKey(card: WorkboardCard): WorkboardCard {
   const automation = card.metadata?.automation;
   const links = card.metadata?.links?.map((link) =>
-    link.id.startsWith("external:")
-      ? {
-          ...link,
-          id: `external:${createHash("sha256").update(link.id).digest("base64url")}`,
-        }
-      : link,
+    (() => {
+      const {
+        lastSourceObservationId: _lastSourceObservationId,
+        lastSourceObservationRequestJson: _lastSourceObservationRequestJson,
+        lastSourceObservationRevision: _lastSourceObservationRevision,
+        lastSourceObservationEvidenceJson: _lastSourceObservationEvidenceJson,
+        ...safeLink
+      } = link;
+      return link.id.startsWith("external:")
+        ? {
+            ...safeLink,
+            id: `external:${createHash("sha256").update(link.id).digest("base64url")}`,
+          }
+        : safeLink;
+    })(),
   );
   if (!automation?.idempotencyKey && !links) return card;
   const { idempotencyKey: _idempotencyKey, ...safeAutomation } = automation ?? {};

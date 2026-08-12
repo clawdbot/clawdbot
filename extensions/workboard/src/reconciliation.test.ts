@@ -441,11 +441,9 @@ describe("WorkboardReconciler", () => {
     const persisted = present.card.metadata?.links?.find((link) => link.id.startsWith("external:"));
     expect(persisted).toMatchObject({
       consecutiveSuccessfulFullScanMisses: 0,
-      lastSourceObservationId: "evidence-3",
     });
-    expect(JSON.parse(persisted?.lastSourceObservationEvidenceJson ?? "{}")).toEqual({
-      consecutiveSuccessfulFullScanMisses: 0,
-    });
+    expect(persisted).not.toHaveProperty("lastSourceObservationId");
+    expect(persisted).not.toHaveProperty("lastSourceObservationEvidenceJson");
     expect(
       await reconciler.observeSource({
         ...base,
@@ -685,7 +683,7 @@ describe("WorkboardReconciler", () => {
           );
         legacy
           .prepare("UPDATE workboard_card_links SET id = ? WHERE url = ? AND card_id = ?")
-          .run(`external:${"x".repeat(2000)}`, "https://example.test/legacy/max", created.card.id);
+          .run(`external:${"x".repeat(43)}`, "https://example.test/legacy/max", created.card.id);
         legacy.prepare("DELETE FROM workboard_schema_migrations WHERE id = ?").run("schema-8");
       } finally {
         legacy.close();
@@ -698,6 +696,7 @@ describe("WorkboardReconciler", () => {
         });
         const links = listed.cards[0]?.metadata?.links ?? [];
         expect(JSON.stringify(listed)).not.toContain("legacy-original-apply-key");
+        expect(JSON.stringify(listed)).not.toContain("x".repeat(43));
         expect(links.every((link) => !link.id.includes("legacy-original-apply-key"))).toBe(true);
         const key = links.find(
           (link) => link.url === observation.sourceUrl,
@@ -749,6 +748,66 @@ describe("WorkboardReconciler", () => {
       }
     } finally {
       if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("redacts legacy link IDs and replay state from every in-memory reconciliation response", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const reconciler = new WorkboardReconciler(store);
+    const created = await reconciler.apply({
+      sourceUrl: "https://example.test/in-memory-secret",
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      idempotencyKey: "in-memory-apply-secret",
+      sourceUpdatedAt: 1,
+      card: { title: "In-memory legacy" },
+    });
+    const rawLegacyId = `external:${"r".repeat(43)}`;
+    const updated = await store.update(created.card.id, {
+      metadata: {
+        ...created.card.metadata,
+        links: created.card.metadata?.links?.map((link) => ({
+          ...link,
+          id: rawLegacyId,
+          lastSourceObservationId: "internal-observation-id",
+          lastSourceObservationRequestJson: JSON.stringify({ idempotencyKey: "replay-secret" }),
+          lastSourceObservationRevision: 1,
+          lastSourceObservationEvidenceJson: JSON.stringify({ internal: true }),
+        })),
+      },
+    });
+    const associationKey = updated.metadata?.links?.[0]?.reconciliationAssociationKey!;
+    const observed = await reconciler.observeSource({
+      cardId: updated.id,
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      sourceUrl: "https://example.test/in-memory-secret",
+      reconciliationAssociationKey: associationKey,
+      observationId: "visible-observation",
+      sourceState: "present",
+      staleAfterMisses: 1,
+      observedAt: 2,
+      expectedRevision: updated.updatedAt,
+    });
+    const applied = await reconciler.apply({
+      cardId: updated.id,
+      sourceUrl: "https://example.test/in-memory-secret/next",
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      idempotencyKey: "in-memory-apply-secret",
+      sourceUpdatedAt: 3,
+      expectedRevision: observed.card.updatedAt,
+    });
+    const listed = await reconciler.list({ tenant: "acme" });
+
+    for (const response of [listed, applied, observed]) {
+      const serialized = JSON.stringify(response);
+      expect(serialized).not.toContain(rawLegacyId);
+      expect(serialized).not.toContain("in-memory-apply-secret");
+      expect(serialized).not.toContain("replay-secret");
+      expect(serialized).not.toContain("lastSourceObservationRequestJson");
+      expect(serialized).not.toContain("lastSourceObservationEvidenceJson");
+      expect(serialized).not.toContain("lastSourceObservationRevision");
     }
   });
 

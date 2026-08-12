@@ -147,16 +147,24 @@ function opaqueExternalLinkId(legacyId: string, collision: number): string {
     .digest("base64url")}`;
 }
 
+function isOpaqueExternalLinkId(id: string): boolean {
+  return /^external:[A-Za-z0-9_-]{43}$/.test(id);
+}
+
 function migrateLegacyExternalLinkIds(db: DatabaseSync): void {
   const links = db
     .prepare(
-      `SELECT id FROM workboard_card_links
-       WHERE id LIKE 'external:%' AND length(id) != 52`,
+      `SELECT id, reconciliation_association_key FROM workboard_card_links
+       WHERE id LIKE 'external:%'`,
     )
-    .all() as Array<{ id: string }>;
+    .all() as Array<{ id: string; reconciliation_association_key: string | null }>;
   const exists = db.prepare("SELECT 1 AS found FROM workboard_card_links WHERE id = ?");
   const update = db.prepare("UPDATE workboard_card_links SET id = ? WHERE id = ?");
   for (const link of links) {
+    const associationKey = link.reconciliation_association_key;
+    if (isOpaqueExternalLinkId(link.id) && !associationKey?.startsWith("legacy_")) {
+      continue;
+    }
     let collision = 0;
     let replacement = opaqueExternalLinkId(link.id, collision);
     while (exists.get(replacement)) {
