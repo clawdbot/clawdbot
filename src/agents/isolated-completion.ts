@@ -5,6 +5,7 @@
  * transcript, hook, and delivery lifecycle. Execution owners either prove a
  * literal empty native tool surface or fail before inference starts.
  */
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -187,7 +188,7 @@ async function runCliIsolatedCompletion(params: {
     { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-isolated-completion-" },
     async ({ dir }) => {
       const { runCliAgent } = await import("./cli-runner.runtime.js");
-      const sessionId = `isolated-completion-${Date.now()}`;
+      const sessionId = `isolated-completion-${randomUUID()}`;
       const config = params.request.config ?? getRuntimeConfig();
       const preparedRunAdmission = prepareSystemAgentRunAdmission(
         config,
