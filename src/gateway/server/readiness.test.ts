@@ -32,7 +32,6 @@ function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
     getRuntimeSnapshot: vi.fn(() => snapshot),
     getPluginCommandCatalogAccounts: vi.fn(() => new Map()),
     startChannels: vi.fn(),
-    restartRunningChannels: vi.fn(),
     startChannel: vi.fn(),
     stopChannel: vi.fn(),
     setAutostartSuppression: vi.fn(),

@@ -9,7 +9,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { completePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { isGatewayWorkAdmissionClosed } from "../process/gateway-work-admission.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-identity-token.js";
+import { restartRunningChannelAccounts } from "./channel-thaw-restart.js";
 import type { ExecApprovalManager } from "./exec-approval-manager.js";
 import { revokeAttachGrantsForSession } from "./mcp-grant-store.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
@@ -174,7 +176,11 @@ export async function startGatewayCoreRuntime(input: {
         getPresenceVersion,
         getHealthVersion,
         refreshGatewayHealthSnapshot: refreshGatewayHealthSnapshotWithRuntime,
-        restartRunningChannels: channelManager.restartRunningChannels,
+        restartRunningChannels: async () =>
+          await restartRunningChannelAccounts(channelManager, {
+            shouldContinue: () => !isGatewayWorkAdmissionClosed(),
+            onError: (message) => logHealth.error(message),
+          }),
         refreshPresence: () =>
           broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion }),
         resetEventLoopHealth: readinessEventLoopHealth.reset,

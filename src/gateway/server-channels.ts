@@ -258,7 +258,6 @@ export type ChannelManager = {
   getRuntimeSnapshot: () => ChannelRuntimeSnapshot;
   getPluginCommandCatalogAccounts: () => ReadonlyMap<ChannelId, ReadonlySet<string>>;
   startChannels: () => Promise<void>;
-  restartRunningChannels: () => Promise<void>;
   startChannel: (
     channel: ChannelId,
     accountId?: string,
@@ -1367,31 +1366,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         .map(([channelId, store]) => [channelId, new Set(store.pluginCommandCatalogOwners.keys())]),
     );
 
-  const restartRunningChannels = async () => {
-    const snapshot = getRuntimeSnapshot();
-    for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
-      for (const [accountId, status] of Object.entries(accounts ?? {})) {
-        const channel = channelId as ChannelId;
-        if (status?.running !== true || isManuallyStoppedFlag(channel, accountId)) {
-          continue;
-        }
-        try {
-          await stopChannel(channel, accountId, { manual: false });
-          await startChannel(channel, accountId, { preserveManualStop: true });
-          if (getRuntime(channel, accountId).restartPending === true) {
-            // A timed-out stop uses a two-call recovery contract: the first call
-            // requests replacement and the second discards the stale task.
-            await startChannel(channel, accountId, { preserveManualStop: true });
-          }
-        } catch (error) {
-          ensureChannelLog(channel).error?.(
-            `[${accountId}] host-thaw restart failed: ${formatErrorMessage(error)}`,
-          );
-        }
-      }
-    }
-  };
-
   const isManuallyStoppedFlag = (channelId: ChannelId, accountId: string): boolean => {
     return manuallyStopped.has(restartKey(channelId, accountId));
   };
@@ -1408,7 +1382,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     getRuntimeSnapshot,
     getPluginCommandCatalogAccounts,
     startChannels,
-    restartRunningChannels,
     startChannel,
     stopChannel,
     setAutostartSuppression: (suppression) => {

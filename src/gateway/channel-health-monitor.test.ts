@@ -14,7 +14,6 @@ function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelM
     getRuntimeSnapshot: vi.fn(() => ({ channels: {}, channelAccounts: {} })),
     getPluginCommandCatalogAccounts: vi.fn(() => new Map()),
     startChannels: vi.fn(async () => {}),
-    restartRunningChannels: vi.fn(async () => {}),
     startChannel: vi.fn(async () => {}),
     stopChannel: vi.fn(async () => {}),
     setAutostartSuppression: vi.fn(),

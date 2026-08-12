@@ -34,6 +34,7 @@ import {
 } from "../secrets/runtime-degraded-state.js";
 import { evaluateChannelHealth } from "./channel-health-policy.js";
 import { channelReadyPatch, createTransportActivityStatusPatch } from "./channel-status-patches.js";
+import { restartRunningChannelAccounts } from "./channel-thaw-restart.js";
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
 
 const hoisted = vi.hoisted(() => {
@@ -904,7 +905,7 @@ describe("server-channels auto restart", () => {
     starts.length = 0;
     stops.length = 0;
 
-    await manager.restartRunningChannels();
+    await restartRunningChannelAccounts(manager, { shouldContinue: () => true, onError: () => {} });
 
     expect(starts).toEqual(["running"]);
     expect(stops).toEqual(["running"]);
@@ -920,7 +921,10 @@ describe("server-channels auto restart", () => {
     const manager = createManager();
     await manager.startChannels();
 
-    const restartTask = manager.restartRunningChannels();
+    const restartTask = restartRunningChannelAccounts(manager, {
+      shouldContinue: () => true,
+      onError: () => {},
+    });
     await vi.advanceTimersByTimeAsync(5_000);
     await restartTask;
 
@@ -928,6 +932,45 @@ describe("server-channels auto restart", () => {
     expect(startAccount).toHaveBeenCalledTimes(2);
     expect(account?.running).toBe(true);
     expect(account?.restartPending).toBe(false);
+  });
+
+  it("stops thaw restarts once admission closes mid-pass", async () => {
+    const starts: string[] = [];
+    const stops: string[] = [];
+    installTestRegistry(
+      createTestPlugin({
+        listAccountIds: () => ["first", "second"],
+        startAccount: async (context) => {
+          starts.push(context.accountId);
+          await new Promise<void>((resolve) => {
+            context.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+          });
+        },
+        stopAccount: async (context) => {
+          stops.push(context.accountId);
+        },
+      }),
+    );
+    const manager = createManager();
+    await manager.startChannels();
+    await vi.waitFor(() => expect(starts).toHaveLength(2));
+    starts.length = 0;
+    stops.length = 0;
+
+    let open = true;
+    await restartRunningChannelAccounts(manager, {
+      shouldContinue: () => {
+        if (stops.length > 0) {
+          // Simulate a suspension committing while the first stop was awaited.
+          open = false;
+        }
+        return open;
+      },
+      onError: () => {},
+    });
+
+    expect(stops).toEqual(["first"]);
+    expect(starts).toEqual([]);
   });
 
   it("bounds a hung stopAccount so a host-thaw restart still completes", async () => {
@@ -945,7 +988,10 @@ describe("server-channels auto restart", () => {
     await manager.startChannels();
     await vi.waitFor(() => expect(startAccount).toHaveBeenCalledTimes(1));
 
-    const restartTask = manager.restartRunningChannels();
+    const restartTask = restartRunningChannelAccounts(manager, {
+      shouldContinue: () => true,
+      onError: () => {},
+    });
     await vi.advanceTimersByTimeAsync(11_000);
     await restartTask;
 
