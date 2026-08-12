@@ -514,6 +514,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
     "2026.8",
     { description: "Search GitHub repositories that can be cloned as managed projects." },
   ],
+  ["desktop.observe", "environments", "operator.admin", "2026.8", { startup: true }],
+  ["desktop.launch", "environments", "operator.admin", "2026.8", { startup: true }],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

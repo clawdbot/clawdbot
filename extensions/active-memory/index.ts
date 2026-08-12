@@ -589,4 +589,4 @@ const testing = {
   getCircuitBreakerEntry,
 };
 
-export { testing, testing as __testing };
+export { testing };

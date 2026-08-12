@@ -57,13 +57,29 @@ type IterationMetric = {
 
 type CompactionProof = ReliabilityReport["maintenanceProof"]["compaction"];
 
-// Exceed the 1 MiB interruption thresholds without copying an arbitrary 64 MiB
-// through every repository and restore crash phase.
-const COMPACTION_BLOAT_ROWS = 64;
+// Keep 50% headroom above the 2 MiB staged-restore threshold without copying
+// an arbitrarily large payload through every repository and restore crash phase.
+const COMPACTION_BLOAT_ROWS = 12;
 const COMPACTION_BLOAT_PAYLOAD_BYTES = 256 * 1024;
 
 function nowMs(): number {
   return Number(process.hrtime.bigint()) / 1e6;
+}
+
+async function runProofsConcurrently<First, Second>(
+  first: Promise<First>,
+  second: Promise<Second>,
+): Promise<[First, Second]> {
+  // Wait for both proofs to release their child processes before outer scratch
+  // cleanup starts, even when one proof fails.
+  const [firstResult, secondResult] = await Promise.allSettled([first, second]);
+  if (firstResult.status === "rejected") {
+    throw firstResult.reason;
+  }
+  if (secondResult.status === "rejected") {
+    throw secondResult.reason;
+  }
+  return [firstResult.value, secondResult.value];
 }
 
 function percentile(values: number[], pct: number): number {
@@ -485,23 +501,6 @@ async function runMaintenanceRoundTrip(params: {
       `compaction payload setup failed: rows=${expectedPayload.rows} bytes=${expectedPayload.bytes}`,
     );
   }
-  const repositoryInterruption = await runRepositoryInterruptionProof({
-    expectedPayload,
-    expectedState,
-    identity: params.target.identity,
-    repositoryPath: path.join(params.restoreRoot, "repository-interruptions"),
-    sourcePath: params.target.path,
-    validationRootPath: params.validationRoot,
-    verifyPayload: readCompactionPayload,
-    verifyState: (databasePath) =>
-      verifyRestoredDatabase({
-        expectedState,
-        identity: params.target.identity,
-        path: databasePath,
-        rowsPerBatch: params.rowsPerBatch,
-        uncommittedBatch: null,
-      }),
-  });
   const interruptedSnapshot = await params.repositoryProvider.create({
     identity: params.target.identity,
     path: params.target.path,
@@ -510,24 +509,43 @@ async function runMaintenanceRoundTrip(params: {
     interruptedSnapshot.ref.path,
     params.syncedRepository,
   );
-  const restoreInterruption = await runRestoreInterruptionProof({
-    expectedPayload,
-    expectedSnapshotBytes: interruptedSnapshot.manifest.artifact.sizeBytes,
-    expectedState,
-    repositoryPath: params.syncedRepository,
-    scratchPath: path.join(params.restoreRoot, "interrupted"),
-    snapshotPath: interruptedCopiedPath,
-    validationRootPath: params.validationRoot,
-    verifyPayload: readCompactionPayload,
-    verifyState: (databasePath) =>
-      verifyRestoredDatabase({
-        expectedState,
-        identity: params.target.identity,
-        path: databasePath,
-        rowsPerBatch: params.rowsPerBatch,
-        uncommittedBatch: null,
-      }),
-  });
+  const [repositoryInterruption, restoreInterruption] = await runProofsConcurrently(
+    runRepositoryInterruptionProof({
+      expectedPayload,
+      expectedState,
+      identity: params.target.identity,
+      repositoryPath: path.join(params.restoreRoot, "repository-interruptions"),
+      sourcePath: params.target.path,
+      validationRootPath: params.validationRoot,
+      verifyPayload: readCompactionPayload,
+      verifyState: (databasePath) =>
+        verifyRestoredDatabase({
+          expectedState,
+          identity: params.target.identity,
+          path: databasePath,
+          rowsPerBatch: params.rowsPerBatch,
+          uncommittedBatch: null,
+        }),
+    }),
+    runRestoreInterruptionProof({
+      expectedPayload,
+      expectedSnapshotBytes: interruptedSnapshot.manifest.artifact.sizeBytes,
+      expectedState,
+      repositoryPath: params.syncedRepository,
+      scratchPath: path.join(params.restoreRoot, "interrupted"),
+      snapshotPath: interruptedCopiedPath,
+      validationRootPath: params.validationRoot,
+      verifyPayload: readCompactionPayload,
+      verifyState: (databasePath) =>
+        verifyRestoredDatabase({
+          expectedState,
+          identity: params.target.identity,
+          path: databasePath,
+          rowsPerBatch: params.rowsPerBatch,
+          uncommittedBatch: null,
+        }),
+    }),
+  );
   const vacuumInterruption = await runVacuumInterruptionProof({
     env: params.env,
     expectedAutoVacuum: autoVacuumBeforeKill,
@@ -725,22 +743,23 @@ export async function runReliabilityStress(options: CliOptions): Promise<Reliabi
       rowsPerBatch: profile.rowsPerBatch,
       uncommittedBatch: null,
     });
-    const publicationInterruptionProof = await runPublicationInterruptionProof({
-      expectedState: stableState,
-      scratchPath: path.join(runScratch, "publication-interruptions"),
-      sourcePath: target.path,
-      verifyDatabase: (databasePath) =>
-        verifyRestoredDatabase({
+    const [publicationInterruptionProof, indexRepairInterruptionProof] =
+      await runProofsConcurrently(
+        runPublicationInterruptionProof({
           expectedState: stableState,
-          identity: target.identity,
-          path: databasePath,
-          rowsPerBatch: profile.rowsPerBatch,
-          uncommittedBatch: null,
+          scratchPath: path.join(runScratch, "publication-interruptions"),
+          sourcePath: target.path,
+          verifyDatabase: (databasePath) =>
+            verifyRestoredDatabase({
+              expectedState: stableState,
+              identity: target.identity,
+              path: databasePath,
+              rowsPerBatch: profile.rowsPerBatch,
+              uncommittedBatch: null,
+            }),
         }),
-    });
-    const indexRepairInterruptionProof = await runIndexRepairInterruptionProof(
-      path.join(runScratch, "index-repair-interruptions"),
-    );
+        runIndexRepairInterruptionProof(path.join(runScratch, "index-repair-interruptions")),
+      );
     const maintenanceProof = await runMaintenanceRoundTrip({
       env,
       repositoryProvider,

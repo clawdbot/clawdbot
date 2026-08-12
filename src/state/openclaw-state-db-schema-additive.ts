@@ -24,6 +24,9 @@ const SECRET_STORE_SCHEMA_END =
 const MCP_OAUTH_PENDING_SCHEMA_START =
   "CREATE TABLE IF NOT EXISTS mcp_oauth_pending_authorizations (";
 const MCP_OAUTH_PENDING_SCHEMA_END = "\n) STRICT;";
+const DEVICE_PAIRING_JOIN_CODE_SCHEMA_START =
+  "CREATE TABLE IF NOT EXISTS device_pairing_join_codes (";
+const DEVICE_PAIRING_JOIN_CODE_SCHEMA_END = "\n) STRICT;";
 
 function secretStoreSchemaSql(): string {
   const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(SECRET_STORE_SCHEMA_START);
@@ -49,6 +52,24 @@ export function ensureMcpOAuthPendingSchema(database: DatabaseSync): void {
   }
   database.exec(
     OPENCLAW_STATE_SCHEMA_SQL.slice(start, endMarkerStart + MCP_OAUTH_PENDING_SCHEMA_END.length),
+  ); // sqlite-allow-raw -- Canonical additive DDL only.
+}
+
+/** Lazily install the additive device join-code table on first mint or redemption. */
+export function ensureDevicePairingJoinCodeSchema(database: DatabaseSync): void {
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(DEVICE_PAIRING_JOIN_CODE_SCHEMA_START);
+  const endMarkerStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+    DEVICE_PAIRING_JOIN_CODE_SCHEMA_END,
+    start,
+  );
+  if (start < 0 || endMarkerStart < start) {
+    throw new Error("OpenClaw device pairing join-code schema marker is missing.");
+  }
+  database.exec(
+    OPENCLAW_STATE_SCHEMA_SQL.slice(
+      start,
+      endMarkerStart + DEVICE_PAIRING_JOIN_CODE_SCHEMA_END.length,
+    ),
   ); // sqlite-allow-raw -- Canonical additive DDL only.
 }
 

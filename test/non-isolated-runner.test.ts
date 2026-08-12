@@ -276,16 +276,13 @@ it("clears named plugin runtime slots between files", async () => {
   }
 });
 
-it("clears session suspension state between files", async () => {
+it("clears the session suspension shutdown fence between files", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-suspension-runner-"));
   try {
     const write = (name: string, content: string) =>
       fs.writeFile(path.join(root, name), content, "utf-8");
     const sessionSuspensionPath = JSON.stringify(
       path.join(repoRoot, "src", "agents", "session-suspension.ts"),
-    );
-    const sessionSuspensionTestSupportPath = JSON.stringify(
-      path.join(repoRoot, "src", "agents", "session-suspension.test-support.ts"),
     );
     const sharedVitestConfigPath = JSON.stringify(
       path.join(repoRoot, "test", "vitest", "vitest.shared.config.ts"),
@@ -298,16 +295,12 @@ it("clears session suspension state between files", async () => {
     await write(
       "a-seed.test.ts",
       [
-        `import { getSuspendedLaneIdsForGatewayPublication } from ${sessionSuspensionPath};`,
-        `import { seedClearedLaneResumeForTest } from ${sessionSuspensionTestSupportPath};`,
+        `import { fenceSessionSuspensionWritesForGatewayShutdown } from ${sessionSuspensionPath};`,
         'import { expect, it } from "vitest";',
-        'const laneId = "plugin:test:session-suspension";',
-        'it("seeds real process-global suspension state", () => {',
-        "  seedClearedLaneResumeForTest(laneId, {",
-        "    resumeConcurrency: 1,",
-        "    resumeAtMs: Date.now() + 10_000,",
-        "  });",
-        "  expect(getSuspendedLaneIdsForGatewayPublication()).toContain(laneId);",
+        'const testApi = (globalThis as Record<PropertyKey, { isSessionSuspensionWriteCleanupActiveForTest(): boolean }>)[Symbol.for("openclaw.sessionSuspensionTestApi")];',
+        'it("seeds the real process-global shutdown fence", () => {',
+        "  fenceSessionSuspensionWritesForGatewayShutdown();",
+        "  expect(testApi?.isSessionSuspensionWriteCleanupActiveForTest()).toBe(true);",
         "});",
         "",
       ].join("\n"),
@@ -315,10 +308,11 @@ it("clears session suspension state between files", async () => {
     await write(
       "b-observe.test.ts",
       [
-        `import { getSuspendedLaneIdsForGatewayPublication } from ${sessionSuspensionPath};`,
+        `import ${sessionSuspensionPath};`,
         'import { expect, it } from "vitest";',
+        'const testApi = (globalThis as Record<PropertyKey, { isSessionSuspensionWriteCleanupActiveForTest(): boolean }>)[Symbol.for("openclaw.sessionSuspensionTestApi")];',
         'it("starts without real suspension state from the previous file", () => {',
-        "  expect(getSuspendedLaneIdsForGatewayPublication()).toEqual(new Set());",
+        "  expect(testApi?.isSessionSuspensionWriteCleanupActiveForTest()).toBe(false);",
         "});",
         "",
       ].join("\n"),

@@ -235,7 +235,6 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
     failedQuestion: null,
     hint: null,
     retryable: false,
-    phase: null,
     draft: "",
   };
   @property({ attribute: false }) connected = false;
@@ -535,13 +534,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
           ? html`
               <article class="chat-session-rail__exchange chat-session-rail__exchange--pending">
                 <div class="chat-session-rail__question">${this.companion.pendingQuestion}</div>
-                <div class="chat-session-rail__hint">
-                  ${t(
-                    this.companion.phase === "answering"
-                      ? "chat.rail.askAnswering"
-                      : "chat.rail.askReading",
-                  )}
-                </div>
+                <div class="chat-session-rail__hint">${t("chat.rail.askPending")}</div>
               </article>
             `
           : nothing}
@@ -698,11 +691,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
               aria-label=${t("chat.rail.askLabel")}
               .value=${this.companion.draft}
               placeholder=${this.companion.pendingQuestion
-                ? t(
-                    this.companion.phase === "answering"
-                      ? "chat.rail.askAnswering"
-                      : "chat.rail.askReading",
-                  )
+                ? t("chat.rail.askPending")
                 : t("chat.rail.askPlaceholder")}
               ?disabled=${!this.connected || this.companion.pendingQuestion !== null}
               @input=${(event: InputEvent) => {

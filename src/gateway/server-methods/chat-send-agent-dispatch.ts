@@ -18,7 +18,10 @@ import type { ChatRunTiming } from "../server-chat-state.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
-import { resolveWebchatPromptCacheKey } from "./chat-send-background.js";
+import {
+  resolveWebchatPromptCacheKey,
+  scheduleChatDashboardSessionTitle,
+} from "./chat-send-background.js";
 import { createChatSendDispatchErrorLifecycle } from "./chat-send-dispatch-errors.js";
 import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-authority-contract.js";
 import { finalizeAcceptedChatSendMessageInjection } from "./chat-send-message-injection.js";
@@ -503,5 +506,20 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
       }
     })
     .catch(dispatchErrorLifecycle.handleError)
-    .finally(dispatchErrorLifecycle.finalize);
+    .finally(() => {
+      dispatchErrorLifecycle.finalize();
+      // Cosmetic title work starts only after the accepted turn finishes. Starting it
+      // before dispatch can make a cold utility runtime starve the user's real turn.
+      scheduleChatDashboardSessionTitle({
+        admittedSessionId,
+        agentId,
+        cfg,
+        context,
+        entry,
+        request,
+        sessionKey,
+        sessionLoadOptions: session.sessionLoadOptions,
+        storePath: session.storePath,
+      });
+    });
 }

@@ -562,6 +562,12 @@ describe("test-projects args", () => {
         forwardedArgs: [],
         includePatterns: [
           "extensions/memory-core/src/memory/index.test.ts",
+          "extensions/memory-core/src/memory/manager-keyword-retrieval.test.ts",
+          "extensions/memory-core/src/memory/manager-provider-lifecycle-fallback.test.ts",
+          "extensions/memory-core/src/memory/manager-provider-lifecycle-leases.test.ts",
+          "extensions/memory-core/src/memory/manager-provider-lifecycle.test.ts",
+          "extensions/memory-core/src/memory/manager-registry.test.ts",
+          "extensions/memory-core/src/memory/manager-search-orchestration.test.ts",
           "extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts",
           "extensions/memory-core/src/memory/manager.legacy-migration-cleanup.test.ts",
           "extensions/memory-core/src/memory/manager.reindex-recovery.test.ts",

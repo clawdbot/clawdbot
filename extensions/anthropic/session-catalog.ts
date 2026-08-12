@@ -14,6 +14,7 @@ import type {
   SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
 import {
+  asPositiveSafeInteger as pullRequestNumber,
   isRecord,
   normalizeBoundedOptionalString as readBoundedString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -239,10 +240,6 @@ function pullRequestState(value: unknown): SessionCatalogPullRequestSummary["sta
     default:
       return undefined;
   }
-}
-
-function pullRequestNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
 // Desktop retains historical PRs in order and marks hidden ones as dismissed;

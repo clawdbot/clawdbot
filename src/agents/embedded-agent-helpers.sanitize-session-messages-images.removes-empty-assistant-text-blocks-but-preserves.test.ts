@@ -250,6 +250,31 @@ describe("sanitizeSessionMessagesImages", () => {
     expect(out).toHaveLength(1);
     expect(out[0]?.role).toBe("user");
   });
+  it.each([
+    ["full", "length"],
+    ["images-only", "length"],
+    ["full", "error"],
+    ["images-only", "error"],
+  ] as const)(
+    "preserves an empty provider replay owner in %s mode after %s",
+    async (sanitizeMode, stopReason) => {
+      const checkpoint = {
+        ...makeOpenAiResponsesAssistantMessage([{ type: "text", text: "" }], stopReason),
+        providerReplay: {
+          v: 1,
+          type: "opaque-checkpoint",
+          data: "opaque-state",
+          provider: "openai",
+          api: "openai-responses",
+          model: "gpt-5.4",
+        },
+      } satisfies AssistantMessage;
+
+      const out = await sanitizeSessionMessagesImages([checkpoint], "test", { sanitizeMode });
+
+      expect(out).toEqual([{ ...checkpoint, content: [] }]);
+    },
+  );
   it("drops empty assistant error messages", async () => {
     const input = castAgentMessages([
       { role: "user", content: "hello", timestamp: nextTimestamp() } satisfies UserMessage,

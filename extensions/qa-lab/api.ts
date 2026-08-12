@@ -24,7 +24,6 @@ export {
   DEFAULT_WAIT_TIMEOUT_MS,
   type QaBusWaitMatch,
 } from "./src/bus-waiters.js";
-export { isQaLabCliAvailable, registerQaLabCli } from "./src/cli.js";
 export { createQaRunnerRuntime } from "./src/harness-runtime.js";
 export {
   buildScriptEvidenceSummary,
@@ -101,7 +100,6 @@ export {
 export { runQaE2eSelfCheck, runQaLabSelfCheck } from "./src/self-check-runner.js";
 export {
   testing,
-  testing as __testing,
   buildQaRuntimeEnv,
   type QaCliBackendAuthMode,
   type QaGatewayChildListeningContext,

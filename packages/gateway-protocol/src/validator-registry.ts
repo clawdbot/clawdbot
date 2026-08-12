@@ -92,6 +92,7 @@ export const validateAuditRunInspectParams = compile<AuditRunInspectParams>(
   S.AuditRunInspectParamsSchema,
 );
 export const validateExecutionIdentityContextV1 = compile(S.ExecutionIdentityContextV1Schema);
+export const validateDecisionReceiptV1 = compile(S.DecisionReceiptV1Schema);
 export const validateAuditListParams = compile(S.AuditListParamsSchema);
 export const validateUsersListParams = compile(S.UsersListParamsSchema);
 export const validateUsersPrefsGetParams = compile(S.UsersPrefsGetParamsSchema);
@@ -158,6 +159,9 @@ export const validateWorkerDesktopObserveParams = compile(S.WorkerDesktopObserve
 export const validateWorkerDesktopObserveResult = compile(S.WorkerDesktopObserveResultSchema);
 export const validateWorkerDesktopLaunchParams = compile(S.WorkerDesktopLaunchParamsSchema);
 export const validateWorkerDesktopLaunchResult = compile(S.WorkerDesktopLaunchResultSchema);
+export const validateDesktopObserveParams = compile(S.DesktopObserveParamsSchema);
+export const validateDesktopObserveResult = compile(S.DesktopObserveResultSchema);
+export const validateDesktopLaunchParams = compile(S.DesktopLaunchParamsSchema);
 export const validateSystemInfoParams = compile(S.SystemInfoParamsSchema);
 export const validateSystemInfoResult = compile(S.SystemInfoResultSchema);
 export const validateNodePendingAckParams = compile(S.NodePendingAckParamsSchema);

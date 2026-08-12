@@ -265,9 +265,7 @@ describe("monitorSlackProvider tool results", () => {
         ackReaction: "👀",
         ackReactionScope: "group-mentions",
         groupChat: { visibleReplies: "automatic" },
-        statusReactions: statusReactionsEnabled
-          ? { enabled: true, timing: { debounceMs: 0, doneHoldMs: 0, errorHoldMs: 0 } }
-          : { enabled: false },
+        statusReactions: statusReactionsEnabled ? { enabled: true } : { enabled: false },
       },
       channels: {
         slack: {
@@ -544,7 +542,6 @@ describe("monitorSlackProvider tool results", () => {
         groupChat: { visibleReplies: "message_tool" },
         statusReactions: {
           enabled: true,
-          timing: { debounceMs: 0, doneHoldMs: 0, errorHoldMs: 0 },
         },
       },
       channels: {
@@ -738,7 +735,6 @@ describe("monitorSlackProvider tool results", () => {
         groupChat: { visibleReplies: "message_tool" },
         statusReactions: {
           enabled: true,
-          timing: { debounceMs: 0, doneHoldMs: 0, errorHoldMs: 0 },
         },
       },
       channels: {
@@ -767,7 +763,7 @@ describe("monitorSlackProvider tool results", () => {
     );
   });
 
-  it("keeps the error reaction when dispatch fails before any reply is delivered", async () => {
+  it("restores the ack reaction when dispatch fails before any reply is delivered", async () => {
     replyMock.mockRejectedValue(new Error("boom"));
     setMentionGatedAckConfig(true);
     mockGeneralChannelInfo();
@@ -779,7 +775,7 @@ describe("monitorSlackProvider tool results", () => {
         expectReactionFlow({
           startsWith: ["eyes", "x"],
           includes: "x",
-          endsWith: "x",
+          endsWith: "eyes",
         }),
       { timeout: 5_000 },
     );

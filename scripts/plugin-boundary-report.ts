@@ -403,6 +403,18 @@ function collectReferenceFiles(files: readonly WorkspaceTextFile[], tokens: read
   };
 }
 
+export function isPluginCompatEligibleForRemoval(
+  removeAfter: string | undefined,
+  today = new Date(),
+): boolean {
+  if (!removeAfter) {
+    return false;
+  }
+  const firstRemovalInstant = new Date(`${removeAfter}T00:00:00Z`);
+  firstRemovalInstant.setUTCDate(firstRemovalInstant.getUTCDate() + 1);
+  return firstRemovalInstant <= today;
+}
+
 function collectCompatDebt(
   files: readonly WorkspaceTextFile[],
   today = new Date(),
@@ -416,9 +428,7 @@ function collectCompatDebt(
         options.includeReferenceFiles === false
           ? { codeReferenceFiles: [], docReferenceFiles: [] }
           : collectReferenceFiles(files, tokens);
-      const eligibleForRemoval = record.removeAfter
-        ? new Date(`${record.removeAfter}T00:00:00Z`) <= today
-        : false;
+      const eligibleForRemoval = isPluginCompatEligibleForRemoval(record.removeAfter, today);
       return {
         code: record.code,
         owner: record.owner,

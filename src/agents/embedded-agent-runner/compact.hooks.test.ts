@@ -2420,7 +2420,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     }
   });
 
-  it("uses the acquired gateway runtime generation for queued model resolution", async () => {
+  it("uses the acquired gateway runtime generation for queued tiered model resolution", async () => {
     await compactEmbeddedAgentSession(
       wrappedCompactionArgs({
         allowGatewaySubagentBinding: true,
@@ -2434,9 +2434,8 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       : undefined;
     expect(snapshot).toBeDefined();
     expect(mockCallArg(resolveModelAsyncMock, 0, 4)).toMatchObject({
-      authStorage: {},
-      modelRegistry: {},
       preparedModelRuntime: snapshot,
+      skipAgentDiscovery: true,
     });
   });
 

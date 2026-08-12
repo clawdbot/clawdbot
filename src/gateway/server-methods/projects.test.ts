@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { expect, test } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -14,9 +14,25 @@ import {
 } from "../../projects/project-registry.js";
 import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { projectsHandlers } from "./projects.js";
+import { createProjectsHandlers } from "./projects.js";
 
 const execFileAsync = promisify(execFile);
+const listRegistryRecords = vi.fn(() => []);
+const resolveRepositoryIdentity = vi.fn(async (checkoutPath: string) => ({
+  checkoutRoot: checkoutPath,
+  repoRoot: checkoutPath,
+  originUrl: "",
+  fingerprint: checkoutPath,
+}));
+const projectsHandlers = createProjectsHandlers({
+  listRegistryRecords,
+  resolveRepositoryIdentity,
+} as never);
+
+beforeEach(() => {
+  listRegistryRecords.mockClear();
+  resolveRepositoryIdentity.mockClear();
+});
 
 async function initializeRepository(
   root: string,
@@ -117,8 +133,18 @@ test("projects.list exposes checkout details only at write scope", async () => {
       expect(project).not.toHaveProperty("repoRoot");
       expect(project).not.toHaveProperty("originUrl");
     }
+    expect(readResult.payload).not.toHaveProperty("observedProjects");
+    expect(listRegistryRecords).not.toHaveBeenCalled();
+    expect(resolveRepositoryIdentity).not.toHaveBeenCalled();
+
+    const readOptIn = await invokeProjectMethod("projects.list", { includeObserved: true }, cfg, [
+      "operator.read",
+    ]);
+    expect(readOptIn?.payload).not.toHaveProperty("observedProjects");
+    expect(listRegistryRecords).not.toHaveBeenCalled();
 
     for (const scope of ["operator.write", "operator.admin"]) {
+      const callsBeforeDefaultList = listRegistryRecords.mock.calls.length;
       const writeResult = await invokeProjectMethod("projects.list", {}, cfg, [scope]);
       expect(writeResult).toMatchObject({
         ok: true,
@@ -133,7 +159,60 @@ test("projects.list exposes checkout details only at write scope", async () => {
           ],
         },
       });
+      expect(writeResult?.payload).not.toHaveProperty("observedProjects");
+      expect(listRegistryRecords).toHaveBeenCalledTimes(callsBeforeDefaultList);
+
+      const observedResult = await invokeProjectMethod(
+        "projects.list",
+        { includeObserved: true },
+        cfg,
+        [scope],
+      );
+      expect(observedResult).toMatchObject({
+        ok: true,
+        payload: { observedProjects: [] },
+      });
     }
+    expect(listRegistryRecords).toHaveBeenCalledTimes(2);
+  } finally {
+    await state.cleanup();
+  }
+});
+
+test("project responses redact credentials and URL suffixes from registered origins", async () => {
+  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
+  try {
+    const repo = await initializeRepository(state.root);
+    await execFileAsync("git", [
+      "-C",
+      repo,
+      "remote",
+      "set-url",
+      "origin",
+      ["https://user", ":placeholder", "@host/private.git?visible=value#branch"].join(""),
+    ]);
+
+    const registered = await invokeProjectMethod(
+      "projects.register",
+      { path: repo, name: "Private" },
+      {},
+      ["operator.admin"],
+    );
+    expect(registered).toMatchObject({
+      ok: true,
+      payload: { originUrl: "https://host/private.git" },
+    });
+
+    const listed = await invokeProjectMethod("projects.list", {}, {}, ["operator.write"]);
+    expect(listed).toMatchObject({
+      ok: true,
+      payload: {
+        projects: expect.arrayContaining([
+          expect.objectContaining({ id: "workspace:main" }),
+          expect.objectContaining({ id: "private", originUrl: "https://host/private.git" }),
+        ]),
+      },
+    });
   } finally {
     await state.cleanup();
   }

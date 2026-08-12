@@ -171,7 +171,7 @@ type RunCliAgentPrepareParams = RunCliAgentParams & {
   systemAgentTool?: import("../tools/system-agent-tool.js").SystemAgentToolOptions;
 };
 
-const prepareDeps = {
+const defaultPrepareDeps = {
   isWorkspaceBootstrapPending: isWorkspaceBootstrapPendingImpl,
   makeBootstrapWarn: makeBootstrapWarnImpl,
   resolveBootstrapContextForRun: resolveBootstrapContextForRunImpl,
@@ -195,6 +195,7 @@ const prepareDeps = {
   readExternalCliBootstrapCredential,
   resolveApiKeyForProfile,
 };
+const prepareDeps = { ...defaultPrepareDeps };
 
 function resolveReusableCliSessionId(reusableCliSession: CliReusableSession): string | undefined {
   return reusableCliSession.mode === "reuse" || reusableCliSession.mode === "reuse-with-drift"
@@ -320,6 +321,11 @@ function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): vo
   Object.assign(prepareDeps, overrides);
 }
 
+/** Restores preparation dependencies after CLI runner tests. */
+function resetCliRunnerPrepareTestDeps(): void {
+  Object.assign(prepareDeps, defaultPrepareDeps);
+}
+
 /** Returns whether profile-owned prepared execution should skip local CLI epoch hashing. */
 function shouldSkipLocalCliCredentialEpoch(params: {
   authEpochMode?: CliBackendAuthEpochMode;
@@ -337,6 +343,7 @@ function shouldSkipLocalCliCredentialEpoch(params: {
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cliRunnerPrepareTestApi")] = {
+    resetCliRunnerPrepareTestDeps,
     setCliRunnerPrepareTestDeps: (overrides: Record<string, unknown>) => {
       setCliRunnerPrepareTestDeps(overrides as Partial<typeof prepareDeps>);
     },

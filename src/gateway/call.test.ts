@@ -125,6 +125,7 @@ function startStubGatewayClient() {
       phase: "pre-hello",
       socketOpened: true,
       transportValidated: true,
+      connectRequestSent: true,
       transientPreHelloCleanClose: true,
     });
     lastClientOptions?.onHelloOk?.(makeStubGatewayHello());
@@ -133,12 +134,14 @@ function startStubGatewayClient() {
       phase: "pre-hello",
       socketOpened: true,
       transportValidated: true,
+      connectRequestSent: true,
       transientPreHelloCleanClose: true,
     });
     lastClientOptions?.onClose?.(1000, "", {
       phase: "pre-hello",
       socketOpened: true,
       transportValidated: true,
+      connectRequestSent: true,
       transientPreHelloCleanClose: true,
     });
   } else if (startMode === "connect-error") {
@@ -1701,6 +1704,34 @@ describe("callGateway error details", () => {
         retryAfterMs: 60_000,
       },
     });
+  });
+
+  it("surfaces a websocket upgrade rejection carried by close info", async () => {
+    startMode = "silent";
+    setLocalLoopbackGatewayConfig();
+    const upgradeError = Object.assign(
+      new Error(
+        "gateway rejected websocket upgrade (HTTP 503): Gateway websocket admission closed",
+      ),
+      {
+        name: "GatewayClientRequestError",
+        gatewayCode: "UNAVAILABLE",
+        details: { reason: "websocket-upgrade-rejected", httpStatus: 503 },
+        retryable: true,
+      },
+    );
+
+    const request = callGateway({ method: "health" });
+    await waitForFast(() => expect(lastClientOptions).not.toBeNull());
+    lastClientOptions?.onClose?.(1006, "", {
+      phase: "pre-hello",
+      socketOpened: false,
+      transportValidated: false,
+      transientPreHelloCleanClose: false,
+      connectError: upgradeError,
+    });
+
+    await expect(request).rejects.toBe(upgradeError);
   });
 
   it.each([

@@ -217,6 +217,32 @@ CREATE TABLE IF NOT EXISTS execution_identity_contexts (
 CREATE INDEX IF NOT EXISTS execution_identity_contexts_run_created_idx
   ON execution_identity_contexts (run_id, created_at, execution_id);
 
+CREATE TABLE IF NOT EXISTS execution_decision_facts (
+  receipt_id TEXT NOT NULL PRIMARY KEY CHECK (length(receipt_id) BETWEEN 1 AND 256),
+  context_id TEXT NOT NULL CHECK (length(context_id) BETWEEN 1 AND 256),
+  execution_id TEXT NOT NULL CHECK (length(execution_id) BETWEEN 1 AND 256),
+  run_id TEXT NOT NULL CHECK (length(run_id) BETWEEN 1 AND 256),
+  action_id TEXT CHECK (action_id IS NULL OR length(action_id) BETWEEN 1 AND 256),
+  action_family TEXT NOT NULL CHECK (length(action_family) BETWEEN 1 AND 256),
+  decision_outcome TEXT NOT NULL CHECK (
+    decision_outcome IN ('allowed', 'denied', 'not-applicable', 'unknown')
+  ),
+  coverage_state TEXT NOT NULL CHECK (
+    coverage_state IN ('enforced', 'attribution-only', 'unattributed', 'unknown', 'unsupported')
+  ),
+  reason_code TEXT NOT NULL CHECK (length(reason_code) BETWEEN 1 AND 256),
+  owner TEXT NOT NULL CHECK (length(owner) BETWEEN 1 AND 256),
+  source_ref TEXT NOT NULL CHECK (length(source_ref) BETWEEN 1 AND 256),
+  occurred_at INTEGER NOT NULL CHECK (occurred_at >= 0),
+  receipt_bytes INTEGER NOT NULL CHECK (receipt_bytes BETWEEN 1 AND 16384),
+  receipt_json TEXT NOT NULL CHECK (length(receipt_json) > 0),
+  UNIQUE (occurred_at, receipt_id)
+) STRICT;
+CREATE INDEX IF NOT EXISTS execution_decision_facts_context_occurred_idx
+  ON execution_decision_facts (context_id, occurred_at, receipt_id);
+CREATE INDEX IF NOT EXISTS execution_decision_facts_run_occurred_idx
+  ON execution_decision_facts (run_id, occurred_at, receipt_id);
+
 CREATE TABLE IF NOT EXISTS session_state_events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   dedupe_key TEXT UNIQUE,
@@ -445,6 +471,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_operator_approvals_resolution_ref
 CREATE INDEX IF NOT EXISTS idx_operator_approvals_source_session_created
   ON operator_approvals(source_session_key, created_at_ms DESC, approval_id);
 
+CREATE INDEX IF NOT EXISTS idx_operator_approvals_source_run_resolved
+  ON operator_approvals(source_run_id, resolved_at_ms, approval_id)
+  WHERE source_run_id IS NOT NULL AND resolved_at_ms IS NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_operator_approvals_resolved
   ON operator_approvals(resolved_at_ms, approval_id)
   WHERE resolved_at_ms IS NOT NULL;
@@ -546,6 +576,13 @@ CREATE TABLE IF NOT EXISTS device_bootstrap_tokens (
 
 CREATE INDEX IF NOT EXISTS idx_device_bootstrap_tokens_ts
   ON device_bootstrap_tokens(ts);
+
+CREATE TABLE IF NOT EXISTS device_pairing_join_codes (
+  shortcode TEXT,
+  payload_json TEXT,
+  created_at_ms INTEGER,
+  expires_at_ms INTEGER
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS device_identities (
   identity_key TEXT NOT NULL PRIMARY KEY,

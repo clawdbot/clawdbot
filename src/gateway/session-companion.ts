@@ -14,6 +14,7 @@ export type SessionCompanionService = {
     sessionKey: string;
     question: string;
     connId: string;
+    signal?: AbortSignal;
   }) => Promise<SessionsCompanionAskResult>;
   state: (sessionKey: string) => SessionsCompanionStateResult;
   reset: (sessionKey: string) => void;

@@ -16,20 +16,22 @@ import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 type ThinkingSessionDefaults = SessionsListResult["defaults"] | undefined;
 
-type ChatThinkingSelection =
-  | {
-      kind: "anchored";
-      source: "override" | "default";
-      value: string;
-      displayLabel: string;
-      index: number;
-    }
-  | {
-      kind: "unanchored";
-      source: "override" | "default";
-      value: string;
-      displayLabel: string;
-    };
+type ChatThinkingSelection = {
+  source: "override" | "default";
+  value: string;
+  displayLabel: string;
+} & ({ kind: "anchored"; index: number } | { kind: "unanchored" });
+
+export type ChatThinkingTarget = Pick<
+  GatewaySessionRow,
+  | "agentRuntime"
+  | "model"
+  | "modelProvider"
+  | "thinkingDefault"
+  | "thinkingLevel"
+  | "thinkingLevels"
+  | "thinkingOptions"
+>;
 
 export type ChatThinkingSelectState = {
   selection: ChatThinkingSelection;
@@ -38,7 +40,7 @@ export type ChatThinkingSelectState = {
 };
 
 function resolveThinkingLevelOptionsForSession(
-  session: GatewaySessionRow | undefined,
+  session: ChatThinkingTarget | undefined,
   defaults: ThinkingSessionDefaults,
 ): GatewayThinkingLevelOption[] {
   const { provider, model } = resolveThinkingTargetModel({ defaults, session });
@@ -46,7 +48,7 @@ function resolveThinkingLevelOptionsForSession(
 }
 
 export function formatThinkingCommandOptionsForSession(
-  session: GatewaySessionRow | undefined,
+  session: ChatThinkingTarget | undefined,
   defaults?: SessionsListResult["defaults"],
 ): string {
   const options = resolveThinkingLevelOptionsForSession(session, defaults)
@@ -57,7 +59,7 @@ export function formatThinkingCommandOptionsForSession(
 
 export function resolveThinkingLevelInput(
   rawLevel: string,
-  session: GatewaySessionRow | undefined,
+  session: ChatThinkingTarget | undefined,
   defaults: ThinkingSessionDefaults,
 ): string | undefined {
   const normalized = normalizeThinkLevel(rawLevel);
@@ -74,7 +76,7 @@ export function resolveThinkingLevelInput(
 }
 
 export function isThinkingLevelOptionForSession(
-  session: GatewaySessionRow | undefined,
+  session: ChatThinkingTarget | undefined,
   defaults: ThinkingSessionDefaults,
   level: string,
 ): boolean {
@@ -85,7 +87,7 @@ export function isThinkingLevelOptionForSession(
 }
 
 export function resolveCurrentThinkingLevel(
-  session: GatewaySessionRow | undefined,
+  session: ChatThinkingTarget | undefined,
   defaults: ThinkingSessionDefaults,
   models: ModelCatalogEntry[],
 ): string {
@@ -143,7 +145,7 @@ function isOffOnlyThinkingLevels(levels: readonly GatewayThinkingLevelOption[]):
 
 function resolveThinkingTargetModel(params: {
   defaults: ThinkingSessionDefaults;
-  session: GatewaySessionRow | undefined;
+  session: ChatThinkingTarget | undefined;
 }): { provider: string | null; model: string | null } {
   return {
     provider: params.session?.modelProvider ?? params.defaults?.modelProvider ?? null,
@@ -167,7 +169,7 @@ function resolveThinkingLevelOptions(params: {
   hideUnsupportedOffOnly?: boolean;
   model: string | null;
   provider: string | null;
-  session: GatewaySessionRow | undefined;
+  session: ChatThinkingTarget | undefined;
 }): GatewayThinkingLevelOption[] {
   const modelMatchesDefaults = sessionModelMatchesDefaults(params.session, params.defaults);
   const catalogEntry = resolveThinkingCatalogEntry(params.catalog, params.provider, params.model);
@@ -209,7 +211,7 @@ function resolveThinkingLevelOptions(params: {
 export function resolveChatThinkingSelectState(params: {
   catalog: readonly ModelCatalogEntry[];
   defaults?: SessionsListResult["defaults"];
-  session?: GatewaySessionRow;
+  session?: ChatThinkingTarget;
   sessionKey: string;
   sessionsResult: SessionsListResult | null;
 }): ChatThinkingSelectState {

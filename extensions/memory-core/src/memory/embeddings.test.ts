@@ -1,6 +1,7 @@
 // Memory Core tests cover embeddings plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { EmbeddingProviderAdapter } from "openclaw/plugin-sdk/embedding-providers";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -105,7 +106,7 @@ function createMissingCredentialsAdapter(
     id: "bedrock",
     transport: "remote",
     autoSelectPriority: 60,
-    formatSetupError: (err) => (err instanceof Error ? err.message : String(err)),
+    formatSetupError: coerceErrorMessage,
     shouldContinueAutoSelection: (err) =>
       err instanceof Error && err.message.includes("No API key found for provider"),
     create: async () => {

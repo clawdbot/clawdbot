@@ -112,16 +112,30 @@ function createPreflightContext(channelId = "ch-1") {
   };
 }
 
+function createPreflightContextForMessage(data: { channel_id: string; message: { id: string } }) {
+  const ctx = createPreflightContext(data.channel_id);
+  return {
+    ...ctx,
+    message: { ...ctx.message, id: data.message.id },
+    data: {
+      ...ctx.data,
+      message: { ...ctx.data.message, id: data.message.id },
+    },
+  };
+}
+
 function createHandlerWithDefaultPreflight(overrides?: { setStatus?: SetStatusFn }) {
-  preflightDiscordMessageMock.mockImplementation(async (params: { data: { channel_id: string } }) =>
-    createPreflightContext(params.data.channel_id),
+  preflightDiscordMessageMock.mockImplementation(
+    async (params: { data: ReturnType<typeof createMessageData> }) =>
+      createPreflightContextForMessage(params.data),
   );
   return createDiscordMessageHandler(createDiscordHandlerParams(overrides));
 }
 
 function installDefaultDiscordPreflight() {
-  preflightDiscordMessageMock.mockImplementation(async (params: { data: { channel_id: string } }) =>
-    createPreflightContext(params.data.channel_id),
+  preflightDiscordMessageMock.mockImplementation(
+    async (params: { data: ReturnType<typeof createMessageData> }) =>
+      createPreflightContextForMessage(params.data),
   );
 }
 
@@ -177,7 +191,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
     expectStatusPatch(setStatus, { activeRuns: 0, busy: false });
   });
 
-  it("returns immediately and tracks busy status while queued runs execute", async () => {
+  it("starts a second same-session event while the first run is active", async () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
 
@@ -190,8 +204,12 @@ describe("createDiscordMessageHandler queue behavior", () => {
       .mockImplementationOnce(async () => {
         await secondRun.promise;
       });
+    preflightDiscordMessageMock.mockImplementation(
+      async (params: { data: ReturnType<typeof createMessageData> }) =>
+        createPreflightContextForMessage(params.data),
+    );
     const setStatus = vi.fn();
-    const handler = createHandlerWithDefaultPreflight({ setStatus });
+    const handler = createDiscordMessageHandler(createDiscordHandlerParams({ setStatus }));
 
     await expect(handler(createMessageData("m-1") as never, {} as never)).resolves.toBeUndefined();
 
@@ -203,16 +221,17 @@ describe("createDiscordMessageHandler queue behavior", () => {
 
     await flushQueueWork();
     expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(2);
-    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
-
-    firstRun.resolve();
-    await firstRun.promise;
-
-    await flushQueueWork();
     expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
+    expectStatusPatch(setStatus, { activeRuns: 2, busy: true });
 
     secondRun.resolve();
     await secondRun.promise;
+
+    await flushQueueWork();
+    expectStatusPatch(setStatus, { activeRuns: 1, busy: true });
+
+    firstRun.resolve();
+    await firstRun.promise;
 
     await flushQueueWork();
     const lastStatusPatch = statusPatches(setStatus).at(-1);
@@ -375,7 +394,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
     expect(stop).toHaveBeenCalledTimes(1);
   });
 
-  it("does not abort long queued runs with a Discord-owned channel timeout", async () => {
+  it("does not abort concurrent runs with a Discord-owned channel timeout", async () => {
     vi.useFakeTimers();
     try {
       preflightDiscordMessageMock.mockReset();
@@ -407,27 +426,21 @@ describe("createDiscordMessageHandler queue behavior", () => {
         handler(createMessageData("m-2") as never, {} as never),
       ).resolves.toBeUndefined();
       await flushQueueWork();
-      expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+      expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
 
       await vi.advanceTimersByTimeAsync(60_000);
       await flushQueueWork();
 
-      expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
-      expect(capturedAbortSignals).toEqual([undefined]);
+      expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
+      expect(capturedAbortSignals).toEqual([undefined, undefined]);
       const runtimeError = params.runtime.error as unknown as MockCallSource;
       expect(
         mockCalls(runtimeError).some(([message]) => String(message).includes("timed out")),
       ).toBe(false);
 
       firstRun.resolve();
-      await firstRun.promise;
-      await flushQueueWork();
-
-      expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
-      expect(capturedAbortSignals).toEqual([undefined, undefined]);
-
       secondRun.resolve();
-      await secondRun.promise;
+      await Promise.all([firstRun.promise, secondRun.promise]);
     } finally {
       vi.useRealTimers();
     }
@@ -545,101 +558,6 @@ describe("createDiscordMessageHandler queue behavior", () => {
     expect(getEventListeners(abortController.signal, "abort")).toHaveLength(initialListenerCount);
   });
 
-  it("skips queued runs that have not started yet after deactivation", async () => {
-    preflightDiscordMessageMock.mockReset();
-    processDiscordMessageMock.mockReset();
-
-    const firstRun = createDeferred<void>();
-    processDiscordMessageMock
-      .mockImplementationOnce(async () => {
-        await firstRun.promise;
-      })
-      .mockImplementationOnce(async () => undefined);
-    preflightDiscordMessageMock.mockImplementation(
-      async (params: { data: { channel_id: string } }) =>
-        createPreflightContext(params.data.channel_id),
-    );
-
-    const handler = createDiscordMessageHandler(createDiscordHandlerParams());
-    await expect(handler(createMessageData("m-1") as never, {} as never)).resolves.toBeUndefined();
-    await flushQueueWork();
-    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
-
-    await expect(handler(createMessageData("m-2") as never, {} as never)).resolves.toBeUndefined();
-    const deactivation = handler.deactivate();
-
-    firstRun.resolve();
-    await firstRun.promise;
-    await deactivation;
-    await Promise.resolve();
-
-    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("continues queued durable cleanup after an earlier settlement failure", async () => {
-    preflightDiscordMessageMock.mockReset();
-    processDiscordMessageMock.mockReset();
-
-    const firstRun = createDeferred<void>();
-    processDiscordMessageMock.mockImplementation(async () => {
-      await firstRun.promise;
-    });
-    preflightDiscordMessageMock.mockImplementation(
-      async (params: {
-        data: { channel_id: string };
-        abortSignal?: AbortSignal;
-        turnAdoptionLifecycle?: DiscordIngressLifecycle;
-      }) => ({
-        ...createPreflightContext(params.data.channel_id),
-        abortSignal: params.abortSignal,
-        turnAdoptionLifecycle: params.turnAdoptionLifecycle,
-      }),
-    );
-
-    const handlerParams = createDiscordHandlerParams();
-    const handler = createDiscordMessageHandler(handlerParams);
-    const activeIngress = createIngressLifecycle();
-    const failingQueuedIngress = createIngressLifecycle();
-    const laterQueuedIngress = createIngressLifecycle();
-    failingQueuedIngress.onAbandoned.mockRejectedValueOnce(
-      new Error("simulated durable release failure"),
-    );
-
-    await expect(
-      handler(createMessageData("m-1") as never, {} as never, {
-        turnAdoptionLifecycle: activeIngress,
-      }),
-    ).resolves.toEqual({ kind: "deferred" });
-    await flushQueueWork();
-    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
-
-    await expect(
-      handler(createMessageData("m-2") as never, {} as never, {
-        turnAdoptionLifecycle: failingQueuedIngress,
-      }),
-    ).resolves.toEqual({ kind: "deferred" });
-    await expect(
-      handler(createMessageData("m-3") as never, {} as never, {
-        turnAdoptionLifecycle: laterQueuedIngress,
-      }),
-    ).resolves.toEqual({ kind: "deferred" });
-
-    const deactivation = handler.deactivate();
-    await vi.waitFor(() => expect(failingQueuedIngress.onAbandoned).toHaveBeenCalledTimes(1));
-    firstRun.resolve();
-
-    await expect(deactivation).resolves.toBeUndefined();
-    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
-    expect(activeIngress.onAbandoned).toHaveBeenCalledTimes(1);
-    expect(laterQueuedIngress.onAbandoned).toHaveBeenCalledTimes(1);
-    const runtimeError = handlerParams.runtime.error as unknown as MockCallSource;
-    expect(
-      mockCalls(runtimeError).some(([message]) =>
-        String(message).includes("discord queued message cleanup failed"),
-      ),
-    ).toBe(true);
-  });
-
   it("preserves non-debounced message ordering by awaiting debouncer enqueue", async () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
@@ -684,7 +602,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
     expect(processedMessageIds).toEqual(["m-1", "m-2"]);
   });
 
-  it("recovers queue progress after a run failure without leaving busy state stuck", async () => {
+  it("reports a concurrent run failure without leaving busy state stuck", async () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
 

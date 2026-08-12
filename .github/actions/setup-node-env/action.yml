@@ -139,12 +139,28 @@ runs:
         # disk here, this gate binds cooperating code, not hostile code: the
         # enforced trust boundary is the fork/dispatch runner gate in ci.yml,
         # and same-repo PR authors already hold repository write access.
-        # Explicit true (not on-change) because the allocated-byte heuristic
-        # can miss a fingerprint refresh whose reinstall keeps disk usage
-        # stable, permanently stranding consumers on a stale marker. The action
-        # skips commit after failed/cancelled steps, so a broken install cannot
-        # seed this key.
-        commit: ${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'true' || 'false' }}
+        # Warm validated snapshots stay read-only so asynchronous publication
+        # does not perpetually chase no-op commits. The canonical writer records
+        # the action's allocation baseline below; after any real capture and
+        # store pruning, preflight forces a verified delta before this action's
+        # post phase. The action also skips commit after failed/cancelled steps.
+        commit: ${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'on-change' || 'false' }}
+
+    - name: Record sticky disk allocation baseline
+      if: inputs.sticky-disk == 'true' && inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request'
+      shell: bash
+      run: |
+        set -euo pipefail
+        sticky_root=/var/tmp/openclaw-node-deps
+        initial_usage_bytes="$(df -B1 --output=used "$sticky_root" | tail -n1 | tr -d '[:space:]')"
+        if [[ ! "$initial_usage_bytes" =~ ^[0-9]+$ ]] || [[ "$initial_usage_bytes" -le 0 ]]; then
+          echo "::error::Could not record sticky disk allocation baseline"
+          exit 1
+        fi
+        rebuild_signal="${RUNNER_TEMP:?}/openclaw-sticky-deps-rebuilt"
+        rm -f "$rebuild_signal"
+        echo "OPENCLAW_STICKY_INITIAL_USAGE_BYTES=$initial_usage_bytes" >> "$GITHUB_ENV"
+        echo "OPENCLAW_STICKY_REBUILD_SIGNAL=$rebuild_signal" >> "$GITHUB_ENV"
 
     - name: Restore and save Vitest transform cache
       if: inputs.vitest-fs-cache == 'true' && inputs.save-vitest-fs-cache == 'true' && runner.os != 'Windows'
@@ -462,7 +478,7 @@ runs:
           # publishes the fingerprint; read-only clones are discarded at job
           # end, so capturing there would only burn shard wall clock.
           if [ "$STICKY_DISK" = "true" ] && [ "$STICKY_WRITER" = "true" ]; then
-            bash "$GITHUB_ACTION_PATH/sticky-importers.sh" capture "$STICKY_ROOT" "$GITHUB_WORKSPACE" "$OPENCLAW_STICKY_DEPS_FINGERPRINT"
+            bash "$GITHUB_ACTION_PATH/sticky-importers.sh" capture "$STICKY_ROOT" "$GITHUB_WORKSPACE" "$OPENCLAW_STICKY_DEPS_FINGERPRINT" "${OPENCLAW_STICKY_REBUILD_SIGNAL:?}"
           fi
         fi
 

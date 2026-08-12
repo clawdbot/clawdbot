@@ -221,6 +221,12 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs shared-state ownership coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/state/openclaw-state-ownership.test.ts",
+    );
+  });
+
   it("runs mixed-case local media file URL coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "src/media/local-media-path.windows.test.ts",

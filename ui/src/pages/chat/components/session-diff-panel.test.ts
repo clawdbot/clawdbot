@@ -44,6 +44,7 @@ describe("SessionDiffPanel", () => {
     document.body.append(panel);
 
     await vi.waitFor(() => expect(firstLoader).toHaveBeenCalledOnce());
+    expect(firstLoader).toHaveBeenCalledWith({ scope: "all" });
     panel.loader = secondLoader;
     await vi.waitFor(() => expect(secondLoader).toHaveBeenCalledOnce());
 

@@ -137,24 +137,103 @@
   font-weight: 500;
 }
 
-.chat-text :where(ul, ol) {
-  padding-left: 1.2em;
+:is(.chat-text, .chat-thinking) {
+  --chat-markdown-indent: var(--space-7);
+  --chat-markdown-marker-gap: var(--space-2);
+}
+
+:is(.chat-text, .chat-thinking) :where(ul, ol) {
+  padding-inline-start: var(--chat-markdown-indent);
+}
+
+:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse)) {
+  margin-inline-start: var(--space-3);
+  padding-inline-start: calc(var(--chat-markdown-indent) - var(--space-3));
 }
 
 .chat-text :where(li + li) {
   margin-top: 0.4em;
 }
 
-/* Hide default marker only for unordered task lists; ordered lists keep numbers */
-.chat-text :where(ul > .task-list-item),
-.chat-thinking :where(ul > .task-list-item) {
+/* Keep bullets, checkboxes, and numbers in one marker column while their text
+   shares the same start edge. */
+:is(.chat-text, .chat-thinking) :where(ul > li:not(.task-list-item))::marker {
+  content: "";
+}
+
+:is(.chat-text, .chat-thinking) :where(ul > .task-list-item) {
   list-style: none;
 }
 
-.chat-text :where(.task-list-item-checkbox),
-.chat-thinking :where(.task-list-item-checkbox) {
-  margin-right: 0.4em;
-  vertical-align: middle;
+:is(.chat-text, .chat-thinking) :where(ol > li)::marker {
+  font-variant-numeric: tabular-nums;
+}
+
+:is(.chat-text, .chat-thinking) :where(ul > li) {
+  position: relative;
+}
+
+:is(.chat-text, .chat-thinking) :where(ul > li:not(.task-list-item))::before {
+  position: absolute;
+  inset-inline-end: calc(100% + var(--chat-markdown-marker-gap));
+  content: "•";
+  inset-block-start: 0;
+  inline-size: calc(var(--chat-markdown-indent) - var(--chat-markdown-marker-gap));
+  text-align: end;
+}
+
+/* Authored disclosures align with list text but place their affordance at the
+   row edge; JSON code blocks retain their separate compact presentation. */
+:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse) > summary) {
+  position: relative;
+  padding-inline-end: var(--space-7);
+  list-style: none;
+  cursor: var(--cursor-action);
+}
+
+:is(.chat-text, .chat-thinking)
+  :where(details:not(.json-collapse) > summary)::-webkit-details-marker {
+  display: none;
+}
+
+:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse) > summary)::after {
+  position: absolute;
+  content: "";
+  inset-block-start: calc((1lh - var(--space-4)) / 2);
+  inset-inline-end: 0;
+  inline-size: var(--space-4);
+  block-size: var(--space-4);
+  background: var(--select-chevron) center / var(--space-4) no-repeat;
+  transform: rotate(-90deg);
+  transition: transform var(--duration-normal) var(--ease-out);
+}
+
+:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse)[open] > summary)::after {
+  transform: rotate(0deg);
+}
+
+:is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox) {
+  position: absolute;
+  inset-block-start: calc((1lh - var(--space-4)) / 2);
+  inset-inline-end: calc(100% + var(--chat-markdown-marker-gap));
+  inline-size: var(--space-4);
+  block-size: var(--space-4);
+  margin: 0;
+}
+
+:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse)[open]) {
+  padding-inline-start: calc(var(--chat-markdown-indent) - var(--space-3) - 1px);
+  border-inline-start: 1px solid var(--border);
+}
+
+:is(.chat-text, .chat-thinking) :where(details:not(.json-collapse)[open] > summary) {
+  margin-bottom: var(--space-2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(.chat-text, .chat-thinking) :where(details:not(.json-collapse) > summary)::after {
+    transition: none;
+  }
 }
 
 .chat-text :where(a) {
@@ -426,11 +505,6 @@
 
 .chat-text[dir="rtl"] {
   text-align: right;
-}
-
-.chat-text[dir="rtl"] :where(ul, ol) {
-  padding-left: 0;
-  padding-right: 1.5em;
 }
 
 .chat-text[dir="rtl"] :where(blockquote) {

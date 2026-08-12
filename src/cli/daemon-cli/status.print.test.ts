@@ -107,6 +107,26 @@ describe("printDaemonStatus", () => {
     isWSLEnvMock.mockClear();
   });
 
+  it("prints host desktop state and auth type", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+        },
+        hostDesktop: { enabled: true, state: "attached", port: 5900, security: "VncAuth" },
+        extraServices: [],
+      },
+      { json: false },
+    );
+    expectMockLineContains(
+      runtime.log,
+      "Host desktop: attached · 127.0.0.1:5900 · security VncAuth",
+    );
+  });
+
   it("prints the applied Gateway heap limit and derivation", () => {
     printDaemonStatus(
       {

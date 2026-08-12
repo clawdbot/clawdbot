@@ -4498,17 +4498,6 @@ describe("resolveCliNoOutputTimeoutMs", () => {
     expect(timeoutMs).toBe(480_000);
   });
 
-  it("lets configured agent default timeouts lift the default resume no-output ceiling", () => {
-    const timeoutMs = resolveCliNoOutputTimeoutMs({
-      backend: { command: "codex" },
-      timeoutMs: 600_000,
-      runTimeoutOverrideMs: 600_000,
-      useResume: true,
-      trigger: "user",
-    });
-    expect(timeoutMs).toBe(480_000);
-  });
-
   it("keeps inherited user resume timeouts on the default resume no-output ceiling", () => {
     const timeoutMs = resolveCliNoOutputTimeoutMs({
       backend: { command: "codex" },

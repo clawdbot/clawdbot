@@ -636,6 +636,34 @@ describe("buildQaRuntimeEnv", () => {
     expect(developmentEnv.NODE_ENV).toBe("development");
   });
 
+  it("does not inherit parent channel or provider skip controls", () => {
+    const env = buildQaRuntimeEnv({
+      ...createParams({
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_PROVIDERS: "1",
+      }),
+    });
+
+    expect(env.OPENCLAW_SKIP_CHANNELS).toBeUndefined();
+    expect(env.OPENCLAW_SKIP_PROVIDERS).toBeUndefined();
+  });
+
+  it("honors explicit channel and provider skip controls", () => {
+    const env = buildQaRuntimeEnv({
+      ...createParams({
+        OPENCLAW_SKIP_CHANNELS: "inherited",
+        OPENCLAW_SKIP_PROVIDERS: "inherited",
+      }),
+      runtimeEnvPatch: {
+        OPENCLAW_SKIP_CHANNELS: "patched-channels",
+        OPENCLAW_SKIP_PROVIDERS: "patched-providers",
+      },
+    });
+
+    expect(env.OPENCLAW_SKIP_CHANNELS).toBe("patched-channels");
+    expect(env.OPENCLAW_SKIP_PROVIDERS).toBe("patched-providers");
+  });
+
   it("maps live frontier key aliases into provider env vars", () => {
     const env = buildQaRuntimeEnv({
       ...createParams({

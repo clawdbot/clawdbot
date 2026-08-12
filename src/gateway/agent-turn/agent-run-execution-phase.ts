@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
+import { attachAgentCommandAdmissionFacts } from "../../agents/agent-command-admission-facts.js";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import {
   claimExecApprovalFollowupRuntimeHandoff,
@@ -41,6 +42,7 @@ import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
+import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { createAgentRunModelSelectionHandler } from "../server-methods/agent-run-model-selection.js";
 import { resolveSessionRuntimeCwd } from "../server-methods/agent-session-reset.js";
@@ -366,6 +368,10 @@ export function startAgentRunExecution(params: {
         restartRecoveryChannelContext?.sameChannelThreadRequired,
       );
 
+      const localUserIngress = getGatewayLocalUserIngress(params.client);
+      if (localUserIngress) {
+        attachAgentCommandAdmissionFacts(runContext, localUserIngress.facts);
+      }
       dispatchAgentRunFromGateway({
         cronCreatorAuthority: prepared.cronCreatorAuthority,
         ingressOpts: {

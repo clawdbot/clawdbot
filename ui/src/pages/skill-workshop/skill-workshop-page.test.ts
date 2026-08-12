@@ -1,3 +1,4 @@
+import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
@@ -5,6 +6,7 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import type { SkillWorkshopProposal } from "../../lib/skill-workshop/index.ts";
 import { createSkillWorkshopState, skillWorkshopRouteData } from "./proposals.ts";
 import type { SkillWorkshopRouteData, SkillWorkshopState } from "./proposals.ts";
+import { page as skillWorkshopRoute } from "./route.ts";
 import "./skill-workshop-page.ts";
 
 type SkillWorkshopPageTestElement = HTMLElement & {
@@ -217,6 +219,96 @@ describe("SkillWorkshopPage lifecycle", () => {
         agentId: "research",
       }),
     );
+  });
+
+  it("reloads proposals on route activation and removes Apply after reconciliation", async () => {
+    let activation = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "skills.proposals.list") {
+        activation += 1;
+        return {
+          schema: "openclaw.skill-workshop.proposals-manifest.v1",
+          updatedAt: "2026-08-12T00:00:00.000Z",
+          proposals: [
+            {
+              id: "proposal-route-refresh",
+              kind: "create",
+              status: activation === 1 ? "pending" : "stale",
+              title: "Route Refresh",
+              description: "Refresh stale proposal state on route activation.",
+              skillName: "Route Refresh",
+              skillKey: "route-refresh",
+              createdAt: "2026-08-12T00:00:00.000Z",
+              updatedAt: "2026-08-12T00:00:00.000Z",
+              scanState: "clean",
+            },
+          ],
+        };
+      }
+      if (method === "skills.proposals.inspect") {
+        const status = activation === 1 ? "pending" : "stale";
+        return {
+          record: {
+            id: "proposal-route-refresh",
+            kind: "create",
+            status,
+            title: "Route Refresh",
+            description: "Refresh stale proposal state on route activation.",
+            createdAt: "2026-08-12T00:00:00.000Z",
+            updatedAt: "2026-08-12T00:00:00.000Z",
+            proposedVersion: "v1",
+            draftHash: "a".repeat(64),
+            target: {
+              skillName: "Route Refresh",
+              skillKey: "route-refresh",
+            },
+          },
+          revisionHash: "b".repeat(64),
+          content: "# Route Refresh\n",
+          supportFiles: [],
+        };
+      }
+      if (method === "skills.proposals.historyStatus") {
+        return {
+          schema: "openclaw.skill-workshop.history-scan.v1",
+          hasScanned: false,
+          reviewedSessions: 0,
+          ideasFound: 0,
+          hasMore: false,
+          lastScanReviewed: 0,
+          lastScanIdeas: 0,
+        };
+      }
+      return {};
+    });
+    const context = createContext(request);
+    const options = {
+      signal: new AbortController().signal,
+      shouldRun: () => true,
+      revalidating: false,
+      location: { pathname: "/skill-workshop", search: "", hash: "" },
+      deps: "",
+      cause: "navigation",
+    } satisfies RouteLoaderOptions;
+    if (!skillWorkshopRoute.loader) {
+      throw new Error("skill workshop route has no loader");
+    }
+
+    const first = (await skillWorkshopRoute.loader(context, options)) as SkillWorkshopRouteData;
+    const second = (await skillWorkshopRoute.loader(context, options)) as SkillWorkshopRouteData;
+    expect(callsFor(request, "skills.proposals.list")).toHaveLength(2);
+    expect(first.skillWorkshopProposals[0]?.status).toBe("pending");
+    expect(second.skillWorkshopProposals[0]?.status).toBe("stale");
+
+    const secondPage = document.createElement(
+      "openclaw-skill-workshop-page",
+    ) as SkillWorkshopPageTestElement;
+    secondPage.data = second;
+    secondPage.context = context;
+    document.body.append(secondPage);
+    await secondPage.updateComplete;
+
+    expect(secondPage.querySelector(".sw-action-bar .sw-btn--primary")).toBeNull();
   });
 
   it("does not issue duplicate list requests while a load is in flight", async () => {

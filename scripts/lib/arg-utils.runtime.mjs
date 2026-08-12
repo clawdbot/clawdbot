@@ -47,6 +47,9 @@
  *   onUnhandledArg?: (arg: string, args: T) => "handled" | void,
  * }} ParseOptions
  */
+/**
+ * @typedef {{ kind: "syntax" } | { kind: "below" } | { kind: "above" } | { kind: "value", value: number }} BoundedUnsignedDecimalResult
+ */
 /** @param {string} message */
 function failFlagParse(message) {
   throw new Error(message);
@@ -169,6 +172,57 @@ function readFlagOptionValue(argv, index, flag) {
     failFlagParse(`${flag} requires a value`);
   }
   return { nextIndex: index + 1, value };
+}
+/**
+ * Parse the exact lowercase Boolean language used by strict script arguments.
+ * @param {unknown} value
+ * @param {string} label
+ */
+export function parseStrictBooleanArg(value, label) {
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false") {
+    return false;
+  }
+  throw new Error(`${label} must be true or false.`);
+}
+/**
+ * Classify an ASCII unsigned-decimal token against inclusive bounds.
+ * @param {unknown} value
+ * @param {number} min
+ * @param {number} max
+ * @returns {BoundedUnsignedDecimalResult}
+ */
+export function classifyBoundedUnsignedDecimal(value, min, max) {
+  if (typeof value !== "string" || !/^\d+$/u.test(value)) {
+    return { kind: "syntax" };
+  }
+  const parsed = Number(value);
+  if (parsed < min) {
+    return { kind: "below" };
+  }
+  if (parsed > max) {
+    return { kind: "above" };
+  }
+  return { kind: "value", value: parsed };
+}
+const PERMISSIVE_BOOLEAN_TRUE_TOKENS = new Set(["1", "on", "true", "yes"]);
+const PERMISSIVE_BOOLEAN_FALSE_TOKENS = new Set(["0", "false", "no", "off"]);
+/**
+ * Parse the normalized Boolean token language shared by repository scripts.
+ * @param {unknown} value
+ * @returns {boolean | undefined}
+ */
+export function parsePermissiveBooleanToken(value) {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (!normalized) {
+    return undefined;
+  }
+  if (PERMISSIVE_BOOLEAN_TRUE_TOKENS.has(normalized)) {
+    return true;
+  }
+  return PERMISSIVE_BOOLEAN_FALSE_TOKENS.has(normalized) ? false : undefined;
 }
 /**
  * @param {string} raw

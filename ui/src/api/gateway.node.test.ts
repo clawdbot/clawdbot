@@ -18,7 +18,6 @@ import {
   readCloudSessionRecovery,
   writeCloudSessionRecovery,
 } from "../lib/sessions/cloud-recovery.ts";
-import { requestSessionCompanionAnswer } from "../pages/chat/chat-session-companion.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
@@ -457,7 +456,6 @@ describe("GatewayBrowserClient", () => {
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
       GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
       GATEWAY_CLIENT_CAPS.UI_COMMANDS,
-      GATEWAY_CLIENT_CAPS.SESSION_COMPANION_PROGRESS,
     ]);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
   });
@@ -720,7 +718,7 @@ describe("GatewayBrowserClient", () => {
     });
   });
 
-  it("correlates companion accepted progress with final and error responses", async () => {
+  it("settles a companion ask from one final response", async () => {
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
@@ -733,87 +731,24 @@ describe("GatewayBrowserClient", () => {
       payload: { type: "hello-ok", protocol: 4, auth: { role: "operator", scopes: [] } },
     });
 
-    const prepared = vi.fn();
-    const answer = requestSessionCompanionAnswer(
-      client,
-      "agent:main:main",
-      "What changed?",
-      prepared,
+    const answer = client.request(
+      "sessions.companion.ask",
+      { sessionKey: "agent:main:main", question: "What changed?" },
+      { timeoutMs: 70_000 },
     );
-    const answerFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string; method?: string };
-    expect(answerFrame.method).toBe("sessions.companion.ask");
-    ws.emitMessage({
-      type: "res",
-      id: answerFrame.id,
-      ok: true,
-      payload: { status: "accepted", empty: false },
-    });
-    expect(prepared).toHaveBeenCalledOnce();
-    ws.emitMessage({
-      type: "res",
-      id: answerFrame.id,
-      ok: true,
-      payload: { answer: "The fix changed.", ts: 4 },
-    });
-    await expect(answer).resolves.toEqual({ answer: "The fix changed.", ts: 4 });
-
-    const failedPrepared = vi.fn();
-    const failed = requestSessionCompanionAnswer(
-      client,
-      "agent:main:main",
-      "Retry?",
-      failedPrepared,
-    );
-    const failedFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string };
-    ws.emitMessage({
-      type: "res",
-      id: failedFrame.id,
-      ok: true,
-      payload: { status: "accepted", empty: false },
-    });
-    ws.emitMessage({
-      type: "res",
-      id: failedFrame.id,
-      ok: false,
-      error: {
-        code: "UNAVAILABLE",
-        message: "history unavailable",
-        details: { reason: "context-unavailable" },
-        retryable: true,
-      },
-    });
-    expect(failedPrepared).toHaveBeenCalledOnce();
-    await expect(failed).rejects.toMatchObject({
-      details: { reason: "context-unavailable" },
-      retryable: true,
-    });
-  });
-
-  it("accepts a legacy single final companion response without progress", async () => {
-    const client = new GatewayBrowserClient({
-      url: "ws://127.0.0.1:18789",
-      token: "shared-auth-token",
-    });
-    const { ws, connectFrame } = await startConnect(client);
-    ws.emitMessage({
-      type: "res",
-      id: connectFrame.id,
-      ok: true,
-      payload: { type: "hello-ok", protocol: 4, auth: { role: "operator", scopes: [] } },
-    });
-
-    const prepared = vi.fn();
-    const answer = requestSessionCompanionAnswer(client, "agent:main:main", "Legacy?", prepared);
-    const frame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string };
+    const frame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string; method?: string };
+    expect(frame.method).toBe("sessions.companion.ask");
     ws.emitMessage({
       type: "res",
       id: frame.id,
       ok: true,
-      payload: { answer: "Still works.", ts: 5 },
+      payload: { answer: "The companion was simplified.", ts: 4 },
     });
 
-    await expect(answer).resolves.toEqual({ answer: "Still works.", ts: 5 });
-    expect(prepared).not.toHaveBeenCalled();
+    await expect(answer).resolves.toEqual({
+      answer: "The companion was simplified.",
+      ts: 4,
+    });
   });
 
   it("tracks inbound activity and delegates forced reconnect to the shared socket", async () => {

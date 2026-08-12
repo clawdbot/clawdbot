@@ -19,7 +19,7 @@ Status: official downloadable plugin.
 ## Install
 
 ```bash
-openclaw plugins install @openclaw/qqbot
+openclaw plugins install @tencent-connect/openclaw-qqbot
 ```
 
 ## Setup

@@ -57,7 +57,7 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
 import type { SessionRailCommand, SessionRailMode } from "./components/chat-session-rail.ts";
 import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
-import { ChatTranscriptController } from "./components/chat-thread.ts";
+import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 
@@ -160,6 +160,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @litState() protected headerRenameValue = "";
   @litState() protected headerPlatform: string | null = null;
   @litState() protected headerCopiedAction: ChatPaneHeaderAction | null = null;
+  @litState() protected headerPlacementReclaimingKey: string | null = null;
   @litState() protected presencePayload: PresencePayload | undefined;
   @litState() protected sessionSharingStates = new Map<string, ChatSessionSharingState>();
   protected readonly sessionParticipationTracker = new SessionParticipationTracker();
@@ -251,24 +252,8 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       return;
     }
     const client = state.client;
-    const connectionGeneration = this.connectionGeneration;
-    await this.sessionCompanionThreads.submit(
-      sessionKey,
-      question,
-      (key, value, onPrepared) => requestSessionCompanionAnswer(client, key, value, onPrepared),
-      () =>
-        this.state === state &&
-        state.connected &&
-        state.client === client &&
-        state.sessionKey === sessionKey &&
-        this.connectionGeneration === connectionGeneration,
-      async (key) => {
-        const current = this.state;
-        if (!current?.connected || !current.client) {
-          throw new Error("Session companion connection is unavailable.");
-        }
-        return await requestSessionCompanionState(current.client, key);
-      },
+    await this.sessionCompanionThreads.submit(sessionKey, question, (key, value) =>
+      requestSessionCompanionAnswer(client, key, value),
     );
   };
 

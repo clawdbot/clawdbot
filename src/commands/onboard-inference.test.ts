@@ -4,8 +4,6 @@ import type { LocalCommandProbe } from "../system-agent/probes.js";
 import {
   ANTHROPIC_API_DEFAULT_MODEL_REF,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
-  CODEX_APP_SERVER_DEFAULT_MODEL_REF,
-  OPENAI_API_DEFAULT_MODEL_REF,
   detectInferenceBackends,
 } from "./onboard-inference.js";
 
@@ -17,11 +15,6 @@ function probeDeps(found: Record<string, boolean>) {
 }
 
 describe("detectInferenceBackends", () => {
-  it("uses canonical GPT-5.6 Sol defaults for direct API and Codex", () => {
-    expect(OPENAI_API_DEFAULT_MODEL_REF).toBe("openai/gpt-5.6-sol");
-    expect(CODEX_APP_SERVER_DEFAULT_MODEL_REF).toBe("openai/gpt-5.6-sol");
-  });
-
   it("returns nothing when no backend exists", async () => {
     const candidates = await detectInferenceBackends({
       env: {},
@@ -84,8 +77,8 @@ describe("detectInferenceBackends", () => {
     expect(candidates[0]?.modelRef).toBe("zai/glm-5.2");
     expect(candidates[0]?.detail).toBe("zai/glm-5.2 — already configured");
     expect(candidates[1]?.modelRef).toBe(CLAUDE_CLI_DEFAULT_MODEL_REF);
-    expect(candidates[2]?.modelRef).toBe(CODEX_APP_SERVER_DEFAULT_MODEL_REF);
-    expect(candidates[3]?.modelRef).toBe(OPENAI_API_DEFAULT_MODEL_REF);
+    expect(candidates[2]?.modelRef).toBe("openai/gpt-5.6-sol");
+    expect(candidates[3]?.modelRef).toBe("openai/gpt-5.6-sol");
     expect(candidates[4]?.modelRef).toBe(ANTHROPIC_API_DEFAULT_MODEL_REF);
   });
 
@@ -131,8 +124,48 @@ describe("detectInferenceBackends", () => {
       "anthropic-api-key",
       "claude-cli",
     ]);
-    expect(candidates[1]).toMatchObject({ credentials: true, detail: "logged in" });
+    expect(candidates[1]).toMatchObject({
+      credentials: true,
+      detail: "logged in · API key (usage-billed)",
+    });
   });
+
+  it("labels a Claude CLI environment key as usage-billed", async () => {
+    const candidates = await detectInferenceBackends({
+      env: { ANTHROPIC_API_KEY: "sk-y" },
+      platform: "linux",
+      deps: {
+        probeLocalCommand: probeDeps({ claude: true }),
+        readClaudeCliCredentials: () => null,
+      },
+    });
+
+    expect(candidates.find((candidate) => candidate.kind === "claude-cli")?.detail).toBe(
+      "logged in · API key (usage-billed)",
+    );
+  });
+
+  it.each(["oauth", "token"])(
+    "labels parsed Claude CLI %s credentials as a subscription",
+    async (type) => {
+      const candidates = await detectInferenceBackends({
+        env: {},
+        platform: "linux",
+        deps: {
+          probeLocalCommand: probeDeps({ claude: true }),
+          readClaudeCliCredentials: () => ({ type }),
+        },
+      });
+
+      expect(candidates).toMatchObject([
+        {
+          kind: "claude-cli",
+          credentials: true,
+          detail: "logged in · Claude subscription",
+        },
+      ]);
+    },
+  );
 
   it("keeps an Anthropic environment key ahead of unknown Claude credentials", async () => {
     const candidates = await detectInferenceBackends({
@@ -176,7 +209,7 @@ describe("detectInferenceBackends", () => {
         kind: "claude-cli",
         credentials: true,
         detail:
-          "logged in; Claude Code 2.1.206 is the first published build known to advertise msg_lifecycle_v1; found 2.1.205. OpenClaw verifies this capability at runtime. If this build is rejected, run `claude update`, restart OpenClaw, and retry.",
+          "logged in · Claude subscription; Claude Code 2.1.206 is the first published build known to advertise msg_lifecycle_v1; found 2.1.205. OpenClaw verifies this capability at runtime. If this build is rejected, run `claude update`, restart OpenClaw, and retry.",
       },
     ]);
   });
@@ -320,11 +353,19 @@ describe("detectInferenceBackends", () => {
     ).toBeUndefined();
   });
 
-  it("recognizes Codex login status across native credential stores", async () => {
+  it.each([
+    ["ChatGPT", "Logged in using ChatGPT", "logged in · ChatGPT subscription"],
+    [
+      "API key",
+      "Logged in using an API key - sk-proj-1***23456",
+      "logged in · API key (usage-billed)",
+    ],
+    ["unrecognized auth", "Logged in using access token", "logged in"],
+  ])("classifies Codex %s login status", async (_auth, loginOutput, expectedDetail) => {
     const probe = async (command: string, args: string[] = ["--version"]) => ({
       command,
       found: command === "codex",
-      ...(args[0] === "login" ? {} : { version: "codex 1.0" }),
+      version: args[0] === "login" ? loginOutput : "codex 1.0",
     });
     const candidates = await detectInferenceBackends({
       env: {},
@@ -335,7 +376,7 @@ describe("detectInferenceBackends", () => {
     });
 
     expect(candidates).toMatchObject([
-      { kind: "codex-cli", credentials: true, detail: "logged in" },
+      { kind: "codex-cli", credentials: true, detail: expectedDetail },
     ]);
   });
 

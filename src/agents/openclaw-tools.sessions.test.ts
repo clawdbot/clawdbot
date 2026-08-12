@@ -1164,6 +1164,9 @@ describe("sessions tools", () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as GatewayCall;
       calls.push(request);
+      if (request.method === "sessions.resolve") {
+        return { key: targetSessionKey };
+      }
       if (request.method === "agent") {
         return { runId: "run-scoped", status: "accepted", acceptedAt: 1 };
       }
@@ -1193,8 +1196,8 @@ describe("sessions tools", () => {
         watched: false,
       });
       expect(calls.map((call) => call.method)).toEqual([
-        "sessions.list",
         "sessions.resolve",
+        "sessions.list",
         "agent",
       ]);
     } finally {

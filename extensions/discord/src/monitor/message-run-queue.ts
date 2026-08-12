@@ -129,7 +129,9 @@ export function createDiscordMessageRunQueue(
         return;
       }
       skippedCleanup.add(cleanupSkipped);
-      runQueue.enqueue(job.queueKey, async ({ lifecycleSignal }) => {
+      // Core reply admission owns session serialization. A transport event key
+      // lets later Discord messages reach active-run steering while this run continues.
+      runQueue.enqueue(job.payload.message.id, async ({ lifecycleSignal }) => {
         // Once the task starts, normal process/commit handling owns cleanup.
         // Leaving it in skippedCleanup would double-release replay state.
         skippedCleanup.delete(cleanupSkipped);
