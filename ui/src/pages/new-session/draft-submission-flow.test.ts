@@ -31,6 +31,7 @@ describe("DraftSubmissionFlow", () => {
         }),
     );
     const navigate = vi.fn();
+    const preload = vi.fn(async () => undefined);
     const setSessionKey = vi.fn();
     const selectAgent = vi.fn();
     const client = {
@@ -79,6 +80,7 @@ describe("DraftSubmissionFlow", () => {
       cloudStartup: { start },
       config: { current: {} },
       navigate,
+      preload,
     } as unknown as ApplicationContext;
     const host = new ControllerHost();
     const gateway = new DraftGatewayState(
@@ -201,5 +203,6 @@ describe("DraftSubmissionFlow", () => {
     expect(setSessionKey).toHaveBeenCalledWith(start.mock.calls[0]?.[0].recovery.sessionKey);
     expect(selectAgent).toHaveBeenCalledWith("cloud");
     expect(navigate).toHaveBeenCalledOnce();
+    expect(preload).toHaveBeenCalledWith("chat");
   });
 });

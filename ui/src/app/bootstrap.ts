@@ -44,6 +44,7 @@ import { createNativeChatDrafts } from "./native-bridge.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
 import { createNativeNotificationsCapability } from "./native-notifications.ts";
 import { createApplicationOverlays } from "./overlays.ts";
+import { navigateWithRouteTransition } from "./route-transition.ts";
 import {
   loadSettings,
   patchSettings,
@@ -476,11 +477,16 @@ export function bootstrapApplication(
       if (!routerStarted) {
         pendingRouterStartNavigation = { routeId, location, mode: "push" };
       }
-      void router
-        .navigate(routeId, context, { history: "push" }, location)
-        .catch((error: unknown) => {
-          console.error("[openclaw] route navigation failed", error);
-        });
+      void navigateWithRouteTransition({
+        document,
+        from: router.getState().matches[0]?.routeId,
+        to: routeId,
+        prefersReducedMotion:
+          globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false,
+        navigate: () => router.navigate(routeId, context, { history: "push" }, location),
+      }).catch((error: unknown) => {
+        console.error("[openclaw] route navigation failed", error);
+      });
     },
     replace: (routeId, options) => {
       const location = routeLocation(routeId, options);

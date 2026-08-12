@@ -429,6 +429,16 @@ wa-popover.new-session-page__place-popover::part(body) {
   align-items: center;
 }
 
+.new-session-page__start-submit[aria-busy="true"] svg {
+  animation: new-session-start-spin 0.75s linear infinite;
+}
+
+@keyframes new-session-start-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
 .new-session-page__start-primary {
   width: 34px;
   min-width: 34px;
@@ -492,6 +502,10 @@ wa-dropdown.new-session-page__start-menu {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .new-session-page__start-submit[aria-busy="true"] svg {
+    animation: none;
+  }
+
   .new-session-page__composer::after,
   .new-session-page__composer > *,
   .new-session-page__visibility {

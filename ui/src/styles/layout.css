@@ -3677,6 +3677,52 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   min-height: 0;
 }
 
+html.session-route-transition .content--chat > openclaw-router-outlet {
+  view-transition-name: session-route;
+}
+
+/* Keep the shell chrome fixed; only the main routed pane participates. */
+html.session-route-transition::view-transition-old(root),
+html.session-route-transition::view-transition-new(root) {
+  animation: none;
+}
+
+html.session-route-transition::view-transition-old(session-route),
+html.session-route-transition::view-transition-new(session-route) {
+  mix-blend-mode: normal;
+  animation-duration: 180ms;
+  animation-timing-function: var(--ease-out);
+}
+
+html.session-route-transition::view-transition-old(session-route) {
+  animation-name: session-route-exit;
+}
+
+html.session-route-transition::view-transition-new(session-route) {
+  animation-name: session-route-enter;
+}
+
+@keyframes session-route-exit {
+  to {
+    opacity: 0;
+    transform: translateY(-3px) scale(0.997);
+  }
+}
+
+@keyframes session-route-enter {
+  from {
+    opacity: 0;
+    transform: translateY(5px) scale(0.997);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.session-route-transition::view-transition-old(session-route),
+  html.session-route-transition::view-transition-new(session-route) {
+    animation: none;
+  }
+}
+
 .content--custodian {
   display: flex;
   flex-direction: column;
