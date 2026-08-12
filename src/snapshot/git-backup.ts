@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { isPathInside } from "../infra/fs-safe.js";
+import { canonicalPathFromExistingAncestor, isPathInside } from "../infra/fs-safe.js";
 import {
   executeGitCommand as runGit,
   requireGitCommand as requireGit,
@@ -22,6 +22,7 @@ import { createOpenClawSnapshotCopy } from "./openclaw-snapshot-copy.js";
 import type { SnapshotDatabaseRef } from "./snapshot-provider.js";
 
 const GIT_BACKUP_MATERIALIZE_MAX_BYTES = 1024 * 1024 * 1024;
+const GIT_BACKUP_DIAGNOSTIC_MAX_LENGTH = 500;
 
 type GitBackupCreateResult = {
   repositoryPath: string;
@@ -31,6 +32,10 @@ type GitBackupCreateResult = {
   pushWarning?: string;
   manifests: GitBackupManifest[];
 };
+
+function sanitizeGitBackupDiagnostic(value: string): string {
+  return value.replace(/:\/\/[^@\s]+@/gu, "://***@").slice(0, GIT_BACKUP_DIAGNOSTIC_MAX_LENGTH);
+}
 
 async function assertGitRepository(repositoryPath: string, env?: NodeJS.ProcessEnv): Promise<void> {
   const topLevel = await requireGit(repositoryPath, ["rev-parse", "--show-toplevel"], { env });
@@ -52,7 +57,14 @@ export async function initializeGitBackupRepository(params: {
 }): Promise<{ repositoryPath: string }> {
   const repositoryPath = path.resolve(params.repositoryPath);
   const stateDir = path.resolve(params.stateDir);
-  if (isPathInside(stateDir, repositoryPath)) {
+  const [canonicalRepositoryPath, canonicalStateDir] = await Promise.all([
+    canonicalPathFromExistingAncestor(repositoryPath),
+    canonicalPathFromExistingAncestor(stateDir),
+  ]);
+  if (
+    isPathInside(canonicalStateDir, canonicalRepositoryPath) ||
+    isPathInside(canonicalRepositoryPath, canonicalStateDir)
+  ) {
     throw new Error(
       `Git backup repository must be outside the OpenClaw state directory: ${stateDir}`,
     );
@@ -163,10 +175,23 @@ export async function createGitBackup(params: {
   } finally {
     await fs.rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined);
   }
-  await requireGit(repositoryPath, ["add", "-A"], { env: params.gitEnv });
-  const changed = await requireGit(repositoryPath, ["status", "--porcelain"], {
+  // Keep both owned roots present so Git accepts both scoped pathspecs even on a first global-only
+  // or agent-only backup. Empty directories remain untracked.
+  await Promise.all(
+    ["global", "agents"].map(async (scope) =>
+      fs.mkdir(path.join(repositoryPath, scope), { recursive: true, mode: 0o700 }),
+    ),
+  );
+  await requireGit(repositoryPath, ["add", "-A", "--", "global", "agents"], {
     env: params.gitEnv,
   });
+  const changed = await requireGit(
+    repositoryPath,
+    ["status", "--porcelain", "--", "global", "agents"],
+    {
+      env: params.gitEnv,
+    },
+  );
   let commit: string | undefined;
   if (changed) {
     const now = params.now ?? new Date();
@@ -188,7 +213,9 @@ export async function createGitBackup(params: {
     if (pushedResult.code === 0) {
       pushed = true;
     } else {
-      pushWarning = (pushedResult.stderr || pushedResult.stdout).trim() || "git push failed";
+      pushWarning = sanitizeGitBackupDiagnostic(
+        (pushedResult.stderr || pushedResult.stdout).trim() || "git push failed",
+      );
     }
   }
   return {

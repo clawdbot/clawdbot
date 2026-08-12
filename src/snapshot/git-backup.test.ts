@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import { requireGitCommand as requireGit } from "../infra/git-exec.js";
 import {
@@ -14,6 +14,23 @@ import { createPathResolutionEnv } from "../test-utils/env.js";
 import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-codec.js";
 import { createGitBackup, initializeGitBackupRepository } from "./git-backup.js";
 
+const mocks = vi.hoisted(() => ({ pushDiagnostic: undefined as string | undefined }));
+
+vi.mock("../infra/git-exec.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/git-exec.js")>();
+  return {
+    ...actual,
+    executeGitCommand: async (
+      ...args: Parameters<typeof actual.executeGitCommand>
+    ): ReturnType<typeof actual.executeGitCommand> => {
+      if (args[1][0] === "push" && mocks.pushDiagnostic) {
+        return { code: 1, stdout: "", stderr: mocks.pushDiagnostic };
+      }
+      return await actual.executeGitCommand(...args);
+    },
+  };
+});
+
 const roots: string[] = [];
 
 async function tempRoot(): Promise<string> {
@@ -23,6 +40,7 @@ async function tempRoot(): Promise<string> {
 }
 
 afterEach(async () => {
+  mocks.pushDiagnostic = undefined;
   closeOpenClawStateDatabaseForTest();
   await Promise.all(
     roots.splice(0).map(async (root) => await fs.rm(root, { recursive: true, force: true })),
@@ -110,6 +128,24 @@ function createStateDatabaseFixture(root: string): {
 }
 
 describe("Git-backed SQLite snapshots", () => {
+  it("rejects state and repository overlap in either canonical direction", async () => {
+    const root = await fs.realpath(await tempRoot());
+    const stateDir = path.join(root, "state");
+    await fs.mkdir(stateDir, { recursive: true });
+    const stateAlias = path.join(root, "state-alias");
+    await fs.symlink(stateDir, stateAlias, process.platform === "win32" ? "junction" : "dir");
+
+    for (const repositoryPath of [
+      path.join(stateDir, "backup"),
+      root,
+      path.join(stateAlias, "backup"),
+    ]) {
+      await expect(initializeGitBackupRepository({ repositoryPath, stateDir })).rejects.toThrow(
+        `Git backup repository must be outside the OpenClaw state directory: ${stateDir}`,
+      );
+    }
+  });
+
   it("dumps byte-identical trees and skips a second unchanged create commit", async () => {
     const root = await tempRoot();
     const source = path.join(root, "source.sqlite");
@@ -142,6 +178,29 @@ describe("Git-backed SQLite snapshots", () => {
     expect(await requireGit(repositoryPath, ["rev-list", "--count", "HEAD"])).toBe("1");
   });
 
+  it("stages only backup-owned paths in an adopted repository", async () => {
+    const root = await tempRoot();
+    const { stateDir, database } = createStateDatabaseFixture(root);
+    const repositoryPath = path.join(root, "repository");
+    await initializeGitBackupRepository({ repositoryPath, stateDir });
+    await requireGit(repositoryPath, ["config", "user.name", "OpenClaw Backup Test"]);
+    await requireGit(repositoryPath, ["config", "user.email", "backup@example.invalid"]);
+    await fs.writeFile(path.join(repositoryPath, "unrelated.txt"), "operator-owned\n");
+
+    const created = await createGitBackup({ repositoryPath, stateDir, databases: [database] });
+    const unchanged = await createGitBackup({ repositoryPath, stateDir, databases: [database] });
+
+    expect(created.noChanges).toBe(false);
+    expect(unchanged.noChanges).toBe(true);
+    expect(await requireGit(repositoryPath, ["status", "--porcelain", "--", "unrelated.txt"])).toBe(
+      "?? unrelated.txt",
+    );
+    expect(
+      await requireGit(repositoryPath, ["ls-tree", "-r", "--name-only", "HEAD"]),
+    ).not.toContain("unrelated.txt");
+    expect(await requireGit(repositoryPath, ["rev-list", "--count", "HEAD"])).toBe("1");
+  });
+
   it("uses a commit-scoped fallback identity when Git has no configured email", async () => {
     const root = await tempRoot();
     const { stateDir, database } = createStateDatabaseFixture(root);
@@ -170,6 +229,31 @@ describe("Git-backed SQLite snapshots", () => {
         env: gitEnv,
       }).catch(() => undefined),
     ).toBeUndefined();
+  });
+
+  it("redacts and bounds credential-bearing push diagnostics", async () => {
+    const root = await tempRoot();
+    const { stateDir, database } = createStateDatabaseFixture(root);
+    const repositoryPath = path.join(root, "push-repository");
+    const username = ["synthetic", "user"].join("-");
+    const password = ["synthetic", "password"].join("-");
+    const remote = `https://${username}:${password}@example.invalid/repository`;
+    mocks.pushDiagnostic = `fatal: unable to access '${remote}': ${"x".repeat(600)}`;
+    await initializeGitBackupRepository({ repositoryPath, stateDir, remote });
+    await requireGit(repositoryPath, ["config", "user.name", "OpenClaw Backup Test"]);
+    await requireGit(repositoryPath, ["config", "user.email", "backup@example.invalid"]);
+
+    const result = await createGitBackup({
+      repositoryPath,
+      stateDir,
+      databases: [database],
+      push: true,
+    });
+
+    expect(result.pushWarning).toContain("https://***@example.invalid/repository");
+    expect(result.pushWarning).not.toContain(username);
+    expect(result.pushWarning).not.toContain(password);
+    expect(result.pushWarning?.length).toBeLessThanOrEqual(500);
   });
 
   it("round-trips losslessly, converges FTS, and omits derived vec and transcript state", async () => {
