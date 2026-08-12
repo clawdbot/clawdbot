@@ -153,7 +153,11 @@ export function createManagedLinuxDesktop(
       runPasswordTool?: typeof runCommandBuffered;
       sleep?: (ms: number) => Promise<void>;
       tempRoot?: string;
-      tryListenOnPort?: typeof tryListenOnPort;
+      tryListenOnPort?: (params: {
+        port: 0;
+        host: "127.0.0.1";
+        exclusive: true;
+      }) => Promise<number>;
       x11SocketDir?: string;
     };
   } = {},

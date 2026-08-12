@@ -6,15 +6,20 @@ import type { PortUsageStatus } from "./ports-types.js";
 const PORT_PROBE_HOSTS = ["127.0.0.1", "0.0.0.0", "::1", "::"];
 export const LOOPBACK_PORT_PROBE_HOSTS = ["127.0.0.1"] as const;
 
-/** Opens and closes a temporary listener, returning the bound port. */
-export async function tryListenOnPort(params: {
+type ListenOnPortParams = {
   /** TCP port to probe; `0` lets the OS allocate an available ephemeral port. */
   port: number;
   /** Optional host/interface to bind during the probe. */
   host?: string;
   /** Whether the probe should request an exclusive server handle from Node. */
   exclusive?: boolean;
-}): Promise<number> {
+};
+
+/** Opens and closes an ephemeral listener, returning the allocated port. */
+export function tryListenOnPort(params: ListenOnPortParams & { port: 0 }): Promise<number>;
+/** Opens and closes a temporary listener to verify that an explicit port can be bound. */
+export function tryListenOnPort(params: ListenOnPortParams): Promise<void>;
+export async function tryListenOnPort(params: ListenOnPortParams): Promise<number | void> {
   const listenOptions: net.ListenOptions = { port: params.port };
   if (params.host) {
     listenOptions.host = params.host;
@@ -22,7 +27,7 @@ export async function tryListenOnPort(params: {
   if (typeof params.exclusive === "boolean") {
     listenOptions.exclusive = params.exclusive;
   }
-  return await new Promise<number>((resolve, reject) => {
+  return await new Promise<number | void>((resolve, reject) => {
     const tester = net
       .createServer()
       .once("error", (err) => reject(err))
@@ -33,7 +38,7 @@ export async function tryListenOnPort(params: {
           return;
         }
         // Binding succeeded; close immediately so the real server can claim the same port.
-        tester.close(() => resolve(address.port));
+        tester.close(() => resolve(params.port === 0 ? address.port : undefined));
       })
       .listen(listenOptions);
   });

@@ -48,6 +48,9 @@ describe("tryListenOnPort", () => {
       throw err;
     }
     expect(port).toBeGreaterThan(0);
+    await expect(
+      tryListenOnPort({ port, host: "127.0.0.1", exclusive: true }),
+    ).resolves.toBeUndefined();
   });
 
   it("rejects when the port is already in use", async () => {
