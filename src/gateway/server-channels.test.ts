@@ -880,6 +880,56 @@ describe("server-channels auto restart", () => {
     expect(startAccount).toHaveBeenCalledTimes(1);
   });
 
+  it("restarts only running accounts after a host thaw", async () => {
+    const starts: string[] = [];
+    const stops: string[] = [];
+    installTestRegistry(
+      createTestPlugin({
+        listAccountIds: () => ["running", "manual"],
+        startAccount: async (context) => {
+          starts.push(context.accountId);
+          await new Promise<void>((resolve) => {
+            context.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+          });
+        },
+        stopAccount: async (context) => {
+          stops.push(context.accountId);
+        },
+      }),
+    );
+    const manager = createManager();
+    await manager.startChannels();
+    await vi.waitFor(() => expect(starts).toHaveLength(2));
+    await manager.stopChannel("discord", "manual");
+    starts.length = 0;
+    stops.length = 0;
+
+    await manager.restartRunningChannels();
+
+    expect(starts).toEqual(["running"]);
+    expect(stops).toEqual(["running"]);
+    expect(manager.isManuallyStopped("discord", "manual")).toBe(true);
+  });
+
+  it("completes a timed-out channel restart in one host-thaw pass", async () => {
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      abortSignal.addEventListener("abort", () => {}, { once: true });
+      await new Promise<void>(() => {});
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+    await manager.startChannels();
+
+    const restartTask = manager.restartRunningChannels();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await restartTask;
+
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    expect(account?.running).toBe(true);
+    expect(account?.restartPending).toBe(false);
+  });
+
   it("does not auto-restart a channel task exit marked as terminal disconnect", async () => {
     const lifecycleAtHandoff: Array<ChannelAccountSnapshot["lifecycle"]> = [];
     const startAccount = vi.fn(

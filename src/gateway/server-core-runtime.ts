@@ -26,7 +26,12 @@ import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation
 import type { prepareGatewayLifecycle } from "./server-lifecycle.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
-import { getHealthVersion, getPresenceVersion } from "./server/health-state.js";
+import {
+  getHealthVersion,
+  getPresenceVersion,
+  incrementPresenceVersion,
+} from "./server/health-state.js";
+import { broadcastPresenceSnapshot } from "./server/presence-events.js";
 
 type GatewayLifecycle = Awaited<ReturnType<typeof prepareGatewayLifecycle>>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
@@ -115,6 +120,7 @@ export async function startGatewayCoreRuntime(input: {
     kernel,
     startupTrace,
     channelManager,
+    readinessEventLoopHealth,
     workerDispatchAuthority,
     clients,
     startChannel,
@@ -168,6 +174,10 @@ export async function startGatewayCoreRuntime(input: {
         getPresenceVersion,
         getHealthVersion,
         refreshGatewayHealthSnapshot: refreshGatewayHealthSnapshotWithRuntime,
+        restartRunningChannels: channelManager.restartRunningChannels,
+        refreshPresence: () =>
+          broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion }),
+        resetEventLoopHealth: readinessEventLoopHealth.reset,
         logHealth,
         dedupe,
         chatAbortControllers,
