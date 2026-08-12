@@ -722,6 +722,9 @@ it on other network interfaces according to macOS Sharing settings.
   loopback hosts (`localhost`, `127.0.0.1`, or `[::1]`) during local development.
   Per-requester MCP OAuth requires this value and uses
   `<publicOrigin>/oauth/mcp/callback` as its callback URL.
+  Slack session-card actions and plugin-generated viewer links also use this
+  origin. Set `gateway.controlUi.basePath` separately when the Control UI is
+  served below a reverse-proxy path prefix.
 - `bind`: `auto`, `loopback` (default), `lan` (`0.0.0.0`), `tailnet` (Tailscale IPv4 when available, otherwise loopback), or `custom` (one IPv4 address). A resolved `tailnet` address and any `custom` address other than `127.0.0.1` or `0.0.0.0` require `127.0.0.1` on the same port for same-host clients; startup fails if either listener cannot bind. Non-loopback exposure remains limited to the selected interface.
 - **Legacy bind aliases**: use bind mode values in `gateway.bind` (`auto`, `loopback`, `lan`, `tailnet`, `custom`), not host aliases (`0.0.0.0`, `127.0.0.1`, `localhost`, `::`, `::1`).
 - **Docker note**: the default `loopback` bind listens on `127.0.0.1` inside the container. With Docker bridge networking (`-p 18789:18789`), traffic arrives on `eth0`, so the gateway is unreachable. Use `--network host`, or set `bind: "lan"` (or `bind: "custom"` with `customBindHost: "0.0.0.0"`) to listen on all interfaces.

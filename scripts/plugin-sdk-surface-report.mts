@@ -274,7 +274,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: QQBot 2.0.1 operator-approval Gateway client compatibility export.
       // +2: narrow channel agent-run terminal reader and outcome contract.
       // +5: narrow string, record, and error coercion helpers.
-      4878,
+      // +1: normalized Gateway public origin resolver for plugin-generated links.
+      4879,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -340,7 +341,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: QQBot 2.0.1 operator-approval Gateway client compatibility export.
       // +1: narrow channel agent-run terminal reader.
       // +5: narrow string, record, and error coercion helpers.
-      2931,
+      // +1: normalized Gateway public origin resolver for plugin-generated links.
+      2932,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

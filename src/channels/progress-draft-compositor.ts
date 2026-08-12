@@ -1,3 +1,5 @@
+import { readCompletedFileMutationDelta } from "../agents/file-mutation-args.js";
+import { resolveFileMutationToolName } from "../agents/tool-mutation-names.js";
 import {
   createChannelProgressDraftEventHandlers,
   type ChannelProgressDraftEventLineBuilder,
@@ -41,12 +43,22 @@ export const PROGRESS_STATUS_PREAMBLE_FRESH_MS = 20_000;
 // commentary updates. It owns draft lifecycle state before the final reply wins.
 type ChannelProgressDraftMode = StreamingMode;
 export type ChannelProgressDraftCompositorLine = string | ChannelProgressDraftLine;
+type ChannelProgressDraftDiffStat = Readonly<{
+  files: number;
+  added: number;
+  removed: number;
+}>;
 export type ChannelProgressDraftCompositorSnapshot = Readonly<{
   lines: readonly ChannelProgressDraftCompositorLine[];
   statusHeadline?: string;
   plan?: readonly AgentPlanStep[];
   planExplanation?: string;
+  diffStat?: ChannelProgressDraftDiffStat;
 }>;
+
+const MAX_TRACKED_MUTATION_FILES = 256;
+const MAX_PENDING_MUTATION_DIFFS = 64;
+type PendingMutationDelta = NonNullable<ReturnType<typeof readCompletedFileMutationDelta>>;
 
 type ChannelProgressDraftUpdateOptions = {
   flush?: boolean;
@@ -112,6 +124,7 @@ export function createChannelProgressDraftCompositor(params: {
   let lines: ChannelProgressDraftCompositorLine[] = [];
   let lastRenderedText = "";
   let lastRenderedLines = lines;
+  let lastRenderedDiffStatKey = "";
   let reasoningRawText = "";
   let lastReasoningLine: string | undefined;
   // Id-less commentary streams as cumulative snapshots ("Checking" → "Checking
@@ -127,6 +140,12 @@ export function createChannelProgressDraftCompositor(params: {
   let narrationText = "";
   let planSteps: AgentPlanStep[] | undefined;
   let planExplanation = "";
+  let hasCommittedDiff = false;
+  let mutationFiles = new Set<string>();
+  let mutationOverflowFiles = 0;
+  let mutationAdded = 0;
+  let mutationRemoved = 0;
+  let pendingMutationDiffs = new Map<string, PendingMutationDelta>();
   let finalReplyStarted = false;
   let finalReplyDelivered = false;
   let preambleExpiryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -174,13 +193,25 @@ export function createChannelProgressDraftCompositor(params: {
     });
   };
 
+  const resolveDiffStat = (): ChannelProgressDraftDiffStat | undefined => {
+    return hasCommittedDiff
+      ? {
+          files: mutationFiles.size + mutationOverflowFiles,
+          added: mutationAdded,
+          removed: mutationRemoved,
+        }
+      : undefined;
+  };
+
   const getSnapshot = (): ChannelProgressDraftCompositorSnapshot => {
     const statusHeadline = resolveStatusText();
+    const diffStat = resolveDiffStat();
     return {
       lines: lines.map((line) => (typeof line === "string" ? line : { ...line })),
       ...(statusHeadline ? { statusHeadline } : {}),
       ...(planSteps ? { plan: planSteps.map((entry) => ({ ...entry })) } : {}),
       ...(planExplanation ? { planExplanation } : {}),
+      ...(diffStat ? { diffStat } : {}),
     };
   };
 
@@ -190,6 +221,7 @@ export function createChannelProgressDraftCompositor(params: {
     lines = [];
     lastRenderedText = "";
     lastRenderedLines = lines;
+    lastRenderedDiffStatKey = "";
     reasoningRawText = "";
     lastReasoningLine = undefined;
     lastIdLessCommentaryId = undefined;
@@ -200,13 +232,90 @@ export function createChannelProgressDraftCompositor(params: {
     narrationText = "";
     planSteps = undefined;
     planExplanation = "";
+    hasCommittedDiff = false;
+    mutationFiles = new Set();
+    mutationOverflowFiles = 0;
+    mutationAdded = 0;
+    mutationRemoved = 0;
+    pendingMutationDiffs = new Map();
     lastStartRendered = false;
+  };
+
+  const stageFileMutation = (payload: {
+    toolCallId?: string;
+    name?: string;
+    phase?: string;
+    args?: Record<string, unknown>;
+  }) => {
+    if (
+      !params.active ||
+      params.mode !== "progress" ||
+      progressSuppressed ||
+      finalReplyStarted ||
+      finalReplyDelivered
+    ) {
+      return;
+    }
+    const toolCallId = payload.toolCallId?.trim();
+    if (payload.phase !== "start" || !toolCallId || !payload.name || !payload.args) {
+      return;
+    }
+    const kind = resolveFileMutationToolName(payload.name);
+    const delta = kind ? readCompletedFileMutationDelta(kind, payload.args) : undefined;
+    if (!delta) {
+      return;
+    }
+    if (
+      !pendingMutationDiffs.has(toolCallId) &&
+      pendingMutationDiffs.size >= MAX_PENDING_MUTATION_DIFFS
+    ) {
+      return;
+    }
+    pendingMutationDiffs.set(toolCallId, delta);
+  };
+
+  const commitFileMutation = (payload: {
+    toolCallId?: string;
+    phase?: string;
+    status?: string;
+  }) => {
+    const toolCallId = payload.toolCallId?.trim();
+    if (!toolCallId || payload.phase !== "end") {
+      return;
+    }
+    const delta = pendingMutationDiffs.get(toolCallId);
+    if (!delta) {
+      return;
+    }
+    pendingMutationDiffs.delete(toolCallId);
+    const status = payload.status?.trim().toLowerCase();
+    if (status === "failed" || status === "error") {
+      return;
+    }
+    hasCommittedDiff = true;
+    mutationAdded += delta.added;
+    mutationRemoved += delta.removed;
+    for (const file of delta.files) {
+      if (mutationFiles.has(file)) {
+        continue;
+      }
+      if (mutationFiles.size < MAX_TRACKED_MUTATION_FILES) {
+        mutationFiles.add(file);
+        continue;
+      }
+      // Overflow keeps file-count memory bounded. Repeated paths beyond the
+      // tracked window may count again, while line totals remain authoritative.
+      mutationOverflowFiles += 1;
+    }
   };
 
   const publish = async (options?: { flush?: boolean }): Promise<boolean> => {
     const text = formatDraftText();
-    const linesChanged = params.updateOnLineChange === true && lines !== lastRenderedLines;
-    if (!text || (text === lastRenderedText && !linesChanged)) {
+    const diffStatKey = JSON.stringify(resolveDiffStat() ?? null);
+    const structuredStateChanged =
+      params.updateOnLineChange === true &&
+      (lines !== lastRenderedLines || diffStatKey !== lastRenderedDiffStatKey);
+    if (!text || (text === lastRenderedText && !structuredStateChanged)) {
       return false;
     }
     const observed = await settleProgressVisibilityCallbackResult(
@@ -218,6 +327,7 @@ export function createChannelProgressDraftCompositor(params: {
     // Only accepted renders become the dedupe baseline; pending sends remain retryable.
     lastRenderedText = text;
     lastRenderedLines = lines;
+    lastRenderedDiffStatKey = diffStatKey;
     return true;
   };
 
@@ -337,7 +447,10 @@ export function createChannelProgressDraftCompositor(params: {
       : lines;
     const lineChanged = nextLines !== lines;
     const hasUnconfirmedRender = formatDraftText(nextLines) !== lastRenderedText;
-    if (shouldStoreLine && !lineChanged && !hasUnconfirmedRender) {
+    const diffStatChanged =
+      params.updateOnLineChange === true &&
+      JSON.stringify(resolveDiffStat() ?? null) !== lastRenderedDiffStatKey;
+    if (shouldStoreLine && !lineChanged && !hasUnconfirmedRender && !diffStatChanged) {
       return false;
     }
     // A work line lands between reasoning bursts: commit the current thinking
@@ -384,6 +497,8 @@ export function createChannelProgressDraftCompositor(params: {
   const progressEventHandlers = createChannelProgressDraftEventHandlers({
     entry: params.entry,
     pushLine: noteProgress,
+    onTool: stageFileMutation,
+    onItem: commitFileMutation,
     ...(params.buildProgressEventLine ? { buildLine: params.buildProgressEventLine } : {}),
   });
 

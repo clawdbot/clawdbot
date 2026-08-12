@@ -197,6 +197,25 @@ describe("createSlackDraftStream", () => {
     expect(stream.messageId()).toBe("333.444");
   });
 
+  it("rearms updates after sealing and finalizing the previous message", async () => {
+    const send = vi
+      .fn<DraftSendFn>()
+      .mockResolvedValueOnce(slackDraftSendResult("111.222"))
+      .mockResolvedValueOnce(slackDraftSendResult("333.444"));
+    const { stream } = createDraftStreamHarness({ send });
+
+    stream.update("first card");
+    await stream.flush();
+    await stream.seal();
+    await expect(stream.finalizeMessage("111.222", async () => {})).resolves.toBe(true);
+    stream.forceNewMessage();
+    stream.update("second card");
+    await stream.flush();
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(stream.messageId()).toBe("333.444");
+  });
+
   it("continues below a human message that interrupts an in-progress Slack reply", async () => {
     const accountId = "interrupted-reply";
     const send = vi
