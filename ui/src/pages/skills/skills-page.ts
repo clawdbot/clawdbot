@@ -74,6 +74,7 @@ class SkillsPage extends OpenClawLightDomElement {
   @state() clawhubSearchQuery = "";
   @state() clawhubDetail: ClawHubSkillDetail | null = null;
   @state() clawhubDetailSlug: string | null = null;
+  @state() clawhubDetailInstallRef: string | null = null;
   @state() clawhubDetailLoading = false;
   @state() clawhubDetailError: string | null = null;
   @state() clawhubInstallMessage: {
@@ -185,6 +186,7 @@ class SkillsPage extends OpenClawLightDomElement {
     this.debouncedClawHubSearchQuery = "";
     this.clawhubDetail = null;
     this.clawhubDetailSlug = null;
+    this.clawhubDetailInstallRef = null;
     this.clawhubDetailLoading = false;
     this.clawhubDetailError = null;
     this.clawhubInstallMessage = null;
@@ -407,6 +409,7 @@ class SkillsPage extends OpenClawLightDomElement {
             clawhubSearchError: this.clawhubSearchError,
             clawhubDetail: this.clawhubDetail,
             clawhubDetailSlug: this.clawhubDetailSlug,
+            clawhubDetailInstallRef: this.clawhubDetailInstallRef,
             clawhubDetailLoading: this.clawhubDetailLoading,
             clawhubDetailError: this.clawhubDetailError,
             clawhubInstallMessage: this.clawhubInstallMessage,
@@ -441,7 +444,8 @@ class SkillsPage extends OpenClawLightDomElement {
             onDetailClose: () => (this.skillsDetailKey = null),
             onDetailTabChange: (tab) => this.changeDetailTab(tab),
             onClawHubQueryChange: (query) => this.changeClawHubQuery(query),
-            onClawHubDetailOpen: (slug) => void loadClawHubDetail(this, slug),
+            onClawHubDetailOpen: (slug, installRef) =>
+              void loadClawHubDetail(this, slug, installRef),
             onClawHubDetailClose: () => closeClawHubDetail(this),
             onClawHubInstall: (slug, acknowledgeClawHubRisk, version) => {
               if (this.canInstallSkills()) {

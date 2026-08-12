@@ -98,6 +98,7 @@ function createProps(overrides: Partial<SkillsProps> = {}): SkillsProps {
     clawhubSearchError: null,
     clawhubDetail: null,
     clawhubDetailSlug: null,
+    clawhubDetailInstallRef: null,
     clawhubDetailLoading: false,
     clawhubDetailError: null,
     clawhubInstallMessage: null,
@@ -761,7 +762,7 @@ describe("renderSkills", () => {
     installButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onClawHubDetailOpen).toHaveBeenCalledTimes(1);
-    expect(onClawHubDetailOpen).toHaveBeenCalledWith("github");
+    expect(onClawHubDetailOpen).toHaveBeenCalledWith("github", undefined);
     expect(onClawHubInstall).toHaveBeenCalledTimes(1);
     expect(onClawHubInstall).toHaveBeenCalledWith("github");
 
@@ -792,7 +793,10 @@ describe("renderSkills", () => {
     container.querySelector<HTMLButtonElement>(".plugins-item__detail-button")!.click();
     container.querySelector<HTMLButtonElement>(".plugins-item .btn.btn--sm")!.click();
     // Detail should use @owner/slug, never skills-sh: refs.
-    expect(onClawHubDetailOpen).toHaveBeenCalledWith("@openclaw/weather");
+    expect(onClawHubDetailOpen).toHaveBeenCalledWith(
+      "@openclaw/weather",
+      "skills-sh:openclaw/skills/weather",
+    );
     // Install should use the full skills-sh: installRef.
     expect(onClawHubInstall).toHaveBeenCalledWith("skills-sh:openclaw/skills/weather");
 

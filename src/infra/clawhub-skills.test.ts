@@ -76,7 +76,7 @@ describe("clawhub skills", () => {
           { headers: { "content-type": "application/json" } },
         ),
     });
-    expect(results[0]!.ownerHandle).toBeUndefined();
+    expect("ownerHandle" in results[0]!).toBe(false);
     expect(results[1]!.ownerHandle).toBe("alice");
   });
 

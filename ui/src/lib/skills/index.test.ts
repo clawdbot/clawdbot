@@ -71,6 +71,7 @@ function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<T
     clawhubSearchError: "old error",
     clawhubDetail: null,
     clawhubDetailSlug: null,
+    clawhubDetailInstallRef: null,
     clawhubDetailLoading: false,
     clawhubDetailError: null,
     clawhubInstallMessage: null,

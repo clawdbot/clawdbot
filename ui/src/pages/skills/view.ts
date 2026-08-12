@@ -82,6 +82,7 @@ type SkillsProps = {
   clawhubSearchError: string | null;
   clawhubDetail: ClawHubSkillDetail | null;
   clawhubDetailSlug: string | null;
+  clawhubDetailInstallRef: string | null;
   clawhubDetailLoading: boolean;
   clawhubDetailError: string | null;
   clawhubInstallMessage: {
@@ -103,7 +104,7 @@ type SkillsProps = {
   onDetailClose: () => void;
   onDetailTabChange: (tab: SkillDetailTab) => void;
   onClawHubQueryChange: (query: string) => void;
-  onClawHubDetailOpen: (slug: string) => void;
+  onClawHubDetailOpen: (slug: string, installRef?: string) => void;
   onClawHubDetailClose: () => void;
   onClawHubInstall: (slug: string, acknowledgeClawHubRisk?: boolean, version?: string) => void;
 };
@@ -465,7 +466,11 @@ function renderClawHubResults(props: SkillsProps) {
             type="button"
             class="settings-row__text plugins-item__detail-button clawhub-skill-result__button"
             aria-label=${t("skillsPage.openDetails", { name: r.displayName })}
-            @click=${() => props.onClawHubDetailOpen(detailRef)}
+            @click=${() =>
+              props.onClawHubDetailOpen(
+                detailRef,
+                installRef !== detailRef ? installRef : undefined,
+              )}
           >
             ${iconUrl
               ? html`<img class="clawhub-skill-icon" src=${iconUrl} alt="" loading="lazy" />`
@@ -567,7 +572,9 @@ function renderClawHubDetailDialog(props: SkillsProps) {
                       ?disabled=${skillInstallLocked(props)}
                       @click=${() => {
                         if (props.clawhubDetailSlug) {
-                          props.onClawHubInstall(props.clawhubDetailSlug);
+                          props.onClawHubInstall(
+                            props.clawhubDetailInstallRef ?? props.clawhubDetailSlug,
+                          );
                         }
                       }}
                     >

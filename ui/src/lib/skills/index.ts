@@ -92,6 +92,7 @@ type SkillsState = {
   clawhubSearchError: string | null;
   clawhubDetail: ClawHubSkillDetail | null;
   clawhubDetailSlug: string | null;
+  clawhubDetailInstallRef: string | null;
   clawhubDetailLoading: boolean;
   clawhubDetailError: string | null;
   clawhubInstallMessage: {
@@ -637,13 +638,14 @@ export async function installSkill(
   });
 }
 
-export async function loadClawHubDetail(state: SkillsState, slug: string) {
+export async function loadClawHubDetail(state: SkillsState, slug: string, installRef?: string) {
   if (!state.client || !state.connected) {
     return;
   }
   const client = state.client;
   const agentScope = captureSkillsAgentScope(state);
   state.clawhubDetailSlug = slug;
+  state.clawhubDetailInstallRef = installRef ?? null;
   state.clawhubDetailLoading = true;
   state.clawhubDetailError = null;
   state.clawhubDetail = null;
@@ -668,6 +670,7 @@ export async function loadClawHubDetail(state: SkillsState, slug: string) {
 
 export function closeClawHubDetail(state: SkillsState) {
   state.clawhubDetailSlug = null;
+  state.clawhubDetailInstallRef = null;
   state.clawhubDetail = null;
   state.clawhubDetailError = null;
   state.clawhubDetailLoading = false;
