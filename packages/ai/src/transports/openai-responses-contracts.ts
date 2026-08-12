@@ -91,7 +91,11 @@ export type OpenAIResponsesOptions = BaseOpenAIStreamOptions & {
 const PROMPT_OBSERVER = Symbol("openaiResponsesPromptObserver");
 export type ResponsesPromptObservation = {
   egress: "responses-sdk" | "responses-websocket" | "native-codex-websocket" | "native-codex-sse";
-  payloadVariant: "initial" | "reasoning-stripped" | "compaction-stripped";
+  payloadVariant:
+    | "initial"
+    | "reasoning-stripped"
+    | "compaction-stripped"
+    | "continuation-rejected";
   promptSource: "instructions" | "input.developer" | "input.system" | "missing";
   expectedChars: number;
   observedChars: number;
@@ -131,6 +135,7 @@ export type OpenAIResponsesRequestParams = {
   prompt_cache_key?: string;
   prompt_cache_retention?: "24h";
   metadata?: Record<string, string>;
+  previous_response_id?: string;
   store?: boolean;
   max_output_tokens?: number;
   temperature?: number;
