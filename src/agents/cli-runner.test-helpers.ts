@@ -141,6 +141,7 @@ export type PreparedCliRunContextOverrides = {
   executionMode?: PreparedCliRunContext["params"]["executionMode"];
   cliToolAvailability?: PreparedCliRunContext["params"]["cliToolAvailability"];
   emitCommentaryText?: boolean;
+  workspaceAgentId?: string;
   workspaceDir?: string;
   systemPrompt?: string;
   timeoutMs?: number;
@@ -226,6 +227,7 @@ export function buildPreparedCliRunContext(
       skillsSnapshot: overrides.skillsSnapshot,
     },
     started: Date.now(),
+    workspaceAgentId: overrides.workspaceAgentId ?? overrides.agentId ?? "main",
     workspaceDir,
     backendResolved: {
       id: provider,

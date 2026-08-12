@@ -306,6 +306,8 @@ export type PreparedCliRunContext = {
   authProfileStore?: AuthProfileStore;
   agentDir?: string;
   started: number;
+  /** Agent owner frozen when the run workspace is resolved. */
+  workspaceAgentId: string;
   workspaceDir: string;
   cwd?: string;
   backendResolved: ResolvedCliBackend;

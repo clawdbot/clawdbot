@@ -76,6 +76,7 @@ function createRunContext(params: {
       ...(params.signal ? { abortSignal: params.signal } : {}),
     },
     started: Date.now(),
+    workspaceAgentId: "main",
     workspaceDir: "/tmp",
     backendResolved: {
       id: "test-cli",

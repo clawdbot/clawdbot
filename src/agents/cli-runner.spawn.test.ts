@@ -144,7 +144,7 @@ async function createCliPackageFixture(version: string): Promise<{
 }
 
 describe("runCliAgent spawn path", () => {
-  it("hydrates an active agent workspace image before spawning the CLI", async () => {
+  it("hydrates a session-key-owned agent workspace image before spawning the CLI", async () => {
     const stateDir = tempDirs.make("openclaw-cli-agent-image-");
     const workspaceDir = path.join(stateDir, "workspace-arthur");
     const imagePath = path.join(workspaceDir, "media", "inbound", "photo.png");
@@ -154,7 +154,8 @@ describe("runCliAgent spawn path", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     mockSuccessfulCliRun(CLAUDE_OK_JSONL);
     const context = buildPreparedCliRunContext({
-      agentId: "arthur",
+      sessionKey: "agent:arthur:main",
+      workspaceAgentId: "arthur",
       workspaceDir,
       config: {
         agents: { entries: { arthur: { default: true, workspace: workspaceDir } } },
@@ -742,6 +743,7 @@ describe("runCliAgent spawn path", () => {
         extraSystemPrompt: "You are a helpful assistant.",
       },
       started: Date.now(),
+      workspaceAgentId: "main",
       workspaceDir: "/tmp",
       backendResolved: {
         id: "claude-cli",

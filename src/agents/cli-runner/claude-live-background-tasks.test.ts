@@ -81,6 +81,7 @@ function buildPreparedCliRunContext(params: {
       runId: params.runId,
     },
     started: Date.now(),
+    workspaceAgentId: "main",
     workspaceDir: "/tmp",
     backendResolved: {
       id: "claude-cli",

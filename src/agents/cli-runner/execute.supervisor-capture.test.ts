@@ -110,6 +110,7 @@ function buildPreparedCliRunContext(params: {
       runId,
     },
     started: Date.now(),
+    workspaceAgentId: "main",
     workspaceDir: "/tmp",
     backendResolved: {
       id: provider,

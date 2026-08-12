@@ -419,6 +419,27 @@ describe("prepareCliRunContext", () => {
     fixture.cleanup();
   });
 
+  it("freezes the session-key-derived agent as the prepared workspace owner", async () => {
+    const { dir } = fixture.session;
+    const arthurWorkspace = path.join(dir, "workspace-arthur");
+    const context = await fixture.prepare({
+      sessionKey: "agent:arthur:main",
+      workspaceDir: arthurWorkspace,
+      config: {
+        agents: {
+          list: [
+            { id: "main", default: true, workspace: path.join(dir, "workspace-main") },
+            { id: "arthur", workspace: arthurWorkspace },
+          ],
+        },
+      },
+    });
+
+    expect(context.params.agentId).toBeUndefined();
+    expect(context.workspaceAgentId).toBe("arthur");
+    expect(context.workspaceDir).toBe(arthurWorkspace);
+  });
+
   it("honors an explicit auth agent directory independently of session identity", async () => {
     const { dir } = fixture.session;
     const modelOwnerAgentDir = path.join(dir, "ops-agent");

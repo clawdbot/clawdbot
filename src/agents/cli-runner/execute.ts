@@ -186,7 +186,7 @@ export async function executePreparedCliRun(
         prompt,
         imagePrompt: params.imagePrompt,
         workspaceDir: context.workspaceDir,
-        localRoots: getAgentScopedMediaLocalRoots(params.config ?? {}, params.agentId),
+        localRoots: getAgentScopedMediaLocalRoots(params.config ?? {}, context.workspaceAgentId),
         images: params.images,
         imageOrder: params.imageOrder,
         media: params.media,
