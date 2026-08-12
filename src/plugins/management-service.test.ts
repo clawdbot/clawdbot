@@ -215,7 +215,12 @@ const hostedDiffsEntry = {
   description: "Hosted description",
   openclaw: {
     plugin: { id: "diffs", label: "Hosted Diffs" },
-    install: { clawhubSpec: "clawhub:@openclaw/diffs", defaultChoice: "clawhub" },
+    install: {
+      clawhubSpec: "clawhub:@openclaw/diffs",
+      npmSpec: "@openclaw/diffs@2.0.0",
+      defaultChoice: "npm",
+      expectedIntegrity: "sha512-ZGlmZnM=",
+    },
   },
 };
 
@@ -753,53 +758,51 @@ describe("plugin management service", () => {
     expect(result.plugin.id).toBe("bluebubbles");
   });
 
-  it("keeps the runtime-id pin when a declared id equals the package name", async () => {
+  it("does not send npm integrity to explicit managed ClawHub installs", async () => {
     mocks.readConfig.mockResolvedValue(configSnapshot());
-    // An unscoped package can legitimately declare its package name as the runtime id.
-    mockHostedOfficialCatalog([
-      {
-        id: "sonos",
-        title: "Sonos",
-        state: "available",
-        publisher: { id: "openclaw", trust: "official" },
-        openclaw: { plugin: { id: "sonos" } },
-        install: { candidates: [{ sourceRef: "public-clawhub", package: "sonos" }] },
-      },
-    ]);
-    mockClawHubInstall("impostor", "sonos");
+    mockHostedOfficialCatalog([hostedDiffsEntry]);
+    mockClawHubInstall("impostor", "@openclaw/diffs");
 
     await expect(
       installManagedPlugin({
-        request: { source: "clawhub", packageName: "sonos", acknowledgeClawHubRisk: true },
-        env: {},
+        request: {
+          source: "clawhub",
+          packageName: "@openclaw/diffs",
+          acknowledgeClawHubRisk: true,
+        },
       }),
-    ).rejects.toThrow("expected sonos, got impostor");
+    ).rejects.toThrow("expected diffs, got impostor");
     expect(mocks.clawhubInstall).toHaveBeenCalledWith(
-      expect.objectContaining({ expectedPluginId: "sonos" }),
+      expect.objectContaining({ expectedPluginId: "diffs" }),
+    );
+    expect(mocks.clawhubInstall).toHaveBeenCalledWith(
+      expect.not.objectContaining({ expectedIntegrity: expect.anything() }),
     );
   });
 
-  it("threads hosted ClawHub candidate integrity into official installs", async () => {
+  it("uses the declared npm default for dual-source official installs", async () => {
     mocks.readConfig.mockResolvedValue(configSnapshot());
-    mockHostedOfficialCatalog([hostedFeedDiffsEntry]);
-    mockClawHubInstall("diffs", "@openclaw/diffs");
-    mocks.persistInstall.mockResolvedValue({});
-    mocks.metadata.mockReturnValue(
-      metadataSnapshot({ enabled: true, id: "diffs", name: "Diffs", origin: "global" }),
-    );
-
-    await installManagedPlugin({
-      request: { source: "official", pluginId: "diffs" },
-      env: {},
+    mockHostedOfficialCatalog([hostedDiffsEntry]);
+    mocks.npmInstall.mockResolvedValue({
+      ok: true,
+      pluginId: "impostor",
+      targetDir: "/tmp/extensions/impostor",
     });
 
-    expect(mocks.clawhubInstall).toHaveBeenCalledWith(
+    await expect(
+      installManagedPlugin({
+        request: { source: "official", pluginId: "diffs" },
+        env: {},
+      }),
+    ).rejects.toThrow("expected diffs, got impostor");
+    expect(mocks.npmInstall).toHaveBeenCalledWith(
       expect.objectContaining({
-        spec: "clawhub:@openclaw/diffs@2026.6.11",
+        spec: "@openclaw/diffs@2.0.0",
         expectedPluginId: "diffs",
-        expectedIntegrity: `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`,
+        expectedIntegrity: "sha512-ZGlmZnM=",
       }),
     );
+    expect(mocks.clawhubInstall).not.toHaveBeenCalled();
   });
 
   it("removes only the newly installed managed target after persistence conflicts", async () => {

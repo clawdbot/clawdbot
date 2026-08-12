@@ -1564,6 +1564,7 @@
                   "providers/sglang",
                   "providers/stepfun",
                   "providers/synthetic",
+                  "providers/telnyx",
                   "providers/tencent",
                   "providers/together",
                   "providers/venice",
