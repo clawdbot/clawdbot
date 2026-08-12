@@ -3651,6 +3651,9 @@ describe("runPreparedReply media-only handling", () => {
         ...createInboundBody("report queued reactions"),
         SystemEventSessionKey: "agent:main:slack:channel:c123",
       },
+      provider: "",
+      model: "",
+      resolvedThinkLevel: "off",
       sessionKey: "agent:main:slack:channel:c123:thread:123.456",
     });
 
