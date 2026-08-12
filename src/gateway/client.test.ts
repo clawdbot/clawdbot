@@ -1162,7 +1162,7 @@ describe("GatewayClient message dispatch", () => {
 
 describe("GatewayClient connect auth payload", () => {
   beforeEach(() => {
-    vi.useRealTimers();
+    vi.useFakeTimers();
     wsInstances.length = 0;
     clearDeviceAuthTokenMock.mockReset();
     clearOriginDeviceTokenMock.mockReset();
@@ -1219,6 +1219,13 @@ describe("GatewayClient connect auth payload", () => {
 
   function connectRequestFrom(ws: MockWebSocket) {
     return parseConnectRequest(ws);
+  }
+
+  async function advanceToNextReconnect(): Promise<MockWebSocket> {
+    const previousCount = wsInstances.length;
+    await vi.advanceTimersToNextTimerAsync();
+    expect(wsInstances).toHaveLength(previousCount + 1);
+    return getLatestWs();
   }
 
   type ProtocolCompatibilityOptions = Pick<
@@ -1401,8 +1408,7 @@ describe("GatewayClient connect auth payload", () => {
         { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
         "protocol mismatch",
       );
-      await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(1), { timeout: 3_000 });
-      const legacyWs = getLatestWs();
+      const legacyWs = await advanceToNextReconnect();
       legacyWs.emitOpen();
       emitConnectChallenge(legacyWs, "nonce-v3");
       const legacyConnect = connectRequestFrom(legacyWs);
@@ -1454,8 +1460,7 @@ describe("GatewayClient connect auth payload", () => {
       { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
       "protocol mismatch",
     );
-    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(1), { timeout: 3_000 });
-    const v3Ws = getLatestWs();
+    const v3Ws = await advanceToNextReconnect();
     v3Ws.emitOpen();
     emitConnectChallenge(v3Ws, "nonce-v3-initial");
     const v3Connect = connectRequestFrom(v3Ws);
@@ -1463,8 +1468,7 @@ describe("GatewayClient connect auth payload", () => {
     await waitForFast(() => expect(onHelloOk).toHaveBeenCalledOnce());
 
     v3Ws.emitClose(1012, "gateway restarting after upgrade");
-    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(2), { timeout: 3_000 });
-    const upgradedProbeWs = getLatestWs();
+    const upgradedProbeWs = await advanceToNextReconnect();
     upgradedProbeWs.emitOpen();
     emitConnectChallenge(upgradedProbeWs, "nonce-v3-upgraded");
     const upgradedProbeConnect = connectRequestFrom(upgradedProbeWs);
@@ -1479,9 +1483,8 @@ describe("GatewayClient connect auth payload", () => {
       "protocol mismatch",
     );
 
-    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(3), { timeout: 3_000 });
+    const currentReconnectWs = await advanceToNextReconnect();
     expect(onHelloOk).toHaveBeenCalledOnce();
-    const currentReconnectWs = getLatestWs();
     currentReconnectWs.emitOpen();
     emitConnectChallenge(currentReconnectWs, "nonce-v4-upgraded");
     const currentReconnect = connectRequestFrom(currentReconnectWs);
@@ -1494,8 +1497,7 @@ describe("GatewayClient connect auth payload", () => {
     await waitForFast(() => expect(onHelloOk).toHaveBeenCalledTimes(2));
 
     currentReconnectWs.emitClose(1012, "gateway rolled back");
-    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(4), { timeout: 3_000 });
-    const rolledBackProbeWs = getLatestWs();
+    const rolledBackProbeWs = await advanceToNextReconnect();
     rolledBackProbeWs.emitOpen();
     emitConnectChallenge(rolledBackProbeWs, "nonce-v4-rolled-back");
     const rolledBackProbeConnect = connectRequestFrom(rolledBackProbeWs);
@@ -1509,8 +1511,7 @@ describe("GatewayClient connect auth payload", () => {
       { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
       "protocol mismatch",
     );
-    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(5), { timeout: 3_000 });
-    const rolledBackLegacyWs = getLatestWs();
+    const rolledBackLegacyWs = await advanceToNextReconnect();
     rolledBackLegacyWs.emitOpen();
     emitConnectChallenge(rolledBackLegacyWs, "nonce-v3-rolled-back");
     expect(connectRequestFrom(rolledBackLegacyWs).params).toMatchObject({
@@ -1561,8 +1562,7 @@ describe("GatewayClient connect auth payload", () => {
       { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
       "protocol mismatch",
     );
-    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(1), { timeout: 3_000 });
-    const v3Ws = getLatestWs();
+    const v3Ws = await advanceToNextReconnect();
     v3Ws.emitOpen();
     emitConnectChallenge(v3Ws, "nonce-v3-ready");
     const v3Connect = connectRequestFrom(v3Ws);
@@ -1570,8 +1570,7 @@ describe("GatewayClient connect auth payload", () => {
     await waitForFast(() => expect(onHelloOk).toHaveBeenCalledOnce());
 
     v3Ws.emitClose(1012, "gateway upgrading");
-    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(2), { timeout: 3_000 });
-    const v3UpgradeProbeWs = getLatestWs();
+    const v3UpgradeProbeWs = await advanceToNextReconnect();
     v3UpgradeProbeWs.emitOpen();
     emitConnectChallenge(v3UpgradeProbeWs, "nonce-v3-upgrade-probe");
     const v3UpgradeProbe = connectRequestFrom(v3UpgradeProbeWs);
@@ -1582,8 +1581,7 @@ describe("GatewayClient connect auth payload", () => {
       "protocol mismatch",
     );
 
-    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(3), { timeout: 3_000 });
-    const v4Ws = getLatestWs();
+    const v4Ws = await advanceToNextReconnect();
     v4Ws.emitOpen();
     emitConnectChallenge(v4Ws, "nonce-v4-before-rollback");
     const v4Connect = connectRequestFrom(v4Ws);
@@ -1594,8 +1592,7 @@ describe("GatewayClient connect auth payload", () => {
       "protocol mismatch",
     );
 
-    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(4), { timeout: 3_000 });
-    const recoveredV3Ws = getLatestWs();
+    const recoveredV3Ws = await advanceToNextReconnect();
     recoveredV3Ws.emitOpen();
     emitConnectChallenge(recoveredV3Ws, "nonce-v3-after-rollback");
     expect(connectRequestFrom(recoveredV3Ws).params).toMatchObject({
@@ -1880,8 +1877,7 @@ describe("GatewayClient connect auth payload", () => {
       params.failureDetails,
       params.failureMessage,
     );
-    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(1), { timeout: 3_000 });
-    const ws = getLatestWs();
+    const ws = await advanceToNextReconnect();
     ws.emitOpen();
     emitConnectChallenge(ws, "nonce-2");
     return connectFrameFrom(ws);
@@ -2458,8 +2454,7 @@ describe("GatewayClient connect auth payload", () => {
     emitHelloOk(ws, connect.id);
     await waitForFast(() => expect(onHelloOk).toHaveBeenCalledOnce());
     ws.emitClose(1006, "socket lost");
-    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(1), { timeout: 3_000 });
-    const reconnect = getLatestWs();
+    const reconnect = await advanceToNextReconnect();
     reconnect.emitOpen();
     emitConnectChallenge(reconnect, "nonce-reconnect");
     expect(connectFrameFrom(reconnect)).toMatchObject({
