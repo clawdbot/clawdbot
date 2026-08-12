@@ -78,9 +78,9 @@ export type BackgroundTasksHost = {
   requestUpdate?: () => void;
 };
 
-// Bounded like the Tasks page: active tasks get their own query because the
-// ledger pages newest-first and long-running work can hide behind newer
-// terminal records on the first page.
+// The chat rail stays bounded to its session while the full Tasks page drains
+// every active page. A separate active query still keeps long-running work
+// from hiding behind newer terminal records here.
 const ACTIVE_TASKS_LIMIT = 200;
 const RECENT_TASKS_LIMIT = 100;
 
@@ -255,10 +255,10 @@ function loadBackgroundTasks(
         }),
         client.request("tasks.list", { sessionKey, limit: RECENT_TASKS_LIMIT }),
       ]);
-      const active = normalizeTasksListResult(activePayload)?.map((task) =>
+      const active = normalizeTasksListResult(activePayload)?.tasks.map((task) =>
         prepareTaskSnapshot(state, task),
       );
-      const recent = normalizeTasksListResult(recentPayload)?.map((task) =>
+      const recent = normalizeTasksListResult(recentPayload)?.tasks.map((task) =>
         prepareTaskSnapshot(state, task),
       );
       if (!active || !recent) {

@@ -172,10 +172,10 @@ describe("memory manager mistral provider wiring", () => {
       };
       const remote = {
         baseUrl: "https://primary-openai.invalid/v1",
-        apiKey: "synthetic-primary-openai-api-key",
+        apiKey: "test-key",
         headers: {
-          Authorization: "Bearer synthetic-primary-openai-auth",
-          "X-OpenAI-Secret": "synthetic-primary-openai-header",
+          Authorization: "Bearer test-secret",
+          "X-OpenAI-Secret": "test-token",
         },
         ...sharedRemote,
       };

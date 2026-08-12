@@ -321,7 +321,8 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/auto-reply/reply/commands-status.test.ts", 12],
   ["src/auto-reply/reply/commands-system-prompt.test.ts", 8],
   ["src/scripts/test-projects.test.ts", 21],
-  ["test/scripts/bench-sqlite-reliability.test.ts", 9],
+  // Focused cold proof is ~34s after right-sizing and concurrent crash phases.
+  ["test/scripts/bench-sqlite-reliability.test.ts", 34],
   ["test/scripts/bundled-plugin-install-uninstall-probe.test.ts", 4],
   ["test/scripts/changed-lanes.test.ts", 5],
   ["test/scripts/ci-workflow-guards.test.ts", 12],
