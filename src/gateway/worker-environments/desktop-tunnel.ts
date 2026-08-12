@@ -106,7 +106,7 @@ export function createWorkerDesktopTunnels(deps: {
   };
 
   const fenceReplacedOwners = async (environmentId: string, ownerEpoch: number): Promise<void> => {
-    await sessions.stop(environmentId);
+    await sessions.stopSuperseded(environmentId, ownerEpoch);
     const staleLaunches = [...appLaunches.values()].filter(
       (entry) => entry.environmentId === environmentId && entry.ownerEpoch < ownerEpoch,
     );

@@ -224,6 +224,17 @@ export function createDesktopSessionRegistry(
     }
   }
 
+  /**
+   * Retires only owners strictly older than the claimant. An equal epoch shares the
+   * session, so fencing must not tear down a peer that claimed the same generation.
+   */
+  async function stopSuperseded(sourceKey: string, ownerEpoch: number): Promise<void> {
+    const entry = entries.get(sourceKey);
+    if (entry && entry.ownerEpoch < ownerEpoch) {
+      await stopEntry(entry);
+    }
+  }
+
   async function stopAll(): Promise<void> {
     await Promise.all([...entries.values()].map(stopEntry));
   }
@@ -235,6 +246,7 @@ export function createDesktopSessionRegistry(
     isOwnerEpochCurrent: (sourceKey: string, ownerEpoch: number) =>
       claimedOwnerEpochs.get(sourceKey) === ownerEpoch,
     stop,
+    stopSuperseded,
     stopAll,
   };
 }
