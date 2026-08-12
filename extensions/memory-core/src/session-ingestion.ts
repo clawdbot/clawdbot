@@ -151,7 +151,7 @@ function normalizeSessionCorpusSnippet(value: string): string {
 }
 
 const ASSISTANT_PROCESS_CHATTER_BODY_RE =
-  /^(?:(?:Need(?: to)?|Now) (?:commit|inspect|merge|poll|push)(?: PR(?: #\d+)?)?\.?|Oops worktree maybe not created yet due first command still running\. poll\.?|(?:Commit|Inspect|Merge|Poll|Push)\.?)$/i;
+  /^(?:(?:Need(?: to)?|Now) (?:commit|inspect|merge|poll|push)(?: PR)?\.?|Oops worktree maybe not created yet due first command still running\. poll\.?|(?:Commit|Inspect|Merge|Poll|Push)\.?)$/i;
 
 function isAssistantProcessChatter(value: string): boolean {
   if (!value.startsWith("Assistant:")) {

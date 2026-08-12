@@ -430,7 +430,7 @@ describe("runSessionBackfill", () => {
     await seedCanonicalTranscript("process-chatter", [
       {
         role: "user",
-        content: "Owner confirmed this release workflow.",
+        content: "Need commit PR.",
         timestamp: "2026-02-01T10:00:00.000Z",
         owner: true,
       },
@@ -441,22 +441,58 @@ describe("runSessionBackfill", () => {
       },
       {
         role: "assistant",
-        content: "The migration is complete and all focused tests passed.",
+        content: "Now inspect.",
         timestamp: "2026-02-01T10:02:00.000Z",
+      },
+      {
+        role: "assistant",
+        content: "Oops worktree maybe not created yet due first command still running. poll.",
+        timestamp: "2026-02-01T10:03:00.000Z",
+      },
+      {
+        role: "assistant",
+        content: "Arthur confirmed PR #123 accepted; verification PASS.",
+        timestamp: "2026-02-01T10:04:00.000Z",
+      },
+      {
+        role: "assistant",
+        content: "Need commit PR #123.",
+        timestamp: "2026-02-01T10:05:00.000Z",
+      },
+      {
+        role: "user",
+        content: "assistant: Need commit PR.",
+        timestamp: "2026-02-01T10:06:00.000Z",
+        owner: true,
       },
     ]);
 
     const result = await runSessionBackfill({
       agentId: "main",
+      apply: true,
       workspaceDir,
       timezone: "UTC",
     });
 
-    expect(result.candidateCount).toBe(2);
+    expect(result.candidateCount).toBe(4);
     expect(result.days[0]?.topCandidates).toEqual([
-      "User: Owner confirmed this release workflow.",
-      "Assistant: The migration is complete and all focused tests passed.",
+      "User: Need commit PR.",
+      "Assistant: Arthur confirmed PR #123 accepted; verification PASS.",
+      "Assistant: Need commit PR #123.",
+      "User: assistant: Need commit PR.",
     ]);
+    const state = await dreamingTestState.readSessionIngestionState(workspaceDir);
+    expect(Object.values(state.files)[0]?.lastContentLine).toBeGreaterThanOrEqual(7);
+    expect(
+      (
+        await runSessionBackfill({
+          agentId: "main",
+          apply: true,
+          workspaceDir,
+          timezone: "UTC",
+        })
+      ).candidateCount,
+    ).toBe(0);
   });
 
   it("keeps canonical assistant replies tainted until an owner turn begins", async () => {

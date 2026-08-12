@@ -36,13 +36,28 @@ describe("session ingestion", () => {
       { role: "assistant", content: "Now inspect.", timestamp: "2026-04-05T18:01:00.000Z" },
       {
         role: "assistant",
-        content: "The migration is complete and all focused tests passed.",
+        content: "Oops worktree maybe not created yet due first command still running. poll.",
         timestamp: "2026-04-05T18:02:00.000Z",
       },
       {
-        role: "user",
-        content: "Need commit PR before the release.",
+        role: "assistant",
+        content: "Arthur confirmed PR #123 accepted; verification PASS.",
         timestamp: "2026-04-05T18:03:00.000Z",
+      },
+      {
+        role: "assistant",
+        content: "Need commit PR #123.",
+        timestamp: "2026-04-05T18:04:00.000Z",
+      },
+      {
+        role: "user",
+        content: "Need commit PR.",
+        timestamp: "2026-04-05T18:05:00.000Z",
+      },
+      {
+        role: "user",
+        content: "assistant: Need commit PR.",
+        timestamp: "2026-04-05T18:06:00.000Z",
       },
     ];
     await fs.writeFile(
@@ -59,19 +74,32 @@ describe("session ingestion", () => {
         .join("\n")}\n`,
     );
 
+    const source = foreignSessionIngestionSource("main", archiveFile);
     const result = await scanSessionIngestionSource({
-      source: foreignSessionIngestionSource("main", archiveFile),
+      source,
       seenMessages: {},
       verifyContent: true,
       classifyDay: () => "include",
     });
 
     expect(result.candidates.map((candidate) => candidate.snippet)).toEqual([
-      "Assistant: The migration is complete and all focused tests passed.",
-      "User: Need commit PR before the release.",
+      "Assistant: Arthur confirmed PR #123 accepted; verification PASS.",
+      "Assistant: Need commit PR #123.",
+      "User: Need commit PR.",
+      "User: assistant: Need commit PR.",
     ]);
-    expect(result.fileState?.lastContentLine).toBe(4);
-    expect(result.scannedEndIndex).toBe(4);
+    expect(result.fileState?.lastContentLine).toBe(messages.length);
+    expect(result.scannedEndIndex).toBe(messages.length);
+
+    const duplicate = await scanSessionIngestionSource({
+      source,
+      seenMessages: { [source.scope]: result.candidates.map((candidate) => candidate.hash) },
+      verifyContent: true,
+      classifyDay: () => "include",
+    });
+
+    expect(duplicate.candidates).toEqual([]);
+    expect(duplicate.scannedEndIndex).toBe(messages.length);
   });
 
   it("verifies backfill content despite an unchanged size and mtime", async () => {
