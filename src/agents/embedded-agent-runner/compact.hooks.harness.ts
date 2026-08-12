@@ -653,6 +653,7 @@ export async function loadCompactHooksHarness(): Promise<{
     getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
     resolvePluginMetadataControlPlaneFingerprint: vi.fn(() => "test-plugin-fingerprint"),
     setCurrentPluginMetadataSnapshot: vi.fn(),
+    withPluginMetadataSnapshotScope: (_snapshot: unknown, run: () => unknown) => run(),
   }));
 
   vi.doMock("../../plugins/command-registry-state.js", () => {

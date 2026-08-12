@@ -3,7 +3,7 @@
  */
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
@@ -336,10 +336,7 @@ export async function compactEmbeddedAgentSessionDirect(
       });
       return fallbackResult.result;
     };
-    return await withPluginRuntimeRegistryScope(
-      preparedModelRuntime.pluginRegistry,
-      compactPrepared,
-    );
+    return await withPluginRuntimeGenerationScope(preparedModelRuntime, compactPrepared);
   } catch (err) {
     return fallbackFailureToCompactionResult(err);
   } finally {

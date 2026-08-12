@@ -15,12 +15,13 @@ import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
 } from "../../plugins/before-agent-reply.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
 } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import {
@@ -226,8 +227,15 @@ async function runEmbeddedAgentInternal(
           agentId: requestedWorkspaceResolution.agentId,
           sessionKey: params.sessionKey,
         });
+      const currentPluginMetadataSnapshot = getCurrentPluginMetadataSnapshot({
+        config,
+        workspaceDir: requestedWorkspaceResolution.workspaceDir,
+        env: process.env,
+        allowWorkspaceScopedSnapshot: true,
+      });
       const runtimePluginSelections = resolveModelCandidateChain({
         cfg: config,
+        manifestPlugins: currentPluginMetadataSnapshot?.plugins,
         provider: requestedRuntimeSelection.provider,
         model: requestedRuntimeSelection.modelId,
         requestedRouteResolution: "resolved",
@@ -424,10 +432,7 @@ async function runEmbeddedAgentInternal(
             preparedModelRuntime,
           });
         };
-        return await withPluginRuntimeRegistryScope(
-          preparedModelRuntime.pluginRegistry,
-          runPrepared,
-        );
+        return await withPluginRuntimeGenerationScope(preparedModelRuntime, runPrepared);
       } finally {
         preparedModelRuntimeLease.release();
       }

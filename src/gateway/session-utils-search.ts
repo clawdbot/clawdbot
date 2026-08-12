@@ -153,9 +153,10 @@ type LoadGatewaySessionRowOptions = {
   transcriptUsageMaxBytes?: number;
 };
 
-export function loadGatewaySessionLifecycleSnapshot(
+function loadGatewaySessionSnapshot(
   sessionKey: string,
   options?: LoadGatewaySessionRowOptions,
+  lightweight = false,
 ): { lifecycleRunId?: string; row: GatewaySessionRow | null } {
   const now = options?.now ?? Date.now();
   const { cfg, storePath, store, entry, canonicalKey } = loadGatewaySessionEntryReadOnly(
@@ -189,16 +190,25 @@ export function loadGatewaySessionLifecycleSnapshot(
       includeLastMessage: options?.includeLastMessage,
       transcriptUsageMaxBytes: options?.transcriptUsageMaxBytes,
       storeChildSessionsByKey,
+      skipTranscriptUsageFallback: lightweight,
+      lightweightListRow: lightweight,
       ...(options?.agentId ? { agentId: options.agentId } : {}),
     }),
   };
+}
+
+export function loadGatewaySessionLifecycleSnapshot(
+  sessionKey: string,
+  options?: LoadGatewaySessionRowOptions,
+): { lifecycleRunId?: string; row: GatewaySessionRow | null } {
+  return loadGatewaySessionSnapshot(sessionKey, options, true);
 }
 
 export function loadGatewaySessionRow(
   sessionKey: string,
   options?: LoadGatewaySessionRowOptions,
 ): GatewaySessionRow | null {
-  return loadGatewaySessionLifecycleSnapshot(sessionKey, options).row;
+  return loadGatewaySessionSnapshot(sessionKey, options).row;
 }
 
 export function buildGatewaySessionInfo(params: {

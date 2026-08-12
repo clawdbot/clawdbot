@@ -16,6 +16,11 @@ import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGenerationScope,
+} from "./runtime/gateway-request-scope.js";
 
 function createSnapshot(
   params: {
@@ -158,6 +163,26 @@ describe("current plugin metadata snapshot", () => {
         workspaceDir: "/workspace/global",
       }),
     ).toBe(globalSnapshot);
+  });
+
+  it("carries prepared metadata and registry as one runtime generation", async () => {
+    const config = { plugins: { allow: ["scoped"] } };
+    const workspaceDir = "/workspace/scoped";
+    const metadataSnapshot = createSnapshot({ config, workspaceDir });
+    const pluginRegistry = createEmptyPluginRegistry();
+    setCurrentPluginMetadataSnapshot(undefined);
+
+    await withPluginRuntimeGenerationScope(
+      { config, metadataSnapshot, pluginRegistry, workspaceDir },
+      async () => {
+        await Promise.resolve();
+        expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir })).toBe(metadataSnapshot);
+        expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(pluginRegistry);
+      },
+    );
+
+    expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir })).toBeUndefined();
+    expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
   });
 
   it("lets configless nested readers inherit explicit owner discovery context", () => {

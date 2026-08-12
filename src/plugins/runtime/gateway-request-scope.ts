@@ -1,10 +1,13 @@
 // Gateway request scope tracks request-local plugin runtime context across async work.
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   GatewayRequestContext,
   GatewayRequestOptions,
 } from "../../gateway/server-methods/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { withPluginMetadataSnapshotScope } from "../current-plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "../plugin-origin.types.js";
 import type { PluginRegistry } from "../registry-types.js";
 
@@ -60,6 +63,26 @@ export function withPluginRuntimeRegistryScope<T>(
   return pluginRuntimeGatewayRequestScope.run(
     { isWebchatConnect: () => false, ...current, pluginRegistry: registry },
     run,
+  );
+}
+
+/** Carries one prepared plugin generation through all nested runtime lookups. */
+export function withPluginRuntimeGenerationScope<T>(
+  generation: {
+    config: OpenClawConfig;
+    metadataSnapshot: PluginMetadataSnapshot;
+    pluginRegistry?: PluginRegistry;
+    workspaceDir?: string;
+  },
+  run: () => T,
+): T {
+  return withPluginMetadataSnapshotScope(
+    generation.metadataSnapshot,
+    () => withPluginRuntimeRegistryScope(generation.pluginRegistry, run),
+    {
+      config: generation.config,
+      ...(generation.workspaceDir ? { workspaceDir: generation.workspaceDir } : {}),
+    },
   );
 }
 

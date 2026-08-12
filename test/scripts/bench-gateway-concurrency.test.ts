@@ -128,6 +128,7 @@ describe("gateway concurrency benchmark script", () => {
     const sample = {
       controlUi: [],
       durationMs: 10,
+      pluginMetadataScans: { count: 0, durationMs: null, totalDurationMs: 0 },
       probeWarmup: { durationMs: 2, samples: [] },
       readyz: [],
       sessionsList: [],
