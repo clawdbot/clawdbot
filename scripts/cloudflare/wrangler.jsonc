@@ -45,9 +45,8 @@
       "image": "docker.io/<docker-hub-user>/openclaw-cloudflare@sha256:<derived-image-digest>",
       "instance_type": "standard-2",
       "max_instances": 1,
-      "ssh": {
-        "enabled": true,
-      },
+      // For debugging you can add `"ssh": { "enabled": true }` to allow
+      // wrangler-mediated SSH for accounts with container write access.
     },
   ],
 }
