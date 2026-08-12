@@ -37,17 +37,15 @@ export const SUPPORTED_LOCALES = [
 export type OpenClawLocale = (typeof SUPPORTED_LOCALES)[number];
 
 export const LOCALE_REGISTRY_REVISION =
-  "sha256:deae03e1e938e2e34234e03418859df676b17547e4d2a31262926f2165b529b5";
+  "sha256:f1fc485ce67ea02b74c69e63e648da3fddc51e276d507a2eeb21d49a18898207";
 
 export const LOCALE_REGISTRY: readonly LocaleRegistration[] = [
   locale("en", "English", { aliases: ["en-US"], inferredLanguageDefault: true }),
   locale("zh-CN", "Chinese (Simplified)", {
-    aliases: ["zh", "zh-Hans", "zh-Hans-CN", "zh-Hans-SG", "zh-Hans-HK", "zh-Hans-TW", "zh-SG"],
+    aliases: ["zh", "zh-Hans", "zh-SG"],
     inferredLanguageDefault: true,
   }),
-  locale("zh-TW", "Chinese (Traditional)", {
-    aliases: ["zh-Hant", "zh-Hant-TW", "zh-Hant-HK", "zh-Hant-MO", "zh-HK", "zh-MO"],
-  }),
+  locale("zh-TW", "Chinese (Traditional)", { aliases: ["zh-Hant", "zh-HK", "zh-MO"] }),
   // Preserve the Control UI's shipped `pt-*` inference behavior. This explicit
   // registry rule is intentionally cross-region; it must not emerge implicitly.
   locale("pt-BR", "Portuguese (Brazil)", { inferredLanguageDefault: true }),
@@ -150,7 +148,20 @@ export function matchExactOpenClawLocale(
     return null;
   }
   const localeId = EXACT_LOCALE_LOOKUP.get(normalized.toLowerCase());
-  return localeId && supportedLocales.includes(localeId) ? localeId : null;
+  if (localeId && supportedLocales.includes(localeId)) {
+    return localeId;
+  }
+
+  // Preserve the wizard's established explicit Chinese script matching, but
+  // require a valid canonical BCP 47 tag rather than matching arbitrary text.
+  const parsed = new Intl.Locale(normalized);
+  if (parsed.language === "zh" && parsed.script === "Hans") {
+    return supportedLocales.includes("zh-CN") ? "zh-CN" : null;
+  }
+  if (parsed.language === "zh" && parsed.script === "Hant") {
+    return supportedLocales.includes("zh-TW") ? "zh-TW" : null;
+  }
+  return null;
 }
 
 export function matchInferredOpenClawLocale(

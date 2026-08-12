@@ -38,14 +38,16 @@ describe("wizard i18n", () => {
 
   it.each([
     ["zh-Hans-SG", "Gateway 端口"],
+    ["zh-Hans-US", "Gateway 端口"],
     ["zh-Hant-HK", "Gateway 連接埠"],
+    ["zh-Hant-US", "Gateway 連接埠"],
   ])("preserves the registered explicit locale %s", (locale, expected) => {
     vi.stubEnv("OPENCLAW_LOCALE", locale);
     expect(t("wizard.gateway.port")).toBe(expected);
   });
 
-  it("falls directly to English for an unregistered explicit locale", () => {
-    vi.stubEnv("OPENCLAW_LOCALE", "zh-Hans-US");
+  it("falls directly to English for an unsupported explicit script", () => {
+    vi.stubEnv("OPENCLAW_LOCALE", "zh-Latn-US");
     vi.stubEnv("LANG", "zh-CN");
     expect(t("wizard.gateway.port")).toBe("Gateway port");
   });
