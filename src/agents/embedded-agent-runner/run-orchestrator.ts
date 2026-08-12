@@ -269,9 +269,9 @@ async function runEmbeddedAgentInternal(
             ? acquireReadOnlyPreparedModelRuntime(preparedInput)
             : acquireAgentRunPreparedModelRuntime(preparedInput, {
                 retainIdleRunOwner,
-                // A one-shot turn needs only configured turn-admission facts. Full live model
-                // inventory remains available through the snapshot's lazy control-plane loader.
-                ...(params.oneShotCliRun ? { catalogMode: "static" } : {}),
+                // Turns need only configured admission facts. Full live model inventory remains
+                // available through the snapshot's lazy control-plane loader.
+                catalogMode: "static",
               }),
       );
       startupStages.mark("prepared-runtime");
