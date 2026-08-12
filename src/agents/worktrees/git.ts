@@ -5,7 +5,6 @@ import {
   createGitCommandError,
   executeGitCommand,
   requireGitCommand,
-  requireGitCommandBuffer,
   requireGitCommandRaw,
 } from "../../infra/git-exec.js";
 
@@ -44,14 +43,6 @@ export async function requireGit(
 
 export async function requireGitRaw(cwd: string, args: string[]): Promise<string> {
   return await requireGitCommandRaw(cwd, args);
-}
-
-export async function requireGitBuffer(
-  cwd: string,
-  args: string[],
-  options: { env?: NodeJS.ProcessEnv; input?: Uint8Array } = {},
-): Promise<Buffer> {
-  return await requireGitCommandBuffer(cwd, args, options);
 }
 
 function parseWorktreeList(output: string): WorktreeListEntry[] {
