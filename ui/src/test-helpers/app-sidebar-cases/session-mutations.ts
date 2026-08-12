@@ -14,6 +14,7 @@ import {
 import {
   answerConfirmDialog,
   installDialogPolyfill,
+  submitInputDialog,
   waitForConfirmDialogActions,
 } from "../modal-dialog.ts";
 import { waitForFast } from "../wait-for.ts";
@@ -436,5 +437,52 @@ describe("AppSidebar session mutation feedback", () => {
       expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull(),
     );
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("opens the owned rename dialog from the Rename menu item without native prompts", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockImplementation(() => true);
+    const promptSpy = vi.spyOn(window, "prompt").mockImplementation(() => "ignored");
+    try {
+      const { harness, sidebar } = await mountMutationHarness();
+      const menu = await openSessionMenu(sidebar, "agent:main:a");
+      menu.querySelector<HTMLElement>('[value="rename"]')?.click();
+      await waitForFast(() => {
+        expect(document.body.querySelector('input[name="value"]')).toBeInstanceOf(HTMLInputElement);
+      });
+      expect(confirmSpy).not.toHaveBeenCalled();
+      expect(promptSpy).not.toHaveBeenCalled();
+      await submitInputDialog("Renamed from menu");
+      await waitForFast(() =>
+        expect(harness.patch).toHaveBeenCalledWith(
+          "agent:main:a",
+          { label: "Renamed from menu" },
+          expect.objectContaining({ agentId: "main" }),
+        ),
+      );
+    } finally {
+      confirmSpy.mockRestore();
+      promptSpy.mockRestore();
+    }
+  });
+
+  it("opens the owned delete confirm from the Delete menu item without native prompts", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockImplementation(() => true);
+    const promptSpy = vi.spyOn(window, "prompt").mockImplementation(() => "ignored");
+    const restoreDialogPolyfill = installDialogPolyfill();
+    try {
+      const { harness, sidebar } = await mountMutationHarness();
+      harness.deleteSession.mockResolvedValueOnce({ deleted: true });
+      const menu = await openSessionMenu(sidebar, "agent:main:a");
+      menu.querySelector<HTMLElement>('[value="delete"]')?.click();
+      const actions = await waitForConfirmDialogActions();
+      expect(confirmSpy).not.toHaveBeenCalled();
+      expect(promptSpy).not.toHaveBeenCalled();
+      answerConfirmDialog(actions, "confirm");
+      await waitForFast(() => expect(harness.deleteSession).toHaveBeenCalledOnce());
+    } finally {
+      restoreDialogPolyfill();
+      confirmSpy.mockRestore();
+      promptSpy.mockRestore();
+    }
   });
 });

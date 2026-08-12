@@ -33,11 +33,27 @@ import {
   type SidebarSessionPatch,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
+import type { ApplicationContext } from "../app/context.ts";
+import { loadSettings, patchSettings } from "../app/settings.ts";
+import type { RouteId } from "../app-route-paths.ts";
+import { showConfirmDialog, type ConfirmDialogSkipPreference } from "./confirm-dialog.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 
 type SessionOrganizerOperations = typeof import("./session-organizer-operations.runtime.ts");
 type InputDialogOpener = (typeof import("./input-dialog.ts"))["showInputDialog"];
+
+function sidebarSessionDeleteSkipPreference(
+  context: ApplicationContext<RouteId>,
+): ConfirmDialogSkipPreference {
+  return {
+    skipped: loadSettings().sessionDeleteConfirm === false,
+    remember: () => {
+      patchSettings({ sessionDeleteConfirm: false });
+      context.theme.refresh();
+    },
+  };
+}
 
 export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
   readonly sessionData: Pick<
@@ -196,14 +212,28 @@ export class SessionOrganizerController implements ReactiveController {
   }
 
   async deleteSession(session: SidebarRecentSession): Promise<void> {
+    const context = this.host.sessionData.context;
+    if (!context) {
+      return;
+    }
+    // Match rename: confirm in the owned dialog before capturing a mutation
+    // scope or loading operations, so desktop webviews never depend on native
+    // confirm and a stale scope cannot suppress the prompt entirely.
+    const confirmed = await showConfirmDialog({
+      message: t("sessionsView.deleteSessionConfirm", { session: session.label }),
+      confirmLabel: t("common.delete"),
+      danger: true,
+      skipPreference: sidebarSessionDeleteSkipPreference(context),
+    });
+    if (!confirmed) {
+      return;
+    }
     const scope = this.host.sessionData.beginSessionMutation();
     if (!scope) {
       return;
     }
     const operations = await this.loadOperations(scope);
-    // Sidebar is the surface the delete-confirm setting names, so it is the one
-    // caller allowed to offer the opt-out.
-    await operations?.deleteSession(this.host, session, scope, { offerSkip: true });
+    await operations?.deleteSession(this.host, session, scope, { skipConfirm: true });
   }
 
   startSidebarRouteDrag(event: DragEvent, route: SidebarNavRoute) {

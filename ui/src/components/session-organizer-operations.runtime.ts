@@ -246,8 +246,8 @@ async function restoreArchivedSessions(
  * deliberately get none: the first is a rare shared-resource action and the
  * second destroys the only copy of uncommitted work.
  */
-function sessionDeleteSkipPreference(
-  scope: SidebarSessionMutationScope,
+export function sessionDeleteSkipPreference(
+  scope: Pick<SidebarSessionMutationScope, "context">,
 ): ConfirmDialogSkipPreference {
   return {
     skipped: loadSettings().sessionDeleteConfirm === false,
@@ -535,15 +535,21 @@ export async function deleteSession(
   scope: SidebarSessionMutationScope,
   // The chat header shares this operation, so the opt-out is opt-in per caller:
   // only the sidebar the setting names may offer it, and the default keeps asking.
-  options: { offerSkip?: boolean } = {},
+  // Sidebar confirms before capturing a mutation scope; callers that already
+  // confirmed pass skipConfirm so the owned dialog is not shown twice.
+  options: { offerSkip?: boolean; skipConfirm?: boolean } = {},
 ) {
-  const confirmed = await showConfirmDialog({
-    message: t("sessionsView.deleteSessionConfirm", { session: session.label }),
-    confirmLabel: t("common.delete"),
-    danger: true,
-    ...(options.offerSkip ? { skipPreference: sessionDeleteSkipPreference(scope) } : {}),
-  });
-  if (!confirmed || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  if (!options.skipConfirm) {
+    const confirmed = await showConfirmDialog({
+      message: t("sessionsView.deleteSessionConfirm", { session: session.label }),
+      confirmLabel: t("common.delete"),
+      danger: true,
+      ...(options.offerSkip ? { skipPreference: sessionDeleteSkipPreference(scope) } : {}),
+    });
+    if (!confirmed || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      return;
+    }
+  } else if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
   const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
