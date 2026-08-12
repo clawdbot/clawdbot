@@ -36,7 +36,7 @@ function shouldEmitSlackReactionNotification(params: {
       id: event.user,
       name: actorName,
       allowNameMatching: ctx.allowNameMatching,
-      allowUnscoped: ctx.installationIdentity.kind !== "enterprise",
+      allowUnscoped: ctx.installationIdentity?.kind !== "enterprise",
     });
   }
   return ctx.reactionMode === "all";

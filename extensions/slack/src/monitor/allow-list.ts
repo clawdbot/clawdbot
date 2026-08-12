@@ -152,6 +152,9 @@ export function resolveSlackUserAllowListForTeam(params: {
   const allowList = normalizeAllowListLower(params.allowList);
   const teamId = normalizeOptionalLowercaseString(params.teamId);
   return allowList.flatMap((entry) => {
+    if (entry === "*") {
+      return [entry];
+    }
     if (!entry.startsWith("team:")) {
       return params.allowUnscoped === true || params.preserveUnmatchedScopedEntries ? [entry] : [];
     }

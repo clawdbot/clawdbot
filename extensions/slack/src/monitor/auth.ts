@@ -200,7 +200,7 @@ function buildBaseAllowFrom(ctx: SlackMonitorContext, teamId?: string): string[]
   return resolveSlackUserAllowListForTeam({
     allowList: ctx.allowFrom,
     teamId,
-    allowUnscoped: ctx.installationIdentity.kind !== "enterprise",
+    allowUnscoped: ctx.installationIdentity?.kind !== "enterprise",
   });
 }
 
@@ -224,7 +224,7 @@ export async function resolveSlackEffectiveAllowFrom(
   } catch {
     storeAllowFrom = [];
   }
-  if (ctx.installationIdentity.kind !== "enterprise") {
+  if (ctx.installationIdentity?.kind !== "enterprise") {
     return resolveSlackUserAllowListForTeam({
       allowList: [...base, ...storeAllowFrom],
       teamId,
@@ -350,7 +350,7 @@ export async function authorizeSlackBotRoomMessage(params: {
       id: params.senderId,
       name: params.senderName,
       allowNameMatching: params.ctx.allowNameMatching,
-      allowUnscoped: params.ctx.installationIdentity.kind !== "enterprise",
+      allowUnscoped: params.ctx.installationIdentity?.kind !== "enterprise",
     })
   ) {
     return true;
@@ -415,7 +415,7 @@ export async function resolveSlackCommandIngress(params: {
   const isDirectMessage = params.channelType === "im";
   const isGroupDm = params.channelType === "mpim";
   const teamId = params.teamId ?? params.ctx.teamId;
-  const allowUnscoped = params.ctx.installationIdentity.kind !== "enterprise";
+  const allowUnscoped = params.ctx.installationIdentity?.kind !== "enterprise";
   const ownerAllowFrom = resolveSlackUserAllowListForTeam({
     allowList: params.ownerAllowFromLower,
     teamId,
@@ -481,7 +481,7 @@ async function decideSlackSystemIngress(params: {
   const isDirectMessage = params.channelType === "im";
   const isGroupDm = params.channelType === "mpim";
   const teamId = params.teamId ?? params.ctx.teamId;
-  const allowUnscoped = params.ctx.installationIdentity.kind !== "enterprise";
+  const allowUnscoped = params.ctx.installationIdentity?.kind !== "enterprise";
   const ownerAllowFromLower = resolveSlackUserAllowListForTeam({
     allowList: params.ownerAllowFromLower,
     teamId,
