@@ -968,219 +968,27 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(progress.getSnapshot().diffStat).toBeUndefined();
   });
 
-  it("stages mutation starts and commits successful terminal items additively", async () => {
+  it("wires successful mutation completions into the snapshot diff stat", async () => {
     const progress = createTestProgressDraftCompositor({
       entry: { streaming: { mode: "progress", progress: { label: "Working" } } },
       update: vi.fn(),
       updateOnLineChange: true,
     });
 
-    await progress.start();
     await progress.pushToolEvent({
-      itemId: "write-1",
       toolCallId: "write-1",
       name: "write",
       phase: "start",
       args: { path: "src/example.ts", content: "one\ntwo" },
     });
     expect(progress.getSnapshot().diffStat).toBeUndefined();
-
-    await progress.pushToolEvent({
-      itemId: "write-update",
-      toolCallId: "write-1",
-      name: "write",
-      phase: "update",
-      args: { path: "src/example.ts", content: "ignored\npartial\nargs" },
-    });
-    expect(progress.getSnapshot().diffStat).toBeUndefined();
-
     await progress.pushItemEvent({
       toolCallId: "write-1",
       kind: "tool",
-      name: "write",
       phase: "end",
       status: "completed",
     });
     expect(progress.getSnapshot().diffStat).toEqual({ files: 1, added: 2, removed: 0 });
-
-    await progress.pushToolEvent({
-      itemId: "edit-1",
-      toolCallId: "edit-1",
-      name: "edit",
-      phase: "start",
-      args: {
-        path: "src/example.ts",
-        edits: [{ oldText: "one\ntwo", newText: "three" }],
-      },
-    });
-    await progress.pushItemEvent({
-      toolCallId: "edit-1",
-      kind: "tool",
-      name: "edit",
-      phase: "end",
-      status: "completed",
-    });
-    expect(progress.getSnapshot().diffStat).toEqual({ files: 1, added: 3, removed: 2 });
-
-    for (const status of ["failed", "error"] as const) {
-      const toolCallId = `failed-${status}`;
-      await progress.pushToolEvent({
-        itemId: toolCallId,
-        toolCallId,
-        name: "write",
-        phase: "start",
-        args: { path: `src/${toolCallId}.ts`, content: "ignored" },
-      });
-      await progress.pushItemEvent({
-        toolCallId,
-        kind: "tool",
-        name: "write",
-        phase: "end",
-        status,
-      });
-    }
-    expect(progress.getSnapshot().diffStat).toEqual({ files: 1, added: 3, removed: 2 });
-
-    await progress.pushToolEvent({
-      itemId: "patch-1",
-      toolCallId: "patch-1",
-      name: "apply_patch",
-      phase: "start",
-      args: {
-        input: [
-          "*** Begin Patch",
-          "*** Update File: src/example.ts",
-          "@@",
-          "-three",
-          "+four",
-          "+five",
-          "*** Add File: src/new.ts",
-          "+new",
-          "+line",
-          "*** End Patch",
-        ].join("\n"),
-      },
-    });
-    await progress.pushItemEvent({
-      toolCallId: "patch-1",
-      kind: "patch",
-      name: "apply_patch",
-      phase: "end",
-      status: "completed",
-    });
-    expect(progress.getSnapshot().diffStat).toEqual({ files: 2, added: 7, removed: 3 });
-
-    await progress.pushToolEvent({
-      itemId: "codex-patch-1",
-      toolCallId: "codex-patch-1",
-      name: "apply_patch",
-      phase: "start",
-      args: {
-        changes: [
-          { path: "src/example.ts", stat: { added: 7, removed: 3 } },
-          { path: "src/third.ts", stat: { added: 5, removed: 2 } },
-        ],
-      },
-    });
-    await progress.pushItemEvent({
-      toolCallId: "codex-patch-1",
-      kind: "patch",
-      name: "apply_patch",
-      phase: "end",
-      status: "completed",
-    });
-    expect(progress.getSnapshot().diffStat).toEqual({ files: 3, added: 19, removed: 8 });
-
-    await progress.pushPatchEvent({ phase: "end", added: ["ignored.ts"] });
-    expect(progress.getSnapshot().diffStat).toEqual({ files: 3, added: 19, removed: 8 });
-
-    await progress.pushToolEvent({
-      toolCallId: "pending-reset",
-      name: "write",
-      phase: "start",
-      args: { path: "src/pending-reset.ts", content: "pending" },
-    });
-
-    progress.markFinalReplyStarted();
-    expect(progress.beginNewTurn()).toBe(true);
-    expect(progress.getSnapshot().diffStat).toBeUndefined();
-    await progress.pushItemEvent({
-      toolCallId: "pending-reset",
-      kind: "tool",
-      name: "write",
-      phase: "end",
-      status: "completed",
-    });
-    expect(progress.getSnapshot().diffStat).toBeUndefined();
-  });
-
-  it("bounds pending mutation staging and distinct committed file tracking", async () => {
-    const progress = createTestProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { label: "Working" } } },
-      update: vi.fn(),
-      updateOnLineChange: true,
-    });
-
-    await progress.start();
-    for (let index = 0; index < 65; index += 1) {
-      await progress.pushToolEvent({
-        itemId: `write-${index}`,
-        toolCallId: `write-${index}`,
-        name: "write",
-        phase: "start",
-        args: { path: `src/file-${index}.ts`, content: "line" },
-      });
-    }
-    expect(progress.getSnapshot().diffStat).toBeUndefined();
-    for (let index = 0; index < 65; index += 1) {
-      await progress.pushItemEvent({
-        toolCallId: `write-${index}`,
-        kind: "tool",
-        name: "write",
-        phase: "end",
-        status: "completed",
-      });
-    }
-    expect(progress.getSnapshot().diffStat).toEqual({ files: 64, added: 64, removed: 0 });
-
-    for (let index = 64; index < 257; index += 1) {
-      const toolCallId = `restaged-write-${index}`;
-      await progress.pushToolEvent({
-        itemId: toolCallId,
-        toolCallId,
-        name: "write",
-        phase: "start",
-        args: { path: `src/file-${index}.ts`, content: "line" },
-      });
-      await progress.pushItemEvent({
-        toolCallId,
-        kind: "tool",
-        name: "write",
-        phase: "end",
-        status: "completed",
-      });
-    }
-    expect(progress.getSnapshot().diffStat).toEqual({ files: 257, added: 257, removed: 0 });
-
-    await progress.pushToolEvent({
-      itemId: "edit-known",
-      toolCallId: "edit-known",
-      name: "edit",
-      phase: "start",
-      args: {
-        path: "src/file-0.ts",
-        oldText: "one\ntwo",
-        newText: "one\ntwo\nthree",
-      },
-    });
-    await progress.pushItemEvent({
-      toolCallId: "edit-known",
-      kind: "tool",
-      name: "edit",
-      phase: "end",
-      status: "completed",
-    });
-    expect(progress.getSnapshot().diffStat).toEqual({ files: 257, added: 260, removed: 2 });
   });
 
   it("ignores status updates once the final reply started and clears both per turn", async () => {

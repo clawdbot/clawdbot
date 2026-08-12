@@ -12,14 +12,11 @@ import {
   type ChannelProgressDraftCompositorSnapshot,
   type ChannelProgressDraftLine,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { resolveGatewayPublicOrigin } from "openclaw/plugin-sdk/config-contracts";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { buildControlUiSessionPath } from "openclaw/plugin-sdk/session-discussion";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { formatSlackError } from "../../errors.js";
 import { SLACK_TEXT_LIMIT } from "../../limits.js";
 import {
-  buildSlackProgressCardBlocks,
   buildSlackProgressStreamCompletionChunks,
   buildSlackProgressStreamStartChunks,
   buildSlackProgressStreamUpdateChunks,
@@ -33,22 +30,23 @@ import {
   stopSlackStream,
   type SlackStreamSession,
 } from "../../streaming.js";
-import { escapeSlackMrkdwn } from "../mrkdwn.js";
 import {
   resolveExplicitSlackProgressTitle,
   resolveSlackStreamRecipientTeamId,
 } from "./dispatch-helpers.js";
+import {
+  createSlackDraftProgressCardRuntime,
+  formatSlackProgressDraftLine,
+} from "./dispatch-progress-card.js";
 import { collapseSlackProgressReceipt } from "./dispatch-progress-io.js";
 import {
   buildNativeProgressChunks as buildRenderedNativeProgressChunks,
   combineProgressHeadlineAndExplanation,
   resolveNativeProgressLines,
   resolveNativeProgressPlan,
-  resolveStructuredProgressLines,
 } from "./dispatch-progress-render.js";
 import type { SlackDispatchSetup } from "./dispatch-setup.js";
 import type { SlackStreamingDeliveryRuntime } from "./dispatch-streaming.js";
-import { finalizeSlackPreviewEdit } from "./preview-finalize.js";
 
 export function createSlackProgressRuntime(runtimeParams: {
   setup: SlackDispatchSetup;
@@ -130,68 +128,17 @@ export function createSlackProgressRuntime(runtimeParams: {
   const useDraftProgressCard = Boolean(draftStream) && streamMode === "status_final";
   const explicitProgressTitle = resolveExplicitSlackProgressTitle(account.config);
   const progressDraftMaxLineChars = resolveChannelProgressDraftMaxLineChars(account.config);
-  let latestProgressFallbackText = "";
-  let draftProgressCardFinalStatus: "success" | "error" | undefined;
-
-  const resolveSessionUrl = () => {
-    const publicOrigin = resolveGatewayPublicOrigin(cfg);
-    if (!publicOrigin) {
-      return undefined;
-    }
-    const url = new URL(publicOrigin);
-    const path = buildControlUiSessionPath({
-      namespace: "chat",
-      sessionKey: prepared.route.sessionKey,
-      fallbackAgentId: prepared.route.agentId,
-      basePath: cfg.gateway?.controlUi?.basePath,
-    });
-    if (!path) {
-      return undefined;
-    }
-    url.pathname = path;
-    return url.toString();
-  };
-
-  const resolveDraftCardText = (snapshot: ChannelProgressDraftCompositorSnapshot) =>
-    latestProgressFallbackText ||
-    formatChannelProgressDraftText({
-      entry: account.config,
-      lines: [...snapshot.lines],
-      seed: progressSeed,
-      formatLine: formatSlackProgressDraftLine,
-      narration: snapshot.statusHeadline,
-      plan: snapshot.plan,
-    });
-
-  const resolveDraftCardPresentation = (
-    snapshot: ChannelProgressDraftCompositorSnapshot,
-    state: "working" | "success" | "error",
-  ) => {
-    const title = explicitProgressTitle ?? snapshot.statusHeadline ?? "Working";
-    const narration = explicitProgressTitle
-      ? combineProgressHeadlineAndExplanation(snapshot.statusHeadline, snapshot.planExplanation)
-      : snapshot.planExplanation && snapshot.planExplanation !== title
-        ? snapshot.planExplanation
-        : undefined;
-    return buildSlackProgressCardBlocks({
-      state,
-      title,
-      narration,
-      plan: snapshot.plan,
-      lines: resolveStructuredProgressLines(snapshot.lines),
-      maxLineChars: progressDraftMaxLineChars,
-      diffStat: snapshot.diffStat,
-      ...(state === "working"
-        ? {
-            toolCalls: progressReceipt.toolCalls,
-            elapsedSeconds: progressReceipt.elapsedSeconds,
-          }
-        : {
-            receiptSummary: progressReceipt.buildSummaryLine(),
-            sessionUrl: resolveSessionUrl(),
-          }),
-    });
-  };
+  const progressCard = createSlackDraftProgressCardRuntime({
+    setup: { account, cfg, ctx, prepared, slackClient },
+    draftStream,
+    enabled: useDraftProgressCard,
+    progressReceipt,
+    progressSeed,
+    explicitTitle: explicitProgressTitle,
+    maxLineChars: progressDraftMaxLineChars,
+    getSnapshot: () => progressDraft.getSnapshot(),
+    getThreadTs: () => delivery.usedReplyThreadTs,
+  });
 
   const waitForNativeProgressStreamStart = async (): Promise<boolean> => {
     if (delivery.streamSession || !delivery.nativeProgressStreamStartPromise) {
@@ -409,12 +356,12 @@ export function createSlackProgressRuntime(runtimeParams: {
         return false;
       }
       const snapshot = progressDraft.getSnapshot();
-      latestProgressFallbackText = previewText;
+      progressCard.setFallbackText(previewText);
       draftStream.update(
         useDraftProgressCard
           ? {
               text: previewText,
-              blocks: resolveDraftCardPresentation(snapshot, "working"),
+              blocks: progressCard.resolvePresentation(snapshot, "working"),
             }
           : previewText,
       );
@@ -426,49 +373,6 @@ export function createSlackProgressRuntime(runtimeParams: {
     },
   });
   const commentaryProgressEnabled = progressDraft.commentaryProgressEnabled;
-
-  const finalizeDraftProgressCard = async (
-    status: "success" | "error",
-    snapshot = progressDraft.getSnapshot(),
-    fallbackText = resolveDraftCardText(snapshot),
-  ): Promise<boolean> => {
-    if (!draftStream || !useDraftProgressCard) {
-      return false;
-    }
-    const terminalStatus =
-      draftProgressCardFinalStatus === "error" || status === "error" ? "error" : "success";
-    if (draftProgressCardFinalStatus === terminalStatus) {
-      return true;
-    }
-    await draftStream.flush();
-    const channelId = draftStream.channelId();
-    const messageId = draftStream.messageId();
-    if (!channelId || !messageId) {
-      return false;
-    }
-    await draftStream.seal();
-    try {
-      const finalized = await draftStream.finalizeMessage(messageId, async () => {
-        await finalizeSlackPreviewEdit({
-          client: slackClient,
-          token: ctx.botToken,
-          accountId: account.accountId,
-          channelId,
-          messageId,
-          text: fallbackText,
-          blocks: resolveDraftCardPresentation(snapshot, terminalStatus),
-          threadTs: delivery.usedReplyThreadTs,
-        });
-      });
-      if (finalized) {
-        draftProgressCardFinalStatus = terminalStatus;
-      }
-      return finalized;
-    } catch (err) {
-      logVerbose(`slack: progress card final edit failed (${formatSlackError(err)})`);
-      return false;
-    }
-  };
 
   const buildNativeProgressCompletionChunks = (finalInProgressStatus: "complete" | "error") => {
     const snapshot = progressDraft.getSnapshot();
@@ -654,7 +558,7 @@ export function createSlackProgressRuntime(runtimeParams: {
   };
   const beginNewProgressTurn = async (options?: { force?: boolean }) => {
     const priorSnapshot = progressDraft.getSnapshot();
-    const priorFallbackText = resolveDraftCardText(priorSnapshot);
+    const priorFallbackText = progressCard.resolveText(priorSnapshot);
     const completionChunks =
       useNativeProgressStreaming && !nativeProgressCompletionSent
         ? buildNativeProgressCompletionChunks(nativeProgressTerminalStatus)
@@ -667,7 +571,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     if (useNativeProgressStreaming) {
       await finishNativeProgressTurn(completionChunks);
     } else {
-      await finalizeDraftProgressCard("success", priorSnapshot, priorFallbackText);
+      await progressCard.finalize("success", priorSnapshot, priorFallbackText);
       draftStream?.forceNewMessage();
     }
     resetProgressTurnState();
@@ -675,8 +579,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     nativeProgressCompletionSent = false;
     nativeProgressTerminalStatus = "complete";
     nativeProgressChunkKey = undefined;
-    latestProgressFallbackText = "";
-    draftProgressCardFinalStatus = undefined;
+    progressCard.reset();
     // A re-armed turn is a new visible reply: it must not dedupe against or
     // inherit delivery state from the settled turn (mirrors queued admission).
     resetPreviewDeliveryState();
@@ -750,7 +653,7 @@ export function createSlackProgressRuntime(runtimeParams: {
     beginNewProgressTurn,
     buildNativeProgressCompletionChunks,
     collapseProgressReceipt,
-    finalizeDraftProgressCard,
+    finalizeDraftProgressCard: progressCard.finalize,
     onDraftBoundary,
     onQueuedFollowupAdmitted,
     pushPlanProgress,
@@ -763,32 +666,4 @@ export function createSlackProgressRuntime(runtimeParams: {
     },
     shouldYieldDraftProgress: () => shouldYieldDraftProgress(),
   };
-}
-
-function formatSlackProgressDraftLine(line: string): string {
-  if (/^(?:🧠|💬)\s/u.test(line)) {
-    return line;
-  }
-
-  const italicCommentary = /^_(.*)_$/su.exec(line);
-  if (!italicCommentary) {
-    return escapeSlackMrkdwn(line);
-  }
-
-  const content = italicCommentary[1]!
-    .split(/(`[^`\n]+`)/u)
-    .map((segment, index) => {
-      if (index % 2 === 0) {
-        return escapeSlackMrkdwn(segment);
-      }
-      const code = segment
-        .slice(1, -1)
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;");
-      return `\`${code}\``;
-    })
-    .join("");
-
-  return `_${content}_`;
 }

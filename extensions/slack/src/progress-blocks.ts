@@ -282,7 +282,7 @@ function buildActivityText(lines: readonly ChannelProgressDraftLine[], maxLineCh
     rendered.push(row);
     length = nextLength;
   }
-  return rendered.reverse().join("\n");
+  return rendered.toReversed().join("\n");
 }
 
 export function buildSlackProgressCardBlocks(params: {
