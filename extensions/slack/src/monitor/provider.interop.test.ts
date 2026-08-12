@@ -1,6 +1,10 @@
 // Slack tests cover provider.interop plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import { createSlackBoltApp, resolveSlackBoltInterop } from "./provider-support.js";
+import {
+  createSlackBoltApp,
+  gracefulStopSlackApp,
+  resolveSlackBoltInterop,
+} from "./provider-support.js";
 
 describe("resolveSlackBoltInterop", () => {
   function FakeApp() {}
@@ -354,6 +358,49 @@ describe("createSlackBoltApp", () => {
       ["unable_to_socket_mode_start", startError],
       ["reconnecting"],
     ]);
+  });
+
+  it("cancels a pending native reconnect when the app is stopped and started again", async () => {
+    vi.useFakeTimers();
+    try {
+      const slackBoltModule = await import("@slack/bolt");
+      const { app, receiver } = createSlackBoltApp({
+        interop: resolveSlackBoltInterop({
+          defaultImport: slackBoltModule.default,
+          namespaceImport: slackBoltModule,
+        }),
+        slackMode: "socket",
+        token: "xoxb-test",
+        appToken: "xapp-test",
+        slackWebhookPath: "/slack/events",
+        clientOptions: {},
+      });
+      if (!receiver || typeof receiver !== "object") {
+        throw new Error("expected a Socket Mode receiver");
+      }
+      const client = Reflect.get(receiver, "client");
+      if (!client || typeof client !== "object") {
+        throw new Error("expected a Socket Mode client");
+      }
+      const start = vi.fn(async () => {
+        Reflect.set(client, "shuttingDown", false);
+      });
+      Reflect.set(client, "start", start);
+      const delayReconnectAttempt = Reflect.get(client, "delayReconnectAttempt");
+      if (typeof delayReconnectAttempt !== "function") {
+        throw new Error("expected a native reconnect scheduler");
+      }
+
+      void delayReconnectAttempt.call(client, start);
+      await gracefulStopSlackApp(app);
+      await app.start();
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(start).toHaveBeenCalledTimes(1);
+      await gracefulStopSlackApp(app);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("uses Slack's fixed Socket Mode receiver policy", () => {
