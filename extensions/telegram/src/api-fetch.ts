@@ -69,7 +69,11 @@ export async function fetchTelegramChatId(params: {
     signal: requestSignal,
     timeoutMs: resolveTelegramRequestTimeoutMs("getchat", params.timeoutSeconds),
     operation: "telegram-getchat-lookup",
-    url,
+    // Redact the bot token from the diagnostic URL to prevent credential
+    // exposure in timeout logs. The token lives in the path segment
+    // (/bot<TOKEN>/getChat) and is not stripped by the generic query-param
+    // sanitizer. The actual fetch below still uses the unredacted `url`.
+    url: params.token ? url.replace(params.token, "<redacted>") : url,
   });
   try {
     const res = await fetchImpl(url, timeout.signal ? { signal: timeout.signal } : undefined);

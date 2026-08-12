@@ -3,6 +3,24 @@ import { createRequire } from "node:module";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchTelegramChatId, lookupTelegramChatId } from "./api-fetch.js";
 
+const extensionSharedMocks = vi.hoisted(() => {
+  const buildTimeoutAbortSignalSpy = vi.fn();
+  return { buildTimeoutAbortSignalSpy };
+});
+
+vi.mock("openclaw/plugin-sdk/extension-shared", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/extension-shared")>(
+    "openclaw/plugin-sdk/extension-shared",
+  );
+  return {
+    ...actual,
+    buildTimeoutAbortSignal: (...args: Parameters<typeof actual.buildTimeoutAbortSignal>) => {
+      extensionSharedMocks.buildTimeoutAbortSignalSpy(...args);
+      return actual.buildTimeoutAbortSignal(...args);
+    },
+  };
+});
+
 const TELEGRAM_GETCHAT_JSON_CAP_BYTES = 4 * 1024 * 1024;
 
 function getChatOkResponse(id: number | string): Response {
@@ -291,6 +309,35 @@ describe("fetchTelegramChatId", () => {
     expect(abortReason).toBeInstanceOf(Error);
     expect((abortReason as Error).name).toBe("TimeoutError");
     expect((abortReason as Error).message).toBe("request timed out");
+  });
+
+  it("does not pass the raw bot token in the diagnostic url given to the timeout helper", async () => {
+    // Regression test for #106562: the bot token lives in the URL path
+    // (/bot<TOKEN>/getChat) and must be redacted before reaching any
+    // diagnostic or logging layer, including buildTimeoutAbortSignal.
+    const secretToken = "secret-bot-token-abc123";
+    const fetchMock = vi.fn(async () => getChatOkResponse(99));
+    vi.stubGlobal("fetch", fetchMock);
+    extensionSharedMocks.buildTimeoutAbortSignalSpy.mockClear();
+
+    await fetchTelegramChatId({
+      token: secretToken,
+      chatId: "@user",
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+
+    // The actual fetch must still use the unredacted URL so the real HTTP
+    // request succeeds — only the logging/diagnostic url must be redacted.
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining(secretToken), expect.anything());
+
+    // The url passed to buildTimeoutAbortSignal must NOT contain the raw token.
+    expect(extensionSharedMocks.buildTimeoutAbortSignalSpy).toHaveBeenCalledOnce();
+    const timeoutParams = extensionSharedMocks.buildTimeoutAbortSignalSpy.mock.calls[0]?.[0] as
+      | { url?: string }
+      | undefined;
+    expect(timeoutParams?.url).toBeDefined();
+    expect(timeoutParams?.url).not.toContain(secretToken);
+    expect(timeoutParams?.url).toContain("<redacted>");
   });
 });
 
