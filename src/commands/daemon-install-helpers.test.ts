@@ -256,6 +256,7 @@ async function buildPluginConfigExecSecretRefPlan(home: string) {
         id: "acme-plugin",
         origin: "global",
         rootDir: configuredPluginRoot,
+        channels: [],
         configContracts: {
           secretInputs: {
             paths: [{ path: "apiKey", expected: "string" }],
