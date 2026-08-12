@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, onTestFinished, test, vi } from "vitest";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
+import { buildAgentSummaries } from "../commands/agents.config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -2647,6 +2648,37 @@ describe("gateway session utils", () => {
 
       const { agents } = listAgentsForGateway(cfg);
       expect(agents.map((agent) => agent.id)).toEqual(["main"]);
+    });
+  });
+
+  test("gateway agents.list and CLI agents list intentionally diverge when agents.list is not configured", async () => {
+    await withStateDirEnv("openclaw-agent-list-divergence-", async ({ stateDir }) => {
+      fs.mkdirSync(path.join(stateDir, "agents", "main"), { recursive: true });
+      fs.mkdirSync(path.join(stateDir, "agents", "codex"), { recursive: true });
+
+      const cfgWithoutExplicitList = {
+        session: { mainKey: "main" },
+      } as OpenClawConfig;
+
+      const gatewayWithoutExplicitList = listAgentsForGateway(cfgWithoutExplicitList);
+      const cliWithoutExplicitList = buildAgentSummaries(cfgWithoutExplicitList);
+
+      expect(gatewayWithoutExplicitList.agents.map((agent) => agent.id)).toEqual([
+        "main",
+        "codex",
+      ]);
+      expect(cliWithoutExplicitList.map((agent) => agent.id)).toEqual(["main"]);
+
+      const cfgWithExplicitList = {
+        session: { mainKey: "main" },
+        agents: { list: [{ id: "main", default: true }] },
+      } as OpenClawConfig;
+
+      const gatewayWithExplicitList = listAgentsForGateway(cfgWithExplicitList);
+      const cliWithExplicitList = buildAgentSummaries(cfgWithExplicitList);
+
+      expect(gatewayWithExplicitList.agents.map((agent) => agent.id)).toEqual(["main"]);
+      expect(cliWithExplicitList.map((agent) => agent.id)).toEqual(["main"]);
     });
   });
 

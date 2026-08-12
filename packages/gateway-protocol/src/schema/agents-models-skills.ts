@@ -91,7 +91,10 @@ export const AgentSummarySchema = closedObject({
   thinkingDefault: Type.Optional(NonEmptyString),
 });
 
-/** Empty request payload for listing configured agents. */
+/**
+ * Empty request payload for listing runtime-visible agents. Explicit configuration scopes
+ * the result; otherwise disk-discovered agent state may also be included.
+ */
 export const AgentsListParamsSchema = closedObject({});
 
 /** Agent list result including the default agent and session scoping mode. */

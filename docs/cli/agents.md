@@ -37,6 +37,15 @@ openclaw agents delete work
 
 Options: `--json`, `--bindings` (include full routing rules, not only per-agent counts/summaries).
 
+Visibility notes:
+
+- `openclaw agents list` is config-scoped. It reports agents from the configured explicit roster (`agents.entries` or the legacy `agents.list` shape), or only `main` when no explicit roster is configured.
+- Chat clients (iOS/Android/TUI) call Gateway `agents.list`, which is runtime-scoped:
+  - If an explicit roster is configured through `agents.entries` or `agents.list`, Gateway preserves that explicit scope.
+  - If no explicit roster is configured, Gateway may include disk-discovered agent state directories under `OPENCLAW_STATE_DIR/agents/*`.
+- This means UI/chat can show more agents than `openclaw agents list` when the configuration has no explicit roster.
+- To make UI and CLI deterministic and aligned, define agents explicitly. Prefer the canonical `agents.entries` shape; `agents.list` remains supported for compatibility.
+
 ### `agents add [name]`
 
 Options: `--workspace <dir>`, `--model <id>`, `--agent-dir <dir>`, `--bind <channel[:accountId]>` (repeatable), `--non-interactive`, `--json`.
