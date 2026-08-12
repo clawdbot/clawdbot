@@ -1181,8 +1181,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           }
           if (lastAuditReasons.length > 0) {
             log.warn(
-              `Compaction safeguard: corrective generation failed on attempt ${attempt + 1}: ` +
-                formatErrorMessage(attemptError),
+              "Compaction safeguard: corrective generation failed; " +
+                `reasonCode=corrective_generation_failed attempt=${attempt + 1}`,
             );
             setCompactionSafeguardCancelReason(
               ctx.sessionManager,
