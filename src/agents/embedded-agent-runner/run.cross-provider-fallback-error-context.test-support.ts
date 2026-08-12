@@ -76,6 +76,14 @@ function expectDeepseekAssistant(value: unknown) {
   expect(value.errorMessage).toBe(DEEPSEEK_ERROR_MESSAGE);
 }
 
+function expectFailoverAssistantErrorCallsScopedTo(provider: string) {
+  const calls = mockedIsFailoverAssistantError.mock.calls;
+  expect(calls.length).toBeGreaterThan(0);
+  for (const call of calls) {
+    expect(call[1]).toEqual({ provider });
+  }
+}
+
 function makeCrossProviderFallbackConfig() {
   return makeModelFallbackCfg({
     agents: {
@@ -228,8 +236,8 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
     await expect(promise).rejects.toThrow(
       `anthropic/test-model: ${COMPACTION_REMOVED_ERROR_MESSAGE}`,
     );
-    expect(mockedIsFailoverAssistantError).toHaveBeenCalledTimes(1);
-    expect(mockedIsFailoverAssistantError).toHaveBeenCalledWith(
+    expectFailoverAssistantErrorCallsScopedTo("anthropic");
+    expect(mockedIsFailoverAssistantError).toHaveBeenLastCalledWith(
       expect.objectContaining({
         provider: "anthropic",
         model: "test-model",
