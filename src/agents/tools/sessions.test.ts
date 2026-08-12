@@ -989,8 +989,9 @@ describe("sessions_send gating", () => {
       timeoutSeconds: 0,
     });
 
-    expect(callGatewayMock).toHaveBeenCalledTimes(1);
-    expect(requireGatewayRequest().method).toBe("sessions.list");
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+    expect(requireGatewayRequest().method).toBe("sessions.resolve");
+    expect(requireGatewayRequest(1).method).toBe("sessions.list");
     expect(requireDetails(result).status).toBe("forbidden");
   });
 
@@ -1017,7 +1018,8 @@ describe("sessions_send gating", () => {
     expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
       "cannot target a thread session",
     );
-    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(requireGatewayRequest().method).toBe("sessions.resolve");
   });
 
   it("rejects Telegram topic session targets before dispatching an agent run", async () => {
@@ -1056,7 +1058,8 @@ describe("sessions_send gating", () => {
     expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
       "cannot target a thread session",
     );
-    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(requireGatewayRequest().method).toBe("sessions.resolve");
   });
 
   it("rejects label targets that resolve to canonical thread sessions", async () => {
@@ -1083,8 +1086,9 @@ describe("sessions_send gating", () => {
     expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
       "cannot target a thread session",
     );
-    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
     expect(requireGatewayRequest().method).toBe("sessions.resolve");
+    expect(requireGatewayRequest(1).method).toBe("sessions.resolve");
   });
 
   it("does not disclose a resolved thread session key from a sessionId target", async () => {
@@ -1653,8 +1657,7 @@ describe("sessions_send agent-main materialization provenance", () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.resolve") {
-        // Unmaterialized agent main: the probe fails, forcing creation.
-        throw new Error("unknown session: agent:main:main");
+        return {};
       }
       if (request.method === "sessions.create") {
         throw new Error("plain sessions.create must not be used for trusted materialization");

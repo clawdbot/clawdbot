@@ -153,6 +153,49 @@ afterAll(async () => {
 });
 
 describe("sessions_send gateway loopback", () => {
+  it("rejects a missing explicit key without creating or running a session", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-missing-"));
+    const missingKey = "agent:main:missing";
+    const spy = agentCommandMock as unknown as Mock<(opts: unknown) => Promise<void>>;
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    try {
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      spy.mockClear();
+      const tool = createOpenClawTools({
+        agentSessionKey: "agent:main:main",
+        config: { tools: { sessions: { visibility: "all" } } },
+      }).find((candidate) => candidate.name === "sessions_send");
+      if (!tool) {
+        throw new Error("missing sessions_send tool");
+      }
+
+      const result = await tool.execute("call-missing-key", {
+        sessionKey: missingKey,
+        message: "ping",
+        timeoutSeconds: 0,
+      });
+
+      expect(result.details).toMatchObject({
+        status: "error",
+        error: `No session found: ${missingKey}`,
+      });
+      expect(spy).not.toHaveBeenCalled();
+      expect(
+        loadSessionEntry({ sessionKey: missingKey, storePath: testState.sessionStorePath }),
+      ).toBe(undefined);
+    } finally {
+      testState.sessionStorePath = undefined;
+      await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
   it("returns reply when lifecycle ends before agent.wait", async () => {
     const spy = agentCommandMock as unknown as Mock<(opts: unknown) => Promise<void>>;
     spy.mockImplementation(async (opts: unknown) =>

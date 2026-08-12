@@ -156,6 +156,7 @@ type SessionReferenceResolution =
       key: string;
       displayKey: string;
       resolvedViaSessionId: boolean;
+      missing?: true;
     }
   | { ok: false; status: "error" | "forbidden"; error: string };
 
@@ -188,6 +189,26 @@ function buildResolvedSessionReference(params: {
     }),
     resolvedViaSessionId: params.resolvedViaSessionId,
   };
+}
+
+function buildFailedSessionReference(
+  error: unknown,
+  raw: string,
+  restrictToSpawned: boolean,
+): Extract<SessionReferenceResolution, { ok: false }> {
+  return restrictToSpawned
+    ? {
+        ok: false,
+        status: "forbidden",
+        error: `Session not visible from this sandboxed agent session: ${raw}`,
+      }
+    : {
+        ok: false,
+        status: "error",
+        error:
+          formatErrorMessage(error) ||
+          `Session not found: ${raw} (use the full sessionKey from sessions_list)`,
+      };
 }
 
 async function requestResolvedSessionKey(
@@ -248,6 +269,7 @@ export async function resolveSessionReference(params: {
   mainKey: string;
   requesterInternalKey?: string;
   restrictToSpawned: boolean;
+  allowMissingKey?: boolean;
   callGateway?: GatewayCaller;
 }): Promise<SessionReferenceResolution> {
   const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
@@ -275,11 +297,12 @@ export async function resolveSessionReference(params: {
       return null;
     }
   };
-  const rawInput =
-    resolveCurrentSessionClientAlias({
-      key: params.sessionKey,
-      requesterInternalKey: params.requesterInternalKey,
-    }) ?? params.sessionKey.trim();
+  const requestedInput = params.sessionKey.trim();
+  const currentClientAlias = resolveCurrentSessionClientAlias({
+    key: requestedInput,
+    requesterInternalKey: params.requesterInternalKey,
+  });
+  const rawInput = currentClientAlias ?? requestedInput;
   if (rawInput === "current") {
     const resolvedCurrent =
       (params.restrictToSpawned ? null : await tryResolve(rawInput, "key", true)) ??
@@ -310,20 +333,7 @@ export async function resolveSessionReference(params: {
       }
       return buildReference(key, true);
     } catch (error) {
-      if (params.restrictToSpawned) {
-        return {
-          ok: false,
-          status: "forbidden",
-          error: `Session not visible from this sandboxed agent session: ${raw}`,
-        };
-      }
-      return {
-        ok: false,
-        status: "error",
-        error:
-          formatErrorMessage(error) ||
-          `Session not found: ${raw} (use the full sessionKey from sessions_list)`,
-      };
+      return buildFailedSessionReference(error, raw, params.restrictToSpawned);
     }
   }
 
@@ -333,12 +343,38 @@ export async function resolveSessionReference(params: {
     mainKey: params.mainKey,
     requesterInternalKey: params.requesterInternalKey,
   });
-  const displayKey = resolveDisplaySessionKey({
-    key: resolvedKey,
-    alias: params.alias,
-    mainKey: params.mainKey,
-  });
-  return { ok: true, key: resolvedKey, displayKey, resolvedViaSessionId: false };
+  if (
+    currentClientAlias ||
+    rawInput === "current" ||
+    rawInput === "main" ||
+    rawInput === "global" ||
+    rawInput === "unknown"
+  ) {
+    return buildReference(resolvedKey, false);
+  }
+  try {
+    const key = await requestResolvedSessionKey(
+      buildSessionResolveQuery({
+        input: resolvedKey,
+        kind: "key",
+        requesterInternalKey: params.requesterInternalKey,
+        restrictToSpawned: params.restrictToSpawned,
+        allowMissing: params.allowMissingKey,
+      }),
+      gatewayCall,
+    );
+    if (key) {
+      return buildReference(key, false);
+    }
+    if (params.allowMissingKey) {
+      return { ...buildReference(resolvedKey, false), missing: true };
+    }
+    // A strict sessions.resolve call either returns a canonical key or throws.
+    // Preserve the requested key for injected callers that omit the typed payload.
+    return buildReference(resolvedKey, false);
+  } catch (error) {
+    return buildFailedSessionReference(error, raw, params.restrictToSpawned);
+  }
 }
 
 export async function resolveVisibleSessionReference(params: {
