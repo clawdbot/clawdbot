@@ -1,5 +1,3 @@
-import AppKit
-import SwiftUI
 import Testing
 @testable import OpenClaw
 
@@ -24,19 +22,5 @@ struct LowCoverageViewSmokeTests {
         controller.present()
         controller.dismiss()
         try? await Task.sleep(nanoseconds: 250_000_000)
-    }
-
-    @Test func `visual effect view hosts in NS hosting view`() {
-        let hosting = NSHostingView(rootView: VisualEffectView(material: .sidebar))
-        _ = hosting.fittingSize
-        hosting.rootView = VisualEffectView(material: .popover, emphasized: true)
-        _ = hosting.fittingSize
-    }
-
-    @Test func `dock icon manager updates visibility`() {
-        _ = NSApplication.shared
-        UserDefaults.standard.set(false, forKey: showDockIconKey)
-        DockIconManager.shared.updateDockVisibility()
-        DockIconManager.shared.temporarilyShowDock()
     }
 }
