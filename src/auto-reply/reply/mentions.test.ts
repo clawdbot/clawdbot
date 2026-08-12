@@ -308,6 +308,23 @@ describe("derived mention matching with decorated identity names", () => {
     ).toBe("小蝶🦋後續說明");
   });
 
+  it("leaves a word-prefixed leading-decorated name in place when stripping", () => {
+    // The left boundary holds across the optional leading decoration on the
+    // stripping side too: a word glued in front of the decorated spelling is
+    // one longer word, not a mention followed by that word.
+    const cfg = configForName("🦋小蝶");
+
+    expect(stripMentions("前🦋小蝶 /status", {} as MsgContext, cfg, "decorated-agent")).toBe(
+      "前🦋小蝶 /status",
+    );
+    expect(stripMentions("x🦋小蝶 /status", {} as MsgContext, cfg, "decorated-agent")).toBe(
+      "x🦋小蝶 /status",
+    );
+    expect(stripMentions("🦋小蝶 /status", {} as MsgContext, cfg, "decorated-agent")).toBe(
+      "/status",
+    );
+  });
+
   it("keeps an emoji-only identity name matching literally", () => {
     const regexes = buildMentionRegexes(configForName("🦋"), "decorated-agent");
 
