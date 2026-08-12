@@ -1214,8 +1214,12 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         }
         lastAuditReasons = quality.reasons;
         if (!canRegenerate || attempt >= totalAttempts - 1) {
+          const reasonCodes = [
+            ...new Set(quality.reasons.map((reason) => reason.split(":", 1)[0])),
+          ];
           log.warn(
-            `Compaction safeguard: finalized summary failed quality checks: ${quality.reasons.join(", ")}`,
+            "Compaction safeguard: finalized summary failed quality checks; " +
+              `reasonCodes=${reasonCodes.join(",")} reasonCount=${quality.reasons.length}`,
           );
           setCompactionSafeguardCancelReason(
             ctx.sessionManager,
