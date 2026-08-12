@@ -23,6 +23,7 @@ type UpgradeEntry = {
   initialApprovedAtMs?: number;
   expiresAtMs: number;
   resolutionHint?: "approved" | "rejected";
+  resultPromise?: Promise<ScopeUpgradeResult>;
   wake: UpgradeWake;
   cleanupTimer?: ReturnType<typeof setTimeout>;
 };
@@ -99,6 +100,19 @@ export class ScopeUpgradeCoordinator {
     if (!entry || !sameOwner(entry.owner, owner)) {
       return null;
     }
+    if (!entry.resultPromise) {
+      const pending = this.waitForResult(entry);
+      entry.resultPromise = pending;
+      void pending.catch(() => {
+        if (entry.resultPromise === pending) {
+          entry.resultPromise = undefined;
+        }
+      });
+    }
+    return await entry.resultPromise;
+  }
+
+  private async waitForResult(entry: UpgradeEntry): Promise<ScopeUpgradeResult> {
     while (true) {
       const now = Date.now();
       if (now >= entry.expiresAtMs) {

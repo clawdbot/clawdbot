@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import * as devicePairing from "../infra/device-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { issueOperatorToken, openTrackedWs } from "./device-authz.test-helpers.js";
 import {
@@ -125,6 +126,65 @@ describe("live device scope upgrade", () => {
         payload: { status: "rejected", requestId },
       });
     } finally {
+      limited.ws.close();
+    }
+  });
+
+  test("coalesces concurrent waits for the same device request", async () => {
+    const limited = await openLimitedDevice("live-scope-upgrade-concurrent-waits");
+    const readPending = devicePairing.getPendingDevicePairing;
+    let releaseRead = () => {};
+    const readGate = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const pendingSpy = vi
+      .spyOn(devicePairing, "getPendingDevicePairing")
+      .mockImplementation(async (...args) => {
+        await readGate;
+        return await readPending(...args);
+      });
+    let requestId: string | undefined;
+    let waits: Array<Promise<unknown>> = [];
+    try {
+      const registration = await rpcReq<{ requestId: string }>(
+        limited.ws,
+        "device.scopes.requestUpgrade",
+        { scopes: FULL_SCOPES },
+      );
+      requestId = registration.payload?.requestId;
+      const firstWait = rpcReq<{ status: string; requestId: string }>(
+        limited.ws,
+        "device.scopes.waitUpgrade",
+        { requestId },
+        10_000,
+      );
+      const secondWait = rpcReq<{ status: string; requestId: string }>(
+        limited.ws,
+        "device.scopes.waitUpgrade",
+        { requestId },
+        10_000,
+      );
+      waits = [firstWait, secondWait];
+
+      await vi.waitFor(() => expect(pendingSpy).toHaveBeenCalled());
+      expect(pendingSpy).toHaveBeenCalledTimes(1);
+      releaseRead();
+      expect((await rpcReq(started.ws, "device.pair.reject", { requestId })).ok).toBe(true);
+      await expect(firstWait).resolves.toMatchObject({
+        ok: true,
+        payload: { status: "rejected", requestId },
+      });
+      await expect(secondWait).resolves.toMatchObject({
+        ok: true,
+        payload: { status: "rejected", requestId },
+      });
+    } finally {
+      releaseRead();
+      if (requestId) {
+        await rpcReq(started.ws, "device.pair.reject", { requestId }).catch(() => undefined);
+      }
+      await Promise.allSettled(waits);
+      pendingSpy.mockRestore();
       limited.ws.close();
     }
   });
