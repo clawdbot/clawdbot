@@ -1106,7 +1106,6 @@ openclaw-session-owner-chip {
   background: transparent;
   color: var(--muted);
   cursor: var(--cursor-action);
-  touch-action: manipulation;
 }
 
 .oc-sensitive-toggle:hover:not(:disabled) {
@@ -4408,7 +4407,6 @@ td.data-table-key-col {
     background-color var(--duration-fast) var(--ease-in-out),
     border-color var(--duration-fast) var(--ease-in-out),
     color var(--duration-fast) var(--ease-in-out);
-  touch-action: manipulation;
 }
 
 .agent-tools-runtime-chip:hover {
@@ -4465,7 +4463,6 @@ td.data-table-key-col {
   transition:
     background-color var(--duration-fast) var(--ease-in-out),
     color var(--duration-fast) var(--ease-in-out);
-  touch-action: manipulation;
 }
 
 .agent-tools-group__summary::before {
@@ -4582,7 +4579,6 @@ td.data-table-key-col {
   transition:
     background-color var(--duration-fast) var(--ease-in-out),
     color var(--duration-fast) var(--ease-in-out);
-  touch-action: manipulation;
 }
 
 .agent-tool-summary::after {
