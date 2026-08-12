@@ -316,7 +316,35 @@ describe("resolveGatewayConnection", () => {
     });
   });
 
-  it("fails closed when one exact target maps to both local and remote auth identities", async () => {
+  it("does not resolve local auth for an explicit loopback target in remote mode", async () => {
+    await withModeExecProviderFixture(
+      "remote-loopback",
+      async ({ tokenMarker, passwordMarker, providers }) => {
+        loadConfig.mockReturnValue({
+          secrets: { providers },
+          gateway: {
+            mode: "remote",
+            auth: {
+              mode: "token",
+              token: { source: "exec", provider: "tokenprovider", id: "TOKEN_SECRET" },
+            },
+            remote: { url: "wss://remote.example/gateway", token: "remote-token" },
+          },
+        });
+
+        await expect(
+          resolveGatewayConnection({
+            url: "ws://127.0.0.1:18789",
+            allowConfiguredAuthForExactTarget: true,
+          }),
+        ).rejects.toThrow(/pass --token or --password once to request pairing/i);
+        expect(await fileExists(tokenMarker)).toBe(false);
+        expect(await fileExists(passwordMarker)).toBe(false);
+      },
+    );
+  });
+
+  it("uses only the configured remote identity when publicOrigin matches in remote mode", async () => {
     loadConfig.mockReturnValue({
       gateway: {
         mode: "remote",
@@ -332,7 +360,7 @@ describe("resolveGatewayConnection", () => {
         url: "wss://gateway.example/gateway",
         allowConfiguredAuthForExactTarget: true,
       }),
-    ).rejects.toThrow(/pass --token or --password once to request pairing/i);
+    ).resolves.toMatchObject({ token: "remote-token" });
   });
 
   it.each([

@@ -104,46 +104,45 @@ function resolveExactConfiguredGatewayTarget(params: {
   explicitUrl: string;
   localPortOverride?: number;
 }): ConfiguredGatewayTargetIdentity | undefined {
-  const localGateway = { ...params.config.gateway, mode: "local" as const };
-  delete localGateway.remote;
-  const localUrl = params.buildConnectionDetails({
-    config: { ...params.config, gateway: localGateway },
-    ignoreEnvUrlOverride: true,
-    ...(params.localPortOverride !== undefined
-      ? { localPortOverride: params.localPortOverride }
-      : {}),
-  }).url;
-  const basePath = params.config.gateway?.controlUi?.basePath ?? "";
   const candidates: Array<{
     target: string;
     identity: ConfiguredGatewayTargetIdentity;
-  }> = [
-    {
+  }> = [];
+  if (params.config.gateway?.mode === "remote") {
+    const remoteUrl = trimToUndefined(params.config.gateway.remote?.url);
+    if (remoteUrl) {
+      candidates.push({
+        target: remoteUrl,
+        identity: { authSurface: "remote", tlsSource: "config gateway.remote.url" },
+      });
+    }
+  } else {
+    const localGateway = { ...params.config.gateway, mode: "local" as const };
+    delete localGateway.remote;
+    const localUrl = params.buildConnectionDetails({
+      config: { ...params.config, gateway: localGateway },
+      ignoreEnvUrlOverride: true,
+      ...(params.localPortOverride !== undefined
+        ? { localPortOverride: params.localPortOverride }
+        : {}),
+    }).url;
+    const basePath = params.config.gateway?.controlUi?.basePath ?? "";
+    candidates.push({
       target: appendControlUiBasePath(localUrl, basePath),
       identity: { authSurface: "local", tlsSource: "local loopback" },
-    },
-  ];
-  const remoteUrl =
-    params.config.gateway?.mode === "remote"
-      ? trimToUndefined(params.config.gateway.remote?.url)
-      : undefined;
-  if (remoteUrl) {
-    candidates.push({
-      target: remoteUrl,
-      identity: { authSurface: "remote", tlsSource: "config gateway.remote.url" },
     });
-  }
-  const publicOrigin = resolveGatewayPublicOrigin(params.config);
-  if (publicOrigin) {
-    candidates.push({
-      target: appendControlUiBasePath(
-        publicOrigin.replace(/^https:/u, "wss:").replace(/^http:/u, "ws:"),
-        basePath,
-      ),
-      // A public reverse proxy may terminate a different certificate than the
-      // direct local listener, so local auth ownership does not imply a TLS pin.
-      identity: { authSurface: "local" },
-    });
+    const publicOrigin = resolveGatewayPublicOrigin(params.config);
+    if (publicOrigin) {
+      candidates.push({
+        target: appendControlUiBasePath(
+          publicOrigin.replace(/^https:/u, "wss:").replace(/^http:/u, "ws:"),
+          basePath,
+        ),
+        // A public reverse proxy may terminate a different certificate than the
+        // direct local listener, so local auth ownership does not imply a TLS pin.
+        identity: { authSurface: "local" },
+      });
+    }
   }
   const matches = candidates.filter(({ target }) => target === params.explicitUrl);
   const identities = new Map(
