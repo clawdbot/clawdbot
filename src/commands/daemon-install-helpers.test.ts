@@ -233,6 +233,8 @@ async function buildPluginConfigExecSecretRefPlan(home: string) {
   const pluginRoot = path.join(home, "acme-secrets");
   createSecurePluginRoot(pluginRoot);
   writeSecurePluginEntrypoint(path.join(pluginRoot, "secret-ref-resolver.js"));
+  const configuredPluginRoot = path.join(home, "acme-plugin");
+  createSecurePluginRoot(configuredPluginRoot);
   mocks.loadPluginManifestRegistryCore.mockReturnValue({
     diagnostics: [],
     plugins: [
@@ -253,6 +255,7 @@ async function buildPluginConfigExecSecretRefPlan(home: string) {
       {
         id: "acme-plugin",
         origin: "global",
+        rootDir: configuredPluginRoot,
         configContracts: {
           secretInputs: {
             paths: [{ path: "apiKey", expected: "string" }],
@@ -267,6 +270,7 @@ async function buildPluginConfigExecSecretRefPlan(home: string) {
       {
         id: "acme-plugin",
         origin: "global",
+        rootDir: configuredPluginRoot,
         channels: [],
         configContracts: {
           secretInputs: {
