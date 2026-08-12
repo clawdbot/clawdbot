@@ -140,7 +140,6 @@ function sourceObservationRequestJson(
     observationId: observation.observationId,
     sourceState: observation.sourceState,
     staleAfterMisses: observation.staleAfterMisses,
-    observedAt: observation.observedAt,
   });
 }
 
@@ -163,7 +162,6 @@ function canonicalSourceObservationRequestJson(
       observationId: request.observationId,
       sourceState: request.sourceState,
       staleAfterMisses: request.staleAfterMisses,
-      observedAt: request.observedAt,
     });
   } catch {
     return value;

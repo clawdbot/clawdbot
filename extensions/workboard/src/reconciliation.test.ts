@@ -367,7 +367,11 @@ describe("WorkboardReconciler", () => {
     };
 
     const first = await reconciler.observeSource(observation);
-    const replay = await reconciler.observeSource({ ...observation, expectedRevision: 999_999 });
+    const replay = await reconciler.observeSource({
+      ...observation,
+      observedAt: 999_999,
+      expectedRevision: 999_999,
+    });
 
     expect(first).toMatchObject({
       observationId: "scan-42:replay:missing",
@@ -711,6 +715,7 @@ describe("WorkboardReconciler", () => {
         ).observeSource({
           ...observation,
           reconciliationAssociationKey: key!,
+          observedAt: 2_000,
           expectedRevision: first.revision + 1,
         });
         expect(replay.revision).toBe(first.revision);

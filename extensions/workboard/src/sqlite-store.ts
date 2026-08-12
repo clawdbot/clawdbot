@@ -436,7 +436,7 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
   db.exec(
     `UPDATE workboard_card_links
      SET last_source_observation_request_json = json_set(
-       json_remove(last_source_observation_request_json, '$.expectedRevision', '$.idempotencyKey'),
+       json_remove(last_source_observation_request_json, '$.expectedRevision', '$.idempotencyKey', '$.observedAt'),
        '$.reconciliationAssociationKey', reconciliation_association_key
      )
      WHERE last_source_observation_request_json IS NOT NULL
