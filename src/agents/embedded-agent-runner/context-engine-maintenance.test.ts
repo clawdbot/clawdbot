@@ -18,7 +18,7 @@ import { enqueueCommandInLane, markGatewayDraining } from "../../process/command
 import * as commandQueueModule from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { createDeferred } from "../../shared/deferred.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { createQueuedTaskRunCore as createQueuedTaskRunOrNull } from "../../tasks/task-executor.js";
 import { getTaskFlowById } from "../../tasks/task-flow-registry.js";
 import { getTaskById, listTasksForOwnerKey } from "../../tasks/task-registry.js";
@@ -94,8 +94,8 @@ function createControlledMaintenance(options?: {
   onStart?: (params: ContextEngineMaintainParams) => void;
   onRelease?: (params: ContextEngineMaintainParams) => Promise<void> | void;
 }) {
-  const started = createDeferred<ContextEngineMaintainParams>();
-  const release = createDeferred();
+  const started = createDeferredCore<ContextEngineMaintainParams>();
+  const release = createDeferredCore();
   const maintain = vi.fn(async (params: ContextEngineMaintainParams) => {
     started.resolve(params);
     options?.onStart?.(params);
@@ -1526,7 +1526,7 @@ describe("runContextEngineMaintenance", () => {
         const sessionKey = "agent:main:session-preempt-fallback";
         const engineId = "preempt-fallback-engine";
         let releaseRewriteRead: (() => void) | undefined;
-        const rewriteStarted = createDeferred();
+        const rewriteStarted = createDeferredCore();
         resolveRuntimeTranscriptReadTargetMock.mockImplementationOnce(
           async (scope: Record<string, unknown>) => {
             rewriteStarted.resolve();

@@ -23,7 +23,7 @@ import {
   GatewayDrainingError,
   isGatewayDraining,
 } from "../../process/command-queue.js";
-import { createDeferred } from "../../shared/deferred.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   completeTaskRunByRunId,
   createQueuedTaskRun,
@@ -189,8 +189,8 @@ function isForegroundMaintenancePreemption(signal: AbortSignal): boolean {
 }
 
 class DeferredTurnMaintenanceRun {
-  private readonly completionDeferred = createDeferred();
-  private readonly physicalSettlement = createDeferred();
+  private readonly completionDeferred = createDeferredCore();
+  private readonly physicalSettlement = createDeferredCore();
   readonly completion = this.completionDeferred.promise;
   private readonly schedulerAbort = createDeferredTurnMaintenanceAbortSignal();
   private readonly writeFence = createDeferredMaintenanceWriteFence();
@@ -290,7 +290,7 @@ class DeferredTurnMaintenanceRun {
   }
 
   private async settlesWithinPreemptionGrace(): Promise<boolean> {
-    const timeout = createDeferred<boolean>();
+    const timeout = createDeferredCore<boolean>();
     this.preemptionTimer = setTimeout(() => {
       this.preemptionTimer = undefined;
       timeout.resolve(false);
