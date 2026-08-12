@@ -6,7 +6,7 @@ mod gateway_sleep;
 mod gateway_sleep_logind_listener;
 
 use gateway_sleep::{GatewaySleepCycleController, SleepPrepareOutcome};
-use gateway_sleep_logind_listener::{run_listener, SleepCycleHook};
+use gateway_sleep_logind_listener::{run_listener, BeginSleepCycleHook, EndSleepCycleHook};
 use std::io::{BufRead, BufReader, Read};
 use std::os::fd::OwnedFd as StdOwnedFd;
 use std::os::unix::net::UnixStream;
@@ -219,11 +219,12 @@ async fn logind_full_sleep_cycle_releases_and_reacquires_inhibitor() {
         |message| eprintln!("mock Gateway sleep: {message}"),
     ));
     let begin_events = event_tx.clone();
-    let begin_sleep_cycle: SleepCycleHook = Arc::new(move || {
+    let begin_sleep_cycle: BeginSleepCycleHook = Arc::new(move || {
         let _ = begin_events.send(MockEvent::DriverActivated);
+        true
     });
     let end_events = event_tx;
-    let end_sleep_cycle: SleepCycleHook = Arc::new(move || {
+    let end_sleep_cycle: EndSleepCycleHook = Arc::new(move || {
         let _ = end_events.send(MockEvent::DriverDeactivated);
     });
     let listener = tokio::spawn(run_listener(controller, begin_sleep_cycle, end_sleep_cycle));
@@ -250,13 +251,26 @@ async fn logind_full_sleep_cycle_releases_and_reacquires_inhibitor() {
     MockLogin1::prepare_for_sleep(interface.signal_emitter(), false)
         .await
         .expect("emit wake signal");
+    // Wake recovery is spawned before the inhibitor re-acquire so a slow logind
+    // cannot delay reconnect/resume; only the relative order of the recovery
+    // chain is guaranteed.
+    let mut wake_events = Vec::new();
+    for _ in 0..4 {
+        wake_events.push(next_event(&mut events).await);
+    }
+    assert!(wake_events.contains(&MockEvent::InhibitorAcquired(2)));
+    let recovery: Vec<_> = wake_events
+        .into_iter()
+        .filter(|event| *event != MockEvent::InhibitorAcquired(2))
+        .collect();
     assert_eq!(
-        next_event(&mut events).await,
-        MockEvent::InhibitorAcquired(2)
+        recovery,
+        vec![
+            MockEvent::Refresh,
+            MockEvent::Resume,
+            MockEvent::DriverDeactivated
+        ]
     );
-    assert_eq!(next_event(&mut events).await, MockEvent::Refresh);
-    assert_eq!(next_event(&mut events).await, MockEvent::Resume);
-    assert_eq!(next_event(&mut events).await, MockEvent::DriverDeactivated);
 
     listener.abort();
 }

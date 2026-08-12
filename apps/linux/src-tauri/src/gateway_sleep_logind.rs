@@ -1,5 +1,5 @@
 use crate::gateway_sleep::GatewaySleepCycleController;
-use crate::gateway_sleep_logind_listener::{run_listener, SleepCycleHook};
+use crate::gateway_sleep_logind_listener::{run_listener, BeginSleepCycleHook, EndSleepCycleHook};
 use crate::gateway_ws::GatewayClient;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager};
@@ -42,8 +42,15 @@ impl SleepBridge {
             tokio::time::sleep,
             |message| eprintln!("Gateway sleep: {message}"),
         ));
-        let begin_sleep_cycle: SleepCycleHook = Arc::new(move || begin_gateway.begin_sleep_cycle());
-        let end_sleep_cycle: SleepCycleHook = Arc::new(move || end_gateway.end_sleep_cycle());
+        let begin_sleep_cycle: BeginSleepCycleHook = Arc::new(move || {
+            // A remote or unconfigured route must not activate the driver.
+            if begin_gateway.loopback_route_token().is_none() {
+                return false;
+            }
+            begin_gateway.begin_sleep_cycle();
+            true
+        });
+        let end_sleep_cycle: EndSleepCycleHook = Arc::new(move || end_gateway.end_sleep_cycle());
         let task = tauri::async_runtime::spawn(async move {
             if let Err(error) = run_listener(controller, begin_sleep_cycle, end_sleep_cycle).await {
                 eprintln!("Gateway sleep listener unavailable: {error}");
