@@ -1,3 +1,4 @@
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 // Kimi Coding usage fetcher for coding-plan quota windows.
 import {
   buildUsageErrorSnapshot,
@@ -8,6 +9,7 @@ import {
   type ProviderUsageSnapshot,
   type UsageWindow,
 } from "openclaw/plugin-sdk/provider-usage";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type KimiUsageRow = {
   limit?: unknown;
@@ -43,12 +45,6 @@ const DEFAULT_KIMI_USAGE_BASE_URL = "https://api.kimi.com/coding/v1";
 const KIMI_MANAGED_USAGE_ORIGIN = "https://api.kimi.com";
 const KIMI_MANAGED_USAGE_PATHS = new Set(["/coding", "/coding/v1"]);
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function toNumber(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -71,7 +67,7 @@ function toText(value: unknown): string | undefined {
 }
 
 function usagePercent(row: unknown): number | undefined {
-  const record = asRecord(row);
+  const record = isRecord(row) ? row : undefined;
   if (!record) {
     return undefined;
   }
@@ -88,8 +84,8 @@ function usagePercent(row: unknown): number | undefined {
 }
 
 function isFiveHourLimit(item: KimiUsageLimit): boolean {
-  const detail = asRecord(item.detail) ?? {};
-  const window = asRecord(item.window) ?? {};
+  const detail = isRecord(item.detail) ? item.detail : {};
+  const window = isRecord(item.window) ? item.window : {};
   const label = [item.name, item.title, item.scope, detail.name, detail.title, detail.scope]
     .map((value) => toText(value)?.toLowerCase())
     .filter((value) => value !== undefined)
@@ -107,7 +103,7 @@ function isFiveHourLimit(item: KimiUsageLimit): boolean {
 }
 
 function parseKimiUsageWindows(payload: unknown): UsageWindow[] {
-  const data = asRecord(payload) as KimiUsageResponse | undefined;
+  const data = isRecord(payload) ? (payload as KimiUsageResponse) : undefined;
   if (!data) {
     return [];
   }
@@ -119,10 +115,10 @@ function parseKimiUsageWindows(payload: unknown): UsageWindow[] {
   }
 
   for (const item of data.limits ?? []) {
-    if (!asRecord(item) || !isFiveHourLimit(item)) {
+    if (!isRecord(item) || !isFiveHourLimit(item)) {
       continue;
     }
-    const row = asRecord(item.detail) ?? item;
+    const row = isRecord(item.detail) ? item.detail : item;
     const fiveHour = usagePercent(row);
     if (fiveHour !== undefined) {
       windows.unshift({ label: "5h", usedPercent: fiveHour });
@@ -153,6 +149,7 @@ export async function fetchKimiUsage(
   );
 
   if (!res.ok) {
+    await res.body?.cancel().catch(() => undefined);
     return buildUsageHttpErrorSnapshot({
       provider: "kimi",
       status: res.status,
@@ -162,7 +159,7 @@ export async function fetchKimiUsage(
 
   let payload: unknown;
   try {
-    payload = await res.json();
+    payload = await readProviderJsonResponse<unknown>(res, "kimi usage");
   } catch {
     return buildUsageErrorSnapshot("kimi", "Malformed usage response");
   }

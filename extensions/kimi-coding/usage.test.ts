@@ -1,6 +1,6 @@
 // Covers Kimi Coding plan usage parsing.
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fetchKimiUsage, isManagedKimiUsageBaseUrl, normalizeKimiUsageBaseUrl } from "./usage.js";
 
 async function expectParsedWindows(body: unknown) {
@@ -10,8 +10,18 @@ async function expectParsedWindows(body: unknown) {
 }
 
 describe("fetchKimiUsage", () => {
-  it("returns token-expired errors for auth failures", async () => {
-    const mockFetch = createProviderUsageFetch(async () => makeResponse(401, "unauthorized"));
+  it("returns token-expired errors and cancels unread auth-failure bodies", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const mockFetch = createProviderUsageFetch(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            pull() {},
+            cancel,
+          }),
+          { status: 401 },
+        ),
+    );
 
     const result = await fetchKimiUsage("key", 5000, mockFetch);
 
@@ -21,6 +31,7 @@ describe("fetchKimiUsage", () => {
       windows: [],
       error: "Token expired",
     });
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("returns a stable error for malformed successful JSON", async () => {
@@ -55,6 +66,61 @@ describe("fetchKimiUsage", () => {
         { label: "7d", usedPercent: 18 },
       ],
     });
+  });
+
+  it("parses a chunked JSON response through the bounded reader", async () => {
+    const encoded = new TextEncoder().encode(
+      JSON.stringify({
+        usage: { limit: 100, used: 18 },
+        limits: [{ name: "5h", detail: { limit: 50, used: 7 } }],
+      }),
+    );
+    const mockFetch = createProviderUsageFetch(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(encoded.slice(0, 17));
+              controller.enqueue(encoded.slice(17));
+              controller.close();
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+
+    await expect(fetchKimiUsage("key", 5000, mockFetch)).resolves.toMatchObject({
+      windows: [
+        { label: "5h", usedPercent: 14 },
+        { label: "7d", usedPercent: 18 },
+      ],
+    });
+  });
+
+  it("returns the stable malformed error and cancels oversized response bodies", async () => {
+    let pullCount = 0;
+    const cancel = vi.fn(async () => undefined);
+    const mockFetch = createProviderUsageFetch(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              pullCount += 1;
+              controller.enqueue(new Uint8Array(pullCount === 1 ? 16 * 1024 * 1024 + 1 : 1));
+            },
+            cancel,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+
+    await expect(fetchKimiUsage("key", 5000, mockFetch)).resolves.toMatchObject({
+      provider: "kimi",
+      windows: [],
+      error: "Malformed usage response",
+    });
+    expect(pullCount).toBeLessThanOrEqual(2);
+    expect(cancel).toHaveBeenCalledOnce();
   });
 });
 
