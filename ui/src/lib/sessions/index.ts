@@ -288,19 +288,25 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     };
   };
 
+  const reconcileChangedEvent = (payload: unknown, options?: SessionReconcileOptions) => {
+    const previous = state.result;
+    const eventInfo = readSessionChangedEvent(payload);
+    const reconciled = reconcileSessionChanged(
+      previous,
+      payload,
+      reconcileChangedOptions(payload, options),
+    );
+    if (reconciled.result !== previous && reconciled.key && eventInfo) {
+      mutations.observeArchiveState(reconciled.key, eventInfo.archived, reconciled.row);
+    }
+    return { eventInfo, reconciled };
+  };
+
   const reconcileChanged = (
     payload: unknown,
     options?: SessionReconcileOptions,
   ): SessionChangedResult => {
-    const base = reconcileSessionChanged(
-      state.result,
-      payload,
-      reconcileChangedOptions(payload, options),
-    );
-    const eventInfo = readSessionChangedEvent(payload);
-    if (base.key && eventInfo) {
-      mutations.observeArchiveState(base.key, eventInfo.archived, base.row);
-    }
+    const { reconciled: base } = reconcileChangedEvent(payload, options);
     const result = decorateRows(base.result);
     const reconciled =
       result === base.result
@@ -406,15 +412,10 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (decoratedResult !== state.result) {
       publish({ ...state, result: decoratedResult });
     }
-    const eventInfo = readSessionChangedEvent(event.payload);
-    const reconcileOptions = reconcileChangedOptions(event.payload, {
+    const { eventInfo, reconciled } = reconcileChangedEvent(event.payload, {
       resultAgentId: state.agentId,
       archivedFilter: roster.lastOptions().archivedFilter,
     });
-    const reconciled = reconcileSessionChanged(state.result, event.payload, reconcileOptions);
-    if (reconciled.key && eventInfo) {
-      mutations.observeArchiveState(reconciled.key, eventInfo.archived, reconciled.row);
-    }
     if (eventInfo?.archived !== null) {
       const result = decorateRows(reconciled.result);
       if (result !== state.result) {
