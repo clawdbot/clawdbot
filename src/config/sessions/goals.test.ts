@@ -14,7 +14,7 @@ import {
   upsertSessionEntryCore as upsertAccessorSessionEntry,
 } from "./session-accessor.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
-import type { SessionEntry } from "./types.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "./types.js";
 
 // The goal APIs read/write session entries through the SQLite-backed accessor,
 // so fixtures must seed and assert through the same accessor rather than the
@@ -222,6 +222,7 @@ describe("session goals", () => {
     const goal = resolveSessionGoalDisplayState({
       totalTokens: 125,
       totalTokensFresh: true,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       goal: {
         schemaVersion: 1,
         id: "goal-1",

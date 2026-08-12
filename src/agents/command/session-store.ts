@@ -8,10 +8,7 @@ import {
   setSessionRuntimeModel,
   type SessionEntry,
 } from "../../config/sessions.js";
-import {
-  rebaseSessionGoalTokenCursor,
-  resolveSessionGoalDisplayState,
-} from "../../config/sessions/goals.js";
+import { resolveSessionGoalDisplayState } from "../../config/sessions/goals.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { projectSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
@@ -34,6 +31,19 @@ type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["run
 
 const usageFormatModuleLoader = createLazyImportLoader(() => import("../../utils/usage-format.js"));
 const contextModuleLoader = createLazyImportLoader(() => import("../context.js"));
+
+function rebaseSessionGoalTokenCursor(
+  goal: NonNullable<SessionEntry["goal"]>,
+  totalTokens: number,
+  options?: { resetStart?: boolean },
+): NonNullable<SessionEntry["goal"]> {
+  return {
+    ...goal,
+    ...(options?.resetStart ? { tokenStart: totalTokens } : {}),
+    tokenStartFresh: true,
+    tokenCursor: totalTokens,
+  };
+}
 
 async function getUsageFormatModule() {
   return await usageFormatModuleLoader.load();

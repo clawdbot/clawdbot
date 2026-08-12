@@ -100,24 +100,6 @@ export function resolveSessionGoalDisplayState(
   return accountGoalUsage(entry, nowMs(now), options);
 }
 
-/** Rebases a goal cursor when a lifecycle owner publishes a new token-count epoch. */
-export function rebaseSessionGoalTokenCursor(
-  goal: SessionGoal,
-  totalTokens: number,
-  options?: { resetStart?: boolean },
-): SessionGoal {
-  const normalizedTotal = normalizeTokenCount(totalTokens);
-  if (normalizedTotal === undefined) {
-    return cloneGoal(goal);
-  }
-  return {
-    ...goal,
-    ...(options?.resetStart ? { tokenStart: normalizedTotal } : {}),
-    tokenStartFresh: true,
-    tokenCursor: normalizedTotal,
-  };
-}
-
 function accountGoalUsage(
   entry: Pick<SessionEntry, "goal" | "totalTokens" | "totalTokensFresh" | "totalTokensVersion">,
   now: number,

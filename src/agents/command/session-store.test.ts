@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  SESSION_TOTAL_TOKENS_VERSION,
   resolveFreshSessionTotalTokens,
   type InternalSessionEntry as SessionEntry,
 } from "../../config/sessions.js";
@@ -1622,11 +1623,20 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       expect(sessionStore[sessionKey]?.totalTokens).toBe(125);
-      expect(sessionStore[sessionKey]?.goal).toEqual(concurrentGoal);
+      expect(sessionStore[sessionKey]?.goal).toEqual({
+        ...concurrentGoal,
+        tokenCursor: 125,
+        tokensUsed: 25,
+      });
       expect(loadPersistedSessionEntry(storePath, sessionKey)).toMatchObject({
         totalTokens: 125,
         totalTokensFresh: true,
-        goal: concurrentGoal,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+        goal: {
+          ...concurrentGoal,
+          tokenCursor: 125,
+          tokensUsed: 25,
+        },
       });
     });
   });
