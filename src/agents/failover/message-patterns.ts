@@ -232,6 +232,11 @@ const ERROR_PATTERNS = {
     /out of extra usage/i,
     /draw from your extra usage/i,
     /extra usage is required(?: for long context requests)?/i,
+    // Claude subscription exhaustion surfaced by the claude-cli runtime: "You're out of
+    // usage credits. Run /usage-credits ...". Without this the turn lands in `unknown`,
+    // which does not advance the model fallback chain, so a configured cross-provider
+    // fallback is never reached (#122010).
+    /\bout of usage credits\b/i,
     // Chinese provider billing messages
     "余额不足",
     "账户余额不足",

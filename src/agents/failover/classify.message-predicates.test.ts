@@ -19,6 +19,40 @@ describe("matchesFormatErrorPattern", () => {
   });
 });
 
+describe("Claude subscription usage credits (#122010)", () => {
+  const reported =
+    "You're out of usage credits. Run /usage-credits to keep using Fable 5 or /model to switch models.";
+
+  it("classifies claude-cli usage-credit exhaustion as billing", () => {
+    // Left unmatched this lands in `unknown`, which does not advance the model fallback
+    // chain, so a configured cross-provider fallback is never reached.
+    expect(isBillingErrorMessage(reported)).toBe(true);
+    expect(classifyFailoverReason(reported, { provider: "anthropic" })).toBe("billing");
+  });
+
+  it("classifies the uncontracted wording the same way", () => {
+    const raw =
+      "You are out of usage credits. Run /usage-credits to keep using Opus 5 or /model to switch models.";
+    expect(classifyFailoverReason(raw, { provider: "anthropic" })).toBe("billing");
+  });
+
+  it("does not misclassify usage-credit exhaustion as auth or rate limit", () => {
+    expect(isAuthErrorMessage(reported)).toBe(false);
+    expect(isRateLimitErrorMessage(reported)).toBe(false);
+  });
+
+  it("keeps unrelated credit and usage prose out of billing", () => {
+    // Informational prose naming usage credits must not read as exhaustion.
+    expect(isBillingErrorMessage("insufficient to reconcile the final balance")).toBe(false);
+    expect(isBillingErrorMessage("The model produced credits toward the usage report")).toBe(false);
+    expect(isBillingErrorMessage("You have 5 usage credits remaining this month")).toBe(false);
+    expect(isBillingErrorMessage("Your usage credits reset at midnight UTC")).toBe(false);
+    expect(isBillingErrorMessage("Run /usage-credits to view your remaining usage credits")).toBe(
+      false,
+    );
+  });
+});
+
 describe("Z.ai vendor error codes (#48988)", () => {
   describe("error 1311 — model not included in subscription plan", () => {
     it("classifies Z.ai 1311 JSON body as billing", () => {
