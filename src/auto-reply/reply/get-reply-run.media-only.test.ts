@@ -62,6 +62,13 @@ vi.mock("../../agents/harness/hook-helpers.js", () => ({
   runAgentHarnessBeforeMessageWriteHook: vi.fn((params: { message: unknown }) => params.message),
 }));
 
+// Provider policy projection belongs to its adapter and provider-local suites. These tests
+// exercise prepared reply orchestration and supply their own model/thinking facts.
+vi.mock("../../plugins/provider-policy-surface.js", () => ({
+  resolveDirectBundledProviderPolicySurface: () => null,
+  resolveTrustedExternalProviderPolicySurface: () => null,
+}));
+
 vi.mock("../../config/sessions/group.js", () => ({
   resolveGroupSessionKey: vi.fn().mockReturnValue(undefined),
 }));
