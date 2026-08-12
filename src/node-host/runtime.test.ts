@@ -9,6 +9,8 @@ import { prepareNodeHostRuntime } from "./runtime.js";
 const mocks = vi.hoisted(() => ({
   closeMcp: vi.fn(async () => undefined),
   handleInvoke: vi.fn(async () => undefined),
+  progressStartHeartbeats: vi.fn(),
+  progressWrite: vi.fn(async () => undefined),
 }));
 
 vi.mock("../infra/path-env.js", () => ({
@@ -30,8 +32,8 @@ vi.mock("./mcp.js", () => ({
 
 vi.mock("./node-invoke-progress.js", () => ({
   createNodeInvokeProgressWriter: vi.fn(() => ({
-    startHeartbeats: vi.fn(),
-    write: vi.fn(async () => undefined),
+    startHeartbeats: mocks.progressStartHeartbeats,
+    write: mocks.progressWrite,
     stop: vi.fn(),
     flush: vi.fn(async () => undefined),
   })),
@@ -196,6 +198,22 @@ describe("node-host desktop manifest", () => {
       platform: "linux",
     });
     expect(enabled.manifest.commands).toContain(NODE_DESKTOP_STREAM_COMMAND);
+  });
+
+  it("emits desktop statuses without control-channel heartbeats", async () => {
+    const runtime = await startRuntime();
+    await runtime.invoke({ ...frame, command: NODE_DESKTOP_STREAM_COMMAND });
+
+    expect(mocks.progressStartHeartbeats).not.toHaveBeenCalled();
+    const lastCall = mocks.handleInvoke.mock.calls.at(-1) as unknown[] | undefined;
+    const invokeRuntime = lastCall?.[4] as
+      | {
+          emitProgress?: (text: string) => Promise<void>;
+        }
+      | undefined;
+    await invokeRuntime?.emitProgress?.("attached\n");
+    expect(mocks.progressWrite).toHaveBeenCalledWith("attached\n");
+    await runtime.close();
   });
 });
 

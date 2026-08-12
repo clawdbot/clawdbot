@@ -389,7 +389,9 @@ export async function prepareNodeHostRuntime(params?: {
                 onError: () => controller.abort(),
               })
             : undefined;
-          progress?.startHeartbeats();
+          if (duplexCommand) {
+            progress?.startHeartbeats();
+          }
           const pluginCommandIo: OpenClawPluginNodeHostCommandIo | undefined =
             input && progress
               ? {

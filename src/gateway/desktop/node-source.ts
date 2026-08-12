@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS } from "../../infra/node-commands.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
@@ -124,10 +123,9 @@ export function createNodeDesktopService(params: {
         throw new Error("node desktop is unavailable; reconnect and approve the node capability");
       }
       const pairingGeneration = node.pairingGeneration;
-      const allowlist = resolveNodeCommandAllowlist(params.getConfig(), {
-        ...node,
-        approvedCommands: node.commands,
-      });
+      // NodeSession.commands is the generation-bound effective approval surface;
+      // declaredCommands remains the broader capability advertised at connect.
+      const allowlist = resolveNodeCommandAllowlist(params.getConfig(), node);
       const commandPolicy = isNodeCommandAllowed({
         command: NODE_DESKTOP_STREAM_COMMAND,
         declaredCommands: node.commands,
@@ -167,7 +165,6 @@ export function createNodeDesktopService(params: {
         command: NODE_DESKTOP_STREAM_COMMAND,
         params: { ticket: active.ticket.ticket, attachPath: active.ticket.attachPath },
         timeoutMs: 0,
-        idleTimeoutMs: NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS,
         onProgress: () => {},
         signal: active.controller.signal,
       });
