@@ -9,7 +9,6 @@ import {
   normalizeGatewayClientId,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { GatewayClientRequestError } from "../../gateway/client.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   createSessionVisibilityChecker,
@@ -164,10 +163,11 @@ type VisibleSessionReferenceResolution =
       ok: true;
       key: string;
       displayKey: string;
+      missing?: true;
     }
   | {
       ok: false;
-      status: "forbidden";
+      status: "error" | "forbidden";
       error: string;
       displayKey: string;
     };
@@ -190,36 +190,35 @@ function buildResolvedSessionReference(params: {
   };
 }
 
+function buildFailedSessionReference(
+  error: unknown,
+  raw: string,
+  restrictToSpawned: boolean,
+): Extract<SessionReferenceResolution, { ok: false }> {
+  return restrictToSpawned
+    ? {
+        ok: false,
+        status: "forbidden",
+        error: `Session not visible from this sandboxed agent session: ${raw}`,
+      }
+    : {
+        ok: false,
+        status: "error",
+        error:
+          formatErrorMessage(error) ||
+          `Session not found: ${raw} (use the full sessionKey from sessions_list)`,
+      };
+}
+
 async function requestResolvedSessionKey(
   params: Record<string, unknown> & { allowMissing?: boolean },
   callGateway: GatewayCaller,
 ): Promise<string | undefined> {
-  try {
-    const result = await callGateway<{ key?: unknown }>({
-      method: "sessions.resolve",
-      params,
-    });
-    return normalizeOptionalString(result?.key);
-  } catch (error) {
-    const olderGatewayRejectedProbe =
-      params.allowMissing === true &&
-      error instanceof GatewayClientRequestError &&
-      error.gatewayCode === "INVALID_REQUEST" &&
-      error.message.includes("invalid sessions.resolve params") &&
-      error.message.includes("unexpected property 'allowMissing'");
-    if (!olderGatewayRejectedProbe) {
-      throw error;
-    }
-    // Protocol v4 gateways predating allowMissing reject the additive field.
-    // Retry without it for mixed-version correctness; remove at the next protocol break.
-    const legacyParams: Record<string, unknown> = { ...params };
-    delete legacyParams.allowMissing;
-    const result = await callGateway<{ key?: unknown }>({
-      method: "sessions.resolve",
-      params: legacyParams,
-    });
-    return normalizeOptionalString(result?.key);
-  }
+  const result = await callGateway<{ key?: unknown }>({
+    method: "sessions.resolve",
+    params,
+  });
+  return normalizeOptionalString(result?.key);
 }
 
 function buildSessionResolveQuery(params: {
@@ -310,20 +309,7 @@ export async function resolveSessionReference(params: {
       }
       return buildReference(key, true);
     } catch (error) {
-      if (params.restrictToSpawned) {
-        return {
-          ok: false,
-          status: "forbidden",
-          error: `Session not visible from this sandboxed agent session: ${raw}`,
-        };
-      }
-      return {
-        ok: false,
-        status: "error",
-        error:
-          formatErrorMessage(error) ||
-          `Session not found: ${raw} (use the full sessionKey from sessions_list)`,
-      };
+      return buildFailedSessionReference(error, raw, params.restrictToSpawned);
     }
   }
 
@@ -333,12 +319,7 @@ export async function resolveSessionReference(params: {
     mainKey: params.mainKey,
     requesterInternalKey: params.requesterInternalKey,
   });
-  const displayKey = resolveDisplaySessionKey({
-    key: resolvedKey,
-    alias: params.alias,
-    mainKey: params.mainKey,
-  });
-  return { ok: true, key: resolvedKey, displayKey, resolvedViaSessionId: false };
+  return buildReference(resolvedKey, false);
 }
 
 export async function resolveVisibleSessionReference(params: {
@@ -347,12 +328,66 @@ export async function resolveVisibleSessionReference(params: {
   requesterSessionKey: string;
   restrictToSpawned: boolean;
   visibilitySessionKey: string;
+  allowMissingKey?: boolean;
+  concealResolutionError?: string;
   callGateway?: GatewayCaller;
 }): Promise<VisibleSessionReferenceResolution> {
-  const resolvedKey = params.resolvedSession.key;
-  const displayKey = params.resolvedSession.displayKey;
+  let resolvedKey = params.resolvedSession.key;
+  let displayKey = params.resolvedSession.displayKey;
+  let missing = false;
   // Cross-session tools persist their results into the caller transcript; an
   // incognito target must remain unreachable even from an incognito requester.
+  if (isIncognitoSessionKey(resolvedKey)) {
+    return {
+      ok: false,
+      status: "forbidden",
+      error: `Session not visible from session tools: ${params.visibilitySessionKey}`,
+      displayKey,
+    };
+  }
+  const input = params.visibilitySessionKey.trim();
+  const isExplicitKey =
+    !params.resolvedSession.resolvedViaSessionId &&
+    input !== "current" &&
+    input !== "main" &&
+    input !== "global" &&
+    input !== "unknown" &&
+    !shouldResolveSessionIdInput(input);
+  if (isExplicitKey && (params.action === "history" || params.action === "send")) {
+    try {
+      const key = await requestResolvedSessionKey(
+        buildSessionResolveQuery({
+          input: resolvedKey,
+          kind: "key",
+          requesterInternalKey: params.requesterSessionKey,
+          restrictToSpawned: params.restrictToSpawned,
+          allowMissing: params.allowMissingKey,
+        }),
+        params.callGateway ?? callAgentToolGatewayRequest,
+      );
+      if (key) {
+        resolvedKey = key;
+        displayKey = key;
+      } else if (params.allowMissingKey) {
+        missing = true;
+      }
+    } catch (error) {
+      if (params.concealResolutionError && !params.restrictToSpawned) {
+        return {
+          ok: false,
+          status: "forbidden",
+          error: params.concealResolutionError,
+          displayKey,
+        };
+      }
+      const failed = buildFailedSessionReference(
+        error,
+        params.visibilitySessionKey,
+        params.restrictToSpawned,
+      );
+      return { ...failed, displayKey };
+    }
+  }
   if (isIncognitoSessionKey(resolvedKey)) {
     return {
       ok: false,
@@ -389,5 +424,5 @@ export async function resolveVisibleSessionReference(params: {
       displayKey,
     };
   }
-  return { ok: true, key: resolvedKey, displayKey };
+  return { ok: true, key: resolvedKey, displayKey, ...(missing ? { missing: true } : {}) };
 }

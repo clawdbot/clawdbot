@@ -113,6 +113,7 @@ export const DevicePairSetupCodeResultSchema = closedObject({
     Type.Union([Type.Literal("full"), Type.Literal("limited"), Type.Literal("node")]),
   ),
   accessDowngraded: Type.Optional(Type.Boolean()),
+  expiresAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
 // Wire types derive directly from local schema consts so public d.ts graphs never

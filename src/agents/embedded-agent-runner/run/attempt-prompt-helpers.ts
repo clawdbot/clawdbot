@@ -21,8 +21,8 @@ import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { truncateUtf16Safe } from "../../../utils.js";
-import { resolveProcessToolScopeKey } from "../../agent-tools.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
+import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
 import {

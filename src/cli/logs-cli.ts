@@ -1,7 +1,10 @@
 // Gateway logs CLI with RPC tailing, local file fallback, and systemd journal fallback.
 import { setTimeout as delay } from "node:timers/promises";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
-import { coerceErrorMessage as normalizeErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import {
+  coerceErrorMessage as normalizeErrorMessage,
+  toStringifiedError,
+} from "@openclaw/normalization-core/error-coercion";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
@@ -203,10 +206,6 @@ async function fetchLogs(
       localFallback: true,
     };
   }
-}
-
-function normalizeError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }
 
 function shouldUseLocalLogsFallback(opts: LogsCliOptions, error: unknown): boolean {
@@ -612,9 +611,9 @@ export function registerLogsCli(program: Command) {
           return { payload: result.payload, gatewayPollStartedAt: result.startedAt };
         }
         if (!shouldUseLocalLogsFallback(opts, result.error)) {
-          throw normalizeError(result.error);
+          throw toStringifiedError(result.error);
         }
-        fallbackError = normalizeError(result.error);
+        fallbackError = toStringifiedError(result.error);
       }
 
       const activeProbe = gatewayRecovery.kind === "probing" ? gatewayRecovery.promise : undefined;
@@ -633,7 +632,7 @@ export function registerLogsCli(program: Command) {
         if (result.ok) {
           return { payload: result.payload, gatewayPollStartedAt: result.startedAt };
         }
-        throw normalizeError(result.error);
+        throw toStringifiedError(result.error);
       }
       throw fallbackError ?? new Error("Active systemd journal unavailable for logs follow");
     };

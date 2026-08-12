@@ -12,7 +12,7 @@ import type {
   SessionCompanionContextMessage,
   SessionCompanionPreparedContext,
 } from "./session-companion-state.js";
-import { loadSessionEntryReadOnly } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 const CONTEXT_MAX_MESSAGES = 40;
 const CONTEXT_MAX_BYTES = 24 * 1024;
@@ -123,7 +123,7 @@ async function readSessionCompanionContext(params: {
   sessionKey: string;
   signal?: AbortSignal;
 }): Promise<SessionCompanionContextReadResult> {
-  const loaded = loadSessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
+  const loaded = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
   const sessionId = loaded.entry?.sessionId?.trim();
   if (!sessionId) {
     return { kind: "missing" };
@@ -229,6 +229,6 @@ async function readSessionCompanionContext(params: {
 
 export const defaultSessionCompanionContextReader: SessionCompanionContextReader = {
   currentSessionId: ({ agentId, sessionKey }) =>
-    loadSessionEntryReadOnly(sessionKey, { agentId }).entry?.sessionId?.trim() || undefined,
+    loadGatewaySessionEntryReadOnly(sessionKey, { agentId }).entry?.sessionId?.trim() || undefined,
   read: readSessionCompanionContext,
 };

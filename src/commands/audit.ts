@@ -95,16 +95,6 @@ function parseAuditDecisionLimit(value: string | undefined): number {
   return parsed;
 }
 
-function parseAuditExecutionLimit(value: string | undefined): number {
-  const parsed = parseAuditDecisionLimit(value);
-  if (parsed > MAX_AUDIT_EXECUTION_LIMIT) {
-    throw new Error(
-      `--limit must be between 1 and ${String(MAX_AUDIT_EXECUTION_LIMIT)} for run discovery.`,
-    );
-  }
-  return parsed;
-}
-
 function short(value: string | undefined, maxChars: number): string {
   if (!value) {
     return "-";
@@ -335,11 +325,26 @@ function unavailableIdentityLines(state: "unknown" | "unsupported"): string[] {
 }
 
 function decisionLines(receipt: DecisionReceiptV1): string[] {
+  const evidence =
+    receipt.action.family === "run" && receipt.action.operation === "admission"
+      ? "admission provenance only; no enforcement decision"
+      : receipt.enforcement.coverageState === "unknown" ||
+          receipt.enforcement.coverageState === "unsupported"
+        ? "evidence unavailable or corrupt; do not infer authorization"
+        : receipt.source.owner === "operator_approvals"
+          ? "authoritative owner-native SQLite record; retained 30 days"
+          : receipt.enforcement.coverageState === "enforced"
+            ? "validated immutable decision fact; retained 30 days"
+            : "attribution record only; no enforcement decision";
   return [
     `  ${safe(receipt.action.family)}.${safe(receipt.action.operation)}: ${safe(receipt.decision.outcome)}`,
     `    Coverage: ${safe(receipt.enforcement.coverageState)}`,
     `    Reason: ${safe(receipt.decision.reasonCode)}`,
     `    Source: ${safe(receipt.source.owner)} at ${safe(receipt.source.decisionBoundary)}`,
+    `    Evidence: ${evidence}`,
+    `    Policy refs: ${receipt.enforcement.policyRefs.length > 0 ? receipt.enforcement.policyRefs.map(safe).join(", ") : "none"}`,
+    `    Grant refs: ${receipt.enforcement.grantRefs.length > 0 ? receipt.enforcement.grantRefs.map(safe).join(", ") : "none"}`,
+    `    Context used: ${receipt.enforcement.contextFieldsUsed.length > 0 ? receipt.enforcement.contextFieldsUsed.map(safe).join(", ") : "none"}`,
     ...(receipt.action.summary ? [`    Summary: ${safe(receipt.action.summary)}`] : []),
   ];
 }
@@ -464,15 +469,16 @@ export async function auditListCommand(
         "--explain accepts only --run or --execution, plus --limit, --cursor, and --json; remove activity-list filters.",
       );
     }
+    const decisionLimit = parseAuditDecisionLimit(options.limit);
     const result = await queryAuditRunInspection({
       ...(executionId
         ? { executionId }
         : {
             runId: runId!,
-            executionLimit: parseAuditExecutionLimit(options.limit),
+            executionLimit: Math.min(decisionLimit, MAX_AUDIT_EXECUTION_LIMIT),
             ...(options.cursor ? { executionCursor: options.cursor } : {}),
           }),
-      decisionLimit: parseAuditDecisionLimit(options.limit),
+      decisionLimit,
       ...(options.cursor ? { decisionCursor: options.cursor } : {}),
     });
     if (options.json) {

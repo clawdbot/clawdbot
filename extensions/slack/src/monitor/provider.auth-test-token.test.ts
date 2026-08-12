@@ -321,7 +321,9 @@ describe("auth.test boot call", () => {
           dmPolicy: "disabled",
           groupPolicy: "open",
           slashCommand: { enabled: true, name: "openclaw" },
-          channels: { C12345678: { allow: true, requireMention: true } },
+          channels: {
+            "team:TWORKSPACE:channel:C12345678": { allow: true, requireMention: true },
+          },
         },
       },
     });
@@ -886,7 +888,9 @@ describe("connected identity health", () => {
         slack: {
           dmPolicy: "disabled",
           groupPolicy: "open",
-          channels: { C12345678: { allow: true, requireMention: true } },
+          channels: {
+            "team:TWORKSPACE:channel:C12345678": { allow: true, requireMention: true },
+          },
         },
       },
     });

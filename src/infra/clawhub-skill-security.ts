@@ -1,4 +1,5 @@
 // Shared owner-qualified ClawHub security verdict resolution.
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readObject } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import pLimit from "p-limit";
@@ -82,8 +83,7 @@ function readOptionalStringField(value: unknown, field: string): string | undefi
 }
 
 function readOptionalNumberField(value: unknown, field: string): number | undefined {
-  const raw = readObject(value)?.[field];
-  return typeof raw === "number" && Number.isFinite(raw) ? raw : undefined;
+  return asFiniteNumber(readObject(value)?.[field]);
 }
 
 function normalizeReason(reason: string | null | undefined): string {

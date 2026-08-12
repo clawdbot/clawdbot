@@ -35,7 +35,7 @@ vi.mock("./session-utils.js", () => ({
   attachOpenClawTranscriptMeta: (message: unknown) => message,
   loadGatewaySessionRow: loadGatewaySessionRowMock,
   loadSessionEntry: () => ({ entry: undefined, storePath: "" }),
-  loadSessionEntryReadOnly: loadGatewaySessionEntryReadOnlyMock,
+  loadGatewaySessionEntryReadOnly: loadGatewaySessionEntryReadOnlyMock,
 }));
 vi.mock("./session-transcript-readers.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-transcript-readers.js")>();

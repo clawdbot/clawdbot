@@ -36,7 +36,7 @@ import { capArrayByJsonBytes } from "../session-transcript-readers.js";
 import {
   buildGatewaySessionInfo,
   getSessionDefaults,
-  loadSessionEntryReadOnly,
+  loadGatewaySessionEntryReadOnly,
   listAgentsForGateway,
   resolveSessionModelRef,
   resolveSessionStoreKey,
@@ -203,7 +203,7 @@ async function handleChatHistoryRequest({
   const { cfg, storePath, store, entry, canonicalKey } = measureDiagnosticsTimelineSpanSync(
     `gateway.${method}.session_entry`,
     () =>
-      loadSessionEntryReadOnly(sessionKey, {
+      loadGatewaySessionEntryReadOnly(sessionKey, {
         ...sessionLoadOptions,
         includeStoreChildEntries: true,
       }),

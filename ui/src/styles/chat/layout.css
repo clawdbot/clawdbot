@@ -2450,6 +2450,8 @@ button.chat-reply-preview--message:disabled {
 }
 
 .agent-chat__composer-combobox > :is(textarea, input) {
+  --control-ui-touch-input-size: var(--control-ui-input-text-size);
+
   width: 100%;
   min-height: var(--chat-composer-control-height);
   max-height: calc(7em + 24px);
@@ -2482,12 +2484,6 @@ button.chat-reply-preview--message:disabled {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-@media (hover: none) and (pointer: coarse) {
-  .agent-chat__composer-combobox > :is(textarea, input) {
-    font-size: var(--control-ui-input-text-size);
-  }
 }
 
 .agent-chat__composer-status-stack {
@@ -4587,16 +4583,17 @@ button.chat-reply-preview--message:disabled {
   margin-left: auto;
 }
 
-.chat-controls__model-option-action kbd {
-  min-width: 18px;
-  padding: 1px 4px;
-  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  border-radius: 4px;
-  color: var(--muted);
-  font-family: inherit;
-  font-size: 10px;
-  line-height: 1.35;
-  text-align: center;
+@media (prefers-reduced-motion: no-preference) {
+  .chat-controls__model-option-action kbd {
+    transition: opacity var(--duration-fast) var(--ease-out);
+  }
+}
+
+.chat-controls__model-search-wrap:focus-within
+  ~ .chat-controls__model-options
+  .chat-controls__model-option-action
+  kbd {
+  opacity: 0;
 }
 
 .chat-controls__model-option-action kbd::before {

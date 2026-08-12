@@ -94,9 +94,6 @@ export async function settlePendingFinalDelivery(
         current === "suppressed" ||
         (current === "unknown" && state === "unknown");
       settled = terminal ? current : state;
-      // Unknown affirmed after a claimed send is ambiguity the user must hear
-      // about: record durable notice debt for the next same-route turn. The
-      // prepared->unknown transition is the pre-I/O claim and never owes one.
       const pending = internalEntry.pendingFinalDelivery;
       const existingNotice = internalEntry.pendingDeliveryNotice;
       const owedNotice =
@@ -115,7 +112,13 @@ export async function settlePendingFinalDelivery(
               },
             }
           : undefined;
-      if (settled === current && !owedNotice) {
+      const clearsNotice =
+        settled !== "queued" &&
+        settled !== "unknown" &&
+        existingNotice?.intentId === pending.intentId;
+      // The pre-I/O claim preserves crash-window ambiguity. Any authoritative
+      // fate for that intent must clear debt before a later turn can surface it.
+      if (settled === current && !owedNotice && !clearsNotice) {
         return null;
       }
       wakeRecovery =
@@ -135,7 +138,7 @@ export async function settlePendingFinalDelivery(
           ...internalEntry.pendingFinalDelivery,
           deliveries: deliveries.with(index, { id: completion.deliveryId, state: settled }),
         },
-        ...owedNotice,
+        ...(clearsNotice ? { pendingDeliveryNotice: undefined } : owedNotice),
         updatedAt: Date.now(),
       };
     },

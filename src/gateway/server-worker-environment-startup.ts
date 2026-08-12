@@ -6,6 +6,7 @@ import {
   getActiveSecretsRuntimeEnvState,
 } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
 import type { WorkerBundleProducer, WorkerNpmArtifact } from "./worker-environments/bundle.js";
 import type { WorkerLiveEventReceiver } from "./worker-environments/live-events.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
@@ -77,6 +78,7 @@ export async function loadGatewayWorkerEnvironmentStartupState(): Promise<Gatewa
 export async function createGatewayWorkerEnvironmentRuntime(params: {
   getPluginRegistry: () => Pick<PluginRegistry, "workerProviders">;
   resolveWorkerGateway: () => WorkerGatewayEndpoint;
+  desktopSessionRegistry: DesktopSessionRegistry;
   startup: GatewayWorkerEnvironmentStartupState;
   log: WorkerEnvironmentLogger;
 }): Promise<GatewayWorkerEnvironmentRuntime> {
@@ -144,7 +146,9 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       startupBindings.map((binding) => [binding.environmentId, binding.runEpoch] as const),
     ),
   });
-  const workerTunnelManager = createWorkerTunnelManager();
+  const workerTunnelManager = createWorkerTunnelManager({
+    desktopSessionRegistry: params.desktopSessionRegistry,
+  });
   let executeSessionTool: ReturnType<typeof createWorkerSessionToolExecutor> = async () => {
     throw new Error("Worker session tools are unavailable");
   };

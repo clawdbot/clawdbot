@@ -18,7 +18,7 @@ export const page = definePage({
     const [{ loadSkillWorkshopPageData }, { createSkillWorkshopState, skillWorkshopRouteData }] =
       await Promise.all([import("./history-scan-page-controller.ts"), import("./proposals.ts")]);
     const state = createSkillWorkshopState();
-    await loadSkillWorkshopPageData({ state, context, force: false });
+    await loadSkillWorkshopPageData({ state, context, force: true });
     return skillWorkshopRouteData(state);
   },
 });

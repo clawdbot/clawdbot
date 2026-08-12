@@ -235,6 +235,65 @@ suite.define(() => {
     });
   });
 
+  it("separates model shortcuts from numeric search input by focus", async () => {
+    await withNewSessionPage(DESKTOP_CONTEXT, async (page) => {
+      await installMockGateway(page, { models: MODELS });
+      await page.goto(`${suite.server.baseUrl}new`);
+
+      const modelSelect = page.locator('[data-chat-model-select="true"]');
+      const picker = page.locator(".chat-controls__model-picker");
+      const search = page.locator('[data-chat-model-search="true"]');
+      const firstModel = page.locator('[data-chat-model-option="openai/gpt-5.5"]');
+      const secondModel = page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]');
+
+      await modelSelect.click();
+      await expect.poll(() => picker.getAttribute("open")).toBe("");
+      await expect
+        .poll(() => modelSelect.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      const secondShortcut = secondModel.locator('[data-chat-model-shortcut-number="2"]');
+      await expect.poll(() => secondShortcut.count()).toBe(1);
+      const menuBoxBeforeFocus = await page.locator(".chat-controls__model-menu").boundingBox();
+      const actionBoxBeforeFocus = await secondModel
+        .locator(".chat-controls__model-option-action")
+        .boundingBox();
+      expect(menuBoxBeforeFocus).not.toBeNull();
+      expect(actionBoxBeforeFocus).not.toBeNull();
+      await expect
+        .poll(() => secondShortcut.evaluate((element) => getComputedStyle(element).opacity))
+        .toBe("1");
+
+      await search.focus();
+      await expect
+        .poll(() => search.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await expect
+        .poll(() => secondShortcut.evaluate((element) => getComputedStyle(element).opacity))
+        .toBe("0");
+      expect(await page.locator(".chat-controls__model-menu").boundingBox()).toEqual(
+        menuBoxBeforeFocus,
+      );
+      expect(
+        await secondModel.locator(".chat-controls__model-option-action").boundingBox(),
+      ).toEqual(actionBoxBeforeFocus);
+      await search.press("1");
+      await expect.poll(() => search.inputValue()).toBe("1");
+      await expect.poll(() => picker.getAttribute("open")).toBe("");
+
+      await search.fill("anthropic");
+      await expect.poll(() => firstModel.isVisible()).toBe(false);
+      await expect.poll(() => secondModel.isVisible()).toBe(true);
+      await modelSelect.focus();
+      const filteredShortcut = secondModel.locator('[data-chat-model-shortcut-number="1"]');
+      await expect
+        .poll(() => filteredShortcut.evaluate((element) => getComputedStyle(element).opacity))
+        .toBe("1");
+      await page.keyboard.press("1");
+      await expect.poll(() => picker.getAttribute("open")).toBe(null);
+      await expect.poll(() => modelSelect.textContent()).toContain("Claude Sonnet 4.6");
+    });
+  });
+
   it("keeps the effort label, slider stop, and create payload aligned after a model switch", async () => {
     await withNewSessionPage(DESKTOP_CONTEXT, async (page) => {
       const levels = (ids: string[]) => ids.map((id) => ({ id, label: id }));

@@ -12,7 +12,11 @@ import {
   ModelSelectionLockedError,
 } from "openclaw/plugin-sdk/model-session-runtime";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
-import { asBoolean, asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asBoolean,
+  asOptionalRecord,
+  asSafeIntegerInRange,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
@@ -111,12 +115,6 @@ type CodexThreadsToolOptions = {
   getPluginConfig: () => unknown;
   request?: typeof codexControlRequest;
 };
-
-function readLimit(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 100
-    ? value
-    : undefined;
-}
 
 function resolveToolSession(
   context: OpenClawPluginToolContext,
@@ -291,7 +289,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           CODEX_CONTROL_METHODS.listThreads,
           {
             archived: asBoolean(params.archived) ?? false,
-            limit: readLimit(params.limit) ?? 20,
+            limit: asSafeIntegerInRange(params.limit, { min: 1, max: 100 }) ?? 20,
             modelProviders: [],
             sortKey: "recency_at",
             sortDirection: "desc",

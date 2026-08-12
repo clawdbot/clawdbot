@@ -2074,7 +2074,7 @@ describe("runBtwSideQuestion", () => {
   it.each([
     { label: "explicit", source: "user" as const },
     { label: "legacy source-less", source: undefined },
-  ])("keeps $label user-locked static Anthropic auth for BTW", async ({ source }) => {
+  ])("keeps $label user-pinned static Anthropic auth first for BTW", async ({ source }) => {
     const staticAuthStore = {
       version: 1 as const,
       profiles: {
@@ -2085,7 +2085,7 @@ describe("runBtwSideQuestion", () => {
         },
       },
     };
-    ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValueOnce(staticAuthStore);
+    ensureAuthProfileStoreMock.mockReturnValueOnce(staticAuthStore);
     getApiKeyForModelMock.mockResolvedValueOnce({
       apiKey: "static-key",
       mode: "api-key",
@@ -2112,11 +2112,11 @@ describe("runBtwSideQuestion", () => {
       }),
     });
 
-    expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
-    expect(ensureAuthProfileStoreWithoutExternalProfilesMock).toHaveBeenCalledWith(
-      DEFAULT_AGENT_DIR,
-      { allowKeychainPrompt: false },
-    );
+    expect(ensureAuthProfileStoreWithoutExternalProfilesMock).not.toHaveBeenCalled();
+    expect(ensureAuthProfileStoreMock).toHaveBeenCalledWith(DEFAULT_AGENT_DIR, {
+      externalCliProviderIds: ["claude-cli"],
+      allowKeychainPrompt: false,
+    });
     expectRecordFields(mockArg(getApiKeyForModelMock, 0, 0), {
       profileId: "anthropic:api",
       store: staticAuthStore,

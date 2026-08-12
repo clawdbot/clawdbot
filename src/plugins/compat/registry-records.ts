@@ -13,18 +13,17 @@ export const PLUGIN_COMPAT_RECORDS = [
   MEDIA_LEGACY_PROJECTION_COMPAT_RECORD,
   {
     code: "context-engine-legacy-host-param-default",
-    status: "deprecated",
+    status: "removed",
     owner: "sdk",
     introduced: "2026-07-29",
-    deprecated: "2026-07-29",
-    warningStarts: "2026-07-29",
-    removeAfter: "2026-08-12",
     replacement:
-      "declare `ContextEngineInfo.acceptedHostParams`; full host params after the window",
+      "`ContextEngineInfo.acceptedHostParams` for restricted projection; omitted declarations receive full host params",
     docsPath: "/concepts/context-engine#the-contextengine-interface",
     surfaces: ["ContextEngineInfo.acceptedHostParams and undeclared-engine default projection"],
-    diagnostics: ["plugin compatibility registry and dated runtime removal marker"],
+    diagnostics: ["plugin compatibility registry and context engine guide"],
     tests: ["src/context-engine/host-param-projection.test.ts"],
+    releaseNote:
+      "The undeclared context-engine host-parameter compatibility default was removed; engines without `acceptedHostParams` now receive all current host fields.",
   },
   {
     code: "removed-global-api-provider-publication",

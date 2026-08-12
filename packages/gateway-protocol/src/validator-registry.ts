@@ -92,6 +92,7 @@ export const validateAuditRunInspectParams = compile<AuditRunInspectParams>(
   S.AuditRunInspectParamsSchema,
 );
 export const validateExecutionIdentityContextV1 = compile(S.ExecutionIdentityContextV1Schema);
+export const validateDecisionReceiptV1 = compile(S.DecisionReceiptV1Schema);
 export const validateAuditListParams = compile(S.AuditListParamsSchema);
 export const validateUsersListParams = compile(S.UsersListParamsSchema);
 export const validateUsersPrefsGetParams = compile(S.UsersPrefsGetParamsSchema);

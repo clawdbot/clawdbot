@@ -1171,7 +1171,7 @@ describe("tryDispatchAcpReplyCore", () => {
     }
   });
 
-  it("passes the ACP agent directory to media understanding", async () => {
+  it("passes the ACP agent directory without declaring host-path access", async () => {
     setReadyAcpResolution();
     mockVisibleTextTurn("image turn");
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
@@ -1201,12 +1201,12 @@ describe("tryDispatchAcpReplyCore", () => {
         },
       });
 
-      expect(
-        requireRecord(
-          mockArg(mediaUnderstandingMocks.applyMediaUnderstanding, 0, 0, "media understanding"),
-          "media understanding",
-        ).agentDir,
-      ).toBe(agentDir);
+      const mediaUnderstandingParams = requireRecord(
+        mockArg(mediaUnderstandingMocks.applyMediaUnderstanding, 0, 0, "media understanding"),
+        "media understanding",
+      );
+      expect(mediaUnderstandingParams.agentDir).toBe(agentDir);
+      expect(mediaUnderstandingParams.selfServeLocalPaths).toBeUndefined();
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }

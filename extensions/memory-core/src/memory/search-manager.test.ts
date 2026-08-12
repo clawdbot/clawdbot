@@ -67,6 +67,6 @@ describe("builtin memory search manager", () => {
 
     await closeMemorySearchManager({ cfg, agentId: " Main " });
 
-    expect(closeMemoryIndexManagersForAgent).toHaveBeenCalledWith({ cfg, agentId: "main" });
+    expect(closeMemoryIndexManagersForAgent).toHaveBeenCalledWith({ agentId: "main" });
   });
 });

@@ -38,7 +38,6 @@ import type {
   RegisterTelegramHandlerParams,
   TelegramCallbackRouter,
 } from "./bot-handlers.types.js";
-import { parseTelegramNativeCommandCallbackData } from "./bot-native-commands.js";
 import {
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
@@ -63,6 +62,7 @@ import {
 } from "./model-buttons.js";
 import {
   hasTelegramOpaqueCallbackPrefix,
+  parseTelegramNativeCommandCallbackData,
   parseTelegramOpaqueCallbackData,
 } from "./native-command-callback-data.js";
 import { isTelegramMessageNotModifiedError } from "./network-errors.js";

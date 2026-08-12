@@ -619,10 +619,10 @@ For an end-to-end authoring guide, see
 
 ### Exclusive slots
 
-| Method                                     | What it registers                                                                                                                                                                                                             |
-| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Declare accepted host-added lifecycle fields with `info.acceptedHostParams`; undeclared engines receive the legacy field set through 2026-08-12, then receive all current host fields. |
-| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                                                                     |
+| Method                                     | What it registers                                                                                                                                                          |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Use `info.acceptedHostParams` to restrict accepted host-added lifecycle fields; undeclared engines receive all current host fields. |
+| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                  |
 
 To participate in durable admitted turns, context engines must declare
 `currentTurnFence: "before-current-turn-entry-v1"` and

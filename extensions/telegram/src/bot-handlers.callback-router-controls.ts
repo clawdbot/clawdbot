@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import { logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { TelegramApprovalCallback } from "./approval-callback-data.js";
 import {
   buildTelegramCanonicalApprovalTerminalText,
@@ -420,11 +421,7 @@ const updateMultiSelectKeyboard = (
   );
 
 const resolvePluginCallbackSubmitText = (submitText: unknown): string | undefined => {
-  if (typeof submitText !== "string") {
-    return undefined;
-  }
-  const trimmed = submitText.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(submitText);
 };
 
 const isReplySessionInitConflictError = (err: unknown): boolean =>

@@ -62,7 +62,6 @@ type CommonModelResolutionOptions = {
 type AsyncModelResolutionOptions = CommonModelResolutionOptions & {
   allowBundledStaticCatalogFallback?: boolean;
   preferBundledStaticCatalogTransport?: boolean;
-  retryTransientProviderRuntimeMiss?: boolean;
   agentRuntimeId?: string;
   skipAgentDiscovery?: boolean;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
@@ -412,12 +411,6 @@ export async function resolveModelAsync(
       ? explicitModel.model
       : undefined;
   model ??= await resolveDynamicAttempt();
-  if (!model && !explicitModel && options?.retryTransientProviderRuntimeMiss) {
-    // Startup can race the first provider-runtime snapshot load on a fresh
-    // gateway boot. Retry once before surfacing a user-visible "Unknown model"
-    // that disappears on the next message.
-    model = await resolveDynamicAttempt();
-  }
   if (!model && !explicitModel && options?.allowBundledStaticCatalogFallback) {
     model = await resolveStaticCatalogFallbackModel();
   }

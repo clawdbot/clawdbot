@@ -163,7 +163,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     if (!tunnels) {
       throw serviceError("invalid_state", "Worker tunnel runtime is unavailable");
     }
-    let startup: Promise<{ localSocketPath: string; vncPassword?: string }> | undefined;
+    let startup: ReturnType<WorkerTunnelManager["desktop"]["acquire"]> | undefined;
     let ownerEpoch: number | undefined;
     await withLock(request.environmentId, async () => {
       stopping = options.isStopping();
@@ -203,18 +203,18 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       throw serviceError("invalid_state", "Worker desktop tunnel failed to start");
     }
     const acquired = await startup;
-    const { WORKER_DESKTOP_OBSERVE_PATH, mintWorkerDesktopObserverToken } =
-      await import("./desktop-observe.js");
-    const minted = mintWorkerDesktopObserverToken({
-      environmentId: request.environmentId,
+    const { DESKTOP_OBSERVE_PATH, mintDesktopObserverToken } =
+      await import("../desktop/observe-bridge.js");
+    const minted = mintDesktopObserverToken({
+      sourceKey: request.environmentId,
       ownerEpoch,
       control: request.control,
-      localSocketPath: acquired.localSocketPath,
+      attachment: acquired.attachment,
       nowMs: now(),
     });
     return {
       transport: "rfb",
-      wsPath: `${WORKER_DESKTOP_OBSERVE_PATH}?token=${minted.token}`,
+      wsPath: `${DESKTOP_OBSERVE_PATH}?token=${minted.token}`,
       expiresAtMs: minted.expiresAtMs,
       control: request.control,
       ...(acquired.vncPassword ? { vncPassword: acquired.vncPassword } : {}),

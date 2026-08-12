@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import {
   createWorkerBundleProducer,
@@ -243,6 +244,76 @@ describe("worker bundle producer", () => {
       ).rejects.toThrow(
         "Vendored workspace dependency @openclaw/fake-nested remains referenced by @openclaw/fake-pkg dist",
       );
+    });
+  });
+
+  it("installs a source bundle when the AI workspace import is bundled", async () => {
+    await withTestDir({ prefix: "openclaw-worker-bundle-npm-install-" }, async (root) => {
+      const repoRoot = path.resolve(import.meta.dirname, "../../..");
+      const aiManifest = JSON.parse(
+        await fs.readFile(path.join(repoRoot, "packages/ai/package.json"), "utf8"),
+      ) as {
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      };
+      const dependencyFields = (["dependencies", "devDependencies"] as const).filter(
+        (field) => aiManifest[field]?.["@openclaw/normalization-core"] !== undefined,
+      );
+      if (dependencyFields.length !== 1) {
+        throw new Error(
+          "@openclaw/ai must classify normalization-core in exactly one dependency field",
+        );
+      }
+      const dependencyField = dependencyFields[0]!;
+      const normalizationCoreSpec = aiManifest[dependencyField]?.["@openclaw/normalization-core"];
+      if (!normalizationCoreSpec?.startsWith("workspace:")) {
+        throw new Error("@openclaw/ai must use a workspace normalization-core dependency");
+      }
+      const packageRoot = path.join(root, "package");
+      await writeFixture(packageRoot, [["dist/entry.js", 'import "@openclaw/ai";\nexport {};\n']]);
+      await fs.writeFile(
+        path.join(packageRoot, "package.json"),
+        `${JSON.stringify({
+          name: "openclaw",
+          version: "1.2.3",
+          type: "module",
+          files: ["dist/"],
+          dependencies: { "@openclaw/ai": "workspace:*" },
+        })}\n`,
+        "utf8",
+      );
+      const vendorSource = path.join(packageRoot, "node_modules/@openclaw/ai");
+      await fs.mkdir(path.join(vendorSource, "dist"), { recursive: true });
+      await fs.writeFile(
+        path.join(vendorSource, "package.json"),
+        `${JSON.stringify({
+          name: "@openclaw/ai",
+          version: "1.2.3",
+          type: "module",
+          main: "./dist/index.js",
+          [dependencyField]: { "@openclaw/normalization-core": normalizationCoreSpec },
+        })}\n`,
+        "utf8",
+      );
+      await fs.writeFile(path.join(vendorSource, "dist/index.js"), "export {};\n", "utf8");
+
+      const bundle = await createWorkerBundleProducer({
+        packageRoot,
+        cacheDir: path.join(root, "cache"),
+      }).prepare();
+      const extractRoot = path.join(root, "extract");
+      await fs.mkdir(extractRoot);
+      await tar.extract({ file: bundle.tarballPath, cwd: extractRoot });
+
+      const install = await runCommandWithTimeout(
+        ["npm", "install", "--ignore-scripts", "--omit=dev", "--no-audit", "--no-fund"],
+        {
+          cwd: extractRoot,
+          env: { NPM_CONFIG_CACHE: path.join(root, "npm-cache") },
+          timeoutMs: 30_000,
+        },
+      );
+      expect(install.code, install.stderr).toBe(0);
     });
   });
 

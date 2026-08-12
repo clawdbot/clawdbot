@@ -956,14 +956,15 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
-  it("routes the bundled provider auth parity test to the isolated tooling shard", () => {
-    expectSingleVitestRunPlan(
-      buildVitestRunPlans(["test/plugins/bundled-provider-auth-literal-parity.test.ts"]),
-      {
-        config: "test/vitest/vitest.tooling-isolated.config.ts",
-        includePatterns: ["test/plugins/bundled-provider-auth-literal-parity.test.ts"],
-      },
-    );
+  it.each([
+    "test/plugins/bundled-provider-auth-literal-parity.test.ts",
+    "test/plugins/bundled-provider-auth-literal-parity.2.test.ts",
+    "test/plugins/bundled-provider-auth-literal-parity.3.test.ts",
+  ])("routes bundled provider auth parity test %s to the isolated tooling shard", (testFile) => {
+    expectSingleVitestRunPlan(buildVitestRunPlans([testFile]), {
+      config: "test/vitest/vitest.tooling-isolated.config.ts",
+      includePatterns: [testFile],
+    });
   });
 
   it.each([
@@ -1047,21 +1048,29 @@ describe("scripts/test-projects changed-target routing", () => {
     ["src/agents/runtime-plan", "test/vitest/vitest.agents-support.config.ts"],
     ["src/agents/tools", "test/vitest/vitest.agents-tools.config.ts"],
   ])("routes focused agent directory %s to its owning shard", (directory, config) => {
-    const plans = buildVitestRunPlans([directory]);
+    expect(buildVitestRunPlans([directory])).toEqual([
+      {
+        config,
+        forwardedArgs: [directory],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
+  });
 
-    expect(plans).toEqual(
-      expect.arrayContaining([
-        {
-          config,
-          forwardedArgs: [],
-          includePatterns: [`${directory}/**/*.test.ts`],
-          watchMode: false,
-        },
-      ]),
-    );
-    expect(plans.map((plan) => plan.config)).not.toContain(
-      "test/vitest/vitest.agents-core.config.ts",
-    );
+  it("keeps shuffle options on the single owning embedded-run shard", () => {
+    const directory = "src/agents/embedded-agent-runner/run";
+
+    expect(
+      buildVitestRunPlans([directory, "--", "--sequence.shuffle", "--sequence.seed", "3"]),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.agents-embedded-agent-run.config.ts",
+        forwardedArgs: ["--sequence.shuffle", "--sequence.seed", "3", directory],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
   });
 
   it("splits the embedded-agent parent directory across every isolated harness", () => {
@@ -1921,6 +1930,16 @@ describe("scripts/test-projects changed-target routing", () => {
       "src/plugins/contracts/core-extension-facade-boundary.test.ts",
       "src/plugins/contracts/tts.contract.test.ts",
     ]);
+  });
+
+  it("routes Slack enterprise install changes through both owning tests", () => {
+    expectChangedTargets(
+      ["extensions/slack/src/monitor/enterprise-install.ts"],
+      [
+        "extensions/slack/src/monitor/enterprise-install.test.ts",
+        "extensions/slack/src/monitor/provider.auth-test-token.test.ts",
+      ],
+    );
   });
 
   it("keeps unknown root surfaces cheap by default", () => {

@@ -543,6 +543,9 @@ export function buildQaRuntimeEnv(params: {
       : {}),
   };
   const normalizedEnv = normalizeQaProviderModeEnv(env, params.providerMode);
+  // Test-runner skip flags are parent controls; each QA child declares its own runtime needs.
+  delete normalizedEnv.OPENCLAW_SKIP_CHANNELS;
+  delete normalizedEnv.OPENCLAW_SKIP_PROVIDERS;
   Object.assign(normalizedEnv, params.runtimeEnvPatch);
   normalizedEnv.OPENCLAW_BUILD_PRIVATE_QA = "1";
   delete normalizedEnv[QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV];

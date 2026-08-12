@@ -42,7 +42,7 @@ vi.mock("../session-utils.js", async () => {
   return {
     ...actual,
     loadSessionEntry: hoisted.loadSessionEntry,
-    loadSessionEntryReadOnly: hoisted.loadSessionEntry,
+    loadGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
   };
 });
 

@@ -871,13 +871,14 @@ vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
   resolvePinnedMainDmOwnerFromAllowlist: () => mockedPinnedMainDmOwner,
 }));
 
-vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => {
-  const isMockRecord = (value: unknown): value is Record<string, unknown> =>
-    typeof value === "object" && value !== null && !Array.isArray(value);
+vi.mock("openclaw/plugin-sdk/string-coerce-runtime", async (importOriginal) => {
+  const { asOptionalRecord, isRecord } =
+    await importOriginal<typeof import("openclaw/plugin-sdk/string-coerce-runtime")>();
   const normalizeMockLowercaseString = (value?: string) => value?.toLowerCase();
   const readMockOptionalString = (value?: string) => value;
   return {
-    isRecord: isMockRecord,
+    asOptionalRecord,
+    isRecord,
     normalizeOptionalLowercaseString: normalizeMockLowercaseString,
     normalizeOptionalString: readMockOptionalString,
   };
@@ -1956,9 +1957,13 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     });
     expect(statusReactionControllerMock.setQueued).toHaveBeenCalledTimes(1);
     expect(statusReactionControllerMock.setDone).toHaveBeenCalledTimes(1);
+    expect(statusReactionControllerMock.restoreInitial).toHaveBeenCalledTimes(1);
+    expect(statusReactionControllerMock.setDone.mock.invocationCallOrder[0]).toBeLessThan(
+      statusReactionControllerMock.restoreInitial.mock.invocationCallOrder[0] ?? 0,
+    );
   });
 
-  it("marks a recovered agent failure as failed after delivering its visible error reply", async () => {
+  it("marks a recovered agent failure as failed then restores its initial reaction", async () => {
     mockedAgentRunTerminalOutcome = "failed";
     mockedNativeStreaming = true;
     mockedSlackStreamingMode = "progress";
@@ -1984,6 +1989,10 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(collectNativeTaskUpdates().at(-1)).toEqual(expect.objectContaining({ status: "error" }));
     expect(statusReactionControllerMock.setError).toHaveBeenCalledTimes(1);
     expect(statusReactionControllerMock.setDone).not.toHaveBeenCalled();
+    expect(statusReactionControllerMock.restoreInitial).toHaveBeenCalledTimes(1);
+    expect(statusReactionControllerMock.setError.mock.invocationCallOrder[0]).toBeLessThan(
+      statusReactionControllerMock.restoreInitial.mock.invocationCallOrder[0] ?? 0,
+    );
   });
 
   it("keeps Slack lifecycle reactions off by default when an ack reaction exists", async () => {
