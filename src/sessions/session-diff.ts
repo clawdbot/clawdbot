@@ -8,8 +8,8 @@ import type {
   SessionDiffFile,
   SessionsDiffResult,
 } from "../../packages/gateway-protocol/src/index.js";
-import { runGit } from "../agents/worktrees/git.js";
 import type { SessionDiffBaseline } from "../config/sessions/types.js";
+import { runGit } from "../infra/git-exec.js";
 import { runCommandBuffered } from "../process/exec.js";
 import {
   loadSessionDiffBranchMetadata,

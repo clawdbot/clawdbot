@@ -7,6 +7,13 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../../config/paths.js";
 import { isMissingPathError } from "../../infra/errors.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  commandError,
+  requireGit,
+  requireGitBuffer,
+  runGit,
+  type GitResult,
+} from "../../infra/git-exec.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
@@ -14,15 +21,10 @@ import { createCrustaceanSlug } from "../session-slug.js";
 import { resolveWorktreeBase } from "./base-ref.js";
 import { lockState, lockWorktreeForProcess, unlockWorktree } from "./git-lock.js";
 import {
-  commandError,
   insideGitCheckout,
   listGitWorktrees,
   worktreePathExists,
   removeEmptyParents,
-  requireGit,
-  requireGitBuffer,
-  runGit,
-  type GitResult,
 } from "./git.js";
 import { worktreeNameAllocationFamily } from "./name.js";
 import { worktreeOwnerMatches } from "./owner.js";

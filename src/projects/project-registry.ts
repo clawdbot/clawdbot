@@ -3,9 +3,10 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { insideGitCheckout, runGit } from "../agents/worktrees/git.js";
+import { insideGitCheckout } from "../agents/worktrees/git.js";
 import { slugifyWorktreeTitle } from "../agents/worktrees/name.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runGit } from "../infra/git-exec.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,

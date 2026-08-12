@@ -20,8 +20,8 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveToCwd as resolveSessionToolPathToCwd } from "../../agents/sessions/tools/path-utils.js";
-import { runGit } from "../../agents/worktrees/git.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
+import { runGit } from "../../infra/git-exec.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
