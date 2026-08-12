@@ -1879,6 +1879,65 @@ describe("config plugin validation", () => {
     });
   });
 
+  it("does not warn that a bundled default-enabled plugin with config is disabled", () => {
+    // canvas is bundled with enabledByDefault: true; a config-only entry (no
+    // top-level enabled: true) must not produce the disabled-config warning
+    // that plugins list contradicts.
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: {
+          entries: {
+            canvas: {
+              config: { host: { enabled: true } },
+            },
+          },
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [
+              {
+                id: "canvas",
+                origin: "bundled",
+                enabledByDefault: true,
+                channels: [],
+                providers: [],
+                cliBackends: [],
+                skills: [],
+                hooks: [],
+                rootDir: "/tmp/plugins/canvas",
+                source: "test",
+                manifestPath: "/tmp/plugins/canvas/openclaw.plugin.json",
+                schemaCacheKey: "test:canvas",
+                configSchema: {
+                  type: "object",
+                  properties: {
+                    host: {
+                      type: "object",
+                      properties: { enabled: { type: "boolean" } },
+                    },
+                  },
+                },
+              },
+            ],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    expect(res.warnings ?? []).not.toContainEqual(
+      expect.objectContaining({
+        path: "plugins.entries.canvas",
+        message: expect.stringContaining("plugin disabled"),
+      }),
+    );
+  });
+
   it("ignores standalone helper scripts in auto-discovered global extensions", async () => {
     const helperPath = path.join(suiteHome, ".openclaw", "extensions", "my-helper.mjs");
     await mkdirSafe(path.dirname(helperPath));
