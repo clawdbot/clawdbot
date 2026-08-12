@@ -456,7 +456,7 @@ async function compactResolvedContextEngine(
       agentDir,
       config: params.config,
       workspaceDir: resolvedWorkspaceDir,
-      ...(initialModelAuth ?? {}),
+      ...initialModelAuth,
       preparedModelRuntime,
     });
     const { model: ceModel, authStorage, modelRegistry } = modelResolution;

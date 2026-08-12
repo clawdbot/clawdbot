@@ -5,7 +5,7 @@ const STATIC_MODEL_ID = "claude-haiku-4-5";
 const PROVIDER = "anthropic";
 
 const emptyModelRegistry = {
-  find: vi.fn(() => null),
+  find: vi.fn((_provider: string, _modelId: string) => null),
 };
 const authStorage = {
   setRuntimeApiKey: vi.fn(),

@@ -142,7 +142,7 @@ export async function prepareDirectCompactionAttempt(
     agentDir,
     config: params.config,
     workspaceDir: resolvedWorkspace,
-    ...(initialModelAuth ?? {}),
+    ...initialModelAuth,
     preparedModelRuntime,
   });
   const { model, error, authStorage, modelRegistry } = modelResolution;
