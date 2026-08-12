@@ -457,8 +457,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         return;
       }
 
-      const session = new FeishuStreamingSession(createFeishuClient(account), creds, (message) =>
-        params.runtime.log?.(`feishu[${account.accountId}] ${message}`),
+      const session = new FeishuStreamingSession(
+        () => createFeishuClient(account),
+        creds,
+        (message) => params.runtime.log?.(`feishu[${account.accountId}] ${message}`),
+        undefined,
+        account.accountId,
       );
       const generation = ++streamingGeneration;
       streaming = session;

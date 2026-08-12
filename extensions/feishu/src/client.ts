@@ -8,6 +8,7 @@ import {
   resolveAmbientNodeProxyAgent,
 } from "openclaw/plugin-sdk/extension-shared";
 import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
+import { addFeishuTokenCacheClearer } from "./comment-shared.js";
 import type { FeishuConfig, FeishuDomain, ResolvedFeishuAccount } from "./types.js";
 
 const require = createRequire(import.meta.url);
@@ -434,3 +435,23 @@ export function createEventDispatcher(account: ResolvedFeishuAccount): Lark.Even
     verificationToken: account.verificationToken,
   });
 }
+
+/**
+ * Clear the cached client for an account so the next createFeishuClient
+ * call creates a fresh Client with a new tenant_access_token (#97287).
+ * When accountId is provided, only that account's entry is removed;
+ * other accounts' clients stay warm.
+ */
+export function clearClientCache(accountId?: string): void {
+  if (accountId) {
+    clientCache.delete(accountId);
+  } else {
+    clientCache.clear();
+  }
+}
+
+// Register so requestFeishuApi can invalidate the client cache when it
+// detects a token-invalid error and retry with a fresh client (#97287).
+addFeishuTokenCacheClearer((accountId) => {
+  clearClientCache(accountId);
+});

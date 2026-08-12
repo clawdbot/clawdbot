@@ -261,7 +261,9 @@ describe("FeishuStreamingSession", () => {
 
   function mockStreamingTokenStart(resolveAuthJson: (token: string) => Record<string, unknown>): {
     authTokens: string[];
-    client: ConstructorParameters<typeof FeishuStreamingSession>[0];
+    client: ConstructorParameters<typeof FeishuStreamingSession>[0] extends () => infer R
+      ? R
+      : never;
     deps: StreamingFetchDeps;
   } {
     const authTokens: string[] = [];
@@ -283,7 +285,9 @@ describe("FeishuStreamingSession", () => {
           create: vi.fn(async () => ({ code: 0, msg: "ok", data: { message_id: "om_1" } })),
         },
       },
-    } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
+    } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0] extends () => infer R
+      ? R
+      : never;
     return { authTokens, client, deps };
   }
 
@@ -303,7 +307,7 @@ describe("FeishuStreamingSession", () => {
     });
 
     const session = new FeishuStreamingSession(
-      {} as never,
+      () => ({}) as never,
       {
         appId: "app_oversized_token",
         appSecret: "secret",
@@ -358,7 +362,7 @@ describe("FeishuStreamingSession", () => {
     };
 
     const session = new FeishuStreamingSession(
-      {} as never,
+      () => ({}) as never,
       {
         appId: "app_stalled_token",
         appSecret: "secret",
@@ -437,7 +441,7 @@ describe("FeishuStreamingSession", () => {
     const deps = mockFetches(updateBodies);
 
     const session = new FeishuStreamingSession(
-      {} as never,
+      () => ({}) as never,
       {
         appId: "app_pending_flush",
         appSecret: "secret",
@@ -496,7 +500,7 @@ describe("FeishuStreamingSession", () => {
     });
     const log = vi.fn();
     const session = new FeishuStreamingSession(
-      {} as never,
+      () => ({}) as never,
       { appId: "app_rejected_pending_flush", appSecret: "secret" },
       log,
       deps,
@@ -535,7 +539,7 @@ describe("FeishuStreamingSession", () => {
     const deps = mockFetches(updateBodies);
 
     const session = new FeishuStreamingSession(
-      {} as never,
+      () => ({}) as never,
       {
         appId: "app_boundary_flush",
         appSecret: "secret",
@@ -585,7 +589,7 @@ describe("FeishuStreamingSession", () => {
     const previous = "> Thinking one\n\n---\n\nanswer";
     const next = "> Thinking two\n\n---\n\nanswer!";
     const session = new FeishuStreamingSession(
-      {} as never,
+      () => ({}) as never,
       { appId: "app_reasoning_snapshot", appSecret: "secret" },
       undefined,
       deps,
@@ -616,7 +620,7 @@ describe("FeishuStreamingSession", () => {
     const previous = "> Thinking one\n\n---\n\nanswer";
     const next = "> Thinking two\n\n---\n\nanswer more";
     const session = new FeishuStreamingSession(
-      {} as never,
+      () => ({}) as never,
       { appId: "app_pending_reasoning_close", appSecret: "secret" },
       undefined,
       deps,
@@ -682,7 +686,7 @@ describe("FeishuStreamingSession", () => {
     });
     const log = vi.fn();
     const session = new FeishuStreamingSession(
-      {} as never,
+      () => ({}) as never,
       { appId: "app_rejected_pending_reasoning_close", appSecret: "secret" },
       log,
       deps,
@@ -734,7 +738,7 @@ describe("FeishuStreamingSession", () => {
     });
     const log = vi.fn();
     const session = new FeishuStreamingSession(
-      {} as never,
+      () => ({}) as never,
       { appId: "app_rejected_note_and_close", appSecret: "secret" },
       log,
       deps,
@@ -780,7 +784,7 @@ describe("FeishuStreamingSession", () => {
     const deps = mockFetches(updateBodies, new Set([0]));
 
     const session = new FeishuStreamingSession(
-      {} as never,
+      () => ({}) as never,
       {
         appId: "app_failed_delta_retry",
         appSecret: "secret",
@@ -823,7 +827,7 @@ describe("FeishuStreamingSession", () => {
     const deps = mockFetches(updateBodies, new Set<number>(), [], new Map([[0, 429]]));
 
     const session = new FeishuStreamingSession(
-      {} as never,
+      () => ({}) as never,
       {
         appId: "app_non_ok_delta_retry",
         appSecret: "secret",
@@ -867,7 +871,7 @@ describe("FeishuStreamingSession", () => {
     const deps = mockFetches(updateBodies, new Set<number>(), replaceBodies);
 
     const session = new FeishuStreamingSession(
-      {} as never,
+      () => ({}) as never,
       {
         appId: "app_final_rewrite",
         appSecret: "secret",
@@ -935,7 +939,7 @@ describe("FeishuStreamingSession", () => {
     });
 
     const session = new FeishuStreamingSession(
-      {} as never,
+      () => ({}) as never,
       {
         appId: "app_summary_surrogate",
         appSecret: "secret",
@@ -985,7 +989,7 @@ describe("FeishuStreamingSession", () => {
     const log = vi.fn();
 
     const session = new FeishuStreamingSession(
-      {} as never,
+      () => ({}) as never,
       {
         appId: "app_final_rewrite_non_ok",
         appSecret: "secret",
@@ -1023,7 +1027,7 @@ describe("FeishuStreamingSession", () => {
     const log = vi.fn();
 
     const session = new FeishuStreamingSession(
-      {} as never,
+      () => ({}) as never,
       {
         appId: "app_final_update_non_ok",
         appSecret: "secret",
@@ -1063,7 +1067,7 @@ describe("FeishuStreamingSession", () => {
     }));
 
     await new FeishuStreamingSession(
-      client,
+      () => client,
       {
         appId: "app_unsafe_token_expiry",
         appSecret: "secret",
@@ -1075,7 +1079,7 @@ describe("FeishuStreamingSession", () => {
 
     vi.setSystemTime(Date.now() + 7200 * 1000 - 60_000 + 1);
     await new FeishuStreamingSession(
-      client,
+      () => client,
       {
         appId: "app_unsafe_token_expiry",
         appSecret: "secret",
@@ -1096,7 +1100,7 @@ describe("FeishuStreamingSession", () => {
     }));
 
     await new FeishuStreamingSession(
-      client,
+      () => client,
       {
         appId: "app_invalid_clock_token_expiry",
         appSecret: "secret",
@@ -1108,7 +1112,7 @@ describe("FeishuStreamingSession", () => {
 
     dateNow.mockReturnValue(7200 * 1000 - 60_000 + 1);
     await new FeishuStreamingSession(
-      client,
+      () => client,
       {
         appId: "app_invalid_clock_token_expiry",
         appSecret: "secret",
@@ -1131,7 +1135,7 @@ describe("FeishuStreamingSession", () => {
     }));
 
     await new FeishuStreamingSession(
-      client,
+      () => client,
       {
         appId: "app_invalid_clock_cache_miss",
         appSecret: "secret",
@@ -1143,7 +1147,7 @@ describe("FeishuStreamingSession", () => {
 
     dateNow.mockReturnValue(8_640_000_000_000_001);
     await new FeishuStreamingSession(
-      client,
+      () => client,
       {
         appId: "app_invalid_clock_cache_miss",
         appSecret: "secret",

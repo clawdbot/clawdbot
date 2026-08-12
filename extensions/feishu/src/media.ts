@@ -454,7 +454,7 @@ async function uploadImageFeishu(params: {
   accountId?: string;
 }): Promise<UploadImageResult> {
   const { cfg, image, imageType = "message", accountId } = params;
-  const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
+  const getClient = () => createConfiguredFeishuMediaClient({ cfg, accountId }).client;
 
   // SDK accepts Buffer directly. Keep string path support on this helper, but
   // verify the path as a regular local file before uploading it.
@@ -464,14 +464,14 @@ async function uploadImageFeishu(params: {
 
   const response = await requestFeishuApi(
     () =>
-      client.im.image.create({
+      getClient().im.image.create({
         data: {
           image_type: imageType,
           image: imageData,
         },
       }),
     "Feishu image upload failed",
-    { includeNestedErrorLogId: true },
+    { includeNestedErrorLogId: true, accountId },
   );
 
   return {
@@ -509,7 +509,7 @@ async function uploadFileFeishu(params: {
   accountId?: string;
 }): Promise<UploadFileResult> {
   const { cfg, file, fileName, fileType, duration, accountId } = params;
-  const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
+  const getClient = () => createConfiguredFeishuMediaClient({ cfg, accountId }).client;
 
   // SDK accepts Buffer directly. Keep string path support on this helper, but
   // verify the path as a regular local file before uploading it.
@@ -521,7 +521,7 @@ async function uploadFileFeishu(params: {
 
   const response = await requestFeishuApi(
     () =>
-      client.im.file.create({
+      getClient().im.file.create({
         data: {
           file_type: fileType,
           file_name: safeFileName,
@@ -530,7 +530,7 @@ async function uploadFileFeishu(params: {
         },
       }),
     "Feishu file upload failed",
-    { includeNestedErrorLogId: true },
+    { includeNestedErrorLogId: true, accountId },
   );
 
   return {
@@ -562,34 +562,39 @@ async function sendImageFeishu(params: {
     allowTopLevelReplyFallback,
     accountId,
   } = params;
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
+  const { receiveId, receiveIdType } = resolveFeishuSendTarget({
     cfg,
     to,
     accountId,
   });
+  const getClient = () => resolveFeishuSendTarget({ cfg, to, accountId }).client;
   const content = JSON.stringify({ image_key: imageKey });
 
   if (replyToMessageId) {
-    return sendReplyOrFallbackDirect(client, {
-      replyToMessageId,
-      replyInThread,
-      allowTopLevelReplyFallback,
-      content,
-      msgType: "image",
-      directParams: {
-        receiveId,
-        receiveIdType,
+    return sendReplyOrFallbackDirect(
+      getClient,
+      {
+        replyToMessageId,
+        replyInThread,
+        allowTopLevelReplyFallback,
         content,
         msgType: "image",
+        directParams: {
+          receiveId,
+          receiveIdType,
+          content,
+          msgType: "image",
+        },
+        directErrorPrefix: "Feishu image send failed",
+        replyErrorPrefix: "Feishu image reply failed",
       },
-      directErrorPrefix: "Feishu image send failed",
-      replyErrorPrefix: "Feishu image reply failed",
-    });
+      accountId,
+    );
   }
 
   const response = await requestFeishuApi(
     () =>
-      client.im.message.create({
+      getClient().im.message.create({
         params: { receive_id_type: receiveIdType },
         data: {
           receive_id: receiveId,
@@ -598,7 +603,7 @@ async function sendImageFeishu(params: {
         },
       }),
     "Feishu image send failed",
-    { includeNestedErrorLogId: true },
+    { includeNestedErrorLogId: true, accountId },
   );
   assertFeishuMessageApiSuccess(response, "Feishu image send failed");
   return toFeishuSendResult(response, receiveId, "media", "Feishu image send failed");
@@ -628,34 +633,39 @@ async function sendFileFeishu(params: {
     accountId,
   } = params;
   const msgType = params.msgType ?? "file";
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
+  const { receiveId, receiveIdType } = resolveFeishuSendTarget({
     cfg,
     to,
     accountId,
   });
+  const getClient = () => resolveFeishuSendTarget({ cfg, to, accountId }).client;
   const content = JSON.stringify({ file_key: fileKey });
 
   if (replyToMessageId) {
-    return sendReplyOrFallbackDirect(client, {
-      replyToMessageId,
-      replyInThread,
-      allowTopLevelReplyFallback,
-      content,
-      msgType,
-      directParams: {
-        receiveId,
-        receiveIdType,
+    return sendReplyOrFallbackDirect(
+      getClient,
+      {
+        replyToMessageId,
+        replyInThread,
+        allowTopLevelReplyFallback,
         content,
         msgType,
+        directParams: {
+          receiveId,
+          receiveIdType,
+          content,
+          msgType,
+        },
+        directErrorPrefix: "Feishu file send failed",
+        replyErrorPrefix: "Feishu file reply failed",
       },
-      directErrorPrefix: "Feishu file send failed",
-      replyErrorPrefix: "Feishu file reply failed",
-    });
+      accountId,
+    );
   }
 
   const response = await requestFeishuApi(
     () =>
-      client.im.message.create({
+      getClient().im.message.create({
         params: { receive_id_type: receiveIdType },
         data: {
           receive_id: receiveId,
@@ -664,7 +674,7 @@ async function sendFileFeishu(params: {
         },
       }),
     "Feishu file send failed",
-    { includeNestedErrorLogId: true },
+    { includeNestedErrorLogId: true, accountId },
   );
   assertFeishuMessageApiSuccess(response, "Feishu file send failed");
   return toFeishuSendResult(

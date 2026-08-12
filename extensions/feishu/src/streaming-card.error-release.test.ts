@@ -96,7 +96,7 @@ beforeEach(() => {
 describe("feishu streaming card error-path body release", () => {
   it("cancels the unread tenant-token error body before release", async () => {
     loopback.authStatus = 500;
-    const session = new FeishuStreamingSession({} as never, {
+    const session = new FeishuStreamingSession(() => ({}) as never, {
       appId: "app_error_token",
       appSecret: "secret",
     });
@@ -110,13 +110,13 @@ describe("feishu streaming card error-path body release", () => {
 
   it("cancels the unread create-card error body before release", async () => {
     loopback.createStatus = 500;
-    const session = new FeishuStreamingSession({} as never, {
+    const session = new FeishuStreamingSession(() => ({}) as never, {
       appId: "app_error_create",
       appSecret: "secret",
     });
 
     await expect(session.start("chat_id", "open_id")).rejects.toThrow(
-      "Create card request failed with HTTP 500",
+      "Create card failed with HTTP 500",
     );
 
     expect(loopback.releases).toEqual([
@@ -133,7 +133,7 @@ describe("feishu streaming card error-path body release", () => {
         },
       },
     };
-    const session = new FeishuStreamingSession(client as never, {
+    const session = new FeishuStreamingSession(() => client as never, {
       appId: "app_error_close",
       appSecret: "secret",
     });
