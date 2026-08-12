@@ -159,6 +159,91 @@ class ChatControllerSubagentActivityTest {
       )
     }
 
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun expiredTerminalActivityIsNotResurrectedByLateRedelivery() =
+    runTest {
+      val controller = newController()
+      controller.handleGatewayEvent("task", taskPayload(id = "task-1", status = "completed"))
+
+      advanceTimeBy(60_001)
+      runCurrent()
+      assertTrue(controller.subagentActivities.value.isEmpty())
+
+      // A delayed duplicate terminal delivery must stay hidden and must not
+      // start a second retention window.
+      controller.handleGatewayEvent(
+        "task",
+        taskPayload(
+          id = "task-1",
+          status = "completed",
+          terminalSummary = "Late duplicate",
+        ),
+      )
+      assertTrue(controller.subagentActivities.value.isEmpty())
+
+      advanceTimeBy(30_000)
+      runCurrent()
+      assertTrue(controller.subagentActivities.value.isEmpty())
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun newWorkingLifecycleSurfacesAfterTerminalObservationExpired() =
+    runTest {
+      val controller = newController()
+      controller.handleGatewayEvent("task", taskPayload(id = "task-1", status = "completed"))
+
+      advanceTimeBy(60_001)
+      runCurrent()
+      assertTrue(controller.subagentActivities.value.isEmpty())
+
+      // A genuinely new lifecycle for the same task id still appears and its
+      // terminal state is retained again.
+      controller.handleGatewayEvent(
+        "task",
+        taskPayload(id = "task-1", status = "running", progressSummary = "Second run"),
+      )
+      assertTrue("task-1" in controller.subagentActivities.value)
+      assertEquals(
+        "Second run",
+        controller.subagentActivities.value.getValue("task-1").snippet,
+      )
+
+      controller.handleGatewayEvent(
+        "task",
+        taskPayload(
+          id = "task-1",
+          status = "completed",
+          terminalSummary = "Second run complete",
+        ),
+      )
+      assertEquals(
+        "Second run complete",
+        controller.subagentActivities.value.getValue("task-1").terminalSummary,
+      )
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun explicitDeletionAllowsLaterTerminalRedelivery() =
+    runTest {
+      val controller = newController()
+      controller.handleGatewayEvent("task", taskPayload(id = "task-1", status = "completed"))
+      advanceTimeBy(60_001)
+      runCurrent()
+      assertTrue(controller.subagentActivities.value.isEmpty())
+
+      // An explicit deletion is a real lifecycle boundary: a later terminal
+      // delivery for the task id is presented again.
+      controller.handleGatewayEvent(
+        "task",
+        "{\"action\":\"deleted\",\"taskId\":\"task-1\"}",
+      )
+      controller.handleGatewayEvent("task", taskPayload(id = "task-1", status = "completed"))
+      assertTrue("task-1" in controller.subagentActivities.value)
+    }
+
   private fun TestScope.newController(): ChatController =
     ChatController(
       scope = backgroundScope,

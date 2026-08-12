@@ -334,6 +334,16 @@ class ChatController internal constructor(
   val pendingToolCalls: StateFlow<List<ChatPendingToolCall>> = _pendingToolCalls.asStateFlow()
 
   private val subagentActivityLock = Any()
+
+  /**
+   * Task ids for which a terminal (completed/failed/cancelled/timed_out) state has
+   * already been observed by this controller. Kept separately from the expiring UI
+   * row so a delayed duplicate terminal delivery cannot resurrect an expired row or
+   * start a second retention window. Cleared when a real lifecycle boundary (new
+   * working event, explicit deletion, session/gateway-scope change, or sequence-gap
+   * reset) establishes that a new lifecycle for the task id can appear.
+   */
+  private val observedTerminalTaskIds = mutableSetOf<String>()
   private val subagentActivityExpiryJobs = mutableMapOf<String, Job>()
   private val _subagentActivities = MutableStateFlow<Map<String, ChatSubagentActivity>>(emptyMap())
   val subagentActivities: StateFlow<Map<String, ChatSubagentActivity>> = _subagentActivities.asStateFlow()
@@ -5886,6 +5896,12 @@ class ChatController internal constructor(
     val now = System.currentTimeMillis()
     synchronized(subagentActivityLock) {
       val existing = _subagentActivities.value[taskId]
+      if (terminal && existing == null && taskId in observedTerminalTaskIds) {
+        // A terminal state for this task was already observed and its retention
+        // window has elapsed; a delayed duplicate terminal delivery must not
+        // resurrect the expired row or start a second retention window.
+        return@synchronized
+      }
       val lastActivity = task["lastActivity"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
       val fallback =
         task["progressSummary"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
@@ -5921,10 +5937,14 @@ class ChatController internal constructor(
         )
       _subagentActivities.value = _subagentActivities.value + (taskId to activity)
       if (activity.isWorking) {
+        // A fresh working event starts a new lifecycle for this task id: the
+        // previous terminal observation (if any) no longer applies.
+        observedTerminalTaskIds.remove(taskId)
         subagentActivityExpiryJobs.remove(taskId)?.cancel()
       } else if (terminal && existing?.isWorking != false) {
         // Local receipt starts retention; remote endedAt may be old.
         // Duplicate terminal updates must not extend that retention window.
+        observedTerminalTaskIds += taskId
         subagentActivityExpiryJobs[taskId] =
           scope.launch {
             delay(SUBAGENT_ACTIVITY_RETENTION_MS)
@@ -5941,6 +5961,7 @@ class ChatController internal constructor(
   private fun removeSubagentActivity(taskId: String) {
     synchronized(subagentActivityLock) {
       subagentActivityExpiryJobs.remove(taskId)?.cancel()
+      observedTerminalTaskIds.remove(taskId)
       _subagentActivities.value = _subagentActivities.value - taskId
     }
   }
@@ -5949,6 +5970,7 @@ class ChatController internal constructor(
     synchronized(subagentActivityLock) {
       subagentActivityExpiryJobs.values.forEach(Job::cancel)
       subagentActivityExpiryJobs.clear()
+      observedTerminalTaskIds.clear()
       _subagentActivities.value = emptyMap()
     }
   }
