@@ -15,10 +15,8 @@ import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   clearActivePluginRegistry,
+  commitStagedPluginRegistry,
   getActivePluginRegistry,
-  getActivePluginRegistryKey,
-  getActivePluginRegistryWorkspaceDir,
-  setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import {
   clearSecretsRuntimeSnapshotState,
@@ -146,13 +144,13 @@ export async function resetPreparedModelCatalogForTestCore(): Promise<void> {
 export async function createGatewayKernel(port = 18789, opts: GatewayServerOptions = {}) {
   ensureOpenClawCliOnPath();
   let lifecycleRuntime: Awaited<ReturnType<typeof prepareGatewayLifecycle>> | undefined;
-  // Pre-lifecycle failure cleanup is scoped to state THIS attempt published: an embedded
-  // process can already run a Gateway whose registry, config snapshot, and secrets runtime
-  // these globals hold, and a second kernel attempt failing during preflight must not strip
-  // them from it.
+  // Startup-failure cleanup is scoped to state THIS attempt published: an embedded process
+  // can already run a Gateway whose registry, config snapshot, and secrets runtime these
+  // globals hold, and a second kernel attempt failing at ANY stage must not strip them from
+  // it. Bootstrap STAGES its pre-bind registry (no retirement) and clearing an uncommitted
+  // staged registry reverts the slot to the displaced survivor snapshot; the displaced
+  // registry retires only at the commit on full kernel success below.
   const priorRegistry = getActivePluginRegistry();
-  const priorRegistryKey = getActivePluginRegistryKey();
-  const priorRegistryWorkspaceDir = getActivePluginRegistryWorkspaceDir();
   const priorSnapshot = getRuntimeConfigSnapshot();
   const priorSourceSnapshot = getRuntimeConfigSourceSnapshot();
   const priorAppliedHash = getRuntimeConfigAppliedHash();
@@ -213,30 +211,39 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
       loadGatewayModelCatalogSnapshot,
       readPreparedGatewayModelCatalog,
     });
-    return await prepareGatewayKernelRequestRuntime({ coreRuntime, log, logHealth });
+    const requestRuntime = await prepareGatewayKernelRequestRuntime({
+      coreRuntime,
+      log,
+      logHealth,
+    });
+    // Commit only at full kernel success, after the last throwing step: the displaced prior
+    // registry retires exactly once here, as a completed replacement. Committing any earlier
+    // lets a later startup failure close the attempt with the survivor already retired —
+    // destructive disable-cleanup fired — and nothing live left to restore.
+    commitStagedPluginRegistry(priorRegistry, bootstrap.pluginBootstrap.pluginRegistry);
+    return requestRuntime;
   } catch (error) {
     if (lifecycleRuntime) {
+      // The close's shutdown clears the attempt's staged (uncommitted) registry, which
+      // reverts the slot to the displaced survivor snapshot — key, subagent mode, workspace
+      // dir — and skips the host-state wipe the survivor still owns (see
+      // clearActivePluginRegistry). The commit above only runs after the last throwing step,
+      // so every failure landing here still holds an unretired survivor.
       await lifecycleRuntime.closeOnStartupFailure();
     } else {
-      // Kernel state prep activates the process-global plugin registry and pins the runtime
-      // config snapshot BEFORE the lifecycle exists. A pre-lifecycle failure must clear what
-      // THIS attempt published — or later validation (and a same-process retry) treats
+      // Bootstrap stages the process-global plugin registry and pins the runtime config
+      // snapshot BEFORE the lifecycle exists. A pre-lifecycle failure must clear what THIS
+      // attempt published — or later validation (and a same-process retry) treats
       // registrations from a Gateway that never started as LANDED channel owners — while a
-      // still-running embedded Gateway's state is preserved or restored. The registry retires
-      // FIRST — plugin-host cleanup still reads the runtime config and secrets snapshots,
-      // exactly as normal shutdown orders it — and the snapshots scrub (or restore to their
-      // prior state) afterwards even when that cleanup throws.
+      // still-running embedded Gateway's state is preserved or restored: clearing the staged
+      // registry retires only the attempt's and reverts the slot to the displaced survivor.
+      // The attempt registry retires FIRST — plugin-host cleanup still reads the runtime
+      // config and secrets snapshots, exactly as normal shutdown orders it — and the
+      // snapshots scrub (or restore to their prior state) afterwards even when that cleanup
+      // throws.
       try {
         if (getActivePluginRegistry() !== priorRegistry) {
           await clearActivePluginRegistry();
-          if (priorRegistry) {
-            setActivePluginRegistry(
-              priorRegistry,
-              priorRegistryKey ?? undefined,
-              "default",
-              priorRegistryWorkspaceDir,
-            );
-          }
         }
       } finally {
         // The secrets family follows the same THIS-attempt scope: leave a surviving snapshot

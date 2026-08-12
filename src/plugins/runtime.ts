@@ -47,6 +47,16 @@ const state: RegistryState = (() => {
   return registryState;
 })();
 
+// Arms exactly one revert for the currently staged registry: staging displaces a still-live
+// registry WITHOUT retiring it, so if the staged attempt is cleared before commit the displaced
+// snapshot (registry, key, subagent mode, workspace dir) must come back — otherwise the clear
+// empties the slot and its tail wipes global host state the displaced survivor still owns. Any
+// other install or clear invalidates the marker so a stale snapshot can never resurrect.
+let stagedRegistryRevert: {
+  registry: PluginRegistry;
+  snapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
+} | null = null;
+
 function registryHasPluginHostCleanupWork(registry: PluginRegistry | null): boolean {
   if (!registry) {
     return false;
@@ -161,6 +171,7 @@ export function stageActivePluginRegistry(
   runtimeSubagentMode: RegistryState["runtimeSubagentMode"],
   workspaceDir?: string,
 ): void {
+  const displaced = captureActivePluginRegistrySnapshot();
   installActivePluginRegistry({
     registry,
     key: cacheKey,
@@ -168,12 +179,22 @@ export function stageActivePluginRegistry(
     workspaceDir: workspaceDir ?? null,
     retirePrevious: false,
   });
+  // A no-survivor stage keeps plain clear semantics (empty slot + host-state wipe); only a
+  // displaced live registry earns the abort-by-clear revert.
+  stagedRegistryRevert =
+    displaced.activeRegistry && displaced.activeRegistry !== registry
+      ? { registry, snapshot: displaced }
+      : null;
 }
 
 export function commitStagedPluginRegistry(
   previousRegistry: PluginRegistry | null,
   registry: PluginRegistry,
 ): void {
+  if (stagedRegistryRevert?.registry === registry) {
+    // The attempt owns the slot from here: a later clear is a real clear, not an abort.
+    stagedRegistryRevert = null;
+  }
   if (state.activeRegistry !== registry || !retirePluginRegistryIfUnused(previousRegistry)) {
     return;
   }
@@ -207,6 +228,8 @@ function installActivePluginRegistry(params: {
   workspaceDir: string | null;
   retirePrevious?: boolean;
 }): void {
+  // Any install supersedes a pending staged revert (staging re-arms it after this returns).
+  stagedRegistryRevert = null;
   const previousRegistry = asPluginRegistry(state.activeRegistry);
   state.activeRegistry = params.registry;
   markPluginRegistryActive(params.registry);
@@ -382,6 +405,7 @@ export function listImportedRuntimePluginIds(): string[] {
 }
 
 function clearActivePluginRegistryState(): PluginRegistry | null {
+  stagedRegistryRevert = null;
   const previousRegistry = asPluginRegistry(state.activeRegistry);
   state.activeRegistry = null;
   state.activeVersion += 1;
@@ -397,6 +421,12 @@ function clearActivePluginRegistryState(): PluginRegistry | null {
 }
 
 export async function clearActivePluginRegistry(): Promise<void> {
+  // Clearing an uncommitted staged registry is an ABORT: capture the displaced survivor
+  // snapshot before the state clear consumes the marker, restore it synchronously below.
+  const revertSnapshot =
+    stagedRegistryRevert && stagedRegistryRevert.registry === state.activeRegistry
+      ? stagedRegistryRevert.snapshot
+      : null;
   const previousRegistry = clearActivePluginRegistryState();
   const clearVersion = state.activeVersion;
   const clearRegistries = (state.commandRegistryClearRegistries ??= new Map());
@@ -439,6 +469,12 @@ export async function clearActivePluginRegistry(): Promise<void> {
   state.commandRegistryClearTail = completion.catch((error: unknown) => {
     log.warn(`plugin registry clear failed: ${String(error)}`);
   });
+  if (revertSnapshot) {
+    // Restore the survivor synchronously after starting the clear: the version bump makes the
+    // clear's tail skip its global host-state wipe (run contexts, dynamic scheduler jobs the
+    // survivor still owns) while the retired attempt registry's own cleanup still completes.
+    restoreActivePluginRegistrySnapshot(revertSnapshot);
+  }
   if ([...clearRegistries.keys()].some(isPluginCommandExecutionActiveHere)) {
     return;
   }

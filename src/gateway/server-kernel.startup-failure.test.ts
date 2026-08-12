@@ -18,9 +18,17 @@ import {
   setRuntimeAmbientEnvTriggers,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  getPluginSessionSchedulerJobGeneration,
+  registerPluginSessionSchedulerJob,
+} from "../plugins/host-hook-runtime.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { isPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
   getActivePluginRegistry,
+  getActivePluginRegistryKey,
+  getActivePluginRuntimeSubagentMode,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
@@ -43,13 +51,42 @@ const teardownOrder = vi.hoisted(() => ({ calls: [] as string[] }));
 // Bootstrap publishes the ambient env-trigger policy BEFORE the config snapshot; failing the
 // snapshot load lands in that window, where recovery cannot rely on the snapshot-changed scrub.
 const configLoadFailure = vi.hoisted(() => ({ enabled: false }));
+// P1 follow-up to cycle 35: the retirement of a SURVIVING gateway's registry happens inside the
+// failed attempt, long before the catch runs. Probe the retired flag at the exact failure point
+// so the regression cannot hide behind the catch re-marking the registry active.
+const lifecycleFailureProbe = vi.hoisted(() => ({
+  survivor: null as object | null,
+  survivorRetiredAtFailure: null as boolean | null,
+}));
+// ClawSweeper cycle 38 (P1): failures AFTER prepareGatewayLifecycle succeeds route through
+// closeOnStartupFailure. realLifecycle lets those tests run the real lifecycle (and its real
+// close path); stubKernelTail completes the post-lifecycle kernel phases without booting the
+// full production tail so the success-path commit is reachable at this seam.
+const lifecycleStageFixture = vi.hoisted(() => ({
+  realLifecycle: false,
+  stubKernelTail: false,
+}));
+// The survivor-stripping fires inside the failed attempt's close, before the kernel catch can
+// repair anything: probe the retired flag at the moment the close clears the attempt registry.
+const closeClearProbe = vi.hoisted(() => ({
+  survivor: null as object | null,
+  survivorRetiredAtClear: null as boolean | null,
+}));
 
 vi.mock("../plugins/runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/runtime.js")>();
+  const registryLifecycle = await import("../plugins/registry-lifecycle.js");
   return {
     ...actual,
     clearActivePluginRegistry: async () => {
       teardownOrder.calls.push("registry");
+      // Synchronous probe: the clear's own synchronous phase must still run inside this call
+      // so restore-ordering against the clear's version-guarded tail stays observable.
+      if (closeClearProbe.survivor) {
+        closeClearProbe.survivorRetiredAtClear = registryLifecycle.isPluginRegistryRetired(
+          closeClearProbe.survivor as never,
+        );
+      }
       return actual.clearActivePluginRegistry();
     },
   };
@@ -85,8 +122,49 @@ vi.mock("./server-lifecycle.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./server-lifecycle.js")>();
   return {
     ...actual,
-    prepareGatewayLifecycle: () => {
+    prepareGatewayLifecycle: async (...args: Parameters<typeof actual.prepareGatewayLifecycle>) => {
+      if (lifecycleFailureProbe.survivor) {
+        const registryLifecycle = await import("../plugins/registry-lifecycle.js");
+        lifecycleFailureProbe.survivorRetiredAtFailure = registryLifecycle.isPluginRegistryRetired(
+          lifecycleFailureProbe.survivor as never,
+        );
+      }
+      if (lifecycleStageFixture.realLifecycle) {
+        return actual.prepareGatewayLifecycle(...args);
+      }
       throw new Error("fixture pre-lifecycle failure");
+    },
+  };
+});
+
+vi.mock("./server-core-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./server-core-runtime.js")>();
+  return {
+    ...actual,
+    startGatewayCoreRuntime: async (
+      input: Parameters<typeof actual.startGatewayCoreRuntime>[0],
+    ) => {
+      if (lifecycleStageFixture.stubKernelTail) {
+        return input.lifecycleRuntime as Awaited<ReturnType<typeof actual.startGatewayCoreRuntime>>;
+      }
+      return actual.startGatewayCoreRuntime(input);
+    },
+  };
+});
+
+vi.mock("./server-kernel-request-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./server-kernel-request-runtime.js")>();
+  return {
+    ...actual,
+    prepareGatewayKernelRequestRuntime: async (
+      params: Parameters<typeof actual.prepareGatewayKernelRequestRuntime>[0],
+    ) => {
+      if (lifecycleStageFixture.stubKernelTail) {
+        return params.coreRuntime as Awaited<
+          ReturnType<typeof actual.prepareGatewayKernelRequestRuntime>
+        >;
+      }
+      return actual.prepareGatewayKernelRequestRuntime(params);
     },
   };
 });
@@ -370,6 +448,398 @@ describe("createGatewayKernel pre-lifecycle failure", () => {
       resetPluginRuntimeStateForTest();
       clearRuntimeConfigSnapshot();
       await state.cleanup();
+    }
+  });
+
+  // P1 follow-up to cycle 35: the PRODUCTION bootstrap branch publishes a fresh pre-bind
+  // registry; a plain set there would retire the still-running Gateway's registry — firing
+  // its "disable" lifecycle hooks and deleting its live scheduler jobs — before the recovery
+  // catch can restore anything. The restored registry must be live, not a repointed corpse.
+  // Runs WITHOUT the minimal-gateway env: the minimal branch reuses the active registry, so
+  // the displacement under test only exists on the production branch.
+  it("keeps the surviving gateway's loaded registry live after a failed second start", async () => {
+    const port = await getFreePort();
+    const state = await createOpenClawTestState({
+      label: "gateway-kernel-registry-live",
+      layout: "home",
+      env: {
+        OPENCLAW_GATEWAY_PASSWORD: undefined,
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+        OPENCLAW_SKIP_CANVAS_HOST: "1",
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_CRON: "1",
+        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+        OPENCLAW_SKIP_PROVIDERS: "1",
+        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        VITEST: "1",
+      },
+    });
+    const token = "gateway-kernel-registry-live-token";
+    await state.writeConfig({
+      gateway: {
+        auth: { mode: "token", token },
+        controlUi: { enabled: false },
+        port,
+      },
+    });
+    state.applyEnv();
+    resetPluginRuntimeStateForTest();
+    clearRuntimeConfigSnapshot();
+    // The surviving embedded gateway: a LOADED registry whose retirement is observable — a
+    // runtime lifecycle cleanup hook plus a live dynamic scheduler job it owns.
+    const lifecycleCleanupReasons: string[] = [];
+    const schedulerCleanupReasons: string[] = [];
+    const survivor: PluginRegistry = {
+      ...createEmptyPluginRegistry(),
+      runtimeLifecycles: [
+        {
+          pluginId: "embedded-prior-plugin",
+          lifecycle: {
+            id: "embedded-prior-lifecycle",
+            cleanup: (ctx) => {
+              lifecycleCleanupReasons.push(ctx.reason);
+            },
+          },
+          source: "test",
+        },
+      ],
+    };
+    setActivePluginRegistry(survivor, "embedded-prior-live", "gateway-bindable");
+    const schedulerJob = registerPluginSessionSchedulerJob({
+      pluginId: "embedded-prior-plugin",
+      job: {
+        id: "embedded-prior-job",
+        sessionKey: "embedded-prior-session",
+        kind: "watchdog",
+        cleanup: (ctx) => {
+          schedulerCleanupReasons.push(ctx.reason);
+        },
+      },
+      ownerRegistry: survivor,
+    });
+    expect(schedulerJob).toBeDefined();
+    const runningConfig: OpenClawConfig = { channels: {} };
+    setAppliedRuntimeConfigSnapshot(runningConfig, runningConfig);
+    lifecycleFailureProbe.survivor = survivor;
+    try {
+      await expect(
+        createGatewayKernel(port, {
+          auth: { mode: "token", token },
+          bind: "loopback",
+          controlUiEnabled: false,
+          sidecarStartup: "defer",
+        }),
+      ).rejects.toThrow("fixture pre-lifecycle failure");
+      // At the failure point the attempt had already displaced the survivor; a retired flag
+      // there means displacement retired it and its destructive cleanup was already racing.
+      expect(lifecycleFailureProbe.survivorRetiredAtFailure).toBe(false);
+      expect(getActivePluginRegistry()).toBe(survivor);
+      expect(isPluginRegistryRetired(survivor)).toBe(false);
+      // Retirement cleanup is fire-and-forget: give any scheduled cleanup a bounded window to
+      // land, then prove none ever fired and the survivor's scheduler job is still registered.
+      await new Promise((resolve) => {
+        setTimeout(resolve, 100);
+      });
+      expect(lifecycleCleanupReasons).toEqual([]);
+      expect(schedulerCleanupReasons).toEqual([]);
+      expect(
+        getPluginSessionSchedulerJobGeneration({
+          pluginId: "embedded-prior-plugin",
+          jobId: "embedded-prior-job",
+          sessionKey: "embedded-prior-session",
+        }),
+      ).toBeDefined();
+    } finally {
+      lifecycleFailureProbe.survivor = null;
+      lifecycleFailureProbe.survivorRetiredAtFailure = null;
+      resetPluginRuntimeStateForTest();
+      clearRuntimeConfigSnapshot();
+      await state.cleanup();
+    }
+  });
+
+  // P1 follow-up to cycle 35: the running Gateway activates plugins as "gateway-bindable", but
+  // recovery restored the captured registry with a hard-coded "default" mode — downgrading the
+  // surviving registry despite the runtime snapshot contract preserving mode. Same production
+  // (non-minimal) displacement path as the loaded-lifecycle regression above.
+  it("restores the surviving registry's runtime mode after a failed second start", async () => {
+    const port = await getFreePort();
+    const state = await createOpenClawTestState({
+      label: "gateway-kernel-mode-restore",
+      layout: "home",
+      env: {
+        OPENCLAW_GATEWAY_PASSWORD: undefined,
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+        OPENCLAW_SKIP_CANVAS_HOST: "1",
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_CRON: "1",
+        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+        OPENCLAW_SKIP_PROVIDERS: "1",
+        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        VITEST: "1",
+      },
+    });
+    const token = "gateway-kernel-mode-token";
+    await state.writeConfig({
+      gateway: {
+        auth: { mode: "token", token },
+        controlUi: { enabled: false },
+        port,
+      },
+    });
+    state.applyEnv();
+    resetPluginRuntimeStateForTest();
+    clearRuntimeConfigSnapshot();
+    const survivor = createEmptyPluginRegistry();
+    setActivePluginRegistry(survivor, "embedded-prior-mode", "gateway-bindable");
+    const runningConfig: OpenClawConfig = { channels: {} };
+    setAppliedRuntimeConfigSnapshot(runningConfig, runningConfig);
+    try {
+      await expect(
+        createGatewayKernel(port, {
+          auth: { mode: "token", token },
+          bind: "loopback",
+          controlUiEnabled: false,
+          sidecarStartup: "defer",
+        }),
+      ).rejects.toThrow("fixture pre-lifecycle failure");
+      expect(getActivePluginRegistry()).toBe(survivor);
+      expect(getActivePluginRegistryKey()).toBe("embedded-prior-mode");
+      expect(getActivePluginRuntimeSubagentMode()).toBe("gateway-bindable");
+    } finally {
+      resetPluginRuntimeStateForTest();
+      clearRuntimeConfigSnapshot();
+      await state.cleanup();
+    }
+  });
+});
+
+describe("createGatewayKernel lifecycle-stage startup failure", () => {
+  // ClawSweeper cycle 38 (P1): committing the staged registry as soon as the lifecycle exists
+  // retires the surviving embedded Gateway's registry while startup can still fail — and the
+  // lifecycle failure branch only closes the candidate, leaving the slot empty. This drives a
+  // REAL post-lifecycle failure (TLS configured but unavailable, thrown by the kernel after
+  // prepareGatewayLifecycle) through the real closeOnStartupFailure. Non-minimal: the
+  // displacement under test only exists on the production bootstrap branch.
+  it("keeps the surviving gateway live when startup fails after the lifecycle exists", async () => {
+    const port = await getFreePort();
+    const state = await createOpenClawTestState({
+      label: "gateway-kernel-lifecycle-stage-failure",
+      layout: "home",
+      env: {
+        OPENCLAW_GATEWAY_PASSWORD: undefined,
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+        OPENCLAW_SKIP_CANVAS_HOST: "1",
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_CRON: "1",
+        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+        OPENCLAW_SKIP_PROVIDERS: "1",
+        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        VITEST: "1",
+      },
+    });
+    const token = "gateway-kernel-lifecycle-stage-token";
+    await state.writeConfig({
+      gateway: {
+        auth: { mode: "token", token },
+        controlUi: { enabled: false },
+        port,
+        tls: {
+          enabled: true,
+          autoGenerate: false,
+          certPath: state.path("missing-cert.pem"),
+          keyPath: state.path("missing-key.pem"),
+        },
+      },
+    });
+    state.applyEnv();
+    resetPluginRuntimeStateForTest();
+    clearRuntimeConfigSnapshot();
+    // The surviving embedded gateway: a LOADED registry whose retirement is observable — a
+    // runtime lifecycle cleanup hook plus a live dynamic scheduler job it owns.
+    const lifecycleCleanupReasons: string[] = [];
+    const schedulerCleanupReasons: string[] = [];
+    const survivor: PluginRegistry = {
+      ...createEmptyPluginRegistry(),
+      runtimeLifecycles: [
+        {
+          pluginId: "embedded-prior-plugin",
+          lifecycle: {
+            id: "embedded-prior-lifecycle",
+            cleanup: (ctx) => {
+              lifecycleCleanupReasons.push(ctx.reason);
+            },
+          },
+          source: "test",
+        },
+      ],
+    };
+    setActivePluginRegistry(survivor, "embedded-prior-tls", "gateway-bindable");
+    const schedulerJob = registerPluginSessionSchedulerJob({
+      pluginId: "embedded-prior-plugin",
+      job: {
+        id: "embedded-prior-job",
+        sessionKey: "embedded-prior-session",
+        kind: "watchdog",
+        cleanup: (ctx) => {
+          schedulerCleanupReasons.push(ctx.reason);
+        },
+      },
+      ownerRegistry: survivor,
+    });
+    expect(schedulerJob).toBeDefined();
+    const runningConfig: OpenClawConfig = { channels: {} };
+    setAppliedRuntimeConfigSnapshot(runningConfig, runningConfig);
+    lifecycleStageFixture.realLifecycle = true;
+    closeClearProbe.survivor = survivor;
+    try {
+      await expect(
+        createGatewayKernel(port, {
+          auth: { mode: "token", token },
+          bind: "loopback",
+          controlUiEnabled: false,
+          sidecarStartup: "defer",
+        }),
+      ).rejects.toThrow("gateway tls: cert/key missing");
+      // When closeOnStartupFailure cleared the attempt registry, a retired survivor means the
+      // commit fired mid-attempt and its destructive cleanup was already racing.
+      expect(closeClearProbe.survivorRetiredAtClear).toBe(false);
+      expect(getActivePluginRegistry()).toBe(survivor);
+      expect(isPluginRegistryRetired(survivor)).toBe(false);
+      expect(getActivePluginRegistryKey()).toBe("embedded-prior-tls");
+      expect(getActivePluginRuntimeSubagentMode()).toBe("gateway-bindable");
+      // Retirement cleanup is fire-and-forget: give any scheduled cleanup a bounded window to
+      // land, then prove none ever fired and the survivor's scheduler job is still registered.
+      await new Promise((resolve) => {
+        setTimeout(resolve, 100);
+      });
+      expect(lifecycleCleanupReasons).toEqual([]);
+      expect(schedulerCleanupReasons).toEqual([]);
+      expect(
+        getPluginSessionSchedulerJobGeneration({
+          pluginId: "embedded-prior-plugin",
+          jobId: "embedded-prior-job",
+          sessionKey: "embedded-prior-session",
+        }),
+      ).toBeDefined();
+    } finally {
+      lifecycleStageFixture.realLifecycle = false;
+      closeClearProbe.survivor = null;
+      closeClearProbe.survivorRetiredAtClear = null;
+      resetPluginRuntimeStateForTest();
+      clearRuntimeConfigSnapshot();
+      await state.cleanup();
+    }
+  });
+
+  // Success-path guard: deferring the commit to full kernel success must not lose the
+  // retirement itself. A successful second start still retires the displaced survivor exactly
+  // once — the commit's retirement, not a second one from the attempt's own close.
+  it("retires the displaced survivor exactly once when the second start succeeds", async () => {
+    const port = await getFreePort();
+    const state = await createOpenClawTestState({
+      label: "gateway-kernel-lifecycle-stage-success",
+      layout: "home",
+      env: {
+        OPENCLAW_GATEWAY_PASSWORD: undefined,
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+        OPENCLAW_SKIP_CANVAS_HOST: "1",
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_CRON: "1",
+        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+        OPENCLAW_SKIP_PROVIDERS: "1",
+        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        VITEST: "1",
+      },
+    });
+    const token = "gateway-kernel-lifecycle-stage-success-token";
+    await state.writeConfig({
+      gateway: {
+        auth: { mode: "token", token },
+        controlUi: { enabled: false },
+        port,
+      },
+    });
+    state.applyEnv();
+    resetPluginRuntimeStateForTest();
+    clearRuntimeConfigSnapshot();
+    const lifecycleCleanupReasons: string[] = [];
+    const schedulerCleanupReasons: string[] = [];
+    const survivor: PluginRegistry = {
+      ...createEmptyPluginRegistry(),
+      runtimeLifecycles: [
+        {
+          pluginId: "embedded-prior-plugin",
+          lifecycle: {
+            id: "embedded-prior-lifecycle",
+            cleanup: (ctx) => {
+              lifecycleCleanupReasons.push(ctx.reason);
+            },
+          },
+          source: "test",
+        },
+      ],
+    };
+    setActivePluginRegistry(survivor, "embedded-prior-success", "gateway-bindable");
+    const schedulerJob = registerPluginSessionSchedulerJob({
+      pluginId: "embedded-prior-plugin",
+      job: {
+        id: "embedded-prior-job",
+        sessionKey: "embedded-prior-session",
+        kind: "watchdog",
+        cleanup: (ctx) => {
+          schedulerCleanupReasons.push(ctx.reason);
+        },
+      },
+      ownerRegistry: survivor,
+    });
+    expect(schedulerJob).toBeDefined();
+    lifecycleStageFixture.realLifecycle = true;
+    lifecycleStageFixture.stubKernelTail = true;
+    let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
+    try {
+      kernel = await createGatewayKernel(port, {
+        auth: { mode: "token", token },
+        bind: "loopback",
+        controlUiEnabled: false,
+        sidecarStartup: "defer",
+      });
+      expect(getActivePluginRegistry()).not.toBe(survivor);
+      expect(isPluginRegistryRetired(survivor)).toBe(true);
+      await vi.waitFor(() => {
+        expect(lifecycleCleanupReasons).toEqual(["disable"]);
+        expect(schedulerCleanupReasons).toEqual(["disable"]);
+      });
+      expect(
+        getPluginSessionSchedulerJobGeneration({
+          pluginId: "embedded-prior-plugin",
+          jobId: "embedded-prior-job",
+          sessionKey: "embedded-prior-session",
+        }),
+      ).toBeUndefined();
+      // The completed replacement's own close must not fire a SECOND survivor retirement.
+      const closing = kernel.closeOnStartupFailure();
+      kernel = undefined;
+      await closing;
+      await new Promise((resolve) => {
+        setTimeout(resolve, 100);
+      });
+      expect(lifecycleCleanupReasons).toEqual(["disable"]);
+      expect(schedulerCleanupReasons).toEqual(["disable"]);
+    } finally {
+      lifecycleStageFixture.realLifecycle = false;
+      lifecycleStageFixture.stubKernelTail = false;
+      try {
+        await kernel?.closeOnStartupFailure();
+      } finally {
+        resetPluginRuntimeStateForTest();
+        clearRuntimeConfigSnapshot();
+        await state.cleanup();
+      }
     }
   });
 });

@@ -13,7 +13,7 @@ import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginRegistry, PluginRegistryParams } from "../plugins/registry-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import { getActivePluginRegistry, stageActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import { listGatewayMethods } from "./server-methods-list.js";
 
@@ -173,7 +173,14 @@ export async function prepareGatewayPluginBootstrap(params: {
   const pluginRegistry = params.minimalTestGateway
     ? (getActivePluginRegistry() ?? emptyPluginRegistry)
     : emptyPluginRegistry;
-  setActivePluginRegistry(pluginRegistry);
+  // Stage, never set: this pre-bind publish is provisional until the whole kernel start
+  // succeeds. A plain set would retire a still-running embedded Gateway's registry here —
+  // firing its "disable" lifecycle/scheduler cleanup — while the attempt can still fail. The
+  // kernel commits the staged registry (retiring the displaced one) only at full startup
+  // success; reusing the already-active registry leaves its slot key/mode/workspace untouched.
+  if (pluginRegistry !== getActivePluginRegistry()) {
+    stageActivePluginRegistry(pluginRegistry, null, "default");
+  }
 
   return {
     gatewayPluginConfigAtStart: gatewayPluginConfig,
