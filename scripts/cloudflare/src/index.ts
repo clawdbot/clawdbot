@@ -1,4 +1,4 @@
-export { OpenClawContainer } from "./container";
+export { OpenClawContainer } from "./container.js";
 
 interface ContainerStub {
   fetch(request: Request): Promise<Response>;

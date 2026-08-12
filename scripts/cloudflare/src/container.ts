@@ -52,9 +52,9 @@ function buildContainerEnv(env: OpenClawContainerEnv): Record<string, string> {
 }
 
 export class OpenClawContainer extends Container<OpenClawContainerEnv> {
-  defaultPort = 8080;
-  pingEndpoint = "localhost/startupz";
-  sleepAfter = "10m";
+  override defaultPort = 8080;
+  override pingEndpoint = "localhost/startupz";
+  override sleepAfter = "10m";
 
   private readonly webhookOnly: boolean;
 
