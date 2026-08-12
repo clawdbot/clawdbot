@@ -18923,6 +18923,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         case .missingScope(let value): value.code
         case .mcpAppViewExpired(let value): value.code
         case .userPrefsLimitExceeded(let value): value.code
+        case .projectCloneFailed(let value): value.code
         case .unknownAgentId(let value): value.code
         case .wizardNotFound(let value): value.code
         }
