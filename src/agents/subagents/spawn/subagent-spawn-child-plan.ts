@@ -89,7 +89,6 @@ type ResolvedSubagentChildPlan = {
   childSessionOrigin: ReturnType<typeof resolveRequesterOriginForChild>;
   incognito: boolean;
   childSessionKey: string;
-  requesterRuntimeSandboxed: boolean;
   childRuntimeSandboxed: boolean;
   targetAgentDir: string;
   modelPlan: Extract<ReturnType<typeof resolveSubagentModelAndThinkingPlan>, { status: "ok" }>;
@@ -254,7 +253,6 @@ export async function resolveSubagentChildPlan(params: {
       childSessionOrigin,
       incognito,
       childSessionKey,
-      requesterRuntimeSandboxed: requesterRuntime.sandboxed,
       childRuntimeSandboxed: childRuntime.sandboxed,
       targetAgentDir,
       modelPlan,

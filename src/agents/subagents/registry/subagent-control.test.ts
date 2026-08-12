@@ -51,6 +51,15 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type GatewayCaller = typeof import("../../../gateway/call.js").callGateway;
 
+function readAgentRequestRunId(request: CallGatewayOptions): string {
+  const idempotencyKey = (request.params as { idempotencyKey?: unknown } | undefined)
+    ?.idempotencyKey;
+  if (typeof idempotencyKey !== "string" || idempotencyKey.length === 0) {
+    throw new Error("agent request is missing its idempotency key");
+  }
+  return idempotencyKey;
+}
+
 vi.mock("../../../gateway/call.js", () => ({
   callGateway: vi.fn(),
 }));
@@ -2486,6 +2495,7 @@ describe("steerControlledSubagentRun", () => {
       .spyOn(await import("./subagent-registry.js"), "replaceSubagentRunAfterSteerCore")
       .mockReturnValue(false);
 
+    let acceptedRunId = "";
     const callGatewayImplementation: GatewayCaller = async <T = Record<string, unknown>>(
       request: CallGatewayOptions,
     ) => {
@@ -2493,7 +2503,8 @@ describe("steerControlledSubagentRun", () => {
         return {} as T;
       }
       if (request.method === "agent") {
-        return { runId: "run-steer-new" } as T;
+        acceptedRunId = readAgentRequestRunId(request);
+        return { runId: acceptedRunId } as T;
       }
       if (request.method === "chat.abort") {
         return {
@@ -2523,7 +2534,7 @@ describe("steerControlledSubagentRun", () => {
 
       expect(result).toEqual({
         status: "error",
-        runId: "run-steer-new",
+        runId: acceptedRunId,
         sessionKey: "agent:main:subagent:steer-worker",
         sessionId: undefined,
         error: "failed to replace steered subagent run",
@@ -2536,7 +2547,7 @@ describe("steerControlledSubagentRun", () => {
           method: "chat.abort",
           params: {
             sessionKey: "agent:main:subagent:steer-worker",
-            runId: "run-steer-new",
+            runId: acceptedRunId,
           },
         }),
       );
@@ -2559,6 +2570,7 @@ describe("steerControlledSubagentRun", () => {
       startedAt: Date.now() - 4_000,
     });
     addSubagentRunForTests(entry);
+    let acceptedRunId = "";
     const callGatewayImplementation: GatewayCaller = async <T = Record<string, unknown>>(
       request: CallGatewayOptions,
     ) => {
@@ -2573,35 +2585,35 @@ describe("steerControlledSubagentRun", () => {
       }
       if (request.method === "agent") {
         rotateAgentEventLifecycleGeneration();
-        return { runId: "run-steer-generation-new" } as T;
+        acceptedRunId = readAgentRequestRunId(request);
+        return { runId: acceptedRunId } as T;
       }
       throw new Error(`unexpected method: ${request.method}`);
     };
     const callGateway = vi.fn(callGatewayImplementation) as GatewayCaller;
     setSubagentControlDepsForTest({ callGateway });
 
-    await expect(
-      steerControlledSubagentRun({
-        cfg: cfgWithSessionStore(),
-        controller: {
-          controllerSessionKey: "agent:main:main",
-          callerSessionKey: "agent:main:main",
-          callerIsSubagent: false,
-          controlScope: "children",
-        },
-        entry,
-        message: "new direction",
-      }),
-    ).resolves.toMatchObject({
+    const result = await steerControlledSubagentRun({
+      cfg: cfgWithSessionStore(),
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry,
+      message: "new direction",
+    });
+    expect(result).toMatchObject({
       status: "error",
-      runId: "run-steer-generation-new",
+      runId: acceptedRunId,
       error: "Gateway lifecycle changed before the steered run could be registered.",
     });
 
     expect(callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "chat.abort",
-        params: { sessionKey: childSessionKey, runId: "run-steer-generation-new" },
+        params: { sessionKey: childSessionKey, runId: acceptedRunId },
       }),
     );
     expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
@@ -2806,13 +2818,15 @@ describe("steerControlledSubagentRun", () => {
       startedAt: Date.now() - 500,
     });
 
+    let acceptedRunId = "";
     setSubagentControlDepsForTest({
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
         if (request.method === "agent.wait") {
           return {} as T;
         }
         if (request.method === "agent") {
-          return { runId: "run-followup-steer" } as T;
+          acceptedRunId = readAgentRequestRunId(request);
+          return { runId: acceptedRunId } as T;
         }
         throw new Error(`unexpected method: ${request.method}`);
       },
@@ -2844,7 +2858,7 @@ describe("steerControlledSubagentRun", () => {
 
     expect(result).toEqual({
       status: "accepted",
-      runId: "run-followup-steer",
+      runId: acceptedRunId,
       sessionKey: childSessionKey,
       sessionId: undefined,
       mode: "restart",
@@ -2870,13 +2884,15 @@ describe("steerControlledSubagentRun", () => {
       pauseReason: "sessions_yield",
     });
 
+    let acceptedRunId = "";
     setSubagentControlDepsForTest({
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
         if (request.method === "agent.wait") {
           return {} as T;
         }
         if (request.method === "agent") {
-          return { runId: "run-yielded-followup" } as T;
+          acceptedRunId = readAgentRequestRunId(request);
+          return { runId: acceptedRunId } as T;
         }
         throw new Error(`unexpected method: ${request.method}`);
       },
@@ -2908,7 +2924,7 @@ describe("steerControlledSubagentRun", () => {
 
     expect(result).toEqual({
       status: "accepted",
-      runId: "run-yielded-followup",
+      runId: acceptedRunId,
       sessionKey: childSessionKey,
       sessionId: undefined,
       mode: "restart",
@@ -2953,7 +2969,7 @@ describe("steerControlledSubagentRun", () => {
         }
         if (request.method === "agent") {
           agentCalls.push(request);
-          return { runId: "run-active-steer-restarted" } as T;
+          return { runId: readAgentRequestRunId(request) } as T;
         }
         throw new Error(`unexpected method: ${request.method}`);
       },

@@ -71,6 +71,7 @@ test("isolates attachment ingress roots by child session", async () => {
     runtimeId: "shared-runtime",
     sessionKey: firstSession,
     workspaceDir: "/workspace",
+    hostIngressWorkspaceDir: resolveMxcAttachmentIngressRoot(firstSession),
     containerWorkspaceDir: "/workspace",
     config: {},
   });
@@ -82,7 +83,6 @@ test("isolates attachment ingress roots by child session", async () => {
       ".openclaw",
       "attachments",
     ),
-    workspaceMutationVisibility: "shared-host",
   });
   expect(resolveMxcAttachmentIngressRoot(firstSession)).not.toBe(
     resolveMxcAttachmentIngressRoot(secondSession),

@@ -285,9 +285,7 @@ export type SubagentRunRecord = {
   attachmentsSandboxIdentity?: {
     backendId: string;
     runtimeId: string;
-    configLabel: string;
-    fsCleanupLocator?: unknown;
-    workspaceMutationVisibility: "shared-host" | "runtime-local";
+    fsCleanupLocator: unknown;
   };
   /** Exact container path used for bridge-owned attachment cleanup. */
   attachmentsSandboxDir?: string;

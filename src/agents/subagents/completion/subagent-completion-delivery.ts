@@ -27,6 +27,7 @@ import {
 } from "../registry/subagent-registry-helpers.js";
 import type { SubagentLifecycleController } from "../registry/subagent-registry-lifecycle.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { scheduleSubagentRegistrySweep } from "../registry/subagent-registry-runtime.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   admitSubagentCompletionDelivery,
@@ -319,6 +320,7 @@ export async function dismissSubagentCompletionDelivery(
   options: {
     discardTerminalDelivery: typeof SubagentLifecycleController.discardTerminalDelivery;
     databaseOptions?: OpenClawStateDatabaseOptions;
+    scheduleSweep?: (params: { delayMs?: number }) => void | Promise<void>;
   },
 ): Promise<CompletionDeliveryRecoveryResult> {
   const task = getTaskById(taskId);
@@ -330,14 +332,8 @@ export async function dismissSubagentCompletionDelivery(
   const expectedTaskRunId = current.taskRunId ?? current.runId;
   const expectedDeliveryGeneration = current.delivery.generation;
   const expectedQueueId = current.delivery.queueId;
-  if (
-    (current.cleanup === "delete" || !current.retainAttachmentsOnKeep) &&
-    !(await safeRemoveAttachmentsDir(current))
-  ) {
-    return { ok: false, reason: "attachment cleanup failed; retry dismissal" };
-  }
-  // Attachment removal crosses a filesystem boundary. Revalidate the exact
-  // suspended owner before committing its terminal delivery state.
+  const attachmentCleanupRequired =
+    current.cleanup === "delete" || !current.retainAttachmentsOnKeep;
   const authoritativeTask = getTaskById(taskId);
   const authoritative = subagentRuns.get(expectedRunId);
   if (
@@ -367,8 +363,45 @@ export async function dismissSubagentCompletionDelivery(
     subagent,
     task: projectedTask,
     databaseOptions: options.databaseOptions,
-    mutateSubagent: (entry) => options.discardTerminalDelivery(entry, now),
+    mutateSubagent: (entry) => {
+      options.discardTerminalDelivery(entry, now);
+      if (attachmentCleanupRequired) {
+        entry.cleanupHandled = false;
+        entry.cleanupCompletedAt = undefined;
+      }
+    },
   });
   publishCommittedRecords(subagent, projectedTask);
+  if (attachmentCleanupRequired) {
+    const attachmentsRemoved = await safeRemoveAttachmentsDir(subagent);
+    if (!attachmentsRemoved) {
+      await (options.scheduleSweep ?? scheduleSubagentRegistrySweep)({ delayMs: 0 });
+      return { ok: true, task: getTaskById(taskId) };
+    }
+    const pending = subagentRuns.get(expectedRunId);
+    const pendingTask = getTaskById(taskId);
+    if (
+      pending &&
+      pendingTask &&
+      pending.delivery?.status === "discarded" &&
+      pending.delivery.generation === expectedDeliveryGeneration &&
+      (pending.taskRunId ?? pending.runId) === expectedTaskRunId &&
+      pendingTask.runId === expectedTaskRunId
+    ) {
+      const cleaned = structuredClone(pending);
+      cleaned.cleanupHandled = true;
+      cleaned.cleanupCompletedAt = Date.now();
+      try {
+        settleSubagentCompletionDelivery({
+          subagent: cleaned,
+          task: pendingTask,
+          databaseOptions: options.databaseOptions,
+        });
+        publishCommittedRecords(cleaned, pendingTask);
+      } catch {
+        await (options.scheduleSweep ?? scheduleSubagentRegistrySweep)({ delayMs: 0 });
+      }
+    }
+  }
   return { ok: true, task: getTaskById(taskId) };
 }

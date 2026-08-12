@@ -1,9 +1,12 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { ContainerConfig } from "@microsoft/mxc-sdk";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
+import {
+  resolvePreferredOpenClawTmpDir,
+  resolveSandboxAttachmentIngressWorkspace,
+} from "openclaw/plugin-sdk/sandbox";
 import type {
   SandboxBackendHandle,
   SandboxBackendExecSpec,
@@ -360,8 +363,7 @@ export function createMxcSandboxBackendHandle(params: {
 }
 
 export function resolveMxcAttachmentIngressRoot(sessionKey: string): string {
-  const sessionHash = createHash("sha256").update(sessionKey).digest("hex").slice(0, 32);
-  return path.join(resolvePreferredOpenClawTmpDir(), "openclaw-mxc-attachments", sessionHash);
+  return resolveSandboxAttachmentIngressWorkspace(sessionKey);
 }
 
 function toBuffer(value: Buffer | string): Buffer {
@@ -373,12 +375,10 @@ function toBuffer(value: Buffer | string): Buffer {
 
 /** Manager for `openclaw sandbox list` and `openclaw sandbox remove`. */
 export const mxcSandboxBackendManager: SandboxBackendManager = {
-  async prepareAttachmentIngress({ sessionKey }) {
-    const attachmentIngressRoot = resolveMxcAttachmentIngressRoot(sessionKey);
+  async prepareAttachmentIngress({ hostIngressWorkspaceDir }) {
     return {
-      workspaceDir: attachmentIngressRoot,
-      sandboxAttachmentsRootDir: path.join(attachmentIngressRoot, ".openclaw", "attachments"),
-      workspaceMutationVisibility: "shared-host" as const,
+      workspaceDir: hostIngressWorkspaceDir,
+      sandboxAttachmentsRootDir: path.join(hostIngressWorkspaceDir, ".openclaw", "attachments"),
     };
   },
   async describeRuntime() {

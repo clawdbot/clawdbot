@@ -1506,12 +1506,14 @@ describe("subagent registry seam flow", () => {
       "agent:main:subagent:run-queued-one": { sessionId: "session-one", updatedAt: now },
       "agent:main:subagent:run-queued-two": { sessionId: "session-two", updatedAt: now },
     });
-    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "agent") {
-        return { runId: "gateway-run-one" };
-      }
-      return request.method === "agent.wait" ? { status: "pending" } : {};
-    });
+    mocks.callGateway.mockImplementation(
+      async (request: { method?: string; params?: { idempotencyKey?: unknown } }) => {
+        if (request.method === "agent") {
+          return { runId: request.params?.idempotencyKey };
+        }
+        return request.method === "agent.wait" ? { status: "pending" } : {};
+      },
+    );
 
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspension?.commit()).toBe(true);
@@ -1536,10 +1538,9 @@ describe("subagent registry seam flow", () => {
         scopes: ["operator.admin"],
       });
     });
-    expect(mod.getSubagentRunByRunId("run-queued-one")?.execution?.status).toBe("running");
-    const acceptedRun = mod.getSubagentRunByRunId("gateway-run-one");
+    const acceptedRun = mod.getSubagentRunByRunId("run-queued-one");
     expect(acceptedRun).toMatchObject({
-      runId: "gateway-run-one",
+      runId: "run-queued-one",
       swarmRunId: "run-queued-one",
       schedulerSlotId: "run-queued-one",
       execution: { status: "running" },

@@ -42,6 +42,7 @@ export type SandboxBackendManager = {
     runtimeId: string;
     sessionKey: string;
     workspaceDir: string;
+    hostIngressWorkspaceDir: string;
     containerWorkspaceDir: string;
     config: OpenClawConfig;
     agentId?: string;
@@ -51,7 +52,6 @@ export type SandboxBackendManager = {
     sandboxFsBridge?: SandboxFsBridge;
     cleanupLocator?: unknown;
     cleanupContainerWorkspaceDir?: string;
-    workspaceMutationVisibility: "shared-host" | "runtime-local";
   }>;
   /** Reopen an existing runtime from its frozen address without provisioning it. */
   createFsCleanupBridge?(params: {

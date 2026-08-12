@@ -31,30 +31,6 @@ import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
-const MAX_RESOLVED_SANDBOX_CONTEXTS = 256;
-const resolvedSandboxContexts = new Map<string, SandboxContext>();
-
-function rememberResolvedSandboxContext(context: SandboxContext): void {
-  if (context.backend?.capabilities?.workspaceMutationVisibility !== "shared-host") {
-    return;
-  }
-  const key = `${context.backendId}\0${context.runtimeId}`;
-  resolvedSandboxContexts.delete(key);
-  resolvedSandboxContexts.set(key, context);
-  while (resolvedSandboxContexts.size > MAX_RESOLVED_SANDBOX_CONTEXTS) {
-    const oldest = resolvedSandboxContexts.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    resolvedSandboxContexts.delete(oldest);
-  }
-}
-
-/** Process-local sandboxes that can still share writable host mounts. */
-export function listResolvedSandboxContexts(): SandboxContext[] {
-  return [...resolvedSandboxContexts.values()];
-}
-
 const loadSyncWorkspaceSkills = createLazyRuntimeNamedExport(
   () => import("../../skills/loading/workspace-skill-sync.runtime.js"),
   "syncWorkspaceSkills",
@@ -365,8 +341,6 @@ async function resolveProvisionedSandboxContext(
   sandboxContext.fsBridge =
     backend.createFsBridge?.({ sandbox: sandboxContext }) ??
     createSandboxFsBridge({ sandbox: sandboxContext });
-
-  rememberResolvedSandboxContext(sandboxContext);
 
   return sandboxContext;
 }

@@ -8,7 +8,7 @@ import {
   GatewayDrainingError,
 } from "../../../process/gateway-work-admission.js";
 import { applySubagentLaunchAuthorization } from "../spawn/subagent-launch-authorization.js";
-import { readGatewayRunId } from "../spawn/subagent-spawn-gateway.js";
+import { requireMatchingGatewayRunId } from "../spawn/subagent-spawn-gateway.js";
 import { resolveSwarmConfig } from "../swarm/swarm-config.js";
 import {
   enqueueSwarmRun,
@@ -291,7 +291,7 @@ export function createSubagentRegistryRestorer(config: {
                           : undefined,
                       )
                     : await deps().callGateway(request);
-                  const gatewayRunId = readGatewayRunId(response) ?? runId;
+                  const gatewayRunId = requireMatchingGatewayRunId(response, runId);
                   if (!startQueuedSubagentRun(runId, gatewayRunId, terminationOwner)) {
                     throw new Error(
                       "collector registry row could not transition from queued to running",

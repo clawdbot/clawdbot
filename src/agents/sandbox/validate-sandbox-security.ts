@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveRequiredHomeDir, resolveRequiredOsHomeDir } from "../../infra/home-dir.js";
+import { resolveSandboxAttachmentIngressRoot } from "./attachment-ingress.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import {
@@ -163,11 +164,13 @@ function getBlockedHostPaths(): string[] {
     openclawHome: process.env.OPENCLAW_HOME,
     osHome: os.homedir(),
     userProfile: process.env.USERPROFILE,
+    attachmentIngress: resolveSandboxAttachmentIngressRoot(),
   });
   if (blockedHostPathsCache?.key === cacheKey) {
     return blockedHostPathsCache.paths;
   }
   const blocked = new Set(BLOCKED_HOST_PATHS.map(normalizeHostPath));
+  blocked.add(normalizeHostPath(resolveSandboxAttachmentIngressRoot()));
   for (const home of getBlockedHomeRoots()) {
     for (const suffix of BLOCKED_HOME_SUBPATHS) {
       blocked.add(normalizeHostPath(path.posix.join(home, suffix)));

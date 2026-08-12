@@ -17,12 +17,7 @@ import { computeBackoff } from "../../../infra/backoff.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { truncateUtf8Prefix } from "../../../utils/utf8-truncate.js";
 import { getSandboxBackendManager } from "../../sandbox/backend.js";
-import { resolveSandboxContext } from "../../sandbox/context.js";
 import type { SandboxFsBridge } from "../../sandbox/fs-bridge.types.js";
-import {
-  buildSandboxFsMounts,
-  resolveWritableSandboxHostPathAliases,
-} from "../../sandbox/fs-paths.js";
 import {
   removeSubagentAttachmentsDir,
   resolveSubagentAttachmentSandboxWorkspaceDir,
@@ -213,7 +208,6 @@ export async function safeRemoveAttachmentsDir(
   entry: SubagentRunRecord,
   options?: {
     config?: OpenClawConfig;
-    resolveSandbox?: typeof resolveSandboxContext;
     createRuntimeCleanupBridge?: typeof createRegisteredSandboxCleanupBridge;
   },
 ): Promise<boolean> {
@@ -221,7 +215,7 @@ export async function safeRemoveAttachmentsDir(
     return true;
   }
   let sandboxFsBridge;
-  let sandboxDir = entry.attachmentsSandboxDir;
+  const sandboxDir = entry.attachmentsSandboxDir;
   if (entry.attachmentsSandboxSessionKey) {
     if (
       !entry.attachmentsSandboxWorkspaceDir ||
@@ -233,68 +227,26 @@ export async function safeRemoveAttachmentsDir(
     const identity = entry.attachmentsSandboxIdentity;
     const config = options?.config ?? getRuntimeConfig();
     try {
-      if (identity.workspaceMutationVisibility === "runtime-local") {
-        if (identity.fsCleanupLocator === undefined) {
-          return false;
-        }
-        const cleanupWorkspaceDir = resolveSubagentAttachmentSandboxWorkspaceDir(
-          entry.attachmentsSandboxDir,
-          path.basename(entry.attachmentsDir),
-        );
-        if (!cleanupWorkspaceDir) {
-          return false;
-        }
-        sandboxFsBridge = await (
-          options?.createRuntimeCleanupBridge ?? createRegisteredSandboxCleanupBridge
-        )({
-          backendId: identity.backendId,
-          runtimeId: identity.runtimeId,
-          workspaceDir: entry.attachmentsSandboxWorkspaceDir,
-          containerWorkspaceDir: cleanupWorkspaceDir,
-          locator: identity.fsCleanupLocator,
-          config,
-          agentId: entry.attachmentsSandboxAgentId ?? entry.requesterAgentId,
-        });
-        if (!sandboxFsBridge) {
-          return false;
-        }
-      } else {
-        const sandbox = await (options?.resolveSandbox ?? resolveSandboxContext)({
-          config,
-          agentId: entry.attachmentsSandboxAgentId ?? entry.requesterAgentId,
-          sessionKey: entry.attachmentsSandboxSessionKey,
-          workspaceDir: entry.attachmentsSandboxWorkspaceDir,
-          requireCurrentConfig: true,
-        });
-        if (
-          !sandbox ||
-          sandbox.backendId !== identity.backendId ||
-          sandbox.runtimeId !== identity.runtimeId ||
-          sandbox.backend?.configLabel?.trim() !== identity.configLabel ||
-          sandbox.backend?.capabilities?.workspaceMutationVisibility !== "shared-host"
-        ) {
-          return false;
-        }
-        if (sandbox.backend?.createFsBridge) {
-          return false;
-        }
-        const attachmentsRelativePath = path.relative(
-          entry.attachmentsRootDir,
-          entry.attachmentsDir,
-        );
-        const writableAliases = resolveWritableSandboxHostPathAliases({
-          hostRoot: entry.attachmentsRootDir,
-          relativePath: attachmentsRelativePath,
-          defaultContainerRoot: sandbox.containerWorkdir,
-          mounts: buildSandboxFsMounts(sandbox),
-        });
-        if (writableAliases.length > 0) {
-          if (!sandbox.fsBridge) {
-            return false;
-          }
-          sandboxFsBridge = sandbox.fsBridge;
-          sandboxDir = writableAliases[0]?.containerPath;
-        }
+      const cleanupWorkspaceDir = resolveSubagentAttachmentSandboxWorkspaceDir(
+        entry.attachmentsSandboxDir,
+        path.basename(entry.attachmentsDir),
+      );
+      if (!cleanupWorkspaceDir) {
+        return false;
+      }
+      sandboxFsBridge = await (
+        options?.createRuntimeCleanupBridge ?? createRegisteredSandboxCleanupBridge
+      )({
+        backendId: identity.backendId,
+        runtimeId: identity.runtimeId,
+        workspaceDir: entry.attachmentsSandboxWorkspaceDir,
+        containerWorkspaceDir: cleanupWorkspaceDir,
+        locator: identity.fsCleanupLocator,
+        config,
+        agentId: entry.attachmentsSandboxAgentId ?? entry.requesterAgentId,
+      });
+      if (!sandboxFsBridge) {
+        return false;
       }
     } catch {
       return false;

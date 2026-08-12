@@ -43,6 +43,7 @@ import {
 } from "../../tools/sessions-helpers.js";
 import { resolveStoredSubagentCapabilities } from "../spawn/subagent-capabilities.js";
 import { terminateClaimedAcceptedSubagentRun } from "../spawn/subagent-spawn-cleanup.js";
+import { requireMatchingGatewayRunId } from "../spawn/subagent-spawn-gateway.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { resolveSessionEntryForKey } from "./subagent-list.js";
 import {
@@ -1185,9 +1186,7 @@ export async function steerControlledSubagentRun(params: {
       },
       timeoutMs: 10_000,
     });
-    if (typeof response?.runId === "string" && response.runId) {
-      runId = response.runId;
-    }
+    runId = requireMatchingGatewayRunId(response, idempotencyKey);
     const terminateUnownedSteer = async () => {
       return await terminateClaimedAcceptedSubagentRun({
         childSessionKey: params.entry.childSessionKey,

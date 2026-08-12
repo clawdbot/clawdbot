@@ -1,54 +1,45 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
+import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import {
-  resetSubagentRegistryRuntimeLoadersForTests,
-  setSubagentRegistryDepsForTest,
-} from "./subagent-registry-deps.js";
+  clearFailedLaunchRollbacks,
+  registerFailedLaunchRollback,
+} from "./subagent-failed-launch-rollback.js";
+import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-describe("subagent registry context cleanup", () => {
+vi.mock("../../internal-session-effects.js", () => ({
+  removeInternalSessionEffectsSession: vi.fn(async () => undefined),
+}));
+
+describe("failed-launch context cleanup", () => {
   afterEach(() => {
-    setSubagentRegistryDepsForTest();
-    resetSubagentRegistryRuntimeLoadersForTests();
+    clearFailedLaunchRollbacks();
+    vi.mocked(removeInternalSessionEffectsSession).mockClear();
   });
 
-  it("rechecks lifecycle ownership after resolving the context engine", async () => {
-    let releaseResolution!: () => void;
-    const resolutionGate = new Promise<void>((resolve) => {
-      releaseResolution = resolve;
-    });
-    let resolutionStarted!: () => void;
-    const started = new Promise<void>((resolve) => {
-      resolutionStarted = resolve;
-    });
-    const onSubagentEnded = vi.fn(async () => {});
-    setSubagentRegistryDepsForTest({
-      loadAgentRuntimePluginRegistryHandle: () => undefined,
-      ensureContextEnginesInitialized: vi.fn(),
-      resolveContextEngine: vi.fn(async () => {
-        resolutionStarted();
-        await resolutionGate;
-        return { onSubagentEnded } as never;
-      }),
-    });
+  it("persists completion after the prepared context rollback succeeds", async () => {
+    const persist = vi.fn();
+    const rollback = vi.fn(async () => true);
+    const entry = {
+      runId: "run-prepared-rollback",
+      childSessionKey: "agent:main:subagent:prepared-rollback",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "rollback prepared context",
+      cleanup: "delete",
+      createdAt: 1,
+      execution: { status: "terminal", transcriptTarget: "agent:main:main" },
+    } as SubagentRunRecord;
+    registerFailedLaunchRollback(entry.runId, rollback);
     const cleanup = createSubagentRegistryContextCleanup({
       deps: () => ({ getRuntimeConfig: () => ({}) }) as never,
-      persist: vi.fn(),
+      persist,
       warn: vi.fn(),
     });
-    let current = true;
 
-    const pending = cleanup.notifyContextEngineSubagentEnded(
-      {
-        childSessionKey: "agent:main:subagent:retired",
-        reason: "completed",
-      },
-      { isCurrent: () => current },
-    );
-    await started;
-    current = false;
-    releaseResolution();
-    await pending;
-
-    expect(onSubagentEnded).not.toHaveBeenCalled();
+    await expect(cleanup.cleanupFailedLaunchResources(entry)).resolves.toBe(true);
+    expect(rollback).toHaveBeenCalledOnce();
+    expect(entry.contextEngineCleanupCompletedAt).toEqual(expect.any(Number));
+    expect(persist).toHaveBeenCalledWith(entry.runId);
   });
 });

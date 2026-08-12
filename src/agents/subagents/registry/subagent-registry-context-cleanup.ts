@@ -103,6 +103,10 @@ export function createSubagentRegistryContextCleanup(config: {
       preparedRollback = await runFailedLaunchRollback(entry.runId);
       if (preparedRollback === true) {
         contextAlreadyEnded = true;
+        if (isCurrent()) {
+          entry.contextEngineCleanupCompletedAt = Date.now();
+          persist(entry.runId);
+        }
       }
     }
     const attachmentsRemoved = await safeRemoveAttachmentsDir(entry);

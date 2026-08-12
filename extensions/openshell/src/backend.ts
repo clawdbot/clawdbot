@@ -392,7 +392,6 @@ export function createOpenShellSandboxBackendManager(params: {
         sandboxFsBridge: bridge,
         cleanupLocator: locator,
         cleanupContainerWorkspaceDir: ingressRoot,
-        workspaceMutationVisibility: "runtime-local" as const,
       };
     },
     async createFsCleanupBridge({

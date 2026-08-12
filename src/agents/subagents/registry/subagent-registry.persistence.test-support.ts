@@ -78,8 +78,6 @@ export function createFailedLaunchCleanupOwnerFixture(): SubagentRunRecord {
     attachmentsSandboxIdentity: {
       backendId: "ssh",
       runtimeId: "runtime-1",
-      configLabel: "host.example",
-      workspaceMutationVisibility: "runtime-local",
       fsCleanupLocator: {
         version: 1,
         backend: "ssh",

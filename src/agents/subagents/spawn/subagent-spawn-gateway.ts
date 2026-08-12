@@ -83,6 +83,15 @@ export function readGatewayRunId(
   return typeof runId === "string" && runId.trim() ? runId.trim() : undefined;
 }
 
+/** The Gateway binds accepted agent runs to the caller's idempotency key. */
+export function requireMatchingGatewayRunId(response: unknown, idempotencyKey: string): string {
+  const runId = readGatewayRunId(response as Awaited<ReturnType<typeof callGateway>>);
+  if (runId !== idempotencyKey) {
+    throw new Error("Gateway accepted an agent run with an unexpected execution identity");
+  }
+  return runId;
+}
+
 export function resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds: number): number {
   const runTimeoutMs = resolveSubagentRunTimerDelayMs(runTimeoutSeconds) ?? 0;
   if (runTimeoutMs <= 0) {

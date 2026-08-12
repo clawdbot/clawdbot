@@ -1,3 +1,4 @@
+import path from "node:path";
 /**
  * Docker sandbox backend implementation.
  *
@@ -24,7 +25,105 @@ import {
   type SandboxContainerEngineTarget,
   validateSandboxContainerEngineTarget,
 } from "./docker.js";
+import { hashTextSha256 } from "./hash.js";
 import type { SandboxRegistryEntry } from "./registry.js";
+import { createRemoteShellSandboxFsBridge } from "./remote-fs-bridge.js";
+
+type ContainerFsCleanupLocator = {
+  version: 1;
+  backend: "docker" | "podman";
+  containerId: string;
+  ingressRoot: string;
+  target?: SandboxContainerEngineTarget;
+};
+
+function readContainerFsCleanupLocator(
+  value: unknown,
+  expectedBackend: "docker" | "podman",
+): ContainerFsCleanupLocator {
+  const locator = value as Partial<ContainerFsCleanupLocator> | undefined;
+  const target = locator?.target;
+  if (
+    locator?.version !== 1 ||
+    locator.backend !== expectedBackend ||
+    typeof locator.containerId !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(locator.containerId) ||
+    typeof locator.ingressRoot !== "string" ||
+    !/^\/tmp\/openclaw-attachment-ingress\/[0-9a-f]{32}$/u.test(locator.ingressRoot) ||
+    (target !== undefined &&
+      (typeof target.key !== "string" ||
+        !target.key.trim() ||
+        !Array.isArray(target.globalArgs) ||
+        target.globalArgs.some((arg) => typeof arg !== "string")))
+  ) {
+    throw new Error(`Invalid ${expectedBackend} attachment cleanup locator`);
+  }
+  return {
+    version: 1,
+    backend: expectedBackend,
+    containerId: locator.containerId,
+    ingressRoot: locator.ingressRoot,
+    ...(target ? { target: { key: target.key, globalArgs: [...target.globalArgs] } } : {}),
+  };
+}
+
+function createContainerCleanupFsBridge(params: {
+  engine: SandboxContainerEngine;
+  locator: ContainerFsCleanupLocator;
+  runtimeId: string;
+  workspaceDir: string;
+  allowMissingRuntimeOnRemove?: boolean;
+}) {
+  const bridge = createRemoteShellSandboxFsBridge({
+    sandbox: {
+      workspaceDir: params.workspaceDir,
+      agentWorkspaceDir: params.workspaceDir,
+      workspaceAccess: "rw",
+      containerName: params.runtimeId,
+      containerWorkdir: params.locator.ingressRoot,
+      docker: { binds: [] },
+    },
+    runtime: {
+      remoteWorkspaceDir: params.locator.ingressRoot,
+      remoteAgentWorkspaceDir: params.locator.ingressRoot,
+      runRemoteShellScript: async (command) =>
+        await runContainerSandboxShellCommand({
+          engine: params.engine,
+          containerName: params.locator.containerId,
+          podmanTarget: params.locator.target,
+          ...command,
+        }),
+    },
+  });
+  if (params.allowMissingRuntimeOnRemove) {
+    const remove = bridge.remove.bind(bridge);
+    bridge.remove = async (removeParams) => {
+      const inspected = await execContainer(
+        params.engine,
+        ["inspect", "-f", "{{.Id}}", params.locator.containerId],
+        { allowFailure: true },
+      );
+      if (inspected.code !== 0) {
+        const detail = inspected.stderr.trim() || inspected.stdout.trim();
+        if (
+          /No such (container|object)|no container with name or id .* found|does not exist/iu.test(
+            detail,
+          )
+        ) {
+          return;
+        }
+        throw new Error(
+          `Failed to verify ${params.engine.displayName} attachment runtime: ${detail || `exit ${inspected.code}`}`,
+        );
+      }
+      if (inspected.stdout.trim() !== params.locator.containerId) {
+        throw new Error(`${params.engine.displayName} attachment runtime identity changed`);
+      }
+      await remove(removeParams);
+    };
+  }
+  return bridge;
+}
 
 function resolveConfiguredDockerRuntimeImage(params: {
   config: CreateSandboxBackendParams["cfg"] | import("../../config/config.js").OpenClawConfig;
@@ -191,6 +290,59 @@ function createContainerSandboxBackendManager(
     );
   };
   return {
+    async prepareAttachmentIngress({ runtimeId, sessionKey, workspaceDir }) {
+      const target =
+        engine.id === "podman" ? (await resolvePodmanSandboxRuntimeInfo()).target : undefined;
+      await validateSandboxContainerEngineTarget(engine, target);
+      const runtimeEngine = target ? bindPodmanSandboxEngine(target) : engine;
+      const inspected = await execContainer(runtimeEngine, ["inspect", "-f", "{{.Id}}", runtimeId]);
+      const ingressRoot = path.posix.join(
+        "/tmp/openclaw-attachment-ingress",
+        hashTextSha256(sessionKey).slice(0, 32),
+      );
+      const locator = readContainerFsCleanupLocator(
+        {
+          version: 1,
+          backend: engine.id,
+          containerId: inspected.stdout.trim(),
+          ingressRoot,
+          ...(target ? { target } : {}),
+        },
+        engine.id,
+      );
+      return {
+        workspaceDir,
+        sandboxAttachmentsRootDir: path.posix.join(ingressRoot, ".openclaw", "attachments"),
+        sandboxFsBridge: createContainerCleanupFsBridge({
+          engine: runtimeEngine,
+          locator,
+          runtimeId,
+          workspaceDir,
+        }),
+        cleanupLocator: locator,
+        cleanupContainerWorkspaceDir: ingressRoot,
+      };
+    },
+    async createFsCleanupBridge({
+      runtimeId,
+      workspaceDir,
+      containerWorkspaceDir,
+      locator: rawLocator,
+    }) {
+      const locator = readContainerFsCleanupLocator(rawLocator, engine.id);
+      if (path.posix.normalize(containerWorkspaceDir) !== locator.ingressRoot) {
+        return null;
+      }
+      await validateSandboxContainerEngineTarget(engine, locator.target);
+      const runtimeEngine = locator.target ? bindPodmanSandboxEngine(locator.target) : engine;
+      return createContainerCleanupFsBridge({
+        engine: runtimeEngine,
+        locator,
+        runtimeId,
+        workspaceDir,
+        allowMissingRuntimeOnRemove: true,
+      });
+    },
     async describeRuntime({ entry, config, agentId }) {
       const podmanTarget = resolvePodmanTarget(entry);
       await validateSandboxContainerEngineTarget(engine, podmanTarget);

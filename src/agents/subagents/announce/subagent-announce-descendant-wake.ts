@@ -1,10 +1,10 @@
 // Descendant-settle wake replaces an ended nested orchestrator run while
 // preserving lifecycle ownership.
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../../utils/message-channel.js";
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
 import { terminateClaimedAcceptedSubagentRun } from "../spawn/subagent-spawn-cleanup.js";
+import { requireMatchingGatewayRunId } from "../spawn/subagent-spawn-gateway.js";
 import {
   loadSessionEntryByKey,
   runAnnounceDeliveryWithRetry,
@@ -136,7 +136,7 @@ export async function runDescendantWake(params: {
         );
       },
     });
-    wakeRunId = normalizeOptionalString(wakeResponse?.runId) ?? "";
+    wakeRunId = requireMatchingGatewayRunId(wakeResponse, wakeIdempotencyKey);
   } catch {
     if (terminationOwnerRecorded) {
       await params.deps.markAcceptedRunTerminationPending(params.runId, dispatchTerminationOwner);

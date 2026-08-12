@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../../test-utils/env.js";
+import { resolveSandboxAttachmentIngressRoot } from "./attachment-ingress.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import {
   getBlockedBindReason,
@@ -63,7 +64,7 @@ describe("getBlockedBindReason", () => {
       const reason = getBlockedBindReason("/home/tester:/mnt/home:ro");
       expect(reason).toMatchObject({
         kind: "covers",
-        blockedPath: "/home/tester/.aws",
+        blockedPath: normalizePathForSnapshot(resolveSandboxAttachmentIngressRoot()),
       });
     });
   });
@@ -84,6 +85,19 @@ describe("getBlockedBindReason", () => {
       for (const source of cases) {
         expectBlockedTargetReason(`${source}:/mnt/test:ro`);
       }
+    });
+  });
+
+  it("blocks binds that expose the host-private attachment ingress", () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "openclaw-attachment-ingress-state-"));
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      const ingressRoot = resolveSandboxAttachmentIngressRoot();
+      const reason = expectBlockedTargetReason(`${ingressRoot}:/attachment-ingress:rw`);
+      expect(reason.blockedPath).toBe(normalizePathForSnapshot(ingressRoot));
+      expect(getBlockedBindReason(`${stateDir}:/state:rw`)).toMatchObject({
+        kind: "covers",
+        blockedPath: normalizePathForSnapshot(ingressRoot),
+      });
     });
   });
 
@@ -209,7 +223,7 @@ describe("validateBindMounts", () => {
         validateBindMounts(["/home/tester:/mnt/home:ro"], {
           allowedSourceRoots: ["/home/tester"],
         }),
-      ).toThrow(/covers blocked path "\/home\/tester\/\.aws"/);
+      ).toThrow(/covers blocked path "\/home\/tester\/\.openclaw\/attachment-ingress"/);
     });
   });
 

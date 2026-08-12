@@ -304,9 +304,7 @@ describe("safeRemoveAttachmentsDir", () => {
     const sandboxIdentity = {
       backendId: "ssh",
       runtimeId: "runtime-main",
-      configLabel: "worker@example.test",
       fsCleanupLocator: { version: 1, backend: "ssh" },
-      workspaceMutationVisibility: "runtime-local" as const,
     };
     const createRuntimeCleanupBridge = vi.fn(() => ({
       remove,
@@ -352,137 +350,6 @@ describe("safeRemoveAttachmentsDir", () => {
     }
   });
 
-  it("revalidates a shared-host attachment mapping before cleanup", async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachments-shared-"));
-    const attachmentsDir = path.join(rootDir, ".openclaw", "attachments", ATTACHMENT_ID);
-    const sandboxDir = `/workspace/.openclaw/attachments/${ATTACHMENT_ID}`;
-    await fs.mkdir(attachmentsDir, { recursive: true });
-    const remove = vi.fn(async () => {
-      await fs.rm(attachmentsDir, { recursive: true, force: true });
-    });
-    const fsBridge = {
-      resolvePath: vi.fn(() => ({
-        hostPath: attachmentsDir,
-        relativePath: `.openclaw/attachments/${ATTACHMENT_ID}`,
-        containerPath: sandboxDir,
-      })),
-      remove,
-    };
-    try {
-      await expect(
-        safeRemoveAttachmentsDir(
-          createRunEntry({
-            attachmentsDir,
-            attachmentsRootDir: rootDir,
-            attachmentsSandboxSessionKey: "agent:main:main",
-            attachmentsSandboxAgentId: "main",
-            attachmentsSandboxWorkspaceDir: rootDir,
-            attachmentsSandboxIdentity: {
-              backendId: "docker",
-              runtimeId: "sandbox-main",
-              configLabel: "openclaw-sandbox:latest",
-              workspaceMutationVisibility: "shared-host",
-            },
-            attachmentsSandboxDir: sandboxDir,
-          }),
-          {
-            config: {},
-            resolveSandbox: vi.fn(
-              async () =>
-                ({
-                  backendId: "docker",
-                  runtimeId: "sandbox-main",
-                  backend: {
-                    configLabel: "openclaw-sandbox:latest",
-                    capabilities: { workspaceMutationVisibility: "shared-host" },
-                  },
-                  workspaceDir: rootDir,
-                  agentWorkspaceDir: rootDir,
-                  workspaceAccess: "rw",
-                  containerWorkdir: "/workspace",
-                  docker: { binds: [] },
-                  fsBridge,
-                }) as never,
-            ),
-          },
-        ),
-      ).resolves.toBe(true);
-      expect(remove).toHaveBeenCalledWith({
-        filePath: sandboxDir,
-        recursive: true,
-        force: true,
-      });
-    } finally {
-      await fs.rm(rootDir, { recursive: true, force: true });
-    }
-  });
-
-  it("re-addresses shared-host cleanup through the current writable alias", async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachments-remap-"));
-    const attachmentsDir = path.join(rootDir, ".openclaw", "attachments", ATTACHMENT_ID);
-    const sandboxDir = `/workspace/.openclaw/attachments/${ATTACHMENT_ID}`;
-    await fs.mkdir(attachmentsDir, { recursive: true });
-    const currentSandboxDir = `/workspace/.openclaw/attachments/${ATTACHMENT_ID}`;
-    const remove = vi.fn(async () => {
-      await fs.rm(attachmentsDir, { recursive: true, force: true });
-    });
-    try {
-      await expect(
-        safeRemoveAttachmentsDir(
-          createRunEntry({
-            attachmentsDir,
-            attachmentsRootDir: rootDir,
-            attachmentsSandboxSessionKey: "agent:main:main",
-            attachmentsSandboxAgentId: "main",
-            attachmentsSandboxWorkspaceDir: rootDir,
-            attachmentsSandboxIdentity: {
-              backendId: "docker",
-              runtimeId: "sandbox-main",
-              configLabel: "openclaw-sandbox:latest",
-              workspaceMutationVisibility: "shared-host",
-            },
-            attachmentsSandboxDir: sandboxDir,
-          }),
-          {
-            config: {},
-            resolveSandbox: vi.fn(
-              async () =>
-                ({
-                  backendId: "docker",
-                  runtimeId: "sandbox-main",
-                  backend: {
-                    configLabel: "openclaw-sandbox:latest",
-                    capabilities: { workspaceMutationVisibility: "shared-host" },
-                  },
-                  workspaceDir: rootDir,
-                  agentWorkspaceDir: rootDir,
-                  workspaceAccess: "rw",
-                  containerWorkdir: "/workspace",
-                  docker: { binds: [] },
-                  fsBridge: {
-                    resolvePath: ({ filePath }: { filePath: string }) => ({
-                      hostPath: path.join(rootDir, path.posix.relative("/workspace", filePath)),
-                      relativePath: "",
-                      containerPath: filePath,
-                    }),
-                    remove,
-                  },
-                }) as never,
-            ),
-          },
-        ),
-      ).resolves.toBe(true);
-      expect(remove).toHaveBeenCalledWith({
-        filePath: currentSandboxDir,
-        recursive: true,
-        force: true,
-      });
-      await expect(fs.access(attachmentsDir)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      await fs.rm(rootDir, { recursive: true, force: true });
-    }
-  });
-
   it("reconstructs runtime-local cleanup from the frozen remote workspace", async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachments-remote-"));
     const attachmentsDir = path.join(rootDir, ".openclaw", "attachments", ATTACHMENT_ID);
@@ -510,9 +377,7 @@ describe("safeRemoveAttachmentsDir", () => {
           attachmentsSandboxIdentity: {
             backendId: "ssh",
             runtimeId: "runtime-main",
-            configLabel: "worker@example.test",
             fsCleanupLocator: { version: 1, backend: "ssh" },
-            workspaceMutationVisibility: "runtime-local",
           },
           attachmentsSandboxDir: sandboxDir,
         }),
@@ -557,9 +422,7 @@ describe("safeRemoveAttachmentsDir", () => {
             attachmentsSandboxIdentity: {
               backendId: "ssh",
               runtimeId: "runtime-main",
-              configLabel: "worker@example.test",
               fsCleanupLocator: { version: 1, backend: "ssh", target: "old" },
-              workspaceMutationVisibility: "runtime-local",
             },
             attachmentsSandboxDir: `/workspace/.openclaw/attachments/${ATTACHMENT_ID}`,
           }),

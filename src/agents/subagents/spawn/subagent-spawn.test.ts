@@ -69,6 +69,14 @@ function gatewayRequest(method: string): Record<string, unknown> {
   return requireRecord(request);
 }
 
+function echoAgentRunId(request: { params?: unknown }): { runId: string } {
+  const idempotencyKey = requireRecord(request.params).idempotencyKey;
+  if (typeof idempotencyKey !== "string" || idempotencyKey.length === 0) {
+    throw new Error("agent request is missing its idempotency key");
+  }
+  return { runId: idempotencyKey };
+}
+
 function firstRegisteredSubagentRun(): Record<string, unknown> {
   return requireRecord(hoisted.registerSubagentRunMock.mock.calls[0]?.[0]);
 }
@@ -562,7 +570,7 @@ describe("spawnSubagentDirect seam flow", () => {
       async (request: { method?: string; params?: unknown }) => {
         if (request.method === "agent") {
           agentCalls += 1;
-          return { runId: `gateway-${agentCalls}` };
+          return echoAgentRunId(request);
         }
         if (request.method === "chat.abort") {
           abortCalls += 1;
@@ -623,13 +631,13 @@ describe("spawnSubagentDirect seam flow", () => {
             !message.includes("indeterminate-first") &&
             !message.includes("indeterminate-second")
           ) {
-            return { runId: "unrelated" };
+            return echoAgentRunId(request);
           }
           agentCalls += 1;
           if (agentCalls === 1) {
             throw new Error("launch response lost");
           }
-          return { runId: "gateway-second" };
+          return echoAgentRunId(request);
         }
         if (request.method === "sessions.delete") {
           return await new Promise<Record<string, unknown>>((resolve) => {
@@ -659,12 +667,14 @@ describe("spawnSubagentDirect seam flow", () => {
 
   it("hands asynchronous collector launch cleanup to the durable sweeper", async () => {
     hoisted.configOverride = createConfigOverride({ tools: { swarm: true } });
-    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "agent") {
-        throw new Error("launch failed");
-      }
-      return {};
-    });
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: unknown }) => {
+        if (request.method === "agent") {
+          throw new Error("launch failed");
+        }
+        return {};
+      },
+    );
 
     const result = await spawnSubagentDirect(
       { task: "fail launch", collect: true },
@@ -689,12 +699,14 @@ describe("spawnSubagentDirect seam flow", () => {
         },
       }),
     });
-    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "agent") {
-        throw new Error("launch failed");
-      }
-      return {};
-    });
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: unknown }) => {
+        if (request.method === "agent") {
+          throw new Error("launch failed");
+        }
+        return {};
+      },
+    );
 
     await spawnSubagentDirect(
       { task: "fail launch", collect: true },
@@ -836,16 +848,18 @@ describe("spawnSubagentDirect seam flow", () => {
       releasePendingDispatches = resolve;
     });
     let dispatchedRuns = 0;
-    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
-      if (request.method !== "agent") {
-        return request.method?.startsWith("sessions.") ? { ok: true } : {};
-      }
-      const runNumber = ++dispatchedRuns;
-      if (runNumber <= 2) {
-        await pendingDispatches;
-      }
-      return { runId: `run-${runNumber}` };
-    });
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: unknown }) => {
+        if (request.method !== "agent") {
+          return request.method?.startsWith("sessions.") ? { ok: true } : {};
+        }
+        const runNumber = ++dispatchedRuns;
+        if (runNumber <= 2) {
+          await pendingDispatches;
+        }
+        return echoAgentRunId(request);
+      },
+    );
     const controllerSessionKey = "agent:main:telegram:default:direct:456";
     const spawnContext = {
       agentSessionKey: controllerSessionKey,
@@ -882,15 +896,17 @@ describe("spawnSubagentDirect seam flow", () => {
       },
     });
     let dispatchAttempts = 0;
-    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "agent") {
-        if (++dispatchAttempts === 1) {
-          throw new Error("gateway dispatch failed");
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: unknown }) => {
+        if (request.method === "agent") {
+          if (++dispatchAttempts === 1) {
+            throw new Error("gateway dispatch failed");
+          }
+          return echoAgentRunId(request);
         }
-        return { runId: "replacement-run" };
-      }
-      return request.method?.startsWith("sessions.") ? { ok: true } : {};
-    });
+        return request.method?.startsWith("sessions.") ? { ok: true } : {};
+      },
+    );
     const context = { agentSessionKey: "agent:main:main" };
 
     const failed = await spawnSubagentDirect({ task: "failing child" }, context);
@@ -900,7 +916,7 @@ describe("spawnSubagentDirect seam flow", () => {
       status: "error",
       error: expect.stringContaining("gateway dispatch failed"),
     });
-    expect(replacement).toMatchObject({ status: "accepted", runId: "replacement-run" });
+    expect(replacement).toMatchObject({ status: "accepted", runId: expect.any(String) });
     expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(2);
   });
 
@@ -923,14 +939,16 @@ describe("spawnSubagentDirect seam flow", () => {
     hoisted.countActiveRunsForSessionMock.mockImplementation(
       () => hoisted.registerSubagentRunMock.mock.calls.length,
     );
-    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "agent") {
-        nativeDispatchStarted = true;
-        await pendingNativeDispatch;
-        return { runId: "native-run" };
-      }
-      return request.method?.startsWith("sessions.") ? { ok: true } : {};
-    });
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: unknown }) => {
+        if (request.method === "agent") {
+          nativeDispatchStarted = true;
+          await pendingNativeDispatch;
+          return echoAgentRunId(request);
+        }
+        return request.method?.startsWith("sessions.") ? { ok: true } : {};
+      },
+    );
     const controllerSessionKey = "agent:main:telegram:default:direct:456";
     const native = spawnSubagentDirect(
       { task: "pending native child" },
@@ -960,7 +978,7 @@ describe("spawnSubagentDirect seam flow", () => {
       status: "forbidden",
       error: expect.stringContaining("max active children for this session (1/1"),
     });
-    expect(accepted).toMatchObject({ status: "accepted", runId: "native-run" });
+    expect(accepted).toMatchObject({ status: "accepted", runId: expect.any(String) });
     expect(visibleGateway).not.toHaveBeenCalled();
   });
 
@@ -1233,12 +1251,14 @@ describe("spawnSubagentDirect seam flow", () => {
   it("dispatches spawned agent runs in process when a gateway context is available", async () => {
     hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
     hoisted.callGatewayMock.mockRejectedValue(new Error("unexpected websocket gateway call"));
-    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
-      if (method === "agent") {
-        return { runId: "run-in-process" };
-      }
-      return { ok: true };
-    });
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(
+      async (method: string, params: unknown) => {
+        if (method === "agent") {
+          return echoAgentRunId({ params });
+        }
+        return { ok: true };
+      },
+    );
 
     const result = await spawnSubagentDirect(
       {
@@ -1250,7 +1270,7 @@ describe("spawnSubagentDirect seam flow", () => {
     );
 
     expect(result.status).toBe("accepted");
-    expect(result.runId).toBe("run-in-process");
+    expect(result.runId).toEqual(expect.any(String));
     expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
     expect(hoisted.dispatchGatewayMethodInProcessMock).toHaveBeenCalledWith(
       "agent",
@@ -1275,16 +1295,17 @@ describe("spawnSubagentDirect seam flow", () => {
   it("authorizes explicit model overrides for in-process child launches", async () => {
     hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
     hoisted.callGatewayMock.mockRejectedValue(new Error("unexpected websocket gateway call"));
-    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
-      return method === "agent" ? { runId: "run-in-process-model" } : { ok: true };
-    });
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(
+      async (method: string, params: unknown) =>
+        method === "agent" ? echoAgentRunId({ params }) : { ok: true },
+    );
 
     const result = await spawnSubagentDirect(
       { task: "spawn on the requested model", model: "openai/gpt-5.4" },
       { agentSessionKey: "agent:main:main" },
     );
 
-    expect(result).toMatchObject({ status: "accepted", runId: "run-in-process-model" });
+    expect(result).toMatchObject({ status: "accepted", runId: expect.any(String) });
     const agentDispatch = hoisted.dispatchGatewayMethodInProcessMock.mock.calls.find(
       ([method]) => method === "agent",
     );
@@ -1710,15 +1731,17 @@ describe("spawnSubagentDirect seam flow", () => {
   });
 
   it("omits requesterOrigin threadId when no requester thread is provided", async () => {
-    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "agent") {
-        return { runId: "run-1" };
-      }
-      if (request.method?.startsWith("sessions.")) {
-        return { ok: true };
-      }
-      return {};
-    });
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: unknown }) => {
+        if (request.method === "agent") {
+          return echoAgentRunId(request);
+        }
+        if (request.method?.startsWith("sessions.")) {
+          return { ok: true };
+        }
+        return {};
+      },
+    );
     installSessionStoreCaptureMock(hoisted.updateSessionStoreMock);
 
     const result = await spawnSubagentDirect(
@@ -1747,10 +1770,10 @@ describe("spawnSubagentDirect seam flow", () => {
     const capturedCalls: Array<{ method?: string; scopes?: string[] }> = [];
 
     hoisted.callGatewayMock.mockImplementation(
-      async (request: { method?: string; scopes?: string[] }) => {
+      async (request: { method?: string; scopes?: string[]; params?: unknown }) => {
         capturedCalls.push({ method: request.method, scopes: request.scopes });
         if (request.method === "agent") {
-          return { runId: "run-1" };
+          return echoAgentRunId(request);
         }
         if (request.method?.startsWith("sessions.")) {
           return { ok: true };
@@ -1793,7 +1816,7 @@ describe("spawnSubagentDirect seam flow", () => {
       async (request: { method?: string; params?: unknown }) => {
         calls.push(request);
         if (request.method === "agent") {
-          return { runId: "run-thinking", status: "accepted", acceptedAt: 1000 };
+          return { ...echoAgentRunId(request), status: "accepted", acceptedAt: 1000 };
         }
         if (request.method?.startsWith("sessions.")) {
           return { ok: true };
@@ -1826,7 +1849,7 @@ describe("spawnSubagentDirect seam flow", () => {
       async (request: { method?: string; params?: unknown }) => {
         calls.push(request);
         if (request.method === "agent") {
-          return { runId: "run-inherited-thinking", status: "accepted", acceptedAt: 1000 };
+          return { ...echoAgentRunId(request), status: "accepted", acceptedAt: 1000 };
         }
         if (request.method?.startsWith("sessions.")) {
           return { ok: true };
@@ -1861,7 +1884,7 @@ describe("spawnSubagentDirect seam flow", () => {
       async (request: { method?: string; params?: unknown }) => {
         calls.push(request);
         if (request.method === "agent") {
-          return { runId: "run-no-dup", status: "accepted", acceptedAt: 1000 };
+          return { ...echoAgentRunId(request), status: "accepted", acceptedAt: 1000 };
         }
         if (request.method?.startsWith("sessions.")) {
           return { ok: true };
@@ -1896,7 +1919,7 @@ describe("spawnSubagentDirect seam flow", () => {
     hoisted.callGatewayMock.mockImplementation(
       async (request: { method?: string; params?: unknown }) => {
         if (request.method === "agent") {
-          return { runId: "run-1", status: "accepted", acceptedAt: 1000 };
+          return { ...echoAgentRunId(request), status: "accepted", acceptedAt: 1000 };
         }
         if (request.method === "sessions.delete") {
           return { ok: true };

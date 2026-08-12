@@ -28,6 +28,8 @@ export type {
 } from "../agents/sandbox.js";
 export type { OpenClawConfig } from "../config/config.js";
 
+export { resolveSandboxAttachmentIngressWorkspace } from "../agents/sandbox/attachment-ingress.js";
+
 export {
   buildExecRemoteCommand,
   buildRemoteWorkdirValidationCommand,

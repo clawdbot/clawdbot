@@ -55,7 +55,7 @@ export function createSubagentSpawnTestConfig(
 
 /** Mock gateway calls for the common accepted-spawn flow. */
 export function setupAcceptedSubagentGatewayMock(callGatewayMock: MockImplementationTarget) {
-  callGatewayMock.mockImplementation(async (opts: { method?: string }) => {
+  callGatewayMock.mockImplementation(async (opts: { method?: string; params?: unknown }) => {
     if (opts.method === "sessions.patch") {
       return { ok: true };
     }
@@ -63,7 +63,12 @@ export function setupAcceptedSubagentGatewayMock(callGatewayMock: MockImplementa
       return { ok: true };
     }
     if (opts.method === "agent") {
-      return { runId: "run-1", status: "accepted", acceptedAt: 1000 };
+      const idempotencyKey = (opts.params as { idempotencyKey?: unknown } | undefined)
+        ?.idempotencyKey;
+      if (typeof idempotencyKey !== "string" || idempotencyKey.length === 0) {
+        throw new Error("agent request is missing its idempotency key");
+      }
+      return { runId: idempotencyKey, status: "accepted", acceptedAt: 1000 };
     }
     return {};
   });
@@ -166,7 +171,6 @@ export async function loadSubagentSpawnModuleForTest(params: {
   resolveSandboxContext?: (...args: unknown[]) => Promise<unknown>;
   createSandboxWorkspaceIngressFsBridge?: (sandbox: unknown) => unknown;
   getSandboxBackendManager?: (backendId: string) => unknown;
-  listResolvedSandboxContexts?: () => unknown[];
   getSessionBindingService?: () => {
     getCapabilities?: (params: { channel?: string; accountId?: string }) => {
       adapterAvailable: boolean;
@@ -408,7 +412,6 @@ export async function loadSubagentSpawnModuleForTest(params: {
       latestResolvedSandbox = resolved;
       return resolved;
     },
-    listResolvedSandboxContexts: params.listResolvedSandboxContexts ?? (() => []),
     createSandboxWorkspaceIngressFsBridge:
       params.createSandboxWorkspaceIngressFsBridge ??
       ((sandbox: { fsBridge?: unknown }) => sandbox.fsBridge),

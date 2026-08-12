@@ -52,7 +52,7 @@ import type {
   SpawnSubagentResult,
 } from "./subagent-spawn-contract.js";
 import { terminateOrRetryFailedAcceptedSubagentLaunch } from "./subagent-spawn-failed-launch-retry.js";
-import { callSubagentGateway, readGatewayRunId } from "./subagent-spawn-gateway.js";
+import { callSubagentGateway, requireMatchingGatewayRunId } from "./subagent-spawn-gateway.js";
 import { buildSubagentLaunchRequest } from "./subagent-spawn-launch-request.js";
 import {
   createSubagentSpawnLifecycleEmitter,
@@ -145,7 +145,6 @@ export async function spawnSubagentDirect(
       requesterOrigin,
       incognito,
       childSessionKey,
-      requesterRuntimeSandboxed,
       childRuntimeSandboxed,
       targetAgentDir,
       modelPlan: plan,
@@ -279,17 +278,14 @@ export async function spawnSubagentDirect(
     let attachmentBoundary: SubagentAttachmentStagingBoundary = {
       workspaceDir: spawnedCwd ?? spawnedWorkspaceDir,
     };
-    if (params.attachments?.length && childRuntimeSandboxed) {
+    if (params.attachments?.length) {
       try {
         attachmentBoundary = await resolveSubagentAttachmentStagingBoundary({
           config: cfg,
           targetAgentId,
           childSessionKey,
+          childSandboxed: childRuntimeSandboxed,
           workspaceDir: attachmentBoundary.workspaceDir,
-          requesterSandboxed: requesterRuntimeSandboxed,
-          requesterAgentId,
-          requesterSessionKey: requesterInternalKey,
-          requesterWorkspaceDir: toolSpawnMetadata.workspaceDir,
         });
       } catch (error) {
         await cleanupCreatedSession(threadBindingReady);
@@ -516,7 +512,7 @@ export async function spawnSubagentDirect(
         recordAcceptedRunTermination(childIdem, dispatchTerminationOwner);
         dispatchTerminationRecorded = true;
         const response = await launchChildRun();
-        return { runId: readGatewayRunId(response) ?? childIdem };
+        return { runId: requireMatchingGatewayRunId(response, childIdem) };
       },
       async cleanupOnFailure({ phase, state }) {
         let ownerSettled = false;
@@ -630,7 +626,7 @@ export async function spawnSubagentDirect(
             recordAcceptedRunTermination(childRunId, collectorTerminationOwner);
             try {
               const response = await launchChildRun();
-              const gatewayRunId = readGatewayRunId(response) ?? childRunId;
+              const gatewayRunId = requireMatchingGatewayRunId(response, childRunId);
               if (!startQueuedSubagentRun(childRunId, gatewayRunId, collectorTerminationOwner)) {
                 throw new Error(
                   "collector registry row could not transition from queued to running",

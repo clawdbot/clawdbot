@@ -92,6 +92,84 @@ describe("docker sandbox backend manager", () => {
     expect(backend.capabilities?.workspaceMutationVisibility).toBe("shared-host");
   });
 
+  it("prepares attachment ingress inside the exact child container", async () => {
+    const containerId = "a".repeat(64);
+    dockerMocks.execContainer.mockResolvedValueOnce({
+      code: 0,
+      stdout: `${containerId}\n`,
+      stderr: "",
+    });
+    const backend = {
+      id: "docker",
+      runtimeId: "sandbox-child",
+      runtimeLabel: "sandbox-child",
+      workdir: "/workspace",
+      configLabel: "openclaw-sandbox:bookworm-slim",
+      buildExecSpec: vi.fn(),
+      runShellCommand: vi.fn(),
+    } as never;
+
+    const prepared = await dockerSandboxBackendManager.prepareAttachmentIngress?.({
+      backend,
+      runtimeId: "sandbox-child",
+      sessionKey: "agent:coder:subagent:child",
+      workspaceDir: "/host/workspace",
+      hostIngressWorkspaceDir: "/host/private-ingress",
+      containerWorkspaceDir: "/workspace",
+      config: createConfig(),
+      agentId: "coder",
+    });
+
+    expect(dockerMocks.execContainer).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "docker" }),
+      ["inspect", "-f", "{{.Id}}", "sandbox-child"],
+    );
+    expect(prepared).toMatchObject({
+      workspaceDir: "/host/workspace",
+      sandboxAttachmentsRootDir: expect.stringMatching(
+        /^\/tmp\/openclaw-attachment-ingress\/[0-9a-f]{32}\/\.openclaw\/attachments$/u,
+      ),
+      cleanupLocator: {
+        backend: "docker",
+        containerId,
+      },
+    });
+    expect(prepared?.sandboxFsBridge).toBeDefined();
+  });
+
+  it("treats an absent exact container as completed attachment cleanup", async () => {
+    const containerId = "b".repeat(64);
+    dockerMocks.execContainer.mockResolvedValueOnce({
+      code: 1,
+      stdout: "",
+      stderr: `Error response from daemon: No such container: ${containerId}`,
+    });
+    const bridge = await dockerSandboxBackendManager.createFsCleanupBridge?.({
+      runtimeId: "sandbox-child",
+      workspaceDir: "/host/workspace",
+      containerWorkspaceDir: "/tmp/openclaw-attachment-ingress/0123456789abcdef0123456789abcdef",
+      locator: {
+        version: 1,
+        backend: "docker",
+        containerId,
+        ingressRoot: "/tmp/openclaw-attachment-ingress/0123456789abcdef0123456789abcdef",
+      },
+      config: createConfig(),
+      agentId: "coder",
+    });
+    expect(bridge).toBeDefined();
+
+    await expect(
+      bridge!.remove({
+        filePath:
+          "/tmp/openclaw-attachment-ingress/0123456789abcdef0123456789abcdef/.openclaw/attachments/12345678-1234-1234-1234-123456789abc",
+        recursive: true,
+        force: true,
+      }),
+    ).resolves.toBeUndefined();
+    expect(dockerMocks.execContainerRaw).not.toHaveBeenCalled();
+  });
+
   it("binds Podman provisioning and later execs to the resolved target", async () => {
     dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-podman");
     const podmanTarget = {

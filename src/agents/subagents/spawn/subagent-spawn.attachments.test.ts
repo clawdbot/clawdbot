@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
+import { resolveSandboxAttachmentIngressWorkspace } from "../../sandbox/attachment-ingress.js";
 import {
   createSubagentSpawnTestConfig,
   loadSubagentSpawnModuleForTest,
@@ -33,6 +34,7 @@ describe("spawnSubagentDirect filename validation", () => {
     workspaceDirOverride = fs.mkdtempSync(
       path.join(os.tmpdir(), `openclaw-subagent-attachments-${process.pid}-${Date.now()}-`),
     );
+    vi.stubEnv("OPENCLAW_STATE_DIR", workspaceDirOverride);
     configOverride = createSubagentSpawnTestConfig(workspaceDirOverride);
     subagentSpawnModule.resetSubagentRegistryForTests();
     callGatewayMock.mockClear();
@@ -85,86 +87,7 @@ describe("spawnSubagentDirect filename validation", () => {
     );
   }
 
-  it.each([
-    ["empty", ""],
-    ["bad padding", "abc"],
-    ["invalid characters", "!@#$"],
-    ["whitespace only", "   "],
-    ["pre-decode oversize", "A".repeat(2737)],
-    ["decoded oversize", Buffer.alloc(1025, 0x42).toString("base64")],
-  ])("rejects %s base64 attachments through the spawn boundary", async (_label, content) => {
-    configOverride = createSubagentSpawnTestConfig(workspaceDirOverride, {
-      tools: {
-        sessions_spawn: {
-          attachments: {
-            enabled: true,
-            maxFiles: 50,
-            maxFileBytes: 1024,
-            maxTotalBytes: 5 * 1024 * 1024,
-          },
-        },
-      },
-    });
-    const result = await subagentSpawnModule.spawnSubagentDirect(
-      {
-        task: "test",
-        attachments: [{ name: "file.bin", content, encoding: "base64" }],
-      },
-      ctx,
-    );
-    expect(result).toMatchObject({
-      status: "error",
-      error: expect.stringContaining("attachments_invalid_base64_or_too_large"),
-    });
-  });
-
-  it("name with / returns attachments_invalid_name", async () => {
-    const result = await spawnWithName("foo/bar");
-    expect(result.status).toBe("error");
-    expect(result.error).toMatch(/attachments_invalid_name/);
-  });
-
-  it("name '..' returns attachments_invalid_name", async () => {
-    const result = await spawnWithName("..");
-    expect(result.status).toBe("error");
-    expect(result.error).toMatch(/attachments_invalid_name/);
-  });
-
-  it("name '.manifest.json' returns attachments_invalid_name", async () => {
-    const result = await spawnWithName(".manifest.json");
-    expect(result.status).toBe("error");
-    expect(result.error).toMatch(/attachments_invalid_name/);
-  });
-
-  it("name with newline returns attachments_invalid_name", async () => {
-    const result = await spawnWithName("foo\nbar");
-    expect(result.status).toBe("error");
-    expect(result.error).toMatch(/attachments_invalid_name/);
-  });
-
-  it("duplicate name returns attachments_duplicate_name", async () => {
-    const { spawnSubagentDirect } = subagentSpawnModule;
-    const result = await spawnSubagentDirect(
-      {
-        task: "test",
-        attachments: [
-          { name: "file.txt", content: validContent, encoding: "base64" },
-          { name: "file.txt", content: validContent, encoding: "base64" },
-        ],
-      },
-      ctx,
-    );
-    expect(result.status).toBe("error");
-    expect(result.error).toMatch(/attachments_duplicate_name/);
-  });
-
-  it("empty name returns attachments_invalid_name", async () => {
-    const result = await spawnWithName("");
-    expect(result.status).toBe("error");
-    expect(result.error).toMatch(/attachments_invalid_name/);
-  });
-
-  it("materializes attachments under explicit cwd when native subagent cwd is provided", async () => {
+  it("stages unsandboxed attachments outside an explicit cwd", async () => {
     const explicitWorkspaceDir = fs.mkdtempSync(
       path.join(os.tmpdir(), `openclaw-subagent-cwd-attachments-${process.pid}-${Date.now()}-`),
     );
@@ -180,20 +103,25 @@ describe("spawnSubagentDirect filename validation", () => {
       );
 
       expect(result.status).toBe("accepted");
+      const privateWorkspace = resolveSandboxAttachmentIngressWorkspace(
+        result.childSessionKey as string,
+      );
+      const privateAttachmentsRoot = path.join(privateWorkspace, ".openclaw", "attachments");
       const explicitAttachmentsRoot = path.join(explicitWorkspaceDir, ".openclaw", "attachments");
       const targetAttachmentsRoot = path.join(workspaceDirOverride, ".openclaw", "attachments");
-      expect(fs.existsSync(explicitAttachmentsRoot)).toBe(true);
+      expect(fs.existsSync(privateAttachmentsRoot)).toBe(true);
+      expect(fs.existsSync(explicitAttachmentsRoot)).toBe(false);
       expect(fs.existsSync(targetAttachmentsRoot)).toBe(false);
       if (process.platform !== "win32") {
-        const [receiptDir] = fs.readdirSync(explicitAttachmentsRoot);
+        const [receiptDir] = fs.readdirSync(privateAttachmentsRoot);
         expect(receiptDir).toBeTypeOf("string");
         if (!receiptDir) {
           throw new Error("missing attachment receipt directory");
         }
         for (const privateDir of [
-          path.join(explicitWorkspaceDir, ".openclaw"),
-          explicitAttachmentsRoot,
-          path.join(explicitAttachmentsRoot, receiptDir),
+          path.join(privateWorkspace, ".openclaw"),
+          privateAttachmentsRoot,
+          path.join(privateAttachmentsRoot, receiptDir),
         ]) {
           expect(fs.statSync(privateDir).mode & 0o777).toBe(0o700);
         }
@@ -301,8 +229,6 @@ describe("spawnSubagentDirect filename validation", () => {
         attachmentsSandboxIdentity: expect.objectContaining({
           backendId: "ssh",
           runtimeId: "runtime-main",
-          configLabel: "worker@example.test",
-          workspaceMutationVisibility: "runtime-local",
           fsCleanupLocator: expect.anything(),
         }),
         attachmentsSandboxDir: expect.stringContaining("/.openclaw/attachments/"),
@@ -397,7 +323,7 @@ describe("spawnSubagentDirect filename validation", () => {
     );
   });
 
-  it("uses the requester pinned bridge for a writable cross-agent bind", async () => {
+  it("uses child-private ingress for a writable cross-agent bind", async () => {
     const bindRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), `openclaw-subagent-bind-attachments-${process.pid}-${Date.now()}-`),
     );
@@ -484,6 +410,22 @@ describe("spawnSubagentDirect filename validation", () => {
       };
     });
     const registerSubagentRunMock = vi.fn();
+    const childIngressCalls: string[] = [];
+    const childIngressRoot = "/tmp/openclaw-attachment-ingress/worker";
+    const childIngressBridge = {
+      resolvePath: ({ filePath }: { filePath: string }) => ({
+        relativePath: "",
+        containerPath: filePath,
+      }),
+      mkdirp: async ({ filePath }: { filePath: string }) => {
+        childIngressCalls.push(`mkdir:${filePath}`);
+      },
+      createFileExclusive: async ({ filePath }: { filePath: string }) => {
+        childIngressCalls.push(`create:${filePath}`);
+        return "created" as const;
+      },
+      remove: async () => undefined,
+    };
     const sandboxedSpawnModule = await loadSubagentSpawnModuleForTest({
       callGatewayMock,
       getRuntimeConfig: () => configOverride,
@@ -491,6 +433,16 @@ describe("spawnSubagentDirect filename validation", () => {
       workspaceDir: workspaceDirOverride,
       resolveSandboxRuntimeStatus: () => ({ sandboxed: true, agentId: "main" }) as never,
       resolveSandboxContext,
+      getSandboxBackendManager: () => ({
+        prepareAttachmentIngress: async () => ({
+          workspaceDir: workerWorkspaceDir,
+          sandboxAttachmentsRootDir: `${childIngressRoot}/.openclaw/attachments`,
+          sandboxFsBridge: childIngressBridge,
+          cleanupLocator: { runtime: "worker-ro" },
+          cleanupContainerWorkspaceDir: childIngressRoot,
+        }),
+        createFsCleanupBridge: async () => childIngressBridge,
+      }),
       registerSubagentRunMock,
     });
 
@@ -505,19 +457,16 @@ describe("spawnSubagentDirect filename validation", () => {
       );
 
       expect(result.status).toBe("accepted");
-      expect(
-        bridgeCalls.some((call) =>
-          call.startsWith("mkdir:/mnt/shared/worker/.openclaw/attachments/"),
-        ),
-      ).toBe(true);
+      expect(bridgeCalls).toHaveLength(0);
+      expect(childIngressCalls.some((call) => call.startsWith(`mkdir:${childIngressRoot}`))).toBe(
+        true,
+      );
       expect(registerSubagentRunMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          attachmentsSandboxSessionKey: "agent:main:main",
-          attachmentsSandboxAgentId: "main",
-          attachmentsSandboxWorkspaceDir: workspaceDirOverride,
-          attachmentsSandboxIdentity: expect.objectContaining({
-            workspaceMutationVisibility: "shared-host",
-          }),
+          attachmentsSandboxSessionKey: expect.stringContaining("subagent"),
+          attachmentsSandboxAgentId: "worker",
+          attachmentsSandboxWorkspaceDir: workerWorkspaceDir,
+          attachmentsSandboxIdentity: expect.objectContaining({ backendId: "docker" }),
         }),
       );
     } finally {
@@ -768,7 +717,7 @@ describe("spawnSubagentDirect filename validation", () => {
     },
   );
 
-  it("stages into the host copy behind a shared read-only sandbox mount", async () => {
+  it("uses backend-private ingress for a shared read-only sandbox", async () => {
     configOverride = createSubagentSpawnTestConfig(workspaceDirOverride, {
       agents: {
         defaults: {
@@ -777,17 +726,45 @@ describe("spawnSubagentDirect filename validation", () => {
         },
       },
     });
-    const sandboxWorkspaceDir = path.join(workspaceDirOverride, "sandbox-copy");
+    const privateIngressRoot = "/private-ingress";
+    const privateIngressHostRoot = path.join(workspaceDirOverride, "private-ingress");
+    const toHostPath = (filePath: string) =>
+      path.join(privateIngressHostRoot, path.posix.relative(privateIngressRoot, filePath));
+    const bridge = {
+      resolvePath: ({ filePath }: { filePath: string }) => ({
+        hostPath: toHostPath(filePath),
+        relativePath: path.posix.relative(privateIngressRoot, filePath),
+        containerPath: filePath,
+      }),
+      mkdirp: async ({ filePath }: { filePath: string }) => {
+        await fs.promises.mkdir(toHostPath(filePath), { recursive: true, mode: 0o700 });
+      },
+      createFileExclusive: async ({
+        filePath,
+        data,
+      }: {
+        filePath: string;
+        data: Buffer | string;
+      }) => {
+        await fs.promises.writeFile(toHostPath(filePath), data, { flag: "wx", mode: 0o600 });
+        return "created" as const;
+      },
+      remove: async ({ filePath }: { filePath: string }) => {
+        await fs.promises.rm(toHostPath(filePath), { recursive: true, force: true });
+      },
+    };
     const createIngress = vi.fn(() => {
-      throw new Error("shared host workspaces must not stage through a read-only container");
+      throw new Error("shared-host staging must use backend-owned private ingress");
     });
     const childGatewayMock = vi.fn(async (request: unknown) => {
-      if ((request as { method?: string }).method === "agent") {
-        expect(fs.existsSync(path.join(sandboxWorkspaceDir, ".openclaw", "attachments"))).toBe(
+      const gatewayRequest = request as { method?: string; params?: { idempotencyKey?: unknown } };
+      if (gatewayRequest.method === "agent") {
+        expect(fs.existsSync(path.join(privateIngressHostRoot, ".openclaw", "attachments"))).toBe(
           true,
         );
+        return { runId: gatewayRequest.params?.idempotencyKey };
       }
-      return { runId: "child-run" };
+      return { ok: true };
     });
     const sandboxedSpawnModule = await loadSubagentSpawnModuleForTest({
       callGatewayMock: childGatewayMock,
@@ -802,13 +779,23 @@ describe("spawnSubagentDirect filename validation", () => {
           configLabel: "openclaw-sandbox:latest",
           capabilities: { workspaceMutationVisibility: "shared-host" },
         },
-        workspaceDir: sandboxWorkspaceDir,
+        workspaceDir: workspaceDirOverride,
         agentWorkspaceDir: workspaceDirOverride,
         workspaceAccess: "ro",
-        containerWorkdir: sandboxWorkspaceDir,
+        containerWorkdir: "/workspace",
         docker: { binds: [] },
       }),
       createSandboxWorkspaceIngressFsBridge: createIngress,
+      getSandboxBackendManager: () => ({
+        prepareAttachmentIngress: async () => ({
+          workspaceDir: workspaceDirOverride,
+          sandboxAttachmentsRootDir: `${privateIngressRoot}/.openclaw/attachments`,
+          sandboxFsBridge: bridge,
+          cleanupLocator: { runtime: "sandbox-readonly" },
+          cleanupContainerWorkspaceDir: privateIngressRoot,
+        }),
+        createFsCleanupBridge: async () => bridge,
+      }),
     });
 
     const result = await sandboxedSpawnModule.spawnSubagentDirect(
@@ -821,11 +808,11 @@ describe("spawnSubagentDirect filename validation", () => {
 
     expect(result.status).toBe("accepted");
     expect(createIngress).not.toHaveBeenCalled();
-    expect(fs.existsSync(path.join(sandboxWorkspaceDir, ".openclaw", "attachments"))).toBe(true);
+    expect(fs.existsSync(path.join(privateIngressHostRoot, ".openclaw", "attachments"))).toBe(true);
     expect(fs.existsSync(path.join(workspaceDirOverride, ".openclaw", "attachments"))).toBe(false);
   });
 
-  it("uses the pinned workspace alias when a read-only bind masks the host lookup", async () => {
+  it("uses child-private ingress when a read-only alias masks a writable workspace", async () => {
     const attachmentsRoot = path.join(workspaceDirOverride, ".openclaw", "attachments");
     configOverride = createSubagentSpawnTestConfig(workspaceDirOverride, {
       agents: {
@@ -840,10 +827,14 @@ describe("spawnSubagentDirect filename validation", () => {
       },
     });
     const bridgeCalls: string[] = [];
+    const privateIngressRoot = "/attachment-ingress";
+    const privateIngressHostRoot = path.join(workspaceDirOverride, "private-ingress");
     const toHostPath = (filePath: string) =>
-      filePath.startsWith("/workspace")
-        ? path.join(workspaceDirOverride, path.relative("/workspace", filePath))
-        : filePath;
+      filePath.startsWith(privateIngressRoot)
+        ? path.join(privateIngressHostRoot, path.posix.relative(privateIngressRoot, filePath))
+        : filePath.startsWith("/workspace")
+          ? path.join(workspaceDirOverride, path.relative("/workspace", filePath))
+          : filePath;
     const bridge = {
       resolvePath: ({ filePath }: { filePath: string }) => ({
         hostPath: toHostPath(filePath),
@@ -891,8 +882,18 @@ describe("spawnSubagentDirect filename validation", () => {
         fsBridge: bridge,
       }),
       createSandboxWorkspaceIngressFsBridge: () => {
-        throw new Error("shared-host staging must use the effective pinned bridge");
+        throw new Error("shared-host staging must use backend-owned private ingress");
       },
+      getSandboxBackendManager: () => ({
+        prepareAttachmentIngress: async () => ({
+          workspaceDir: workspaceDirOverride,
+          sandboxAttachmentsRootDir: `${privateIngressRoot}/.openclaw/attachments`,
+          sandboxFsBridge: bridge,
+          cleanupLocator: { runtime: "sandbox-rw" },
+          cleanupContainerWorkspaceDir: privateIngressRoot,
+        }),
+        createFsCleanupBridge: async () => bridge,
+      }),
       registerSubagentRunMock,
     });
 
@@ -912,16 +913,17 @@ describe("spawnSubagentDirect filename validation", () => {
         attachmentsSandboxIdentity: {
           backendId: "docker",
           runtimeId: "sandbox-rw",
-          configLabel: "openclaw-sandbox:latest",
-          workspaceMutationVisibility: "shared-host",
+          fsCleanupLocator: { runtime: "sandbox-rw" },
         },
-        attachmentsSandboxDir: expect.stringContaining("/workspace/.openclaw/attachments/"),
+        attachmentsSandboxDir: expect.stringContaining(
+          "/attachment-ingress/.openclaw/attachments/",
+        ),
       }),
     );
   });
 
   it.runIf(process.platform !== "win32").each(["metadata", "attachments"] as const)(
-    "rejects a symlinked %s directory without writing outside the workspace",
+    "rejects a symlinked %s directory inside the private ingress",
     async (linkedComponent) => {
       const externalDir = fs.mkdtempSync(
         path.join(
@@ -931,13 +933,28 @@ describe("spawnSubagentDirect filename validation", () => {
       );
       fs.writeFileSync(path.join(externalDir, "sentinel.txt"), "unchanged", "utf8");
       try {
-        const metadataDir = path.join(workspaceDirOverride, ".openclaw");
-        if (linkedComponent === "metadata") {
-          fs.symlinkSync(externalDir, metadataDir, "dir");
-        } else {
-          fs.mkdirSync(metadataDir, { recursive: true });
-          fs.symlinkSync(externalDir, path.join(metadataDir, "attachments"), "dir");
-        }
+        const store: Record<string, Record<string, unknown>> = {};
+        updateSessionStoreMock.mockImplementation(async (_storePath: unknown, mutator: unknown) => {
+          if (typeof mutator !== "function") {
+            throw new Error("missing session store mutator");
+          }
+          await mutator(store);
+          const childSessionKey = Object.keys(store).find((key) => key.includes(":subagent:"));
+          if (childSessionKey) {
+            const privateWorkspace = resolveSandboxAttachmentIngressWorkspace(childSessionKey);
+            const metadataDir = path.join(privateWorkspace, ".openclaw");
+            fs.mkdirSync(privateWorkspace, { recursive: true });
+            if (linkedComponent === "metadata") {
+              if (!fs.existsSync(metadataDir)) {
+                fs.symlinkSync(externalDir, metadataDir, "dir");
+              }
+            } else if (!fs.existsSync(path.join(metadataDir, "attachments"))) {
+              fs.mkdirSync(metadataDir, { recursive: true });
+              fs.symlinkSync(externalDir, path.join(metadataDir, "attachments"), "dir");
+            }
+          }
+          return store;
+        });
 
         const result = await spawnWithName("file.txt");
 
@@ -951,7 +968,7 @@ describe("spawnSubagentDirect filename validation", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "materializes attachments through a configured workspace symlink",
+    "keeps unsandboxed attachments outside a configured workspace symlink",
     async () => {
       const workspaceTarget = workspaceDirOverride;
       const workspaceAlias = `${workspaceTarget}-link`;
@@ -962,8 +979,13 @@ describe("spawnSubagentDirect filename validation", () => {
         const result = await spawnWithName("file.txt");
 
         expect(result.status).toBe("accepted");
-        const attachmentsRoot = path.join(workspaceTarget, ".openclaw", "attachments");
-        expect(fs.readdirSync(attachmentsRoot)).toHaveLength(1);
+        const privateAttachmentsRoot = path.join(
+          resolveSandboxAttachmentIngressWorkspace(result.childSessionKey as string),
+          ".openclaw",
+          "attachments",
+        );
+        expect(fs.readdirSync(privateAttachmentsRoot)).toHaveLength(1);
+        expect(fs.existsSync(path.join(workspaceTarget, ".openclaw"))).toBe(false);
       } finally {
         workspaceDirOverride = workspaceTarget;
         fs.unlinkSync(workspaceAlias);
@@ -971,7 +993,7 @@ describe("spawnSubagentDirect filename validation", () => {
     },
   );
 
-  it("normalizes explicit cwd before materializing native subagent attachments", async () => {
+  it("normalizes explicit cwd while keeping native attachments in private ingress", async () => {
     const homeDir = fs.mkdtempSync(
       path.join(os.tmpdir(), `openclaw-subagent-home-attachments-${process.pid}-${Date.now()}-`),
     );
@@ -999,9 +1021,14 @@ describe("spawnSubagentDirect filename validation", () => {
         );
 
         expect(result.status).toBe("accepted");
-        const attachmentsRoot = path.join(expectedCwd, ".openclaw", "attachments");
-        expect(fs.existsSync(attachmentsRoot)).toBe(true);
         const childSessionKey = result.childSessionKey as string;
+        const attachmentsRoot = path.join(
+          resolveSandboxAttachmentIngressWorkspace(childSessionKey),
+          ".openclaw",
+          "attachments",
+        );
+        expect(fs.existsSync(attachmentsRoot)).toBe(true);
+        expect(fs.existsSync(path.join(expectedCwd, ".openclaw"))).toBe(false);
         expect(persistedStore?.[childSessionKey]?.spawnedCwd).toBe(expectedCwd);
       });
     } finally {

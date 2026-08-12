@@ -10,7 +10,6 @@ import {
   getRuntimeConfig,
   hasInProcessGatewayContext,
   loadPreparedModelCatalog,
-  listResolvedSandboxContexts,
   resolveContextEngine,
   resolveSandboxContext,
 } from "./subagent-spawn.runtime.js";
@@ -28,7 +27,6 @@ type SubagentSpawnDeps = {
   createSandboxWorkspaceIngressFsBridge: typeof createSandboxWorkspaceIngressFsBridge;
   resolveSandboxContext: typeof resolveSandboxContext;
   getSandboxBackendManager: typeof getSandboxBackendManager;
-  listResolvedSandboxContexts: typeof listResolvedSandboxContexts;
 };
 
 const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
@@ -44,7 +42,6 @@ const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
   createSandboxWorkspaceIngressFsBridge,
   resolveSandboxContext,
   getSandboxBackendManager,
-  listResolvedSandboxContexts,
 };
 
 let subagentSpawnDeps = defaultSubagentSpawnDeps;

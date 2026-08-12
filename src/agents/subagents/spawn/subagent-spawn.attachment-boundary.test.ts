@@ -93,10 +93,23 @@ describe("subagent attachment owner boundaries", () => {
     expect(mutate).not.toHaveBeenCalled();
   });
 
-  it("fails closed when writable-alias resolution cannot prove the receipt path", async () => {
-    fs.symlinkSync(".openclaw", path.join(workspaceDir, ".openclaw"));
+  it("uses child-private ingress instead of a writable shared workspace bridge", async () => {
+    const sharedMutate = vi.fn();
+    const ingressMutations: string[] = [];
+    const ingressBridge = {
+      resolvePath: ({ filePath }: { filePath: string }) => ({
+        relativePath: "",
+        containerPath: filePath,
+      }),
+      mkdirp: async () => ingressMutations.push("mkdir"),
+      createFileExclusive: async ({ filePath }: { filePath: string }) => {
+        ingressMutations.push(`create:${path.basename(filePath)}`);
+        return "created" as const;
+      },
+      remove: async () => undefined,
+    };
+    const preparedRoot = "/tmp/openclaw-attachment-ingress/child";
     const registerSubagentRunMock = vi.fn();
-    const mutate = vi.fn();
     const module = await loadSubagentSpawnModuleForTest({
       callGatewayMock,
       getRuntimeConfig: () => config,
@@ -115,19 +128,39 @@ describe("subagent attachment owner boundaries", () => {
         workspaceAccess: "rw",
         containerWorkdir: "/workspace",
         docker: { binds: [] },
-        fsBridge: { resolvePath: vi.fn(), mkdirp: mutate, createFileExclusive: mutate },
+        fsBridge: {
+          resolvePath: vi.fn(),
+          mkdirp: sharedMutate,
+          createFileExclusive: sharedMutate,
+        },
+      }),
+      getSandboxBackendManager: () => ({
+        prepareAttachmentIngress: async () => ({
+          workspaceDir,
+          sandboxAttachmentsRootDir: `${preparedRoot}/.openclaw/attachments`,
+          sandboxFsBridge: ingressBridge,
+          cleanupLocator: { runtime: "sandbox-rw" },
+          cleanupContainerWorkspaceDir: preparedRoot,
+        }),
+        createFsCleanupBridge: async () => ingressBridge,
       }),
       registerSubagentRunMock,
     });
 
-    expect((await spawnAttachments(module)).status).toBe("error");
-    expect(registerSubagentRunMock).not.toHaveBeenCalled();
-    expect(mutate).not.toHaveBeenCalled();
+    expect((await spawnAttachments(module, ["file.txt"])).status).toBe("accepted");
+    expect(sharedMutate).not.toHaveBeenCalled();
+    expect(ingressMutations).toContain("mkdir");
+    expect(ingressMutations).toContain("create:file.txt");
+    expect(registerSubagentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachmentsSandboxIdentity: expect.objectContaining({ backendId: "docker" }),
+        attachmentsSandboxDir: expect.stringContaining(preparedRoot),
+      }),
+    );
   });
 
-  it("rejects a backend host ingress still writable through a peer boundary", async () => {
-    const peerWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-peer-sandbox-"));
-    const preparedRoot = path.join(peerWorkspace, "prepared-ingress");
+  it("rejects a backend host ingress outside the core-owned private root", async () => {
+    const preparedRoot = path.join(workspaceDir, "prepared-ingress");
     const registerSubagentRunMock = vi.fn();
     const module = await loadSubagentSpawnModuleForTest({
       callGatewayMock,
@@ -149,27 +182,10 @@ describe("subagent attachment owner boundaries", () => {
         containerWorkdir: workspaceDir,
         docker: { binds: [] },
       }),
-      listResolvedSandboxContexts: () => [
-        {
-          backendId: "docker",
-          runtimeId: "peer-rw",
-          sessionKey: "agent:peer:main",
-          backend: {
-            configLabel: "openclaw-sandbox:latest",
-            capabilities: { workspaceMutationVisibility: "shared-host" },
-          },
-          workspaceDir: peerWorkspace,
-          agentWorkspaceDir: peerWorkspace,
-          workspaceAccess: "rw",
-          containerWorkdir: "/peer",
-          docker: { binds: [] },
-        },
-      ],
       getSandboxBackendManager: () => ({
         prepareAttachmentIngress: async () => ({
           workspaceDir: preparedRoot,
           sandboxAttachmentsRootDir: path.join(preparedRoot, ".openclaw", "attachments"),
-          workspaceMutationVisibility: "shared-host" as const,
         }),
       }),
       registerSubagentRunMock,
@@ -177,10 +193,9 @@ describe("subagent attachment owner boundaries", () => {
 
     expect(await spawnAttachments(module)).toMatchObject({
       status: "error",
-      error: expect.stringContaining("writable through another sandbox boundary"),
+      error: expect.stringContaining("escaped the host-private attachment root"),
     });
     expect(registerSubagentRunMock).not.toHaveBeenCalled();
-    fs.rmSync(peerWorkspace, { recursive: true, force: true });
   });
 
   it("does not mutate the receipt path when the durable cleanup claim fails", async () => {

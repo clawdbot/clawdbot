@@ -33,7 +33,6 @@ export { AGENT_LANE_SUBAGENT } from "../../lanes.js";
 export { loadPreparedModelCatalog } from "../../prepared-model-catalog.js";
 export {
   createSandboxWorkspaceIngressFsBridge,
-  listResolvedSandboxContexts,
   resolveSandboxContext,
 } from "../../sandbox/context.js";
 export { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
