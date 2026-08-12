@@ -640,10 +640,6 @@ async function resolveImagesForRequest(
   return images;
 }
 
-export const testOnlyOpenAiHttp = {
-  resolveChatCompletionUsage,
-};
-
 function buildAgentPrompt(
   messagesUnknown: unknown,
   activeTurnContext: Pick<ActiveTurnContext, "activeUserMessageIndex" | "imageUrls">,

@@ -1462,6 +1462,24 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       {
         agentCommandMock.mockClear();
         agentCommandMock.mockResolvedValueOnce({
+          payloads: [{ text: "usage last call" }],
+          meta: {
+            agentMeta: {
+              lastCallUsage: { input: 80, output: 20, total: 100 },
+            },
+          },
+        } as never);
+        const json = await postSyncUserMessage("usage");
+        expect(json.usage).toEqual({
+          prompt_tokens: 80,
+          completion_tokens: 20,
+          total_tokens: 100,
+        });
+      }
+
+      {
+        agentCommandMock.mockClear();
+        agentCommandMock.mockResolvedValueOnce({
           payloads: [{ text: "usage total" }],
           meta: {
             agentMeta: {
@@ -3164,7 +3182,29 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(allContent).toBe("final answer");
   });
 
-  it("includes usage in final stream chunk when stream_options.include_usage=true", async () => {
+  it.each([
+    {
+      name: "includes aggregate usage in the final stream chunk",
+      usage: { input: 12, output: 5, cacheRead: 3, cacheWrite: 0, total: 20 },
+      lastCallUsage: undefined,
+      expected: {
+        prompt_tokens: 15,
+        completion_tokens: 5,
+        total_tokens: 20,
+        prompt_tokens_details: { cached_tokens: 3 },
+      },
+    },
+    {
+      name: "uses last-call usage when the aggregate is zero",
+      usage: { input: 0, output: 0, total: 0 },
+      lastCallUsage: { input: 55, output: 7, total: 62 },
+      expected: {
+        prompt_tokens: 55,
+        completion_tokens: 7,
+        total_tokens: 62,
+      },
+    },
+  ])("$name", async ({ usage, lastCallUsage, expected }) => {
     const port = enabledPort;
     agentCommandMock.mockClear();
     agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
@@ -3175,13 +3215,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         payloads: [{ text: "hello" }],
         meta: {
           agentMeta: {
-            usage: {
-              input: 12,
-              output: 5,
-              cacheRead: 3,
-              cacheWrite: 0,
-              total: 20,
-            },
+            usage,
+            ...(lastCallUsage ? { lastCallUsage } : {}),
           },
         },
       };
@@ -3203,12 +3238,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       .map((d) => JSON.parse(d) as Record<string, unknown>);
 
     const usageChunk = jsonChunks.find((chunk) => "usage" in chunk);
-    expect(usageChunk?.usage).toEqual({
-      prompt_tokens: 15,
-      completion_tokens: 5,
-      total_tokens: 20,
-      prompt_tokens_details: { cached_tokens: 3 },
-    });
+    expect(usageChunk?.usage).toEqual(expected);
     expect(usageChunk?.choices).toStrictEqual([]);
   });
 
