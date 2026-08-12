@@ -126,28 +126,43 @@ const PLUGIN_SDK_SUBPATH_SEEDS = [
   },
 ] as const satisfies readonly PluginSdkSubpathSeed[];
 
-export const PLUGIN_SDK_SUBPATH_RECORDS = PLUGIN_SDK_SUBPATH_SEEDS.map(
-  (seed) =>
-    ({
+function buildPluginSdkSubpathRecord(seed: (typeof PLUGIN_SDK_SUBPATH_SEEDS)[number]) {
+  if ("status" in seed) {
+    return {
       code: seed.code,
-      status: "status" in seed ? seed.status : "deprecated",
+      status: seed.status,
       owner: seed.owner,
       introduced: "2026-07-06",
-      ...(!("status" in seed) ? { deprecated: "2026-07-06", warningStarts: "2026-07-06" } : {}),
-      removeAfter: "removeAfter" in seed ? seed.removeAfter : undefined,
-      removalGate: "removalGate" in seed ? seed.removalGate : undefined,
       replacement: seed.replacement,
       docsPath: "/plugins/sdk-migration",
       surfaces: [`openclaw/plugin-sdk/${seed.subpath}`],
-      diagnostics:
-        "status" in seed
-          ? ["plugin SDK compatibility registry and migration guide"]
-          : [
-              "repository deprecated API usage guard for core and bundled plugins; no external runtime import warning",
-            ],
+      diagnostics: ["plugin SDK compatibility registry and migration guide"],
       tests: ["src/plugins/compat/registry.test.ts"],
-      ...("releaseNote" in seed ? { releaseNote: seed.releaseNote } : {}),
-    }) satisfies PluginCompatRecord,
+      releaseNote: seed.releaseNote,
+    } satisfies PluginCompatRecord;
+  }
+
+  return {
+    code: seed.code,
+    status: "deprecated",
+    owner: seed.owner,
+    introduced: "2026-07-06",
+    deprecated: "2026-07-06",
+    warningStarts: "2026-07-06",
+    removeAfter: "removeAfter" in seed ? seed.removeAfter : undefined,
+    removalGate: "removalGate" in seed ? seed.removalGate : undefined,
+    replacement: seed.replacement,
+    docsPath: "/plugins/sdk-migration",
+    surfaces: [`openclaw/plugin-sdk/${seed.subpath}`],
+    diagnostics: [
+      "repository deprecated API usage guard for core and bundled plugins; no external runtime import warning",
+    ],
+    tests: ["src/plugins/compat/registry.test.ts"],
+  } satisfies PluginCompatRecord;
+}
+
+export const PLUGIN_SDK_SUBPATH_RECORDS = PLUGIN_SDK_SUBPATH_SEEDS.map(
+  buildPluginSdkSubpathRecord,
 ) satisfies readonly PluginCompatRecord[];
 
 const BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_SEEDS = [
