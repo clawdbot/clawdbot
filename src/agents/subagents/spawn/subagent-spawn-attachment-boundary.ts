@@ -2,6 +2,7 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveSandboxAttachmentIngressWorkspace } from "../../sandbox/attachment-ingress.js";
+import { resolveSandboxConfigForAgent } from "../../sandbox/config.js";
 import type { SandboxFsBridge } from "../../sandbox/fs-bridge.types.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
@@ -95,6 +96,13 @@ export async function resolveSubagentAttachmentStagingBoundary(params: {
       workspaceDir: privateIngressWorkspace,
       sandboxAttachmentsRootDir: path.join(privateIngressWorkspace, ".openclaw", "attachments"),
     };
+  }
+  // Attachments are readable model inputs, so their filesystem principal must
+  // be exclusive to this child rather than an agent/shared sandbox runtime.
+  if (resolveSandboxConfigForAgent(params.config, params.targetAgentId).scope !== "session") {
+    throw new Error(
+      'sandboxed subagent attachments require sandbox.scope="session" so other sandbox sessions cannot read or replace them',
+    );
   }
   const deps = getSubagentSpawnDeps();
   const childSandbox = await deps.resolveSandboxContext({

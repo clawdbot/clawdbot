@@ -58,6 +58,38 @@ describe("subagent attachment owner boundaries", () => {
       ctx,
     );
 
+  it.each(["agent", "shared"] as const)(
+    "rejects attachment staging in a %s-scoped sandbox runtime",
+    async (scope) => {
+      config = createSubagentSpawnTestConfig(workspaceDir, {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+            sandbox: { mode: "all", workspaceAccess: "rw", scope },
+          },
+        },
+      });
+      const resolveSandboxContext = vi.fn();
+      const registerSubagentRunMock = vi.fn();
+      const module = await loadSubagentSpawnModuleForTest({
+        callGatewayMock,
+        getRuntimeConfig: () => config,
+        updateSessionStoreMock,
+        workspaceDir,
+        resolveSandboxRuntimeStatus: () => ({ sandboxed: true, agentId: "main" }) as never,
+        resolveSandboxContext,
+        registerSubagentRunMock,
+      });
+
+      expect(await spawnAttachments(module)).toMatchObject({
+        status: "error",
+        error: expect.stringContaining('sandbox.scope="session"'),
+      });
+      expect(resolveSandboxContext).not.toHaveBeenCalled();
+      expect(registerSubagentRunMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects writable shared staging when the backend bridge is not pinned", async () => {
     const registerSubagentRunMock = vi.fn();
     const mutate = vi.fn();
