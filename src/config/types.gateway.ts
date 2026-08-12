@@ -437,6 +437,26 @@ export type GatewayHttpConfig = {
   securityHeaders?: GatewayHttpSecurityHeadersConfig;
 };
 
+export type GatewayWsKeepaliveConfig = {
+  /**
+   * WebSocket protocol keepalive ping interval in milliseconds.
+   * Default: 30000 (30s).
+   */
+  pingIntervalMs?: number;
+  /**
+   * Consecutive missed pongs tolerated before the gateway terminates the
+   * socket as half-open. A missed pong is counted per ping interval with no
+   * pong reply, so the effective grace period is roughly
+   * `pingIntervalMs * maxMissedPongs`. Default: 5 (~2.5 min at 30s).
+   */
+  maxMissedPongs?: number;
+};
+
+export type GatewayWsConfig = {
+  /** WebSocket protocol keepalive/liveness tuning. */
+  keepalive?: GatewayWsKeepaliveConfig;
+};
+
 export type GatewayPushApnsRelayConfig = {
   /** Base HTTPS URL for the external iOS APNs relay service. */
   baseUrl?: string;
@@ -556,6 +576,7 @@ export type GatewayConfig = {
   reload?: GatewayReloadConfig;
   tls?: GatewayTlsConfig;
   http?: GatewayHttpConfig;
+  ws?: GatewayWsConfig;
   push?: GatewayPushConfig;
   nodes?: GatewayNodesConfig;
   /**

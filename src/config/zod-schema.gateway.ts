@@ -170,6 +170,16 @@ export const GatewayConfigSchema = z
           .optional(),
       })
       .optional(),
+    ws: z
+      .strictObject({
+        keepalive: z
+          .strictObject({
+            pingIntervalMs: z.number().int().positive().optional(),
+            maxMissedPongs: z.number().int().positive().optional(),
+          })
+          .optional(),
+      })
+      .optional(),
     push: z
       .strictObject({
         apns: z
