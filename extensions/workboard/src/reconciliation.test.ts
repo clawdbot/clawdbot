@@ -129,6 +129,40 @@ describe("WorkboardReconciler", () => {
     ).toBe(true);
   });
 
+  it("replays the exact persisted newer association", async () => {
+    const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
+    const created = await reconciler.apply({
+      sourceUrl: "https://example.test/a",
+      tenant: "acme",
+      idempotencyKey: "a",
+      sourceUpdatedAt: 100,
+      card: { title: "A" },
+    });
+    await reconciler.apply({
+      sourceUrl: "https://example.test/b",
+      tenant: "acme",
+      idempotencyKey: "b",
+      sourceUpdatedAt: 200,
+      link: { title: "Persisted B" },
+      cardId: created.card.id,
+      card: { title: "B" },
+    });
+    const replayed = await reconciler.apply({
+      sourceUrl: "https://attacker.test/b",
+      tenant: "acme",
+      idempotencyKey: "b",
+      sourceUpdatedAt: 999,
+      card: { title: "wrong" },
+    });
+    expect(replayed.link).toEqual({
+      sourceUrl: "https://example.test/b",
+      tenant: "acme",
+      idempotencyKey: "b",
+      sourceUpdatedAt: 200,
+      title: "Persisted B",
+    });
+  });
+
   it("fails closed when an explicit card belongs to another tenant", async () => {
     const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
     const owner = await reconciler.apply({

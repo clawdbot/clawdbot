@@ -56,9 +56,7 @@ function reconciliationLinkFor(
   card: WorkboardCard,
   fallback: WorkboardExternalExecutionLink,
 ): WorkboardExternalExecutionLink {
-  const link = card.metadata?.links?.find(
-    (entry) => entry.id === `external:${fallback.idempotencyKey}`,
-  );
+  const link = externalLinkFor(card, fallback);
   return {
     sourceUrl: link?.url ?? card.sourceUrl ?? fallback.sourceUrl,
     tenant: card.metadata?.automation?.tenant ?? fallback.tenant,
@@ -73,13 +71,15 @@ function externalLinkId(link: WorkboardExternalExecutionLink): string {
 }
 
 function isExternalLinkFor(card: WorkboardCard, link: WorkboardExternalExecutionLink): boolean {
-  return (
-    card.metadata?.links?.some(
-      (entry) =>
-        entry.id === externalLinkId(link) ||
-        (entry.id === `external:${link.idempotencyKey}` &&
-          card.metadata?.automation?.tenant === link.tenant),
-    ) ?? false
+  return externalLinkFor(card, link) !== undefined;
+}
+
+function externalLinkFor(card: WorkboardCard, link: WorkboardExternalExecutionLink) {
+  return card.metadata?.links?.find(
+    (entry) =>
+      entry.id === externalLinkId(link) ||
+      (entry.id === `external:${link.idempotencyKey}` &&
+        card.metadata?.automation?.tenant === link.tenant),
   );
 }
 
@@ -215,7 +215,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
           lifecycleStatusSourceUpdatedAt: link.sourceUpdatedAt,
           links: [
             {
-              id: `external:${link.idempotencyKey}`,
+              id: externalLinkId(link),
               type: "relates_to",
               createdAt: Date.now(),
               sourceUpdatedAt: link.sourceUpdatedAt,
