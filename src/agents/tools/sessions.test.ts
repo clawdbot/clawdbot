@@ -1348,8 +1348,7 @@ describe("sessions_send gating", () => {
       error: "sessions_send cannot target the calling session; use your own reply instead",
       sessionKey: "current",
     });
-    expect(callGatewayMock).toHaveBeenCalledTimes(1);
-    expect(requireGatewayRequest().method).toBe("sessions.resolve");
+    expect(callGatewayMock).not.toHaveBeenCalled();
     expect(callGatewayMock.mock.calls).not.toContainEqual([
       expect.objectContaining({ method: "agent" }),
     ]);

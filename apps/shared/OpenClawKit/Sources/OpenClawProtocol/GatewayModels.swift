@@ -777,38 +777,47 @@ public struct BoardWidgetGeneratedIdentity: Codable, Sendable {
 
 public struct BoardGetParams: Codable, Sendable {
     public let sessionkey: String
+    public let agentid: String?
 
     public init(
-        sessionkey: String)
+        sessionkey: String,
+        agentid: String? = nil)
     {
         self.sessionkey = sessionkey
+        self.agentid = agentid
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
     }
 }
 
 public struct BoardUpdateParams: Codable, Sendable {
     public let sessionkey: String
+    public let agentid: String?
     public let ops: [BoardOp]
 
     public init(
         sessionkey: String,
+        agentid: String? = nil,
         ops: [BoardOp])
     {
         self.sessionkey = sessionkey
+        self.agentid = agentid
         self.ops = ops
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
         case ops
     }
 }
 
 public struct BoardWidgetPutParams: Codable, Sendable {
     public let sessionkey: String
+    public let agentid: String?
     public let name: String
     public let title: String?
     public let content: BoardWidgetPutContent
@@ -820,6 +829,7 @@ public struct BoardWidgetPutParams: Codable, Sendable {
 
     public init(
         sessionkey: String,
+        agentid: String? = nil,
         name: String,
         title: String? = nil,
         content: BoardWidgetPutContent,
@@ -830,6 +840,7 @@ public struct BoardWidgetPutParams: Codable, Sendable {
         generatedidentity: BoardWidgetGeneratedIdentity? = nil)
     {
         self.sessionkey = sessionkey
+        self.agentid = agentid
         self.name = name
         self.title = title
         self.content = content
@@ -842,6 +853,7 @@ public struct BoardWidgetPutParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
         case name
         case title
         case content
@@ -885,6 +897,7 @@ public struct BoardWidgetPutResult: Codable, Sendable {
 
 public struct BoardWidgetGrantParams: Codable, Sendable {
     public let sessionkey: String
+    public let agentid: String?
     public let name: String
     public let decision: AnyCodable
     public let revision: Int
@@ -892,12 +905,14 @@ public struct BoardWidgetGrantParams: Codable, Sendable {
 
     public init(
         sessionkey: String,
+        agentid: String? = nil,
         name: String,
         decision: AnyCodable,
         revision: Int,
         instanceid: String)
     {
         self.sessionkey = sessionkey
+        self.agentid = agentid
         self.name = name
         self.decision = decision
         self.revision = revision
@@ -906,6 +921,7 @@ public struct BoardWidgetGrantParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
         case name
         case decision
         case revision
@@ -915,17 +931,20 @@ public struct BoardWidgetGrantParams: Codable, Sendable {
 
 public struct BoardWidgetAppViewParams: Codable, Sendable {
     public let sessionkey: String
+    public let agentid: String?
     public let name: String
     public let revision: Int
     public let instanceid: String
 
     public init(
         sessionkey: String,
+        agentid: String? = nil,
         name: String,
         revision: Int,
         instanceid: String)
     {
         self.sessionkey = sessionkey
+        self.agentid = agentid
         self.name = name
         self.revision = revision
         self.instanceid = instanceid
@@ -933,6 +952,7 @@ public struct BoardWidgetAppViewParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
         case name
         case revision
         case instanceid = "instanceId"
@@ -959,21 +979,25 @@ public struct BoardWidgetAppViewResult: Codable, Sendable {
 
 public struct BoardEventParams: Codable, Sendable {
     public let sessionkey: String
+    public let agentid: String?
     public let widget: String
     public let payload: AnyCodable
 
     public init(
         sessionkey: String,
+        agentid: String? = nil,
         widget: String,
         payload: AnyCodable)
     {
         self.sessionkey = sessionkey
+        self.agentid = agentid
         self.widget = widget
         self.payload = payload
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
         case widget
         case payload
     }
@@ -4610,18 +4634,22 @@ public struct UiNavigateCommand: Codable, Sendable {
 public struct UiCommandParams: Codable, Sendable {
     public let command: UiCommand
     public let sessionkey: String?
+    public let agentid: String?
 
     public init(
         command: UiCommand,
-        sessionkey: String? = nil)
+        sessionkey: String? = nil,
+        agentid: String? = nil)
     {
         self.command = command
         self.sessionkey = sessionkey
+        self.agentid = agentid
     }
 
     private enum CodingKeys: String, CodingKey {
         case command
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
     }
 }
 
@@ -6147,18 +6175,22 @@ public struct SessionRow: Codable, Sendable {
 
 public struct SessionsCompanionAskParams: Codable, Sendable {
     public let sessionkey: String
+    public let agentid: String?
     public let question: String
 
     public init(
         sessionkey: String,
+        agentid: String? = nil,
         question: String)
     {
         self.sessionkey = sessionkey
+        self.agentid = agentid
         self.question = question
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
         case question
     }
 }
@@ -6183,15 +6215,19 @@ public struct SessionsCompanionAskResult: Codable, Sendable {
 
 public struct SessionsCompanionResetParams: Codable, Sendable {
     public let sessionkey: String
+    public let agentid: String?
 
     public init(
-        sessionkey: String)
+        sessionkey: String,
+        agentid: String? = nil)
     {
         self.sessionkey = sessionkey
+        self.agentid = agentid
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
     }
 }
 
@@ -6211,15 +6247,19 @@ public struct SessionsCompanionResetResult: Codable, Sendable {
 
 public struct SessionsCompanionStateParams: Codable, Sendable {
     public let sessionkey: String
+    public let agentid: String?
 
     public init(
-        sessionkey: String)
+        sessionkey: String,
+        agentid: String? = nil)
     {
         self.sessionkey = sessionkey
+        self.agentid = agentid
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
     }
 }
 
@@ -7383,15 +7423,19 @@ public struct SessionDiscussionInfo: Codable, Sendable {
 
 public struct SessionDiscussionInfoParams: Codable, Sendable {
     public let sessionkey: String
+    public let agentid: String?
 
     public init(
-        sessionkey: String)
+        sessionkey: String,
+        agentid: String? = nil)
     {
         self.sessionkey = sessionkey
+        self.agentid = agentid
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
     }
 }
 
@@ -7419,15 +7463,19 @@ public struct SessionDiscussionInfoResult: Codable, Sendable {
 
 public struct SessionDiscussionOpenParams: Codable, Sendable {
     public let sessionkey: String
+    public let agentid: String?
 
     public init(
-        sessionkey: String)
+        sessionkey: String,
+        agentid: String? = nil)
     {
         self.sessionkey = sessionkey
+        self.agentid = agentid
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
     }
 }
 
@@ -8478,15 +8526,19 @@ public struct SessionsMessagesUnsubscribeParams: Codable, Sendable {
 }
 
 public struct SessionsViewerPresenceSetParams: Codable, Sendable {
+    public let agentid: String?
     public let sessionkeys: [String]
 
     public init(
+        agentid: String? = nil,
         sessionkeys: [String])
     {
+        self.agentid = agentid
         self.sessionkeys = sessionkeys
     }
 
     private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
         case sessionkeys = "sessionKeys"
     }
 }
@@ -8851,6 +8903,7 @@ public struct SessionsPatchManyResult: Codable, Sendable {
 
 public struct SessionsPluginPatchParams: Codable, Sendable {
     public let key: String
+    public let agentid: String?
     public let pluginid: String
     public let namespace: String
     public let value: AnyCodable?
@@ -8858,12 +8911,14 @@ public struct SessionsPluginPatchParams: Codable, Sendable {
 
     public init(
         key: String,
+        agentid: String? = nil,
         pluginid: String,
         namespace: String,
         value: AnyCodable? = nil,
         unset: Bool? = nil)
     {
         self.key = key
+        self.agentid = agentid
         self.pluginid = pluginid
         self.namespace = namespace
         self.value = value
@@ -8872,6 +8927,7 @@ public struct SessionsPluginPatchParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case key
+        case agentid = "agentId"
         case pluginid = "pluginId"
         case namespace
         case value
@@ -17249,7 +17305,19 @@ public struct QuestionListResult: Codable, Sendable {
     }
 }
 
-public struct HooksStatusParams: Codable, Sendable {}
+public struct HooksStatusParams: Codable, Sendable {
+    public let agentid: String?
+
+    public init(
+        agentid: String? = nil)
+    {
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+    }
+}
 
 public struct PluginApprovalRequestParams: Codable, Sendable {
     public let pluginid: String?
@@ -17747,17 +17815,20 @@ public struct PluginsSessionActionParams: Codable, Sendable {
     public let pluginid: String
     public let actionid: String
     public let sessionkey: String?
+    public let agentid: String?
     public let payload: AnyCodable?
 
     public init(
         pluginid: String,
         actionid: String,
         sessionkey: String? = nil,
+        agentid: String? = nil,
         payload: AnyCodable? = nil)
     {
         self.pluginid = pluginid
         self.actionid = actionid
         self.sessionkey = sessionkey
+        self.agentid = agentid
         self.payload = payload
     }
 
@@ -17765,6 +17836,7 @@ public struct PluginsSessionActionParams: Codable, Sendable {
         case pluginid = "pluginId"
         case actionid = "actionId"
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
         case payload
     }
 }

@@ -22,7 +22,7 @@ export function getCronStoreKysely(db: DatabaseSync) {
 }
 
 export function ensureCronStoreEpochSchema(db: DatabaseSync): void {
-  db.exec(`
+  db.exec(/* sqlite-allow-raw: additive schema DDL is outside Kysely's query builder. */ `
     CREATE TABLE IF NOT EXISTS cron_store_epochs (
       store_key TEXT PRIMARY KEY,
       store_epoch INTEGER NOT NULL DEFAULT 0

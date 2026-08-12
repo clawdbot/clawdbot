@@ -35,6 +35,9 @@ export function resolveConfigWideDoctorPluginMetadataSnapshot(params: {
   const manifestRegistry = resolveConfigWidePluginManifestRegistry({
     config: params.config,
     env: params.env,
+    // Doctor calls this after filesystem repairs; the process-current snapshot
+    // may describe the pre-repair manifest and must not restore stale owners.
+    allowCurrent: false,
   });
   const snapshot = rebasePluginMetadataSnapshotManifestRegistry(params.snapshot, manifestRegistry);
   configWideDoctorSnapshots.add(snapshot);

@@ -21,7 +21,6 @@ import {
   isUnscopedSessionKeySentinel,
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
-  scopeLegacySessionKeyToAgent,
 } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
@@ -35,7 +34,6 @@ import {
   listAgentIds,
   resolveAgentDir,
   resolveSessionAgentId,
-  resolveSessionAgentIds,
   resolveAgentWorkspaceDir,
 } from "../agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
@@ -52,6 +50,7 @@ import {
   prependInternalEventContext,
   resolveInternalEventTranscriptBody,
 } from "./attempt-execution.shared.js";
+import { resolveExplicitAgentCommandSessionKey } from "./explicit-session-key.js";
 import { loadAcpManagerRuntime } from "./runtime-loaders.js";
 import { createAgentCommandSessionWorkingCopy } from "./session-helpers.js";
 import { resolveSession } from "./session.js";
@@ -85,35 +84,6 @@ export function normalizeExplicitOverrideInput(raw: string, kind: "provider" | "
     throw new Error(`${label} override contains invalid control characters.`);
   }
   return trimmed;
-}
-
-export function resolveExplicitAgentCommandSessionKey(params: {
-  rawExplicitSessionKey?: string;
-  agentIdOverride?: string;
-  shouldScopeDefaultAgentKey?: boolean;
-  cfg: OpenClawConfig;
-}): string | undefined {
-  if (
-    isUnscopedSessionKeySentinel(params.rawExplicitSessionKey) &&
-    !params.agentIdOverride &&
-    !params.shouldScopeDefaultAgentKey
-  ) {
-    return params.rawExplicitSessionKey;
-  }
-  const unscopedOwnerAgentId =
-    classifySessionKeyShape(params.rawExplicitSessionKey) === "legacy_or_alias" &&
-    (params.agentIdOverride || params.shouldScopeDefaultAgentKey)
-      ? resolveSessionAgentIds({
-          config: params.cfg,
-          agentId: params.agentIdOverride,
-          sessionKey: params.rawExplicitSessionKey,
-        }).sessionAgentId
-      : undefined;
-  return scopeLegacySessionKeyToAgent({
-    agentId: unscopedOwnerAgentId ?? params.agentIdOverride,
-    sessionKey: params.rawExplicitSessionKey,
-    mainKey: params.cfg.session?.mainKey,
-  });
 }
 
 export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: RuntimeEnv) {

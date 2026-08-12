@@ -404,14 +404,16 @@ export function readAcpSessionMetaBatch(params: {
   // Chunked IN keeps each statement under SQLite's bind-variable cap, matching the
   // sharing-store membership precedent; one statement per 500 keys instead of per row.
   const db = getAcpSessionKysely(database.db);
-  const requestedKeys = [
-    ...new Set(
-      [...entriesByKey].flatMap(([sessionKey, entries]) => [
-        sessionKey,
-        ...entries.flatMap((item) => item.legacyKeys),
-      ]),
-    ),
-  ];
+  const requestedKeySet = new Set<string>();
+  for (const [sessionKey, entries] of entriesByKey) {
+    requestedKeySet.add(sessionKey);
+    for (const item of entries) {
+      for (const legacyKey of item.legacyKeys) {
+        requestedKeySet.add(legacyKey);
+      }
+    }
+  }
+  const requestedKeys = [...requestedKeySet];
   const keyChunks: string[][] = [];
   for (let index = 0; index < requestedKeys.length; index += 500) {
     keyChunks.push(requestedKeys.slice(index, index + 500));
@@ -446,12 +448,12 @@ export function readAcpSessionMetaBatch(params: {
   }
   if (legacyRowsToRekey.length > 0) {
     runOpenClawStateWriteTransaction(
-      (database) => {
+      (transactionDatabase) => {
         for (const { row, sessionKey } of legacyRowsToRekey) {
-          upsertAcpSessionMetaRow(database.db, { ...row, session_key: sessionKey });
+          upsertAcpSessionMetaRow(transactionDatabase.db, { ...row, session_key: sessionKey });
           executeSqliteQuerySync(
-            database.db,
-            getAcpSessionKysely(database.db)
+            transactionDatabase.db,
+            getAcpSessionKysely(transactionDatabase.db)
               .deleteFrom("acp_sessions")
               .where("session_key", "=", row.session_key),
           );

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveChatSendStopOwnerScope } from "./chat-send-pre-admission.js";
+import { resolveChatSendStopOwnerScope } from "./chat-send-stop-owner-scope.js";
 
 describe("chat send stop ownership", () => {
   it("keeps the selected filter separate from the compatibility run fallback", () => {

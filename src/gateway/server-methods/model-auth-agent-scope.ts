@@ -67,7 +67,7 @@ export function modelAuthAgentScopeError(scope: Extract<ModelAuthAgentScopeResul
   return scope.error ?? unknownModelAuthAgentIdError(scope.agentId);
 }
 
-export function unknownModelAuthAgentIdError(agentId: string) {
+function unknownModelAuthAgentIdError(agentId: string) {
   const details: UnknownAgentIdErrorDetails = {
     code: GatewayErrorDetailCodes.UNKNOWN_AGENT_ID,
     agentId,

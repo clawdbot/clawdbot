@@ -896,7 +896,7 @@ describe("session_status tool", () => {
     const result = await tool.execute("call-current-child", { sessionKey: "current" });
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("main");
+    expect(details.sessionKey).toBe("agent:support:main");
   });
 
   it.each([
@@ -1820,7 +1820,7 @@ describe("session_status tool", () => {
     expect(text).not.toContain("all done");
   });
 
-  it("resolves a literal current sessionId in session_status", async () => {
+  it("resolves current as the requester alias before a colliding session id", async () => {
     resetSessionStore({
       main: {
         sessionId: "s-main",
@@ -1850,7 +1850,7 @@ describe("session_status tool", () => {
     const result = await tool.execute("call-current-literal-id", { sessionKey: "current" });
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
-    expect(details.sessionKey).toBe("agent:main:other");
+    expect(details.sessionKey).toBe("main");
   });
 
   it("keeps sessionKey=current bound to the requester subagent session", async () => {
@@ -2472,8 +2472,7 @@ describe("session_status tool", () => {
       }),
     ).rejects.toThrow(expectedError);
 
-    expect(loadSessionStoreMock).toHaveBeenCalledTimes(1);
-    expect(loadSessionStoreMock).toHaveBeenCalledWith("/tmp/main/sessions.json");
+    expect(loadSessionStoreMock).not.toHaveBeenCalled();
     expect(updateSessionStoreMock).not.toHaveBeenCalled();
     expect(callGatewayMock).toHaveBeenCalledTimes(3);
     expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
@@ -2487,6 +2486,7 @@ describe("session_status tool", () => {
     expect(callGatewayMock).toHaveBeenNthCalledWith(2, {
       method: "sessions.resolve",
       params: {
+        agentId: "main",
         key: sessionId,
         spawnedBy: "agent:main:subagent:child",
       },

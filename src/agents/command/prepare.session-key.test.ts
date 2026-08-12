@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { AgentSelectionRequiredError } from "../agent-scope.js";
-import { resolveExplicitAgentCommandSessionKey } from "./prepare.js";
+import { resolveExplicitAgentCommandSessionKey } from "./explicit-session-key.js";
 
 const fixedStoreConfig = {
   session: { store: "/stores/shared.sqlite" },

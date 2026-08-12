@@ -2141,7 +2141,7 @@ describe("doctor config flow", () => {
 
   it("emits warning-only stale channel cleanup without changing config", async () => {
     const input = {
-      agents: { entries: { ops: { default: true } } },
+      agents: { entries: { ops: {} } },
       channels: { matrix: { enabled: true } },
     };
     const channelDoctor = await import("./doctor/shared/channel-doctor.js");
