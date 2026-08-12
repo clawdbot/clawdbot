@@ -239,6 +239,7 @@ describeControlUiE2e("session diff panel", () => {
       .toContain("replacement line");
 
     await modified.getByRole("button", { name: "Show next 20 unmodified lines" }).click();
+    await expect.poll(async () => (await gateway.getRequests("sessions.diff")).length).toBe(2);
     await expect
       .poll(async () => (await gateway.getRequests("sessions.files.get"))[0]?.params)
       .toMatchObject({ path: "src/app.ts" });
@@ -251,6 +252,7 @@ describeControlUiE2e("session diff panel", () => {
     await modified.getByRole("button", { name: "Show previous 9 unmodified lines" }).click();
     await expect.poll(() => modified.locator(".chat-diff__row--skip").count()).toBe(0);
     await expect.poll(async () => (await gateway.getRequests("sessions.files.get")).length).toBe(1);
+    await expect.poll(async () => (await gateway.getRequests("sessions.diff")).length).toBe(3);
 
     const untracked = files.nth(1);
     await expect
@@ -268,14 +270,14 @@ describeControlUiE2e("session diff panel", () => {
     await panel.getByRole("button", { name: "Change view options" }).click();
     await page.getByRole("menuitem", { name: "Switch to Unified Diff" }).click();
     await expect.poll(() => modified.locator(".chat-diff").count()).toBe(1);
-    // View-only toggles reuse parsed patches and do not refetch the RPC.
-    await expect.poll(async () => (await gateway.getRequests("sessions.diff")).length).toBe(1);
+    // View-only toggles reuse parsed patches after the expansion revalidations.
+    await expect.poll(async () => (await gateway.getRequests("sessions.diff")).length).toBe(3);
 
     // Collapsing a file hides its diff body.
     await modified.locator(".session-diff__file-toggle").click();
     await expect.poll(() => modified.locator(".chat-diff").count()).toBe(0);
     await panel.getByRole("button", { name: "Refresh changes" }).click();
-    await expect.poll(async () => (await gateway.getRequests("sessions.diff")).length).toBe(2);
+    await expect.poll(async () => (await gateway.getRequests("sessions.diff")).length).toBe(4);
     // Refresh keeps the current collapse state instead of expanding every file.
     await expect.poll(() => modified.locator(".chat-diff").count()).toBe(0);
     await modified.locator(".session-diff__file-toggle").click();

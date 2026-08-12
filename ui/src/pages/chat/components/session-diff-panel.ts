@@ -132,6 +132,26 @@ function shellArgument(value: string): string {
   return /^[A-Za-z0-9_./:@+-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
+function scopeParams(scope: SessionDiffScope): SessionDiffScope {
+  return scope.scope === "commit"
+    ? { scope: "commit", commit: scope.commit }
+    : { scope: scope.scope };
+}
+
+function taskResult(result: SessionsDiffResult): SessionDiffTaskResult {
+  return {
+    result,
+    views: result.files.map((file) => ({
+      file,
+      parsed: file.patch
+        ? parseSessionDiffPatch(file.patch, (count) =>
+            t("chat.sessionDiff.unmodifiedLines", { count: String(count) }),
+          )
+        : null,
+    })),
+  };
+}
+
 class SessionDiffPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) loader: SessionDiffLoader | null = null;
   @property({ attribute: false }) loadFileText: SessionDiffFileTextLoader | null = null;
@@ -147,6 +167,7 @@ class SessionDiffPanel extends OpenClawLightDomElement {
   private readonly splitCache = new WeakMap<ParsedFilePatch, SessionSplitDiffRow[]>();
   private readonly fileTextCache = new WeakMap<FileView, Promise<string[] | null>>();
   private readonly unavailableFileText = new WeakSet<FileView>();
+  private prefetchedDiffResult: SessionsDiffResult | null = null;
 
   private readonly diffTask = new Task(this, {
     args: () =>
@@ -160,18 +181,9 @@ class SessionDiffPanel extends OpenClawLightDomElement {
         return null;
       }
       const params: SessionDiffScope = scope === "commit" ? { scope, commit: commit! } : { scope };
-      const result = await loader(params);
-      return {
-        result,
-        views: result.files.map((file) => ({
-          file,
-          parsed: file.patch
-            ? parseSessionDiffPatch(file.patch, (count) =>
-                t("chat.sessionDiff.unmodifiedLines", { count: String(count) }),
-              )
-            : null,
-        })),
-      };
+      const result = this.prefetchedDiffResult ?? (await loader(params));
+      this.prefetchedDiffResult = null;
+      return taskResult(result);
     },
     onComplete: (value) => {
       const currentPaths = new Set(value?.views.map((view) => view.file.path) ?? []);
@@ -360,7 +372,32 @@ class SessionDiffPanel extends OpenClawLightDomElement {
     direction: SessionDiffGapDirection,
   ): Promise<void> {
     const parsed = view.parsed;
-    if (!parsed || !line.gap || !this.canExpandGaps(view)) {
+    const loader = this.loader;
+    if (!parsed || !line.gap || !loader || !this.canExpandGaps(view)) {
+      return;
+    }
+    const scope = this.scope;
+    let freshResult: SessionsDiffResult;
+    try {
+      freshResult = await loader(scopeParams(scope));
+    } catch {
+      return;
+    }
+    if (
+      this.loader !== loader ||
+      this.scope !== scope ||
+      !this.diffTask.value?.views.includes(view)
+    ) {
+      return;
+    }
+    const freshFile = freshResult.files.find((file) => file.path === view.file.path);
+    // The panel renders a snapshot; revalidate its patch server-side because gap-interior
+    // edits are invisible to row validation. The remaining diff-to-file fetch race is a few
+    // milliseconds and is an accepted tradeoff without shared snapshot identity.
+    if (!freshFile || freshFile.patch !== view.file.patch) {
+      this.fileTextCache.delete(view);
+      this.prefetchedDiffResult = freshResult;
+      await this.diffTask.run();
       return;
     }
     const fileLines = await this.loadFileLines(view);
