@@ -1,10 +1,6 @@
 // Chat-owned model, reasoning, and fast-mode picker orchestration.
 import { html } from "lit";
-import type {
-  GatewaySessionRow,
-  ModelCatalogEntry,
-  SessionsListResult,
-} from "../../../api/types.ts";
+import type { ModelCatalogEntry, SessionsListResult } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
 import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
 import {
@@ -12,7 +8,10 @@ import {
   resolveChatModelSelectState,
   type ChatFastModeSelectValue,
 } from "../../../lib/chat/model-select-state.ts";
-import { resolveChatThinkingSelectState } from "../../../lib/chat/thinking.ts";
+import {
+  resolveChatThinkingSelectState,
+  type ChatThinkingTarget,
+} from "../../../lib/chat/thinking.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import { renderChatEffortPicker } from "./chat-effort-picker.ts";
 import {
@@ -46,7 +45,7 @@ type ChatModelControlsProps = {
   sessionsResult: SessionsListResult | null;
   stream: string | null;
   thinkingDefaults?: SessionsListResult["defaults"];
-  thinkingSession?: GatewaySessionRow;
+  thinkingSession?: ChatThinkingTarget;
   onFastModeSelect?: (value: ChatFastModeSelectValue, sessionKey: string) => unknown;
   onModelSelect?: (value: string, sessionKey: string) => unknown;
   onModelPickerTargetSelect?: (groupId: string, value: string) => unknown;

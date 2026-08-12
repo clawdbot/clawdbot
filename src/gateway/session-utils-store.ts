@@ -364,9 +364,8 @@ export function listAgentsForGateway(
         workspace,
         workspaceGit,
         agentRuntime,
-        thinkingLevels: thinkingProfile.levels,
-        thinkingOptions: thinkingProfile.levels.map((level) => level.label),
-        thinkingDefault: thinkingProfile.defaultLevel,
+        ...thinkingProfile,
+        thinkingOptions: thinkingProfile.thinkingLevels.map((level) => level.label),
       },
       model ? { model } : {},
     );
