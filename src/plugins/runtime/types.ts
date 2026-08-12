@@ -144,9 +144,15 @@ export type CodexReconciliationProvider = {
   list(params: {
     hostId: string;
     archived: boolean;
+    cursor?: string;
     limit?: number;
     signal?: AbortSignal;
-  }): Promise<{ hostId: string; sessions: CodexReconciliationSession[] }>;
+  }): Promise<{
+    hostId: string;
+    sessions: CodexReconciliationSession[];
+    nextCursor?: string;
+    complete: boolean;
+  }>;
   withTranscript(
     params: {
       hostId: string;

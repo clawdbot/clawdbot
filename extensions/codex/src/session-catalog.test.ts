@@ -1495,6 +1495,7 @@ describe("Codex supervision catalog", () => {
     ).resolves.toEqual({
       hostId: "node:devbox",
       sessions: [{ threadId: "archived-thread", status: "idle", archived: true }],
+      complete: true,
     });
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1596,6 +1597,7 @@ describe("Codex supervision catalog", () => {
           archived: false,
         },
       ],
+      complete: true,
     });
     await expect(
       reconciliationProvider?.list({
@@ -1608,7 +1610,7 @@ describe("Codex supervision catalog", () => {
     });
   });
 
-  it("bounds reconciliation session count, metadata bytes, and timestamps", async () => {
+  it("keeps reconciliation page metadata bounded and fails closed above the item limit", async () => {
     const { runtime } = createRuntime();
     let reconciliationProvider: CodexReconciliationProvider | undefined;
     (
@@ -1628,7 +1630,7 @@ describe("Codex supervision catalog", () => {
       api,
       control: createControl({
         listHistoryPage: async () => ({
-          sessions: Array.from({ length: 1001 }, (_, index) => ({
+          sessions: Array.from({ length: 101 }, (_, index) => ({
             threadId: `thread-${index}`,
             status: "idle",
             archived: false,
@@ -1638,14 +1640,13 @@ describe("Codex supervision catalog", () => {
       }),
     });
 
-    const result = await reconciliationProvider?.list({
-      hostId: CODEX_LOCAL_SESSION_HOST_ID,
-      archived: false,
-      limit: 1,
-    });
-    expect(result?.sessions).toHaveLength(1000);
-    expect(result?.sessions[0]).toEqual({ threadId: "thread-0", status: "idle", archived: false });
-    expect(result?.sessions.at(-1)).toMatchObject({ threadId: "thread-999" });
+    await expect(
+      reconciliationProvider?.list({
+        hostId: CODEX_LOCAL_SESSION_HOST_ID,
+        archived: false,
+        limit: 1,
+      }),
+    ).rejects.toThrow("Codex reconciliation catalog is unavailable");
   });
 
   it("delivers projected reconciliation transcripts only to the explicit consumer", async () => {
@@ -1772,7 +1773,7 @@ describe("Codex supervision catalog", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it("enumerates all local current and archived reconciliation pages without cursor loops", async () => {
+  it("returns resumable current and archived reconciliation pages with completion metadata", async () => {
     const listHistoryPage = vi.fn(
       async ({ archived, cursor }: { archived: boolean; cursor?: string }) => {
         if (!cursor) {
@@ -1791,7 +1792,12 @@ describe("Codex supervision catalog", () => {
     const { runtime } = createRuntime();
     let reconciliationProvider:
       | {
-          list: (input: { hostId: string; archived: boolean; limit: number }) => Promise<unknown>;
+          list: (input: {
+            hostId: string;
+            archived: boolean;
+            cursor?: string;
+            limit: number;
+          }) => Promise<unknown>;
         }
       | undefined;
     (
@@ -1815,7 +1821,20 @@ describe("Codex supervision catalog", () => {
         limit: 1,
       }),
     ).resolves.toMatchObject({
-      sessions: [{ threadId: "current-1" }, { threadId: "current-2" }],
+      sessions: [{ threadId: "current-1" }],
+      nextCursor: "page-2",
+      complete: false,
+    });
+    await expect(
+      reconciliationProvider?.list({
+        hostId: CODEX_LOCAL_SESSION_HOST_ID,
+        cursor: "page-2",
+        archived: false,
+        limit: 1,
+      }),
+    ).resolves.toMatchObject({
+      sessions: [{ threadId: "current-2" }],
+      complete: true,
     });
     await expect(
       reconciliationProvider?.list({
@@ -1824,7 +1843,20 @@ describe("Codex supervision catalog", () => {
         limit: 1,
       }),
     ).resolves.toMatchObject({
-      sessions: [{ threadId: "archived-1" }, { threadId: "archived-2" }],
+      sessions: [{ threadId: "archived-1" }],
+      nextCursor: "page-2",
+      complete: false,
+    });
+    await expect(
+      reconciliationProvider?.list({
+        hostId: CODEX_LOCAL_SESSION_HOST_ID,
+        cursor: "page-2",
+        archived: true,
+        limit: 1,
+      }),
+    ).resolves.toMatchObject({
+      sessions: [{ threadId: "archived-2" }],
+      complete: true,
     });
     expect(listHistoryPage).toHaveBeenCalledTimes(4);
   });

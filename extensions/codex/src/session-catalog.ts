@@ -73,6 +73,7 @@ import {
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
   CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
   CODEX_LOCAL_SESSION_HOST_ID,
+  CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
   DEFAULT_TRANSCRIPT_PAGE_LIMIT,
   filterCatalogPageByTitle,
   isInteractiveThreadSource,
@@ -132,7 +133,6 @@ const CODEX_SUPERVISION_SESSION_KEY_PREFIX = "harness:codex:supervision:";
 const CODEX_SESSION_CATALOG_LIST_TTL_MS = 32_000;
 const CODEX_SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES = 32;
 const MAX_RECONCILIATION_TRANSCRIPT_ITEMS = 1000;
-const MAX_RECONCILIATION_SESSIONS = 1000;
 const MAX_RECONCILIATION_TIME_MS = 8_640_000_000_000_000;
 
 type CodexCatalogRequestOptions = {
@@ -706,7 +706,9 @@ async function enumerateCodexSessionHistory(params: {
   nodeId: string;
   clientScopes?: readonly string[];
   archived: boolean;
+  cursor?: string;
   limit?: number;
+  pageLimit?: number;
   signal?: AbortSignal;
 }): Promise<CodexSessionCatalogPage> {
   if (params.clientScopes?.includes("operator.admin") !== true) {
@@ -731,8 +733,9 @@ async function enumerateCodexSessionHistory(params: {
     }
     const sessions: CodexSessionCatalogSession[] = [];
     const seenCursors = new Set<string>();
-    let cursor: string | undefined;
-    for (let pageIndex = 0; pageIndex < MAX_ACTION_CATALOG_PAGES; pageIndex += 1) {
+    let cursor = params.cursor;
+    const maxPages = params.pageLimit ?? MAX_ACTION_CATALOG_PAGES;
+    for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
       params.signal?.throwIfAborted();
       const raw = await params.runtime.nodes.invoke({
         nodeId,
@@ -750,6 +753,9 @@ async function enumerateCodexSessionHistory(params: {
       const nextCursor = page.nextCursor?.trim();
       if (!nextCursor) {
         return { sessions };
+      }
+      if (params.pageLimit !== undefined && pageIndex + 1 >= maxPages) {
+        return { sessions, nextCursor };
       }
       if (seenCursors.has(nextCursor)) {
         throw new Error("history cursor loop");
@@ -769,13 +775,16 @@ async function enumerateCodexSessionHistory(params: {
 async function enumerateLocalCodexSessionHistory(params: {
   control: CodexSessionCatalogControl;
   archived: boolean;
+  cursor?: string;
   limit: number;
+  pageLimit?: number;
   signal?: AbortSignal;
 }): Promise<CodexSessionCatalogPage> {
   const sessions: CodexSessionCatalogSession[] = [];
   const seenCursors = new Set<string>();
-  let cursor: string | undefined;
-  for (let pageIndex = 0; pageIndex < MAX_ACTION_CATALOG_PAGES; pageIndex += 1) {
+  let cursor = params.cursor;
+  const maxPages = params.pageLimit ?? MAX_ACTION_CATALOG_PAGES;
+  for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
     params.signal?.throwIfAborted();
     const page = await params.control.listHistoryPage({
       archived: params.archived,
@@ -787,6 +796,9 @@ async function enumerateLocalCodexSessionHistory(params: {
     const nextCursor = page.nextCursor?.trim();
     if (!nextCursor) {
       return { sessions };
+    }
+    if (params.pageLimit !== undefined && pageIndex + 1 >= maxPages) {
+      return { sessions, nextCursor };
     }
     if (seenCursors.has(nextCursor)) {
       throw new Error("history cursor loop");
@@ -929,14 +941,16 @@ function readReconciliationListRequest(value: unknown) {
   if (!isRecord(value)) {
     throw new CatalogParamsError("Codex reconciliation parameters must be an object");
   }
-  requireOnlyKeys(value, new Set(["hostId", "archived", "limit"]));
+  requireOnlyKeys(value, new Set(["hostId", "archived", "cursor", "limit"]));
   if (typeof value.archived !== "boolean") {
     throw new CatalogParamsError("Codex reconciliation archived partition must be explicit");
   }
+  const cursor = readOptionalString(value, "cursor", MAX_CURSOR_LENGTH);
   return {
     hostId: readReconciliationHostId(value.hostId),
     archived: value.archived,
     limit: normalizeLimit(value.limit, "limit"),
+    ...(cursor ? { cursor } : {}),
   };
 }
 
@@ -998,7 +1012,10 @@ function projectCodexReconciliationSessions(
   sessions: readonly unknown[],
   archived: boolean,
 ): CodexReconciliationSession[] {
-  return sessions.slice(0, MAX_RECONCILIATION_SESSIONS).flatMap((session) => {
+  if (sessions.length > CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT) {
+    throw new Error("reconciliation session page limit exceeded");
+  }
+  return sessions.flatMap((session) => {
     if (!isRecord(session) || session.archived !== archived) {
       return [];
     }
@@ -1127,6 +1144,7 @@ function registerCodexSessionReconciliation(params: {
         const request = readReconciliationListRequest({
           hostId: input.hostId,
           archived: input.archived,
+          ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
           ...(input.limit !== undefined ? { limit: input.limit } : {}),
         });
         assertReconciliationNotAborted(input.signal);
@@ -1135,7 +1153,9 @@ function registerCodexSessionReconciliation(params: {
             ? await enumerateLocalCodexSessionHistory({
                 control: params.control,
                 archived: request.archived,
+                ...(request.cursor ? { cursor: request.cursor } : {}),
                 limit: request.limit,
+                pageLimit: 1,
                 signal: input.signal,
               })
             : await enumerateCodexSessionHistory({
@@ -1143,13 +1163,17 @@ function registerCodexSessionReconciliation(params: {
                 nodeId: request.hostId.slice("node:".length),
                 clientScopes: ["operator.admin"],
                 archived: request.archived,
+                ...(request.cursor ? { cursor: request.cursor } : {}),
                 limit: request.limit,
+                pageLimit: 1,
                 signal: input.signal,
               });
         assertReconciliationNotAborted(input.signal);
         return {
           hostId: request.hostId,
           sessions: projectCodexReconciliationSessions(page.sessions, request.archived),
+          ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+          complete: !page.nextCursor,
         };
       } catch (error) {
         return rethrowReconciliationError(error, "Codex reconciliation catalog is unavailable");
