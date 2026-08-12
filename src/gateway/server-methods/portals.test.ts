@@ -17,13 +17,14 @@ const portal: PortalSummary = {
   createdAtMs: 1,
 };
 
-function harness(service?: GatewayPortalService) {
+function harness(service?: GatewayPortalService, scopes = ["operator.write"]) {
   const broadcast = vi.fn();
   const invoke = async (method: keyof typeof portalHandlers, params: Record<string, unknown>) => {
     const respond = vi.fn();
     await portalHandlers[method]!({
       params,
       respond,
+      client: { connect: { scopes } } as never,
       context: { portalService: service, broadcast } as never,
     } as never);
     return respond;
@@ -66,7 +67,18 @@ describe("portal gateway methods", () => {
     expect(service.open).toHaveBeenCalledWith({ targetPort: 3000, title: "App" });
     expect(broadcast).toHaveBeenLastCalledWith(
       "portal.changed",
-      { portals: [portal] },
+      {
+        portals: [
+          {
+            id: portal.id,
+            title: portal.title,
+            port: portal.port,
+            listenPort: portal.listenPort,
+            publicUrl: portal.publicUrl,
+            createdAtMs: portal.createdAtMs,
+          },
+        ],
+      },
       { dropIfSlow: true },
     );
     expect((await invoke("portal.close", { id: "missing" })).mock.calls[0]).toEqual([
@@ -79,6 +91,35 @@ describe("portal gateway methods", () => {
       { portals: [] },
       { dropIfSlow: true },
     );
+  });
+
+  it("returns portal credentials only to write-capable operators", async () => {
+    const service: GatewayPortalService = {
+      list: () => [portal],
+      open: vi.fn(),
+      close: vi.fn(),
+      closeAll: vi.fn(),
+    };
+
+    const readResponse = await harness(service, ["operator.read"]).invoke("portal.list", {});
+    expect(readResponse.mock.calls[0]?.[1]).toEqual({
+      portals: [
+        {
+          id: portal.id,
+          title: portal.title,
+          port: portal.port,
+          listenPort: portal.listenPort,
+          publicUrl: portal.publicUrl,
+          createdAtMs: portal.createdAtMs,
+        },
+      ],
+    });
+
+    const writeResponse = await harness(service, ["operator.write"]).invoke("portal.list", {});
+    expect(writeResponse.mock.calls[0]?.[1]).toEqual({ portals: [portal] });
+
+    const adminResponse = await harness(service, ["operator.admin"]).invoke("portal.list", {});
+    expect(adminResponse.mock.calls[0]?.[1]).toEqual({ portals: [portal] });
   });
 
   it("rejects malformed requests before service access and reports absent transports", async () => {

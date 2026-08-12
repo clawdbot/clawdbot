@@ -2,7 +2,7 @@ import type { PortalSummary } from "@openclaw/gateway-protocol";
 import { resolveGatewayHttpOrigin } from "../../components/sandbox-host.ts";
 
 export function resolvePortalUrl(
-  portal: Pick<PortalSummary, "listenPort" | "path" | "tokenQuery">,
+  portal: Pick<PortalSummary, "listenPort" | "path"> & { tokenQuery: string },
   gatewayUrl: string,
   hostOrigin: string,
 ): string {

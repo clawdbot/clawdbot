@@ -1,6 +1,5 @@
 import { consume } from "@lit/context";
 import type {
-  PortalChangedEvent,
   PortalCloseResult,
   PortalListResult,
   PortalSummary,
@@ -63,10 +62,7 @@ class PortalsPage extends OpenClawLightDomElement {
         ) {
           return;
         }
-        const portals = (event.payload as Partial<PortalChangedEvent> | null)?.portals;
-        if (Array.isArray(portals)) {
-          this.applyPortalSet(portals);
-        }
+        void this.loadPortals();
       }),
   );
 
@@ -117,16 +113,22 @@ class PortalsPage extends OpenClawLightDomElement {
     }
   }
 
-  private portalUrl(portal: PortalSummary): string {
+  private portalUrl(portal: PortalSummary, tokenQuery: string): string {
     return resolvePortalUrl(
-      portal,
+      { ...portal, tokenQuery },
       this.context.gateway.connection.gatewayUrl,
       window.location.origin,
     );
   }
 
   private ensurePortalProbe(portal: PortalSummary, force = false) {
-    const url = this.portalUrl(portal);
+    const tokenQuery = portal.tokenQuery;
+    if (!tokenQuery) {
+      this.portalProbeGeneration += 1;
+      this.portalProbeState = null;
+      return;
+    }
+    const url = this.portalUrl(portal, tokenQuery);
     const key = `${portal.id}\u0000${url}`;
     if (!force && this.portalProbeState?.key === key) {
       return;
@@ -243,7 +245,19 @@ class PortalsPage extends OpenClawLightDomElement {
   }
 
   private renderPortal(portal: PortalSummary) {
-    const portalUrl = this.portalUrl(portal);
+    if (!portal.tokenQuery) {
+      return html`
+        <section class="portals-preview">
+          <div class="portals-preview__notice" role="status">
+            <div class="portals-preview__notice-title">
+              ${t("portalsPage.writeAccessRequiredTitle")}
+            </div>
+            <p>${t("portalsPage.writeAccessRequiredBody")}</p>
+          </div>
+        </section>
+      `;
+    }
+    const portalUrl = this.portalUrl(portal, portal.tokenQuery);
     const frameKey = `${portal.id}\u0000${portalUrl}`;
     const probeStatus =
       this.portalProbeState?.key === frameKey ? this.portalProbeState.status : "probing";

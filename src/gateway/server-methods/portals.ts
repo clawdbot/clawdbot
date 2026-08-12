@@ -4,10 +4,12 @@ import {
   formatValidationErrors,
   type PortalCloseParams,
   type PortalOpenParams,
+  type PortalSummary,
   validatePortalCloseParams,
   validatePortalListParams,
   validatePortalOpenParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { ADMIN_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 function invalidParams(method: string, errors: unknown, respond: RespondFn): void {
@@ -32,8 +34,13 @@ function requirePortalService(
   return service;
 }
 
+function redactPortalSummary(summary: PortalSummary): PortalSummary {
+  const { tokenQuery: _tokenQuery, url: _url, ...redacted } = summary;
+  return redacted;
+}
+
 export const portalHandlers: GatewayRequestHandlers = {
-  "portal.list": ({ params, respond, context }) => {
+  "portal.list": ({ params, respond, context, client }) => {
     if (!validatePortalListParams(params)) {
       invalidParams("portal.list", validatePortalListParams.errors, respond);
       return;
@@ -42,7 +49,18 @@ export const portalHandlers: GatewayRequestHandlers = {
     if (!service) {
       return;
     }
-    respond(true, { portals: service.list() }, undefined);
+    const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    const portals = service.list();
+    respond(
+      true,
+      {
+        portals:
+          scopes.includes(WRITE_SCOPE) || scopes.includes(ADMIN_SCOPE)
+            ? portals
+            : portals.map(redactPortalSummary),
+      },
+      undefined,
+    );
   },
   "portal.open": async ({ params, respond, context }) => {
     if (!validatePortalOpenParams(params)) {
@@ -61,7 +79,11 @@ export const portalHandlers: GatewayRequestHandlers = {
         ...(request.description !== undefined ? { description: request.description } : {}),
         ...(request.path !== undefined ? { path: request.path } : {}),
       });
-      context.broadcast("portal.changed", { portals: service.list() }, { dropIfSlow: true });
+      context.broadcast(
+        "portal.changed",
+        { portals: service.list().map(redactPortalSummary) },
+        { dropIfSlow: true },
+      );
       respond(true, portal, undefined);
     } catch (error) {
       respond(
@@ -82,7 +104,11 @@ export const portalHandlers: GatewayRequestHandlers = {
     }
     try {
       await service.close((params as PortalCloseParams).id);
-      context.broadcast("portal.changed", { portals: service.list() }, { dropIfSlow: true });
+      context.broadcast(
+        "portal.changed",
+        { portals: service.list().map(redactPortalSummary) },
+        { dropIfSlow: true },
+      );
       respond(true, { closed: true }, undefined);
     } catch (error) {
       respond(

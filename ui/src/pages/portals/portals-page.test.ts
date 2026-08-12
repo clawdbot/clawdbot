@@ -91,7 +91,7 @@ beforeEach(() => {
 });
 
 describe("PortalsPage", () => {
-  it("renders the portal list and applies full replacement events", async () => {
+  it("renders the portal list and refetches it after replacement events", async () => {
     const source = createContext(["portal.list", "portal.close"], async (method) => {
       if (method === "portal.list") {
         return { portals: [portal] } satisfies PortalListResult;
@@ -122,9 +122,25 @@ describe("PortalsPage", () => {
     source.emitPortals([]);
 
     await vi.waitFor(() => {
-      expect(page.querySelector(".portals-rail__item")).toBeNull();
-      expect(page.textContent).toContain("Ask the agent to start a portal:");
+      expect(source.request).toHaveBeenCalledTimes(2);
     });
+    expect(source.request).toHaveBeenLastCalledWith("portal.list", {});
+    expect(page.querySelector(".portals-rail__title")?.textContent).toBe("Seeded app");
+  });
+
+  it("requires write access instead of opening a portal without credentials", async () => {
+    const { tokenQuery: _tokenQuery, url: _url, ...redactedPortal } = portal;
+    const source = createContext(["portal.list"], async () => ({
+      portals: [redactedPortal as PortalSummary],
+    }));
+    const page = await mountPage(source.context);
+
+    await vi.waitFor(() => {
+      expect(page.textContent).toContain("This portal requires an operator with write access.");
+    });
+    expect(page.querySelector("iframe")).toBeNull();
+    expect(page.querySelector(".portals-preview__url")).toBeNull();
+    expect(probePortalReachable).not.toHaveBeenCalled();
   });
 
   it("shows an unreachable notice without mounting the iframe and retries", async () => {

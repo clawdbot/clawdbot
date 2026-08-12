@@ -2145,6 +2145,8 @@ export const en: TranslationMap = {
     unreachableTitle: "Portal not reachable from this browser",
     unreachableBody:
       "The Gateway is likely being accessed through a proxy or tunnel that exposes only its main port. Open this URL from a browser on the Gateway host.",
+    writeAccessRequiredTitle: "Write access required",
+    writeAccessRequiredBody: "This portal requires an operator with write access.",
     retry: "Retry",
   },
   modelSetup: {
