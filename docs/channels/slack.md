@@ -324,18 +324,18 @@ validated listener-owned client remains in the active event turn. The
 in-memory send queue and thread-participation records are partitioned by that
 event's workspace; the client itself is never serialized or persisted.
 
-Channel policy keys accept raw stable Slack channel IDs, `channel:<id>`,
-`team:<team-id>:channel:<channel-id>`, or the `"*"` wildcard.
-`dm.groupChannels` accepts the same ID forms except `"*"`. Workspace-qualified
-entries select only events from that workspace and take precedence over a bare
-entry for the same channel ID. Bare channel entries remain organization-wide
-for compatibility. The channel prefixes `slack:`, `group:`, and `mpim:` fail
-startup.
+Enterprise channel policy keys must use
+`team:<team-id>:channel:<channel-id>` or the `"*"` wildcard.
+`dm.groupChannels` requires the workspace-qualified form and does not accept
+`"*"`. A delivered Enterprise event never falls back from its qualified
+workspace and channel identity to a bare channel ID. Workspace installations
+retain raw stable channel IDs and `channel:<id>` compatibility. The channel
+prefixes `slack:`, `group:`, and `mpim:` fail startup.
 
-User policy entries in `allowFrom`, `reactionAllowlist`, and per-channel `users`
-accept raw stable Slack user IDs, `slack:<user-id>`, `user:<user-id>`,
-`team:<team-id>:user:<user-id>`, or `"*"`. Workspace-qualified entries select
-only events from that workspace; bare entries remain organization-wide.
+Enterprise user policy entries in `allowFrom`, `reactionAllowlist`, and
+per-channel `users` must use `team:<team-id>:user:<user-id>` or `"*"`. A
+workspace-scoped sender never matches a bare user ID. Workspace installations
+retain raw stable user IDs, `slack:<user-id>`, and `user:<user-id>` compatibility.
 Enterprise `toolsBySender` keys accept raw stable user IDs, `id:<user-id>`,
 `channel:slack:<user-id>`, or `"*"`. Names, slugs, display names, and email
 addresses fail startup. IDs must use Slack's canonical uppercase prefix and body
@@ -355,9 +355,9 @@ rejected before authorization or system-event handling.
 Enterprise DMs support the same `disabled`, `open`, `allowlist`, and `pairing`
 policies as workspace installs. Pairing approvals are stored as
 `team:<team-id>:user:<user-id>` and are applied only to events from that
-workspace. Explicit account `allowFrom` entries can use the same qualified form
-for one workspace or a bare user ID for organization-wide access; channel and
-sender policy continues to apply to channel messages.
+workspace. Explicit account `allowFrom` entries use the same qualified form and
+apply only to that workspace; channel and sender policy continues to apply to
+channel messages.
 
 ## Install
 
@@ -1308,7 +1308,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     - `allowlist`
     - `disabled`
 
-    Channel allowlist lives under `channels.slack.channels` and **must use stable Slack channel IDs** (for example `C12345678`) as config keys. Enterprise Grid installs can scope an entry to one workspace with `team:<team-id>:channel:<channel-id>`.
+    Channel allowlist lives under `channels.slack.channels` and **must use stable Slack channel IDs** (for example `C12345678`) as config keys. Enterprise Grid org installs require `team:<team-id>:channel:<channel-id>` so policies cannot cross workspace boundaries.
 
     Runtime note: if `channels.slack` is completely missing (env-only setup), runtime falls back to `groupPolicy="allowlist"` and logs a warning (even if `channels.defaults.groupPolicy` is set).
 

@@ -395,7 +395,9 @@ export function createSlackMonitorContext(params: {
 
     if (isGroupDm && groupDmChannels.length > 0) {
       const candidates = [
-        ...buildSlackChannelIdCandidates(p.channelId, p.teamId),
+        ...buildSlackChannelIdCandidates(p.channelId, p.teamId, {
+          allowUnscoped: params.installationIdentity?.kind !== "enterprise",
+        }),
         p.channelName ? `#${p.channelName}` : undefined,
         p.channelName,
         p.channelName ? normalizeSlackSlug(p.channelName) : undefined,
@@ -413,6 +415,7 @@ export function createSlackMonitorContext(params: {
     if (isRoom && p.channelId) {
       const channelConfig = resolveSlackChannelConfig({
         teamId: p.teamId,
+        allowUnscoped: params.installationIdentity?.kind !== "enterprise",
         channelId: p.channelId,
         channelName: p.channelName,
         channels: params.channelsConfig,

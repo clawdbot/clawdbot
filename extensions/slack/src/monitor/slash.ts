@@ -559,6 +559,7 @@ export async function registerSlackMonitorSlashCommands(params: {
       if (isRoom) {
         channelConfig = resolveSlackChannelConfig({
           teamId: eventScope?.teamId ?? ctx.teamId,
+          allowUnscoped: ctx.installationIdentity.kind !== "enterprise",
           channelId: command.channel_id,
           channelName: channelInfo?.name,
           channels: ctx.channelsConfig,

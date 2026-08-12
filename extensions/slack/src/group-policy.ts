@@ -22,6 +22,7 @@ type SlackChannelPolicyEntry = {
 export function buildSlackChannelIdCandidates(
   channelId: string | null | undefined,
   teamId?: string | null,
+  options?: { allowUnscoped?: boolean },
 ): string[] {
   const trimmedId = channelId?.trim();
   if (!trimmedId) {
@@ -33,10 +34,16 @@ export function buildSlackChannelIdCandidates(
   const lowercaseTeamId = exactTeamId?.toLowerCase();
   const uppercaseTeamId = exactTeamId?.toUpperCase();
   // Inbound Slack IDs are uppercase, but persisted session group IDs are lowercase.
-  return buildChannelKeyCandidates(
+  const scopedCandidates = buildChannelKeyCandidates(
     exactTeamId ? `team:${exactTeamId}:channel:${trimmedId}` : undefined,
     lowercaseTeamId ? `team:${lowercaseTeamId}:channel:${lowercaseId}` : undefined,
     uppercaseTeamId ? `team:${uppercaseTeamId}:channel:${uppercaseId}` : undefined,
+  );
+  if (exactTeamId && options?.allowUnscoped !== true) {
+    return scopedCandidates;
+  }
+  return buildChannelKeyCandidates(
+    ...scopedCandidates,
     trimmedId,
     lowercaseId,
     uppercaseId,

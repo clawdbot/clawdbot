@@ -12,6 +12,7 @@ import { parseSlackBlocksInput } from "./blocks-input.js";
 import type { SlackConversationInfo } from "./channel-type.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { buildSlackChannelIdCandidates } from "./group-policy.js";
+import { getSlackInstallationKind } from "./installation-identity-state.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { resolveSlackChannelConfig } from "./monitor/channel-config.js";
 import { isSlackChannelAllowedByPolicy } from "./monitor/policy.js";
@@ -293,6 +294,7 @@ function resolveSlackChannelReadPolicy(params: {
   const channelKeys = Object.keys(channels ?? {});
   const channelConfig = resolveSlackChannelConfig({
     teamId: params.teamId,
+    allowUnscoped: getSlackInstallationKind(params.account.accountId) !== "enterprise",
     channelId: params.channelId,
     channelName: params.channelName,
     channels,
@@ -474,7 +476,9 @@ function isSlackGroupDmTargetConfigured(
     return true;
   }
   const candidates = new Set(
-    buildSlackChannelIdCandidates(channelId, teamId).map((candidate) => candidate.toLowerCase()),
+    buildSlackChannelIdCandidates(channelId, teamId, {
+      allowUnscoped: getSlackInstallationKind(account.accountId) !== "enterprise",
+    }).map((candidate) => candidate.toLowerCase()),
   );
   const target = channelId.trim().toLowerCase();
   return entries.some((entry) => {

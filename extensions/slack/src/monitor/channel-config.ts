@@ -64,6 +64,7 @@ export function resolveSlackChannelLabel(params: { channelId?: string; channelNa
 
 export function resolveSlackChannelConfig(params: {
   teamId?: string;
+  allowUnscoped?: boolean;
   channelId: string;
   channelName?: string;
   channels?: SlackChannelConfigEntries;
@@ -84,7 +85,9 @@ export function resolveSlackChannelConfig(params: {
   const normalizedName = channelName ? normalizeSlackSlug(channelName) : "";
   const directName = channelName ? channelName.trim() : "";
   const candidates = buildChannelKeyCandidates(
-    ...buildSlackChannelIdCandidates(channelId, params.teamId),
+    ...buildSlackChannelIdCandidates(channelId, params.teamId, {
+      allowUnscoped: params.allowUnscoped,
+    }),
     allowNameMatching ? (channelName ? `#${directName}` : undefined) : undefined,
     allowNameMatching ? directName : undefined,
     allowNameMatching ? normalizedName : undefined,
@@ -119,8 +122,9 @@ export function resolveSlackChannelConfig(params: {
   const users = resolveSlackUserAllowListForTeam({
     allowList: firstDefined(resolved.users, fallback?.users),
     teamId: params.teamId,
-    // Keeping an unmatched scoped entry preserves the configured allowlist gate;
-    // generic ingress treats that qualified value as non-matching instead of open.
+    allowUnscoped: params.allowUnscoped,
+    // Keeping unmatched entries preserves the configured allowlist gate; strict
+    // workspace ingress treats bare and differently scoped values as non-matching.
     preserveUnmatchedScopedEntries: true,
   });
   const skills = firstDefined(resolved.skills, fallback?.skills);

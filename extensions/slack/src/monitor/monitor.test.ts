@@ -196,9 +196,39 @@ describe("resolveSlackChannelConfig", () => {
     );
   });
 
+  it("does not match a bare channel ID when workspace scope is required", () => {
+    const channels = { C01234567: { enabled: true, requireMention: false } };
+
+    expectSlackChannelConfig(
+      resolveSlackChannelConfig({
+        teamId: "T11111111",
+        channelId: "C01234567",
+        channels,
+      }),
+      { allowed: false, requireMention: true },
+    );
+    expectSlackChannelConfig(
+      resolveSlackChannelConfig({
+        teamId: "T11111111",
+        allowUnscoped: true,
+        channelId: "C01234567",
+        channels,
+      }),
+      {
+        allowed: true,
+        requireMention: false,
+        matchKey: "C01234567",
+        matchSource: "direct",
+      },
+    );
+  });
+
   it("matches per-channel users only in their selected workspace", () => {
     const channels = {
-      C01234567: {
+      "team:T11111111:channel:C01234567": {
+        users: ["team:T11111111:user:U01234567", "team:T22222222:user:U12345678", "U23456789"],
+      },
+      "team:T22222222:channel:C01234567": {
         users: ["team:T11111111:user:U01234567", "team:T22222222:user:U12345678", "U23456789"],
       },
     };
@@ -209,14 +239,22 @@ describe("resolveSlackChannelConfig", () => {
         channelId: "C01234567",
         channels,
       })?.users,
-    ).toEqual(["u01234567", "team:t22222222:user:u12345678", "u23456789"]);
+    ).toEqual([
+      "team:t11111111:user:u01234567",
+      "team:t22222222:user:u12345678",
+      "u23456789",
+    ]);
     expect(
       resolveSlackChannelConfig({
         teamId: "T22222222",
         channelId: "C01234567",
         channels,
       })?.users,
-    ).toEqual(["team:t11111111:user:u01234567", "u12345678", "u23456789"]);
+    ).toEqual([
+      "team:t11111111:user:u01234567",
+      "team:t22222222:user:u12345678",
+      "u23456789",
+    ]);
   });
 
   it("blocks channel-name route matches by default", () => {

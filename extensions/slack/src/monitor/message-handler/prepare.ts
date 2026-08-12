@@ -539,6 +539,7 @@ async function resolveSlackConversationContext(params: {
   const channelConfig = isRoom
     ? resolveSlackChannelConfig({
         teamId: params.eventScope?.teamId ?? ctx.teamId,
+        allowUnscoped: ctx.installationIdentity.kind !== "enterprise",
         channelId: message.channel,
         channelName,
         channels: ctx.channelsConfig,
