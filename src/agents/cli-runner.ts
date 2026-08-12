@@ -27,7 +27,6 @@ import {
   markAuthProfileFailure,
   markAuthProfileSuccess,
 } from "./auth-profiles.js";
-import { isHeartbeatLifecycleRunKind } from "./bootstrap-mode.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
 import { acceptsClaudeLive } from "./cli-runner/claude-live-session-policy.js";
 import {
