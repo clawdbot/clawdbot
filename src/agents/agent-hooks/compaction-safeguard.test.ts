@@ -603,7 +603,49 @@ describe("compaction-safeguard summary budgets", () => {
   });
 
   it("keeps an oversized preserved suffix UTF-16 safe at its leading edge", () => {
-    expect(capCompactionSummaryPreservingSuffix("body", "A🚀tail", 5)).toBe("tail");
+    // Budget 5 with a 7-unit suffix: body keeps a floor share ("bo"), the
+    // suffix tail is preserved, and no surrogate pair is split.
+    expect(capCompactionSummaryPreservingSuffix("body", "A🚀tail", 5)).toBe("boail");
+  });
+
+  it("keeps a floor share of the structured body when the suffix alone exceeds the cap", () => {
+    const body = "## Decisions\n- keep flow\n## Open TODOs\n- fix eviction";
+    const oversizedSuffix =
+      "## Preserved turns\n" + "x".repeat(MAX_COMPACTION_SUMMARY_CHARS + 1000);
+
+    const capped = capCompactionSummaryPreservingSuffix(body, oversizedSuffix);
+
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    // Structured body must survive instead of being evicted entirely.
+    expect(capped).toContain("## Decisions");
+    expect(capped).toContain("keep flow");
+    // Suffix tail must still be preserved (workspace rules live at the tail).
+    expect(capped.endsWith("x")).toBe(true);
+  });
+
+  it("gives the structured body at least half the budget when a large suffix squeezes it", () => {
+    const body = "## Decisions\n" + "y".repeat(4000);
+    const largeSuffix = "## Preserved turns\n" + "z".repeat(MAX_COMPACTION_SUMMARY_CHARS - 2000);
+
+    const capped = capCompactionSummaryPreservingSuffix(body, largeSuffix);
+
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    // Body floor: the structured body keeps its full content when it fits in
+    // the half-budget floor instead of being squeezed to the remainder.
+    expect(capped.startsWith("## Decisions")).toBe(true);
+    expect(capped).toContain("y".repeat(4000));
+    // Suffix tail must still be preserved (workspace rules live at the tail).
+    expect(capped.endsWith("z")).toBe(true);
+  });
+
+  it("keeps the body and suffix whole when they fit within the cap", () => {
+    const body = "## Decisions\n- keep flow";
+    const suffix = "\n\n<workspace-critical-rules>\nRead AGENTS.md\n</workspace-critical-rules>";
+
+    const capped = capCompactionSummaryPreservingSuffix(body, suffix);
+
+    expect(capped).toBe(`${body}${suffix}`);
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
   });
 });
 

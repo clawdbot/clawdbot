@@ -581,13 +581,18 @@ function capCompactionSummaryPreservingSuffix(
   if (maxChars <= 0) {
     return capCompactionSummary(`${summaryBody}${suffix}`, maxChars);
   }
-  if (suffix.length >= maxChars) {
-    // Preserve tail (workspace rules, diagnostics) over head (preserved turns).
-    return sliceUtf16Safe(suffix, -maxChars);
-  }
-  const bodyBudget = Math.max(0, maxChars - suffix.length);
+  // Structured body keeps a floor share; suffix keeps its TAIL (workspace
+  // rules and post-compaction instructions are appended last). When both fit,
+  // bodyBudget/suffixBudget cover their full lengths, so nothing is cut.
+  const bodyBudget = Math.min(
+    summaryBody.length,
+    Math.max(Math.floor(maxChars / 2), maxChars - suffix.length),
+  );
+  const suffixBudget = Math.max(0, maxChars - bodyBudget);
   const cappedBody = capCompactionSummary(summaryBody, bodyBudget);
-  return `${cappedBody}${suffix}`;
+  const cappedSuffix =
+    suffix.length > suffixBudget ? sliceUtf16Safe(suffix, -suffixBudget) : suffix;
+  return `${cappedBody}${cappedSuffix}`;
 }
 
 function resolveSummaryReserveTokens(
