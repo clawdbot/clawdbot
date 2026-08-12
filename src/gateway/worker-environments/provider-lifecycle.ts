@@ -220,14 +220,16 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     if (record.state !== "bootstrapping" || !record.leaseId || !record.sshEndpoint) {
       throw serviceError("invalid_state", "Worker bootstrap requires a provisioned SSH lease");
     }
+    const leaseId = record.leaseId;
+    const sshEndpoint = record.sshEndpoint;
     let receipt: WorkerAdmissionHandshake;
     try {
       receipt = await callBootstrap((signal) =>
         options.bootstrapWorker({
           operationId: record.provisionOperationId,
-          sshEndpoint: record.sshEndpoint,
+          sshEndpoint,
           installation,
-          resolveIdentity: identityResolverFor(record, provider, record.leaseId),
+          resolveIdentity: identityResolverFor(record, provider, leaseId),
           signal,
         }),
       );
@@ -235,7 +237,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         throw new Error("Worker bootstrap receipt does not match the expected build identity");
       }
     } catch (error) {
-      return await failBootstrap(record, record.leaseId, provider, error);
+      return await failBootstrap(record, leaseId, provider, error);
     }
     const material = credentialMaterial();
     // Receipt, owner epoch, and credential hash commit together. A failed write leaves the
@@ -291,11 +293,16 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     // A timeout can happen after allocation; retain the same operation id for safe replay.
     const patch = {
       leaseId: lease.leaseId,
-      sshEndpoint: lease.ssh,
       sharedHost: lease.sharedHost === true,
       desktop: lease.desktop ?? null,
     };
-    const bootstrapping = move(record, "bootstrapping", patch);
+    if (lease.node) {
+      return move(record, "ready", { ...patch, sshEndpoint: null });
+    }
+    const bootstrapping = move(record, "bootstrapping", {
+      ...patch,
+      sshEndpoint: lease.ssh,
+    });
     if (record.destroyRequestedAtMs !== null) {
       return bootstrapping;
     }
@@ -410,7 +417,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     const leaseId = record.leaseId;
     if (!leaseId) {
       const provisioned = await resumeProvision(record, provider).catch(() => undefined);
-      if (provisioned?.state === "bootstrapping") {
+      if (provisioned?.leaseId && provisioned.destroyRequestedAtMs !== null) {
         await finishDestroy(provisioned, provider).catch(() => undefined);
       }
       return;
@@ -456,6 +463,14 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       move(draining, "orphaned", { lastError: ORPHANED_LEASE_ERROR });
       return;
     }
+    if (status === "dormant") {
+      if (teardownExpected) {
+        await finishDestroy(record, provider).catch(() => undefined);
+      }
+      // A paired device may be offline without losing its lease. Keep that authoritative
+      // holding state out of the unknown/orphan path until pairing itself is removed.
+      return;
+    }
     const inspectedSharedHost = inspection.sharedHost === true;
     if (record.sharedHost !== null && record.sharedHost !== inspectedSharedHost) {
       // Workspace actions capture isolation at tunnel creation. Fence the old actions before
@@ -470,6 +485,11 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     });
     if (record.destroyRequestedAtMs !== null) {
       await finishDestroy(record, provider).catch(() => undefined);
+      return;
+    }
+    if (!record.sshEndpoint) {
+      // Node leases deliberately have no SSH bootstrap path; their transport owner advances
+      // this lifecycle once supervised node launch is available.
       return;
     }
     if (record.state === "attached") {

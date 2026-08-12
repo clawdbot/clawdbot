@@ -102,11 +102,10 @@ export type WorkerDesktopEndpoint = {
 /** Durable lease identity and endpoint returned by a successful provision operation. */
 export type WorkerLease = {
   leaseId: string;
-  ssh: WorkerSshEndpoint;
   /** The SSH account also owns processes unrelated to this worker lease. */
   sharedHost?: boolean;
   desktop?: WorkerDesktopEndpoint;
-};
+} & ({ ssh: WorkerSshEndpoint; node?: never } | { node: { deviceId: string }; ssh?: never });
 
 /** Authoritative inspection result for an already-known worker lease. */
 export type WorkerLeaseStatus =
@@ -115,6 +114,7 @@ export type WorkerLeaseStatus =
       /** Explicit provider fact used to reconcile leases persisted before this metadata existed. */
       sharedHost?: boolean;
     }
+  | { status: "dormant" }
   | { status: "destroyed" }
   | { status: "unknown" };
 
