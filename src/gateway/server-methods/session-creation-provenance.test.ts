@@ -5,8 +5,11 @@ import {
 } from "../local-user-ingress.js";
 import { resolveAgentRunSessionCreation } from "./session-creation-provenance.js";
 
-function resolveWithIngress(localUserIngress: ReturnType<typeof prepareGatewayLocalUserIngress>) {
-  const client = {};
+function resolveWithIngress(
+  localUserIngress: ReturnType<typeof prepareGatewayLocalUserIngress>,
+  profileId?: string,
+) {
+  const client = profileId ? { authenticatedUserProfile: { profileId } } : {};
   attachGatewayLocalUserIngress(client, localUserIngress);
   return resolveAgentRunSessionCreation(client);
 }
@@ -19,7 +22,7 @@ describe("agent run session creation provenance", () => {
       isLocalClient: false,
     });
 
-    expect(resolveWithIngress(localUserIngress)).toEqual({
+    expect(resolveWithIngress(localUserIngress, "profile-ada")).toEqual({
       via: "run",
       actor: { type: "human", id: "profile-ada" },
     });
@@ -28,6 +31,23 @@ describe("agent run session creation provenance", () => {
       kind: "person",
       rawPrincipalRef: "profile-ada",
       displayLabel: "Ada",
+    });
+  });
+
+  it("uses the live canonical profile id after a connection profile merge", () => {
+    const localUserIngress = prepareGatewayLocalUserIngress({
+      authenticatedUserExpected: true,
+      profile: { profileId: "profile-before-merge", displayName: "Ada" },
+      isLocalClient: false,
+    });
+
+    expect(resolveWithIngress(localUserIngress, "profile-after-merge")).toEqual({
+      via: "run",
+      actor: { type: "human", id: "profile-after-merge" },
+    });
+    expect(localUserIngress.facts.invoker).toMatchObject({
+      state: "present",
+      rawPrincipalRef: "profile-before-merge",
     });
   });
 
@@ -134,7 +154,7 @@ describe("agent run session creation provenance", () => {
     expect(invoker.displayLabel).toContain("OPENAI_API_KEY=***");
     expect(invoker.displayLabel).not.toContain(secret);
     expect(invoker.displayLabel?.length).toBeLessThanOrEqual(128);
-    expect(resolveWithIngress(localUserIngress)).toEqual({
+    expect(resolveWithIngress(localUserIngress, "profile-redacted")).toEqual({
       via: "run",
       actor: { type: "human", id: "profile-redacted" },
     });

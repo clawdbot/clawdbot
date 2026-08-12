@@ -235,22 +235,27 @@ async function createFakeTailscaleBinary(): Promise<{
   cleanup: () => Promise<void>;
 }> {
   const binaryDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-i1-tailscale-"));
-  const binaryPath = path.join(binaryDir, "tailscale");
-  await fs.writeFile(
-    binaryPath,
-    `#!/bin/sh
+  try {
+    const binaryPath = path.join(binaryDir, "tailscale");
+    await fs.writeFile(
+      binaryPath,
+      `#!/bin/sh
 if [ "$1" = "--version" ]; then
   echo "qa-tailscale 1.0"
   exit 0
 fi
 echo '{"UserProfile":{"LoginName":"operator@example.com","DisplayName":"Operator"}}'
 `,
-    { encoding: "utf8", mode: 0o755 },
-  );
-  return {
-    binaryDir,
-    cleanup: async () => await fs.rm(binaryDir, { force: true, recursive: true }),
-  };
+      { encoding: "utf8", mode: 0o755 },
+    );
+    return {
+      binaryDir,
+      cleanup: async () => await fs.rm(binaryDir, { force: true, recursive: true }),
+    };
+  } catch (error) {
+    await fs.rm(binaryDir, { force: true, recursive: true });
+    throw error;
+  }
 }
 
 async function runGatewayTurn(
@@ -545,6 +550,17 @@ function findRunExecutions(
   }
 }
 
+function assertPersistedContextBytes(
+  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
+  runId: string,
+  expectedContext: string,
+): void {
+  const rows = findRunExecutions(gateway, runId);
+  if (rows.length !== 1 || rows[0]?.context_json !== expectedContext) {
+    throw new Error(`RPC context bytes differ from persisted bytes: ${runId}`);
+  }
+}
+
 async function runRepeatedIngressTurns(
   gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
   repoRoot: string,
@@ -590,9 +606,10 @@ async function runRepeatedIngressTurns(
 
 async function runProof(options: ProducerOptions): Promise<string> {
   const mock = await startQaMockOpenAiServer();
-  const fakeTailscale = await createFakeTailscaleBinary();
+  let fakeTailscale: Awaited<ReturnType<typeof createFakeTailscaleBinary>> | undefined;
   let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
   try {
+    fakeTailscale = await createFakeTailscaleBinary();
     gateway = await startQaGatewayChild({
       repoRoot: options.repoRoot,
       useRepoCli: true,
@@ -638,6 +655,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
     ) as AuditRunInspectResult;
     assertJsonProjection(before, runId);
     const beforeContext = normalizedContextJson(before);
+    assertPersistedContextBytes(gateway, runId, beforeContext);
 
     const profilelessSessionKey = `agent:qa:i1-profileless-${randomUUID()}`;
     const profilelessStarted = (await gateway.call("agent", {
@@ -736,6 +754,8 @@ async function runProof(options: ProducerOptions): Promise<string> {
     });
     const profilelessContext = normalizedContextJson(profilelessBefore);
     const profiledContext = normalizedContextJson(profiledBefore);
+    assertPersistedContextBytes(gateway, profilelessRunId, profilelessContext);
+    assertPersistedContextBytes(gateway, profiledRunId, profiledContext);
 
     const listed = (await gateway.call("sessions.list", {})) as {
       sessions?: Array<{
@@ -901,11 +921,15 @@ async function runProof(options: ProducerOptions): Promise<string> {
               contextSha256: sha256(profilelessContext),
             },
           },
-          repeatedRunId,
-          repeatedExecutions: repeatedRows.map((row) => ({
-            executionId: row.execution_id,
-            contextId: row.context_id,
-          })),
+          ...(!options.i1Only
+            ? {
+                repeatedRunId,
+                repeatedExecutions: repeatedRows.map((row) => ({
+                  executionId: row.execution_id,
+                  contextId: row.context_id,
+                })),
+              }
+            : {}),
           coverage: before.coverage,
           decision: before.decisions[0]?.decision,
           contextSha256: sha256(beforeContext),
@@ -927,11 +951,14 @@ async function runProof(options: ProducerOptions): Promise<string> {
       )}\n`,
       "utf8",
     );
-    return `local run=${runId}; profiled Gateway run=${profiledRunId}; profileless Gateway run=${profilelessRunId}; repeated run=${repeatedRunId} executions=${repeatedRows.map((row) => row.execution_id).join(",")}; Gateway pid=${gateway.pid ?? "unknown"}; text+JSON exact selection passed before/after replacement; normalized context sha256=${sha256(beforeContext)}`;
+    const repeatedDetails = options.i1Only
+      ? "repeated-execution checks skipped by --i1-only"
+      : `repeated run=${repeatedRunId} executions=${repeatedRows.map((row) => row.execution_id).join(",")}; exact selection passed`;
+    return `local run=${runId}; profiled Gateway run=${profiledRunId}; profileless Gateway run=${profilelessRunId}; ${repeatedDetails}; Gateway pid=${gateway.pid ?? "unknown"}; text+JSON and persisted bytes passed before/after replacement; normalized context sha256=${sha256(beforeContext)}`;
   } finally {
     await gateway?.stop().catch(() => undefined);
     await mock.stop();
-    await fakeTailscale.cleanup();
+    await fakeTailscale?.cleanup();
   }
 }
 

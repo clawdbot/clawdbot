@@ -3,7 +3,6 @@ import type {
   SessionCreatedVia,
 } from "../../config/sessions/session-entry-provenance.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
-import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
 
 export type TrustedSessionCreation = {
   via: SessionCreatedVia;
@@ -52,19 +51,12 @@ export function resolveOperatorSessionCreation(
       inheritedToolPolicy: agentRuntimeIdentity.sessionSpawnContext.inheritedToolPolicy,
     };
   }
-  const invoker = getGatewayLocalUserIngress(client)?.facts.invoker;
-  // Session provenance keeps only the durable profile id. The optional display
-  // label stays transient unless execution-identity auditing is explicitly enabled.
+  const profileId = client?.authenticatedUserProfile?.profileId;
+  // Profile linking can canonicalize this id after connection attach, so session
+  // ownership follows the live trusted profile while audit keeps its frozen facts.
   return {
     via: "operator",
-    ...(invoker?.state === "present" && invoker.kind === "person"
-      ? {
-          actor: {
-            type: "human" as const,
-            id: invoker.rawPrincipalRef,
-          },
-        }
-      : {}),
+    ...(profileId ? { actor: { type: "human" as const, id: profileId } } : {}),
   };
 }
 
