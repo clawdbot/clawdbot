@@ -200,14 +200,17 @@ export function handlePortalProxyRequest(params: {
 
   const headers = proxyHeaders(req.headers);
   const originalHost = req.headers.host;
-  headers.host = `127.0.0.1:${target.targetPort}`;
+  headers.host = `localhost:${target.targetPort}`;
   headers["x-forwarded-for"] = req.socket.remoteAddress ?? "";
   headers["x-forwarded-proto"] = tls ? "https" : "http";
   if (originalHost) {
     headers["x-forwarded-host"] = originalHost;
   }
+  // Dial "localhost", not a fixed loopback literal: Node >=17 dev servers (Vite,
+  // Next.js) often bind ::1 only, and family autoselection reaches either stack.
   const proxyReq = requestHttp({
-    hostname: "127.0.0.1",
+    hostname: "localhost",
+    autoSelectFamily: true,
     port: target.targetPort,
     method: req.method,
     path: authorization.requestPath,
@@ -257,7 +260,7 @@ function websocketHeaders(req: IncomingMessage, targetPort: number, requestPath:
       lines.push(`${normalized}: ${item}`);
     }
   }
-  lines.push(`host: 127.0.0.1:${targetPort}`, "", "");
+  lines.push(`host: localhost:${targetPort}`, "", "");
   return lines.join("\r\n");
 }
 
@@ -283,7 +286,12 @@ export function handlePortalProxyUpgrade(params: {
     return;
   }
 
-  const targetSocket: Socket = net.connect({ host: "127.0.0.1", port: target.targetPort });
+  // Same localhost/dual-stack contract as the HTTP path above.
+  const targetSocket: Socket = net.connect({
+    host: "localhost",
+    autoSelectFamily: true,
+    port: target.targetPort,
+  });
   upgradedSockets.add(socket);
   upgradedSockets.add(targetSocket);
   const release = (stream: Duplex) => upgradedSockets.delete(stream);

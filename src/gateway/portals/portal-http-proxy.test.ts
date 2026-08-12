@@ -163,7 +163,7 @@ describe("portal HTTP proxy", () => {
     // Node may add its own connection-local Keep-Alive header; the upstream value must not pass.
     expect(result.headers["keep-alive"]).not.toBe("upstream-secret=17");
     expect(received).toMatchObject({
-      host: `127.0.0.1:${targetPort}`,
+      host: `localhost:${targetPort}`,
       cookie: "app=ok; theme=dark",
       proto: "http",
       forwardedHost: "portal.example:9999",
@@ -216,6 +216,31 @@ describe("portal HTTP proxy", () => {
     expect(result.status).toBe(502);
     expect(result.body).toContain(`Waiting for the app on port ${port}…`);
     expect(result.body).toContain('http-equiv="refresh" content="2"');
+  });
+
+  it("reaches IPv6-only targets through the localhost dual-stack dial", async () => {
+    // Node >=17 dev servers (Vite, Next.js) often bind ::1 only on "localhost".
+    const v6Target = createServer((req, res) => {
+      res.statusCode = 200;
+      res.end("v6 proxied");
+    });
+    await new Promise<void>((resolve, reject) => {
+      v6Target.once("error", reject);
+      v6Target.listen(0, "::1", () => resolve());
+    });
+    try {
+      const v6Port = (v6Target.address() as AddressInfo).port;
+      const portal = await portalService().open({ targetPort: v6Port });
+      const result = await httpCall({
+        port: portal.listenPort,
+        path: `/?${portal.tokenQuery}`,
+      });
+      expect(result).toMatchObject({ status: 200, body: "v6 proxied" });
+    } finally {
+      await new Promise<void>((resolve) => {
+        v6Target.close(() => resolve());
+      });
+    }
   });
 
   it("splices WebSockets and destroys upgraded sockets and listeners on close", async () => {
