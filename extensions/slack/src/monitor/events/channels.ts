@@ -32,6 +32,7 @@ export function registerSlackChannelEvents(params: {
   }) => {
     if (
       !ctx.isChannelAllowed({
+        teamId: paramsLocal.eventScope?.teamId ?? ctx.teamId,
         channelId: paramsLocal.channelId,
         channelName: paramsLocal.channelName,
         channelType: "channel",

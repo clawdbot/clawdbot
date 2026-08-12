@@ -521,6 +521,8 @@ async function resolveSlackConversationContext(params: {
   const isRoomish = isRoom || isGroupDm;
   const channelConfig = isRoom
     ? resolveSlackChannelConfig({
+        teamId: params.eventScope?.teamId ?? ctx.teamId,
+        allowUnscoped: ctx.installationIdentity?.kind !== "enterprise",
         channelId: message.channel,
         channelName,
         channels: ctx.channelsConfig,
@@ -585,6 +587,7 @@ async function authorizeSlackInboundMessage(params: {
 
   if (
     !ctx.isChannelAllowed({
+      teamId: params.eventScope?.teamId ?? ctx.teamId,
       channelId: message.channel,
       channelName,
       channelType: resolvedChannelType,
@@ -1075,6 +1078,7 @@ export async function prepareSlackMessage(params: {
     isRoom && Array.isArray(channelConfig?.users) && channelConfig.users.length > 0;
   const messageIngress = await resolveSlackCommandIngress({
     ctx,
+    teamId: opts.eventScope?.teamId ?? ctx.teamId,
     senderId,
     senderName: senderNameForAuth,
     channelType: conversation.resolvedChannelType ?? "channel",
@@ -1693,7 +1697,7 @@ export async function prepareSlackMessage(params: {
   const pinnedMainDmOwner = isDirectMessage
     ? resolvePinnedMainDmOwnerFromAllowlist({
         dmScope: cfg.session?.dmScope,
-        allowFrom: ctx.allowFrom,
+        allowFrom: allowFromLower,
         normalizeEntry: normalizeSlackAllowOwnerEntry,
       })
     : null;
