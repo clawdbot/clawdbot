@@ -4,7 +4,7 @@ import type {
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveXaiCatalogEntry } from "./model-definitions.js";
-import { isXaiFrontierModelId, normalizeXaiModelId } from "./model-id.js";
+import { isXaiFrontierModelId, isXaiGrok46ModelId, normalizeXaiModelId } from "./model-id.js";
 import { isXaiProviderId } from "./provider-id.js";
 
 export function resolveThinkingProfile(
@@ -16,8 +16,11 @@ export function resolveThinkingProfile(
   }
   const modelId = normalizeXaiModelId(ctx.modelId.trim().toLowerCase());
   if (isXaiFrontierModelId(modelId)) {
+    const levels: ProviderThinkingProfile["levels"] = isXaiGrok46ModelId(modelId)
+      ? [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }]
+      : [{ id: "low" }, { id: "medium" }, { id: "high" }];
     return {
-      levels: [{ id: "low" }, { id: "medium" }, { id: "high" }],
+      levels,
       defaultLevel: "high",
     };
   }

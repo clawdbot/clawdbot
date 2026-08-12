@@ -372,6 +372,30 @@ describe("xai provider plugin", () => {
     );
   });
 
+  it("preserves Grok 4.6 xhigh reasoning through OAuth auto", async () => {
+    mockXaiRuntimeOAuth();
+    stubXaiFetch((url) =>
+      url.endsWith("/settings")
+        ? Response.json({ default_model: "grok-4.6" })
+        : Response.json({
+            data: [{ id: "grok-4.6", api_backend: "responses" }],
+          }),
+    );
+    const { provider, result } = await runXaiCatalog();
+    const auto = result.models.find((model) => model.id === "auto");
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "xai",
+      modelId: "auto",
+      model: { ...auto, provider: "xai" },
+    } as never);
+
+    expect(normalized?.id).toBe("grok-4.6");
+    expect(normalized?.thinkingLevelMap?.xhigh).toBe("xhigh");
+    expect(normalized?.compat).toMatchObject({
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+    });
+  });
+
   it("uses runtime OAuth profiles when xAI catalog auth resolution is empty", async () => {
     mockXaiRuntimeOAuth();
     stubXaiFetch(() =>

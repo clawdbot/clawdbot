@@ -1,10 +1,17 @@
 // Xai plugin module implements model id behavior.
 export const XAI_OAUTH_AUTO_MODEL_ID = "auto";
 
+export function isXaiGrok46ModelId(id: string): boolean {
+  const normalized = normalizeXaiModelId(id.trim().toLowerCase());
+  return normalized === "grok-4.6" || normalized.startsWith("grok-4.6-");
+}
+
 export function isXaiFrontierModelId(id: string): boolean {
   const normalized = normalizeXaiModelId(id.trim().toLowerCase());
-  return ["grok-4.6", "grok-4.5"].some(
-    (prefix) => normalized === prefix || normalized.startsWith(`${prefix}-`),
+  return (
+    isXaiGrok46ModelId(normalized) ||
+    normalized === "grok-4.5" ||
+    normalized.startsWith("grok-4.5-")
   );
 }
 

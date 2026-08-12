@@ -27,11 +27,9 @@ describe("xai provider thinking policy", () => {
   });
 
   it.each([
-    ["xai", "grok-4.6"],
     ["xai", "grok-4.5"],
     ["xai", "grok-4.5-latest"],
     ["xai", "grok-build-latest"],
-    ["x-ai", "grok-4.6"],
     ["x-ai", "grok-4.5"],
     ["x-ai", "grok-4.5-latest"],
     ["x-ai", "grok-build-latest"],
@@ -43,6 +41,13 @@ describe("xai provider thinking policy", () => {
 
     expect(profile).toEqual({
       levels: [{ id: "low" }, { id: "medium" }, { id: "high" }],
+      defaultLevel: "high",
+    });
+  });
+
+  it.each(["xai", "x-ai"])("exposes Grok 4.6 xhigh reasoning for %s", (provider) => {
+    expect(resolveThinkingProfile({ provider, modelId: "grok-4.6" })).toEqual({
+      levels: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }],
       defaultLevel: "high",
     });
   });
