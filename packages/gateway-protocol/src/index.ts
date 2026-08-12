@@ -52,6 +52,16 @@ export { PortalChangedEventSchema, PortalSummarySchema } from "./schema/portals.
 export { PortalListParamsSchema, PortalListResultSchema } from "./schema/portals.js";
 export { PortalOpenParamsSchema, PortalOpenResultSchema } from "./schema/portals.js";
 export { PortalCloseParamsSchema, PortalCloseResultSchema } from "./schema/portals.js";
+export type {
+  PortalChangedEvent,
+  PortalCloseParams,
+  PortalCloseResult,
+  PortalListParams,
+  PortalListResult,
+  PortalOpenParams,
+  PortalOpenResult,
+  PortalSummary,
+} from "./schema/portals.js";
 // Explicit schema exports keep public protocol changes reviewable.
 export {
   isCloudWorkerPlacementState,
