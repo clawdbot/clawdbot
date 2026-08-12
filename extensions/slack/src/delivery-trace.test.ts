@@ -164,7 +164,8 @@ type SlackTraceScenarioName =
   | "stream-stop-first-network-call"
   | "final-blocks-and-text"
   | "cancel-mid-stream"
-  | "preview-edit-fallback";
+  | "preview-edit-fallback"
+  | "progress-session-card";
 
 const NATIVE_SCENARIOS = new Set<SlackTraceScenarioName>([
   "streaming-happy-native",
@@ -252,6 +253,13 @@ const slackTraceScenarios: Record<SlackTraceScenarioName, readonly DeliveryTrace
     { kind: "partial", text: PREVIEW_PARTIAL_TWO },
     { kind: "advance", ms: 1100 },
     { kind: "final", text: PREVIEW_FINAL_TEXT },
+    { kind: "idle" },
+  ],
+  "progress-session-card": [
+    { kind: "reply-start" },
+    { kind: "tool-progress", name: "read", phase: "start" },
+    { kind: "advance", ms: 2000 },
+    { kind: "final", text: "The session card is complete." },
     { kind: "idle" },
   ],
 };
@@ -421,7 +429,18 @@ function createRecordingSlackClient(): Record<string, unknown> {
 }
 
 function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedSlackMessage {
-  const cfg = { channels: { slack: { enabled: true } } } as OpenClawConfig;
+  const progressCard = scenario === "progress-session-card";
+  const cfg = {
+    channels: { slack: { enabled: true } },
+    ...(progressCard
+      ? {
+          gateway: {
+            publicOrigin: "https://team.openclaw.ai",
+            controlUi: { basePath: "/openclaw" },
+          },
+        }
+      : {}),
+  } as OpenClawConfig;
   const client = traceState.client;
   if (!client) {
     throw new Error("trace Slack client not initialized");
@@ -469,9 +488,14 @@ function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedS
     },
     account: {
       accountId: "default",
-      config: {
-        streaming: { mode: "partial", nativeTransport: NATIVE_SCENARIOS.has(scenario) },
-      },
+      config: progressCard
+        ? {}
+        : {
+            streaming: {
+              mode: "partial",
+              nativeTransport: NATIVE_SCENARIOS.has(scenario),
+            },
+          },
     },
     message: {
       type: "message",

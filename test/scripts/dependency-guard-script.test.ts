@@ -380,6 +380,7 @@ describe("dependency guard script", () => {
     const trustedAuthors = dependencyGuardCommentAuthors(
       "github-actions[bot], openclaw-autoscrub[bot]",
     );
+    expect(dependencyGuardCommentAuthors(undefined)).toEqual(new Set(["github-actions[bot]"]));
 
     expect(
       isDependencyGuardMarkerComment(

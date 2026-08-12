@@ -134,6 +134,7 @@ import {
 } from "./state-migrations.session-store.js";
 import {
   autoMigrateLegacyStateDir,
+  migrateLegacyProfileWorkspace,
   resetAutoMigrateLegacyTaskStateSidecarsForTest,
 } from "./state-migrations.state-dir.js";
 import {
@@ -1335,6 +1336,10 @@ export async function autoMigrateLegacyState(params: {
       ...(stateDirResult.notices?.length ? { notices: stateDirResult.notices } : {}),
     };
   }
+  const profileWorkspace =
+    params.doctorOnlyStateMigrations === true
+      ? migrateLegacyProfileWorkspace({ env, homedir })
+      : { changes: [], warnings: [] };
   const pluginDoctorConfig = params.pluginDoctorConfig ?? params.cfg;
   const configMachineState = migrateLegacyConfigMachineState({
     config: pluginDoctorConfig,
@@ -1431,6 +1436,7 @@ export async function autoMigrateLegacyState(params: {
   });
   const initialMigrationSources = [
     stateDirResult,
+    profileWorkspace,
     stateSchema,
     mediaPersistence,
     configMachineState,

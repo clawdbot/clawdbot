@@ -21,6 +21,17 @@ export type ExtensionWildcardReexportPolicy = {
   remediationMessage: string;
 };
 
+async function isFileFollowingLinks(filePath: string): Promise<boolean> {
+  try {
+    return (await fs.stat(filePath)).isFile();
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
 async function listGuardedFiles(policy: ExtensionWildcardReexportPolicy) {
   const files: string[] = [];
   const recursive = policy.fileScope === "all-extension-api-files";
@@ -39,7 +50,12 @@ async function listGuardedFiles(policy: ExtensionWildcardReexportPolicy) {
         await visit(filePath, depth + 1);
         continue;
       }
-      if ((recursive || depth === 1) && entry.isFile() && guardedFileNames.has(entry.name)) {
+      if (!guardedFileNames.has(entry.name) || (!recursive && depth !== 1)) {
+        continue;
+      }
+      // The root-only SDK guard historically follows API barrel symlinks; the
+      // recursive local-barrel guard intentionally retains Dirent semantics.
+      if (recursive ? entry.isFile() : await isFileFollowingLinks(filePath)) {
         files.push(filePath);
       }
     }

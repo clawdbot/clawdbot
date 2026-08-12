@@ -3947,6 +3947,8 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(root.ctxPayload.SessionKey).toBe(expectedSessionKey);
     expect(followUp.ctxPayload.SessionKey).toBe(expectedSessionKey);
     expect(new Set([root.ctxPayload.SessionKey, followUp.ctxPayload.SessionKey]).size).toBe(1);
+    expect(root.ctxPayload).not.toHaveProperty("SystemEventSessionKey");
+    expect(followUp.ctxPayload).not.toHaveProperty("SystemEventSessionKey");
     if (expectedAgentId) {
       expect(root.route.agentId).toBe(expectedAgentId);
     }

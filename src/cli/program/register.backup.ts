@@ -9,6 +9,7 @@ import {
   backupGitRestoreCommand,
   backupGitVerifyCommand,
 } from "../../commands/backup-git.js";
+import { backupRestoreCommand } from "../../commands/backup-restore.js";
 import { backupDisableCommand, backupEnableCommand } from "../../commands/backup-schedule.js";
 import {
   backupSqliteCreateCommand,
@@ -27,7 +28,7 @@ import { formatHelpExamples } from "../help-format.js";
 export function registerBackupCommand(program: Command) {
   const backup = program
     .command("backup")
-    .description("Create and verify backup archives and SQLite snapshots")
+    .description("Create, verify, and restore backup archives and SQLite snapshots")
     .addHelpText(
       "after",
       () =>
@@ -102,6 +103,35 @@ export function registerBackupCommand(program: Command) {
       await runCommandWithRuntime(defaultRuntime, async () => {
         await backupVerifyCommand(defaultRuntime, {
           archive: archive as string,
+          json: Boolean(opts.json),
+        });
+      });
+    });
+
+  backup
+    .command("restore <archive>")
+    .description("Restore a verified backup archive to a fresh staging directory")
+    .requiredOption("--target <dir>", "Fresh target directory; non-empty directories are refused")
+    .option("--json", "Output JSON", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          [
+            "openclaw backup restore ~/Backups/latest.tar.gz --target ./restored-openclaw",
+            "Verify, then extract the whole archive into a fresh staging directory.",
+          ],
+          [
+            "openclaw backup restore ~/Backups/latest.tar.gz --target ./restored-openclaw --json",
+            "Emit machine-readable restore details and rollback warnings.",
+          ],
+        ])}`,
+    )
+    .action(async (archive, opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await backupRestoreCommand(defaultRuntime, {
+          archive: archive as string,
+          target: opts.target as string,
           json: Boolean(opts.json),
         });
       });

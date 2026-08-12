@@ -1,5 +1,5 @@
 // Model Catalog Core module implements model catalog refs behavior.
-import { normalizeLowercaseStringOrEmpty } from "./provider-id.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 // Stable model catalog ref and merge-key builders.
 

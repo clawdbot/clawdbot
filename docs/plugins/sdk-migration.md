@@ -202,23 +202,19 @@ Audit the current migration queue with `pnpm plugins:boundary-report`:
 | ------------------------------------------------------- | -------------------------------------------------------------------------- |
 | `--summary` (or `pnpm plugins:boundary-report:summary`) | Compact counts instead of full detail.                                     |
 | `--json`                                                | Machine-readable report.                                                   |
-| `--owner <id>`                                          | Filter to one plugin or compatibility owner.                               |
-| `--fail-on-cross-owner`                                 | Exit non-zero on cross-owner reserved SDK imports.                         |
+| `--owner <id>`                                          | Filter to one compatibility owner.                                         |
 | `--fail-on-eligible-compat`                             | Exit non-zero on or after a deprecated compat record's `removeAfter` date. |
-| `--fail-on-unclassified-unused-reserved`                | Exit non-zero on unused reserved SDK shims.                                |
 
-`pnpm plugins:boundary-report:ci` runs with all three fail flags. Deprecated
-records normally have an explicit `removeAfter` date. A contract tied to a
-version boundary instead declares a `removalGate`; `next-plugin-sdk-major` is an
-approved major-version gate, not a pending owner decision, and is never
-date-eligible. A record with neither field appears as `no-date` and remains
-ineligible until its owner publishes a gate. The report displays either the date
-or named gate, counts local code/doc references, lists `removal-pending` records
-with their blockers and surface-token reader references, surfaces cross-owner
-reserved SDK imports, and summarizes the private memory-host SDK bridge. Those
-reader references are triage signals, not published-artifact proof. Reserved SDK
-subpaths must have tracked owner usage; unused reserved exports should be removed
-from the public SDK.
+`pnpm plugins:boundary-report:ci` runs with the compatibility fail flag.
+Deprecated records normally have an explicit `removeAfter` date. A contract
+tied to a version boundary instead declares a `removalGate`;
+`next-plugin-sdk-major` is an approved major-version gate, not a pending owner
+decision, and is never date-eligible. A record with neither field appears as
+`no-date` and remains ineligible until its owner publishes a gate. The report
+displays either the date or named gate, counts local code/doc references, lists
+`removal-pending` records with their blockers and surface-token reader
+references, and summarizes the private memory-host SDK bridge. Those reader
+references are triage signals, not published-artifact proof.
 
 ### Media legacy projection
 

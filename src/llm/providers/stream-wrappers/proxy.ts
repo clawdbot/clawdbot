@@ -1,3 +1,4 @@
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 // Proxy stream wrapper applies provider-specific wrappers around base stream functions.
 import {
   normalizeOptionalLowercaseString,
@@ -7,7 +8,6 @@ import { resolveProviderRequestPolicy } from "../../../agents/provider-attributi
 import { resolveProviderRequestPolicyConfig } from "../../../agents/provider-request-config.js";
 import type { StreamFn } from "../../../agents/runtime/index.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
-import { parseStrictFiniteNumber } from "../../../infra/parse-finite-number.js";
 import { normalizeOpenAICompatibleReasoningPayload } from "../../../plugin-sdk/provider-stream-shared.js";
 import { parseBooleanValue } from "../../../utils/boolean.js";
 import { streamSimple } from "../../stream.js";

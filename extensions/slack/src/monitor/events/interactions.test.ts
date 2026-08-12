@@ -2142,6 +2142,7 @@ describe("registerSlackInteractionEvents", () => {
 
   it.each([
     { name: "current", actionId: "openclaw:reply_link:1:1", value: undefined },
+    { name: "session", actionId: "openclaw:session_link", value: undefined },
     {
       name: "legacy",
       actionId: "openclaw:reply_button:1:1",

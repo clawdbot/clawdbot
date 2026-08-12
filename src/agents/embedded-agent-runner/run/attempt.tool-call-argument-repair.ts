@@ -2,6 +2,7 @@
  * Repairs malformed tool-call arguments in embedded-agent stream results.
  */
 import { extractBalancedJsonPrefix } from "@openclaw/normalization-core";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { normalizeProviderId } from "../../model-selection.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
@@ -151,17 +152,6 @@ type ToolCallRepairParsedObject = {
   args: Record<string, unknown>;
   endIndex: number;
 };
-
-function parseUsableObjectJson(raw: string): Record<string, unknown> | undefined {
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 function findAsciiStringEnd(raw: string, startIndex: number): number {
   let escaped = false;
@@ -492,7 +482,7 @@ function tryExtractUsableToolCallArgumentsFromJson(
     return undefined;
   }
 
-  const parsedExtracted = parseUsableObjectJson(extracted.json);
+  const parsedExtracted = safeParseJsonRecord(extracted.json);
   if (!parsedExtracted) {
     return undefined;
   }
@@ -549,7 +539,7 @@ function tryExtractUsableToolCallArguments(
   if (!raw.trim()) {
     return undefined;
   }
-  const parsedRaw = parseUsableObjectJson(raw);
+  const parsedRaw = safeParseJsonRecord(raw);
   if (parsedRaw) {
     return {
       args: parsedRaw,

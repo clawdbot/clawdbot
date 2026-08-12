@@ -1995,12 +1995,30 @@ openclaw-session-discussion {
 }
 
 .session-diff__section-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
   padding: 11px 8px 6px;
+  border: 0;
+  background: transparent;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
   font-weight: 650;
   letter-spacing: 0.08em;
+  text-align: left;
   text-transform: uppercase;
+  cursor: var(--cursor-action);
+}
+
+.session-diff__section-title:hover,
+.session-diff__section-title:focus-visible {
+  color: var(--text);
+}
+
+.session-diff__section-title svg {
+  width: 12px;
+  height: 12px;
 }
 
 .session-diff__files {
@@ -2188,6 +2206,55 @@ openclaw-session-discussion {
   padding-right: 8px;
 }
 
+/* Skip rows carry 18px expander buttons; the shared baseline row alignment
+   derives the strip's baseline from an icon-only button and shears the text
+   upward, so center these rows instead (tool cards keep baseline rows). */
+.session-diff__file .chat-diff__row--skip {
+  align-items: center;
+}
+
+.session-diff__file .chat-diff__row--skip .chat-diff__text {
+  display: inline-flex;
+  align-items: center;
+}
+
+.session-diff__gap-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* Grid, not flex: Chromium's flex layout on <button> pins the label's line box
+   to the button's vertical center, painting the count text into the row above. */
+.session-diff__gap-controls button {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: var(--cursor-action);
+}
+
+.session-diff__gap-controls button:hover,
+.session-diff__gap-controls button:focus-visible {
+  background: color-mix(in srgb, var(--muted) 16%, transparent);
+  color: var(--text);
+}
+
+.session-diff__gap-controls button svg {
+  width: 12px;
+  height: 12px;
+}
+
+.session-diff__gap-controls .session-diff__gap-count {
+  padding-inline: 5px;
+}
+
 .session-diff--wrap .chat-diff__row {
   min-width: 0;
 }
@@ -2277,6 +2344,8 @@ openclaw-session-discussion {
 }
 
 .session-diff-split__row--skip {
+  display: flex;
+  align-items: center;
   padding-left: 58px;
   color: var(--muted);
   user-select: none;

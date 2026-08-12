@@ -160,7 +160,9 @@ describe("CI changed Node test plan", () => {
       ]),
     ).toBe(true);
     expect(
-      hasSqliteSessionLifecycleAffectingChange(["src/media-understanding/provider-id.ts"]),
+      hasSqliteSessionLifecycleAffectingChange([
+        "packages/media-understanding-common/src/provider-id.ts",
+      ]),
     ).toBe(false);
     expect(hasSqliteSessionLifecycleAffectingChange(["src/agents/model-auth.ts"])).toBe(false);
     expect(hasSqliteSessionLifecycleAffectingChange(["extensions/discord/src/index.ts"])).toBe(

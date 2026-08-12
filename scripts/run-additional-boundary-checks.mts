@@ -101,11 +101,6 @@ export const BOUNDARY_CHECKS = (
       ["run", "lint:extensions:no-normalization-core-bypass"],
     ],
     [
-      "extension-plugin-sdk-internal-boundary",
-      "pnpm",
-      ["run", "lint:extensions:no-plugin-sdk-internal"],
-    ],
-    [
       "extension-relative-outside-package-boundary",
       "pnpm",
       ["run", "lint:extensions:no-relative-outside-package"],

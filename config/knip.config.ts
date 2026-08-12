@@ -571,6 +571,7 @@ const config = {
         "src/boolean-coercion.ts!",
         "src/error-coercion.ts!",
         "src/expect.ts!",
+        "src/json-coercion.ts!",
         "src/number-coercion.ts!",
         "src/phone-presentation.ts!",
         "src/record-coerce.ts!",

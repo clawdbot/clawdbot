@@ -1,8 +1,7 @@
-import { formatChannelProgressDraftText } from "openclaw/plugin-sdk/channel-outbound";
 // Slack tests cover progress blocks plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
-  buildSlackProgressDraftBlocks,
+  buildSlackProgressCardBlocks,
   buildSlackProgressStreamCompletionChunks,
   buildSlackProgressStreamStartChunks,
   buildSlackProgressStreamUpdateChunks,
@@ -50,27 +49,6 @@ function contentTaskId(prefix: string) {
   return expect.stringMatching(new RegExp(`^${prefix}_[a-f0-9]{8}_1$`, "u"));
 }
 
-function legacyHeadingBlock(text: string) {
-  return {
-    type: "section",
-    text: { type: "mrkdwn", text },
-  };
-}
-
-function legacyLineBlock(title: string, detail: string) {
-  return {
-    type: "section",
-    fields: [
-      { type: "mrkdwn", text: title },
-      { type: "mrkdwn", text: detail },
-    ],
-  };
-}
-
-function expectLegacyLineBlock(block: unknown, title: string, detail: string) {
-  expect(block).toEqual(legacyLineBlock(title, detail));
-}
-
 function expectTaskUpdate(task: unknown, fields: { id: unknown; title: string; status: string }) {
   expect(task).toEqual({
     type: "task_update",
@@ -80,158 +58,96 @@ function expectTaskUpdate(task: unknown, fields: { id: unknown; title: string; s
   });
 }
 
-describe("buildSlackProgressDraftBlocks", () => {
-  it("keeps a typed checklist below Slack status draft text and work lines", () => {
-    expect(
-      formatChannelProgressDraftText({
-        entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-        lines: [toolLine("read the config")],
-        narration: "Implementing the change.",
-        plan: [
-          { step: "Inspect", status: "completed" },
-          { step: "Patch", status: "in_progress" },
-          { step: "Test", status: "pending" },
-        ],
-      }),
-    ).toBe(
-      "Shelling\n\nImplementing the change.\n\n🛠️ read the config\n✅ Inspect\n▸ Patch\n▢ Test",
-    );
-  });
-
-  it("keeps legacy rich draft rendering as section field blocks", () => {
-    expect(
-      buildSlackProgressDraftBlocks({
-        label: "Shelling...",
-        lines: [toolLine("run tests")],
-      }),
-    ).toEqual([legacyHeadingBlock("*Shelling...*"), legacyLineBlock("🛠️ *Exec*", "run tests")]);
-  });
-
-  it("uses title as the legacy rich draft heading when label is absent", () => {
-    expect(
-      buildSlackProgressDraftBlocks({
-        title: "Shelling...",
-        lines: [toolLine("run tests")],
-      }),
-    ).toEqual([legacyHeadingBlock("*Shelling...*"), legacyLineBlock("🛠️ *Exec*", "run tests")]);
-  });
-
-  it("uses configured max line chars for legacy rich draft details", () => {
-    const blocks = buildSlackProgressDraftBlocks({
-      title: "Shelling...",
-      maxLineChars: 64,
-      lines: [
-        {
-          kind: "tool",
-          icon: "🛠️",
-          label: "Exec",
-          detail: "run tests in /Users/example/Projects/openclaw/packages/very/deep/path/example",
-          text: "🛠️ Exec: run tests in /Users/example/Projects/openclaw/packages/very/deep/path/example",
-        },
+describe("buildSlackProgressCardBlocks", () => {
+  it("renders the working card with narration, plan, one activity block, and live footer", () => {
+    const blocks = buildSlackProgressCardBlocks({
+      state: "working",
+      title: "Implementing",
+      narration: "Checking the workspace.",
+      plan: [
+        { step: "Inspect", status: "completed" },
+        { step: "Patch", status: "in_progress" },
       ],
+      lines: [toolLine("run tests"), itemLine("prepare the workspace", "Preamble")],
+      toolCalls: 3,
+      elapsedSeconds: 12,
+      diffStat: { files: 4, added: 2, removed: 1 },
     });
 
-    expectLegacyLineBlock(
-      blocks?.[1],
-      "🛠️ *Exec*",
-      "run tests in /Users/example/P…aw/packages/very/deep/path/example",
-    );
-  });
-
-  it("keeps completed and failed statuses in legacy rich draft details", () => {
-    const blocks = buildSlackProgressDraftBlocks({
-      title: "Shelling...",
-      lines: [
-        {
-          kind: "command-output",
-          label: "Exec",
-          detail: "command finished",
-          status: "completed",
-          text: "🛠️ Exec: completed",
-          toolName: "exec",
-        },
-        {
-          kind: "command-output",
-          label: "Exec",
-          detail: "command failed",
-          status: "exit 1",
-          text: "🛠️ Exec: exit 1",
-          toolName: "exec",
-        },
-      ],
-    });
-
-    expectLegacyLineBlock(blocks?.[1], "• *Exec*", "command finished");
-    expectLegacyLineBlock(blocks?.[2], "• *Exec*", "command failed · exit 1");
-  });
-
-  it("keeps newest rich progress lines when capping legacy draft blocks", () => {
-    const blocksWithLabel = buildSlackProgressDraftBlocks({
-      title: "Shelling...",
-      lines: Array.from({ length: 60 }, (_value, index) => progressLine(index)),
-    });
-    expect(blocksWithLabel).toHaveLength(50);
-    // The label block survives capping; tool lines yield the remaining budget.
-    expect(JSON.stringify(blocksWithLabel?.[0])).toContain("Shelling...");
-    expectLegacyLineBlock(blocksWithLabel?.[1], "🛠️ *Exec 11*", "run 11");
-    expectLegacyLineBlock(blocksWithLabel?.at(-1), "🛠️ *Exec 59*", "run 59");
-
-    const blocksWithoutTitle = buildSlackProgressDraftBlocks({
-      lines: Array.from({ length: 60 }, (_value, index) => progressLine(index)),
-    });
-    expect(blocksWithoutTitle).toHaveLength(50);
-    expectLegacyLineBlock(blocksWithoutTitle?.[0], "🛠️ *Exec 10*", "run 10");
-    expectLegacyLineBlock(blocksWithoutTitle?.at(-1), "🛠️ *Exec 59*", "run 59");
-  });
-
-  it("renders legacy rich draft lines without a heading when no label or title is provided", () => {
-    expect(
-      buildSlackProgressDraftBlocks({
-        lines: [toolLine("run tests")],
-      }),
-    ).toEqual([legacyLineBlock("🛠️ *Exec*", "run tests")]);
-  });
-
-  it("uses a blank legacy rich draft detail when structured detail is absent", () => {
-    expect(
-      buildSlackProgressDraftBlocks({
-        lines: [itemLine("prepare the workspace", "Preamble"), toolLine("run tests")],
-      }),
-    ).toEqual([legacyLineBlock("• *Preamble*", "—"), legacyLineBlock("🛠️ *Exec*", "run tests")]);
-  });
-
-  it("renders authored commentary Markdown in legacy rich draft details", () => {
-    expect(
-      buildSlackProgressDraftBlocks({
-        lines: [
-          {
-            id: "commentary:preamble-1",
-            kind: "item",
-            label: "Commentary",
-            text: "💬 Rendering the `sample-widget` fixture on **example.test**.",
-            prefix: false,
-          },
-          {
-            id: "reasoning",
-            kind: "item",
-            label: "Reasoning",
-            text: "_Reading the Slack handler_",
-            prefix: false,
-          },
-        ],
-      }),
-    ).toEqual([
-      legacyLineBlock("• *Commentary*", "Rendering the `sample-widget` fixture on *example.test*."),
-      legacyLineBlock("• *Reasoning*", "_Reading the Slack handler_"),
+    expect(blocks).toEqual([
+      { type: "section", text: { type: "mrkdwn", text: "🔄 *Implementing*" } },
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: "_Checking the workspace._" },
+      },
+      { type: "section", text: { type: "mrkdwn", text: "✅ Inspect\n▸ Patch" } },
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: "🛠️ *Exec* — run tests\n• *Preamble* — —" },
+      },
+      {
+        type: "context",
+        elements: [{ type: "mrkdwn", text: "🛠️ 3 tools · 📝 4 files +2 −1 · ⏱ 12s" }],
+      },
     ]);
   });
 
-  it("does not emit legacy rich draft blocks when there are no lines or heading", () => {
-    expect(
-      buildSlackProgressDraftBlocks({
-        lines: [],
-      }),
-    ).toBeUndefined();
+  it.each([
+    { state: "success" as const, icon: "✅" },
+    { state: "error" as const, icon: "❌" },
+  ])(
+    "renders $state terminal cards and gates the session action on public URL",
+    ({ state, icon }) => {
+      const blocks = buildSlackProgressCardBlocks({
+        state,
+        title: "Implementing",
+        lines: [toolLine("run tests")],
+        receiptSummary: "🛠️ 1 tool call · ⏱️ 8s",
+        diffStat: { files: 2, added: 1, removed: 1 },
+        sessionUrl: "https://team.openclaw.ai/openclaw/chat/main",
+      });
+
+      expect(blocks[0]).toEqual({
+        type: "section",
+        text: { type: "mrkdwn", text: `${icon} *Implementing*` },
+      });
+      expect(blocks).toContainEqual({
+        type: "context",
+        elements: [{ type: "mrkdwn", text: "🛠️ 1 tool call · ⏱️ 8s · 📝 2 files +1 −1" }],
+      });
+      expect(blocks.at(-1)).toEqual({
+        type: "actions",
+        elements: [
+          {
+            type: "button",
+            action_id: "openclaw:session_link",
+            text: { type: "plain_text", text: "Open in OpenClaw" },
+            url: "https://team.openclaw.ai/openclaw/chat/main",
+          },
+        ],
+      });
+
+      expect(
+        buildSlackProgressCardBlocks({ state, title: "Implementing", lines: [] }),
+      ).toHaveLength(1);
+    },
+  );
+
+  it("keeps the newest activity rows inside one section and the Slack block budget", () => {
+    const blocks = buildSlackProgressCardBlocks({
+      state: "working",
+      title: "Working",
+      lines: Array.from({ length: 60 }, (_value, index) => progressLine(index)),
+      elapsedSeconds: 1,
+    });
+    const activity = blocks.find(
+      (block) => block.type === "section" && JSON.stringify(block).includes("Exec 59"),
+    );
+
+    expect(blocks.length).toBeLessThanOrEqual(50);
+    expect(activity).toBeDefined();
+    expect(JSON.stringify(activity)).toContain("🛠️ *Exec 59* — run 59");
+    expect(JSON.stringify(activity)).not.toContain("Exec 0");
   });
 });
 
@@ -285,20 +201,6 @@ describe("native Slack progress stream chunks", () => {
       taskUpdate("plan_step_2", "Fix parser bug", "in_progress"),
       taskUpdate("plan_step_3", "Run tests", "pending"),
     ]);
-  });
-
-  it("renders the plan checklist in rich draft blocks", () => {
-    const blocks = buildSlackProgressDraftBlocks({
-      title: "Implementation",
-      lines: [],
-      plan: [
-        { step: "Inspect code", status: "completed" },
-        { step: "Run tests", status: "in_progress" },
-      ],
-    });
-
-    expect(JSON.stringify(blocks)).toContain("✅ Inspect code");
-    expect(JSON.stringify(blocks)).toContain("▸ Run tests");
   });
 
   it("terminalizes orphaned rows when a plan snapshot shrinks", () => {

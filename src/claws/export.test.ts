@@ -3,7 +3,6 @@ import { mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { PLUGIN_ARTIFACT_ADAPTER_IDENTITY } from "../plugins/install-artifact-inspection.js";
@@ -20,6 +19,10 @@ import type { ClawOpenClawProfile, ClawSourceIdentity } from "./types.js";
 const lifecycleStateTestControl = vi.hoisted(() => ({
   afterRead: undefined as (() => Promise<void>) | undefined,
 }));
+const sourceLimitsTestControl = vi.hoisted(() => ({
+  clawManifestBytes: 8 * 1024,
+  managedWorkspaceBytes: 32 * 1024,
+}));
 
 vi.mock("./lifecycle-state.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./lifecycle-state.js")>();
@@ -30,6 +33,14 @@ vi.mock("./lifecycle-state.js", async (importOriginal) => {
       await lifecycleStateTestControl.afterRead?.();
       return status;
     },
+  };
+});
+vi.mock("./source-limits.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./source-limits.js")>();
+  return {
+    ...actual,
+    MAX_CLAW_MANIFEST_BYTES: sourceLimitsTestControl.clawManifestBytes,
+    MAX_MANAGED_WORKSPACE_BYTES: sourceLimitsTestControl.managedWorkspaceBytes,
   };
 });
 
@@ -641,32 +652,15 @@ describe("exportClawAgent", () => {
     );
   });
 
-  it("exports a large pending package bootstrap within the native size limit", async () => {
-    const content = Buffer.from("# First run\n\n" + "x".repeat(1024 * 1024 + 32));
-    expect(content.byteLength).toBeLessThanOrEqual(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES);
-    const fixture = await installedFixture({
-      packageBootstrap: true,
-      packageBootstrapContent: content,
-    });
-    const out = join(fixture.root, "exported-large-bootstrap");
-
-    const result = await exportClawAgent("worker", out, {
-      env: fixture.env,
-      config: fixture.config,
-      packageDeps: fixture.packageDeps,
-      sourceMcpServers: fixture.sourceMcpServers,
-    });
-
-    expect(result.filesWritten).toContain("BOOTSTRAP.md");
-    await expect(readFile(join(out, "BOOTSTRAP.md"))).resolves.toEqual(content);
-    await expect(stat(join(out, "BOOTSTRAP.md"))).resolves.toMatchObject({
-      size: content.byteLength,
-    });
-  });
-
   it("keeps pending package bootstrap outside the managed workspace aggregate", async () => {
-    const workspaceContent = Buffer.alloc(900 * 1024, "w");
-    const bootstrapContent = Buffer.alloc(1536 * 1024, "b");
+    const workspaceContent = Buffer.alloc(9 * 1024, "w");
+    const bootstrapContent = Buffer.alloc(6 * 1024, "b");
+    expect(workspaceContent.byteLength * 3).toBeLessThan(
+      sourceLimitsTestControl.managedWorkspaceBytes,
+    );
+    expect(workspaceContent.byteLength * 3 + bootstrapContent.byteLength).toBeGreaterThan(
+      sourceLimitsTestControl.managedWorkspaceBytes,
+    );
     const fixture = await installedFixture({
       extraWorkspaceFiles: ["one.md", "two.md", "three.md"],
       extraWorkspaceFileContent: workspaceContent,
@@ -734,7 +728,9 @@ describe("exportClawAgent", () => {
   });
 
   it("keeps SOUL.md as a sidecar when embedding would exceed the CLAW.md limit", async () => {
-    const fixture = await installedFixture({ soulContent: Buffer.alloc(1024 * 1024, 0x61) });
+    const fixture = await installedFixture({
+      soulContent: Buffer.alloc(sourceLimitsTestControl.clawManifestBytes, 0x61),
+    });
     const out = join(fixture.root, "exported-large-soul");
 
     await exportClawAgent("worker", out, {

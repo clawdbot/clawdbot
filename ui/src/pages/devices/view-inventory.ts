@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 // Devices page renders the unified paired-device / node inventory sections.
 import { html, nothing, type TemplateResult } from "lit";
 import type { PresenceEntry } from "../../api/types.ts";
@@ -20,7 +21,6 @@ import {
   type DeviceInventoryGroup,
 } from "../../lib/nodes/inventory.ts";
 import { prettifyPlatform } from "../../lib/platform-label.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { renderPendingDeviceRows } from "./view-pending-devices.ts";
 import { deviceIcon, renderDeviceTile } from "./view-shared.ts";
 import type { DevicesProps } from "./view.types.ts";

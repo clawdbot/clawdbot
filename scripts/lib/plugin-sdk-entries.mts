@@ -110,6 +110,16 @@ export const deprecatedBarrelPluginSdkEntrypoints = pluginSdkSubpaths.filter((en
   deprecatedBarrelPluginSdkSubpathList.includes(entry),
 );
 
+/** Supported SDK facades backed by bundled plugins until generic contracts replace them. */
+export const supportedBundledFacadeSdkEntrypoints = [
+  "discord",
+  "matrix",
+  "telegram-account",
+] as const;
+
+/** Plugin-owned surfaces intentionally public and documented for third-party plugins. */
+export const publicPluginOwnedSdkEntrypoints = ["memory-core-host-engine-foundation"] as const;
+
 /**
  * Build tsdown entry source paths for plugin SDK entrypoints.
  * @internal Shared repository-script contract.
