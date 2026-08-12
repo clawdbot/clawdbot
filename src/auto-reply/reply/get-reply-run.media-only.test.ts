@@ -2470,6 +2470,63 @@ describe("runPreparedReply media-only handling", () => {
 
     nextRun.complete();
   });
+  it("keeps route and dispatch system events queued when busy admission returns", async () => {
+    vi.useFakeTimers();
+    const actualSystemEvents = await vi.importActual<typeof import("./session-system-events.js")>(
+      "./session-system-events.js",
+    );
+    vi.mocked(drainFormattedSystemEvents).mockImplementation(
+      actualSystemEvents.drainFormattedSystemEvents,
+    );
+    const queueSettings = await import("./queue/settings-runtime.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+    const routeSessionKey = "agent:main:slack:channel:c123";
+    const dispatchSessionKey = `${routeSessionKey}:thread:123.456`;
+    enqueueSystemEvent("Slack reaction added: :eyes:", { sessionKey: routeSessionKey });
+    enqueueSystemEvent("Slack message in #claw-test from Alice", {
+      sessionKey: dispatchSessionKey,
+    });
+    const previousRun = createReplyOperation({
+      sessionId: "session-before-wait",
+      sessionKey: dispatchSessionKey,
+      resetTriggered: false,
+    });
+    previousRun.setPhase("running");
+
+    const runPromise = runPrepared({
+      isNewSession: false,
+      sessionId: "session-before-wait",
+      sessionKey: dispatchSessionKey,
+      opts: withReplySystemEventSessionKey({}, routeSessionKey),
+      provider: "",
+      model: "",
+      resolvedThinkLevel: "off",
+    });
+
+    await Promise.resolve();
+    previousRun.complete();
+    const nextRun = createReplyOperation({
+      sessionId: "session-after-wait",
+      sessionKey: dispatchSessionKey,
+      resetTriggered: false,
+    });
+    nextRun.setPhase("running");
+
+    const assertion = expect(runPromise).resolves.toEqual({
+      text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
+    });
+    await vi.advanceTimersByTimeAsync(15_000);
+    await assertion;
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+    expect(peekSystemEventEntries(routeSessionKey).map((event) => event.text)).toEqual([
+      "Slack reaction added: :eyes:",
+    ]);
+    expect(peekSystemEventEntries(dispatchSessionKey).map((event) => event.text)).toEqual([
+      "Slack message in #claw-test from Alice",
+    ]);
+
+    nextRun.complete();
+  });
   it("re-drains system events after waiting behind an active run", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
