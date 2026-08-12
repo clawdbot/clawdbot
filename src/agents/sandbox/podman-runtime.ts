@@ -129,7 +129,15 @@ async function isPodmanMachineConnection(params: {
         ? String(machine.Port)
         : "";
     const portMatches = machinePort === uri.port;
-    const connectionUser = decodeURIComponent(uri.username);
+    // WHATWG URL parsing does not validate percent-escapes in userinfo, so a
+    // malformed username (e.g. "user%name") must fail soft like any other
+    // non-matching connection instead of throwing URIError out of the probe.
+    let connectionUser: string;
+    try {
+      connectionUser = decodeURIComponent(uri.username);
+    } catch {
+      return false;
+    }
     const rootConnection = params.selectedName === `${machineName}-root`;
     const userMatches =
       typeof machine.RemoteUsername === "string" &&
