@@ -2352,10 +2352,11 @@ describe("compaction-safeguard recent-turn preservation", () => {
     mockSummarizeInStages.mockReset();
     const oversizedHistorySummary = "history detail ".repeat(MAX_COMPACTION_SUMMARY_CHARS);
     const splitTurnPrefixSummary = "split-turn prefix context that must survive capping";
+    const correctiveFailureMarker = "USER_SESSION_TEXT_issue119932_corrective";
     mockSummarizeInStages
       .mockResolvedValueOnce(summaryResult(oversizedHistorySummary))
       .mockResolvedValueOnce(summaryResult(splitTurnPrefixSummary))
-      .mockRejectedValueOnce(new Error("retry transient failure"));
+      .mockRejectedValueOnce(new Error(correctiveFailureMarker));
 
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture();
@@ -2415,6 +2416,10 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBe(
       "Compaction safeguard finalized summary failed quality checks and corrective generation failed.",
     );
+    const terminalWarnings = compactionLogger.warn.mock.calls.flat().join("\n");
+    expect(terminalWarnings).toContain("reasonCode=corrective_generation_failed");
+    expect(terminalWarnings).toContain("attempt=2");
+    expect(terminalWarnings).not.toContain(correctiveFailureMarker);
   });
 
   it("keeps required headings when all turns are preserved and history is carried forward", async () => {
