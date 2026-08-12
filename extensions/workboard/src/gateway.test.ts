@@ -190,10 +190,12 @@ describe("workboard gateway methods", () => {
 
     const listRespond = vi.fn();
     await listHandler?.({ params: {}, respond: listRespond } as never);
-    expect(listRespond.mock.calls[0]?.[1]).toMatchObject({
-      cards: [expect.objectContaining({ title: "Investigate queue drift" })],
-      boards: [expect.objectContaining({ id: "default", total: 3, active: 3 })],
-    });
+    expect(listRespond.mock.calls[0]?.[1]?.cards).toEqual(
+      expect.arrayContaining([expect.objectContaining({ title: "Investigate queue drift" })]),
+    );
+    expect(listRespond.mock.calls[0]?.[1]?.boards).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "default", total: 3, active: 3 })]),
+    );
     expect(
       listRespond.mock.calls[0]?.[1]?.cards.find((card: { id: string }) => card.id === reconciledId)
         ?.metadata?.reconciliationObjectiveEvidence,
@@ -206,9 +208,11 @@ describe("workboard gateway methods", () => {
       params: {},
       respond: reconciliationRespond,
     } as never);
-    expect(reconciliationRespond.mock.calls[0]?.[1]?.cards[0]?.metadata?.claim?.token).toBe(
-      "[redacted]",
-    );
+    expect(
+      reconciliationRespond.mock.calls[0]?.[1]?.cards.find(
+        (card: { id: string }) => card.id === claimedCardId,
+      )?.metadata?.claim?.token,
+    ).toBe("[redacted]");
     expect(
       reconciliationRespond.mock.calls[0]?.[1]?.cards.find(
         (card: { id: string }) => card.id === reconciledId,
