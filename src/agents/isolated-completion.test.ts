@@ -777,7 +777,7 @@ describe("runIsolatedCompletion", () => {
       admitted: AdmittedRunContext;
       authority: AgentRunDelegatedAuthority;
       params: IsolatedCliRunParams;
-      release: ReturnType<typeof createDeferred>;
+      release: ReturnType<typeof createDeferred<void>>;
     }> = [];
     mocks.runCliAgent.mockImplementation(async (params) => {
       const admitted = await params.preparedRunAdmission.admit("embedded");
