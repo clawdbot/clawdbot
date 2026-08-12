@@ -98,7 +98,7 @@ function nativeHistoryMessage(seq: number, text = `message ${seq}`) {
 }
 
 describe("chat pane header state", () => {
-  it.each(["session", "target", "client", "reconnect"] as const)(
+  it.each(["session", "owner", "target", "client", "reconnect"] as const)(
     "closes terminal continuation after a %s ownership change",
     async (change) => {
       const client = { gatewayUrl: "wss://gateway.example/control" } as GatewayBrowserClient;
@@ -136,7 +136,9 @@ describe("chat pane header state", () => {
         gatewayUrl: "wss://gateway.example/control",
       });
 
-      if (change === "target") {
+      if (change === "owner") {
+        paint({ ...row, agentId: "other-agent" });
+      } else if (change === "target") {
         pane.context.gateway.connection.gatewayUrl = "wss://other.example/control";
         paint(row);
         pane.context.gateway.connection.gatewayUrl = "ws://example.test";
@@ -159,6 +161,41 @@ describe("chat pane header state", () => {
       expect(container.querySelector("openclaw-modal-dialog")).toBeNull();
     },
   );
+
+  it("disables terminal continuation with query-specific guidance", () => {
+    const client = {
+      gatewayUrl: "wss://gateway.example/control?route=alpha",
+    } as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const row = {
+      key: "main",
+      agentId: "alpha",
+      kind: "direct",
+      updatedAt: 0,
+    } satisfies GatewaySessionRow;
+    const container = document.createElement("div");
+
+    render(
+      pane.renderPaneHeader(
+        createSessionWorkspaceProps(state),
+        createBackgroundTasksProps(state),
+        row,
+        false,
+        undefined,
+        false,
+      ),
+      container,
+    );
+
+    const menu = container.querySelector<
+      HTMLElement & {
+        actionDisabledReasons: Record<string, string>;
+      }
+    >("openclaw-chat-header-session-menu");
+    expect(menu?.actionDisabledReasons["continue-in-terminal"]).toBe(
+      "Query-routed Gateway URLs cannot create credential-free continuation commands because authentication and stored device scope are not query-aware. Use a manually authenticated CLI target or a queryless configured Gateway URL.",
+    );
+  });
 
   it("forks through the shared session organizer flow and selects the new session", async () => {
     const create = vi.fn(async () => "agent:main:forked");

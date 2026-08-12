@@ -1,6 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { Guard } from "typebox/guard";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../packages/gateway-protocol/src/schema/primitives.js";
 import { hasTerminalControl } from "../../packages/terminal-core/src/safe-text.js";
+import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 
 const RESUME_HANDOFF_MAX_ENCODED_LENGTH = 4096;
 const RESUME_HANDOFF_MAX_GATEWAY_URL_LENGTH = 2048;
@@ -21,21 +23,25 @@ function validateGatewayUrl(gatewayUrl: string): void {
   if (
     gatewayUrl.length === 0 ||
     gatewayUrl.length > RESUME_HANDOFF_MAX_GATEWAY_URL_LENGTH ||
-    hasTerminalControl(gatewayUrl) ||
-    gatewayUrl.includes("?") ||
-    gatewayUrl.includes("#") ||
-    !/^wss?:\/\//u.test(gatewayUrl)
+    hasTerminalControl(gatewayUrl)
   ) {
     invalidResumeHandoff();
   }
-  const authority = gatewayUrl.slice(gatewayUrl.indexOf("://") + 3).split("/", 1)[0] ?? "";
   let parsed: URL;
   try {
     parsed = new URL(gatewayUrl);
   } catch {
     invalidResumeHandoff();
   }
-  if (authority.includes("@") || parsed.username.length > 0 || parsed.password.length > 0) {
+  const authority = gatewayUrl.slice(gatewayUrl.indexOf("://") + 3).split("/", 1)[0] ?? "";
+  if (
+    (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") ||
+    gatewayUrl.includes("?") ||
+    gatewayUrl.includes("#") ||
+    authority.includes("@") ||
+    parsed.username.length > 0 ||
+    parsed.password.length > 0
+  ) {
     invalidResumeHandoff();
   }
 }
@@ -43,8 +49,9 @@ function validateGatewayUrl(gatewayUrl: string): void {
 function validateResumeHandoffFields(sessionKey: string, gatewayUrl: string): void {
   if (
     sessionKey.length === 0 ||
-    sessionKey.length > CHAT_SEND_SESSION_KEY_MAX_LENGTH ||
-    hasTerminalControl(sessionKey)
+    !Guard.IsMaxLength(sessionKey, CHAT_SEND_SESSION_KEY_MAX_LENGTH) ||
+    hasTerminalControl(sessionKey) ||
+    parseAgentSessionKey(sessionKey) === null
   ) {
     invalidResumeHandoff();
   }

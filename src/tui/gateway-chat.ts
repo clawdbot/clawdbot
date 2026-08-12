@@ -21,6 +21,7 @@ import {
   type CommandsListResult,
   type EnvironmentsListResult,
   type SessionsListParams,
+  type SessionsResolveParams,
   type SessionsPatchResult,
   type SessionsPatchParams,
   type TaskSuggestionsAcceptResult,
@@ -152,6 +153,13 @@ function isLegacySucceedsParentError(err: unknown): boolean {
 type GatewaySessionList = TuiSessionList;
 type GatewayAgentsList = TuiAgentsList;
 type GatewayModelChoice = TuiModelChoice;
+type HandoffSessionResolveParams = Required<
+  Pick<SessionsResolveParams, "key" | "agentId" | "includeGlobal" | "allowMissing">
+>;
+type HandoffSessionResolveResult =
+  | { ok: true; key: string }
+  | { ok: false }
+  | { ok: false; candidates: Array<{ key: string; displayName?: string }> };
 
 export class GatewayChatClient implements TuiBackend {
   private client: GatewayClient;
@@ -363,6 +371,10 @@ export class GatewayChatClient implements TuiBackend {
 
   async listSessions(opts?: SessionsListParams) {
     return await this.client.request<GatewaySessionList>("sessions.list", opts ?? {});
+  }
+
+  async resolveSession(opts: HandoffSessionResolveParams): Promise<HandoffSessionResolveResult> {
+    return await this.client.request<HandoffSessionResolveResult>("sessions.resolve", opts);
   }
 
   async listAgents() {

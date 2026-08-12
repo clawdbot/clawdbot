@@ -42,7 +42,31 @@ describe("resume handoff contract", () => {
     });
   });
 
-  it.each([
+  it.each<[string, string]>([
+    ["astral emoji", `agent:main:${"🦀".repeat(300)}`],
+    ["combining clusters", `agent:main:${"e\u0301".repeat(300)}`],
+    ["ZWJ clusters", `agent:main:${"a\u200Db".repeat(300)}`],
+  ])("round-trips 300 %s clusters", (_name, sessionKey) => {
+    const encoded = encodeResumeHandoff({ sessionKey, gatewayUrl });
+
+    expect(decodeResumeHandoff(encoded)).toEqual({ version: 1, sessionKey, gatewayUrl });
+  });
+
+  it.each(["WSS://gateway.example/openclaw", "WsS://gateway.example/openclaw"])(
+    "preserves a mixed-case WebSocket scheme: %s",
+    (mixedCaseGatewayUrl) => {
+      const sessionKey = "agent:main:mixed-case-scheme";
+      const encoded = encodeResumeHandoff({ sessionKey, gatewayUrl: mixedCaseGatewayUrl });
+
+      expect(decodeResumeHandoff(encoded)).toEqual({
+        version: 1,
+        sessionKey,
+        gatewayUrl: mixedCaseGatewayUrl,
+      });
+    },
+  );
+
+  it.each<[string, string]>([
     ["malformed alphabet", "not+base64url"],
     ["padding", "Zg=="],
     ["noncanonical encoding", "Zh"],
@@ -117,7 +141,14 @@ describe("resume handoff contract", () => {
       }),
     ],
     ["encoded payload over limit", "A".repeat(maxEncodedLength + 1)],
-    ["session key over limit", encodeJson({ version: 1, sessionKey: "s".repeat(513), gatewayUrl })],
+    [
+      "session key over grapheme limit",
+      encodeJson({ version: 1, sessionKey: `agent:main:${"s".repeat(502)}`, gatewayUrl }),
+    ],
+    ...["main", "global", "agent::x", "agent:a:"].map((sessionKey): [string, string] => [
+      `invalid qualified key ${sessionKey}`,
+      encodeJson({ version: 1, sessionKey, gatewayUrl }),
+    ]),
     [
       "Gateway URL over limit",
       encodeJson({
@@ -132,9 +163,18 @@ describe("resume handoff contract", () => {
     );
   });
 
-  it.each([
+  it.each<[string, { sessionKey: string; gatewayUrl: string }]>([
     ["empty key", { sessionKey: "", gatewayUrl }],
-    ["session key over limit", { sessionKey: "s".repeat(513), gatewayUrl }],
+    [
+      "session key over grapheme limit",
+      { sessionKey: `agent:main:${"s".repeat(502)}`, gatewayUrl },
+    ],
+    ...["main", "global", "agent::x", "agent:a:"].map(
+      (sessionKey): [string, { sessionKey: string; gatewayUrl: string }] => [
+        `invalid qualified key ${sessionKey}`,
+        { sessionKey, gatewayUrl },
+      ],
+    ),
     ["key control", { sessionKey: "agent:main:bad\u0085key", gatewayUrl }],
     ["empty URL", { sessionKey: "agent:main:alpha", gatewayUrl: "" }],
     [

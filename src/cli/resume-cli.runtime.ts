@@ -1,5 +1,6 @@
 // Resolves recent Gateway sessions and attaches the existing TUI to the selected key.
 import { cancel, isCancel } from "@clack/prompts";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { selectStyled } from "../../packages/terminal-core/src/prompt-select-styled.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -17,6 +18,10 @@ import type { ResumeCliOptions } from "./resume-cli.js";
 
 const RESUME_INTERACTIVE_TERMINAL_GUIDANCE =
   "Attaching to a session requires an interactive terminal. Re-run `openclaw resume [query]` from an interactive terminal.";
+const RESUME_HANDOFF_MISSING =
+  "This session is no longer available. Copy a fresh command from the Control UI.";
+const RESUME_HANDOFF_UNRESOLVED =
+  "Could not resolve the session handoff. Copy a fresh command from the Control UI.";
 
 function requireInteractiveResumeTerminal() {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -45,14 +50,13 @@ async function formatResumeConnectionError(error: unknown): Promise<Error> {
   );
 }
 
-async function connectResumeGateway(
-  opts: ResumeCliOptions,
-  allowConfiguredAuthForExactTarget: boolean,
-) {
+async function connectResumeGateway(opts: ResumeCliOptions, handoffTarget: boolean) {
   const { GatewayChatClient } = await import("../tui/gateway-chat.js");
   const client = await GatewayChatClient.connect({
     ...opts,
-    ...(allowConfiguredAuthForExactTarget ? { allowConfiguredAuthForExactTarget: true } : {}),
+    ...(handoffTarget
+      ? { allowConfiguredAuthForExactTarget: true, suppressEnvAuthFallback: true }
+      : {}),
   });
   try {
     await new Promise<void>((resolve, reject) => {
@@ -77,10 +81,40 @@ async function connectResumeGateway(
   }
 }
 
-async function resolveHandoffConnection(opts: ResumeCliOptions) {
+async function resolveHandoffConnection(
+  opts: ResumeCliOptions,
+  handoff: { sessionKey: string; agentId: string },
+) {
   const client = await connectResumeGateway(opts, true);
   try {
-    return client.connection;
+    let result: unknown;
+    try {
+      result = await client.resolveSession({
+        key: handoff.sessionKey,
+        agentId: handoff.agentId,
+        includeGlobal: true,
+        allowMissing: true,
+      });
+    } catch {
+      throw new Error(RESUME_HANDOFF_UNRESOLVED);
+    }
+    if (!isRecord(result)) {
+      throw new Error(RESUME_HANDOFF_UNRESOLVED);
+    }
+    const keys = Object.keys(result);
+    if (
+      keys.length === 2 &&
+      keys.includes("ok") &&
+      keys.includes("key") &&
+      result.ok === true &&
+      typeof result.key === "string"
+    ) {
+      return { connection: client.connection, sessionKey: result.key };
+    }
+    if (keys.length === 1 && keys[0] === "ok" && result.ok === false) {
+      throw new Error(RESUME_HANDOFF_MISSING);
+    }
+    throw new Error(RESUME_HANDOFF_UNRESOLVED);
   } finally {
     await client.stop();
   }
@@ -170,14 +204,19 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
   requireInteractiveResumeTerminal();
   const resolvedQuery = query?.trim();
   const explicitGlobalSession = resolveExplicitGlobalSessionKey(resolvedQuery);
-  let connection: Awaited<ReturnType<typeof resolveHandoffConnection>>;
+  let connection: Awaited<ReturnType<typeof connectResumeGateway>>["connection"];
   let sessionKey: string | null;
   if (handoff) {
-    connection = await resolveHandoffConnection({
-      ...connectionOptions,
-      url: handoff.gatewayUrl,
-    });
-    sessionKey = handoff.sessionKey;
+    const parsed = parseAgentSessionKey(handoff.sessionKey)!;
+    const resolved = await resolveHandoffConnection(
+      {
+        ...connectionOptions,
+        url: handoff.gatewayUrl,
+      },
+      { sessionKey: handoff.sessionKey, agentId: parsed.agentId },
+    );
+    connection = resolved.connection;
+    sessionKey = resolved.sessionKey;
   } else {
     const discovery = await fetchResumeSessions(
       connectionOptions,

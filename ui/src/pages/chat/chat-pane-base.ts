@@ -162,8 +162,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @litState() protected headerPlatform: string | null = null;
   @litState() protected headerCopiedAction: ChatPaneHeaderAction | null = null;
   protected continueInTerminalDialog: {
-    command: string;
-    sessionKey: string;
+    qualifiedSessionKey: string;
     selectedGatewayUrl: string;
     clientGatewayUrl: string;
     scope: ChatPaneConnectionScope;

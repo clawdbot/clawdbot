@@ -73,7 +73,10 @@ may reuse `gateway.remote.tlsFingerprint`; a public-origin target never inherits
 the local listener's pin. Pass `--tls-fingerprint` explicitly when that public
 origin needs a pin. A host, port, path, profile, query, or fragment mismatch
 fails closed under the normal explicit-target policy. OpenClaw never scans
-other profiles for a match.
+other profiles for a match. Handoff connections also ignore ambient
+`OPENCLAW_GATEWAY_TOKEN` and `OPENCLAW_GATEWAY_PASSWORD` fallback, so shell
+credentials for another Gateway cannot cross into the selected target. Explicit
+flags and credentials owned by an exact configured target remain eligible.
 
 ## Continue from the Control UI
 
@@ -82,16 +85,25 @@ The dialog shows one copyable `openclaw resume --handoff <payload>` command.
 The opaque payload is versioned, bounded, and encoded with an unpadded URL-safe
 base64 alphabet, so the command needs no quoting and is safe to paste in common
 POSIX shells, PowerShell, and `cmd.exe`. The encoded argument is limited to 4096
-characters; inside it, the session key is limited to 512 characters and the
-Gateway URL to 2048 characters. It contains only the exact qualified session key
-and selected Gateway WebSocket URL, including any Control UI base path. It
-contains no token, password, device credential, or bootstrap credential, and
-the browser does not execute it.
+characters; inside it, the agent-qualified session key is limited to 512
+user-perceived characters and the Gateway URL to 2048 characters. It contains
+only the exact qualified session key and selected Gateway WebSocket URL,
+including any Control UI base path. It contains no token, password, device
+credential, or bootstrap credential, and the browser does not execute it.
+
+The Control UI does not offer this command when the selected Gateway URL uses a
+query string. Gateway authentication and stored device scope are origin-based,
+not query-aware, so OpenClaw never strips or copies that query into a
+credential-free handoff. Use a manually authenticated CLI target with explicit
+`--token` or `--password`, or configure a queryless Gateway URL.
 
 Run the command in an already configured OpenClaw terminal. The terminal
-authenticates independently, and the Gateway's session access controls remain
-authoritative. This flow continues an existing session; it does not delegate
-first-use authentication from the browser.
+authenticates independently. Before opening the TUI, `resume` asks that Gateway
+to resolve the qualified key and uses the returned canonical key. A deleted or
+stale session stops with guidance to copy a fresh command; it never starts a new
+session. The Gateway's session access controls remain authoritative. This flow
+continues an existing session; it does not delegate first-use authentication
+from the browser.
 
 If OpenClaw reports an invalid `--handoff` payload, return to the session's
 Control UI menu and copy a fresh command. Do not edit or reuse a truncated

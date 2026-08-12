@@ -4624,6 +4624,8 @@ export const en: TranslationMap = {
         authNote:
           "The command contains no credentials. The terminal authenticates independently, and the session's access controls still apply.",
         disconnected: "Connect to the Gateway to continue this session in a terminal.",
+        queryRouted:
+          "Query-routed Gateway URLs cannot create credential-free continuation commands because authentication and stored device scope are not query-aware. Use a manually authenticated CLI target or a queryless configured Gateway URL.",
         unavailable: "This session or Gateway address cannot be continued in a terminal.",
       },
       workspaceAria: "Workspace actions for {workspace}",

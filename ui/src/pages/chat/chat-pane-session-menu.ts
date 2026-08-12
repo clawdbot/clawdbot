@@ -145,10 +145,15 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     if (gateway.snapshot.phase !== "connected" || !client) {
       return t("chat.sessionHeader.continueInTerminal.disconnected");
     }
-    if (this.resolveContinueInTerminalCommand(row, client)) {
+    const result = this.resolveContinueInTerminalCommand(row, client);
+    if (result.ok) {
       return undefined;
     }
-    return t("chat.sessionHeader.continueInTerminal.unavailable");
+    return t(
+      result.reason === "query-routed"
+        ? "chat.sessionHeader.continueInTerminal.queryRouted"
+        : "chat.sessionHeader.continueInTerminal.unavailable",
+    );
   }
 
   private openContinueInTerminalDialog(row: GatewaySessionRow): void {
@@ -156,13 +161,12 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     if (!scope) {
       return;
     }
-    const command = this.resolveContinueInTerminalCommand(row, scope.client);
-    if (!command) {
+    const result = this.resolveContinueInTerminalCommand(row, scope.client);
+    if (!result.ok) {
       return;
     }
     this.continueInTerminalDialog = {
-      command,
-      sessionKey: row.key,
+      qualifiedSessionKey: result.qualifiedSessionKey,
       selectedGatewayUrl: this.context.gateway.connection.gatewayUrl,
       clientGatewayUrl: scope.client.gatewayUrl,
       scope,
@@ -185,16 +189,18 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     if (!dialog) {
       return null;
     }
+    const result = row && client ? this.resolveContinueInTerminalCommand(row, client) : null;
     if (
       !this.isConnectionScopeCurrent(dialog.scope) ||
-      row?.key !== dialog.sessionKey ||
+      !result?.ok ||
+      result.qualifiedSessionKey !== dialog.qualifiedSessionKey ||
       gateway.connection.gatewayUrl !== dialog.selectedGatewayUrl ||
       client?.gatewayUrl !== dialog.clientGatewayUrl
     ) {
       this.continueInTerminalDialog = null;
       return null;
     }
-    return dialog.command;
+    return result.command;
   }
 
   private captureHeaderSessionActionScope(): SidebarSessionMutationScope | null {

@@ -66,6 +66,7 @@ function createGatewayClient(
   const client = {
     connection,
     listSessions: vi.fn().mockResolvedValue({ sessions: rows }),
+    resolveSession: vi.fn(),
     onConnected: undefined as (() => void) | undefined,
     onConnectError: undefined as ((error: Error) => void) | undefined,
     onDisconnected: undefined as ((reason: string) => void) | undefined,
@@ -190,6 +191,7 @@ describe("runResumeCommand", () => {
       password: "explicit-password",
       tlsFingerprint: "sha256:explicit-pin",
     });
+    client.resolveSession.mockResolvedValue({ ok: true, key: sessionKey });
 
     await runResumeCommand(undefined, {
       handoff,
@@ -204,6 +206,13 @@ describe("runResumeCommand", () => {
       password: "explicit-password",
       tlsFingerprint: "sha256:explicit-pin",
       allowConfiguredAuthForExactTarget: true,
+      suppressEnvAuthFallback: true,
+    });
+    expect(client.resolveSession).toHaveBeenCalledExactlyOnceWith({
+      key: sessionKey,
+      agentId: "main",
+      includeGlobal: true,
+      allowMissing: true,
     });
     expect(client.listSessions).not.toHaveBeenCalled();
     expect(mocks.runTui).toHaveBeenCalledWith({
@@ -216,6 +225,45 @@ describe("runResumeCommand", () => {
       session: sessionKey,
       forceProcessExitOnReturn: true,
     });
+  });
+
+  it.each([
+    ["missing", { ok: false }, "This session is no longer available."],
+    [
+      "ambiguous",
+      { ok: false, candidates: [{ key: "agent:main:one" }] },
+      "Could not resolve the session handoff.",
+    ],
+    ["malformed", { ok: true }, "Could not resolve the session handoff."],
+  ])(
+    "rejects a %s handoff resolution without discovery or TUI launch",
+    async (_name, result, message) => {
+      const handoff = encodeResumeHandoff({
+        sessionKey: "agent:main:alpha",
+        gatewayUrl: "wss://gateway.example/openclaw",
+      });
+      const client = createGatewayClient([]);
+      client.resolveSession.mockResolvedValue(result);
+
+      await expect(runResumeCommand(undefined, { handoff })).rejects.toThrow(message);
+      expect(client.listSessions).not.toHaveBeenCalled();
+      expect(mocks.runTui).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects a handoff resolution RPC error without exposing it or launching the TUI", async () => {
+    const handoff = encodeResumeHandoff({
+      sessionKey: "agent:main:alpha",
+      gatewayUrl: "wss://gateway.example/openclaw",
+    });
+    const client = createGatewayClient([]);
+    client.resolveSession.mockRejectedValue(new Error("sensitive upstream details"));
+
+    await expect(runResumeCommand(undefined, { handoff })).rejects.toThrow(
+      "Could not resolve the session handoff. Copy a fresh command from the Control UI.",
+    );
+    expect(client.listSessions).not.toHaveBeenCalled();
+    expect(mocks.runTui).not.toHaveBeenCalled();
   });
 
   it("excludes the bare global session from query resolution", async () => {
@@ -308,6 +356,7 @@ describe("real Gateway session boundary", () => {
   beforeAll(async () => {
     harness = await startMinimalRealGateway([
       { agentId: "work", key: "agent:work:global", visibility: "shared" },
+      { agentId: "main", key: "agent:main:alpha" },
     ]);
   });
 
@@ -324,6 +373,26 @@ describe("real Gateway session boundary", () => {
     );
     expect(mocks.runTui).toHaveBeenCalledWith(
       expect.objectContaining({ session: "agent:work:global", forceProcessExitOnReturn: true }),
+    );
+  });
+
+  it("canonicalizes a case-variant handoff through the real sessions.resolve boundary", async () => {
+    const { GatewayChatClient } =
+      await vi.importActual<typeof import("../tui/gateway-chat.js")>("../tui/gateway-chat.js");
+    mocks.connect.mockImplementation((options) => GatewayChatClient.connect(options));
+    const rawSessionKey = "Agent:Main:ALPHA";
+    const handoff = encodeResumeHandoff({ sessionKey: rawSessionKey, gatewayUrl: harness.url });
+
+    await runResumeCommand(undefined, { handoff, token: harness.token });
+
+    expect(harness.sessionResolveRequests).toContainEqual({
+      key: rawSessionKey,
+      agentId: "main",
+      includeGlobal: true,
+      allowMissing: true,
+    });
+    expect(mocks.runTui).toHaveBeenCalledWith(
+      expect.objectContaining({ session: "agent:main:alpha", forceProcessExitOnReturn: true }),
     );
   });
 
