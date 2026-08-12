@@ -13,7 +13,7 @@ export function createMediaGenerationAsyncStartCallback(params: {
   }
   return (message) => {
     setImmediate(() => {
-      void Promise.resolve(params.onYield?.(message)).catch((error: unknown) => {
+      void (async () => params.onYield?.(message))().catch((error: unknown) => {
         log.warn("Failed to yield foreground media generation turn", {
           error: formatErrorMessage(error),
         });
