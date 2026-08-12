@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
 
@@ -94,6 +95,72 @@ function withStores<T>(run: (dbPath: string) => Promise<T>): Promise<T> {
 }
 
 describe("workboard sqlite batch card read", () => {
+  it("migrates and reopens a pre-evidence schema without losing objective metadata or old links", async () => {
+    await withStores(async (dbPath) => {
+      const original = createWorkboardSqliteStores({ dbPath });
+      const card = fixtureCard(99);
+      card.metadata = {
+        ...card.metadata,
+        automation: { tenant: "acme", objectiveKey: "deploy-api" },
+        links: [
+          { id: "old-link", type: "relates_to", url: "https://example.test/old", createdAt: 1 },
+        ],
+      };
+      try {
+        await original.cards.register(card.id, { version: 1, card });
+      } finally {
+        original.close();
+      }
+
+      // A physical pre-change fixture: remove only the three evidence columns and its migration marker.
+      const oldDb = openNodeSqliteDatabase(dbPath);
+      try {
+        oldDb.exec(
+          "ALTER TABLE workboard_card_links DROP COLUMN consecutive_successful_full_scan_misses",
+        );
+        oldDb.exec("ALTER TABLE workboard_card_links DROP COLUMN stale_at");
+        oldDb.exec("ALTER TABLE workboard_card_links DROP COLUMN stale_state");
+        oldDb.prepare("DELETE FROM workboard_schema_migrations WHERE id = ?").run("schema-5");
+      } finally {
+        oldDb.close();
+      }
+
+      const migrated = createWorkboardSqliteStores({ dbPath });
+      try {
+        const restored = await migrated.cards.lookup(card.id);
+        expect(restored?.card.metadata?.automation?.objectiveKey).toBe("deploy-api");
+        expect(restored?.card.metadata?.links).toEqual([
+          expect.objectContaining({ id: "old-link", url: "https://example.test/old" }),
+        ]);
+        const next = restored!.card;
+        next.metadata!.links = [
+          {
+            ...next.metadata!.links![0]!,
+            consecutiveSuccessfulFullScanMisses: 2,
+            staleAt: 123,
+            staleState: "stale",
+          },
+        ];
+        await migrated.cards.register(next.id, { version: 1, card: next });
+        await expect(migrated.cards.lookup(next.id)).resolves.toMatchObject({
+          card: {
+            metadata: {
+              links: [
+                expect.objectContaining({
+                  consecutiveSuccessfulFullScanMisses: 2,
+                  staleAt: 123,
+                  staleState: "stale",
+                }),
+              ],
+            },
+          },
+        });
+      } finally {
+        migrated.close();
+      }
+    });
+  });
+
   it("returns exactly what the per-card read returns", async () => {
     await withStores(async (dbPath) => {
       const stores = createWorkboardSqliteStores({ dbPath });

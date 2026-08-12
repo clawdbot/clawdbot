@@ -117,6 +117,55 @@ describe("workboard gateway methods", () => {
     expect(methods.get("workboard.cards.attachments.add")?.opts).toEqual({
       scope: "operator.write",
     });
+
+    const forgedCreate = vi.fn();
+    await methods.get("workboard.cards.create")?.handler({
+      params: { title: "Forged", metadata: { automation: { objectiveKey: "forged" } } },
+      respond: forgedCreate,
+    } as never);
+    const cardId = forgedCreate.mock.calls[0]?.[1]?.card.id as string;
+    expect(
+      forgedCreate.mock.calls[0]?.[1]?.card.metadata?.automation?.objectiveKey,
+    ).toBeUndefined();
+    const forgedUpdate = vi.fn();
+    await methods.get("workboard.cards.update")?.handler({
+      params: {
+        id: cardId,
+        patch: { metadata: { automation: { objectiveKey: "forged-update" } } },
+      },
+      respond: forgedUpdate,
+    } as never);
+    expect((await store.get(cardId))?.metadata?.automation?.objectiveKey).toBeUndefined();
+
+    const reconciled = vi.fn();
+    await methods.get("workboard.reconciliation.apply")?.handler({
+      params: {
+        sourceUrl: "https://example.test/a",
+        tenant: "acme",
+        objectiveKey: "deploy",
+        idempotencyKey: "a",
+        sourceUpdatedAt: 1,
+        card: { title: "Reconciled" },
+      },
+      respond: reconciled,
+    } as never);
+    const reconciledId = reconciled.mock.calls[0]?.[1]?.card.id as string;
+    await store.claim(reconciledId, { ownerId: "operator", token: "private-claim" });
+    const observed = vi.fn();
+    await methods.get("workboard.reconciliation.observeSource")?.handler({
+      params: {
+        cardId: reconciledId,
+        tenant: "acme",
+        objectiveKey: "deploy",
+        sourceUrl: "https://example.test/a",
+        idempotencyKey: "a",
+        sourceState: "present",
+        staleAfterMisses: 2,
+        observedAt: 2,
+      },
+      respond: observed,
+    } as never);
+    expect(observed.mock.calls[0]?.[1]?.card.metadata?.claim?.token).toBe("[redacted]");
     expect(methods.get("workboard.boards.upsert")?.opts).toEqual({ scope: "operator.write" });
     expect(methods.get("workboard.notifications.list")?.opts).toEqual({
       scope: "operator.read",
