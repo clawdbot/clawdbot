@@ -33,10 +33,13 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
       onDeferred: vi.fn(),
       onAdoptionFinalizing: vi.fn(),
       onFailed: vi.fn(async () => {}),
+      onCancelled: vi.fn(async () => {}),
       onAbandoned: vi.fn(async () => {}),
     });
     const first = createLifecycle();
     const second = createLifecycle();
+    const cancellation = fanInChannelIngressLifecycles([first, second]);
+    await cancellation.lifecycle?.onCancelled?.();
     const combined = fanInChannelIngressLifecycles([undefined, first, second]);
 
     combined.lifecycle?.onAdoptionFinalizing();
@@ -49,6 +52,8 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
     expect(second.onAdopted).toHaveBeenCalledOnce();
     expect(first.onAbandoned).not.toHaveBeenCalled();
     expect(second.onAbandoned).not.toHaveBeenCalled();
+    expect(first.onCancelled).toHaveBeenCalledOnce();
+    expect(second.onCancelled).toHaveBeenCalledOnce();
   });
 
   it("settles or abandons claims that no reply lane adopted", async () => {

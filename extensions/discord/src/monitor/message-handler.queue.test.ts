@@ -1,9 +1,21 @@
 // Discord tests cover message handler.queue plugin behavior.
 import { getEventListeners } from "node:events";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import type { APIMessage } from "discord-api-types/v10";
+import {
+  type ChannelIngressQueue,
+  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DiscordIngressLifecycle } from "./ingress.js";
+import { createDiscordIngressMonitor, type DiscordIngressLifecycle } from "./ingress.js";
 import { createDiscordMessageHandler as createDurableDiscordMessageHandler } from "./message-handler.js";
 import {
   createDiscordMessageHandler,
@@ -35,6 +47,8 @@ function expectStatusPatch(setStatus: MockCallSource, expected: Record<string, u
 
 function createIngressLifecycle(): DiscordIngressLifecycle & {
   onAdopted: ReturnType<typeof vi.fn>;
+  onFailed: ReturnType<typeof vi.fn>;
+  onCancelled: ReturnType<typeof vi.fn>;
   onAbandoned: ReturnType<typeof vi.fn>;
 } {
   return {
@@ -42,8 +56,59 @@ function createIngressLifecycle(): DiscordIngressLifecycle & {
     onAdopted: vi.fn(async () => {}),
     onDeferred: vi.fn(),
     onAdoptionFinalizing: vi.fn(),
+    onFailed: vi.fn(async () => {}),
+    onCancelled: vi.fn(async () => {}),
     onAbandoned: vi.fn(async () => {}),
   };
+}
+
+type DiscordIngressPayload = {
+  version: 1;
+  receivedAt: number;
+  rawMessage: APIMessage;
+};
+
+async function withDiscordQueue<T>(
+  run: (queue: ChannelIngressQueue<DiscordIngressPayload>) => Promise<T>,
+): Promise<T> {
+  const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-handler-"));
+  const stateDir = await fs.realpath(created);
+  const queue = createChannelIngressQueueForTests<DiscordIngressPayload>({
+    channelId: "discord",
+    accountId: "default",
+    stateDir,
+  });
+  try {
+    return await run(queue);
+  } finally {
+    closeOpenClawStateDatabaseForTest();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+}
+
+function createRawMessage(id: string, channelId = "ch-1"): APIMessage {
+  return {
+    id,
+    channel_id: channelId,
+    content: "hello",
+    author: {
+      id: "user-1",
+      username: "alice",
+      discriminator: "0",
+      avatar: null,
+    },
+    attachments: [],
+    embeds: [],
+    mentions: [],
+    mention_roles: [],
+    mention_everyone: false,
+    timestamp: new Date().toISOString(),
+    edited_timestamp: null,
+    components: [],
+    pinned: false,
+    type: 0,
+    tts: false,
+  } as unknown as APIMessage;
 }
 
 async function flushQueueWork(): Promise<void> {
@@ -314,11 +379,31 @@ describe("createDiscordMessageHandler queue behavior", () => {
       turnAdoptionLifecycle: lifecycle,
     });
 
-    expect(result).toMatchObject({ kind: "failed-retryable" });
+    expect(result).toMatchObject({ kind: "deferred" });
+    expect(lifecycle.onCancelled).toHaveBeenCalledTimes(1);
     expect(lifecycle.onAdopted).not.toHaveBeenCalled();
   });
 
-  it("abandons a buffered ingress claim during deactivation", async () => {
+  it("reports a genuine pre-admission exception only through onFailed", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+    const failure = new Error("preflight failed");
+    preflightDiscordMessageMock.mockRejectedValue(failure);
+    const handler = createDiscordMessageHandler(createDiscordHandlerParams());
+    const lifecycle = createIngressLifecycle();
+
+    await expect(
+      handler(createTextMessageData("m-failed") as never, {} as never, {
+        turnAdoptionLifecycle: lifecycle,
+      }),
+    ).resolves.toEqual({ kind: "deferred" });
+
+    expect(lifecycle.onFailed).toHaveBeenCalledExactlyOnceWith(failure);
+    expect(lifecycle.onCancelled).not.toHaveBeenCalled();
+    expect(lifecycle.onAbandoned).not.toHaveBeenCalled();
+  });
+
+  it("cancels a buffered ingress claim during deactivation", async () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
     const params = createDiscordHandlerParams();
@@ -332,11 +417,12 @@ describe("createDiscordMessageHandler queue behavior", () => {
     await handler.deactivate();
 
     expect(preflightDiscordMessageMock).not.toHaveBeenCalled();
-    expect(lifecycle.onAbandoned).toHaveBeenCalledTimes(1);
+    expect(lifecycle.onCancelled).toHaveBeenCalledTimes(1);
+    expect(lifecycle.onAbandoned).not.toHaveBeenCalled();
     expect(lifecycle.onAdopted).not.toHaveBeenCalled();
   });
 
-  it("waits for an active debounce flush and abandons it after shutdown", async () => {
+  it("waits for an active debounce flush and cancels it after shutdown", async () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
     const preflightGate = createDeferred<void>();
@@ -360,7 +446,8 @@ describe("createDiscordMessageHandler queue behavior", () => {
 
     preflightGate.resolve();
     await Promise.all([handling, deactivation]);
-    expect(lifecycle.onAbandoned).toHaveBeenCalledTimes(1);
+    expect(lifecycle.onCancelled).toHaveBeenCalledTimes(1);
+    expect(lifecycle.onAbandoned).not.toHaveBeenCalled();
     expect(lifecycle.onAdopted).not.toHaveBeenCalled();
   });
 
@@ -392,6 +479,136 @@ describe("createDiscordMessageHandler queue behavior", () => {
     admissionGate.resolve();
     await Promise.all([handling, deactivation]);
     expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("dead-letters an exhausted preflight failure and releases its Discord lane", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    try {
+      await withDiscordQueue(async (queue) => {
+        const attempted: string[] = [];
+        const preflight = vi.fn(async (params: { data: { message?: { id?: string } } }) => {
+          const id = params.data.message?.id ?? "unknown";
+          attempted.push(id);
+          if (id === "poison") {
+            throw new Error("deterministic preflight failure");
+          }
+          return null;
+        });
+        const params = createDiscordHandlerParams();
+        const handler = createDurableDiscordMessageHandler({
+          ...params,
+          client: {} as never,
+          testing: {
+            preflightDiscordMessage: preflight as never,
+            createIngressMonitor: (monitorParams) =>
+              createDiscordIngressMonitor({ ...monitorParams, queue }),
+          },
+        });
+        try {
+          await handler(createRawMessage("poison", "lane-a") as never, {} as never);
+          await handler(createRawMessage("follower", "lane-a") as never, {} as never);
+          await handler(createRawMessage("independent", "lane-b") as never, {} as never);
+
+          for (let attempt = 0; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
+            await vi.advanceTimersByTimeAsync(3 * 60_000);
+          }
+
+          await vi.waitFor(() => expect(attempted).toContain("follower"));
+          expect(attempted.indexOf("independent")).toBeGreaterThanOrEqual(0);
+          expect(attempted.indexOf("independent")).toBeLessThan(attempted.indexOf("follower"));
+          expect(attempted.filter((id) => id === "poison")).toHaveLength(
+            DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+          );
+          await expect(queue.enqueue("poison", {} as DiscordIngressPayload)).resolves.toMatchObject(
+            {
+              kind: "failed",
+              record: { reason: "retry-limit-exceeded" },
+            },
+          );
+          await expect(
+            queue.enqueue("follower", {} as DiscordIngressPayload),
+          ).resolves.toMatchObject({ kind: "completed" });
+          const runtimeErrors = mockCalls(params.runtime.error as unknown as MockCallSource).map(
+            ([message]) => String(message),
+          );
+          expect(runtimeErrors.some((message) => message.includes("reached retry limit"))).toBe(
+            true,
+          );
+          expect(runtimeErrors.join("\n")).not.toContain("hello");
+        } finally {
+          await handler.deactivate();
+        }
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves retry facts when deactivation cancels a durable Discord claim", async () => {
+    await withDiscordQueue(async (queue) => {
+      const raw = createRawMessage("cancelled", "lane-a");
+      await queue.enqueue(
+        "cancelled",
+        { version: 1, receivedAt: 10, rawMessage: raw },
+        { laneKey: "channel:lane-a", receivedAt: 10 },
+      );
+      const failedClaim = await queue.claim("cancelled", { ownerId: "failed-owner" });
+      expect(failedClaim).not.toBeNull();
+      if (!failedClaim) {
+        return;
+      }
+      await queue.release(failedClaim, {
+        lastError: "previous genuine failure",
+        releasedAt: 20,
+      });
+      const before = (await queue.listPending())[0];
+      const firstPreflight = vi.fn(async () => null);
+      const firstParams = createDiscordHandlerParams();
+      firstParams.cfg.messages = { inbound: { debounceMs: 60_000 } };
+      const first = createDurableDiscordMessageHandler({
+        ...firstParams,
+        client: {} as never,
+        testing: {
+          preflightDiscordMessage: firstPreflight as never,
+          createIngressMonitor: (monitorParams) =>
+            createDiscordIngressMonitor({ ...monitorParams, queue }),
+        },
+      });
+
+      await vi.waitFor(async () => expect(await queue.listClaims()).toHaveLength(1));
+      await first.deactivate();
+
+      expect(firstPreflight).not.toHaveBeenCalled();
+      expect(await queue.listPending()).toEqual([
+        expect.objectContaining({
+          id: "cancelled",
+          attempts: before?.attempts,
+          lastAttemptAt: before?.lastAttemptAt,
+          lastError: before?.lastError,
+        }),
+      ]);
+
+      const replacementPreflight = vi.fn(async () => null);
+      const replacementParams = createDiscordHandlerParams();
+      const replacement = createDurableDiscordMessageHandler({
+        ...replacementParams,
+        client: {} as never,
+        testing: {
+          preflightDiscordMessage: replacementPreflight as never,
+          createIngressMonitor: (monitorParams) =>
+            createDiscordIngressMonitor({ ...monitorParams, queue }),
+        },
+      });
+      try {
+        await vi.waitFor(() => expect(replacementPreflight).toHaveBeenCalledTimes(1));
+        await expect(
+          queue.enqueue("cancelled", {} as DiscordIngressPayload),
+        ).resolves.toMatchObject({ kind: "completed" });
+      } finally {
+        await replacement.deactivate();
+      }
+    });
   });
 
   it("does not abort concurrent runs with a Discord-owned channel timeout", async () => {

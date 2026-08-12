@@ -132,7 +132,11 @@ export function fanInChannelIngressLifecycles(
   const lifecycles = inputs.filter((lifecycle) => lifecycle !== undefined);
   const first = lifecycles[0];
   if (!first) {
-    return { lifecycle: undefined, settle: async () => {}, abandon: async () => {} };
+    return {
+      lifecycle: undefined,
+      settle: async () => {},
+      abandon: async () => {},
+    };
   }
 
   let handedOff = false;
@@ -147,7 +151,6 @@ export function fanInChannelIngressLifecycles(
   const failAll = async (error: unknown) => {
     await Promise.all(lifecycles.map(async (lifecycle) => await lifecycle.onFailed?.(error)));
   };
-
   return {
     lifecycle: {
       abortSignal:
@@ -172,6 +175,10 @@ export function fanInChannelIngressLifecycles(
       onFailed: async (error) => {
         handedOff = true;
         await failAll(error);
+      },
+      onCancelled: async () => {
+        handedOff = true;
+        await Promise.all(lifecycles.map(async (lifecycle) => await lifecycle.onCancelled?.()));
       },
       onAbandoned: async () => {
         handedOff = true;

@@ -139,7 +139,7 @@ export function createDiscordMessageDispatcher(
           }
           const abortSignal = last.abortSignal;
           if (abortSignal?.aborted) {
-            await admissionLifecycle.onAbandoned();
+            await ingress.lifecycle?.onCancelled?.();
             return;
           }
           try {
@@ -157,7 +157,7 @@ export function createDiscordMessageDispatcher(
                 turnAdoptionLifecycle: admissionLifecycle,
               });
               if (abortSignal?.aborted) {
-                await ingress.abandon(abortSignal.reason);
+                await ingress.lifecycle?.onCancelled?.();
                 return;
               }
               if (!ctx) {
@@ -211,7 +211,7 @@ export function createDiscordMessageDispatcher(
               turnAdoptionLifecycle: admissionLifecycle,
             });
             if (abortSignal?.aborted) {
-              await ingress.abandon(abortSignal.reason);
+              await ingress.lifecycle?.onCancelled?.();
               return;
             }
             if (!ctx) {
@@ -232,7 +232,10 @@ export function createDiscordMessageDispatcher(
             }
             messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { ingressSettlement: ingress }));
           } catch (error) {
-            await admissionLifecycle.onAbandoned();
+            if (abortSignal?.aborted) {
+              await ingress.lifecycle?.onCancelled?.();
+              return;
+            }
             throw error;
           }
         },
@@ -244,7 +247,7 @@ export function createDiscordMessageDispatcher(
     onCancel: (entries) => {
       for (const entry of entries) {
         pendingDebounceEntries.delete(entry);
-        const settlement = Promise.resolve(entry.turnAdoptionLifecycle?.onAbandoned())
+        const settlement = Promise.resolve(entry.turnAdoptionLifecycle?.onCancelled?.())
           .catch((error: unknown) => {
             params.runtime.error(
               danger(`discord ingress cancellation settlement failed: ${String(error)}`),
@@ -271,6 +274,10 @@ export function createDiscordMessageDispatcher(
         const reason = dispatcherShutdown.signal.aborted
           ? (dispatcherShutdown.signal.reason ?? new Error("discord dispatcher shut down"))
           : (options?.abortSignal?.reason ?? new Error("discord dispatch aborted"));
+        if (options?.turnAdoptionLifecycle?.onCancelled) {
+          await options.turnAdoptionLifecycle.onCancelled();
+          return { kind: "deferred" };
+        }
         return { kind: "failed-retryable", error: reason };
       }
       // Filter bot-own messages before they enter the debounce queue.

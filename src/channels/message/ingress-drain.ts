@@ -69,6 +69,8 @@ type ChannelIngressDispatchLifecycle = {
   onAdoptionFinalizing: () => void;
   /** Deferred work terminally failed after dispatch returned. */
   onFailed?: (error: unknown) => void | Promise<void>;
+  /** Explicit cancellation before adoption; releases without consuming retry budget. */
+  onCancelled?: () => void | Promise<void>;
   /**
    * Deferred turn finished without ever owning the reply lane.
    * Drain releases the claim for retry.
@@ -347,13 +349,12 @@ export function createChannelIngressDrain<
 
   const releaseClaim = async (
     claim: ChannelIngressQueueClaim<TPayload, TMetadata>,
-    lastError?: string,
+    releaseOptions?: { lastError?: string; recordAttempt?: boolean },
   ) => {
     await commitClaimWriteWithRetry({
       claim,
       label: "release",
-      write: () =>
-        queue.release(claim, lastError === undefined ? {} : { lastError, releasedAt: now() }),
+      write: () => queue.release(claim, { ...releaseOptions, releasedAt: now() }),
       falseMeansReclaimed: false,
     });
   };
@@ -401,7 +402,7 @@ export function createChannelIngressDrain<
     }
     const displayId = claim.id.replace(/^0+(?=\d)/, "") || claim.id;
     log(`spooled update ${displayId} failed; keeping for retry: ${disposition.message}`);
-    await releaseClaim(claim, disposition.message);
+    await releaseClaim(claim, { lastError: disposition.message });
   };
 
   const createSettleOwner = (
@@ -468,6 +469,24 @@ export function createChannelIngressDrain<
     state.stallTimer.unref?.();
   };
 
+  const releaseUnadopted = async (
+    state: ActiveHandlerState<TPayload, TMetadata>,
+    releaseOptions: { lastError?: string; recordAttempt?: boolean },
+  ) => {
+    if (state.phase !== "deferred" && state.phase !== "dispatching") {
+      return;
+    }
+    if (state.guillotined || state.superseded) {
+      return;
+    }
+    clearStallTimer(state);
+    await state
+      .settleOnce(async () => {
+        await releaseClaim(state.claim, releaseOptions);
+      })
+      .catch(() => undefined);
+  };
+
   const createLifecycle = (
     state: ActiveHandlerState<TPayload, TMetadata>,
   ): ChannelIngressDispatchLifecycle => {
@@ -528,19 +547,13 @@ export function createChannelIngressDrain<
           await applyFailureDisposition(state.claim, error);
         });
       },
+      onCancelled: async () => {
+        // Cancellation means ownership ended before delivery, so preserve every
+        // prior retry fact while reopening the canonical row for replacement.
+        await releaseUnadopted(state, { recordAttempt: false });
+      },
       onAbandoned: async () => {
-        if (state.phase !== "deferred" && state.phase !== "dispatching") {
-          return;
-        }
-        if (state.guillotined || state.superseded) {
-          return;
-        }
-        clearStallTimer(state);
-        await state
-          .settleOnce(async () => {
-            await releaseClaim(state.claim, "turn-abandoned");
-          })
-          .catch(() => undefined);
+        await releaseUnadopted(state, { lastError: "turn-abandoned" });
       },
     };
   };
