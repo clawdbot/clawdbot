@@ -81,6 +81,10 @@ describe("resolveWorkspaceIcon", () => {
     { relative: "public/favicon.ico", body: ICO_BYTES, contentType: "image/x-icon" },
     { relative: "public/favicon.png", body: PNG_BYTES, contentType: "image/png" },
     { relative: "public/favicon-32.png", body: PNG_BYTES, contentType: "image/png" },
+    { relative: "public/apple-touch-icon.png", body: PNG_BYTES, contentType: "image/png" },
+    { relative: "static/favicon.svg", body: SVG_BYTES, contentType: "image/svg+xml" },
+    { relative: "static/favicon.ico", body: ICO_BYTES, contentType: "image/x-icon" },
+    { relative: "static/favicon.png", body: PNG_BYTES, contentType: "image/png" },
     { relative: "ui/public/favicon-32.png", body: PNG_BYTES, contentType: "image/png" },
     { relative: "ui/public/favicon.svg", body: SVG_BYTES, contentType: "image/svg+xml" },
     { relative: "ui/public/favicon.ico", body: ICO_BYTES, contentType: "image/x-icon" },
@@ -119,7 +123,7 @@ describe("resolveWorkspaceIcon", () => {
   });
 
   const rejected = [
-    { label: "an unconventional location", files: { "public/apple-touch-icon.png": PNG_BYTES } },
+    { label: "an unconventional location", files: { "vendor/favicon.png": PNG_BYTES } },
     { label: "an empty file", files: { "favicon.ico": Buffer.alloc(0) } },
     { label: "bytes that are not an image", files: { "favicon.ico": Buffer.from("#!/bin/sh\n") } },
     {
@@ -333,6 +337,21 @@ describe("handleWorkspaceIconHttpRequest", () => {
     expect(Buffer.from(await first.arrayBuffer()).equals(PNG_BYTES)).toBe(true);
     expect(Buffer.from(await second.arrayBuffer()).equals(PNG_BYTES)).toBe(true);
     expect(mocks.resolveLocalSessionWorkspaceRoot).not.toHaveBeenCalled();
+  });
+
+  it("keeps a recently served session snapshot across bounded-cache eviction", async () => {
+    const root = await makeWorkspace({ "favicon.png": PNG_BYTES });
+    mocks.resolveLocalSessionWorkspaceRoot.mockReturnValue(root);
+    await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:kept" });
+    for (let index = 0; index < 127; index += 1) {
+      await prepareSessionWorkspaceIcon({ sessionKey: `agent:main:filler-${index}` });
+    }
+
+    expect((await fetch(iconRoute("agent:main:kept"))).status).toBe(200);
+    await prepareSessionWorkspaceIcon({ sessionKey: "agent:main:newest" });
+
+    expect((await fetch(iconRoute("agent:main:kept"))).status).toBe(200);
+    expect((await fetch(iconRoute("agent:main:filler-0"))).status).toBe(503);
   });
 
   const malformed = ["/__openclaw__/workspace-icon/", "/__openclaw__/workspace-icon/a/b"];

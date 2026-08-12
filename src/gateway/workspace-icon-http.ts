@@ -39,6 +39,10 @@ const WORKSPACE_ICON_RELATIVE_PATHS = [
   "public/favicon.ico",
   "public/favicon.png",
   "public/favicon-32.png",
+  "public/apple-touch-icon.png",
+  "static/favicon.svg",
+  "static/favicon.ico",
+  "static/favicon.png",
   "ui/public/favicon-32.png",
   "ui/public/favicon.svg",
   "ui/public/favicon.ico",
@@ -229,7 +233,12 @@ export async function prepareSessionWorkspaceIcon(params: {
 function readPreparedSessionWorkspaceIcon(
   sessionKey: string,
 ): Promise<WorkspaceIconResolution> | undefined {
-  return sessionWorkspaceIconCache.get(sessionKey);
+  const prepared = sessionWorkspaceIconCache.get(sessionKey);
+  if (prepared) {
+    sessionWorkspaceIconCache.delete(sessionKey);
+    sessionWorkspaceIconCache.set(sessionKey, prepared);
+  }
+  return prepared;
 }
 
 /** `matched` claims the response so a malformed key 404s instead of reaching the SPA. */
