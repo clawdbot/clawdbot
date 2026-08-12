@@ -104,7 +104,7 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
           },
           channels: {
             "team:T01234567:channel:C01234567": {
-              users: ["team:T01234567:user:U01234567"],
+              users: ["team:T01234567:user:U01234567", "team:T01234567:user:B01234567"],
               toolsBySender: {
                 U01234567: {},
                 "id:W01234567": {},

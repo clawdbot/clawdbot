@@ -42,7 +42,7 @@ export type SlackAuthTestIdentity = {
 };
 
 const SLACK_CHANNEL_ID_RE = /^[CDG][A-Z0-9]{8,}$/;
-const SLACK_USER_ID_RE = /^[UW][A-Z0-9]{8,}$/;
+const SLACK_USER_ID_RE = /^[BUW][A-Z0-9]{8,}$/;
 
 function isWorkspaceScopedSlackChannelEntry(
   value: unknown,
