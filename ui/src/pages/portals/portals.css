@@ -25,7 +25,7 @@
   color: var(--text);
   font: inherit;
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .portals-rail__item:hover,

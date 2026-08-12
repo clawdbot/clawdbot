@@ -29,7 +29,8 @@ function createContext(
   methods: string[],
   request: (method: string, params: Record<string, unknown>) => Promise<unknown>,
 ) {
-  const client = { request: vi.fn(request) } as unknown as GatewayBrowserClient;
+  const requestMock = vi.fn(request);
+  const client = { request: requestMock } as unknown as GatewayBrowserClient;
   const snapshot: ApplicationGatewaySnapshot = {
     client,
     phase: "connected",
@@ -63,7 +64,7 @@ function createContext(
         listener({ type: "event", event: "portal.changed", payload: { portals } });
       }
     },
-    request: client.request,
+    request: requestMock,
   };
 }
 
