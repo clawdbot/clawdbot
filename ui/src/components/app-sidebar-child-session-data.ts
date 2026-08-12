@@ -110,7 +110,7 @@ export function preserveActiveSessionLineageRows(
     if (!parent) {
       break;
     }
-    preserved[parent[0]] = parent[1];
+    preserved[parent[0]] = parent[1].filter((row) => areUiSessionKeysEquivalent(row.key, childKey));
     childKey = parent[0];
   }
   return preserved;
