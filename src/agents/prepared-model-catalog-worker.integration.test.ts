@@ -311,8 +311,9 @@ describe("prepared model catalog worker boundary", () => {
         models: [expect.objectContaining({ id: "durable-model", available: false })],
       },
     });
+    expect(removed.projected.authStore).toBeDefined();
     expect(
-      removed.projected.authStore.profiles[`${DURABLE_AUTH_PROVIDER_ID}:default`],
+      removed.projected.authStore?.profiles[`${DURABLE_AUTH_PROVIDER_ID}:default`],
     ).toBeUndefined();
   });
 
