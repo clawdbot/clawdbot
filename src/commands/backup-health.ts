@@ -16,7 +16,7 @@ type BackupFreshness = {
 };
 
 /** Read backup freshness without creating or repairing an absent state database. */
-export function readBackupFreshness(env?: NodeJS.ProcessEnv): BackupFreshness {
+export function readBackupFreshness(env: NodeJS.ProcessEnv): BackupFreshness {
   return (
     withExistingOpenClawStateDatabaseReadOnly(
       ({ db }) => ({
@@ -40,7 +40,7 @@ export function buildBackupStatusValue(params: {
   }
   const age = params.formatTimeAgo(Math.max(0, (params.now ?? Date.now()) - latest.createdAt));
   return latest.status === "ok"
-    ? `last ok ${age} (${latest.kind})`
+    ? `last ok ${age} (${latest.kind}${latest.pushFailed ? ", push failing" : ""})`
     : `last attempt failed ${age} (${latest.kind})`;
 }
 
@@ -50,6 +50,12 @@ function buildBackupDoctorHint(params: {
   now?: number;
 }): string | null {
   const latestOk = params.freshness.latestOk;
+  if (latestOk?.pushFailed) {
+    return [
+      "The newest local Git backup succeeded, but its requested push failed.",
+      `Check the configured Git remote for ${latestOk.archivePath}, then retry the backup.`,
+    ].join("\n");
+  }
   const stale =
     !latestOk || (params.now ?? Date.now()) - latestOk.createdAt > BACKUP_STALE_AFTER_MS;
   if (!stale) {
@@ -65,7 +71,7 @@ function buildBackupDoctorHint(params: {
 }
 
 /** Emit the non-repairing backup freshness hint when it applies. */
-export function noteBackupDoctorHint(env?: NodeJS.ProcessEnv): void {
+export function noteBackupDoctorHint(env: NodeJS.ProcessEnv): void {
   const hint = buildBackupDoctorHint({ freshness: readBackupFreshness(env) });
   if (hint) {
     note(hint, "Backups");

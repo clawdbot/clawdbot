@@ -50,6 +50,7 @@ describe("backup run records", () => {
         status: "ok",
         kind: "git",
         target: `commit-${index}`,
+        pushFailed: index === 202,
         createdAt: index,
       });
     }
@@ -68,6 +69,11 @@ describe("backup run records", () => {
     expect(JSON.parse(rows?.at(-1)?.manifest_json ?? "{}")).toMatchObject({
       kind: "git",
       target: "commit-202",
+      pushFailed: true,
+    });
+    expect(readBackupFreshness(env)).toMatchObject({
+      latest: { createdAt: 202, pushFailed: true },
+      latestOk: { createdAt: 202, pushFailed: true },
     });
   });
 
@@ -115,6 +121,30 @@ describe("backup run records", () => {
     noteBackupDoctorHint(env);
     expect(mocks.note).toHaveBeenCalledWith(
       expect.stringContaining("more than 14 days old"),
+      "Backups",
+    );
+
+    recordBackupRunOutcome({
+      env,
+      archivePath: "/backups/git",
+      status: "ok",
+      kind: "git",
+      pushFailed: true,
+      createdAt: 2,
+    });
+    const pushFailed = readBackupFreshness(env);
+    expect(
+      buildBackupStatusValue({
+        freshness: pushFailed,
+        now: 3_600_002,
+        formatTimeAgo,
+      }),
+    ).toBe("last ok 1h ago (git, push failing)");
+    mocks.note.mockClear();
+    vi.mocked(Date.now).mockReturnValue(3_600_002);
+    noteBackupDoctorHint(env);
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringMatching(/configured Git remote.*\/backups\/git/su),
       "Backups",
     );
   });

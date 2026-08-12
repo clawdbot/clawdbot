@@ -33,6 +33,9 @@ type BackupGitScopeOptions = {
   agent?: string;
 };
 
+export const GIT_BACKUP_PUSH_CREDENTIAL_WARNING =
+  "Warning: pushed backup history contains credential material; keep the Git remote private.";
+
 function resolveRequiredPath(value: string | undefined, label: string): string {
   const trimmed = value?.trim();
   if (!trimmed) {
@@ -107,6 +110,7 @@ function recordGitOutcomeBestEffort(
     status: "ok" | "failed";
     target?: string;
     error?: string;
+    pushFailed?: true;
   },
 ): void {
   try {
@@ -116,6 +120,7 @@ function recordGitOutcomeBestEffort(
       status: params.status,
       target: params.target,
       error: params.error,
+      pushFailed: params.pushFailed,
     });
   } catch (error) {
     runtime.error(
@@ -144,9 +149,7 @@ export async function backupGitInitCommand(
 export async function backupGitCreateCommand(runtime: RuntimeEnv, options: BackupGitCreateOptions) {
   const repositoryPath = resolveRequiredPath(options.repository, "--repository");
   if (options.push && !options.excludeSecrets) {
-    runtime.error(
-      "Warning: pushed backup history contains credential material; keep the Git remote private.",
-    );
+    runtime.error(GIT_BACKUP_PUSH_CREDENTIAL_WARNING);
   }
   try {
     const result = await createGitBackup({
@@ -157,11 +160,14 @@ export async function backupGitCreateCommand(runtime: RuntimeEnv, options: Backu
       excludeSecrets: options.excludeSecrets,
       push: options.push,
     });
+    // A completed local backup remains successful even when requested remote replication fails;
+    // pushFailed records that durable degradation without discarding the recoverable local commit.
     recordGitOutcomeBestEffort(runtime, {
       repositoryPath,
       status: "ok",
       target: result.commit,
       error: result.pushWarning,
+      ...(result.pushWarning ? { pushFailed: true } : {}),
     });
     if (options.json) {
       writeRuntimeJson(runtime, result);

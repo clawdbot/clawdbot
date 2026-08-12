@@ -20,6 +20,7 @@ export type BackupRunRecord = {
   kind: BackupRunKind;
   target?: string;
   error?: string;
+  pushFailed?: true;
 };
 
 function boundedText(value: string | undefined, maxLength: number): string | undefined {
@@ -58,6 +59,7 @@ function parseBackupRun(row: {
     kind: value.kind,
     ...(typeof value.target === "string" ? { target: value.target } : {}),
     ...(typeof value.error === "string" ? { error: value.error } : {}),
+    ...(value.pushFailed === true ? { pushFailed: true } : {}),
   };
 }
 
@@ -68,6 +70,7 @@ export function recordBackupRunOutcome(params: {
   kind: BackupRunKind;
   target?: string;
   error?: string;
+  pushFailed?: boolean;
   createdAt?: number;
   env?: NodeJS.ProcessEnv;
 }): void {
@@ -75,6 +78,7 @@ export function recordBackupRunOutcome(params: {
     kind: params.kind,
     ...(boundedText(params.target, 512) ? { target: boundedText(params.target, 512) } : {}),
     ...(boundedText(params.error, 1_200) ? { error: boundedText(params.error, 1_200) } : {}),
+    ...(params.pushFailed === true ? { pushFailed: true } : {}),
   });
   runOpenClawStateWriteTransaction(
     ({ db }) => {
