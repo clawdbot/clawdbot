@@ -69,6 +69,7 @@ import {
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
   createSessionVisibilityGuard,
+  createSessionVisibilityRowChecker,
   createAgentToAgentPolicy,
   resolveEffectiveSessionToolsVisibility,
   resolveSessionReference,
@@ -584,7 +585,6 @@ export function createSessionsSendTool(opts?: {
         mainKey,
         requesterInternalKey: effectiveRequesterKey,
         restrictToSpawned,
-        allowMissingKey,
         callGateway: gatewayCall,
       });
       if (!resolvedSession.ok) {
@@ -594,12 +594,21 @@ export function createSessionsSendTool(opts?: {
           error: resolvedSession.error,
         });
       }
+      const resolutionAccess = createSessionVisibilityRowChecker({
+        action: "send",
+        defaultAgentId: resolveDefaultAgentId(cfg),
+        requesterSessionKey: effectiveRequesterKey,
+        visibility: sessionVisibility,
+        a2aPolicy,
+      }).check({ key: resolvedSession.key });
       const visibleSession = await resolveVisibleSessionReference({
         action: "send",
         resolvedSession,
         requesterSessionKey: effectiveRequesterKey,
         restrictToSpawned,
         visibilitySessionKey: sessionKey,
+        allowMissingKey,
+        concealResolutionError: resolutionAccess.allowed ? undefined : resolutionAccess.error,
         callGateway: gatewayCall,
       });
       const unresolvedDisplayKey = sessionKey;
@@ -760,7 +769,7 @@ export function createSessionsSendTool(opts?: {
         ...(opts?.signal ? { signal: opts.signal } : {}),
         targetSessionKey: resolvedKey,
         run: async () => {
-          if (resolvedSession.missing) {
+          if (visibleSession.missing) {
             const createdSession = await createConfiguredAgentMainSession({
               cfg,
               callGateway: gatewayCall,

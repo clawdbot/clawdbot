@@ -150,7 +150,7 @@ describe("sessions_history redaction", () => {
     const requests: CallGatewayRequest[] = [];
     const sessionKey = "agent:main:missing";
     const tool = createSessionsHistoryTool({
-      config: {},
+      config: { tools: { sessions: { visibility: "all" } } },
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
         requests.push(request);
         if (request.method === "sessions.resolve") {
@@ -166,6 +166,25 @@ describe("sessions_history redaction", () => {
       status: "error",
       error: `No session found: ${sessionKey}`,
     });
+    expect(requests.map((request) => request.method)).toEqual(["sessions.resolve"]);
+  });
+
+  it("conceals missing explicit keys denied by session visibility", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      agentSessionKey: "agent:main:main",
+      config: { tools: { sessions: { visibility: "self" } } },
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        throw new Error("No session found: agent:main:missing");
+      },
+    });
+
+    const result = await tool.execute("hidden-missing-key", {
+      sessionKey: "agent:main:missing",
+    });
+
+    expect(result.details).toMatchObject({ status: "forbidden" });
     expect(requests.map((request) => request.method)).toEqual(["sessions.resolve"]);
   });
 

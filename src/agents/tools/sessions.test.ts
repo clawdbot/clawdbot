@@ -838,6 +838,31 @@ describe("sessions_send gating", () => {
     expect(requireGatewayRequest().method).toBe("sessions.resolve");
   });
 
+  it("conceals missing explicit keys denied by session visibility", async () => {
+    callGatewayMock.mockRejectedValueOnce(new Error("No session found: agent:main:missing"));
+    const tool = createSessionsSendTool({
+      agentSessionKey: MAIN_AGENT_SESSION_KEY,
+      callGateway: callGatewayMock,
+      config: {
+        session: { scope: "per-sender", mainKey: "main" },
+        tools: {
+          agentToAgent: { enabled: false },
+          sessions: { visibility: "self" },
+        },
+      } as never,
+    });
+
+    const result = await tool.execute("call-hidden-missing-key", {
+      sessionKey: "agent:main:missing",
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+
+    expect(requireDetails(result).status).toBe("forbidden");
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(requireGatewayRequest().method).toBe("sessions.resolve");
+  });
+
   it("prefers sessionKey over a redundant label", async () => {
     const tool = createMainSessionsSendTool();
 

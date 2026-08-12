@@ -3,7 +3,18 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { testing as agentStepTesting } from "../agents/tools/agent-step.test-support.js";
 import { runSessionsSendA2AFlow } from "../agents/tools/sessions-send-tool.a2a.js";
 import {
@@ -33,6 +44,7 @@ let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
 let gatewayPort: number;
 const gatewayToken = "test-gateway-token-1234567890";
 let envSnapshot: ReturnType<typeof captureEnv>;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type SessionSendTool = ReturnType<typeof createOpenClawTools>[number];
 const SESSION_SEND_E2E_TIMEOUT_MS = 10_000;
@@ -154,7 +166,7 @@ afterAll(async () => {
 
 describe("sessions_send gateway loopback", () => {
   it("rejects a missing explicit key without creating or running a session", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-missing-"));
+    const dir = tempDirs.make("openclaw-sessions-send-missing-");
     const missingKey = "agent:main:missing";
     const spy = agentCommandMock as unknown as Mock<(opts: unknown) => Promise<void>>;
     testState.sessionStorePath = path.join(dir, "sessions.json");
@@ -192,7 +204,6 @@ describe("sessions_send gateway loopback", () => {
       ).toBe(undefined);
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 
