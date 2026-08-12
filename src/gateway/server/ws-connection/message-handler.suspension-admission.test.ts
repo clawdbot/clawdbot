@@ -150,6 +150,27 @@ function attachHarness(params: { deferSocketSend?: boolean } = {}) {
           },
         }),
       ),
+    sendNodeConnect: () =>
+      onMessage?.(
+        JSON.stringify({
+          type: "req",
+          id: "node-connect-1",
+          method: "connect",
+          params: {
+            minProtocol: PROTOCOL_VERSION,
+            maxProtocol: PROTOCOL_VERSION,
+            client: {
+              id: "gateway-client",
+              version: "dev",
+              platform: "test",
+              mode: "backend",
+            },
+            role: "node",
+            scopes: [],
+            caps: [],
+          },
+        }),
+      ),
     sendWorkerConnect: () =>
       onMessage?.(
         JSON.stringify({
@@ -224,6 +245,32 @@ describe("WebSocket connect suspension admission", () => {
     });
     expect(harness.client).not.toBeNull();
     expect(harness.close).not.toHaveBeenCalled();
+    suspension?.release();
+  });
+
+  it("rejects a node connect while suspension is prepared", async () => {
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    const harness = attachHarness();
+
+    harness.sendNodeConnect();
+
+    await vi.waitFor(() => {
+      expect(harness.socketSend).toHaveBeenCalledOnce();
+    });
+    const response = JSON.parse(harness.socketSend.mock.calls[0]?.[0] ?? "{}") as {
+      error?: { details?: Record<string, unknown> };
+    };
+    expect(response.error?.details).toMatchObject({
+      method: "connect",
+      reason: "gateway-suspending",
+      phase: "prepared",
+    });
+    expect(harness.setClient).not.toHaveBeenCalled();
+    expect(upsertPresenceMock).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(harness.close).toHaveBeenCalledWith(1013, "gateway suspension in progress");
+    });
     suspension?.release();
   });
 

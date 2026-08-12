@@ -87,6 +87,11 @@ export async function runGatewaySuspend(
   let latest: GatewaySuspendPrepareResult | undefined;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    // A sleep can overshoot the deadline; never issue a prepare that could
+    // suspend the Gateway after the operator's advertised --wait window.
+    if (attempt > 0 && deadlineMs !== undefined && nowMs() >= deadlineMs) {
+      break;
+    }
     latest = (await deps.callGateway("gateway.suspend.prepare", options.rpcOpts, {
       requestId,
     })) as GatewaySuspendPrepareResult;

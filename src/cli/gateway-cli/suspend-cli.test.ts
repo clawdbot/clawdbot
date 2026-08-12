@@ -103,6 +103,27 @@ describe("gateway suspend CLI", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
+  it("never issues another prepare after a sleep overshoots the deadline", async () => {
+    let now = 1_000;
+    const callGateway = vi.fn(async () => busyResult);
+
+    await expect(
+      runGatewaySuspend(
+        { rpcOpts: {}, requestId: "host-operation", waitSeconds: "0.2" },
+        {
+          callGateway,
+          runtime: createRuntime(),
+          nowMs: () => now,
+          sleep: async () => {
+            // A lagging clock can wake far past the advertised --wait window.
+            now += 10_000;
+          },
+        },
+      ),
+    ).rejects.toThrow("Timed out waiting for the Gateway to become idle.");
+    expect(callGateway).toHaveBeenCalledOnce();
+  });
+
   it("reports the latest blockers when the wait deadline expires", async () => {
     let now = 1_000;
 
