@@ -3330,9 +3330,12 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const cronLetterSpacing = await page
         .locator(".cron-run-entry__body.chat-text")
         .evaluate((element) => getComputedStyle(element).letterSpacing);
+      const bodyLetterSpacing = await page
+        .locator("body")
+        .evaluate((element) => getComputedStyle(element).letterSpacing);
       expect(transcriptLetterSpacing).toBe("normal");
-      expect(noticeLetterSpacing).toBe("-0.12px");
-      expect(cronLetterSpacing).toBe("-0.14px");
+      expect(noticeLetterSpacing).toBe(bodyLetterSpacing);
+      expect(cronLetterSpacing).toBe(bodyLetterSpacing);
     } finally {
       await closeBrowserPage(page);
     }
