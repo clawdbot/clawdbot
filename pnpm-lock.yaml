@@ -89,8 +89,8 @@ importers:
         specifier: workspace:*
         version: link:packages/ai
       '@openclaw/fs-safe':
-        specifier: 0.5.4
-        version: 0.5.4
+        specifier: 0.5.5
+        version: 0.5.5
       '@openclaw/proxyline':
         specifier: 0.3.4
         version: 0.3.4(undici@8.9.0)
@@ -1487,8 +1487,8 @@ importers:
   extensions/onepassword:
     dependencies:
       '@openclaw/fs-safe':
-        specifier: 0.5.4
-        version: 0.5.4
+        specifier: 0.5.5
+        version: 0.5.5
       execa:
         specifier: 10.0.0
         version: 10.0.0
@@ -2619,6 +2619,9 @@ packages:
   '@aws-sdk/core@3.977.1':
     resolution: {integrity: sha512-KVtQRtc00ES/y+Sc3vYXeP6pCIcNlBJCZOwvqSy8ZpVGmbM5+IG+AfhuTKQ2oXmIVqZJewaGMMpzPkywC6xg0w==}
     engines: {node: '>=20.0.0'}
+    deprecated: |-
+      Deprecated due to Document number parsing bug in JSON, see
+        https://github.com/aws/aws-sdk-js-v3/issues/8246. Newer version available.
 
   '@aws-sdk/credential-provider-cognito-identity@3.972.60':
     resolution: {integrity: sha512-16Fxa3veKIO6nHJr+vN76z3BkSU7725lzruc5S2SQSTUTbK4TXtmi8033WQljZj4k1+383UsMaNOHN6B76fK5A==}
@@ -4135,8 +4138,8 @@ packages:
     engines: {node: '>=22'}
     hasBin: true
 
-  '@openclaw/fs-safe@0.5.4':
-    resolution: {integrity: sha512-lttlWKRBQU7eYDYykU2BPoF1S6AESGrT77mVCXsuWBxnRBTAI/PuGB89DB3D1lBCDaqTykIjymPJz4pFesGnkg==}
+  '@openclaw/fs-safe@0.5.5':
+    resolution: {integrity: sha512-x8wYigrOwmnsE8v4LfAh2eTvvkuDMspBrQeBp/GyB9/c7eFf8aL7gK4keewDbhscKX1pACD8Yd+ehZq6o29xHw==}
     engines: {node: '>=22'}
 
   '@openclaw/libterminal@0.3.2':
@@ -6279,6 +6282,7 @@ packages:
 
   crypto-js@4.2.0:
     resolution: {integrity: sha512-KALDyEYgpY+Rlob/iriUtjV6d5Eq+Y191A5g4UqLAi8CyGP9N1+FdVbkc1SxKc2r4YAYqG8JzO2KGL+AizD70Q==}
+    deprecated: Active development of CryptoJS has been discontinued. This library is no longer maintained.
 
   css-functions-list@3.3.3:
     resolution: {integrity: sha512-8HFEBPKhOpJPEPu70wJJetjKta86Gw9+CCyCnB3sui2qQfOvRyqBy4IKLKKAwdMpWb2lHXWk9Wb4Z6AmaUT1Pg==}
@@ -11426,7 +11430,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@openclaw/fs-safe@0.5.4':
+  '@openclaw/fs-safe@0.5.5':
     optionalDependencies:
       jszip: 3.10.1
       tar: 7.5.22
