@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { PAIRING_PENDING_TTL_MS } from "../infra/device-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { issueOperatorToken, openTrackedWs } from "./device-authz.test-helpers.js";
 import {
@@ -204,6 +205,43 @@ describe("live device scope upgrade", () => {
         ).ok,
       ).toBe(true);
     } finally {
+      limited.ws.close();
+    }
+  });
+
+  test("uses the refreshed durable deadline when retrying an existing upgrade", async () => {
+    const limited = await openLimitedDevice("live-scope-upgrade-refreshed-deadline");
+    const now = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      const first = await rpcReq<{ requestId: string }>(
+        limited.ws,
+        "device.scopes.requestUpgrade",
+        { scopes: FULL_SCOPES },
+      );
+      nowSpy.mockReturnValue(now + PAIRING_PENDING_TTL_MS - 1_000);
+      const retry = await rpcReq<{ requestId: string }>(
+        limited.ws,
+        "device.scopes.requestUpgrade",
+        { scopes: FULL_SCOPES },
+      );
+      expect(retry.payload?.requestId).toBe(first.payload?.requestId);
+
+      nowSpy.mockReturnValue(now + PAIRING_PENDING_TTL_MS + 1_000);
+      const requestId = retry.payload?.requestId;
+      const wait = rpcReq<{ status: string; requestId: string }>(
+        limited.ws,
+        "device.scopes.waitUpgrade",
+        { requestId },
+        10_000,
+      );
+      expect((await rpcReq(started.ws, "device.pair.approve", { requestId })).ok).toBe(true);
+      expect(await wait).toMatchObject({
+        ok: true,
+        payload: { status: "approved", requestId },
+      });
+    } finally {
+      nowSpy.mockRestore();
       limited.ws.close();
     }
   });

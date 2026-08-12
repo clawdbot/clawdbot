@@ -109,7 +109,7 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
     if (
       !coordinator?.register({
         requestId: pairing.request.requestId,
-        requestTs: pairing.request.ts,
+        expiresAtMs: pairing.expiresAtMs,
         owner,
         requestedScopes,
         initialToken: paired.tokens?.operator?.token,

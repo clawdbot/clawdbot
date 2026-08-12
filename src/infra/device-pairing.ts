@@ -59,6 +59,7 @@ type DevicePairingSupersededRequest = Pick<DevicePairingPendingRequest, "request
 type RequestDevicePairingResult = {
   status: "pending";
   request: DevicePairingPendingRequest;
+  expiresAtMs: number;
   created: boolean;
   superseded?: DevicePairingSupersededRequest[];
 };
@@ -942,6 +943,7 @@ export async function requestDevicePairing(
     const publicResult = {
       ...result,
       request: toPublicPendingDevicePairingRequest(result.request),
+      expiresAtMs: (result.request.refreshedAtMs ?? result.request.ts) + PAIRING_PENDING_TTL_MS,
     };
     return superseded.length > 0 ? { ...publicResult, superseded } : publicResult;
   });

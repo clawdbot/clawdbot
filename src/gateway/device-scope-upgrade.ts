@@ -1,9 +1,5 @@
 import type { ScopeUpgradeResult } from "../../packages/gateway-protocol/src/index.js";
-import {
-  getPairedDevice,
-  getPendingDevicePairing,
-  PAIRING_PENDING_TTL_MS,
-} from "../infra/device-pairing.js";
+import { getPairedDevice, getPendingDevicePairing } from "../infra/device-pairing.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 
 const TERMINAL_GRACE_MS = 15_000;
@@ -55,7 +51,7 @@ export class ScopeUpgradeCoordinator {
 
   register(params: {
     requestId: string;
-    requestTs: number;
+    expiresAtMs: number;
     owner: UpgradeOwner;
     requestedScopes: string[];
     initialToken?: string;
@@ -75,7 +71,7 @@ export class ScopeUpgradeCoordinator {
       wake: createUpgradeWake(),
     };
     entry.requestedScopes = [...params.requestedScopes];
-    entry.expiresAtMs = params.requestTs + PAIRING_PENDING_TTL_MS;
+    entry.expiresAtMs = params.expiresAtMs;
     if (entry.cleanupTimer) {
       clearTimeout(entry.cleanupTimer);
     }
