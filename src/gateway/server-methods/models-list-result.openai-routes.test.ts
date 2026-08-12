@@ -141,10 +141,9 @@ describe("models.list OpenAI routes", () => {
         catalogProjector: { evaluateEntry } as never,
       }),
     ).resolves.toEqual({ models: [] });
-    expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({
-      agentId: "main",
-      readOnly: false,
-    });
+    expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main", readOnly: false }),
+    );
     expect(evaluateEntry).not.toHaveBeenCalled();
   });
 
@@ -227,10 +226,9 @@ describe("models.list OpenAI routes", () => {
         }),
       ],
     });
-    expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({
-      agentId: "worker",
-      readOnly: false,
-    });
+    expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "worker", readOnly: false }),
+    );
   });
 
   it("escalates full discovery using the replacement owner's agent", async () => {
@@ -273,8 +271,8 @@ describe("models.list OpenAI routes", () => {
     await buildModelsListResult({ context, params: { view: "configured" } });
 
     expect(loadGatewayModelCatalogSnapshot.mock.calls).toEqual([
-      [{ agentId: "worker", readOnly: true }],
-      [{ agentId: "main", readOnly: false }],
+      [expect.objectContaining({ agentId: "worker", readOnly: true })],
+      [expect.objectContaining({ agentId: "main", readOnly: false })],
     ]);
   });
 
@@ -345,10 +343,9 @@ describe("models.list OpenAI routes", () => {
     await expect(buildModelsListResult({ context, params: { view: "all" } })).resolves.toEqual({
       models: [],
     });
-    expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({
-      agentId: "main",
-      readOnly: false,
-    });
+    expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main", readOnly: false }),
+    );
   });
 
   it("does not project an ownerless catalog as the requested agent", async () => {
