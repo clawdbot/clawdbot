@@ -33,6 +33,7 @@ export type IncompleteTurnAttempt = Pick<
   | "itemLifecycle"
   | "messagesSnapshot"
   | "replayMetadata"
+  | "currentAttemptReplayMetadata"
   | "terminal"
   | "toolMetas"
 > &

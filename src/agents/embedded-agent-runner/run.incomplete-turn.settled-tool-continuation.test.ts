@@ -236,7 +236,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expectNoWarnMessageWith("settled post-tool turn lacked a final answer");
   });
 
-  it("records silent success when the settled-tool finalization completes empty", async () => {
+  it("surfaces an incomplete turn when a required settled-tool finalizer completes empty", async () => {
     const emptyStopAssistant = makeLastAssistant();
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
@@ -261,16 +261,19 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     const result = await runEmbeddedAgent(
       makeRunParams("run-empty-stop-settled-tool-continuation-exhausted", {
         allowEmptyAssistantReplyAsSilent: true,
+        terminalReplyExpectation: "required",
       }),
     );
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(result.payloads).toBeUndefined();
-    expect(result.meta.error).toBeUndefined();
+    expect(result.payloads?.[0]).toMatchObject({ isError: true });
+    expect(result.payloads?.[0]?.text).toContain(
+      "some tool actions may have already been executed",
+    );
+    expect(result.meta.error?.kind).toBe("incomplete_turn");
     expect(result.meta.terminalReplyKind).toBeUndefined();
     expect(result.meta.finalAssistantVisibleText).toBeUndefined();
     expect(result.meta.finalAssistantRawText).toBeUndefined();
-    expect(result.meta.stopReason).toBe("stop");
     expectNoWarnMessageWith("empty response detected");
     expectWarnMessageWith("settled-turn finalization completed without a visible answer");
   });

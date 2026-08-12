@@ -107,34 +107,16 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       prompt,
       noteLaneTaskProgress: input.finalization.noteLaneTaskProgress,
     });
-    if (finalization.outcome === "empty") {
-      mergeUsageIntoAccumulator(input.terminalBase.usageAccumulator, finalization.result.usage);
-      lastRunPromptUsage = finalization.result.usage ?? lastRunPromptUsage;
-      log.warn(
-        `settled-turn finalization completed without a visible answer: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
-          `provider=${errorContext.provider}/${errorContext.model} — recording completed-empty outcome`,
-      );
-      const emptyAssistant = finalization.result.assistant;
-      const completedEmptyAttempt = {
-        ...initial.attempt,
-        lastAssistant: emptyAssistant,
-        currentAttemptAssistant: emptyAssistant,
-        currentAttemptCompletedAssistant: emptyAssistant,
-      };
-      return {
-        ...initial,
-        attempt: completedEmptyAttempt,
-        attemptAssistant: emptyAssistant,
-        currentAttemptCompletedAssistant: emptyAssistant,
-        prepared,
-        lastRunPromptUsage,
-        finalizationOutcome: "completed-empty" as const,
-      };
-    }
     attempt = finalization.attempt;
     mergeUsageIntoAccumulator(input.terminalBase.usageAccumulator, attempt.attemptUsage);
     mergeAttemptRunStatsIntoAccumulator(input.terminalBase.usageAccumulator, attempt);
     lastRunPromptUsage = attempt.attemptUsage ?? lastRunPromptUsage;
+    if (finalization.outcome === "empty") {
+      log.warn(
+        `settled-turn finalization completed without a visible answer: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
+          `provider=${errorContext.provider}/${errorContext.model} — recording completed-empty outcome`,
+      );
+    }
     // Successful isolated finalization owns a fresh terminal, never the original abort signal.
     const terminalState: EmbeddedRunTerminalState = {
       outcome: resolveEmbeddedRunAttemptTerminalOutcome({
@@ -164,7 +146,8 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       sessionFileUsed: attempt.sessionFileUsed,
       prepared,
       lastRunPromptUsage,
-      finalizationOutcome: "answered" as const,
+      finalizationOutcome:
+        finalization.outcome === "empty" ? ("completed-empty" as const) : ("answered" as const),
     };
   } catch (error) {
     log.warn(
@@ -186,13 +169,7 @@ async function runPreparedSettledTurnFinalization(input: {
   harness: AgentHarness;
   prompt: string;
   noteLaneTaskProgress: () => void;
-}): Promise<
-  | { outcome: "answered"; attempt: EmbeddedRunAttemptWithReceiptEvidence }
-  | {
-      outcome: "empty";
-      result: AgentHarnessSettledTurnFinalizationResult;
-    }
-> {
+}): Promise<{ outcome: "answered" | "empty"; attempt: EmbeddedRunAttemptWithReceiptEvidence }> {
   return await withEmbeddedRunLaneProgressHeartbeat(input.noteLaneTaskProgress, async () => {
     const finalization = await runEmbeddedSettledTurnFinalizationWithBackend(
       {
@@ -206,12 +183,10 @@ async function runPreparedSettledTurnFinalization(input: {
       input.settledAttempt,
       input.harness,
     );
-    if (finalization.outcome === "empty") {
-      return finalization;
-    }
     return {
-      outcome: "answered",
+      outcome: finalization.outcome,
       attempt: buildSettledTurnFinalizationAttemptResult({
+        outcome: finalization.outcome,
         result: finalization.result,
         settledAttempt: input.settledAttempt,
         prompt: input.prompt,
@@ -222,13 +197,14 @@ async function runPreparedSettledTurnFinalization(input: {
 }
 
 function buildSettledTurnFinalizationAttemptResult(input: {
+  outcome: "answered" | "empty";
   result: AgentHarnessSettledTurnFinalizationResult;
   settledAttempt: EmbeddedRunAttemptWithReceiptEvidence;
   prompt: string;
   agentHarnessId?: string;
 }): EmbeddedRunAttemptWithReceiptEvidence {
   const { result, settledAttempt } = input;
-  const text = resolveSettledTurnFinalizationText(result);
+  const text = input.outcome === "empty" ? "" : resolveSettledTurnFinalizationText(result);
   // Finalization replaces terminal ownership, not host-private facts from settled tools.
   // Keep those facts while replay, abort, and lifecycle state remain finalizer-local.
   return {
