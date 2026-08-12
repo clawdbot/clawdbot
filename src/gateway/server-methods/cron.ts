@@ -1192,7 +1192,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       const page = readCronTaskRunHistoryPage({
         storeKey: cronStoreKey(context.cronStorePath),
         ...cronRunLogPageFilters(p),
-        ...(p.agentId ? { jobIds: jobs.map((job) => job.id) } : {}),
+        agentId: p.agentId,
         jobNameById,
       });
       respond(true, page, undefined);
