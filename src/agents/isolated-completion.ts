@@ -435,22 +435,25 @@ export async function runIsolatedCompletion(
       config,
       includeSetupRegistry: true,
     }) ?? request.provider;
-  const lease = await acquireAgentRunPreparedModelRuntime({
-    config,
-    agentId,
-    agentDir,
-    workspaceDir,
-    runtimePluginSelections: [
-      {
-        provider,
-        modelId: request.model,
-        ...(request.agentHarnessRuntimeOverride
-          ? { runtime: request.agentHarnessRuntimeOverride }
-          : {}),
-        agentId,
-      },
-    ],
-  });
+  const lease = await acquireAgentRunPreparedModelRuntime(
+    {
+      config,
+      agentId,
+      agentDir,
+      workspaceDir,
+      runtimePluginSelections: [
+        {
+          provider,
+          modelId: request.model,
+          ...(request.agentHarnessRuntimeOverride
+            ? { runtime: request.agentHarnessRuntimeOverride }
+            : {}),
+          agentId,
+        },
+      ],
+    },
+    { catalogMode: "static" },
+  );
   const pluginRegistry = lease.snapshot.pluginRegistry;
   try {
     const run = async (): Promise<IsolatedCompletionResult> => {
