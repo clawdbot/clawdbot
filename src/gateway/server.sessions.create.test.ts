@@ -1,6 +1,7 @@
 // Session creation tests protect dashboard-origin session records, transcript
 // creation, parent linkage, and model/provider overrides exposed by the gateway API.
 import { execFile } from "node:child_process";
+import { readdirSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -215,6 +216,24 @@ test("sessions.create and sessions.delete preserve every concurrent session life
   }
 });
 
+// The adoption assertion below flaked once on CI (run 31609081812) with the persisted
+// row missing while all 16 creates succeeded; exhaustive owner-path analysis found no
+// mechanism, and the failure never reproduced locally. On mismatch, capture which SQLite
+// files exist and what session_nodes actually holds so the next occurrence names the
+// writer/reader split instead of printing a bare undefined.
+function describeSessionStoreForensics(storePath: string): string {
+  const storeDir = path.dirname(storePath);
+  const files = readdirSync(storeDir).toSorted();
+  const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
+  const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
+  const rows = database.db
+    .prepare(
+      "SELECT session_key, length(entry_json) AS entry_bytes, updated_at FROM session_nodes ORDER BY session_key",
+    )
+    .all();
+  return JSON.stringify({ storeDir, files, resolvedTargetPath: target.path, rows });
+}
+
 test("concurrent sessions.create requests adopt one canonical keyed session", async () => {
   const { storePath } = await createSessionStoreDir();
   const key = "agent:main:dashboard:concurrent-keyed-session";
@@ -232,9 +251,12 @@ test("concurrent sessions.create requests adopt one canonical keyed session", as
   expect(new Set(created.map((result) => result.payload?.key))).toEqual(new Set([key]));
   const sessionIds = new Set(created.map((result) => result.payload?.sessionId));
   expect(sessionIds.size).toBe(1);
-  expect(loadSessionEntry({ sessionKey: key, storePath })?.sessionId).toBe(
-    created[0]?.payload?.sessionId,
-  );
+  const persistedSessionId = loadSessionEntry({ sessionKey: key, storePath })?.sessionId;
+  const canonicalSessionId = created[0]?.payload?.sessionId;
+  expect(
+    persistedSessionId,
+    persistedSessionId === canonicalSessionId ? "" : describeSessionStoreForensics(storePath),
+  ).toBe(canonicalSessionId);
 });
 
 test("keyed sessions remain recoverable across overlapping create and delete waves", async () => {
