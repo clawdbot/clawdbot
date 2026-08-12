@@ -24,6 +24,7 @@ scenario:
     channels:
       - qa-channel
       - telegram
+      - buzz
     summary: Run the shared channel canary through QA Channel, Crabline, or a live adapter.
     transportPolicy:
       requireGroupMention: true

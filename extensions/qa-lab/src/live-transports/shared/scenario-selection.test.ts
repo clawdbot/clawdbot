@@ -138,6 +138,7 @@ describe("live transport QA scenario selection", () => {
 
   it.each([
     { channelId: "matrix", scenarioId: "thread-follow-up" },
+    { channelId: "buzz", scenarioId: "channel-canary" },
     { channelId: "telegram", scenarioId: "channel-canary" },
     { channelId: "telegram", scenarioId: "channel-message-flows" },
   ] as const)(
@@ -165,7 +166,7 @@ describe("live transport QA scenario selection", () => {
         scenarioIds: ["channel-canary"],
       }),
     ).toThrow(
-      "selected QA scenario(s) do not match the current QA lane: channel-canary (channel=qa-channel|telegram)",
+      "selected QA scenario(s) do not match the current QA lane: channel-canary (channel=qa-channel|telegram|buzz)",
     );
   });
 });

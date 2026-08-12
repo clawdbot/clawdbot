@@ -213,10 +213,33 @@ describe("qa scenario catalog channel contracts", () => {
     expect(scenario.gatewayConfigPatch).not.toHaveProperty("channels.telegram.groups");
   });
 
-  it("keeps the shared channel canary eligible for QA Channel and Telegram", () => {
+  it("keeps the shared channel canary eligible for QA Channel, Telegram, and Buzz", () => {
     const scenario = requireFlowScenario(readQaScenarioById("channel-canary"));
 
-    expect(scenario.execution.channels).toEqual(["qa-channel", "telegram"]);
+    expect(scenario.execution.channels).toEqual(["qa-channel", "telegram", "buzz"]);
+  });
+
+  it("keeps raw Matrix command text scoped to the mention-safety scenario", () => {
+    const scenario = requireFlowScenario(
+      readQaScenarioById("matrix-room-tool-progress-mention-safety"),
+    );
+    const ordinaryProgressScenario = requireFlowScenario(
+      readQaScenarioById("matrix-room-tool-progress-preview"),
+    );
+
+    expect(scenario.execution.channel).toBe("matrix");
+    expect(scenario.execution.config).toMatchObject({
+      matrixConfigOverrides: {
+        streaming: {
+          mode: "partial",
+          progress: { commandText: "raw" },
+        },
+        toolProfile: "coding",
+      },
+    });
+    expect(ordinaryProgressScenario.execution.config).not.toHaveProperty(
+      "matrixConfigOverrides.streaming.progress.commandText",
+    );
   });
 
   it("keeps transcript-role delivery on the Crabline driver", () => {
