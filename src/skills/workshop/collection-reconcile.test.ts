@@ -709,6 +709,51 @@ describe("skill collection reconciliation", () => {
     await expect(fs.access(proposal.record.target.skillFile)).rejects.toThrow();
   });
 
+  it("surfaces proposal reads that exceed the collection lease wait", async () => {
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      env: testState.env,
+      name: "Contended Candidate",
+      description: "Surface collection lock contention.",
+      content: "# Contended Candidate\n",
+    });
+    let releaseLock: (() => void) | undefined;
+    let markAcquired: (() => void) | undefined;
+    const acquired = new Promise<void>((resolve) => {
+      markAcquired = resolve;
+    });
+    const heldLock = withSkillCollectionLock(
+      workspaceDir,
+      async () => {
+        markAcquired?.();
+        await new Promise<void>((resolve) => {
+          releaseLock = resolve;
+        });
+      },
+      { env: testState.env },
+    );
+    await acquired;
+
+    try {
+      await Promise.all([
+        expect(listSkillProposals({ workspaceDir, env: testState.env })).rejects.toMatchObject({
+          code: "OPENCLAW_STATE_LEASE_TIMEOUT",
+        }),
+        expect(
+          inspectSkillProposal(proposal.record.id, {
+            workspaceDir,
+            env: testState.env,
+          }),
+        ).rejects.toMatchObject({
+          code: "OPENCLAW_STATE_LEASE_TIMEOUT",
+        }),
+      ]);
+    } finally {
+      releaseLock?.();
+      await heldLock;
+    }
+  }, 15_000);
+
   it("restores a staged drop when backup commit fails", async () => {
     await writeWorkspaceSkills(workspaceDir, [
       { name: "obsolete", description: "Obsolete procedure", body: "# Original\n" },

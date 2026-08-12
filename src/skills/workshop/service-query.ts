@@ -1,6 +1,8 @@
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isPathInside } from "../../infra/path-safety.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 import {
   assertInsideWorkspace,
@@ -187,57 +189,56 @@ async function reconcilePendingCreateProposal(
   if (!workspaceDir || read.record.kind !== "create" || read.record.status !== "pending") {
     return read;
   }
-  const store = storeOptions(options.env);
-  const scope = proposalScope(options);
-  let reconciled:
-    | {
-        read: SkillProposalReadResult;
-        transition?: ReturnType<typeof transitionPendingSkillProposalToStale>;
-      }
-    | undefined;
-  try {
-    reconciled = await withSkillProposalCommitLock(
-      workspaceDir,
-      read.record,
-      async () => {
-        const current = await readSkillProposal(read.record.id, store, scope, { reconcile: false });
-        if (!current || current.record.kind !== "create" || current.record.status !== "pending") {
-          return { read: current ?? read };
-        }
-        assertInsideWorkspace(workspaceDir, current.record.target.skillFile, "skill file");
-        if (await readSkillProposalRollback(current.record.id, store)) {
-          return { read: current };
-        }
-        const targetContent = await readWorkspaceSkillFile(current.record.target.skillFile).catch(
-          () => null,
-        );
-        if (targetContent === null) {
-          return { read: current };
-        }
-        const transition = transitionPendingSkillProposalToStale({
-          record: current.record,
-          reason: "Target skill was created after proposal creation.",
-          input: {
-            workspaceDir,
-            ...(options.agentId ? { agentId: options.agentId } : {}),
-            eventActor: { type: "system" },
-            ...(options.env ? { env: options.env } : {}),
-          },
-        });
-        return {
-          read: {
-            ...current,
-            record: transition.record,
-            revisionHash: hashSkillProposalRevision(transition.record),
-          },
-          transition,
-        };
-      },
-      store,
-    );
-  } catch {
+  const resolvedWorkspaceDir = path.resolve(workspaceDir);
+  const resolvedTarget = path.resolve(read.record.target.skillFile);
+  // Agent-scoped reads intentionally include proposals bound to earlier workspaces.
+  // Only reconcile a target against the workspace that owns it.
+  if (
+    options.agentId &&
+    resolvedTarget !== resolvedWorkspaceDir &&
+    !isPathInside(resolvedWorkspaceDir, resolvedTarget)
+  ) {
     return read;
   }
+  const store = storeOptions(options.env);
+  const scope = proposalScope(options);
+  const reconciled = await withSkillProposalCommitLock(
+    workspaceDir,
+    read.record,
+    async () => {
+      const current = await readSkillProposal(read.record.id, store, scope, { reconcile: false });
+      if (!current || current.record.kind !== "create" || current.record.status !== "pending") {
+        return { read: current ?? read };
+      }
+      assertInsideWorkspace(workspaceDir, current.record.target.skillFile, "skill file");
+      if (await readSkillProposalRollback(current.record.id, store)) {
+        return { read: current };
+      }
+      const targetContent = await readWorkspaceSkillFile(current.record.target.skillFile);
+      if (targetContent === null) {
+        return { read: current };
+      }
+      const transition = transitionPendingSkillProposalToStale({
+        record: current.record,
+        reason: "Target skill was created after proposal creation.",
+        input: {
+          workspaceDir,
+          ...(options.agentId ? { agentId: options.agentId } : {}),
+          eventActor: { type: "system" },
+          ...(options.env ? { env: options.env } : {}),
+        },
+      });
+      return {
+        read: {
+          ...current,
+          record: transition.record,
+          revisionHash: hashSkillProposalRevision(transition.record),
+        },
+        transition,
+      };
+    },
+    store,
+  );
   if (reconciled.transition) {
     await dispatchSkillProposalChanged({
       event: reconciled.transition.event,
