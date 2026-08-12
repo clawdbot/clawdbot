@@ -176,8 +176,8 @@ async function classifyFileAttachment(params: {
   // which would mislabel binary bytes inside a text-named file as a text format.
   // Both candidates pass strict token validation so raw header text never
   // reaches model context; undefined drops the mime from block and marker.
-  const binaryMime =
-    sanitizeMimeType(normalizeMimeType(attachment.mime)) ?? sanitizeMimeType(classification.mime);
+  const classifiedMime = sanitizeMimeType(classification.mime);
+  const binaryMime = sanitizeMimeType(normalizeMimeType(attachment.mime)) ?? classifiedMime;
   // Self-serve only for the cache's root-approved local read; a raw
   // attachment.path may be blocked by policy with bytes served via URL
   // fallback, and the marker must never point the agent at a blocked path.
@@ -190,11 +190,14 @@ async function classifyFileAttachment(params: {
   ) {
     // An operator-pinned allowlist that excludes this type is a policy "no";
     // it must win before any self-serve directive can name the file.
-    if (limits.allowedMimesConfigured && !(binaryMime && limits.allowedMimes.has(binaryMime))) {
+    if (
+      limits.allowedMimesConfigured &&
+      !(classifiedMime && limits.allowedMimes.has(classifiedMime))
+    ) {
       return {
-        outcome: { kind: "policy-rejected", mime: binaryMime },
+        outcome: { kind: "policy-rejected", mime: classifiedMime ?? binaryMime },
         filename,
-        mimeType: binaryMime,
+        mimeType: classifiedMime ?? binaryMime,
       };
     }
     return {
@@ -392,8 +395,7 @@ export async function applyMediaUnderstanding(params: {
   activeModel?: ActiveMediaModel;
   /** Preserve native-harness ownership of image, video, and file inputs while applying STT. */
   processingMode?: "audio-only";
-  /** Caller-owned placement fact: true when the executing agent runs on the host
-   * and can open local media paths (embedded non-sandboxed sessions, ACP). */
+  /** Caller-owned placement fact: true when the executing agent can open host-local media paths. */
   selfServeLocalPaths?: boolean;
   /** Attachment indexes the caller (ACP) has already resolved into native turn attachments. */
   deliveredImageIndexes?: ReadonlySet<number>;
@@ -551,9 +553,8 @@ export async function applyMediaUnderstanding(params: {
             limits: resolveFileExtractionLimits(cfg),
             skipAttachmentIndexes:
               audioAttachmentIndexes.size > 0 ? audioAttachmentIndexes : undefined,
-            // Placement is the caller's fact: embedded sessions resolve their
-            // sandbox state, ACP always executes on the host. Absent the fact,
-            // suppress — a wrong path is worse than the plain marker (#122411).
+            // Placement is the caller's fact. Absent an authoritative host-readable
+            // placement, suppress — a wrong path is worse than the plain marker (#122411).
             selfServePathsEnabled: params.selfServeLocalPaths === true,
           });
     const mediaMarkers =

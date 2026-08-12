@@ -2254,6 +2254,28 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).not.toContain("The file is saved at");
   });
 
+  it("uses classified MIME for allowedMimes when declared metadata disagrees", async () => {
+    const pseudoZip = Buffer.from("PK\u0003\u0004[Content_Types].xml word/document.xml", "utf8");
+    const filePath = await createTempMediaFile({
+      fileName: "declared-text.docx",
+      content: pseudoZip,
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+      mediaType: "text/plain",
+      cfg: createMediaDisabledConfigWithAllowedMimes(["text/plain"]),
+    });
+
+    expectPolicyRejectedFileApplied({
+      ctx,
+      result,
+      mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+    expect(ctx.Body).not.toContain("approved local file path");
+  });
+
   it("omits the self-serve path without the caller's host-placement fact", async () => {
     const filePath = await createTempMediaFile({
       fileName: "sandboxed.doc",
