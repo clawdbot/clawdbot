@@ -623,6 +623,9 @@ describe("createGatewayKernel lifecycle-stage startup failure", () => {
   // REAL post-lifecycle failure (TLS configured but unavailable, thrown by the kernel after
   // prepareGatewayLifecycle) through the real closeOnStartupFailure. Non-minimal: the
   // displacement under test only exists on the production bootstrap branch.
+  // Twin of the pre-lifecycle restores: the close also scrubs the SNAPSHOT families — its
+  // secrets clear cascades into the config snapshot, applied hash, and ambient policy — so
+  // the survivor's seeded snapshot state must come back after the same failure.
   it("keeps the surviving gateway live when startup fails after the lifecycle exists", async () => {
     const port = await getFreePort();
     const state = await createOpenClawTestState({
@@ -658,6 +661,7 @@ describe("createGatewayKernel lifecycle-stage startup failure", () => {
     state.applyEnv();
     resetPluginRuntimeStateForTest();
     clearRuntimeConfigSnapshot();
+    clearSecretsRuntimeSnapshotState();
     // The surviving embedded gateway: a LOADED registry whose retirement is observable — a
     // runtime lifecycle cleanup hook plus a live dynamic scheduler job it owns.
     const lifecycleCleanupReasons: string[] = [];
@@ -693,6 +697,47 @@ describe("createGatewayKernel lifecycle-stage startup failure", () => {
     expect(schedulerJob).toBeDefined();
     const runningConfig: OpenClawConfig = { channels: {} };
     setAppliedRuntimeConfigSnapshot(runningConfig, runningConfig);
+    setRuntimeAmbientEnvTriggers("suppress");
+    // The survivor's activated secrets runtime, seeded through the same activation seam
+    // gateway startup uses (it re-pins the runtime config snapshot with its own clone, so
+    // capture the prior snapshot reference and applied hash AFTER activation — matching
+    // what the kernel captures at attempt start).
+    const agentDir = "/tmp/openclaw-embedded-prior-tls";
+    const priorSecrets: PreparedSecretsRuntimeSnapshot = {
+      sourceConfig: runningConfig,
+      config: runningConfig,
+      authStores: [
+        {
+          agentDir,
+          store: {
+            version: 1,
+            profiles: {
+              "openai:embedded-prior": {
+                type: "api_key",
+                provider: "openai",
+                key: "sk-embedded-prior",
+              },
+            },
+          },
+        },
+      ],
+      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+      warnings: [],
+      webTools: {
+        search: { providerSource: "configured", selectedProvider: "brave", diagnostics: [] },
+        fetch: { providerSource: "none", diagnostics: [] },
+        diagnostics: [],
+      },
+    };
+    activateSecretsRuntimeSnapshotState({
+      snapshot: priorSecrets,
+      refreshContext: null,
+      refreshHandler: null,
+    });
+    const priorSnapshot = getRuntimeConfigSnapshot();
+    expect(priorSnapshot).not.toBeNull();
+    const priorAppliedHash = getRuntimeConfigAppliedHash();
+    expect(priorAppliedHash).not.toBeNull();
     lifecycleStageFixture.realLifecycle = true;
     closeClearProbe.survivor = survivor;
     try {
@@ -725,10 +770,95 @@ describe("createGatewayKernel lifecycle-stage startup failure", () => {
           sessionKey: "embedded-prior-session",
         }),
       ).toBeDefined();
+      // The close scrubbed the snapshot families after its registry clear; the kernel must
+      // restore the survivor's captured prior state, not leave the slots nulled.
+      expect(getRuntimeConfigSnapshot()).toBe(priorSnapshot);
+      expect(getRuntimeConfigAppliedHash()).toBe(priorAppliedHash);
+      expect(getRuntimeAmbientEnvTriggers()).toBe("suppress");
+      // The surviving gateway keeps resolving through its activated secrets runtime.
+      expect(getActiveSecretsRuntimeSnapshotState()?.config).toEqual(runningConfig);
+      expect(
+        getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles["openai:embedded-prior"],
+      ).toMatchObject({ key: "sk-embedded-prior" });
+      expect(getLiveSecretsRuntimeAuthStores()).toMatchObject([
+        {
+          agentDir,
+          store: { profiles: { "openai:embedded-prior": { key: "sk-embedded-prior" } } },
+        },
+      ]);
+      expect(getActiveRuntimeWebToolsMetadataFromState()?.search).toMatchObject({
+        providerSource: "configured",
+        selectedProvider: "brave",
+      });
     } finally {
       lifecycleStageFixture.realLifecycle = false;
       closeClearProbe.survivor = null;
       closeClearProbe.survivorRetiredAtClear = null;
+      clearSecretsRuntimeSnapshotState();
+      resetPluginRuntimeStateForTest();
+      clearRuntimeConfigSnapshot();
+      await state.cleanup();
+    }
+  });
+
+  // Fresh-process guard: a FIRST start's post-lifecycle failure has no survivor, so the
+  // restore must be a no-op — prior values are null, and every snapshot slot ends cleared,
+  // preserving the close's scrub contract for a process that runs no gateway.
+  it("scrubs snapshot state when a first start fails after the lifecycle exists", async () => {
+    const port = await getFreePort();
+    const state = await createOpenClawTestState({
+      label: "gateway-kernel-lifecycle-stage-first-start",
+      layout: "home",
+      env: {
+        OPENCLAW_GATEWAY_PASSWORD: undefined,
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+        OPENCLAW_SKIP_CANVAS_HOST: "1",
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_CRON: "1",
+        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+        OPENCLAW_SKIP_PROVIDERS: "1",
+        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        VITEST: "1",
+      },
+    });
+    const token = "gateway-kernel-lifecycle-stage-first-token";
+    await state.writeConfig({
+      gateway: {
+        auth: { mode: "token", token },
+        controlUi: { enabled: false },
+        port,
+        tls: {
+          enabled: true,
+          autoGenerate: false,
+          certPath: state.path("missing-cert.pem"),
+          keyPath: state.path("missing-key.pem"),
+        },
+      },
+    });
+    state.applyEnv();
+    resetPluginRuntimeStateForTest();
+    clearRuntimeConfigSnapshot();
+    clearSecretsRuntimeSnapshotState();
+    lifecycleStageFixture.realLifecycle = true;
+    try {
+      await expect(
+        createGatewayKernel(port, {
+          auth: { mode: "token", token },
+          bind: "loopback",
+          controlUiEnabled: false,
+          sidecarStartup: "defer",
+        }),
+      ).rejects.toThrow("gateway tls: cert/key missing");
+      expect(getActivePluginRegistry()).toBeNull();
+      expect(getRuntimeConfigSnapshot()).toBeNull();
+      expect(getRuntimeConfigAppliedHash()).toBeNull();
+      expect(getRuntimeAmbientEnvTriggers()).toBeNull();
+      expect(getActiveSecretsRuntimeSnapshotState()).toBeNull();
+      expect(getLiveSecretsRuntimeAuthStores()).toEqual([]);
+      expect(getActiveRuntimeWebToolsMetadataFromState()).toBeNull();
+    } finally {
+      lifecycleStageFixture.realLifecycle = false;
       resetPluginRuntimeStateForTest();
       clearRuntimeConfigSnapshot();
       await state.cleanup();

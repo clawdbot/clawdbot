@@ -159,6 +159,49 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
   const priorSecretsRevision = getActiveSecretsRuntimeSnapshotRevisionState();
   const priorSecretsRefreshContext = getActiveSecretsRuntimeRefreshContext();
   const priorSecretsRefreshHandler = getRuntimeConfigSnapshotRefreshHandler();
+  // One canonical revert for the snapshot families (secrets, config, applied hash, ambient
+  // policy) after this attempt's teardown; registry recovery stays with the teardown owner
+  // (the staged-clear revert), which always runs FIRST — plugin-host cleanup still reads
+  // these snapshots, exactly as normal shutdown orders it.
+  const restorePriorSnapshotFamilies = () => {
+    // The secrets family follows the THIS-attempt scope: leave a surviving snapshot
+    // untouched when this attempt never replaced it (revision unchanged), otherwise clear
+    // and reactivate the captured prior state — clear-only strips a surviving embedded
+    // Gateway's secrets runtime. clearSecretsRuntimeSnapshotState() also cascades into
+    // clearRuntimeConfigSnapshot(); the config restores below compensate and stay after it.
+    if (
+      !priorSecretsSnapshot ||
+      getActiveSecretsRuntimeSnapshotRevisionState() !== priorSecretsRevision
+    ) {
+      clearSecretsRuntimeSnapshotState();
+      if (priorSecretsSnapshot) {
+        restoreSecretsRuntimeSnapshotStateAfterClear({
+          snapshot: priorSecretsSnapshot,
+          refreshContext: priorSecretsRefreshContext,
+          refreshHandler: priorSecretsRefreshHandler,
+        });
+      }
+    }
+    clearPluginMetadataLifecycleCaches();
+    if (getRuntimeConfigSnapshot() !== priorSnapshot) {
+      clearRuntimeConfigSnapshot();
+      if (priorSnapshot) {
+        setRuntimeConfigSnapshot(priorSnapshot, priorSourceSnapshot ?? undefined);
+      }
+      // The plain setter never touches the applied hash: put back the revision the
+      // surviving Gateway's loader accepted (null when none ran), or config.get reports
+      // appliedConfigHash: null for a fully restored configuration.
+      setRuntimeConfigAppliedHash(priorAppliedHash);
+    }
+    // The ambient env-trigger slot travels with the snapshot family: bootstrap can
+    // overwrite it even when the snapshot itself is reused, and clearing resets it. Restore
+    // the exact prior value — including null when no gateway ran before this attempt — so
+    // schema and validation projections honor the surviving loader's policy, or the
+    // default one.
+    if (getRuntimeAmbientEnvTriggers() !== priorAmbientEnvTriggers) {
+      setRuntimeAmbientEnvTriggers(priorAmbientEnvTriggers);
+    }
+  };
   try {
     const bootstrap = await prepareGatewayServerBootstrap({
       port,
@@ -228,8 +271,15 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
       // reverts the slot to the displaced survivor snapshot — key, subagent mode, workspace
       // dir — and skips the host-state wipe the survivor still owns (see
       // clearActivePluginRegistry). The commit above only runs after the last throwing step,
-      // so every failure landing here still holds an unretired survivor.
-      await lifecycleRuntime.closeOnStartupFailure();
+      // so every failure landing here still holds an unretired survivor. The close then
+      // scrubs the snapshot families unconditionally (its secrets clear cascades into the
+      // config snapshot, applied hash, and ambient policy), so restore them to the captured
+      // prior state once teardown settles — even when the close itself throws.
+      try {
+        await lifecycleRuntime.closeOnStartupFailure();
+      } finally {
+        restorePriorSnapshotFamilies();
+      }
     } else {
       // Bootstrap stages the process-global plugin registry and pins the runtime config
       // snapshot BEFORE the lifecycle exists. A pre-lifecycle failure must clear what THIS
@@ -246,43 +296,7 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
           await clearActivePluginRegistry();
         }
       } finally {
-        // The secrets family follows the same THIS-attempt scope: leave a surviving snapshot
-        // untouched when this attempt never replaced it (revision unchanged), otherwise clear
-        // and reactivate the captured prior state — clear-only strips a surviving embedded
-        // Gateway's secrets runtime. clearSecretsRuntimeSnapshotState() also cascades into
-        // clearRuntimeConfigSnapshot(); the config restores below compensate and stay after it.
-        if (
-          !priorSecretsSnapshot ||
-          getActiveSecretsRuntimeSnapshotRevisionState() !== priorSecretsRevision
-        ) {
-          clearSecretsRuntimeSnapshotState();
-          if (priorSecretsSnapshot) {
-            restoreSecretsRuntimeSnapshotStateAfterClear({
-              snapshot: priorSecretsSnapshot,
-              refreshContext: priorSecretsRefreshContext,
-              refreshHandler: priorSecretsRefreshHandler,
-            });
-          }
-        }
-        clearPluginMetadataLifecycleCaches();
-        if (getRuntimeConfigSnapshot() !== priorSnapshot) {
-          clearRuntimeConfigSnapshot();
-          if (priorSnapshot) {
-            setRuntimeConfigSnapshot(priorSnapshot, priorSourceSnapshot ?? undefined);
-          }
-          // The plain setter never touches the applied hash: put back the revision the
-          // surviving Gateway's loader accepted (null when none ran), or config.get reports
-          // appliedConfigHash: null for a fully restored configuration.
-          setRuntimeConfigAppliedHash(priorAppliedHash);
-        }
-        // The ambient env-trigger slot travels with the snapshot family: bootstrap can
-        // overwrite it even when the snapshot itself is reused, and clearing resets it. Restore
-        // the exact prior value — including null when no gateway ran before this attempt — so
-        // schema and validation projections honor the surviving loader's policy, or the
-        // default one.
-        if (getRuntimeAmbientEnvTriggers() !== priorAmbientEnvTriggers) {
-          setRuntimeAmbientEnvTriggers(priorAmbientEnvTriggers);
-        }
+        restorePriorSnapshotFamilies();
       }
     }
     throw error;
