@@ -8,6 +8,7 @@ vi.mock("../cli/gateway-rpc.js", async (importOriginal) => {
   return { ...actual, callGatewayFromCli };
 });
 
+import { GIT_BACKUP_PUSH_CREDENTIAL_WARNING } from "./backup-git.js";
 import { backupDisableCommand, backupEnableCommand } from "./backup-schedule.js";
 
 const BACKUP_CRON_JOB_NAME = "openclaw-backup-scheduled";
@@ -19,11 +20,8 @@ describe("scheduled backups", () => {
 
   it("adds one isolated command job with the selected Git backup argv", async () => {
     callGatewayFromCli.mockImplementation(async (method: string) => {
-      if (method === "cron.list") {
-        return { jobs: [] };
-      }
       if (method === "cron.add") {
-        return { id: "backup-job" };
+        return { created: true, job: { id: "backup-job" } };
       }
       throw new Error(`unexpected method ${method}`);
     });
@@ -40,6 +38,7 @@ describe("scheduled backups", () => {
       "cron.add",
       expect.anything(),
       expect.objectContaining({
+        declarationKey: BACKUP_CRON_JOB_NAME,
         name: BACKUP_CRON_JOB_NAME,
         schedule: { kind: "every", everyMs: 21_600_000 },
         sessionTarget: "isolated",
@@ -59,14 +58,15 @@ describe("scheduled backups", () => {
         },
       }),
     );
+    expect(callGatewayFromCli).toHaveBeenCalledOnce();
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 
-  it("patches an existing named job and removes it idempotently", async () => {
-    callGatewayFromCli.mockImplementation(async (method: string) => {
-      if (method === "cron.list") {
-        return { jobs: [{ id: "existing", name: BACKUP_CRON_JOB_NAME }] };
-      }
-      return { ok: true };
+  it("atomically converges an existing declaration and removes it idempotently", async () => {
+    callGatewayFromCli.mockResolvedValueOnce({
+      created: false,
+      updated: true,
+      job: { id: "existing" },
     });
     const runtime = createTestRuntime();
     await expect(
@@ -75,20 +75,43 @@ describe("scheduled backups", () => {
         globalOnly: true,
       }),
     ).resolves.toEqual({ id: "existing", updated: true });
+    expect(callGatewayFromCli).toHaveBeenCalledOnce();
     expect(callGatewayFromCli).toHaveBeenCalledWith(
-      "cron.update",
+      "cron.add",
       expect.anything(),
       expect.objectContaining({
-        id: "existing",
-        patch: expect.objectContaining({
-          payload: expect.objectContaining({ argv: expect.arrayContaining(["--global"]) }),
-        }),
+        declarationKey: BACKUP_CRON_JOB_NAME,
+        payload: expect.objectContaining({ argv: expect.arrayContaining(["--global"]) }),
       }),
     );
+
+    callGatewayFromCli.mockReset();
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.list") {
+        return { jobs: [{ id: "existing", name: BACKUP_CRON_JOB_NAME }] };
+      }
+      return { ok: true };
+    });
     await expect(backupDisableCommand(runtime, {})).resolves.toEqual({ removed: true });
     expect(callGatewayFromCli).toHaveBeenCalledWith("cron.remove", {}, { id: "existing" });
 
     callGatewayFromCli.mockResolvedValueOnce({ jobs: [] });
     await expect(backupDisableCommand(runtime, {})).resolves.toEqual({ removed: false });
+  });
+
+  it("warns about credential material before provisioning a pushed schedule", async () => {
+    const runtime = createTestRuntime();
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      expect(method).toBe("cron.add");
+      expect(runtime.error).toHaveBeenCalledWith(GIT_BACKUP_PUSH_CREDENTIAL_WARNING);
+      return { created: true, job: { id: "backup-job" } };
+    });
+
+    await backupEnableCommand(runtime, {
+      repository: "/tmp/openclaw-backups",
+      push: true,
+    });
+
+    expect(callGatewayFromCli).toHaveBeenCalledOnce();
   });
 });

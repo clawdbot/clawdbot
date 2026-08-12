@@ -5,6 +5,7 @@ import type { CronJob } from "../cron/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
+import { GIT_BACKUP_PUSH_CREDENTIAL_WARNING } from "./backup-git.js";
 
 const BACKUP_CRON_JOB_NAME = "openclaw-backup-scheduled";
 
@@ -68,6 +69,7 @@ export async function backupEnableCommand(
     throw new Error("--every must be a positive duration such as 6h or 24h.");
   }
   const spec = {
+    declarationKey: BACKUP_CRON_JOB_NAME,
     name: BACKUP_CRON_JOB_NAME,
     enabled: true,
     schedule: { kind: "every" as const, everyMs },
@@ -76,29 +78,23 @@ export async function backupEnableCommand(
     payload: { kind: "command" as const, argv: buildScheduledArgv(options, repositoryPath) },
     delivery: { mode: "none" as const },
   };
-  const existing = await findScheduledBackup(options);
-  if (existing) {
-    await callGatewayFromCli("cron.update", options, {
-      id: existing.id,
-      patch: spec,
-    });
-    runtime.log(
-      `Scheduled Git backups updated: every ${every} to ${shortenHomePath(repositoryPath)}`,
-    );
-    return { id: existing.id, updated: true };
+  if (options.push && !options.excludeSecrets) {
+    runtime.error(GIT_BACKUP_PUSH_CREDENTIAL_WARNING);
   }
   const result = (await callGatewayFromCli("cron.add", options, spec)) as {
-    id?: string;
+    created?: boolean;
+    updated?: boolean;
     job?: { id?: string };
   };
-  const id = result.id ?? result.job?.id;
+  const id = result.job?.id;
   if (!id) {
     throw new Error("cron.add returned no scheduled backup job id.");
   }
+  const updated = result.created === false;
   runtime.log(
-    `Scheduled Git backups enabled: every ${every} to ${shortenHomePath(repositoryPath)}`,
+    `Scheduled Git backups ${updated ? "updated" : "enabled"}: every ${every} to ${shortenHomePath(repositoryPath)}`,
   );
-  return { id, updated: false };
+  return { id, updated };
 }
 
 export async function backupDisableCommand(
