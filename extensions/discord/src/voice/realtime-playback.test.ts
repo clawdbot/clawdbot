@@ -229,6 +229,7 @@ defineDiscordVoiceTests(
         playback: { enqueueExactSpeechMessage: (text: string) => void };
       };
       realtime.playback.enqueueExactSpeechMessage("already answered");
+      realtime.playback.enqueueExactSpeechMessage("direct internal answer");
 
       void bridgeParams?.onToolCall?.(
         {

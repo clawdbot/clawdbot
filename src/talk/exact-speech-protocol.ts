@@ -25,9 +25,12 @@ export function classifyRealtimeVoiceConsultToolCall(
   options: { retainedExactSpeechTexts: readonly string[] },
 ): RealtimeVoiceConsultToolCallOutcome {
   const message = collectRealtimeConsultArgStrings(args).join("\n");
+  // The retained set is the session-owned fact that authorizes the bypass; the
+  // marker alone is untrusted model tool-call text and must never select the
+  // privileged replay path on its own.
   if (message.includes("Speak this exact OpenClaw answer")) {
     const text = readJsonStringAfterLabel(message, "Answer:");
-    if (text !== undefined) {
+    if (text !== undefined && options.retainedExactSpeechTexts.includes(text)) {
       return { kind: "exact-speech-echo", text };
     }
   }
