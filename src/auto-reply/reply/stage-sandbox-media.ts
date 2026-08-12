@@ -249,7 +249,7 @@ const STAGED_MEDIA_PRUNE_MIN_AGE_MS = 60 * 60 * 1000;
 // large accumulated backlog cannot postpone staging the current attachment.
 // Leftovers beyond the budget are swept by later passes.
 const STAGED_MEDIA_PRUNE_MAX_CANDIDATES_PER_PASS = 32;
-export const STAGED_MEDIA_PRUNE_MAX_REMOVALS_PER_PASS = 16;
+const STAGED_MEDIA_PRUNE_MAX_REMOVALS_PER_PASS = 16;
 // Canonical shape emitted by stageSandboxMedia: `openclaw-staged-` + UUID.
 const STAGED_MEDIA_DIR_PATTERN =
   /^openclaw-staged-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
