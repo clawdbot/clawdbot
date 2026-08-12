@@ -1153,6 +1153,8 @@ export const ToolsSchema = z
       })
       .strict()
       .optional(),
+    maxCallsPerBlock: z.number().int().positive().optional(),
+    maxCallsPerBlockCooldown: z.boolean().optional(),
   })
   .strict()
   .superRefine((value, ctx) => {

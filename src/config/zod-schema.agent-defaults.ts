@@ -135,6 +135,8 @@ export const AgentDefaultsSchema = z
           .object({
             allow: z.array(z.string()).optional(),
             deny: z.array(z.string()).optional(),
+            maxCallsPerBlock: z.number().int().positive().optional(),
+            maxCallsPerBlockCooldown: z.boolean().optional(),
           })
           .strict()
           .optional(),
