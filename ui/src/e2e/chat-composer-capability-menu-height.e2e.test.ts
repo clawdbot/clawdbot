@@ -254,6 +254,24 @@ suite.define(() => {
           )
           .toBe(true);
 
+        await expect
+          .poll(() =>
+            interactionTarget.evaluate((node) => {
+              const probe = document.createElement("div");
+              probe.style.backgroundColor = "var(--bg-hover)";
+              probe.style.color = "var(--text)";
+              document.body.append(probe);
+              const rowStyle = getComputedStyle(node);
+              const probeStyle = getComputedStyle(probe);
+              const matches =
+                rowStyle.backgroundColor === probeStyle.backgroundColor &&
+                rowStyle.color === probeStyle.color;
+              probe.remove();
+              return matches;
+            }),
+          )
+          .toBe(true);
+
         if (artifactDir && captureStage === "after") {
           await page.waitForTimeout(50);
           await page.screenshot({

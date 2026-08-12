@@ -2769,6 +2769,11 @@ openclaw-chat-video-player {
   border-radius: 999px;
 }
 
+.agent-chat__capability-menu-item {
+  --wa-color-neutral-fill-normal: var(--bg-hover);
+  --wa-color-text-normal: var(--text);
+}
+
 .agent-chat__capability-menu-item,
 .agent-chat__capability-menu-state {
   color: var(--text);
