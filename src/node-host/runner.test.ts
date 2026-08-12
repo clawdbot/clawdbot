@@ -545,6 +545,8 @@ describe("runNodeHost", () => {
       await vi.waitFor(() => expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalledOnce());
 
       expect(clearIntervalSpy).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(mocks.closeMcpManager).toHaveBeenCalledOnce());
+      expect(resolveCloseMcp).toBeTypeOf("function");
       resolveCloseMcp?.();
       await running;
 
