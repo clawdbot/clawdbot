@@ -410,6 +410,40 @@ describe("getReplyFromConfig message hooks", () => {
     },
   );
 
+  it("withholds local document self-service when the turn cannot read files", async () => {
+    await getReplyFromConfig(
+      buildCtx({
+        SessionKey: "agent:main:main",
+        Provider: "webchat",
+        ChatType: "direct",
+        SenderId: "operator",
+      }),
+      { toolsAllow: ["message"] },
+      withFastReplyConfig({}),
+    );
+
+    expect(mocks.applyMediaUnderstanding.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ selfServeLocalPaths: false }),
+    );
+  });
+
+  it("withholds local document self-service from workspace-only file tools", async () => {
+    await getReplyFromConfig(
+      buildCtx({
+        SessionKey: "agent:main:main",
+        Provider: "webchat",
+        ChatType: "direct",
+        SenderId: "operator",
+      }),
+      undefined,
+      withFastReplyConfig({ tools: { fs: { workspaceOnly: true } } }),
+    );
+
+    expect(mocks.applyMediaUnderstanding.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ selfServeLocalPaths: false }),
+    );
+  });
+
   it("keeps unconfigured audio with a model-locked harness", async () => {
     const sessionKey = "agent:main:harness:claude-cli:locked-unconfigured-audio";
     const sessionEntry = {

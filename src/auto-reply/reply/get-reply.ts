@@ -10,14 +10,18 @@ import {
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
+import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
+import { projectConversationToolNames } from "../../agents/conversation-tool-policy-pipeline.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
+import { resolveEffectiveToolFsRootExpansionAllowed } from "../../agents/tool-fs-policy.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
+import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
@@ -72,6 +76,7 @@ import {
 } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState, createModelSelectionState } from "./model-selection.js";
+import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
   PENDING_FINAL_DELIVERY_CLEAR_PATCH,
   sanitizePendingFinalDeliveryText,
@@ -184,6 +189,70 @@ async function applyMediaUnderstandingIfNeeded(params: {
 function hasExplicitAudioUnderstandingConfig(cfg: OpenClawConfig): boolean {
   const audio = cfg.tools?.media?.audio;
   return audio !== undefined && audio.enabled !== false;
+}
+
+function canSelfServeLocalPaths(params: {
+  ctx: MsgContext;
+  cfg: OpenClawConfig;
+  agentId: string;
+  agentDir?: string;
+  sessionKey?: string;
+  workspaceDir: string;
+  provider: string;
+  model: string;
+  opts?: GetReplyOptions;
+}): boolean {
+  if (
+    params.opts?.disableTools === true ||
+    !resolveEffectiveToolFsRootExpansionAllowed({ cfg: params.cfg, agentId: params.agentId })
+  ) {
+    return false;
+  }
+  const policySessionKey = resolveRuntimePolicySessionKey({
+    cfg: params.cfg,
+    ctx: params.ctx,
+    sessionKey: params.sessionKey,
+  });
+  if (resolveSandboxRuntimeStatus({ cfg: params.cfg, sessionKey: policySessionKey }).sandboxed) {
+    return false;
+  }
+  const capabilityProfile = resolveConversationCapabilityProfile({
+    config: params.cfg,
+    sessionKey: policySessionKey,
+    runSessionKey: policySessionKey === params.sessionKey ? undefined : params.sessionKey,
+    agentId: params.agentId,
+    agentDir: params.agentDir,
+    agentAccountId: params.ctx.AccountId,
+    messageProvider: resolveOriginMessageProvider({
+      originatingChannel: params.ctx.OriginatingChannel,
+      provider: params.ctx.Provider ?? params.ctx.Surface,
+    }),
+    chatType: params.ctx.ChatType,
+    conversationToolPolicy: params.ctx.ConversationToolPolicy,
+    groupId: resolveGroupSessionKey(params.ctx)?.id,
+    groupChannel:
+      normalizeOptionalString(params.ctx.GroupChannel) ??
+      normalizeOptionalString(params.ctx.GroupSubject),
+    groupSpace: normalizeOptionalString(params.ctx.GroupSpace),
+    memberRoleIds: params.ctx.MemberRoleIds,
+    senderId: normalizeOptionalString(params.ctx.SenderId),
+    senderName: normalizeOptionalString(params.ctx.SenderName),
+    senderUsername: normalizeOptionalString(params.ctx.SenderUsername),
+    senderE164: normalizeOptionalString(params.ctx.SenderE164),
+    modelProvider: params.provider,
+    modelId: params.model,
+    workspaceDir: params.workspaceDir,
+    runtimeToolAllowlist: params.opts?.toolsAllow,
+    inheritRuntimeToolAllowlist: true,
+    inputProvenance: params.ctx.InputProvenance,
+  });
+  return (
+    projectConversationToolNames({
+      capabilityProfile,
+      toolNames: ["read"],
+      warn: () => {},
+    }).length === 1
+  );
 }
 
 function withExtractedFileImages(
@@ -470,16 +539,17 @@ export async function getReplyFromConfig(
           agentDir,
           workspaceDir,
           activeModel: { provider, model },
-          // Use the same peer-scoped policy key as tool creation; an external
-          // direct chat may share the main transcript while its tools sandbox.
-          selfServeLocalPaths: !resolveSandboxRuntimeStatus({
+          selfServeLocalPaths: canSelfServeLocalPaths({
+            ctx: finalized,
             cfg,
-            sessionKey: resolveRuntimePolicySessionKey({
-              cfg,
-              ctx: finalized,
-              sessionKey: agentSessionKey,
-            }),
-          }).sandboxed,
+            agentId,
+            agentDir,
+            sessionKey: agentSessionKey,
+            workspaceDir,
+            provider,
+            model,
+            opts: optsWithSkillFilter,
+          }),
           ...(shouldApplyLockedAudio ? { processingMode: "audio-only" as const } : {}),
         }),
       );
