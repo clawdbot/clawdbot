@@ -22,6 +22,12 @@ type PendingToolUse = {
   name: string;
   kind: CliToolUseStartDelta["kind"];
   inputJsonParts: string[];
+  // Some backends deliver the complete tool input on the content_block_start
+  // block instead of streaming it as input_json_delta chunks. Keep it as a
+  // separate fallback so it never concatenates with streamed deltas (which
+  // would produce invalid JSON like `{"a":1}{"b":2}`); deltas win when they
+  // arrive, and this seed is used only when no delta ever shows up.
+  startInputJson?: string;
 };
 
 type ToolUseTracker = {
@@ -267,16 +273,17 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
         const name = typeof block.name === "string" ? block.name.trim() : "";
         if (toolCallId && name) {
           // Some backends deliver the complete tool input on the start block
-          // instead of streaming it as input_json_delta chunks; seed the parts
-          // so the stop event emits a start delta with real args. An empty
-          // input object is the streaming placeholder, so only seed non-empty
-          // inputs to avoid corrupting subsequent delta concatenation.
+          // instead of streaming it as input_json_delta chunks; keep it as a
+          // separate fallback seed so the stop event still emits a start delta
+          // with real args when no delta ever arrives. An empty input object is
+          // the streaming placeholder, so only seed non-empty inputs.
           const completeInput = isRecord(block.input) && Object.keys(block.input).length > 0;
           tracker.pendingByIndex.set(event.index, {
             toolCallId,
             name,
             kind: block.type,
-            inputJsonParts: completeInput ? [JSON.stringify(block.input)] : [],
+            inputJsonParts: [],
+            ...(completeInput ? { startInputJson: JSON.stringify(block.input) } : {}),
           });
         }
       } else if (isClaudeAssistantToolResultBlockType(block.type)) {
@@ -312,7 +319,15 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
           pending.toolCallId,
           pending.name,
           pending.kind,
-          parseToolInputJson(pending.inputJsonParts),
+          // Streamed deltas are the canonical representation; the start-block
+          // seed is only a fallback for backends that never stream deltas.
+          parseToolInputJson(
+            pending.inputJsonParts.length > 0
+              ? pending.inputJsonParts
+              : pending.startInputJson
+                ? [pending.startInputJson]
+                : [],
+          ),
           params.onToolUseStart,
         );
       }

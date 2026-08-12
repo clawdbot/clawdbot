@@ -535,6 +535,66 @@ describe("createCliJsonlStreamingParser events", () => {
     ]);
   });
 
+  it("prefers streamed input_json_delta chunks over a complete start-block input", () => {
+    // Regression (#120464 P1): a backend that seeds a complete input on the
+    // start block AND still streams input_json_delta parts must not concatenate
+    // the two representations (that would yield `{"a":1}{"b":2}` and parse to
+    // `{}`). The streamed deltas are canonical; the start-block input is only a
+    // fallback for backends that never stream deltas.
+    const starts: CliToolUseStartDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: (delta) => starts.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: {
+              type: "tool_use",
+              id: "toolu_3",
+              name: "Bash",
+              input: { command: "ls -la", cwd: "/tmp" },
+            },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: '{"command":"ls"}' },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_stop", index: 0 },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(starts).toEqual([
+      {
+        toolCallId: "toolu_3",
+        name: "Bash",
+        kind: "tool_use",
+        args: { command: "ls" },
+      },
+    ]);
+  });
+
   it.each([
     {
       useType: "server_tool_use",
