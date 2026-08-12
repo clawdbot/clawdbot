@@ -178,8 +178,8 @@ const UNIT_FAST_NODE_TEST_STRIPES = 2;
 // Advisory runtime estimates (seconds) per split shard: median [shard:*]
 // begin->end wall across nine successful hosted compact runs (31568650453,
 // 31569157374, 31569912984, 31570693513, 31571644856, 31572044913,
-// 31572489294, 31574210928, 31574367637).
-// Packing only: a stale entry skews job balance but never correctness.
+// 31572489294, 31574210928, 31574367637). Admission and 4-vCPU striping
+// retain these weights so the bounded job count and runner advisory stay fixed.
 // Unknown shards fall back to a per-file estimate.
 const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["agentic-agents-core-auth", 28],
@@ -297,6 +297,43 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["core-unit-src-security", 252],
   ["core-unit-support", 18],
 ]);
+
+// Rounded mean of the same 8-vCPU groups across successful canonical-main
+// compact runs 31624370014, 31625101669, 31625905392, 31629769941,
+// 31632097578, 31632768372, 31634233096, 31635221353, and 31636058167.
+// Means expose recurrent slow tails hidden by medians without moving the
+// post-pack 4-vCPU runner advisory.
+const COMPACT_LARGE_GROUP_STRIPE_SECONDS_HINTS = new Map<string, number>([
+  ["agentic-agents-core-auth", 35],
+  ["agentic-agents-core-models", 47],
+  ["agentic-agents-core-runner-cli-1", 21],
+  ["agentic-agents-core-runner-cli-2", 9],
+  ["agentic-agents-core-runner-cli-3", 21],
+  ["agentic-agents-core-runner-commands", 33],
+  ["agentic-agents-core-runner-embedded", 11],
+  ["agentic-agents-core-runner-sessions", 12],
+  ["agentic-agents-core-runtime", 128],
+  ["agentic-agents-core-subagents", 31],
+  ["agentic-agents-core-tools", 61],
+  ["agentic-agents-embedded-base", 106],
+  ["agentic-agents-embedded-incomplete-turn", 24],
+  ["agentic-agents-embedded-overflow-compaction", 24],
+  ["agentic-agents-embedded-run", 46],
+  ["agentic-agents-support", 175],
+  ["agentic-control-plane-startup-core", 39],
+  ["agentic-gateway-core", 244],
+  ["agentic-gateway-methods", 154],
+  ["auto-reply-reply-commands-1", 40],
+  ["auto-reply-reply-commands-2", 20],
+  ["auto-reply-reply-commands-3", 32],
+  ["auto-reply-reply-dispatch", 82],
+  ["core-runtime-media-ui", 249],
+  ["core-unit-fast-1", 72],
+  ["core-unit-fast-2", 64],
+  ["core-unit-fast-isolated", 107],
+  ["core-unit-src-security", 266],
+]);
+
 // Advisory per-file wall-clock hints (seconds) for stripe balancing, measured
 // from single-file local runs (M4 Max) and static import-graph size. Packing
 // only: a stale entry skews stripe balance but never correctness. Unlisted
@@ -372,6 +409,13 @@ function estimateCompactGroupSeconds(group: NodeTestShardGroup): number {
     return Math.max(3, Math.round(group.includePatterns.length * DEFAULT_SECONDS_PER_TEST_FILE));
   }
   return DEFAULT_WHOLE_GROUP_SECONDS;
+}
+
+function estimateCompactStripeSeconds(group: NodeTestShardGroup): number {
+  return (
+    COMPACT_LARGE_GROUP_STRIPE_SECONDS_HINTS.get(group.shard_name) ??
+    estimateCompactGroupSeconds(group)
+  );
 }
 
 function expandCompactGroup(group: NodeTestShardGroup): NodeTestShardGroup[] {
@@ -1737,20 +1781,29 @@ function createCompactNodeTestShardBundles(
       }
     }
 
-    // First-fit above determines the bounded worker count. Stripe every regular
-    // group across those workers afterward; only re-striping the expanded
-    // embedded group left the 4-vCPU matrix with full early bins and nearly
-    // empty tail bins despite accurate timing hints.
+    // First-fit above determines the bounded worker count. Keep the
+    // high-variance source/security group isolated, then stripe every other
+    // regular group across the remaining workers. Re-striping the expanded
+    // embedded group avoids full early bins and nearly empty tail bins.
     const expandedGroups = groups.flatMap(expandCompactGroup);
     const regularGroups = expandedGroups
       .filter((group) => !isExclusiveCompactGroup(group))
       .toSorted((a, b) => a.shard_name.localeCompare(b.shard_name));
     const regularBinCount = bins.filter((bin) => !bin.exclusive).length;
-    const regularBatches = createStripedBatches(
-      regularGroups,
-      regularBinCount,
-      estimateCompactGroupSeconds,
+    const isolatedGroups = regularGroups.filter(
+      (group) => group.shard_name === "core-unit-src-security",
     );
+    const stripedGroups = regularGroups.filter(
+      (group) => group.shard_name !== "core-unit-src-security",
+    );
+    const regularBatches = [
+      ...isolatedGroups.map((group) => [group]),
+      ...createStripedBatches(
+        stripedGroups,
+        regularBinCount - isolatedGroups.length,
+        estimateCompactStripeSeconds,
+      ),
+    ];
     if (regularBatches.some((batch) => batch.length > COMPACT_NODE_TEST_JOB_GROUPS)) {
       throw new Error("striped compact job exceeds its group capacity");
     }
@@ -1758,7 +1811,7 @@ function createCompactNodeTestShardBundles(
       exclusive: false,
       groups: batch,
       hasWholeConfigGroup: batch.some((group) => !group.includePatterns),
-      weight: batch.reduce((sum, group) => sum + estimateCompactGroupSeconds(group), 0),
+      weight: batch.reduce((sum, group) => sum + estimateCompactStripeSeconds(group), 0),
     }));
     const exclusiveBins = bins.filter((bin) => bin.exclusive);
     bins.splice(0, bins.length, ...regularBins, ...exclusiveBins);

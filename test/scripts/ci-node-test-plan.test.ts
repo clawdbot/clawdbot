@@ -241,6 +241,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     // pairing them starves model visibility and repeatedly hits its timeout.
     expect(jobOf("agentic-agents-core-models")).not.toBe(jobOf("core-runtime-media-ui"));
     expect(jobOf("core-runtime-media-ui")).not.toBe(jobOf("core-unit-src-security"));
+    // Means expose recurrent 8-vCPU tails hidden by the median-only plan. Keep
+    // the observed pairing that dominated replayed job walls separated.
+    expect(jobOf("agentic-agents-core-tools")).not.toBe(jobOf("agentic-agents-embedded-base"));
     expect(
       compact[jobOf("core-unit-src-security")]?.groups.map((group) => group.shard_name),
     ).toEqual(["core-unit-src-security"]);
@@ -352,8 +355,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         .filter((shard) => !routed8VcpuCheckNames.includes(shard.checkName))
         .every((shard) => shard.runner === BUNDLED_NODE_TEST_RUNNER),
     ).toBe(true);
-    // The refreshed hosted medians give every regular bin one known tail
-    // anchor. Stale hints paired two of these slow groups in each runner class.
+    // The refreshed hosted estimates give every regular bin one known tail
+    // anchor. Stale hints paired two slow groups in each runner class.
     const largeTailAnchors = [
       "core-unit-src-security",
       "agentic-gateway-core",
