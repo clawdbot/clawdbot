@@ -182,8 +182,6 @@ extensions/openai/image-generation-provider.test.ts
 extensions/openai/image-generation-provider.ts
 extensions/openai/openai-provider.test.ts
 extensions/openai/openai-provider.ts
-extensions/openai/realtime-voice-provider.test.ts
-extensions/openai/realtime-voice-provider.ts
 extensions/openrouter/index.test.ts
 extensions/openshell/src/backend.ts
 extensions/openshell/src/openshell-core.test.ts
