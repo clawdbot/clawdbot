@@ -1,7 +1,6 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
@@ -11,11 +10,10 @@ import {
 } from "./session-accessor.js";
 import type { InternalSessionEntry } from "./types.js";
 
-const roots: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function createFixture() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-recovery-"));
-  roots.push(root);
+  const root = tempDirs.make("openclaw-session-recovery-");
   const storePath = path.join(root, "sessions.json");
   const sourceKey = "agent:main:dashboard:tombstoned";
   const successorKey = "agent:main:dashboard:recovered";
@@ -67,10 +65,6 @@ async function createFixture() {
   );
   return { root, sourceKey, sourceSessionId, storePath, successorKey };
 }
-
-afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => fs.rm(root, { force: true, recursive: true })));
-});
 
 describe("recoverSessionEntryFromRestartTombstone", () => {
   it("copies the full transcript and atomically records the archived successor transition", async () => {
