@@ -15,7 +15,7 @@ advances a milestone.
 
 | #   | Milestone                                                  | Status      | PRs     |
 | --- | ---------------------------------------------------------- | ----------- | ------- |
-| 0   | This plan (revision 2)                                     | in progress | —       |
+| 0   | This plan (revision 2)                                     | landed      | #122454 |
 | 1a  | Naming: session copy revert                                | landed      | #120667 |
 | 1b  | Naming: devices consolidation                              | landed      | #120689 |
 | 1c  | Cleanup: node-pairing → device-pairing merge               | not started | —       |
