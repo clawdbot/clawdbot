@@ -171,6 +171,10 @@ openclaw-chat-pane {
   flex: 0 1 auto;
   min-width: 0;
   align-items: center;
+  /* Inter's visible glyph mass sits slightly below the 28px action glyphs even
+     when their CSS boxes share a center. Lift the whole trail as one optical
+     unit so project icon, labels, and separator meet the chrome centerline. */
+  transform: translateY(-1px);
   /* Both interactive segments pull their 5px hover padding back out of flow, so
      this gap is the separator's actual optical air on each side. */
   gap: 6px;
