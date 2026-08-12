@@ -263,6 +263,7 @@ export const validateSessionsGroupsListParams = compile(S.SessionsGroupsListPara
 export const validateSessionsGroupsListResult = compile(S.SessionsGroupsListResultSchema);
 export const validateSessionsGroupsPutParams = compile(S.SessionsGroupsPutParamsSchema);
 export const validateSessionsGroupsRenameParams = compile(S.SessionsGroupsRenameParamsSchema);
+export const validateSessionsGroupsUpdateParams = compile(S.SessionsGroupsUpdateParamsSchema);
 export const validateSessionsGroupsDeleteParams = compile(S.SessionsGroupsDeleteParamsSchema);
 export const validateSessionsGroupsMutationResult = compile(S.SessionsGroupsMutationResultSchema);
 export const validateSessionsCompactParams = compile(S.SessionsCompactParamsSchema);

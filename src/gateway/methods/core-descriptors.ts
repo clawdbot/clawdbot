@@ -254,6 +254,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.groups.list", "sessions-groups", "operator.read", "<=2026.7"],
   ["sessions.groups.put", "sessions-groups", "operator.write", "<=2026.7"],
   ["sessions.groups.rename", "sessions-groups", "operator.write", "<=2026.7"],
+  ["sessions.groups.update", "sessions-groups", "operator.write", "2026.8"],
   ["sessions.groups.delete", "sessions-groups", "operator.write", "<=2026.7"],
   ["last-heartbeat", "system", "operator.read", "<=2026.7"],
   ["set-heartbeats", "system", "operator.admin", "<=2026.7"],

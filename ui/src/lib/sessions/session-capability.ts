@@ -19,6 +19,7 @@ import type {
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import type { GatewayConnectionScope } from "../gateway-connection-lifecycle.ts";
 import type { SessionCreateOutcome, SessionCreateParams } from "./create.ts";
+import type { SessionGroupSettings } from "./custom-groups.ts";
 import type { SessionArchivedFilter } from "./navigation.ts";
 import type { SessionPatchRoute } from "./patch.ts";
 import type {
@@ -36,6 +37,8 @@ export type SessionState = {
   deletedSessions: readonly SessionDeleteTarget[];
   /** Gateway-owned custom group catalog in display order. */
   groups: readonly string[];
+  /** New Session defaults associated with each gateway-owned group. */
+  groupSettings: readonly SessionGroupSettings[];
   /** Gateway-owned sidebar section order; pinned is intentionally absent. */
   sectionOrder: readonly string[];
 };
@@ -253,6 +256,11 @@ export type SessionCapability = {
   ) => Promise<SessionGroupMutationResult>;
   /** Renames a group; stale means the initiating connection retired before reconciliation. */
   groupsRename: (from: string, to: string) => Promise<SessionGroupMutationResult>;
+  /** Updates the New Session defaults for one group. */
+  groupsUpdate: (
+    name: string,
+    defaults: { cwd: string | null; worktree: boolean },
+  ) => Promise<SessionGroupMutationResult>;
   /** Deletes a group; stale means the initiating connection retired before reconciliation. */
   groupsDelete: (name: string) => Promise<SessionGroupMutationResult>;
   subscribeCreated: (listener: (key: string) => void) => () => void;

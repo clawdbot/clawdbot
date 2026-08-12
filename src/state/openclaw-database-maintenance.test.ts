@@ -152,12 +152,15 @@ describe("OpenClaw database maintenance schema validation", () => {
     }
   });
 
-  it("keeps every registered same-version column bare, canonical, and ensured", () => {
-    expect(
-      CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
-        ({ columnName, tableName }) => `${tableName}.${columnName}`,
-      ),
-    ).toEqual(OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY.allowedMissingColumns);
+  it("keeps every startup-repaired same-version column bare, canonical, and ensured", () => {
+    const startupRepairedColumns = CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
+      ({ columnName, tableName }) => `${tableName}.${columnName}`,
+    );
+    expect(OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY.allowedMissingColumns).toEqual([
+      ...startupRepairedColumns,
+      "session_groups.cwd",
+      "session_groups.worktree",
+    ]);
     expect(
       CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
         ({ columnName, dataType, tableName }) => `${tableName}.${columnName} ${dataType}`,

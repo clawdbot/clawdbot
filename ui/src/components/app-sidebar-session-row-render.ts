@@ -115,7 +115,7 @@ export interface SessionListHost {
   startSidebarSectionDrag(sectionId: string): void;
   finishSidebarSectionDrag(): void;
   toggleSection(sectionId: string): void;
-  openNewSession(): void;
+  openNewSession(target?: NewSessionTarget): void;
   readNewSessionAccess(): import("../lib/session-method-access.ts").SessionMethodAccess;
   readSessionMutationAccess(request: {
     method: string;

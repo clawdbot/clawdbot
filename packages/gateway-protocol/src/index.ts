@@ -321,6 +321,7 @@ export {
   SessionsGroupsListResultSchema,
   SessionsGroupsPutParamsSchema,
   SessionsGroupsRenameParamsSchema,
+  SessionsGroupsUpdateParamsSchema,
   SessionsGroupsDeleteParamsSchema,
   SessionsGroupsMutationResultSchema,
   SessionsCompactParamsSchema,

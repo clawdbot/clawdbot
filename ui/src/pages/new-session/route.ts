@@ -13,10 +13,22 @@ async function loadNewSessionData(
 ): Promise<NewSessionRouteData> {
   const requestedLocation = newSessionLocationFromSearch(search);
   const requestedAgentId = requestedLocation.agentId.trim();
+  let groupCwd = "";
+  let groupWorktree = false;
+  if (requestedLocation.group) {
+    await context.sessions.groupsLoad();
+    const settings = context.sessions.state.groupSettings.find(
+      (candidate) => candidate.name === requestedLocation.group,
+    );
+    groupCwd = settings?.cwd ?? "";
+    groupWorktree = settings?.worktree === true;
+  }
   if (!requestedLocation.catalogId) {
     return {
       ...requestedLocation,
       requestedAgentId,
+      groupCwd,
+      groupWorktree,
       model: "",
       catalogLabel: "",
       startTerminal: false,
@@ -27,6 +39,8 @@ async function loadNewSessionData(
     ...requestedLocation,
     agentId,
     requestedAgentId,
+    groupCwd,
+    groupWorktree,
     model: "",
     catalogLabel: "",
     startTerminal: false,

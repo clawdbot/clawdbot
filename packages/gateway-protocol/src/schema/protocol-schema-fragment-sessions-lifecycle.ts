@@ -62,6 +62,7 @@ export const SessionLifecycleProtocolSchemas = {
   SessionsGroupsListResult: sessions.SessionsGroupsListResultSchema,
   SessionsGroupsPutParams: sessions.SessionsGroupsPutParamsSchema,
   SessionsGroupsRenameParams: sessions.SessionsGroupsRenameParamsSchema,
+  SessionsGroupsUpdateParams: sessions.SessionsGroupsUpdateParamsSchema,
   SessionsGroupsDeleteParams: sessions.SessionsGroupsDeleteParamsSchema,
   SessionsGroupsMutationResult: sessions.SessionsGroupsMutationResultSchema,
   SessionsCompactParams: sessions.SessionsCompactParamsSchema,

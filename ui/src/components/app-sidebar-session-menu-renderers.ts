@@ -19,7 +19,11 @@ import {
   trackDropdownKeyboardDismissal,
 } from "./web-awesome.ts";
 
-type SidebarSessionGroupMenuAction = "rename-group" | "new-group" | "delete-group";
+type SidebarSessionGroupMenuAction =
+  | "group-defaults"
+  | "rename-group"
+  | "new-group"
+  | "delete-group";
 
 function renderSidebarMenuTrigger(position: { x: number; y: number }, label: string) {
   return html`
@@ -109,7 +113,10 @@ export function renderSidebarSessionGroupMenu(params: {
             event.preventDefault();
             const value = event.detail.item.value;
             if (
-              (value === "rename-group" || value === "new-group" || value === "delete-group") &&
+              (value === "group-defaults" ||
+                value === "rename-group" ||
+                value === "new-group" ||
+                value === "delete-group") &&
               !params.actionDisabledReasons?.[value]
             ) {
               params.onAction(value, menu.group);
@@ -121,6 +128,16 @@ export function renderSidebarSessionGroupMenu(params: {
             params.onClose(consumeDropdownKeyboardDismissal(event))}
         >
           ${renderSidebarMenuTrigger(menu, t("sessionsView.groupMenu", { group: menu.group }))}
+          <wa-dropdown-item
+            class="session-menu__item"
+            value="group-defaults"
+            ?disabled=${!params.connected ||
+            Boolean(params.actionDisabledReasons?.["group-defaults"])}
+            title=${params.actionDisabledReasons?.["group-defaults"] ?? nothing}
+          >
+            <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.settings}</span>
+            <span class="session-menu__text">${t("sessionsView.groupDefaultsMenu")}</span>
+          </wa-dropdown-item>
           <wa-dropdown-item
             class="session-menu__item"
             value="rename-group"

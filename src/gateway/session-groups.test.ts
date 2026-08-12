@@ -18,6 +18,7 @@ import {
   listSessionGroups,
   putSessionGroups,
   renameSessionGroup,
+  updateSessionGroupDefaults,
 } from "./session-groups.js";
 
 describe("session groups catalog", () => {
@@ -115,6 +116,52 @@ describe("session groups catalog", () => {
         .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
         .get("sidebar_sections"),
     ).toEqual({ name: "sidebar_sections" });
+  });
+
+  it("lazily adds New Session defaults columns to an existing group catalog", () => {
+    const databasePath = openOpenClawStateDatabase({ env }).path;
+    closeOpenClawStateDatabaseForTest();
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec("ALTER TABLE session_groups DROP COLUMN cwd;");
+    legacy.exec("ALTER TABLE session_groups DROP COLUMN worktree;");
+    legacy.close();
+
+    const beforeFeatureUse = openOpenClawStateDatabase({ env })
+      .db.prepare("PRAGMA table_info(session_groups)")
+      .all() as Array<{ name: string }>;
+    expect(beforeFeatureUse.map((column) => column.name)).not.toEqual(
+      expect.arrayContaining(["cwd", "worktree"]),
+    );
+
+    expect(listSessionGroups(env)).toEqual([]);
+    const columns = openOpenClawStateDatabase({ env })
+      .db.prepare("PRAGMA table_info(session_groups)")
+      .all() as Array<{ name: string }>;
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(["cwd", "worktree"]),
+    );
+  });
+
+  it("preserves New Session defaults through reorder and rename", async () => {
+    putSessionGroups(["Client", "Other"], undefined, env);
+    expect(
+      updateSessionGroupDefaults("Client", { cwd: "/repos/client", worktree: true }, env),
+    ).toContainEqual({
+      name: "Client",
+      position: 0,
+      cwd: "/repos/client",
+      worktree: true,
+    });
+
+    putSessionGroups(["Other", "Client"], undefined, env);
+    await renameSessionGroup({ cfg, name: "Client", to: "Customer", env });
+    expect(listSessionGroups(env)).toContainEqual({
+      name: "Customer",
+      position: 1,
+      cwd: "/repos/client",
+      worktree: true,
+    });
   });
 
   it("absorbs ad-hoc categories at the end of the catalog", () => {

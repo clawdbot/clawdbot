@@ -1,7 +1,12 @@
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
 import { readSessionMethodAccess } from "../session-method-access.ts";
-import { readSessionCustomGroupNames, readSidebarSectionOrder } from "./custom-groups.ts";
+import {
+  readSessionCustomGroupNames,
+  readSessionCustomGroups,
+  readSidebarSectionOrder,
+  type SessionGroupSettings,
+} from "./custom-groups.ts";
 import type {
   SessionConnectionOwner,
   SessionConnectionScope,
@@ -59,16 +64,36 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     clearRetry();
   };
 
-  const publishCatalog = (groups: readonly string[], sectionOrder: readonly string[]) => {
+  const publishCatalog = (
+    groupSettings: readonly SessionGroupSettings[],
+    sectionOrder: readonly string[],
+  ) => {
     const state = host.readState();
+    const groups = groupSettings.map((group) => group.name);
     const groupsUnchanged =
       groups.length === state.groups.length &&
       groups.every((group, i) => group === state.groups[i]);
     const orderUnchanged =
       sectionOrder.length === state.sectionOrder.length &&
       sectionOrder.every((sectionId, i) => sectionId === state.sectionOrder[i]);
-    if (!groupsUnchanged || !orderUnchanged) {
-      host.publish({ ...state, groups: [...groups], sectionOrder: [...sectionOrder] });
+    const settingsUnchanged =
+      groupSettings.length === state.groupSettings.length &&
+      groupSettings.every((group, index) => {
+        const current = state.groupSettings[index];
+        return (
+          current?.name === group.name &&
+          current.position === group.position &&
+          current.cwd === group.cwd &&
+          current.worktree === group.worktree
+        );
+      });
+    if (!groupsUnchanged || !settingsUnchanged || !orderUnchanged) {
+      host.publish({
+        ...state,
+        groups: [...groups],
+        groupSettings: [...groupSettings],
+        sectionOrder: [...sectionOrder],
+      });
     }
   };
 
@@ -90,7 +115,8 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       if (!host.connection.isCurrent(scope) || generation !== loadGeneration) {
         return;
       }
-      let names = readSessionCustomGroupNames(listed);
+      let settings = readSessionCustomGroups(listed);
+      let names = settings.map((group) => group.name);
       let sectionOrder = readSidebarSectionOrder(listed);
       // Browser-local catalogs predate the gateway store and migrate exactly once.
       const legacy = readLegacyStoredGroups();
@@ -104,6 +130,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
           return;
         }
         names = readSessionCustomGroupNames(put);
+        settings = readSessionCustomGroups(put);
         sectionOrder = readSidebarSectionOrder(put);
       }
       if (legacy.length > 0 && legacyMigrationAccess.allowed) {
@@ -113,7 +140,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
           // The gateway catalog is canonical even when browser cleanup fails.
         }
       }
-      publishCatalog(names, sectionOrder);
+      publishCatalog(settings, sectionOrder);
     } catch (error) {
       if (
         !host.connection.isCurrent(scope) ||
@@ -171,7 +198,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       if (!host.connection.isCurrent(scope)) {
         return "stale";
       }
-      publishCatalog(readSessionCustomGroupNames(result), readSidebarSectionOrder(result));
+      publishCatalog(readSessionCustomGroups(result), readSidebarSectionOrder(result));
       return "completed";
     } catch (error) {
       return finishMutationFailure(host.connection.isCurrent(scope), error);
@@ -188,7 +215,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       if (!host.connection.isCurrent(scope)) {
         return "stale";
       }
-      publishCatalog(readSessionCustomGroupNames(result), readSidebarSectionOrder(result));
+      publishCatalog(readSessionCustomGroups(result), readSidebarSectionOrder(result));
       // Mutation response commits before a background member-row reconciliation.
       void host.refreshRows();
       return "completed";
@@ -207,7 +234,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
       if (!host.connection.isCurrent(scope)) {
         return "stale";
       }
-      publishCatalog(readSessionCustomGroupNames(result), readSidebarSectionOrder(result));
+      publishCatalog(readSessionCustomGroups(result), readSidebarSectionOrder(result));
       void host.refreshRows();
       return "completed";
     } catch (error) {
@@ -215,5 +242,25 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     }
   };
 
-  return { delete: remove, dispose: invalidate, invalidate, load, put, rename };
+  const update = async (
+    name: string,
+    defaults: { cwd: string | null; worktree: boolean },
+  ): Promise<SessionGroupMutationResult> => {
+    const scope = host.connection.capture();
+    if (!scope) {
+      return "stale";
+    }
+    try {
+      const result = await scope.client.request("sessions.groups.update", { name, ...defaults });
+      if (!host.connection.isCurrent(scope)) {
+        return "stale";
+      }
+      publishCatalog(readSessionCustomGroups(result), readSidebarSectionOrder(result));
+      return "completed";
+    } catch (error) {
+      return finishMutationFailure(host.connection.isCurrent(scope), error);
+    }
+  };
+
+  return { delete: remove, dispose: invalidate, invalidate, load, put, rename, update };
 }

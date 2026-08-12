@@ -7,6 +7,7 @@ import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions.js";
 import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { ensureColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -18,7 +19,12 @@ import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 // statements; a bare transaction would open the default state DB while the
 // SQL hits the override, losing atomicity under OPENCLAW_STATE_DIR overrides.
 
-type SessionGroupRecord = { name: string; position: number };
+type SessionGroupRecord = {
+  name: string;
+  position: number;
+  cwd?: string;
+  worktree?: boolean;
+};
 
 type SessionGroupsDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -26,6 +32,7 @@ type SessionGroupsDatabase = Pick<
 >;
 
 const ensuredSidebarSectionDatabases = new WeakSet<DatabaseSync>();
+const ensuredSessionGroupDefaultsDatabases = new WeakSet<DatabaseSync>();
 const SIDEBAR_SECTIONS_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS sidebar_sections (
   section_id TEXT NOT NULL PRIMARY KEY,
@@ -55,6 +62,22 @@ function ensureSidebarSectionsSchema(env: NodeJS.ProcessEnv): void {
     { operationLabel: "session-groups.sidebar-sections.schema.ensure" },
   );
   ensuredSidebarSectionDatabases.add(database.db);
+}
+
+function ensureSessionGroupDefaultsSchema(env: NodeJS.ProcessEnv): void {
+  const database = openOpenClawStateDatabase({ env });
+  if (ensuredSessionGroupDefaultsDatabases.has(database.db)) {
+    return;
+  }
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      ensureColumn(db, "session_groups", "cwd TEXT");
+      ensureColumn(db, "session_groups", "worktree INTEGER");
+    },
+    { env },
+    { operationLabel: "session-groups.defaults.schema.ensure" },
+  );
+  ensuredSessionGroupDefaultsDatabases.add(database.db);
 }
 
 function normalizeGroupNames(names: readonly string[]): string[] {
@@ -104,16 +127,23 @@ function normalizeSidebarSectionOrder(
 }
 
 export function listSessionGroups(env: NodeJS.ProcessEnv = process.env): SessionGroupRecord[] {
+  ensureSessionGroupDefaultsSchema(env);
   const db = dbFor(env);
   const query = kyselyFor(db)
     .selectFrom("session_groups")
-    .select(["name", "position"])
+    .select(["name", "position", "cwd", "worktree"])
     .orderBy("position", "asc")
     .orderBy("name", "asc");
-  return executeSqliteQuerySync(db, query).rows.map((row) => ({
-    name: row.name,
-    position: row.position,
-  }));
+  return executeSqliteQuerySync(db, query).rows.map((row) => {
+    const group: SessionGroupRecord = { name: row.name, position: row.position };
+    if (row.cwd) {
+      group.cwd = row.cwd;
+    }
+    if (row.worktree !== null) {
+      group.worktree = row.worktree === 1;
+    }
+    return group;
+  });
 }
 
 export function listSidebarSectionOrder(env: NodeJS.ProcessEnv = process.env): string[] {
@@ -135,6 +165,7 @@ export function putSessionGroups(
   sectionOrder?: readonly string[],
   env: NodeJS.ProcessEnv = process.env,
 ): SessionGroupRecord[] {
+  ensureSessionGroupDefaultsSchema(env);
   const normalized = normalizeGroupNames(names);
   const normalizedSectionOrder =
     sectionOrder === undefined ? undefined : normalizeSidebarSectionOrder(sectionOrder, normalized);
@@ -148,8 +179,8 @@ export function putSessionGroups(
       const existing = new Map(
         executeSqliteQuerySync(
           db,
-          kysely.selectFrom("session_groups").select(["name", "created_at"]),
-        ).rows.map((row) => [row.name, row.created_at]),
+          kysely.selectFrom("session_groups").select(["name", "created_at", "cwd", "worktree"]),
+        ).rows.map((row) => [row.name, row]),
       );
       executeSqliteQuerySync(db, kysely.deleteFrom("session_groups"));
       normalized.forEach((name, position) => {
@@ -158,7 +189,9 @@ export function putSessionGroups(
           kysely.insertInto("session_groups").values({
             name,
             position,
-            created_at: existing.get(name) ?? now,
+            created_at: existing.get(name)?.created_at ?? now,
+            cwd: existing.get(name)?.cwd ?? null,
+            worktree: existing.get(name)?.worktree ?? null,
           }),
         );
       });
@@ -176,7 +209,7 @@ export function putSessionGroups(
     },
     { env },
   );
-  return normalized.map((name, position) => ({ name, position }));
+  return listSessionGroups(env);
 }
 
 /**
@@ -187,6 +220,7 @@ export function ensureSessionGroupRegistered(
   name: string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
+  ensureSessionGroupDefaultsSchema(env);
   const normalized = normalizeOptionalString(name);
   if (!normalized) {
     return false;
@@ -222,6 +256,7 @@ export function ensureSessionGroupRegistered(
 }
 
 function renameCatalogEntry(from: string, to: string, env: NodeJS.ProcessEnv): void {
+  ensureSessionGroupDefaultsSchema(env);
   ensureSidebarSectionsSchema(env);
   runOpenClawStateWriteTransaction(
     ({ db }) => {
@@ -270,11 +305,42 @@ function renameCatalogEntry(from: string, to: string, env: NodeJS.ProcessEnv): v
           name: to,
           position: source?.position ?? 0,
           created_at: source?.created_at ?? Date.now(),
+          cwd: source?.cwd ?? null,
+          worktree: source?.worktree ?? null,
         }),
       );
     },
     { env },
   );
+}
+
+export function updateSessionGroupDefaults(
+  name: string,
+  defaults: { cwd: string | null; worktree: boolean },
+  env: NodeJS.ProcessEnv = process.env,
+): SessionGroupRecord[] {
+  const normalized = normalizeOptionalString(name);
+  if (!normalized) {
+    throw new Error("group defaults update requires a non-empty name");
+  }
+  ensureSessionGroupDefaultsSchema(env);
+  ensureSessionGroupRegistered(normalized, env);
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      executeSqliteQuerySync(
+        db,
+        kyselyFor(db)
+          .updateTable("session_groups")
+          .set({
+            cwd: normalizeOptionalString(defaults.cwd) ?? null,
+            worktree: defaults.worktree ? 1 : 0,
+          })
+          .where("name", "=", normalized),
+      );
+    },
+    { env },
+  );
+  return listSessionGroups(env);
 }
 
 /**

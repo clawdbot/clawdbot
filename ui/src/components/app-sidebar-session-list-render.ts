@@ -196,6 +196,21 @@ function renderSessionSection(params: {
             ? html`
                 <button
                   type="button"
+                  class="sidebar-session-group-actions sidebar-new-session"
+                  title=${newSessionAccess.allowed
+                    ? t("sessionsView.newSessionInGroup", { group })
+                    : newSessionAccess.reason}
+                  aria-label=${t("sessionsView.newSessionInGroup", { group })}
+                  ?disabled=${!newSessionAccess.allowed}
+                  @click=${(event: MouseEvent) => {
+                    event.stopPropagation();
+                    host.openNewSession({ group });
+                  }}
+                >
+                  ${icons.plus}
+                </button>
+                <button
+                  type="button"
                   class="sidebar-session-group-actions"
                   title=${t("sessionsView.groupMenu", { group })}
                   aria-label=${t("sessionsView.groupMenu", { group })}

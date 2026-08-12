@@ -168,6 +168,7 @@ export class DraftSubmissionFlow {
       workspace: this.place.workspacePath(),
       execNode: this.place.execNode,
       catalogId: this.read().data?.catalogId,
+      category: this.read().data?.group,
     });
   }
 

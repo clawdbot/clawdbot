@@ -19,6 +19,7 @@ import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-gro
 import { showToast } from "../lib/toast.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
+import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
 import {
   renderAppSidebarAttention,
@@ -74,6 +75,11 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   override readonly sessionOrganizer = new SessionOrganizerController(this);
   override readonly sidebarMenus = new SidebarMenusController(this);
+
+  sessionGroupDefaults(name: string) {
+    const group = this.context?.sessions.state.groupSettings.find((entry) => entry.name === name);
+    return { cwd: group?.cwd ?? "", worktree: group?.worktree === true };
+  }
 
   // Lazy: the controller pulls core token-suppression modules that must stay
   // out of the startup chunk (QA smoke startup-JS budget). It loads on the
@@ -334,8 +340,8 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     this.sessionOrganizer.handleSessionListDrop(event);
   }
 
-  openNewSession(): void {
-    this.requestOpenNewSession(this.expandedAgentId());
+  openNewSession(target?: NewSessionTarget): void {
+    this.requestOpenNewSession(this.expandedAgentId(), target);
   }
 
   setVisibleSessionLimit(sectionId: string, limit: number): void {

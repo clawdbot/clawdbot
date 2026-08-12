@@ -6,8 +6,8 @@ import { t } from "../../i18n/index.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { newSessionLocationFromSearch, type NewSessionRouteData } from "./location.ts";
 
-function draftRouteKey(requestedAgentId: string, catalogId: string): string {
-  return JSON.stringify([requestedAgentId, catalogId]);
+function draftRouteKey(requestedAgentId: string, catalogId: string, group: string): string {
+  return JSON.stringify([requestedAgentId, catalogId, group]);
 }
 
 /**
@@ -17,12 +17,12 @@ function draftRouteKey(requestedAgentId: string, catalogId: string): string {
  * would make that fill-in look like a navigation and discard the draft.
  */
 export function routeKey(data?: NewSessionRouteData): string {
-  return draftRouteKey(data?.requestedAgentId ?? "", data?.catalogId ?? "");
+  return draftRouteKey(data?.requestedAgentId ?? "", data?.catalogId ?? "", data?.group ?? "");
 }
 
 export function routeKeyFromSearch(search: string): string {
   const location = newSessionLocationFromSearch(search);
-  return draftRouteKey(location.agentId, location.catalogId);
+  return draftRouteKey(location.agentId, location.catalogId, location.group ?? "");
 }
 
 export function isTarget(data?: NewSessionRouteData): boolean {

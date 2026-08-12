@@ -92,6 +92,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     error: null,
     deletedSessions: [],
     groups: [],
+    groupSettings: [],
     sectionOrder: [],
   };
   const connection = createGatewayConnectionLifecycle(gateway.snapshot);
@@ -374,6 +375,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         error: null,
         deletedSessions: [],
         groups: state.groups,
+        groupSettings: state.groupSettings,
         sectionOrder: state.sectionOrder,
       });
       return;
@@ -523,6 +525,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     groupsLoad: groups.load,
     groupsPut: groups.put,
     groupsRename: groups.rename,
+    groupsUpdate: groups.update,
     groupsDelete: groups.delete,
     subscribeCreated(listener) {
       createdListeners.add(listener);

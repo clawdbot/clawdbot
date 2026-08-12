@@ -2002,7 +2002,9 @@ CREATE TABLE IF NOT EXISTS user_preferences (
 CREATE TABLE IF NOT EXISTS session_groups (
   name TEXT NOT NULL PRIMARY KEY,
   position INTEGER NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  cwd TEXT,
+  worktree INTEGER
 ) STRICT;
 
 -- Gateway-owned sidebar section layout. IDs are ungrouped, groups, work, or

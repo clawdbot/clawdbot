@@ -34,6 +34,7 @@ export {
   deleteSessionGroup,
   renameSessionGroup,
   reorderSidebarSection,
+  updateSessionGroupDefaults,
 } from "./session-organizer-catalog.ts";
 
 export async function patchSession(

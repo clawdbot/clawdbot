@@ -4,14 +4,41 @@
 
 const BUILT_IN_SESSION_SECTION_IDS = new Set(["ungrouped", "groups", "work"]);
 
-export function readSessionCustomGroupNames(payload: unknown): string[] {
-  const groups = (payload as { groups?: Array<{ name?: unknown }> } | null)?.groups;
+export type SessionGroupSettings = {
+  name: string;
+  position: number;
+  cwd?: string;
+  worktree?: boolean;
+};
+
+export function readSessionCustomGroups(payload: unknown): SessionGroupSettings[] {
+  const groups = (payload as { groups?: unknown } | null)?.groups;
   if (!Array.isArray(groups)) {
     return [];
   }
-  return groups.flatMap((group) =>
-    typeof group?.name === "string" && group.name.trim() ? [group.name.trim()] : [],
-  );
+  return groups.flatMap((entry, index) => {
+    const group = entry as Record<string, unknown> | null;
+    const name = typeof group?.name === "string" ? group.name.trim() : "";
+    if (!name) {
+      return [];
+    }
+    const cwd = typeof group?.cwd === "string" ? group.cwd.trim() : "";
+    return [
+      {
+        name,
+        position:
+          typeof group?.position === "number" && Number.isSafeInteger(group.position)
+            ? group.position
+            : index,
+        ...(cwd ? { cwd } : {}),
+        ...(typeof group?.worktree === "boolean" ? { worktree: group.worktree } : {}),
+      },
+    ];
+  });
+}
+
+export function readSessionCustomGroupNames(payload: unknown): string[] {
+  return readSessionCustomGroups(payload).map((group) => group.name);
 }
 
 export function readSidebarSectionOrder(payload: unknown): string[] {

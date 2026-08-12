@@ -1144,8 +1144,10 @@ export interface SecretStoreEntries {
 
 export interface SessionGroups {
   created_at: number;
+  cwd: string | null;
   name: string;
   position: number;
+  worktree: number | null;
 }
 
 export interface SessionStateEvents {

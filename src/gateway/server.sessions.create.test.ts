@@ -40,6 +40,7 @@ import {
   attachGatewayLocalUserIngress,
   prepareGatewayLocalUserIngress,
 } from "./local-user-ingress.js";
+import { listSessionGroups } from "./session-groups.js";
 import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import {
   agentCommandMock,
@@ -193,6 +194,20 @@ function describeSessionStoreForensics(storePath: string): string {
     .all();
   return JSON.stringify({ storeDir, files, resolvedTargetPath: target.path, rows });
 }
+
+test("sessions.create assigns and registers its requested group", async () => {
+  const { storePath } = await createSessionStoreDir();
+
+  const created = await directSessionReq<{ key: string }>("sessions.create", {
+    agentId: "main",
+    category: "Client work",
+  });
+
+  expect(created.ok).toBe(true);
+  const key = requireNonEmptyString(created.payload?.key, "grouped session key");
+  expect(loadSessionEntry({ sessionKey: key, storePath })?.category).toBe("Client work");
+  expect(listSessionGroups().map((group) => group.name)).toContain("Client work");
+});
 
 test("concurrent sessions.create requests adopt one canonical keyed session", async () => {
   const { storePath } = await createSessionStoreDir();

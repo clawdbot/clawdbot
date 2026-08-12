@@ -38,6 +38,8 @@ import type { SessionMenuAction } from "./session-menu.ts";
 
 type SessionOrganizerOperations = typeof import("./session-organizer-operations.runtime.ts");
 type InputDialogOpener = (typeof import("./input-dialog.ts"))["showInputDialog"];
+type SessionGroupDefaultsDialogOpener =
+  (typeof import("./session-group-defaults-dialog.ts"))["showSessionGroupDefaultsDialog"];
 
 export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
   readonly sessionData: Pick<
@@ -57,6 +59,7 @@ export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
   clearSessionSelection(): void;
   findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
   knownSessionGroups(): string[];
+  sessionGroupDefaults(name: string): { cwd: string; worktree: boolean };
   knownSessionCatalogIds(): string[];
   knownSectionOrder(): string[];
   pruneSidebarSessionEntry(key: string): void;
@@ -528,6 +531,43 @@ export class SessionOrganizerController implements ReactiveController {
     collapsed.delete(`category:${group}`);
     this.saveCollapsedSessionSections(collapsed);
     this.host.requestUpdate();
+  }
+
+  async editSessionGroupDefaults(group: string): Promise<void> {
+    let showDialog: SessionGroupDefaultsDialogOpener;
+    try {
+      showDialog = (await import("./session-group-defaults-dialog.ts"))
+        .showSessionGroupDefaultsDialog;
+    } catch (error) {
+      const scope = this.host.sessionData.beginSessionMutation();
+      if (scope) {
+        this.host.sessionData.publishSessionMutationError(scope, error);
+      }
+      return;
+    }
+    await showDialog({
+      group,
+      defaults: this.host.sessionGroupDefaults(group),
+      submit: async (defaults) => {
+        const scope = this.host.sessionData.beginSessionMutation();
+        if (!scope) {
+          return t("sessionsView.groupDefaultsStale");
+        }
+        const operations = await this.loadOperations(scope);
+        const result = await operations?.updateSessionGroupDefaults(
+          this.host,
+          group,
+          { cwd: defaults.cwd || null, worktree: defaults.worktree },
+          scope,
+        );
+        if (result === "completed") {
+          return null;
+        }
+        return result === "stale"
+          ? t("sessionsView.groupDefaultsStale")
+          : (this.host.sessionData.sessionMutationError ?? t("sessionsView.groupDefaultsFailed"));
+      },
+    });
   }
 
   saveCollapsedSessionSections(sections: ReadonlySet<string>) {

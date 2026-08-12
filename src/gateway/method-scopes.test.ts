@@ -84,6 +84,7 @@ describe("method scope resolution", () => {
     ["sessions.groups.list", ["operator.read"]],
     ["sessions.groups.put", ["operator.write"]],
     ["sessions.groups.rename", ["operator.write"]],
+    ["sessions.groups.update", ["operator.write"]],
     ["sessions.groups.delete", ["operator.write"]],
     ["sessions.catalog.list", ["operator.read"]],
     ["sessions.catalog.read", ["operator.read"]],

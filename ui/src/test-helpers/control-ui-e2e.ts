@@ -224,6 +224,7 @@ const defaultControlUiFeatureMethods = [
   "sessions.groups.list",
   "sessions.groups.put",
   "sessions.groups.rename",
+  "sessions.groups.update",
   "sessions.patch",
   "sessions.reclaim",
   "sessions.reset",
@@ -231,6 +232,7 @@ const defaultControlUiFeatureMethods = [
   "update.hold",
   "update.run",
   "update.status",
+  "worktrees.branches",
 ] as const;
 
 export type MockGatewayRequest = {
@@ -312,6 +314,8 @@ export type ControlUiMockGatewayScenario = {
   sessionKey?: string;
   /** Initial gateway-owned custom group catalog (sessions.groups.*), in order. */
   sessionGroups?: string[];
+  /** Optional New Session defaults keyed by custom group name. */
+  sessionGroupDefaults?: Record<string, { cwd?: string; worktree?: boolean }>;
   terminalEnabled?: boolean;
   cliAgentsEnabled?: boolean;
   workspace?: string;
@@ -825,6 +829,7 @@ function normalizeScenario(
     sessionArchiveFiltering: scenario.sessionArchiveFiltering ?? false,
     sessionKey,
     sessionGroups: scenario.sessionGroups ?? [],
+    sessionGroupDefaults: scenario.sessionGroupDefaults ?? {},
     terminalEnabled: scenario.terminalEnabled ?? false,
     cliAgentsEnabled: scenario.cliAgentsEnabled ?? false,
     workspace: scenario.workspace ?? "",
@@ -973,10 +978,12 @@ function installControlUiMockGateway(
   const groupsStateKey = "openclaw.control-ui-e2e.sessionGroups";
   let groupsState: {
     names: string[];
+    defaults: Record<string, { cwd?: string; worktree?: boolean }>;
     sectionOrder: string[];
     renames: Array<{ from: string; to: string | null }>;
   } = {
     names: [...input.scenario.sessionGroups],
+    defaults: { ...input.scenario.sessionGroupDefaults },
     sectionOrder: [],
     renames: [],
   };
@@ -991,6 +998,7 @@ function installControlUiMockGateway(
     if (rawGroups) {
       groupsState = JSON.parse(rawGroups) as typeof groupsState;
       groupsState.sectionOrder ??= [];
+      groupsState.defaults ??= {};
     }
   } catch {
     // Storage-disabled browser contexts still get the scenario catalog.
@@ -1072,11 +1080,15 @@ function installControlUiMockGateway(
   }
 
   function groupsPayload(): {
-    groups: Array<{ name: string; position: number }>;
+    groups: Array<{ name: string; position: number; cwd?: string; worktree?: boolean }>;
     sectionOrder: string[];
   } {
     return {
-      groups: groupsState.names.map((name, position) => ({ name, position })),
+      groups: groupsState.names.map((name, position) => ({
+        name,
+        position,
+        ...groupsState.defaults[name],
+      })),
       sectionOrder: [...groupsState.sectionOrder],
     };
   }
@@ -1794,6 +1806,10 @@ function installControlUiMockGateway(
             names.splice(sourceIndex < 0 ? names.length : sourceIndex, 0, to);
           }
           groupsState.names = names;
+          if (!groupsState.defaults[to] && groupsState.defaults[from]) {
+            groupsState.defaults[to] = groupsState.defaults[from];
+          }
+          delete groupsState.defaults[from];
           const sourceSectionId = `category:${from}`;
           const targetSectionId = `category:${to}`;
           groupsState.sectionOrder = groupsState.sectionOrder.flatMap((sectionId) => {
@@ -1807,10 +1823,23 @@ function installControlUiMockGateway(
         }
         return { ok: true, updatedSessions: 0, ...groupsPayload() };
       }
+      case "sessions.groups.update": {
+        const name = isRecord(params) && typeof params.name === "string" ? params.name.trim() : "";
+        if (name) {
+          const cwd = isRecord(params) && typeof params.cwd === "string" ? params.cwd.trim() : "";
+          groupsState.defaults[name] = {
+            ...(cwd ? { cwd } : {}),
+            worktree: isRecord(params) && params.worktree === true,
+          };
+          persistGroupsState();
+        }
+        return { ok: true, ...groupsPayload() };
+      }
       case "sessions.groups.delete": {
         const name = isRecord(params) && typeof params.name === "string" ? params.name.trim() : "";
         if (name) {
           groupsState.names = groupsState.names.filter((existing) => existing !== name);
+          delete groupsState.defaults[name];
           groupsState.sectionOrder = groupsState.sectionOrder.filter(
             (sectionId) => sectionId !== `category:${name}`,
           );

@@ -266,6 +266,10 @@ export function renderSidebarSessionGroupMenuForController(controller: SidebarMe
   const { host } = controller;
   const menu = controller.sessionGroupMenu;
   const groupActionAccess = {
+    "group-defaults": readSessionMethodAccess(host.sessionDataContext?.gateway.snapshot, {
+      method: "sessions.groups.update",
+      requiredScope: "operator.write",
+    }),
     "rename-group": readSessionMethodAccess(host.sessionDataContext?.gateway.snapshot, {
       method: "sessions.groups.rename",
       requiredScope: "operator.write",
@@ -291,6 +295,9 @@ export function renderSidebarSessionGroupMenuForController(controller: SidebarMe
     onAction: (action, group) => {
       controller.closeSessionGroupMenu({ restoreFocus: true });
       switch (action) {
+        case "group-defaults":
+          void host.sessionOrganizer.editSessionGroupDefaults(group);
+          break;
         case "rename-group":
           void host.sessionOrganizer.renameSessionGroupFromMenu(group);
           break;

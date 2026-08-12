@@ -1,4 +1,5 @@
 // Session group catalog mutations.
+import path from "node:path";
 import {
   ErrorCodes,
   errorShape,
@@ -6,6 +7,7 @@ import {
   validateSessionsGroupsListParams,
   validateSessionsGroupsPutParams,
   validateSessionsGroupsRenameParams,
+  validateSessionsGroupsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -14,6 +16,7 @@ import {
   listSessionGroups,
   putSessionGroups,
   renameSessionGroup,
+  updateSessionGroupDefaults,
 } from "../session-groups.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -71,6 +74,32 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       }
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
     }
+  },
+  "sessions.groups.update": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSessionsGroupsUpdateParams,
+        "sessions.groups.update",
+        respond,
+      )
+    ) {
+      return;
+    }
+    if (params.cwd && !path.isAbsolute(params.cwd)) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "session group cwd must be absolute"),
+      );
+      return;
+    }
+    const groups = updateSessionGroupDefaults(params.name, {
+      cwd: params.cwd,
+      worktree: params.worktree,
+    });
+    respond(true, { ok: true, groups, sectionOrder: listSidebarSectionOrder() }, undefined);
+    emitSessionsChanged(context, { reason: "groups" });
   },
   "sessions.groups.delete": async ({ params, respond, context, sessionMutationAuthorization }) => {
     if (

@@ -567,6 +567,8 @@ export const SessionsGroupsListParamsSchema = closedObject({});
 export const SessionGroupSchema = closedObject({
   name: SessionLabelString,
   position: Type.Integer({ minimum: 0 }),
+  cwd: Type.Optional(NonEmptyString),
+  worktree: Type.Optional(Type.Boolean()),
 });
 
 const SidebarSectionIdString = Type.String({ minLength: 1, maxLength: 512 });
@@ -587,6 +589,13 @@ export const SessionsGroupsPutParamsSchema = closedObject({
 export const SessionsGroupsRenameParamsSchema = closedObject({
   name: SessionLabelString,
   to: SessionLabelString,
+});
+
+/** Updates the New Session defaults owned by one custom group. */
+export const SessionsGroupsUpdateParamsSchema = closedObject({
+  name: SessionLabelString,
+  cwd: Type.Union([NonEmptyString, Type.Null()]),
+  worktree: Type.Boolean(),
 });
 
 /** Deletes a group and clears every member session's category. */
@@ -835,6 +844,7 @@ export type SessionsGroupsListParams = Static<typeof SessionsGroupsListParamsSch
 export type SessionsGroupsListResult = Static<typeof SessionsGroupsListResultSchema>;
 export type SessionsGroupsPutParams = Static<typeof SessionsGroupsPutParamsSchema>;
 export type SessionsGroupsRenameParams = Static<typeof SessionsGroupsRenameParamsSchema>;
+export type SessionsGroupsUpdateParams = Static<typeof SessionsGroupsUpdateParamsSchema>;
 export type SessionsGroupsDeleteParams = Static<typeof SessionsGroupsDeleteParamsSchema>;
 export type SessionsGroupsMutationResult = Static<typeof SessionsGroupsMutationResultSchema>;
 export type SessionsCompactParams = Static<typeof SessionsCompactParamsSchema>;

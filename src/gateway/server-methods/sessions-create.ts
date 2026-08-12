@@ -30,6 +30,7 @@ import { resolveUserPath } from "../../utils.js";
 import { buildDashboardSessionTitleSource } from "../dashboard-session-title.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { buildDashboardSessionKey, createGatewaySession } from "../session-create-service.js";
+import { ensureSessionGroupRegistered } from "../session-groups.js";
 import type { PrepareGatewaySessionLifecycle } from "../session-lifecycle-preparation.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
@@ -494,6 +495,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       key: sessionKey,
       agentId: sessionAgentId,
       label: p.label,
+      category: p.category,
       ...(catalogTarget ? { catalogTarget: catalogTarget.target } : { model: p.model }),
       thinkingLevel: p.thinkingLevel,
       projectId: requestedProjectId,
@@ -587,6 +589,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (!created.ok) {
       respond(false, undefined, created.error);
       return;
+    }
+    const category = normalizeOptionalString(p.category);
+    if (category) {
+      ensureSessionGroupRegistered(category);
     }
     if (created.resetExisting) {
       await captureCreatedSessionDiffBaseline({
