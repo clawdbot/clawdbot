@@ -352,8 +352,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
       // +7: restore still-existing deprecated inbound-dispatch compatibility re-exports.
       // +6: source-compatible harness contracts retained during the V2 migration window.
-      // +1: shipped default-agent resolver retained during explicit-owner migration.
-      1143,
+      // +4: shipped default-agent resolver projections retained during explicit-owner migration.
+      1146,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
