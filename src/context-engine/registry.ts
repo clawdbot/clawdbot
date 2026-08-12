@@ -2,7 +2,6 @@
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createAbortError } from "../infra/abort-signal.js";
-import { getPluginCompatRecord } from "../plugins/compat/registry.js";
 import type {
   ContextEngineFactory,
   ContextEngineFactoryContext,
@@ -42,7 +41,7 @@ type RegisterContextEngineForOwnerOptions = {
 
 type GuardedContextEngineMethodName = Exclude<keyof ContextEngine, "info" | "dispose">;
 const GUARDED_CONTEXT_ENGINE_METHODS = new Set<PropertyKey>(
-  "bootstrap maintain ingest ingestBatch afterTurn commitTurn commitTurnLocal assemble compact prepareSubagentSpawn onSubagentEnded".split(
+  "bootstrap maintain ingest ingestBatch afterTurn commitTurn assemble compact prepareSubagentSpawn onSubagentEnded".split(
     " ",
   ),
 );
@@ -55,20 +54,11 @@ type ResolvedContextEngineMetadata = {
 };
 
 const resolvedEngineMetadata = new WeakMap<ContextEngine, ResolvedContextEngineMetadata>();
-const legacyHostParamDefaultRemoveAfter = getPluginCompatRecord(
-  "context-engine-legacy-host-param-default",
-).removeAfter;
-
 function projectContextEngineHostParams(
   engine: ContextEngine,
   params: Record<string, unknown>,
 ): Record<string, unknown> {
-  // Removal(2026-08-12): undeclared engines get full params.
-  // Contract: context-engine-legacy-host-param-default.
-  const useLegacyDefault =
-    legacyHostParamDefaultRemoveAfter !== undefined &&
-    new Date().toISOString().slice(0, 10) <= legacyHostParamDefaultRemoveAfter;
-  const accepted = engine.info.acceptedHostParams ?? (useLegacyDefault ? [] : undefined);
+  const accepted = engine.info.acceptedHostParams;
   if (!accepted) {
     return params;
   }

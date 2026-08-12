@@ -1,9 +1,8 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "./provider-model-shared.js";
 
 export function readLiveModelCatalogRecord(body: unknown): Record<string, unknown> | undefined {
-  return body && typeof body === "object" && !Array.isArray(body)
-    ? (body as Record<string, unknown>)
-    : undefined;
+  return asOptionalRecord(body);
 }
 
 function readLiveModelString(

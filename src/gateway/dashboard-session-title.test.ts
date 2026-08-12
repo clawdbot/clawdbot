@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const generateConversationLabelWithFallback = vi.hoisted(() => vi.fn());
 const resolveUtilityModelRefForAgent = vi.hoisted(() => vi.fn());
+const readSessionTitleFieldsFromTranscript = vi.hoisted(() => vi.fn());
 const updateSessionEntry = vi.hoisted(() => vi.fn());
 
 vi.mock("../agents/utility-model.js", () => ({ resolveUtilityModelRefForAgent }));
@@ -10,6 +11,7 @@ vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
   generateConversationLabelWithFallback,
 }));
 vi.mock("../config/sessions/session-accessor.js", () => ({ updateSessionEntry }));
+vi.mock("./session-transcript-title-reader.js", () => ({ readSessionTitleFieldsFromTranscript }));
 
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -51,6 +53,11 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     generateConversationLabelWithFallback.mockReset();
     resolveUtilityModelRefForAgent.mockReset();
     updateSessionEntry.mockReset();
+    readSessionTitleFieldsFromTranscript.mockReset();
+    readSessionTitleFieldsFromTranscript.mockReturnValue({
+      firstUserMessage: null,
+      lastMessagePreview: null,
+    });
     generateConversationLabelWithFallback.mockResolvedValue("Release Planning");
     resolveUtilityModelRefForAgent.mockReturnValue("openai/gpt-5.6-luna");
     mockSessionUpdate(baseEntry);
@@ -113,6 +120,38 @@ describe("maybeGenerateDashboardSessionTitle", () => {
         regularModelRef: "anthropic/claude-fable-5@work",
         preferredProfile: "work",
       }),
+    );
+  });
+
+  it("preserves a locked session harness as the title runtime owner", async () => {
+    const entry = {
+      ...baseEntry,
+      agentHarnessId: "codex",
+      agentRuntimeOverride: "openclaw",
+      modelSelectionLocked: true,
+    };
+    mockSessionUpdate(entry);
+
+    await expect(maybeGenerateDashboardSessionTitle(titleParams(entry))).resolves.toBe(true);
+
+    expect(generateConversationLabelWithFallback).toHaveBeenCalledWith(
+      expect.objectContaining({ agentHarnessRuntimeOverride: "codex" }),
+    );
+  });
+
+  it("preserves a compatible session runtime override for title generation", async () => {
+    const entry = {
+      ...baseEntry,
+      providerOverride: "anthropic",
+      modelOverride: "claude-fable-5",
+      agentRuntimeOverride: "claude-cli",
+    };
+    mockSessionUpdate(entry);
+
+    await expect(maybeGenerateDashboardSessionTitle(titleParams(entry))).resolves.toBe(true);
+
+    expect(generateConversationLabelWithFallback).toHaveBeenCalledWith(
+      expect.objectContaining({ agentHarnessRuntimeOverride: "claude-cli" }),
     );
   });
 
@@ -201,7 +240,6 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     ["group subject", { entry: { ...baseEntry, subject: "Release team" } }],
     ["channel name", { entry: { ...baseEntry, groupChannel: "releases" } }],
     ["space name", { entry: { ...baseEntry, space: "Engineering" } }],
-    ["existing session history", { entry: { ...baseEntry, systemSent: true } }],
   ])("skips %s", async (_name, override) => {
     await expect(
       maybeGenerateDashboardSessionTitle({ ...titleParams(), ...override }),
@@ -209,6 +247,58 @@ describe("maybeGenerateDashboardSessionTitle", () => {
 
     expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
     expect(updateSessionEntry).not.toHaveBeenCalled();
+  });
+
+  it("retries a historical session from the transcript's first user message", async () => {
+    const entry = { ...baseEntry, systemSent: true };
+    readSessionTitleFieldsFromTranscript.mockReturnValue({
+      firstUserMessage: "[Mon 2026-08-10 12:00 UTC] Original release plan",
+      lastMessagePreview: "Latest follow-up",
+    });
+    mockSessionUpdate(entry);
+
+    await expect(
+      maybeGenerateDashboardSessionTitle({
+        ...titleParams(entry),
+        currentUserMessage: "Latest follow-up",
+        userMessage: "Latest follow-up",
+      }),
+    ).resolves.toBe(true);
+
+    expect(generateConversationLabelWithFallback.mock.calls[0]?.[0]?.userMessage).toBe(
+      "Original release plan",
+    );
+  });
+
+  it("preserves attachment-aware input when the first turn is already in the transcript", async () => {
+    readSessionTitleFieldsFromTranscript.mockReturnValue({
+      firstUserMessage: "[Mon 2026-08-10 12:00 UTC] Review this rollout",
+      lastMessagePreview: "Review this rollout",
+    });
+
+    await expect(
+      maybeGenerateDashboardSessionTitle({
+        ...titleParams(),
+        currentUserMessage: "Review this rollout",
+        userMessage: "Review this rollout\nDeployment context",
+      }),
+    ).resolves.toBe(true);
+
+    expect(generateConversationLabelWithFallback.mock.calls[0]?.[0]?.userMessage).toBe(
+      "Review this rollout\nDeployment context",
+    );
+  });
+
+  it("evicts a failed request so later activity can retry", async () => {
+    generateConversationLabelWithFallback
+      .mockRejectedValueOnce(new Error("route unavailable"))
+      .mockResolvedValueOnce("Release Planning");
+
+    await expect(maybeGenerateDashboardSessionTitle(titleParams())).rejects.toThrow(
+      "route unavailable",
+    );
+    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
+    expect(generateConversationLabelWithFallback).toHaveBeenCalledTimes(2);
   });
 
   it("does not overwrite a name added while the model request is running", async () => {

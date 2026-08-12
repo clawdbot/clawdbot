@@ -6,7 +6,7 @@ import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqli
 import {
   appendTranscriptMessage,
   loadTranscriptEvents,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { SessionManager } from "./session-manager.js";
 
@@ -77,7 +77,7 @@ describe("SessionManager user idempotency", () => {
       idempotencyKey: "runtime-user-ancestor:user",
       timestamp: 1,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionFile: formatSqliteSessionFileMarker(scope),
       sessionId: scope.sessionId,
       updatedAt: 1,
@@ -125,7 +125,7 @@ describe("SessionManager user idempotency", () => {
       idempotencyKey: "runtime-user-concurrent-ingress:user",
       timestamp: 1,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionFile: formatSqliteSessionFileMarker(scope),
       sessionId: scope.sessionId,
       updatedAt: 1,
@@ -194,7 +194,7 @@ describe("SessionManager user idempotency", () => {
       idempotencyKey: "runtime-user-setup-metadata:user",
       timestamp: 1,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionFile: formatSqliteSessionFileMarker(scope),
       sessionId: scope.sessionId,
       updatedAt: 1,

@@ -11,9 +11,9 @@ import type { SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
   readTranscriptStatsSync,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { replaceSqliteTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import {
   clearMemoryPluginState,
@@ -126,7 +126,7 @@ function loadMainSessionEntry(storePath: string): SessionEntry {
 
 async function writeTestSessionTranscript(params: {
   rootDir: string;
-  events: Parameters<typeof replaceSqliteTranscriptEvents>[1];
+  events: Parameters<typeof replaceTranscriptEvents>[1];
   sessionKey?: string;
   sessionId?: string;
 }): Promise<void> {
@@ -138,8 +138,8 @@ async function writeTestSessionTranscript(params: {
     sessionKey,
     storePath: path.join(params.rootDir, "sessions.json"),
   };
-  await upsertSessionEntry(scope, { sessionId, updatedAt: 10 });
-  await replaceSqliteTranscriptEvents(scope, params.events);
+  await upsertSessionEntryCore(scope, { sessionId, updatedAt: 10 });
+  await replaceTranscriptEvents(scope, params.events);
 }
 
 type RefreshQueuedFollowupSessionParams = {
@@ -559,8 +559,8 @@ describe("runMemoryFlushIfNeeded", () => {
     const storePath = path.join(rootDir, "tainted-owner-session.json");
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
-    await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
-    await replaceSqliteTranscriptEvents(scope, [
+    await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
+    await replaceTranscriptEvents(scope, [
       {
         type: "message",
         message: { role: "user", content: "Research this", __openclaw: { senderIsOwner: true } },
@@ -2102,7 +2102,7 @@ describe("runMemoryFlushIfNeeded", () => {
       totalTokensVersion: 1,
       compactionCount: 0,
     };
-    await upsertSessionEntry({ agentId: "main", sessionKey, storePath }, sessionEntry);
+    await upsertSessionEntryCore({ agentId: "main", sessionKey, storePath }, sessionEntry);
 
     await runPreflightCompactionIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
@@ -3208,8 +3208,8 @@ describe("runMemoryFlushIfNeeded", () => {
     const storePath = path.join(rootDir, "sqlite-codex-byte-guard.json");
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
-    await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
-    await replaceSqliteTranscriptEvents(scope, [
+    await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
+    await replaceTranscriptEvents(scope, [
       { message: { role: "user", content: "x".repeat(256) }, type: "message" },
     ]);
     expect(readTranscriptStatsSync(scope).sizeBytes).toBeGreaterThan(10);
@@ -3268,8 +3268,8 @@ describe("runMemoryFlushIfNeeded", () => {
     const storePath = path.join(rootDir, "sqlite-codex-under-byte-guard.json");
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
-    await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
-    await replaceSqliteTranscriptEvents(scope, [
+    await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
+    await replaceTranscriptEvents(scope, [
       { message: { role: "user", content: "small" }, type: "message" },
     ]);
     expect(readTranscriptStatsSync(scope).sizeBytes).toBeLessThan(10 * 1024);
@@ -3329,8 +3329,8 @@ describe("runMemoryFlushIfNeeded", () => {
     const storePath = path.join(rootDir, "sqlite-cli-owned-session.json");
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
-    await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
-    await replaceSqliteTranscriptEvents(scope, [
+    await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
+    await replaceTranscriptEvents(scope, [
       { message: { role: "user", content: "x".repeat(256) }, type: "message" },
     ]);
     expect(readTranscriptStatsSync(scope).sizeBytes).toBeGreaterThan(10);
@@ -3401,8 +3401,8 @@ describe("runMemoryFlushIfNeeded", () => {
     const storePath = path.join(rootDir, "sqlite-large-session.json");
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
-    await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
-    await replaceSqliteTranscriptEvents(scope, [
+    await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
+    await replaceTranscriptEvents(scope, [
       { message: { role: "user", content: "x".repeat(256) }, type: "message" },
     ]);
     expect(readTranscriptStatsSync(scope).sizeBytes).toBeGreaterThan(10);
@@ -3548,7 +3548,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const storePath = path.join(rootDir, "sqlite-deep-leaf-session.json");
     const sessionKey = "agent:main:deep-leaf";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
-    await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
     const activeRoot = {
       type: "message",
       id: "active-root",
@@ -3577,7 +3577,7 @@ describe("runMemoryFlushIfNeeded", () => {
       parentId = id;
       return event;
     });
-    await replaceSqliteTranscriptEvents(scope, [
+    await replaceTranscriptEvents(scope, [
       activeRoot,
       ...abandonedBranch,
       {
@@ -3623,8 +3623,8 @@ describe("runMemoryFlushIfNeeded", () => {
     const storePath = path.join(rootDir, "sqlite-force-flush-session.json");
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
-    await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
-    await replaceSqliteTranscriptEvents(scope, [
+    await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
+    await replaceTranscriptEvents(scope, [
       { message: { role: "user", content: "x".repeat(256) }, type: "message" },
     ]);
     const sessionEntry: SessionEntry = {

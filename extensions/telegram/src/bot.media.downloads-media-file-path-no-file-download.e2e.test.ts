@@ -295,6 +295,7 @@ describe("telegram inbound media", () => {
 
     const cases = [
       {
+        updateId: 7005,
         message: {
           chat: { id: 42, type: "private" as const },
           message_id: 5,
@@ -313,9 +314,13 @@ describe("telegram inbound media", () => {
           expect(payload.LocationLon).toBe(2.294351);
           expect(payload.LocationSource).toBe("pin");
           expect(payload.LocationIsLive).toBe(false);
+          expect(payload.ProviderUpdateId).toBe("7005");
+          expect(payload.ProviderUpdateKind).toBe("message");
+          expect(payload.ProviderMessageTimestamp).toBe(1736380800000);
         },
       },
       {
+        updateId: 7006,
         message: {
           chat: { id: 42, type: "private" as const },
           message_id: 6,
@@ -338,6 +343,7 @@ describe("telegram inbound media", () => {
     for (const testCase of cases) {
       replySpy.mockClear();
       await handler({
+        update: { update_id: testCase.updateId, message: testCase.message },
         message: testCase.message,
         me: { username: "openclaw_bot" },
         getFile: async () => ({ file_path: "unused" }),

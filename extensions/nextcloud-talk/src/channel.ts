@@ -112,6 +112,8 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
       messaging: {
         targetPrefixes: ["nextcloud-talk", "nc-talk", "nc"],
         normalizeTarget: normalizeNextcloudTalkMessagingTarget,
+        inferTargetChatType: ({ to }) =>
+          normalizeNextcloudTalkMessagingTarget(to) ? "group" : undefined,
         resolveOutboundSessionRoute: (params) => resolveNextcloudTalkOutboundSessionRoute(params),
         targetResolver: {
           looksLikeId: looksLikeNextcloudTalkTargetId,

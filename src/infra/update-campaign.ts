@@ -166,7 +166,9 @@ export class UpdateCampaignController {
     if (campaign.state === "waiting-for-idle") {
       let idle = false;
       try {
-        idle = createGatewayActiveWorkSnapshot(announcement.inspect).idle;
+        idle = createGatewayActiveWorkSnapshot(announcement.inspect, {
+          ignoreTerminalSessions: true,
+        }).idle;
       } catch {
         // Inspection failure must not erase the hard deadline or force an unsafe early apply.
       }

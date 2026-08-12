@@ -6,14 +6,14 @@ import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import {
-  deliverInboundReplyWithMessageSendContext,
+  deliverInboundReplyWithMessageSendContextCore,
   isDurableInboundReplyDeliveryHandled,
   throwIfDurableInboundReplyDeliveryFailed,
   type DurableInboundReplyDeliveryOptions,
 } from "../channels/turn/durable-delivery.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  normalizeOutboundReplyPayload,
+  normalizeOutboundReplyPayloadCore,
   type OutboundReplyPayload,
 } from "../infra/outbound/reply-payload-normalize.js";
 import { dispatchChannelInboundReply } from "./channel-inbound.js";
@@ -87,10 +87,10 @@ async function recordInboundSessionAndDispatchReply(
     dispatchReplyWithBufferedBlockDispatcher: params.dispatchReplyWithBufferedBlockDispatcher,
     delivery: {
       preparePayload: (payload): OutboundReplyPayload =>
-        payload && typeof payload === "object" ? normalizeOutboundReplyPayload(payload) : {},
+        payload && typeof payload === "object" ? normalizeOutboundReplyPayloadCore(payload) : {},
       deliver: async (payload, info) => {
         if (params.durable) {
-          const durable = await deliverInboundReplyWithMessageSendContext({
+          const durable = await deliverInboundReplyWithMessageSendContextCore({
             cfg: params.cfg,
             channel: params.channel,
             accountId: params.accountId,

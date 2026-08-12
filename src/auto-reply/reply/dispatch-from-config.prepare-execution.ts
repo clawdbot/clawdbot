@@ -91,7 +91,9 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   const progressState = {
     accumulatedBlockText: "",
     accumulatedBlockTtsText: "",
+    acceptedReplyPayload: false,
     blockCount: 0,
+    channelTransformSuppressed: false,
     hasPendingDirectBlockReplyDelivery: false,
     progressCallbackStartTail: Promise.resolve(),
   };

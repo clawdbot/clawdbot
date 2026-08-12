@@ -1,5 +1,6 @@
 // Hermes-native auth discovery and reauthentication planning.
 import { createMigrationManualItem } from "openclaw/plugin-sdk/migration";
+import { parseDateStringTimestampMs as readTimestamp } from "openclaw/plugin-sdk/number-runtime";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readText } from "./helpers.js";
@@ -31,14 +32,6 @@ const HERMES_REAUTH_PROVIDER_MAPPINGS = [
 const HERMES_REAUTH_SOURCE_PROVIDERS = new Set<string>(
   HERMES_REAUTH_PROVIDER_MAPPINGS.map((entry) => entry.sourceProvider),
 );
-
-function readTimestamp(value: unknown): number | undefined {
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
 
 function readHermesProviderCandidate(
   auth: Record<string, unknown>,

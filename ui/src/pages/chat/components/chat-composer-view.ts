@@ -170,6 +170,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         ? html`<div
             class="agent-chat__input ${props.offline ? "agent-chat__input--offline" : ""}"
             @click=${(event: MouseEvent) => focusComposerFromChrome(event, canCompose)}
+            @pointerdown=${(event: PointerEvent) => focusComposerFromChrome(event, canCompose)}
             ${ref(state.composerInputRef ?? undefined)}
           >
             ${props.offline
@@ -410,14 +411,14 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 ></textarea>
                 <span
                   id=${slashMenuAnnouncementId}
-                  class="agent-chat__sr-only"
+                  class="sr-only"
                   role="status"
                   aria-live="polite"
                   aria-atomic="true"
                   >${activeSlashMenuOptionLabel}</span
                 >
                 <span
-                  class="agent-chat__run-status-announcement agent-chat__sr-only"
+                  class="agent-chat__run-status-announcement sr-only"
                   role="status"
                   aria-live="polite"
                   aria-atomic="true"

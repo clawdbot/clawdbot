@@ -29,6 +29,7 @@ import type {
 } from "./server-chat-state.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import { mapTaskSummary, type TaskEventPayload } from "./server-methods/task-summary.js";
+import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
 import { createSessionCompanion } from "./session-companion.js";
 import { createSessionObserver } from "./session-observer.js";
 import type { TerminalSessionManager } from "./terminal/session-manager.js";
@@ -96,6 +97,7 @@ export function startGatewayEventSubscriptions(params: {
     broadcastToConnIds: params.broadcastToConnIds,
   });
   const sessionCompanion = createSessionCompanion({
+    contextReader: defaultSessionCompanionContextReader,
     getConfig: getRuntimeConfig,
     sessionObserver,
   });

@@ -431,6 +431,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       claim: WorkerSessionTurnClaim;
       transcript?: number;
       liveEvent?: number;
+      /** @deprecated Workspace result fencing is implied by a live event cursor. */
       workspaceResultPending?: boolean;
     }): WorkerSessionPlacementRecord {
       const sessionId = required(input.claim.sessionId, "session id");
@@ -499,7 +500,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         if (result.numAffectedRows !== 1n) {
           throw new Error(`Worker session placement ${sessionId} changed during ACK`);
         }
-        if (input.workspaceResultPending) {
+        if (input.liveEvent !== undefined) {
           // The terminal event is not ACKed until crash recovery has a durable
           // fence protecting remote workspace results from stale-claim teardown.
           insertWorkerWorkspacePendingResult(db, input.claim, now(), instanceId);

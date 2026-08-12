@@ -27,9 +27,6 @@ import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
-import { countPendingDescendantRunsExcludingRunFromRuns } from "./subagent-registry-queries.js";
-import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type RegistryTestApi = {
@@ -58,7 +55,6 @@ type RegistryDeps = {
     | undefined;
   captureSubagentCompletionReply: typeof import("../announce/subagent-announce.js").captureSubagentCompletionReply;
   cleanupBrowserSessionsForLifecycleEnd: typeof import("../../../browser-lifecycle-cleanup.js").cleanupBrowserSessionsForLifecycleEnd;
-  getSubagentRunsSnapshotForRead: typeof import("./subagent-registry-state.js").getSubagentRunsSnapshotForRead;
   getRuntimeConfig: typeof import("../../../config/config.js").getRuntimeConfig;
   onAgentEvent: typeof import("../../../infra/agent-events.js").onAgentEvent;
   persistSubagentRunsToDisk: typeof import("./subagent-registry-state.js").persistSubagentRunsToDisk;
@@ -113,17 +109,6 @@ export const testing = {
   setDepsForTest: (overrides?: Partial<RegistryDeps>) =>
     getRegistryTestApi().testing.setDepsForTest(overrides),
 };
-
-export function countPendingDescendantRunsExcludingRun(
-  rootSessionKey: string,
-  excludeRunId: string,
-) {
-  return countPendingDescendantRunsExcludingRunFromRuns(
-    getSubagentRunsSnapshotForRead(subagentRuns),
-    rootSessionKey,
-    excludeRunId,
-  );
-}
 
 export function listSessionMaintenanceProtectedSubagentSessionKeys() {
   return [...(collectSessionMaintenancePreserveKeys() ?? [])];

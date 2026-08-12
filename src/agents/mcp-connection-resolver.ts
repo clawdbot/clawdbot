@@ -154,19 +154,32 @@ function listMcpServerConnectionResolversByServerName(): Map<
   return new Map([...byName.entries()].toSorted(([a], [b]) => a.localeCompare(b)));
 }
 
-/** Partition loaded MCP servers into static vs requester-scoped by registered resolvers. */
+/** Partition loaded MCP servers into static vs requester-scoped connections. */
 export function partitionMcpServersByConnectionScope<T>(mcpServers: Record<string, T>): {
   staticServers: Record<string, T>;
   requesterScopedServerNames: string[];
+  oauthRequesterServerNames: string[];
+  resolverRequesterServerNames: string[];
 } {
   const resolvers = listMcpServerConnectionResolversByServerName();
   const staticServerEntries: Array<[string, T]> = [];
   const requesterScopedServerNames: string[] = [];
+  const oauthRequesterServerNames: string[] = [];
+  const resolverRequesterServerNames: string[] = [];
   for (const [serverName, rawServer] of Object.entries(mcpServers).toSorted(([a], [b]) =>
     a.localeCompare(b),
   )) {
+    const oauth = isRecord(rawServer) && isRecord(rawServer.oauth) ? rawServer.oauth : undefined;
+    if (isRecord(rawServer) && rawServer.auth === "oauth" && oauth?.identity === "per-requester") {
+      // Config-declared requester OAuth must stay out of anonymous/static runs.
+      // Resolver lookup here would erase OAuth and could expose a shared connection.
+      requesterScopedServerNames.push(serverName);
+      oauthRequesterServerNames.push(serverName);
+      continue;
+    }
     if (resolvers.has(serverName)) {
       requesterScopedServerNames.push(serverName);
+      resolverRequesterServerNames.push(serverName);
       continue;
     }
     staticServerEntries.push([serverName, rawServer]);
@@ -174,7 +187,12 @@ export function partitionMcpServersByConnectionScope<T>(mcpServers: Record<strin
   // Data-property construction preserves every own key from unvalidated inputs,
   // including "__proto__", without invoking Object.prototype's legacy setter.
   const staticServers = Object.fromEntries(staticServerEntries);
-  return { staticServers, requesterScopedServerNames };
+  return {
+    staticServers,
+    requesterScopedServerNames,
+    oauthRequesterServerNames,
+    resolverRequesterServerNames,
+  };
 }
 
 /**

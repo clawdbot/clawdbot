@@ -2,6 +2,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   createPluginBoundaryReport,
+  isPluginCompatEligibleForRemoval,
   type PluginBoundaryReportResult,
 } from "../../scripts/plugin-boundary-report.js";
 
@@ -74,6 +75,18 @@ describe("plugin-boundary-report", () => {
     expect(pluginSdk.unusedReservedCount).toBe(0);
     expect(["private-core-bridge", "private-package-core-integrated"]).toContain(
       summary.memoryHostSdk?.implementation,
+    );
+  });
+
+  it("treats removeAfter as the final compatibility day", () => {
+    expect(
+      isPluginCompatEligibleForRemoval("2026-08-12", new Date("2026-08-12T23:59:59.999Z")),
+    ).toBe(false);
+    expect(
+      isPluginCompatEligibleForRemoval("2026-08-12", new Date("2026-08-13T00:00:00.000Z")),
+    ).toBe(true);
+    expect(isPluginCompatEligibleForRemoval(undefined, new Date("2026-08-13T00:00:00.000Z"))).toBe(
+      false,
     );
   });
 

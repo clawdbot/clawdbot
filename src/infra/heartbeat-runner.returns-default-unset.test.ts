@@ -11,7 +11,7 @@ import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
   resolveMainSessionKey,
-  resolveStorePath,
+  resolveSessionStorePathCore,
 } from "../config/sessions.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { buildAgentPeerSessionKey } from "../routing/session-key.js";
@@ -27,7 +27,7 @@ import {
   type HeartbeatDeps,
   isHeartbeatEnabledForAgent,
   resolveHeartbeatIntervalMs,
-  resolveHeartbeatPrompt,
+  resolveConfiguredHeartbeatPrompt,
   resolveHeartbeatSummaryForAgent,
   runHeartbeatOnce,
 } from "./heartbeat-runner.js";
@@ -265,6 +265,12 @@ beforeAll(async () => {
           allowFrom,
         }),
     },
+    messaging: {
+      inferTargetChatType: ({ to }) => {
+        const target = normalizeWhatsAppTargetForTest(to);
+        return target ? (isWhatsAppGroupJidForTest(target) ? "group" : "direct") : undefined;
+      },
+    },
   });
   whatsappPlugin.config = {
     ...whatsappPlugin.config,
@@ -352,8 +358,8 @@ afterAll(async () => {
 });
 
 describe("resolveHeartbeatIntervalMs", () => {
-  it("reports last as the default delivery target", () => {
-    expect(resolveHeartbeatSummaryForAgent({}).target).toBe("last");
+  it("reports owner as the default delivery target", () => {
+    expect(resolveHeartbeatSummaryForAgent({}).target).toBe("owner");
   });
 
   it("reports the merged per-agent heartbeat session", () => {
@@ -413,7 +419,7 @@ describe("resolveHeartbeatIntervalMs", () => {
   });
 });
 
-describe("resolveHeartbeatPrompt", () => {
+describe("resolveConfiguredHeartbeatPrompt", () => {
   it.each([
     { name: "default prompt", cfg: {} as OpenClawConfig, expected: HEARTBEAT_PROMPT },
     {
@@ -424,7 +430,7 @@ describe("resolveHeartbeatPrompt", () => {
       expected: "ping",
     },
   ])("uses $name", ({ cfg, expected }) => {
-    expect(resolveHeartbeatPrompt(cfg)).toBe(expected);
+    expect(resolveConfiguredHeartbeatPrompt(cfg)).toBe(expected);
   });
 });
 
@@ -492,12 +498,15 @@ describe("resolveHeartbeatDeliveryTarget", () => {
         },
       },
       {
-        name: "target defaults to last when unset",
-        cfg: {},
+        name: "target defaults to owner when unset",
+        cfg: {
+          commands: { ownerAllowFrom: ["+15555550166"] },
+          channels: { whatsapp: { allowFrom: ["+15555550166"] } },
+        },
         entry: entryWithDelivery("whatsapp", "120363401234567890@g.us"),
         expected: {
           channel: "whatsapp",
-          to: "120363401234567890@g.us",
+          to: "+15555550166",
           accountId: undefined,
           lastChannel: "whatsapp",
           lastAccountId: undefined,
@@ -627,7 +636,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       },
     ];
     for (const { cfg, entry, name, expected } of cases) {
-      expect(resolveHeartbeatDeliveryTarget({ cfg, entry }), name).toEqual(expected);
+      expect(resolveHeartbeatDeliveryTarget({ cfg, entry }), name).toMatchObject(expected);
     }
   });
 
@@ -713,6 +722,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     ).toEqual({
       channel: "whatsapp",
       to: "120363401234567890@g.us",
+      chatType: "group",
       accountId: undefined,
       lastChannel: "whatsapp",
       lastAccountId: undefined,
@@ -991,10 +1001,11 @@ describe("runHeartbeatOnce", () => {
         agents: {
           defaults: {
             workspace: tmpDir,
-            heartbeat: { every: "5m" },
+            heartbeat: { every: "5m", target: "owner" },
           },
         },
-        channels: { whatsapp: { allowFrom: ["*"] } },
+        commands: { ownerAllowFrom: ["+15555550166"] },
+        channels: { whatsapp: { allowFrom: ["+15555550166"] } },
         session: { store: storePath },
       };
       const sessionKey = resolveMainSessionKey(cfg);
@@ -1022,12 +1033,47 @@ describe("runHeartbeatOnce", () => {
 
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
       expectWhatsAppSendCall(sendWhatsApp, 0, {
-        to: "120363401234567890@g.us",
+        to: "+15555550166",
         text: "Final alert",
       });
     } finally {
       replySpy.mockReset();
     }
+  });
+
+  it("prepends the first heartbeat alert only once for the implicit owner default", async () => {
+    const tmpDir = await createCaseDir("hb-owner-preamble");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { workspace: tmpDir, heartbeat: { every: "5m" } } },
+      commands: { ownerAllowFrom: ["+15555550166"] },
+      channels: { whatsapp: { allowFrom: ["+15555550166"] } },
+      session: { store: storePath },
+    };
+    await seedWhatsAppSession(storePath, resolveMainSessionKey(cfg));
+    const replySpy = vi
+      .fn()
+      .mockResolvedValueOnce({ text: "First alert" })
+      .mockResolvedValueOnce({ text: "Second alert" });
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+    await runHeartbeatOnce({
+      cfg,
+      deps: createHeartbeatDeps(sendWhatsApp, { nowMs: 1, getReplyFromConfig: replySpy }),
+    });
+    await runHeartbeatOnce({
+      cfg,
+      deps: createHeartbeatDeps(sendWhatsApp, { nowMs: 2, getReplyFromConfig: replySpy }),
+    });
+
+    expectWhatsAppSendCall(sendWhatsApp, 0, {
+      to: "+15555550166",
+      text: 'First heartbeat alert: your bot runs periodic background checks and messages you only when something needs attention. Set agents.defaults.heartbeat.target: "none" to keep these internal.\nFirst alert',
+    });
+    expectWhatsAppSendCall(sendWhatsApp, 1, {
+      to: "+15555550166",
+      text: "Second alert",
+    });
   });
 
   it("uses per-agent heartbeat overrides and session keys", async () => {
@@ -1122,7 +1168,7 @@ describe("runHeartbeatOnce", () => {
         session: { store: storeTemplate },
       };
       const sessionKey = resolveAgentMainSessionKey({ cfg, agentId });
-      const storePath = resolveStorePath(storeTemplate, { agentId });
+      const storePath = resolveSessionStorePathCore(storeTemplate, { agentId });
       const sessionsDir = path.dirname(storePath);
       const sessionId = "sid-ops";
       const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
@@ -1610,7 +1656,7 @@ describe("runHeartbeatOnce", () => {
       };
       const sessionKey = resolveMainSessionKey(cfg);
       const agentId = resolveAgentIdFromSessionKey(sessionKey);
-      const storePath = resolveStorePath(storeTemplate, { agentId });
+      const storePath = resolveSessionStorePathCore(storeTemplate, { agentId });
       await seedWhatsAppSession(storePath, sessionKey);
 
       replySpy.mockResolvedValue({ text: "Hello from heartbeat" });
@@ -1763,7 +1809,9 @@ describe("runHeartbeatOnce", () => {
       storePath: customCronStore,
     });
     const cfg = {
-      agents: { defaults: { workspace: workspaceDir, heartbeat: { every: "5m" } } },
+      agents: {
+        defaults: { workspace: workspaceDir, heartbeat: { every: "5m", target: "last" } },
+      },
       cron: { store: customCronStore },
       session: { store: storePath },
     } as unknown as OpenClawConfig;

@@ -5,7 +5,7 @@ import {
   closeProviderTransportDispatcherPool,
   getProviderTransportDispatcherPool,
 } from "../../agents/provider-transport-dispatcher-pool.js";
-import { createDeferred } from "../../shared/deferred.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { PinnedDispatcherPool } from "./pinned-dispatcher-pool.js";
 
 function createDispatcher() {
@@ -139,7 +139,7 @@ describe("PinnedDispatcherPool", () => {
   });
 
   it("does not publish a replacement generation while shutdown is closing", async () => {
-    const close = createDeferred();
+    const close = createDeferredCore();
     const pool = getProviderTransportDispatcherPool();
     const lease = pool.acquire({
       key: "origin-a/pin-a",

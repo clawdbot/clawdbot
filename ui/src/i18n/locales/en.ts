@@ -379,6 +379,7 @@ export const en: TranslationMap = {
       impact:
         "Running sessions are interrupted and this Control UI disconnects until the Gateway is back.",
       versions: "Installed {installed} · Available {available}",
+      versionsBehind: "Installed {installed} · {available}",
       action: "Update and restart",
       macAction: "Update Mac app and restart",
     },
@@ -389,6 +390,13 @@ export const en: TranslationMap = {
     },
     sidebar: {
       campaignTarget: "{status} · {target}",
+      updating: "Updating Gateway…",
+    },
+    dialog: {
+      installing: "Installing the update on the Gateway. It restarts once the install finishes.",
+      restarting: "The Gateway is restarting. This page disconnects and reconnects on its own.",
+      notStarted:
+        "The update request went unanswered. Try again, or run `openclaw update` in the terminal.",
     },
     channel: {
       stable: "Stable",
@@ -478,13 +486,18 @@ export const en: TranslationMap = {
       managedServiceHandoffAlreadyRunning:
         "Another managed update is already running. Wait for it to complete, then refresh update status.",
       doctorFailed: "Doctor repair failed. Run `openclaw doctor --non-interactive` and retry.",
+      managedServiceHandoffFailed:
+        "The update helper stopped before finishing. Run `openclaw update` in the terminal to see why.",
+      managedServiceHandoffSpawnFailed:
+        "The Gateway could not start the update helper. Run `openclaw update` in the terminal instead.",
+      managedServiceHandoffParentTimeout:
+        "The Gateway stayed up too long for the update helper. Start the update again, or run `openclaw update`.",
       default: "See the gateway logs for the exact failure and retry once the cause is fixed.",
     },
-    postRestart: {
-      restartUnhealthy:
-        "The replacement process never became healthy and the previous process stayed up.",
-      default: "Check the gateway logs for the replacement failure.",
-    },
+    failedAtStep: "The update failed at {step}: {cause}.",
+    succeededVersion: "Gateway updated to v{version}.",
+    succeededCommit: "Gateway updated · now on {sha}.",
+    succeeded: "Gateway updated and restarted.",
   },
   devices: {
     pairing: {
@@ -680,7 +693,6 @@ export const en: TranslationMap = {
   newSession: {
     title: "New session",
     hint: "Pick where this session works, then say what to do.",
-    draftRow: "New session",
     agent: "Agent",
     where: "Where",
     gateway: "Gateway · local",
@@ -699,6 +711,11 @@ export const en: TranslationMap = {
     places: "Places",
     projects: "Projects",
     projectsAdminHint: "Admins can register projects from Browse folders",
+    projectSearchPlaceholder: "Search projects or paste a Git URL",
+    githubProjects: "GitHub",
+    githubTokenHint: "GH_TOKEN is not configured; public GitHub results only.",
+    cloneProject: "Clone",
+    cloningProject: "Cloning project…",
     registerProject: "Register as project",
     recentFolders: "Recent",
     runsOn: "Runs on {place}",
@@ -947,6 +964,7 @@ export const en: TranslationMap = {
     moveToGroupMenu: "Move to group",
     moveToGroupMenuCount: "Move {count} to group",
     removeFromGroup: "Remove from group",
+    moveBackToGroups: "Move back to Groups",
     groupMenu: "Group options for {group}",
     renameGroupMenu: "Rename group…",
     renameGroupTitle: 'Rename group "{group}"',
@@ -3193,40 +3211,11 @@ export const en: TranslationMap = {
       applicabilityHeading: "When the agent should use it",
     },
   },
+  // Chat swarm summaries render before the lazy Activity catalog loads.
+  // Keep their shared label in startup English; Activity replaces the full namespace on entry.
   activity: {
-    title: "Activity",
-    visibleCount: "{visible} of {total}",
-    search: "Search",
-    searchPlaceholder: "Filter by activity, summary, run, session",
-    toolFilter: "Tool",
-    allTools: "All tools",
-    statusFilters: "Status filters",
-    autoFollow: "Auto-follow",
-    expandAll: "Expand all",
-    collapseAll: "Collapse all",
-    clear: "Clear",
-    empty: "No activity yet.",
-    emptyFiltered: "No activity matches these filters.",
-    entrySummary: "{argumentSummary}",
-    argumentHiddenOne: "1 argument hidden",
-    argumentsHidden: "{count} arguments hidden",
-    streamLabel: "Agent activity entries",
-    toolCallId: "Tool call",
-    runId: "Run",
-    session: "Session",
-    outputTruncated: "Preview redacted and truncated.",
-    noOutputPreview: "No output preview.",
-    answerCandidate: {
-      title: "Answer candidate",
-      itemId: "Item",
-      candidate: "Candidate answer",
-      superseded: "Superseded answer",
-      selected: "Selected answer",
-    },
     status: {
-      running: "Running",
       done: "Done",
-      error: "Error",
     },
   },
   gatewayLogs: {
@@ -3945,6 +3934,7 @@ export const en: TranslationMap = {
       expired: "Expired",
       missing: "Not signed in",
       apiKey: "API key",
+      denied: "Credentials rejected",
     },
     expiresIn: "Credential expires in {time}",
     models: "{count} models",
@@ -4591,6 +4581,7 @@ export const en: TranslationMap = {
       renameAria: "Rename session {title}",
       renameInputAria: "Session title",
       renameInputPlaceholder: "Session title",
+      openParent: "Open parent session {title}",
       panels: "Panels",
       layout: "Layout",
       workspaceAria: "Workspace actions for {workspace}",
@@ -4753,9 +4744,22 @@ export const en: TranslationMap = {
     compaction: {
       label: "Compacted history",
       savedTokens: "saved {count} tokens",
-      description:
-        "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
+      description: "The compacted transcript is preserved as a checkpoint.",
       openCheckpoints: "Open checkpoints",
+    },
+    sessionReset: {
+      label: "Session reset",
+      description: "The earlier conversation was cleared.",
+    },
+    systemNotice: {
+      restartRecovery: {
+        label: "System · restart recovery",
+        summary:
+          "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.",
+      },
+      gatewayRestarted: {
+        label: "System · gateway restarted",
+      },
     },
     progressLabels: {
       shelling: "Shelling",
@@ -4786,15 +4790,7 @@ export const en: TranslationMap = {
     commands: {
       arguments: "Command arguments",
       menu: "Slash commands",
-      instant: "instant",
       optionCount: "{count} options",
-      showMoreOne: "Show 1 more command",
-      showMoreMany: "Show {count} more commands",
-      navigate: "navigate",
-      fill: "fill",
-      run: "run",
-      select: "select",
-      close: "close",
       clearDescription: "Clear chat history",
       redirectDescription: "Abort and restart with a new message",
       steerDescription: "Inject a message into the active run",
@@ -4936,14 +4932,18 @@ export const en: TranslationMap = {
       close: "Close image preview",
       untitled: "Image",
     },
+    externalImage: {
+      notLoaded: "External image not loaded",
+      open: "Open image",
+    },
     messages: {
       activity: "Activity",
       copySelection: "Copy",
       forkFromHere: "Fork from here",
-      fullContentLoadFailed: "Could not load the full message.",
       reply: "Reply",
       replyToMessage: "Reply to message",
       replyingTo: "Replying to {name}",
+      originalUnavailable: "The original message is unavailable.",
       message: "message",
       currentMessage: "current message",
       actions: "Message actions",
@@ -5029,9 +5029,14 @@ export const en: TranslationMap = {
       askLabel: "Ask the session companion",
       askPlaceholder: "Ask a question",
       askSubmit: "Ask",
-      askPending: "Checking the session…",
+      askPending: "Answering from this session…",
       askBusy: "The companion is already answering a question.",
+      askHistoryUnavailable: "Couldn't load this session's history.",
+      askMissing: "This session is no longer available.",
+      askModelUnavailable: "No utility model is configured for this session.",
+      askRateLimited: "The companion reached its question limit. Try again shortly.",
       askUnavailable: "The companion cannot answer right now.",
+      askRetry: "Retry",
       asOf: "as of {time}",
       health: {
         "on-track": "On track",
@@ -5088,10 +5093,8 @@ export const en: TranslationMap = {
       search: "Search messages",
       searchPlaceholder: "Search messages...",
       closeSearch: "Close search",
-      unpin: "Unpin",
       loading: "Loading chat",
       noMatches: "No matching messages",
-      pinnedCount: "{count} pinned",
     },
     pairingQrExpired: {
       title: "Pairing QR expired",
@@ -5302,6 +5305,15 @@ export const en: TranslationMap = {
         edit: "Edit",
         editing: "Editing",
         edited: "Edited",
+        create: "Create",
+        creating: "Creating",
+        created: "Created",
+        delete: "Delete",
+        deleting: "Deleting",
+        deleted: "Deleted",
+        change: "Change",
+        changing: "Changing",
+        changed: "Changed",
         write: "Write",
         writing: "Writing",
         wrote: "Wrote",
@@ -5317,6 +5329,8 @@ export const en: TranslationMap = {
         editsMany: "edited {count} files",
         writesOne: "created a file",
         writesMany: "created {count} files",
+        deletesOne: "deleted a file",
+        deletesMany: "deleted {count} files",
         searchesOne: "ran a search",
         searchesMany: "ran {count} searches",
         fetchesOne: "fetched a page",

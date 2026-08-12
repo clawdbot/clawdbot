@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import {
   OPENAI_GPT_55_MODEL_ID,
   OPENAI_GPT_55_PRO_MODEL_ID,
-  OPENAI_GPT_56_MODEL_ID,
   OPENAI_GPT_56_VARIANT_MODEL_IDS,
 } from "./model-route-contract.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
@@ -115,7 +114,6 @@ describe("OpenAI plugin manifest", () => {
   it("keeps million-token OpenAI models on the ordinary runtime budget by default", () => {
     const models = manifest.modelCatalog?.providers?.openai?.models ?? [];
     for (const id of [
-      OPENAI_GPT_56_MODEL_ID,
       ...OPENAI_GPT_56_VARIANT_MODEL_IDS,
       OPENAI_GPT_55_MODEL_ID,
       OPENAI_GPT_55_PRO_MODEL_ID,
@@ -127,6 +125,13 @@ describe("OpenAI plugin manifest", () => {
         contextTokens: 272_000,
         maxTokens: 128_000,
       });
+    }
+  });
+
+  it("replaces deprecated GPT-5.5 models with canonical GPT-5.6 Sol", () => {
+    const models = manifest.modelCatalog?.providers?.openai?.models ?? [];
+    for (const id of [OPENAI_GPT_55_MODEL_ID, OPENAI_GPT_55_PRO_MODEL_ID]) {
+      expect(models.find((model) => model.id === id)?.replacedBy, id).toBe("gpt-5.6-sol");
     }
   });
 

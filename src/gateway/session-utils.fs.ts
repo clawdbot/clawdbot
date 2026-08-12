@@ -4,6 +4,7 @@ import fs from "node:fs";
 import readline from "node:readline";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
+  asPositiveFiniteNumber as resolvePositiveUsageNumber,
   resolveIntegerOption,
   resolveNonNegativeIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
@@ -22,7 +23,7 @@ import { selectSessionTranscriptActiveEntries } from "../config/sessions/transcr
 import { readFileWindowFully } from "../infra/file-read.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
+import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
@@ -38,39 +39,11 @@ import {
   extractJsonStringFieldPrefix,
   readNonBlankStringPreservingWhitespace,
 } from "./session-transcript-json.js";
+import {
+  attachOpenClawTranscriptMeta,
+  projectTranscriptEntryMessage,
+} from "./session-transcript-message.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
-
-/** Attach OpenClaw metadata to a transcript message without dropping existing metadata. */
-export function attachOpenClawTranscriptMeta(
-  message: unknown,
-  meta: Record<string, unknown>,
-): unknown {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return message;
-  }
-  const record = message as Record<string, unknown>;
-  const existing =
-    record["__openclaw"] &&
-    typeof record["__openclaw"] === "object" &&
-    !Array.isArray(record["__openclaw"])
-      ? (record["__openclaw"] as Record<string, unknown>)
-      : {};
-  return {
-    ...record,
-    __openclaw: {
-      ...existing,
-      ...meta,
-    },
-  };
-}
-
-function readTranscriptMessageIdempotencyKey(message: unknown): string | undefined {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return undefined;
-  }
-  const value = (message as Record<string, unknown>).idempotencyKey;
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
 
 export type ReadRecentSessionMessagesOptions = {
   maxMessages: number;
@@ -468,14 +441,16 @@ function parseRecentTranscriptTailSnapshot(
     const entry = parseTranscriptRecord(line);
     return entry ? [entry] : [];
   });
-  const selected = selectSessionTranscriptActiveEntries({
-    entries,
-    recordOf: (entry) => entry.record,
-    failClosedOnInvalidLeafControl: true,
-  });
+  const selected = projectResetBoundary(
+    selectSessionTranscriptActiveEntries({
+      entries,
+      recordOf: (entry) => entry.record,
+      failClosedOnInvalidLeafControl: true,
+    }),
+  );
   const messages: unknown[] = [];
   for (const entry of selected) {
-    const message = parsedSessionEntryToMessage(entry.record, messages.length + 1);
+    const message = projectTranscriptEntryMessage(entry.record, messages.length + 1);
     if (message) {
       messages.push(message);
     }
@@ -487,7 +462,7 @@ function parseRecentTranscriptTailSnapshot(
 }
 
 function isVisibleTranscriptRecord(record: Record<string, unknown>): boolean {
-  return Boolean(record.message) || record.type === "compaction";
+  return Boolean(record.message) || record.type === "compaction" || record.type === "reset";
 }
 
 function projectResetBoundary(entries: TranscriptRecord[]): TranscriptRecord[] {
@@ -509,7 +484,7 @@ function projectResetBoundary(entries: TranscriptRecord[]): TranscriptRecord[] {
           const role = (record.message as { role?: unknown } | undefined)?.role;
           return role === "user" || role === "assistant";
         });
-  return [...kept, ...entries.slice(boundaryIndex + 1)];
+  return [...kept, ...entries.slice(boundaryIndex)];
 }
 
 function toIndexedEntries(entries: TranscriptRecord[]): IndexedTranscriptEntry[] {
@@ -860,48 +835,8 @@ async function readRecentSessionSnapshotFromPathAsync(
   return parseRecentTranscriptTailSnapshot(lines, maxMessages);
 }
 
-function parsedSessionEntryToMessage(parsed: unknown, seq: number): unknown {
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return null;
-  }
-  const entry = parsed as Record<string, unknown>;
-  if (entry.message) {
-    const recordTimestampMs =
-      typeof entry.timestamp === "string"
-        ? Date.parse(entry.timestamp)
-        : typeof entry.timestamp === "number"
-          ? entry.timestamp
-          : Number.NaN;
-    const idempotencyKey = readTranscriptMessageIdempotencyKey(entry.message);
-    return attachOpenClawTranscriptMeta(entry.message, {
-      ...(typeof entry.id === "string" ? { id: entry.id } : {}),
-      ...(idempotencyKey ? { idempotencyKey } : {}),
-      ...(Number.isFinite(recordTimestampMs) ? { recordTimestampMs } : {}),
-      seq,
-    });
-  }
-
-  // Compaction entries are not "message" records, but they're useful context for debugging.
-  // Emit a lightweight synthetic message that the Web UI can render as a divider.
-  if (entry.type === "compaction") {
-    const ts = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
-    const timestamp = Number.isFinite(ts) ? ts : Date.now();
-    return {
-      role: "system",
-      content: [{ type: "text", text: "Compaction" }],
-      timestamp,
-      __openclaw: {
-        kind: "compaction",
-        id: typeof entry.id === "string" ? entry.id : undefined,
-        seq,
-      },
-    };
-  }
-  return null;
-}
-
 function indexedTranscriptEntryToMessage(entry: IndexedTranscriptEntry): unknown {
-  return parsedSessionEntryToMessage(entry.record, entry.seq);
+  return projectTranscriptEntryMessage(entry.record, entry.seq);
 }
 
 function indexedTranscriptEntryToMessages(entry: IndexedTranscriptEntry): unknown[] {
@@ -969,10 +904,6 @@ function extractTranscriptUsageCost(raw: unknown): number | undefined {
   }
   const total = (cost as { total?: unknown }).total;
   return typeof total === "number" && Number.isFinite(total) && total >= 0 ? total : undefined;
-}
-
-function resolvePositiveUsageNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
 function extractTranscriptContentEstimatedChars(content: unknown): number {
@@ -1327,7 +1258,7 @@ function truncatePreviewText(text: string, maxChars: number): string {
 function extractPreviewText(message: TranscriptPreviewMessage): string | null {
   const role = normalizeLowercaseStringOrEmpty(message.role);
   if (role === "assistant") {
-    const assistantText = extractAssistantVisibleText(message);
+    const assistantText = extractAssistantPhaseText(message);
     if (assistantText) {
       const normalized = stripInlineDirectiveTagsForDisplay(assistantText).text.trim();
       return normalized ? normalized : null;

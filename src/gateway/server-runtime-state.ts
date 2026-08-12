@@ -13,6 +13,7 @@ import { resolveSandboxHostPort } from "../agents/sandbox-host.js";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { resolveCanvasNodeCapability } from "../canvas/constants.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import type { GatewayTlsRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
@@ -41,7 +42,6 @@ import {
   type PreauthConnectionBudget,
 } from "./server/preauth-connection-budget.js";
 import type { ReadinessChecker } from "./server/readiness.js";
-import type { GatewayTlsRuntime } from "./server/tls.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import type { WorkerDesktopTunnels } from "./worker-environments/desktop-tunnel.js";
 
@@ -163,6 +163,14 @@ export async function createGatewayHttpTransport(params: {
     });
   };
 
+  const handleMcpOAuthCallbackRequest = async (req: IncomingMessage, res: ServerResponse) => {
+    const { handleMcpOAuthCallback } = await import("./mcp-oauth-callback.js");
+    return await handleMcpOAuthCallback(req, res, {
+      config: loadRuntimeConfig(),
+      log: params.log,
+    });
+  };
+
   let loadedPluginRequestHandler: GatewayPluginRequestHandler | null = null;
   let loadedPluginUpgradeHandler: GatewayPluginUpgradeHandler | null = null;
   const handlePluginRequest: GatewayPluginRequestHandler = async (
@@ -266,6 +274,7 @@ export async function createGatewayHttpTransport(params: {
       strictTransportSecurityHeader: params.strictTransportSecurityHeader,
       handleWatchNodeRequest: params.handleWatchNodeRequest,
       handleHooksRequest,
+      handleMcpOAuthCallbackRequest,
       handlePluginRequest,
       shouldEnforcePluginGatewayAuth,
       resolvePluginNodeCapabilityRoute,

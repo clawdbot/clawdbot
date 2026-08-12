@@ -17,13 +17,11 @@ import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { isRecord as isJsonRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
+import { toErrorObject } from "./lib/error-format.mts";
 import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
-
-function isJsonRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolveNpmRunner } from "./npm-runner.mts";
 import { createPrepublishPluginRegistryArtifact } from "./prepublish-plugin-registry-artifact.mjs";
@@ -393,7 +391,7 @@ function run(command: string, args: readonly string[], options: RunOptions = {})
     }
     child.on("error", (error: Error) => {
       ACTIVE_CHILD_KILLERS.delete(killChild);
-      reject(toLintErrorObject(error, "Non-Error rejection"));
+      reject(toErrorObject(error, "Non-Error rejection"));
     });
     child.on("close", (status: number | null, signal: ChildSignal) => {
       if (timeout) {
@@ -1567,7 +1565,7 @@ async function* limitWebResponseBody(
       const next = reader.read();
       const { done, value } = timeoutRead ? await Promise.race([next, timeoutRead]) : await next;
       if (timedOut) {
-        throw toLintErrorObject(timeoutFailure, "package_url download timed out");
+        throw toErrorObject(timeoutFailure, "package_url download timed out");
       }
       if (done) {
         return;
@@ -1929,18 +1927,4 @@ function isPropertyContainer(value: unknown): value is { code?: unknown; name?: 
 
 function isWebResponseBody(body: PackageResponseBody): body is WebResponseBody {
   return "getReader" in body && typeof body.getReader === "function";
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string) {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

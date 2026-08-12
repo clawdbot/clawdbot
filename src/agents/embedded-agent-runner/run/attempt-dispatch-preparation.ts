@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
-import { resolveStorePath } from "../../../config/sessions.js";
-import { resolveSessionTranscriptRuntimeReadTarget } from "../../../config/sessions/session-accessor.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions.js";
+import { resolveSessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import type { resolveContextEngine } from "../../../context-engine/registry.js";
 import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
@@ -120,11 +120,11 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   const resolvedTranscriptTarget =
     reusableSessionTarget ??
     (resolvedSessionKey
-      ? await resolveSessionTranscriptRuntimeReadTarget({
+      ? await resolveSessionTranscriptRuntimeTarget({
           agentId: workspaceResolution.agentId,
           sessionId: sessionPromptState.sessionId,
           sessionKey: resolvedSessionKey,
-          storePath: resolveStorePath(params.config?.session?.store, {
+          storePath: resolveSessionStorePathCore(params.config?.session?.store, {
             agentId: workspaceResolution.agentId,
           }),
         })

@@ -12,10 +12,10 @@ import {
   revokeRuntimeAuthMaterializations,
 } from "./runtime-materializations.js";
 import {
-  clearRuntimeAuthProfileStoreSnapshot,
+  clearRuntimeAuthProfileStoreSnapshotCore,
   clearRuntimeAuthProfileStoreSnapshots,
-  getPreparedRuntimeAuthProfileStoreSnapshot,
-  getRuntimeAuthProfileStoreSnapshot,
+  getPreparedRuntimeAuthProfileStoreSnapshotCore,
+  getRuntimeAuthProfileStoreSnapshotCore,
   getRuntimeAuthProfileStoreCredentialsRevision,
   noteRuntimeAuthProfileStorePersistedMutation,
   registerRuntimeAuthProfileStoreMutationListener,
@@ -171,7 +171,7 @@ describe("runtime auth profile snapshots", () => {
         },
         agentDir,
       );
-      clearRuntimeAuthProfileStoreSnapshot(agentDir);
+      clearRuntimeAuthProfileStoreSnapshotCore(agentDir);
 
       expect(listener).toHaveBeenCalledTimes(2);
       expect(listener).toHaveBeenNthCalledWith(1, {
@@ -223,7 +223,7 @@ describe("runtime auth profile snapshots", () => {
     try {
       setRuntimeAuthProfileStoreSnapshot(emptyStore, agentDir);
       setRuntimeAuthProfileStoreSnapshot(emptyStore, agentDir);
-      clearRuntimeAuthProfileStoreSnapshot(agentDir);
+      clearRuntimeAuthProfileStoreSnapshotCore(agentDir);
 
       expect(listener).toHaveBeenCalledTimes(2);
       expect(listener).toHaveBeenNthCalledWith(1, {
@@ -268,7 +268,7 @@ describe("runtime auth profile snapshots", () => {
       ).provider = "mutated";
       expectDefined(stored.order?.openai, "stored OpenAI profile order").push("mutated");
 
-      const first = getRuntimeAuthProfileStoreSnapshot(agentDir);
+      const first = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
       expectOpenAICodexSnapshotCredential(first, { access: "access-1" });
       expect(first?.order?.["openai"]).toEqual(["openai:default"]);
 
@@ -280,7 +280,7 @@ describe("runtime auth profile snapshots", () => {
         "first OpenAI usage stats",
       ).lastUsed = 99;
 
-      const second = getRuntimeAuthProfileStoreSnapshot(agentDir);
+      const second = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
       expectOpenAICodexSnapshotCredential(second, { access: "access-1" });
       expect(second?.usageStats?.["openai:default"]?.lastUsed).toBe(1);
 
@@ -292,7 +292,7 @@ describe("runtime auth profile snapshots", () => {
         replacementCredential.access = "mutated-replacement";
       }
 
-      const replaced = getRuntimeAuthProfileStoreSnapshot(agentDir);
+      const replaced = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
       expectOpenAICodexSnapshotCredential(replaced, {
         access: "access-2",
         refresh: "refresh-access-2",
@@ -324,7 +324,7 @@ describe("runtime auth profile snapshots", () => {
       );
       setRuntimeAuthProfileStoreSnapshot(createStore("agent"), agentDir);
 
-      const prepared = getPreparedRuntimeAuthProfileStoreSnapshot(agentDir, inheritedAuthDir);
+      const prepared = getPreparedRuntimeAuthProfileStoreSnapshotCore(agentDir, inheritedAuthDir);
 
       expectOpenAICodexSnapshotCredential(prepared, { access: "agent" });
       expect(prepared?.profiles["anthropic:default"]).toMatchObject({
@@ -333,7 +333,7 @@ describe("runtime auth profile snapshots", () => {
         key: "inherited-key",
       });
       expect(
-        getPreparedRuntimeAuthProfileStoreSnapshot(
+        getPreparedRuntimeAuthProfileStoreSnapshotCore(
           "/tmp/openclaw-auth-runtime-missing",
           "/tmp/openclaw-auth-runtime-also-missing",
         ),
@@ -351,13 +351,15 @@ describe("runtime auth profile snapshots", () => {
       setRuntimeAuthProfileStoreSnapshot(createStore("first"), firstAgentDir);
       setRuntimeAuthProfileStoreSnapshot(createStore("second"), secondAgentDir);
 
-      expect(clearRuntimeAuthProfileStoreSnapshot(firstAgentDir)).toBe(true);
-      expect(getRuntimeAuthProfileStoreSnapshot(firstAgentDir)).toBeUndefined();
-      expectOpenAICodexSnapshotCredential(getRuntimeAuthProfileStoreSnapshot(), { access: "main" });
-      expectOpenAICodexSnapshotCredential(getRuntimeAuthProfileStoreSnapshot(secondAgentDir), {
+      expect(clearRuntimeAuthProfileStoreSnapshotCore(firstAgentDir)).toBe(true);
+      expect(getRuntimeAuthProfileStoreSnapshotCore(firstAgentDir)).toBeUndefined();
+      expectOpenAICodexSnapshotCredential(getRuntimeAuthProfileStoreSnapshotCore(), {
+        access: "main",
+      });
+      expectOpenAICodexSnapshotCredential(getRuntimeAuthProfileStoreSnapshotCore(secondAgentDir), {
         access: "second",
       });
-      expect(clearRuntimeAuthProfileStoreSnapshot(firstAgentDir)).toBe(false);
+      expect(clearRuntimeAuthProfileStoreSnapshotCore(firstAgentDir)).toBe(false);
     } finally {
       clearRuntimeAuthProfileStoreSnapshots();
     }

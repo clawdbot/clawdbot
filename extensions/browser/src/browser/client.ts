@@ -130,6 +130,7 @@ export type SnapshotResult =
       targetId: string;
       url: string;
       nodes: SnapshotAriaNode[];
+      truncated?: boolean;
       blockedByDialog?: boolean;
       browserState?: unknown;
     }

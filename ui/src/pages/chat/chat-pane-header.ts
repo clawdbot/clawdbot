@@ -1,10 +1,8 @@
 import { html, nothing } from "lit";
-import type {
-  SessionDiscussionInfo,
-  SessionDiscussionState,
-} from "../../../../packages/gateway-protocol/src/index.js";
+import type { SessionDiscussionInfo } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
+import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { icons } from "../../components/icons.ts";
 import {
@@ -15,6 +13,7 @@ import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { listSessionCreators } from "../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { hasSessionPresenceViewers } from "../../components/viewer-facepile.ts";
+import { workspaceIconRouteUrl } from "../../components/workspace-icon.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
@@ -39,6 +38,7 @@ import type {
 import {
   canRevealSessionWorkspace,
   renderChatPaneHeader,
+  resolveChatPaneParentSession,
   resolveChatPaneWorkspace,
 } from "./components/chat-pane-header.ts";
 import { renderSessionRailToggle } from "./components/chat-session-rail-toggle.ts";
@@ -60,6 +60,24 @@ import {
 } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
+  /** Gateway-served project icon for a session workspace, on the same credentials as agent avatars. */
+  private resolveWorkspaceIcon(sessionKey: string | undefined) {
+    if (!sessionKey) {
+      return null;
+    }
+    const gateway = this.context.gateway;
+    const authTokens = resolveControlUiAuthCandidates({
+      hello: gateway.snapshot.hello,
+      settings: { token: gateway.connection.token },
+      password: gateway.connection.password,
+    });
+    return {
+      routeUrl: workspaceIconRouteUrl(this.context.basePath, sessionKey),
+      authTokens,
+      authReady: Boolean(gateway.snapshot.hello || authTokens.length),
+    };
+  }
+
   protected renderPaneHeader(
     sessionWorkspace: SessionWorkspaceProps,
     backgroundTasks: BackgroundTasksProps,
@@ -161,7 +179,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
           session: row,
         })
       : {};
-    const desktopPanelAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
+    const desktopPanelAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot, row);
     const openDesktopPanel = () =>
       window.dispatchEvent(
         new CustomEvent<DesktopPanelToggleDetail>(DESKTOP_PANEL_TOGGLE_EVENT, {
@@ -213,8 +231,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
       panelMenuActions.push({
         id: "changes",
         label: t("chat.sessionDiff.show"),
-        icon: icons.fileDiff,
-        disabledReason: sessionWorkspace.diffNotGit ? t("chat.sessionDiff.notGit") : undefined,
+        icon: icons.diff,
         onActivate: sessionWorkspace.onOpenDiff,
       });
     }
@@ -291,6 +308,8 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
       renameValue: this.headerRenameValue,
       workspaceRoot: workspace.root,
       workspaceLabel: workspace.label,
+      workspaceIcon: this.resolveWorkspaceIcon(workspace.root ? row?.key : undefined),
+      parentSession: resolveChatPaneParentSession(row, this.state?.sessionsResult?.sessions ?? []),
       branch,
       branches:
         this.state && this.state.chatBranchesSessionKey === this.state.sessionKey
@@ -432,6 +451,9 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
           this.handleHeaderMenuAction(action, row, workspace.root, branch);
         }
       },
+      onOpenParentSession: (sessionKey) => {
+        this.onPaneSessionChange?.(this.paneId, sessionKey);
+      },
       onBranchSelect: (leafEntryId) => {
         const access = readChatSessionActionAccess(
           this.context.gateway.snapshot,
@@ -477,7 +499,6 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
         return;
       }
       this.sessionDiscussionStates.set(sessionKey, info.state);
-      this.maybeAutoShowSessionDiscussion(sessionKey, info.state);
       this.requestUpdate();
     } catch {
       // Leave unprobed: the action stays hidden and a later switch retries.
@@ -493,31 +514,6 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
         void this.probeSessionDiscussion(sessionKey);
       }
     }
-  }
-
-  // An "open" probe result means this session already has a bound discussion;
-  // surface it immediately instead of hiding live chat behind the toggle.
-  // Probe resolution is the only hook needed: willUpdate deletes the target
-  // key's cached state on every session switch (and reconnect clears all), so
-  // each activation resolves a fresh probe and reaches this. Within one
-  // activation the cache dedupes — closing the sidebar sticks, and an
-  // already-open discussion column is never duplicated.
-  protected maybeAutoShowSessionDiscussion(
-    sessionKey: string,
-    discussionState: SessionDiscussionState,
-  ) {
-    const state = this.state;
-    if (
-      discussionState !== "open" ||
-      !state ||
-      state.sessionKey.trim() !== sessionKey ||
-      state.sidebarLayout.columns.some((column) =>
-        column.panels.some((panel) => panel.slot === "discussion"),
-      )
-    ) {
-      return;
-    }
-    this.openSessionDiscussionSlot();
   }
 
   protected buildSessionDiscussionPanel(

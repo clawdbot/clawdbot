@@ -4,7 +4,7 @@
 // "That's wrong — not the 12–34k figure I told you." into live proposals named
 // after slugified message fragments ("12-34k-figure-told").
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { listSkillProposals } from "../../skills/workshop/service.js";
 import {
   createOpenClawTestState,
@@ -70,7 +70,7 @@ describe("agent-end proposal provenance", () => {
     "#4242 Vendor Blue 7: Also when reading comments make sure to read the comments they responded to also.",
   ])("creates no proposal from chat text without a model review: %s", async (userText) => {
     const sessionKey = `agent:main:no-verbatim-capture-${String(++sessionKeyIndex)}`;
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey },
       { sessionId: `session-${sessionKey}`, updatedAt: 1 },
     );

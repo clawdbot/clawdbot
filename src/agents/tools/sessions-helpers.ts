@@ -94,6 +94,7 @@ export type GatewaySessionListRow = {
 /** Focused model-facing row returned by sessions_list. */
 export type SessionListRow = {
   key: string;
+  sessionId?: string;
   agentId: string;
   kind: SessionKind;
   channel: string;
@@ -133,7 +134,7 @@ export function resolveSessionToolContext(opts?: {
 }
 
 /** Classifies a session key/gateway kind into the row category used by tools. */
-export function classifySessionKind(params: {
+export function classifySessionListKind(params: {
   key: string;
   gatewayKind?: string | null;
   alias: string;

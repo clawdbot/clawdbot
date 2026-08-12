@@ -4,7 +4,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
-  activateMenuItem,
+  activateSelfRemovingControl,
   controlUiSessionPath,
   installMockGateway,
   requireRecord,
@@ -123,7 +123,7 @@ suite.define(() => {
           .filter({ has: page.locator(`.session-label-chip[title="${research.label}"]`) });
         await actionRow.waitFor({ state: "visible", timeout: 10_000 });
         await actionRow.getByRole("button", { name: "Open session menu" }).click();
-        await activateMenuItem(
+        await activateSelfRemovingControl(
           page.locator("openclaw-session-menu").getByRole("menuitem", {
             name: "Archive session",
           }),

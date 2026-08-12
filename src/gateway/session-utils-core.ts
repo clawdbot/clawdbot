@@ -1,3 +1,4 @@
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   countActiveDescendantRuns,
@@ -12,7 +13,6 @@ import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js"
 import { isTerminalSessionStatus, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
 import { truncateUtf16Safe } from "../utils.js";
 import {
   estimateUsageCost,
@@ -195,7 +195,7 @@ export function resolveEstimatedSessionCostUsd(params: {
   explicitCostUsd?: number;
   rowContext?: SessionListRowContext;
 }): number | undefined {
-  const explicitCostUsd = resolveNonNegativeNumber(
+  const explicitCostUsd = asNonNegativeFiniteNumber(
     params.explicitCostUsd ?? params.entry?.estimatedCostUsd,
   );
   if (explicitCostUsd !== undefined) {
@@ -231,7 +231,7 @@ export function resolveEstimatedSessionCostUsd(params: {
     },
     cost,
   });
-  return resolveNonNegativeNumber(estimated);
+  return asNonNegativeFiniteNumber(estimated);
 }
 
 const STALE_STORE_ONLY_CHILD_LINK_MS = 60 * 60 * 1_000;

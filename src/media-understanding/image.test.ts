@@ -25,7 +25,7 @@ const hoisted = vi.hoisted(() => ({
       mode: "oauth",
     }),
   ),
-  resolveApiKeyForProviderMock: vi.fn(async () => ({
+  resolveApiKeyForProviderCoreMock: vi.fn(async () => ({
     [API_KEY_FIELD]: "test-api-key", // pragma: allowlist secret
     source: "test",
     mode: "oauth",
@@ -48,7 +48,7 @@ const {
   completeMock,
   ensureOpenClawModelsJsonMock,
   getApiKeyForModelMock,
-  resolveApiKeyForProviderMock,
+  resolveApiKeyForProviderCoreMock,
   requireApiKeyMock,
   setRuntimeApiKeyMock,
   discoverModelsMock,
@@ -117,8 +117,8 @@ vi.mock("../agents/models-config.js", async () => ({
 
 vi.mock("../agents/model-auth.js", () => ({
   applySecretRefHeaderSentinels: (model: unknown) => model,
-  getApiKeyForModel: getApiKeyForModelMock,
-  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
+  getApiKeyForModelCore: getApiKeyForModelMock,
+  resolveApiKeyForProviderCore: resolveApiKeyForProviderCoreMock,
   [REQUIRE_API_KEY_FIELD]: requireApiKeyMock,
 }));
 
@@ -270,7 +270,7 @@ describe("describeImageWithModelCore", () => {
   function getApiKeyForModelCall(index = 0): AuthRequestCall {
     const call = (getApiKeyForModelMock.mock.calls as unknown[][]).at(index);
     if (!call) {
-      throw new Error(`Expected getApiKeyForModel call ${index}`);
+      throw new Error(`Expected getApiKeyForModelCore call ${index}`);
     }
     return call[0] as AuthRequestCall;
   }
@@ -562,7 +562,7 @@ describe("describeImageWithModelCore", () => {
       model: "MiniMax-VL-01",
     });
 
-    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
+    expect(resolveApiKeyForProviderCoreMock).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "minimax-portal",
         agentDir: "/tmp/openclaw-agent",
@@ -609,7 +609,7 @@ describe("describeImageWithModelCore", () => {
       model: "MiniMax-VL-01",
     });
 
-    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
+    expect(resolveApiKeyForProviderCoreMock).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "minimax",
       }),
@@ -659,7 +659,7 @@ describe("describeImageWithModelCore", () => {
       model: "MiniMax-VL-01",
     });
 
-    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
+    expect(resolveApiKeyForProviderCoreMock).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "minimax-cn",
       }),

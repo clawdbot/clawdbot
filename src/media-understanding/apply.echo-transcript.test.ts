@@ -14,9 +14,10 @@ import type { MediaUnderstandingProvider } from "./types.js";
 // Module mocks
 // ---------------------------------------------------------------------------
 
-type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
+type ResolveApiKeyForProvider =
+  typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;
 
-const resolveApiKeyForProviderMock = vi.hoisted(() =>
+const resolveApiKeyForProviderCoreMock = vi.hoisted(() =>
   vi.fn<ResolveApiKeyForProvider>(async () => ({
     apiKey: "test-key", // pragma: allowlist secret
     source: "test",
@@ -25,7 +26,7 @@ const resolveApiKeyForProviderMock = vi.hoisted(() =>
 );
 const hasAvailableAuthForProviderMock = vi.hoisted(() =>
   vi.fn(async (...args: Parameters<ResolveApiKeyForProvider>) => {
-    const resolved = await resolveApiKeyForProviderMock(...args);
+    const resolved = await resolveApiKeyForProviderCoreMock(...args);
     return Boolean(resolved?.apiKey);
   }),
 );
@@ -160,7 +161,7 @@ describe("applyMediaUnderstanding – echo transcript", () => {
   beforeAll(async () => {
     vi.resetModules();
     vi.doMock("../agents/model-auth.js", () => ({
-      resolveApiKeyForProvider: resolveApiKeyForProviderMock,
+      resolveApiKeyForProviderCore: resolveApiKeyForProviderCoreMock,
       hasAvailableAuthForProvider: hasAvailableAuthForProviderMock,
       isProviderAuthError: (err: unknown, code?: string) =>
         err instanceof Error &&
@@ -180,7 +181,7 @@ describe("applyMediaUnderstanding – echo transcript", () => {
       resolveAwsSdkEnvVarName: vi.fn(() => undefined),
       resolveEnvApiKey: vi.fn(() => null),
       resolveModelAuthMode: vi.fn(() => "api-key"),
-      getApiKeyForModel: getApiKeyForModelMock,
+      getApiKeyForModelCore: getApiKeyForModelMock,
       getCustomProviderApiKey: vi.fn(() => undefined),
       ensureAuthProfileStore: vi.fn(async () => ({})),
       resolveAuthProfileOrder: vi.fn(() => []),
@@ -194,7 +195,7 @@ describe("applyMediaUnderstanding – echo transcript", () => {
       runCommandWithTimeout: runCommandWithTimeoutMock,
     }));
     vi.doMock("../channels/message/runtime.js", () => ({
-      sendDurableMessageBatch: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
+      sendDurableMessageBatchCore: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
     }));
     vi.doMock("../utils/message-channel.js", () => ({
       isDeliverableMessageChannel: (channel: string) => channel === "voicechat",
@@ -238,7 +239,7 @@ describe("applyMediaUnderstanding – echo transcript", () => {
   });
 
   beforeEach(() => {
-    resolveApiKeyForProviderMock.mockClear();
+    resolveApiKeyForProviderCoreMock.mockClear();
     hasAvailableAuthForProviderMock.mockClear();
     getApiKeyForModelMock.mockClear();
     readRemoteMediaBufferMock.mockClear();

@@ -20,7 +20,7 @@ import {
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
-import { fileExists, safeReadDir } from "./state-migrations.fs.js";
+import { migrationFileExists, safeReadDir } from "./state-migrations.fs.js";
 import {
   insertTaskDeliveryRowSql,
   insertTaskRunRowSql,
@@ -121,9 +121,9 @@ export function hasPendingSqliteSidecarArchive(
   suffixes: readonly string[],
 ): boolean {
   return (
-    !fileExists(sourcePath) &&
-    fileExists(`${sourcePath}.migrated`) &&
-    suffixes.some((suffix) => suffix !== "" && fileExists(`${sourcePath}${suffix}`))
+    !migrationFileExists(sourcePath) &&
+    migrationFileExists(`${sourcePath}.migrated`) &&
+    suffixes.some((suffix) => suffix !== "" && migrationFileExists(`${sourcePath}${suffix}`))
   );
 }
 
@@ -149,7 +149,7 @@ function archiveLegacyFileSource(params: {
 }): LegacyArchiveResolution | null {
   const archivedPath = `${params.sourcePath}.migrated`;
   try {
-    if (fileExists(archivedPath)) {
+    if (migrationFileExists(archivedPath)) {
       // Import has already committed before archival. Identical archive bytes
       // preserve the same snapshot, so the leftover source can be removed.
       if (fs.readFileSync(params.sourcePath).equals(fs.readFileSync(archivedPath))) {
@@ -190,7 +190,7 @@ function archiveLegacySqliteSidecar(params: {
 }): void {
   const existingSources = PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES.map(
     (suffix) => `${params.sourcePath}${suffix}`,
-  ).filter(fileExists);
+  ).filter(migrationFileExists);
   if (existingSources.length === 0) {
     return;
   }
@@ -632,7 +632,7 @@ async function migrateLegacyTaskRunsSidecar(params: {
   stateDir: string;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const sourcePath = resolveLegacyTaskRunsSidecarPath(params.stateDir);
-  if (!fileExists(sourcePath)) {
+  if (!migrationFileExists(sourcePath)) {
     const changes: string[] = [];
     const warnings: string[] = [];
     if (hasPendingSqliteSidecarArchive(sourcePath, TASK_STATE_SQLITE_SIDECAR_SUFFIXES)) {
@@ -770,7 +770,7 @@ async function migrateLegacyFlowRunsSidecar(params: {
   stateDir: string;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const sourcePath = resolveLegacyFlowRunsSidecarPath(params.stateDir);
-  if (!fileExists(sourcePath)) {
+  if (!migrationFileExists(sourcePath)) {
     const changes: string[] = [];
     const warnings: string[] = [];
     if (hasPendingSqliteSidecarArchive(sourcePath, TASK_STATE_SQLITE_SIDECAR_SUFFIXES)) {

@@ -518,23 +518,3 @@ export async function auditListCommand(
     runtime.log(`More records: --cursor ${result.nextCursor}`);
   }
 }
-
-const testApi = {
-  formatAuditRows,
-  hasMessageSpecificFilters,
-  isUnsupportedActivityMethodError,
-  isUnsupportedRunInspectMethodError,
-  formatAuditRunInspection,
-  hasExplainIncompatibleFilters,
-  parseAuditDecisionLimit,
-  parseAuditExecutionLimit,
-  parseAuditLimit,
-  parseAuditTimestamp,
-  toLegacyAuditListParams,
-  validateAuditKind,
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.auditCommandTestApi")] =
-    testApi;
-}

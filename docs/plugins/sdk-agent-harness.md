@@ -170,12 +170,21 @@ export default definePluginEntry({
 
 ### Isolated completion
 
-The optional `runIsolatedCompletion(params)` capability serves product paths
+The optional `runIsolatedCompletionV2(params)` capability serves product paths
 that require one fresh prompt-only inference call with a literal empty
-model-callable tool surface. Core passes the exact prepared `model`, `auth`,
-provider, model id, system prompt, user prompt, timeout, abort signal, and stream
-parameters. The harness must not re-resolve credentials, switch routes, reuse a
-native thread, attach tools, invoke agent lifecycle hooks, or deliver output.
+model-callable tool surface. Core passes provider and model ids, prompts,
+deadline controls, and one prepared `authorization`:
+
+- `owner: "host"` contains the exact transport `model` and resolved `auth`.
+- `owner: "harness"` contains the prepared runtime auth plan and a credential
+  snapshot restricted to the single profile selected for that call. Core owns
+  automatic fallback order and invokes the harness separately for each candidate.
+
+Host-authorized calls must use the supplied model and credential without
+substitution. Harness-authorized calls may resolve only the supplied prepared
+route and scoped profiles, or the harness's native account when the plan leaves
+auth to the harness. The harness must not switch routes, reuse a native thread,
+attach tools, invoke agent lifecycle hooks, or deliver output.
 
 Return `{ assistant: AssistantMessage }`. Core accepts only terminal text/thinking
 content with a `stop` or `length` stop reason; tool calls, failed stops, and empty
@@ -187,9 +196,15 @@ Plugin callers select this behavior through
 the harness callback is the provider-side enforcement SPI, not a second caller
 API.
 
+The legacy `runIsolatedCompletion(params)` host-auth-only capability is
+deprecated and remains available for external plugins through 2026-10-12.
+Implement V2 for harness-owned or native authentication; OpenClaw never invents
+a host credential when only the legacy capability is present.
+
 Native agent servers often have ambient built-in tools even when OpenClaw sends
-an empty tool list. In that case, use a separate provider transport that can
-serialize a true zero-tool request, or leave the capability unsupported.
+an empty tool list. Disable and attest those native capabilities for the fresh
+turn, use a separate transport that can serialize a true zero-tool request, or
+leave the capability unsupported.
 
 ### Delegated execution
 

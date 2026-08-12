@@ -97,6 +97,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     lifecycle,
     startupState,
     clearFallbackGatewayContextForServer,
+    kernel,
   } = runtime;
   const chatMetadataLifecycle = await createGatewayChatMetadataLifecycle({
     getConfig: getRuntimeConfig,
@@ -200,6 +201,8 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       broadcastVoiceWakeChanged,
       unavailableGatewayMethods,
       broadcastVoiceWakeRoutingChanged,
+      notifyPluginMetadataChanged: kernel.notifyPluginMetadataChanged,
+      getConfigReloaderHotReloadStatus: kernel.getConfigReloaderHotReloadStatus,
     });
   });
   bindApprovalPublicationContext(gatewayRequestContext);

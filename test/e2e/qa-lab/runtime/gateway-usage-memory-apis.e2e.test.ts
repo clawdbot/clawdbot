@@ -8,14 +8,14 @@ import {
 } from "../../../../src/config/sessions/legacy-sqlite-marker.js";
 import {
   persistSessionTranscriptTurn,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../../../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { READ_SCOPE } from "../../../../src/gateway/method-scopes.js";
 import { clearModelAuthStatusUsageCache } from "../../../../src/gateway/server-methods/models-auth-status-usage-cache.js";
 import { testApi as usageTestApi } from "../../../../src/gateway/server-methods/usage.js";
 import { startGatewayServer } from "../../../../src/gateway/server.js";
-import { loadSessionEntryReadOnly } from "../../../../src/gateway/session-utils.js";
+import { loadGatewaySessionEntryReadOnly } from "../../../../src/gateway/session-utils.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
@@ -92,7 +92,7 @@ async function seedCompletedUsageSession(state: OpenClawTestState): Promise<{
     storePath,
   };
 
-  await upsertSessionEntry(scope, {
+  await upsertSessionEntryCore(scope, {
     sessionId: FIXTURE_SESSION_ID,
     sessionFile,
     startedAt: FIXTURE_STARTED_AT,
@@ -125,7 +125,7 @@ async function seedCompletedUsageSession(state: OpenClawTestState): Promise<{
   });
   expect(turn.appendedCount).toBe(2);
 
-  await upsertSessionEntry(scope, {
+  await upsertSessionEntryCore(scope, {
     sessionId: FIXTURE_SESSION_ID,
     sessionFile,
     startedAt: FIXTURE_STARTED_AT,
@@ -204,7 +204,7 @@ describe("gateway usage and memory APIs", () => {
           sessionId: FIXTURE_SESSION_ID,
           storePath: databasePath,
         });
-        const storedSession = loadSessionEntryReadOnly(FIXTURE_SESSION_KEY);
+        const storedSession = loadGatewaySessionEntryReadOnly(FIXTURE_SESSION_KEY);
         expect(storedSession).toMatchObject({
           entry: {
             sessionId: FIXTURE_SESSION_ID,

@@ -76,6 +76,20 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
   if (eventLoopLine) {
     lines.push(theme.warn(`Gateway event loop degraded ${eventLoopLine}`));
   }
+  const statusWarnings = Array.isArray(payload.warnings)
+    ? payload.warnings
+        .filter(
+          (warning): warning is string => typeof warning === "string" && warning.trim().length > 0,
+        )
+        .slice(0, 50)
+    : [];
+  if (payload.partial === true || statusWarnings.length > 0) {
+    lines.push(theme.warn("Channel status is partial:"));
+    for (const warning of statusWarnings) {
+      lines.push(`- ${warning.slice(0, 500)}`);
+    }
+    lines.push("");
+  }
   const channelLabels =
     payload.channelLabels && typeof payload.channelLabels === "object"
       ? (payload.channelLabels as Record<string, unknown>)

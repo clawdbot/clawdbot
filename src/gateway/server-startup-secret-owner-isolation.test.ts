@@ -5,10 +5,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
-import { getRuntimeAuthProfileStoreSnapshot } from "../agents/auth-profiles/runtime-snapshots.js";
+import { getRuntimeAuthProfileStoreSnapshotCore } from "../agents/auth-profiles/runtime-snapshots.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
-import { resolveApiKeyForProvider } from "../agents/model-auth.js";
+import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import { resolveSandboxContext } from "../agents/sandbox/context.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAuthProfileSecretOwnerId } from "../secrets/runtime-auth-profile-owner.js";
@@ -16,7 +16,7 @@ import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state
 import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
-  getFreePort,
+  getGatewayTestPort,
   installGatewayTestHooks,
   startTestGatewayServer,
   testState,
@@ -271,7 +271,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
         });
         testState.gatewayAuth = undefined;
 
-        const port = await getFreePort();
+        const port = await getGatewayTestPort();
         server = await startTestGatewayServer(port);
         const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
 
@@ -434,7 +434,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
         },
       });
 
-      const port = await getFreePort();
+      const port = await getGatewayTestPort();
       server = await startTestGatewayServer(port, { auth: { mode: "none" } });
       const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
 
@@ -507,7 +507,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
             },
           });
 
-          const port = await getFreePort();
+          const port = await getGatewayTestPort();
           server = await startTestGatewayServer(port, { auth: { mode: "none" } });
           const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
 
@@ -581,7 +581,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
         );
         await writeConfig(config);
 
-        const port = await getFreePort();
+        const port = await getGatewayTestPort();
         server = await startTestGatewayServer(port, { auth: { mode: "none" } });
         const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
         expect(ready.status).toBe(200);
@@ -591,14 +591,14 @@ describe("Gateway startup SecretRef owner isolation", () => {
         expect(active?.degradedOwners).toMatchObject([
           { ownerKind: "account", ownerId, state: "unavailable" },
         ]);
-        const store = getRuntimeAuthProfileStoreSnapshot(agentDir);
+        const store = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
         if (!store || !active) {
           throw new Error("Expected activated Gateway auth profile snapshot");
         }
         const request = vi.fn();
         await expect(
           (async () => {
-            const auth = await resolveApiKeyForProvider({
+            const auth = await resolveApiKeyForProviderCore({
               provider: "openai",
               cfg: active.config,
               store,
@@ -631,7 +631,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
       });
       testState.gatewayAuth = undefined;
 
-      await expect(startTestGatewayServer(await getFreePort())).rejects.toThrow(
+      await expect(startTestGatewayServer(await getGatewayTestPort())).rejects.toThrow(
         /Startup failed: required secrets are unavailable/,
       );
     });

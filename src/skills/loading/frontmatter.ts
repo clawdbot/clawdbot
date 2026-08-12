@@ -22,7 +22,7 @@ import type {
 } from "../types.js";
 import type { Skill } from "./skill-contract.js";
 
-export function parseFrontmatter(content: string): ParsedSkillFrontmatter {
+export function parseSkillFrontmatter(content: string): ParsedSkillFrontmatter {
   const parsed = parseFrontmatterBlockResult(content);
   const issue = parsed.issues[0];
   if (issue) {
@@ -190,7 +190,7 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
   return spec;
 }
 
-export function resolveOpenClawMetadata(
+export function resolveSkillManifestMetadata(
   frontmatter: ParsedSkillFrontmatter,
 ): OpenClawSkillMetadata | undefined {
   const metadataObj = resolveOpenClawManifestBlock({ frontmatter });

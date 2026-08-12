@@ -1,9 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveStorePath } from "../../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
-  resolveSessionTranscriptRuntimeReadTarget,
+  resolveSessionTranscriptRuntimeTarget,
   updateSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
 import { resolveQuotaSuspensionEntryMaintenance } from "../../../config/sessions/store-maintenance.js";
@@ -143,12 +143,12 @@ export async function resolveAttemptTrajectorySessionFile(params: {
 }): Promise<string> {
   const storePath =
     params.sessionTarget?.storePath ??
-    resolveStorePath(params.config?.session?.store, { agentId: params.agentId });
+    resolveSessionStorePathCore(params.config?.session?.store, { agentId: params.agentId });
   if (!storePath || !params.sessionKey) {
     return params.sessionFile;
   }
   return (
-    await resolveSessionTranscriptRuntimeReadTarget({
+    await resolveSessionTranscriptRuntimeTarget({
       agentId: params.agentId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
@@ -181,7 +181,7 @@ export async function resolveExistingAttemptTranscriptState(params: {
   const agentId = normalizeOptionalString(params.sessionTarget?.agentId) ?? params.agentId;
   const storePath =
     normalizeOptionalString(params.sessionTarget?.storePath) ??
-    resolveStorePath(params.config?.session?.store, { agentId });
+    resolveSessionStorePathCore(params.config?.session?.store, { agentId });
   const sessionId = normalizeOptionalString(params.sessionTarget?.sessionId) ?? params.sessionId;
   const sessionKey =
     normalizeOptionalString(params.sessionTarget?.sessionKey) ??

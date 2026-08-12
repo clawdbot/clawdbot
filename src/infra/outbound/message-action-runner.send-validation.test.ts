@@ -9,7 +9,7 @@ import {
   forumTestPlugin,
   workspaceConfig,
   workspaceTestPlugin,
-} from "./message-action-test-fixtures.js";
+} from "./message-action-runner.test-support.js";
 
 const emptyConfig = {} as OpenClawConfig;
 describe("runMessageAction send validation", () => {

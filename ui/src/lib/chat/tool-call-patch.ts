@@ -1,4 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import {
   MAX_DIFF_RENDER_LINES,
   type DiffLine,
@@ -7,6 +8,11 @@ import {
 } from "./tool-call-diff.ts";
 
 type PatchOperation = "add" | "delete" | "update";
+
+export type PatchFileOperation = {
+  operation: PatchOperation;
+  path: string;
+};
 
 type PatchSection = {
   operation: PatchOperation;
@@ -31,14 +37,11 @@ type HunkState = {
 
 type PatchViewData = {
   paths: string[];
+  fileOperations: PatchFileOperation[];
   lines: DiffLine[];
   stat: DiffStat;
   move?: { from: string; to: string };
 };
-
-function readNonBlankString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
 
 function splitLines(text: string): string[] {
   if (text === "") {
@@ -159,6 +162,7 @@ function finish(collector: PatchCollector): PatchViewData | null {
     return null;
   }
   const paths = [...new Set(collector.sections.map((section) => section.path).filter(Boolean))];
+  const fileOperations = collector.sections.map(({ operation, path }) => ({ operation, path }));
   const stat = collector.sections.reduce(
     (sum, section) => ({
       added: sum.added + section.stat.added,
@@ -194,7 +198,7 @@ function finish(collector: PatchCollector): PatchViewData | null {
     only && only.operation === "update" && only.sourcePath !== only.path
       ? { from: only.sourcePath, to: only.path }
       : undefined;
-  return { paths, lines, stat, ...(move ? { move } : {}) };
+  return { paths, fileOperations, lines, stat, ...(move ? { move } : {}) };
 }
 
 function parseCodexPatch(text: string): PatchViewData | null {

@@ -148,7 +148,6 @@
 "channel: qqbot":
   - changed-files:
       - any-glob-to-any-file:
-          - "extensions/qqbot/**"
           - "docs/channels/qqbot.md"
 "channel: raft":
   - changed-files:

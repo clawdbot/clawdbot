@@ -343,11 +343,15 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     ? undefined
     : (sessionStore?.[sessionKey] ?? sessionEntryHandle?.getCurrent() ?? sessionEntry);
   let activeGoalContext = formatActiveGoalContext(inboundContextSessionEntry);
-  let inboundUserContext = buildInboundUserContextPrefix(
-    inboundUserContextSessionCtx,
-    envelopeOptions,
-    inboundContextSessionEntry,
-  );
+  // Heartbeats are synthetic system turns: delivery facts still drive routing and
+  // formatting, but must not be presented to the model as user-role inbound context.
+  let inboundUserContext = isHeartbeat
+    ? ""
+    : buildInboundUserContextPrefix(
+        inboundUserContextSessionCtx,
+        envelopeOptions,
+        inboundContextSessionEntry,
+      );
   const refreshInboundContextAfterAdmissionWait = async () => {
     if (isHeartbeat) {
       return;

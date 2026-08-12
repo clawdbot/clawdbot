@@ -311,7 +311,7 @@ vi.mock("../infra/runtime-guard.js", () => ({
 }));
 
 vi.mock("../plugins/memory-runtime.js", () => ({
-  closeActiveMemorySearchManagers: closeActiveMemorySearchManagersMock,
+  closeActiveMemorySearchManagersCore: closeActiveMemorySearchManagersMock,
 }));
 
 vi.mock("../plugins/memory-state.js", () => ({

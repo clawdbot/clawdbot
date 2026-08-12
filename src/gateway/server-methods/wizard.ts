@@ -226,7 +226,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
     }
     respond(true, status, undefined);
   },
-  "wizard.status": ({ params, respond, context }) => {
+  "wizard.status": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateWizardStatusParams, "wizard.status", respond)) {
       return;
     }
@@ -236,6 +236,9 @@ export const wizardHandlers: GatewayRequestHandlers = {
       return;
     }
     const status = readWizardStatus(session);
+    if (status.status !== "running") {
+      await whenAdmittedWizardSessionSettled(session);
+    }
     context.purgeWizardSession(sessionId);
     respond(true, status, undefined);
   },

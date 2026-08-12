@@ -1,3 +1,4 @@
+import "./chat-engine.mocks.test-support.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   fakeOverviewLoader,

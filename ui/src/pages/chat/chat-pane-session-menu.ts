@@ -69,6 +69,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     }
     const session = {
       key: row.key,
+      sessionId: row.sessionId,
       label:
         normalizeOptionalString(row.label) ?? normalizeOptionalString(this.paneTitle) ?? row.key,
       pinned: row.pinned === true,

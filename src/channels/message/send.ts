@@ -209,7 +209,7 @@ export type DurableMessageSendContext = MessageSendContext<
   DurableMessageBatchSendResult
 >;
 
-export async function withDurableMessageSendContext<T>(
+export async function withDurableMessageSendContextCore<T>(
   params: DurableMessageSendContextParams,
   run: (ctx: DurableMessageSendContext) => Promise<T>,
 ): Promise<T> {
@@ -393,7 +393,7 @@ export async function withDurableMessageSendContext<T>(
   }
 }
 
-export async function sendDurableMessageBatch(
+export async function sendDurableMessageBatchCore(
   params: DurableMessageSendContextParams,
 ): Promise<DurableMessageBatchSendResult> {
   const pendingFinalCompletion = params.deliveryCompletion
@@ -406,7 +406,7 @@ export async function sendDurableMessageBatch(
         durability: "required" as const,
       }
     : {};
-  return await withDurableMessageSendContext(
+  return await withDurableMessageSendContextCore(
     { ...params, ...pendingFinalDelivery },
     async (ctx) => {
       const rendered = await ctx.render();

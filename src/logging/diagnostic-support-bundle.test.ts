@@ -1,9 +1,10 @@
 // Diagnostic support bundle tests cover collected files and redaction in bundles.
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   jsonSupportBundleFile,
   textSupportBundleFile,
@@ -62,15 +63,64 @@ describe("diagnostic support bundle helpers", () => {
 
   it("writes zip bundles through the same file model", async () => {
     const outputPath = path.join(tempDir, "bundle.zip");
-    const bytes = await writeSupportBundleZip({
+    const published = await writeSupportBundleZip({
       outputPath,
       files: [jsonSupportBundleFile("manifest.json", { ok: true })],
     });
 
-    expect(bytes).toBeGreaterThan(0);
+    expect(published.path).toBe(outputPath);
+    expect(published.bytes).toBeGreaterThan(0);
     expect(fs.statSync(outputPath).mode & 0o777).toBe(0o600);
 
     const zip = await JSZip.loadAsync(fs.readFileSync(outputPath));
     expect(await zip.file("manifest.json")?.async("string")).toBe('{\n  "ok": true\n}\n');
+    expect(fs.readdirSync(tempDir)).toEqual(["bundle.zip"]);
+  });
+
+  it("replaces an existing export with restrictive permissions", async () => {
+    const outputPath = path.join(tempDir, "bundle.zip");
+    fs.writeFileSync(outputPath, "previous export");
+    fs.chmodSync(outputPath, 0o644);
+
+    const published = await writeSupportBundleZip({
+      outputPath,
+      files: [jsonSupportBundleFile("manifest.json", { ok: true })],
+    });
+
+    expect(published.path).toBe(outputPath);
+    // The staged replacement installs a fresh file instead of truncating in
+    // place, so a permissive pre-existing mode cannot survive the overwrite.
+    expect(fs.statSync(outputPath).mode & 0o777).toBe(0o600);
+    const zip = await JSZip.loadAsync(fs.readFileSync(outputPath));
+    expect(await zip.file("manifest.json")?.async("string")).toBe('{\n  "ok": true\n}\n');
+    expect(fs.readdirSync(tempDir)).toEqual(["bundle.zip"]);
+  });
+
+  it("keeps the previous export when publication fails", async () => {
+    const outputPath = path.join(tempDir, "bundle.zip");
+    await writeSupportBundleZip({
+      outputPath,
+      files: [jsonSupportBundleFile("manifest.json", { ok: true })],
+    });
+    const priorBytes = fs.readFileSync(outputPath);
+
+    const writeFileSpy = vi.spyOn(fsp, "writeFile").mockImplementationOnce(async (file) => {
+      expect(typeof file).toBe("string");
+      fs.writeFileSync(file as string, "partial replacement");
+      throw new Error("injected write failure");
+    });
+    try {
+      await expect(
+        writeSupportBundleZip({
+          outputPath,
+          files: [jsonSupportBundleFile("manifest.json", { ok: false })],
+        }),
+      ).rejects.toThrow("injected write failure");
+    } finally {
+      writeFileSpy.mockRestore();
+    }
+
+    expect(fs.readFileSync(outputPath)).toEqual(priorBytes);
+    expect(fs.readdirSync(tempDir)).toEqual(["bundle.zip"]);
   });
 });

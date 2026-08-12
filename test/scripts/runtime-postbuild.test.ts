@@ -144,6 +144,29 @@ describe("runtime postbuild static assets", () => {
     ]);
   });
 
+  it.each([
+    { name: "top-level array", packageJson: [] },
+    { name: "array openclaw section", packageJson: { openclaw: [] } },
+    { name: "array build section", packageJson: { openclaw: { build: [] } } },
+    {
+      name: "non-record asset entries",
+      packageJson: {
+        openclaw: {
+          build: {
+            staticAssets: [[], "asset", null, { source: 42, output: [] }],
+          },
+        },
+      },
+    },
+  ])("ignores malformed $name metadata", async ({ packageJson }) => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-malformed-");
+    const packageDir = path.join(rootDir, "extensions", "demo");
+    await fs.mkdir(packageDir, { recursive: true });
+    await fs.writeFile(path.join(packageDir, "package.json"), JSON.stringify(packageJson), "utf8");
+
+    expect(discoverStaticExtensionAssets({ rootDir })).toEqual([]);
+  });
+
   it("excludes external plugin (bundledDist: false) static assets by default", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const packageDir = path.join(rootDir, "extensions", "external-demo");

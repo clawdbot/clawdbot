@@ -37,7 +37,7 @@ import {
   replaceSessionEntry,
   type SessionAccessScope,
   type SessionTranscriptReadScope,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
@@ -256,7 +256,7 @@ vi.mock("../session-utils.js", async () => {
   return {
     ...original,
     loadSessionEntry,
-    loadSessionEntryReadOnly: loadSessionEntry,
+    loadGatewaySessionEntryReadOnly: loadSessionEntry,
   };
 });
 
@@ -740,7 +740,7 @@ function sessionEntryScope(): SessionAccessScope {
 }
 
 async function seedSqliteSessionEntry(entry: Record<string, unknown> = {}): Promise<void> {
-  await upsertSessionEntry(sessionEntryScope(), {
+  await upsertSessionEntryCore(sessionEntryScope(), {
     sessionId: mockState.sessionId,
     ...entry,
   });
@@ -1913,6 +1913,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(mockState.messageReceivedCalls).toHaveLength(1);
     expect(readPersistedUserMessages()).toHaveLength(1);
+    expect(readPersistedUserMessages()[0]?.["__openclaw"]).toMatchObject({
+      replyToId: "prior-message",
+      replyToPreview: {
+        text: "quoted deployment status",
+        senderLabel: "Alice",
+      },
+    });
     expect(auditEvents.filter((event) => event.reasonCode === "active_run_injected")).toHaveLength(
       1,
     );

@@ -51,7 +51,17 @@ export async function patchSession(
     key: session.key,
     ...patch,
     agentId,
+    ...(typeof patch.archived === "boolean" && session.sessionId
+      ? { expectedSessionId: session.sessionId }
+      : {}),
   };
+  if (typeof patch.archived === "boolean" && !session.sessionId?.trim()) {
+    host.sessionData.publishSessionMutationError(
+      scope,
+      "Session lifecycle action requires a durable session identity.",
+    );
+    return "failed";
+  }
   if (
     !requireSessionMutationAccess(host, scope, { method: "sessions.patch", params: requestParams })
   ) {
@@ -60,6 +70,7 @@ export async function patchSession(
   try {
     const patched = await scope.sessions.patch(session.key, patch, {
       agentId,
+      ...(typeof patch.archived === "boolean" ? { expectedSessionId: session.sessionId } : {}),
       ...(refresh.deferListRefresh ? { deferListRefresh: true } : {}),
     });
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {

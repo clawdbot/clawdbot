@@ -16,7 +16,7 @@ import {
   hasRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
 } from "./managed-npm-retention.js";
-import { createSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
+import { createSyncSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
 
 const runCommandWithTimeoutMock = vi.fn();
 const resolveOpenClawPackageRootSyncMock = vi.fn();
@@ -37,7 +37,7 @@ const { installPluginFromNpmPackArchive, installPluginFromNpmSpec, PLUGIN_INSTAL
 const { classifyNpmManagedOverrideCompatibilityError } =
   await import("./install-managed-npm-state.js");
 
-const suiteTempRootTracker = createSuiteTempRootTracker("openclaw-plugin-install-npm-spec");
+const suiteTempRootTracker = createSyncSuiteTempRootTracker("openclaw-plugin-install-npm-spec");
 let previousNpmGlobalConfig: string | undefined;
 let npmGlobalConfigPath: string;
 let npmPackArchiveInstallCase: {

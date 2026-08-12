@@ -786,6 +786,17 @@ describe("Claude live process", () => {
       },
     },
     {
+      name: "marks quiet Claude live nonzero exits as retryable unknown failures",
+      exitCode: 1,
+      stderr: "",
+      events: [],
+      expected: {
+        name: "FailoverError",
+        reason: "unknown",
+        code: "cli_unknown_empty_failure",
+      },
+    },
+    {
       name: "preserves Claude live stderr classification on exit-zero failures",
       exitCode: 0,
       stderr: "Prompt is too long",

@@ -152,7 +152,9 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     sessionStoreMocks.readSessionEntry
       .mockReset()
       .mockImplementation(() => sessionStoreMocks.currentEntry);
-    sessionStoreMocks.resolveStorePath.mockReset().mockReturnValue("/tmp/mock-sessions.json");
+    sessionStoreMocks.resolveSessionStorePathCore
+      .mockReset()
+      .mockReturnValue("/tmp/mock-sessions.json");
     sessionStoreMocks.resolveSessionStoreEntry.mockReset().mockReturnValue({ existing: undefined });
     sessionStoreMocks.updateSessionEntry.mockClear();
     acpManagerRuntimeMocks.getAcpSessionManager.mockReset();

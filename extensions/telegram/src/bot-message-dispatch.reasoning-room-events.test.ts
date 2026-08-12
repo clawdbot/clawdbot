@@ -181,7 +181,10 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
 
     await dispatchWithContext({ context: createReasoningStreamContext() });
 
-    expect(reasoningDraftStream.update).toHaveBeenCalledWith("🧠 _hidden_");
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith(
+      "🧠 _hidden_",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
@@ -238,7 +241,10 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
 
     await dispatchWithContext({ context: createContext() });
 
-    expect(answerDraftStream.update).toHaveBeenCalledWith("Before <think>literal tag text after");
+    expect(answerDraftStream.update).toHaveBeenCalledWith(
+      "Before <think>literal tag text after",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 

@@ -45,7 +45,7 @@ vi.mock("./model.static-catalog.js", () => ({
 }));
 
 vi.mock("../model-suppression.js", () => ({
-  shouldSuppressBuiltInModel: ({
+  shouldSuppressBuiltInModelCore: ({
     provider,
     id,
     baseUrl,

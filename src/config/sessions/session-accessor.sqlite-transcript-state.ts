@@ -5,10 +5,10 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { publishSqliteSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
+import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import { coerceSqliteNumber } from "./session-accessor.sqlite-normalize.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
-import { parseSqliteSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,
   assertCanonicalSessionKeyWriteMatchesDatabase,
@@ -98,7 +98,7 @@ export function ensureTranscriptSessionRoot(
         .where("session_key", "in", lookupKeys),
     ).rows;
     for (const candidate of candidates) {
-      const entry = parseSqliteSessionEntryJson(candidate);
+      const entry = parseSessionEntryJson(candidate);
       if (!entry) {
         const retainedWindow =
           candidate.entry_json === "{}"
@@ -169,7 +169,7 @@ export function ensureTranscriptSessionRoot(
         .set({ entry_valid: -1 })
         .where("session_key", "=", scope.sessionKey),
     );
-    publishSqliteSessionEntryCacheInvalidation(database);
+    publishSessionEntryCacheInvalidation(database);
   }
   executeSqliteQuerySync(
     database.db,
@@ -267,7 +267,7 @@ export function touchTranscriptMutationInTransaction(
   }
 }
 
-export function deleteSqliteTranscriptEventsInTransaction(
+export function deleteTranscriptEventsInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
 ): boolean {

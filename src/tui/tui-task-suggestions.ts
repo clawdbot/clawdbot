@@ -10,7 +10,7 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import type { TaskSuggestion } from "../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createTuiRefreshCoalescer } from "./coalesced-refresh.js";
-import { selectListTheme, theme } from "./theme/theme.js";
+import { selectListTheme, tuiTheme as theme } from "./theme/theme.js";
 import type { TuiBackend, TuiTaskSuggestionAcceptMode } from "./tui-backend.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
 

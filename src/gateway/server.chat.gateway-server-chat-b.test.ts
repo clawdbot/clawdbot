@@ -19,7 +19,7 @@ import {
   loadSessionEntry,
   loadExactSessionEntry,
   loadTranscriptEventsSync,
-  patchSessionEntry,
+  patchSessionEntryCore,
   replaceTranscriptEvents,
   replaceSessionEntry,
   withTranscriptWriteLock,
@@ -56,7 +56,7 @@ import {
   connectOk,
   createGatewaySuiteHarness,
   dispatchInboundMessageMock,
-  getReplyFromConfig,
+  gatewayReplyMock,
   installGatewayTestHooks,
   mockGetReplyFromConfigOnce,
   onceMessage,
@@ -1452,7 +1452,7 @@ describe("gateway server chat", () => {
               }
             | undefined;
           expect(payload?.metadata?.models).toEqual([
-            {
+            expect.objectContaining({
               id: "gpt-5.5",
               name: "GPT-5.5",
               provider: "openai",
@@ -1460,7 +1460,7 @@ describe("gateway server chat", () => {
               contextWindow: 400_000,
               reasoning: false,
               available: true,
-            },
+            }),
           ]);
           expect(payload?.sessionInfo?.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
           expect(payload?.defaults?.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
@@ -3185,7 +3185,7 @@ describe("gateway server chat", () => {
       });
       restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockImplementationOnce(
         async ({ sessionKey, storePath: recoveryStorePath }) => {
-          await patchSessionEntry({ sessionKey, storePath: recoveryStorePath }, () => ({
+          await patchSessionEntryCore({ sessionKey, storePath: recoveryStorePath }, () => ({
             abortedLastRun: false,
             updatedAt: Date.now(),
           }));
@@ -3252,7 +3252,7 @@ describe("gateway server chat", () => {
         () => expect(context.dedupe.has(pendingChatSendDedupeKey(idempotencyKey))).toBe(true),
         FAST_WAIT_OPTS,
       );
-      await patchSessionEntry({ sessionKey: "agent:main:main", storePath }, () => ({
+      await patchSessionEntryCore({ sessionKey: "agent:main:main", storePath }, () => ({
         restartRecoveryTerminalRunIds: [idempotencyKey],
         updatedAt: Date.now(),
       }));
@@ -3323,7 +3323,7 @@ describe("gateway server chat", () => {
       });
       restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockImplementationOnce(
         async ({ sessionKey, storePath: recoveryStorePath }) => {
-          await patchSessionEntry({ sessionKey, storePath: recoveryStorePath }, () => ({
+          await patchSessionEntryCore({ sessionKey, storePath: recoveryStorePath }, () => ({
             sessionId: "replacement-session",
             restartRecoveryDeliveryRunId: "replacement-recovery",
             restartRecoveryDeliverySourceRunId: "replacement-source",
@@ -4794,7 +4794,7 @@ describe("gateway server chat", () => {
 
   test("chat.send does not force-disable block streaming", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const spy = getReplyFromConfig;
+      const spy = gatewayReplyMock;
       await connectOk(ws);
 
       await createSessionDir();
@@ -4837,7 +4837,7 @@ describe("gateway server chat", () => {
     try {
       await withGatewayChatHarness(
         async ({ ws, createSessionDir }) => {
-          const spy = getReplyFromConfig;
+          const spy = gatewayReplyMock;
           await connectOk(ws, makeGatewayWebchatClient());
 
           await createSessionDir();
@@ -4966,7 +4966,7 @@ describe("gateway server chat", () => {
   test("chat.send forwards Control UI reconnect resume internally", async () => {
     await withGatewayChatHarness(
       async ({ ws, createSessionDir }) => {
-        const spy = getReplyFromConfig;
+        const spy = gatewayReplyMock;
         await connectOk(ws, makeGatewayWebchatClient());
 
         await createSessionDir();
@@ -5005,7 +5005,7 @@ describe("gateway server chat", () => {
   test("chat.send forwards one-turn queue mode overrides internally", async () => {
     await withGatewayChatHarness(
       async ({ ws, createSessionDir }) => {
-        const spy = getReplyFromConfig;
+        const spy = gatewayReplyMock;
         await connectOk(ws, makeGatewayWebchatClient());
 
         await createSessionDir();
@@ -6386,7 +6386,7 @@ describe("gateway server chat", () => {
 
   test("smoke: supports abort and idempotent completion", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const spy = getReplyFromConfig;
+      const spy = gatewayReplyMock;
       let aborted = false;
       await connectOk(ws);
 

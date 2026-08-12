@@ -121,12 +121,12 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
   }
 
   try {
-    const { sendDurableMessageBatch } = await loadDeliverRuntime();
+    const { sendDurableMessageBatchCore } = await loadDeliverRuntime();
     const outboundSession = buildOutboundSessionContext({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
     });
-    const send = await sendDurableMessageBatch({
+    const send = await sendDurableMessageBatchCore({
       cfg: params.cfg,
       channel,
       to: target.to,

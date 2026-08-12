@@ -10,14 +10,15 @@ import type {
 import {
   createUpdateVerificationController,
   formatUpdateCampaignLabel,
-  readUpdateAvailable,
-  readUpdateSchedule,
   resolveUpdateStatusBanner,
 } from "./update-overlay-helpers.ts";
+import { readUpdateAvailable, readUpdateSchedule } from "./update-schedule-dto.ts";
 
 const translations: Record<string, string> = {
   "updates.status": "Update {status}: {reason}. {guidance}",
   "updates.failureReasons.dirty": "Commit or stash changes, then retry.",
+  "updates.failureReasons.depsInstallFailed":
+    "Dependency install failed. Fix the install error and retry.",
   "updates.failureReasons.default":
     "See the gateway logs for the exact failure and retry once the cause is fixed.",
   "updates.verificationFailed":
@@ -28,9 +29,9 @@ const translations: Record<string, string> = {
     "Update finished, but the running install does not match the expected revision. Expected {expected}, running {actual}.",
   "updates.outcomeUnknown": "The update outcome is unknown.",
   "common.unknown": "Unknown",
-  "updates.postRestart.restartUnhealthy":
-    "The replacement process never became healthy and the previous process stayed up.",
-  "updates.postRestart.default": "Check the gateway logs for the replacement failure.",
+  "updates.failureReasons.restartUnhealthy":
+    "The replacement process never became healthy. The previous process stayed up so you can recover.",
+  "updates.failedAtStep": "The update failed at {step}: {cause}.",
   "updates.handoffTimeout":
     "Update handoff started, but completion was not reported after reconnect. Run `openclaw update status` for the final result.",
   "updates.campaign.countdown": "Updating in {time}",
@@ -226,6 +227,38 @@ describe("update status localization", () => {
     });
   });
 
+  it("names the recorded cause instead of the reason slug when a step failed", async () => {
+    installTranslations();
+
+    await expect(
+      verifyUpdate({
+        pending: { kind: "handoff", expectedVersion: "2.0.0", expectedSha: null },
+        response: {
+          sentinel: {
+            kind: "update",
+            status: "error",
+            stats: {
+              reason: "deps-install-failed",
+              steps: [
+                { name: "fetch", log: { exitCode: 0, stderrTail: "done" } },
+                {
+                  name: "install",
+                  log: {
+                    exitCode: 1,
+                    stderrTail: "Progress: resolved 1\nENOSPC: no space left on device, write",
+                  },
+                },
+              ],
+            },
+          },
+        },
+      }),
+    ).resolves.toEqual({
+      tone: "danger",
+      text: "The update failed at install: ENOSPC: no space left on device, write. Dependency install failed. Fix the install error and retry.",
+    });
+  });
+
   it("preserves unknown status details inside localized fallback guidance", () => {
     const translate = installTranslations();
 
@@ -326,7 +359,7 @@ describe("update status localization", () => {
       }),
     ).resolves.toEqual({
       tone: "danger",
-      text: "Update error: restart-unhealthy. The replacement process never became healthy and the previous process stayed up.",
+      text: "Update error: restart-unhealthy. The replacement process never became healthy. The previous process stayed up so you can recover.",
     });
     await expect(
       verifyUpdate({
@@ -341,7 +374,7 @@ describe("update status localization", () => {
       }),
     ).resolves.toEqual({
       tone: "danger",
-      text: "Update error: supervisor-exited. Check the gateway logs for the replacement failure.",
+      text: "Update error: supervisor-exited. See the gateway logs for the exact failure and retry once the cause is fixed.",
     });
     await expect(
       verifyUpdate({

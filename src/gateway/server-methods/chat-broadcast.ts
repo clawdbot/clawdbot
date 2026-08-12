@@ -65,22 +65,30 @@ export function sendGlobalAwareNodeChatPayload(params: {
   }
 }
 
-export function broadcastChatFinal(params: {
+type ChatBroadcastParams = {
   context: ChatBroadcastContext;
   runId: string;
   sessionKey: string;
   agentId?: string;
-  message?: Record<string, unknown>;
-}): void {
+};
+
+type ChatTerminal =
+  | { state: "final"; message?: Record<string, unknown> }
+  | { state: "error"; errorMessage?: string };
+
+function broadcastChatTerminal(params: ChatBroadcastParams & ChatTerminal): void {
   const seq = nextChatSeq(params.context, params.runId);
   const payloadAgentId = params.sessionKey === "global" ? params.agentId : undefined;
+  const terminal =
+    params.state === "final"
+      ? { state: params.state, message: projectChatDisplayMessage(params.message) }
+      : { state: params.state, errorMessage: params.errorMessage };
   const payload = {
     runId: params.runId,
     sessionKey: params.sessionKey,
     ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
     seq,
-    state: "final" as const,
-    message: projectChatDisplayMessage(params.message),
+    ...terminal,
   };
   params.context.broadcast("chat", payload, {
     sessionKeys: resolveChatSessionKeys({
@@ -97,6 +105,12 @@ export function broadcastChatFinal(params: {
     payload,
   });
   params.context.agentRunSeq.delete(params.runId);
+}
+
+export function broadcastChatFinal(
+  params: ChatBroadcastParams & { message?: Record<string, unknown> },
+): void {
+  broadcastChatTerminal({ ...params, state: "final" });
 }
 
 export function isBtwReplyPayload(payload: ReplyPayload | undefined): payload is ReplyPayload & {
@@ -139,38 +153,8 @@ export function broadcastSideResult(params: {
   });
 }
 
-export function broadcastChatError(params: {
-  context: ChatBroadcastContext;
-  runId: string;
-  sessionKey: string;
-  agentId?: string;
-  errorMessage?: string;
-}): void {
-  const seq = nextChatSeq(params.context, params.runId);
-  const payloadAgentId = params.sessionKey === "global" ? params.agentId : undefined;
-  const payload = {
-    runId: params.runId,
-    sessionKey: params.sessionKey,
-    ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
-    seq,
-    state: "error" as const,
-    errorMessage: params.errorMessage,
-  };
-  params.context.broadcast("chat", payload, {
-    sessionKeys: resolveChatSessionKeys({
-      context: params.context,
-      sessionKey: params.sessionKey,
-      agentId: payloadAgentId,
-    }),
-  });
-  sendGlobalAwareNodeChatPayload({
-    context: params.context,
-    sessionKey: params.sessionKey,
-    agentId: payloadAgentId,
-    event: "chat",
-    payload,
-  });
-  params.context.agentRunSeq.delete(params.runId);
+export function broadcastChatError(params: ChatBroadcastParams & { errorMessage?: string }): void {
+  broadcastChatTerminal({ ...params, state: "error" });
 }
 
 export function isSourceReplyTranscriptMirrorPayload(payload: ReplyPayload | undefined): boolean {

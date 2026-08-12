@@ -65,12 +65,12 @@ vi.mock("../../skills/runtime/refresh-state.js", () => ({
 
 vi.mock("../../config/sessions.js", () => ({
   updateSessionStore: vi.fn(),
-  resolveSessionFilePath: vi.fn(),
+  resolveSessionFilePathCore: vi.fn(),
   resolveSessionFilePathOptions: vi.fn(),
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  patchSessionEntry: vi.fn(),
+  patchSessionEntryCore: vi.fn(),
   updateSessionEntry: updateSessionEntryMock,
 }));
 

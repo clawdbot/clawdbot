@@ -84,6 +84,16 @@ export async function runWebFetchProxyHealth(ctx: DoctorHealthFlowContext): Prom
   await noteWebFetchProxyDiagnostic({ cfg: ctx.cfg, env: ctx.env ?? process.env });
 }
 
+export async function runGitHubProjectHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { githubApiToken } = await import("../gateway/control-ui-github-api.js");
+  if (!githubApiToken(ctx.env ?? process.env)) {
+    note(
+      "Set GH_TOKEN in the Gateway environment to enable authenticated GitHub project search, including private repositories.",
+      "GitHub projects",
+    );
+  }
+}
+
 export async function runBrowserHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteChromeMcpBrowserReadiness } = await import("../commands/doctor-browser.js");
   await runCoreContributionHealth(ctx, ["core/doctor/browser-clawd-profile-residue"]);

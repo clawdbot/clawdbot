@@ -28,6 +28,7 @@ import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
+import { findUiSessionRow } from "../lib/sessions/route-navigation.ts";
 import {
   isUiGlobalSessionKey,
   normalizeAgentId,
@@ -523,7 +524,8 @@ class OpenClawShell
     }
     const gatewaySnapshot = context.gateway?.snapshot;
     if (gatewaySnapshot) {
-      const desktopAvailable = isDesktopPanelAvailable(gatewaySnapshot);
+      const activeSessionRow = findUiSessionRow(context, this.activeSessionKey);
+      const desktopAvailable = isDesktopPanelAvailable(gatewaySnapshot, activeSessionRow);
       if (this.commandPalette) {
         this.commandPalette.desktopAvailable = desktopAvailable;
       }
@@ -583,9 +585,9 @@ class OpenClawShell
       : ROUTE_IDS_WITHOUT_WORKBOARD;
   }
 
-  /** Sidebar draft-row hint while the new-session page is open, keyed off its ?agent param. */
-  draftSessionAgentId(): string {
-    return this.shellNavigation.draftSessionAgentId();
+  /** Agent targeted by the open new-session route, keyed off its ?agent param. */
+  newSessionRouteAgentId(): string {
+    return this.shellNavigation.newSessionRouteAgentId();
   }
 
   ensureAgentsList(

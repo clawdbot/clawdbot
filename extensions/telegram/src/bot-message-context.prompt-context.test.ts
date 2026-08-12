@@ -9,7 +9,7 @@ import {
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it } from "vitest";
-import { createTelegramMessageContextRuntime } from "./bot-handlers.message-context.runtime.js";
+import { createTelegramMessageContextRuntime } from "./bot-handlers.message-context.js";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 import type { TelegramPromptContextEntry } from "./bot-message-context.types.js";
 

@@ -8,7 +8,7 @@ import {
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   DEFAULT_HEARTBEAT_EVERY,
-  resolveHeartbeatPrompt as resolveHeartbeatPromptText,
+  resolveHeartbeatPromptCore as resolveHeartbeatPromptText,
 } from "../auto-reply/heartbeat.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
@@ -31,7 +31,7 @@ export type HeartbeatSummary = {
   ackMaxChars: number;
 };
 
-const DEFAULT_HEARTBEAT_TARGET = "last";
+const DEFAULT_HEARTBEAT_TARGET = "owner";
 
 function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
   const list = listAgentEntries(cfg);

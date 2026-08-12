@@ -11,7 +11,7 @@ import {
   scopeLegacySessionKeyToAgent,
 } from "../../routing/session-key.js";
 import {
-  extractAssistantVisibleText,
+  extractAssistantPhaseText,
   extractFirstTextBlock,
 } from "../../shared/chat-message-content.js";
 import {
@@ -25,7 +25,7 @@ import {
   parseSqliteSessionFileMarker,
   type SqliteSessionFileMarker,
 } from "./legacy-sqlite-marker.js";
-import { resolveDefaultSessionStorePath, resolveStorePath } from "./paths.js";
+import { resolveDefaultSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
 import {
   loadSessionEntryReadOnly,
   loadTranscriptEvents,
@@ -171,7 +171,7 @@ function parseAssistantTranscriptText(
   ) {
     return undefined;
   }
-  const text = extractAssistantVisibleText(message)?.trim();
+  const text = extractAssistantPhaseText(message)?.trim();
   if (!text) {
     return undefined;
   }
@@ -232,7 +232,7 @@ function parseRecentConversationText(
   }
   const text =
     message.role === "assistant"
-      ? extractAssistantVisibleText(message)
+      ? extractAssistantPhaseText(message)
       : (upstreamUserText ?? extractFirstTextBlock(message)?.trim());
   if (!text) {
     return undefined;
@@ -592,7 +592,8 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   const storeAgentId =
     transcriptAgentId ?? resolveAgentIdFromSessionKey(sessionKey, configuredDefaultAgentId);
   const storePath =
-    params.storePath ?? resolveStorePath(params.config?.session?.store, { agentId: storeAgentId });
+    params.storePath ??
+    resolveSessionStorePathCore(params.config?.session?.store, { agentId: storeAgentId });
   const resolved = resolveSessionEntrySelection({
     ...(transcriptAgentId ? { agentId: transcriptAgentId } : {}),
     sessionKey,

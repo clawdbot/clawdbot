@@ -54,7 +54,7 @@ import {
   runServiceUninstall,
 } from "./lifecycle-core.js";
 import {
-  requestSafeGatewayRestart,
+  runSafeGatewayRestart,
   resolveGatewayRestartIntentOptions,
 } from "./lifecycle-safe-restart.js";
 import { createDaemonActionContext, createNullWriter } from "./response.js";
@@ -555,7 +555,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     throw new Error("--skip-deferral requires --safe");
   }
   if (opts.safe) {
-    return await requestSafeGatewayRestart(opts);
+    return await runSafeGatewayRestart(opts);
   }
   if (isGatewayExternallySupervised()) {
     return await runExternalSupervisorRestart(opts);

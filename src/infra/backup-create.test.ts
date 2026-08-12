@@ -726,7 +726,35 @@ describe("createBackupArchive", () => {
             suffix,
           ).toBe(false);
         }
-        expect(result.skippedVolatileCount).toBe(10);
+        expect(result.skippedVolatileCount).toBe(9);
+      },
+    );
+  });
+
+  it("creates a verifiable archive for highly compressible sparse state", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-sparse-state-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const sparsePath = state.statePath("sparse-state.bin");
+        await fs.mkdir(outputDir, { recursive: true });
+        await fs.writeFile(sparsePath, "");
+        await fs.truncate(sparsePath, 256 * 1024 * 1024);
+
+        const result = await createBackupArchive({
+          output: outputDir,
+          includeWorkspace: false,
+          nowMs: Date.UTC(2026, 4, 9, 8, 10, 0),
+        });
+        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+        await expect(
+          backupVerifyCommand(runtime, { archive: result.archivePath }),
+        ).resolves.toMatchObject({ ok: true });
       },
     );
   });
@@ -2487,7 +2515,18 @@ describe("createBackupArchive", () => {
         await fs.mkdir(path.join(stateDir, "npm", "projects", "demo", "node_modules", "dep"), {
           recursive: true,
         });
-        for (const managedRoot of ["dev", "git", "npm-runtime", "tools"]) {
+        await fs.mkdir(path.join(stateDir, "dev", "openclaw", ".git", "objects", "pack"), {
+          recursive: true,
+        });
+        await fs.mkdir(path.join(stateDir, "dev", "openclaw", "node_modules", "dep"), {
+          recursive: true,
+        });
+        await fs.mkdir(path.join(stateDir, "dev", "openclaw", "dist"), { recursive: true });
+        await fs.mkdir(path.join(stateDir, "developer"), { recursive: true });
+        await fs.mkdir(path.join(stateDir, "dev-backup"), { recursive: true });
+        await fs.mkdir(path.join(stateDir, "temporary"), { recursive: true });
+        await fs.mkdir(path.join(stateDir, "tmp-data"), { recursive: true });
+        for (const managedRoot of ["dev", "git", "npm-runtime", "tmp", "tools"]) {
           await fs.mkdir(path.join(stateDir, managedRoot, "runtime"), { recursive: true });
           await fs.writeFile(
             path.join(stateDir, managedRoot, "runtime", "fixture.sqlite"),
@@ -2530,6 +2569,30 @@ describe("createBackupArchive", () => {
           "managed-package sqlite-named asset\n",
           "utf8",
         );
+        await fs.writeFile(
+          path.join(stateDir, "dev", "openclaw", ".git", "objects", "pack", "pack-fixture.pack"),
+          "reinstallable git pack\n",
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(stateDir, "dev", "openclaw", "node_modules", "dep", "index.js"),
+          "module.exports = {}\n",
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(stateDir, "dev", "openclaw", "dist", "entry.js"),
+          "export {};\n",
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(stateDir, "dev", "openclaw", "invalid.sqlite"),
+          "reinstallable sqlite-named artifact\n",
+          "utf8",
+        );
+        await fs.writeFile(path.join(stateDir, "developer", "keep.txt"), "keep\n", "utf8");
+        await fs.writeFile(path.join(stateDir, "dev-backup", "keep.txt"), "keep\n", "utf8");
+        await fs.writeFile(path.join(stateDir, "temporary", "keep.txt"), "keep\n", "utf8");
+        await fs.writeFile(path.join(stateDir, "tmp-data", "keep.txt"), "keep\n", "utf8");
         await fs.mkdir(outputDir, { recursive: true });
 
         const result = await createBackupArchive({
@@ -2544,7 +2607,7 @@ describe("createBackupArchive", () => {
         expect(entrySuffixes).toContain("/state/extensions/demo/src/index.js");
         expect(entrySuffixes).toContain("/state/node_modules/root-dep/index.js");
         expect(entrySuffixes).toContain("/state/node_modules/root-dep/fixture.sqlite");
-        for (const managedRoot of ["dev", "git", "npm", "npm-runtime", "tools"]) {
+        for (const managedRoot of ["dev", "git", "npm", "npm-runtime", "tmp", "tools"]) {
           expect(
             entrySuffixes.some(
               (entry) =>
@@ -2553,6 +2616,10 @@ describe("createBackupArchive", () => {
             managedRoot,
           ).toBe(false);
         }
+        expect(entrySuffixes).toContain("/state/developer/keep.txt");
+        expect(entrySuffixes).toContain("/state/dev-backup/keep.txt");
+        expect(entrySuffixes).toContain("/state/temporary/keep.txt");
+        expect(entrySuffixes).toContain("/state/tmp-data/keep.txt");
         const pluginNodeModuleEntries = entries.filter((entry) =>
           entry.includes("/state/extensions/demo/node_modules/"),
         );
@@ -2576,6 +2643,8 @@ describe("createBackupArchive", () => {
       async (state) => {
         const stateDir = state.stateDir;
         const workspaceDir = path.join(stateDir, "dev", "workspace");
+        const tmpWorkspaceDir = path.join(stateDir, "tmp", "workspace");
+        const externalTmpWorkspaceDir = state.path("tmp");
         const runtimeDir = path.join(stateDir, "dev", "openclaw");
         const configPath = path.join(stateDir, "git", "config", "openclaw.json");
         const oauthDir = path.join(stateDir, "tools", "oauth");
@@ -2586,6 +2655,9 @@ describe("createBackupArchive", () => {
         state.envVars.OPENCLAW_OAUTH_DIR = oauthDir;
         state.applyEnv();
         await fs.mkdir(workspaceDir, { recursive: true });
+        await fs.mkdir(tmpWorkspaceDir, { recursive: true });
+        await fs.mkdir(externalTmpWorkspaceDir, { recursive: true });
+        await fs.mkdir(path.join(stateDir, "tmp", "tsx-501"), { recursive: true });
         await fs.mkdir(runtimeDir, { recursive: true });
         await fs.mkdir(path.dirname(configPath), { recursive: true });
         await fs.mkdir(oauthDir, { recursive: true });
@@ -2594,13 +2666,32 @@ describe("createBackupArchive", () => {
           configPath,
           `${JSON.stringify({
             agents: {
-              entries: { main: { default: true, workspace: workspaceDir } },
+              entries: {
+                main: { default: true, workspace: workspaceDir },
+                external: { workspace: externalTmpWorkspaceDir },
+                worker: { workspace: tmpWorkspaceDir },
+              },
             },
           })}\n`,
           "utf8",
         );
         await fs.writeFile(path.join(oauthDir, "credentials.json"), "{}\n", "utf8");
         await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "durable workspace\n", "utf8");
+        await fs.writeFile(
+          path.join(tmpWorkspaceDir, "AGENTS.md"),
+          "durable tmp workspace\n",
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(externalTmpWorkspaceDir, "AGENTS.md"),
+          "durable external tmp workspace\n",
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(stateDir, "tmp", "tsx-501", "cache-entry"),
+          "rebuildable compiler cache\n",
+          "utf8",
+        );
         await fs.writeFile(path.join(runtimeDir, "package.json"), "{}\n", "utf8");
         await fs.writeFile(path.join(toolRuntimeDir, "tool.bin"), "runtime\n", "utf8");
         const sqlite = requireNodeSqlite();
@@ -2627,6 +2718,10 @@ describe("createBackupArchive", () => {
         expect(
           entries.some((entry) => entry.endsWith("/state/dev/workspace/workspace.sqlite")),
         ).toBe(true);
+        expect(entries.some((entry) => entry.endsWith("/state/tmp/workspace/AGENTS.md"))).toBe(
+          true,
+        );
+        expect(entries.some((entry) => entry.endsWith("/tmp/AGENTS.md"))).toBe(true);
         expect(entries.some((entry) => entry.endsWith("/state/git/config/openclaw.json"))).toBe(
           true,
         );
@@ -2634,6 +2729,7 @@ describe("createBackupArchive", () => {
           true,
         );
         expect(entries.some((entry) => entry.includes("/state/dev/openclaw/"))).toBe(false);
+        expect(entries.some((entry) => entry.includes("/state/tmp/tsx-501/"))).toBe(false);
         expect(entries.some((entry) => entry.includes("/state/tools/runtime/"))).toBe(false);
 
         const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };

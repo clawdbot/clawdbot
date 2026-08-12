@@ -1443,6 +1443,45 @@ export function createNodeTestShards(options: NodeTestPlanOptions = {}): NodeTes
   });
 }
 
+/** Select planner envelopes that produce the protected Vitest transform-cache seed. */
+export function createVitestCacheWarmGroups(): Array<{
+  configs: string[];
+  env?: Record<string, string>;
+  includePatterns?: string[];
+  shard_name: string;
+}> {
+  const additionalShardNames = new Set([
+    "agentic-agents-embedded",
+    "agentic-gateway-methods",
+    "auto-reply-reply-commands-3",
+  ]);
+  const allShards = createNodeTestShards();
+  const coreShards = allShards.filter((candidate) =>
+    candidate.shardName.startsWith("core-unit-fast"),
+  );
+  if (coreShards.length === 0) {
+    throw new Error("core-unit-fast cache seed shards are missing");
+  }
+  const additionalShards = allShards.filter((candidate) =>
+    additionalShardNames.has(candidate.shardName),
+  );
+  const foundAdditionalShardNames = new Set(additionalShards.map((shard) => shard.shardName));
+  const missingShardNames = [...additionalShardNames].filter(
+    (name) => !foundAdditionalShardNames.has(name),
+  );
+  if (missingShardNames.length > 0) {
+    throw new Error(`cache seed shards are missing: ${missingShardNames.join(", ")}`);
+  }
+  return [...coreShards, ...additionalShards].flatMap((shard) =>
+    shard.configs.map((config) => ({
+      configs: [config],
+      ...(shard.env ? { env: shard.env } : {}),
+      ...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {}),
+      shard_name: `cache-warm:${shard.shardName}:${config}`,
+    })),
+  );
+}
+
 function resolveCiNodeTestRunner(shard: NodeTestShard): string {
   if (shard.runner !== DEFAULT_NODE_TEST_RUNNER) {
     return shard.runner;

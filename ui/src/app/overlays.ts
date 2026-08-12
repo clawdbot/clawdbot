@@ -4,7 +4,7 @@ import {
 } from "../../../src/gateway/events.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { UpdateAvailable, UpdateHoldResult, UpdateScheduleState } from "../api/types.ts";
-import { controlUiVersionDiffersFrom, reloadControlUiIfStale } from "../build-info.ts";
+import { controlUiVersionDiffersFrom } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import {
   closeDevicePairSetup as closeDevicePairSetupState,
@@ -40,24 +40,30 @@ import {
   readOverlayOperatorAccessTransition,
 } from "./overlays-access.ts";
 import {
+  classifyUpdateRunResponse,
   createPendingUpdateReconciliation,
   createUpdateCampaignStatusPoller,
   createUpdateStatusRefresher,
   createUpdateVerificationController,
   projectUpdateStatusResponse,
-  readUpdateAvailable,
-  readUpdateAvailableValue,
-  readUpdateSchedule,
-  readUpdateScheduleValue,
   resolveExpectedUpdateSha,
   resolveUnknownUpdateOutcomeBanner,
   resolveUpdateStatusBanner,
-  UPDATE_HANDOFF_STARTED_REASON,
   type ApplicationStatusBanner,
   type PendingUpdateReconciliation,
   type UpdateRestartStatusResponse,
   type UpdateRunResponse,
 } from "./update-overlay-helpers.ts";
+import {
+  readUpdateAvailable,
+  readUpdateAvailableValue,
+  readUpdateSchedule,
+  readUpdateScheduleValue,
+} from "./update-schedule-dto.ts";
+import {
+  announceRecordedUpdateSuccess,
+  announceVerifiedUpdateInstall,
+} from "./update-success-notice.ts";
 
 type ApplicationOverlaySnapshot = {
   updateAvailable: UpdateAvailable | null;
@@ -236,7 +242,7 @@ export function createApplicationOverlays(
     getHello: () => gateway.snapshot.hello,
     publish,
     publishBanner: publishUpdateBanner,
-    onVerifiedInstall: reloadControlUiIfStale,
+    onVerifiedInstall: announceVerifiedUpdateInstall,
   });
   const applyUpdateStatusResponse = (response: UpdateRestartStatusResponse) => {
     snapshot = {
@@ -439,6 +445,8 @@ export function createApplicationOverlays(
     }
   });
   synchronizeGateway(gateway.snapshot);
+  // A reload started by the previous document's verified install lands here.
+  announceRecordedUpdateSuccess();
 
   return {
     get snapshot() {
@@ -491,42 +499,22 @@ export function createApplicationOverlays(
         ) {
           return;
         }
-        const status = response.result?.status ?? (response.ok === true ? "ok" : "error");
-        const expectedVersion =
-          response.result?.after?.version?.trim() || pendingUpdate.expectedVersion;
-        const expectedSha = response.result?.after?.sha?.trim() || pendingUpdate.expectedSha;
-        if (
-          response.ok === true &&
-          status === "skipped" &&
-          response.result?.reason === UPDATE_HANDOFF_STARTED_REASON &&
-          response.handoff?.status === "started"
-        ) {
-          pendingUpdate = { expectedVersion, expectedSha, kind: "handoff" };
-          return;
-        }
-        if (response.ok === true && status === "ok") {
-          pendingUpdate = { expectedVersion, expectedSha, kind: "restart" };
-          if (response.restart?.coalesced === true) {
-            snapshot = {
-              ...snapshot,
-              updateStatusBanner: {
-                tone: "info",
-                text: t("updates.coalescedRestart"),
-              },
-            };
+        const accepted = classifyUpdateRunResponse(response, pendingUpdate);
+        if (accepted) {
+          pendingUpdate = accepted.pending;
+          if (accepted.banner) {
+            snapshot = { ...snapshot, updateStatusBanner: accepted.banner };
           }
           return;
         }
         pendingUpdate = null;
-        if (response.ok !== true || status !== "ok") {
-          snapshot = {
-            ...snapshot,
-            updateStatusBanner: resolveUpdateStatusBanner({
-              status,
-              reason: response.result?.reason,
-            }),
-          };
-        }
+        snapshot = {
+          ...snapshot,
+          updateStatusBanner: resolveUpdateStatusBanner({
+            status: response.result?.status ?? "error",
+            reason: response.result?.reason,
+          }),
+        };
       } catch (error) {
         if (
           disposed ||
