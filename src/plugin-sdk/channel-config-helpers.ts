@@ -6,6 +6,7 @@
  * config-write authorization, and DM access/policy resolution for accounts.
  */
 import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
+import { normalizeChatChannelId } from "../channels/ids.js";
 import {
   deleteAccountFromConfigSection as deleteAccountFromConfigSectionInSection,
   setAccountEnabledInConfigSection as setAccountEnabledInConfigSectionInSection,
@@ -18,7 +19,6 @@ import {
 } from "../channels/plugins/config-write-policy-shared.js";
 import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
 import type { ChannelConfigAdapter } from "../channels/plugins/types.adapters.js";
-import { normalizeManifestChannelId } from "../config/channel-claimant-plugins.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 
@@ -370,9 +370,12 @@ function resolveChannelSectionKey(cfg: OpenClawConfig, sectionKey: string): stri
   if (!channels || Object.hasOwn(channels, sectionKey)) {
     return sectionKey;
   }
-  const canonical = normalizeManifestChannelId(sectionKey);
+  // The pure ids primitive, NOT the config claimant resolver: the public SDK path must not
+  // load auto-enable ownership planning to resolve a channel spelling.
+  const canonical = normalizeChatChannelId(sectionKey) ?? sectionKey;
   return (
-    Object.keys(channels).find((key) => normalizeManifestChannelId(key) === canonical) ?? sectionKey
+    Object.keys(channels).find((key) => (normalizeChatChannelId(key) ?? key) === canonical) ??
+    sectionKey
   );
 }
 
