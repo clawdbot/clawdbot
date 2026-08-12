@@ -1445,6 +1445,37 @@ describe("openclaw state database", () => {
   );
 
   it.each(["runtime open", "doctor repair"] as const)(
+    "retires a v6 commitments layout with missing canonical indexes through %s",
+    (migrationPath) => {
+      const stateDir = createTempStateDir();
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      const databasePath = materializeCurrentStateDatabase(stateDir);
+      const { DatabaseSync } = requireNodeSqlite();
+      const legacy = new DatabaseSync(databasePath);
+      seedV6CommitmentSchema(legacy);
+      legacy.exec(`
+        DROP INDEX idx_commitments_scope_dedupe;
+        DROP INDEX idx_commitments_agent_sent;
+      `);
+      legacy.close();
+
+      if (migrationPath === "doctor repair") {
+        expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+          changes: ["Retired shared state commitments table and indexes"],
+          warnings: [],
+        });
+      }
+      const migrated = openOpenClawStateDatabase(options);
+      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
+      expect(
+        migrated.db.prepare("SELECT name FROM sqlite_schema WHERE name = 'commitments'").get(),
+      ).toBeUndefined();
+    },
+  );
+
+  it.each(["runtime open", "doctor repair"] as const)(
     "retires the supported early commitments layout through %s",
     (migrationPath) => {
       const stateDir = createTempStateDir();
@@ -1465,6 +1496,10 @@ describe("openclaw state database", () => {
           updated_at_ms INTEGER NOT NULL,
           record_json TEXT NOT NULL
         );
+        CREATE INDEX idx_commitments_scope_due
+          ON commitments(agent_id, session_key, status, due_earliest_ms, due_latest_ms);
+        CREATE INDEX idx_commitments_status_due
+          ON commitments(status, due_earliest_ms, due_latest_ms);
         INSERT INTO commitments (
           id, agent_id, session_key, channel, status, due_earliest_ms,
           due_latest_ms, updated_at_ms, record_json
@@ -1614,6 +1649,186 @@ describe("openclaw state database", () => {
       expect(
         preserved.prepare("SELECT type, tbl_name FROM sqlite_schema WHERE name = ?").get(name),
       ).toEqual({ type, tbl_name: "commitments" });
+    } finally {
+      preserved.close();
+    }
+  });
+
+  it.each(["runtime open", "doctor repair"] as const)(
+    "preserves an inbound foreign-key dependency through %s",
+    (migrationPath) => {
+      const stateDir = createTempStateDir();
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      const databasePath = materializeCurrentStateDatabase(stateDir);
+      const { DatabaseSync } = requireNodeSqlite();
+      const dependent = new DatabaseSync(databasePath);
+      seedV6CommitmentSchema(dependent);
+      dependent.exec(`
+        CREATE TABLE sqliteX_dependents (
+          id TEXT NOT NULL PRIMARY KEY,
+          commitment_id TEXT NOT NULL REFERENCES commitments(id) ON DELETE CASCADE
+        ) STRICT;
+        INSERT INTO sqliteX_dependents (id, commitment_id)
+        VALUES ('dependent-row', 'retired-commitment');
+      `);
+      dependent.close();
+
+      if (migrationPath === "doctor repair") {
+        const result = repairOpenClawStateDatabaseSchema(options);
+        expect(result.changes).toEqual([]);
+        expect(result.warnings.join("\n")).toMatch(/referenced by table sqliteX_dependents/iu);
+      } else {
+        expect(() => openOpenClawStateDatabase(options)).toThrow(
+          /referenced by table sqliteX_dependents/iu,
+        );
+      }
+
+      const preserved = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(readSqliteNumberPragma(preserved, "user_version")).toBe(6);
+        expect(preserved.prepare("SELECT id FROM commitments").all()).toEqual([
+          { id: "retired-commitment" },
+        ]);
+        expect(preserved.prepare("SELECT id, commitment_id FROM sqliteX_dependents").all()).toEqual(
+          [{ id: "dependent-row", commitment_id: "retired-commitment" }],
+        );
+      } finally {
+        preserved.close();
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "commitment_projection",
+      sql: "CREATE VIEW commitment_projection AS SELECT id FROM 'commitments';",
+      type: "view",
+    },
+    {
+      name: "lease_commitment_cleanup",
+      sql: `CREATE TRIGGER lease_commitment_cleanup
+              AFTER DELETE ON state_leases
+              BEGIN DELETE FROM [commitments] WHERE id = OLD.lease_key; END;`,
+      type: "trigger",
+    },
+    {
+      name: "lease_commitment_update",
+      sql: `CREATE TRIGGER lease_commitment_update
+              UPDATE OF owner ON state_leases
+              BEGIN DELETE FROM commitments WHERE id = OLD.lease_key; END;`,
+      type: "trigger",
+    },
+    {
+      name: "rowid_commitment_update",
+      sql: `CREATE TABLE rowid_dependency_owner (value TEXT) STRICT;
+            CREATE TRIGGER rowid_commitment_update
+              AFTER UPDATE OF rowid ON rowid_dependency_owner
+              BEGIN DELETE FROM commitments WHERE id = 'retired-commitment'; END;`,
+      type: "trigger",
+    },
+  ])("preserves a cross-object $type dependency on commitments", ({ name, sql, type }) => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+    const { DatabaseSync } = requireNodeSqlite();
+    const dependent = new DatabaseSync(databasePath);
+    seedV6CommitmentSchema(dependent);
+    dependent.exec(sql);
+    dependent.close();
+
+    expect(() => openOpenClawStateDatabase(options)).toThrow(
+      new RegExp(`referenced by ${type} ${name}`, "iu"),
+    );
+
+    const preserved = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(readSqliteNumberPragma(preserved, "user_version")).toBe(6);
+      expect(preserved.prepare("SELECT name FROM sqlite_schema WHERE name = ?").get(name)).toEqual({
+        name,
+      });
+      expect(preserved.prepare("SELECT id FROM commitments").all()).toEqual([
+        { id: "retired-commitment" },
+      ]);
+    } finally {
+      preserved.close();
+    }
+  });
+
+  it("preserves an external-content virtual table dependency on commitments", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+    const { DatabaseSync } = requireNodeSqlite();
+    const dependent = new DatabaseSync(databasePath);
+    seedV6CommitmentSchema(dependent);
+    dependent.exec(`
+      create virtual table commitment_search USING fts5(
+        suggested_text,
+        content='commitments',
+        content_rowid='rowid'
+      );
+    `);
+    dependent.close();
+
+    expect(() => openOpenClawStateDatabase(options)).toThrow(
+      /SQLite virtual table commitment_search is unusable/iu,
+    );
+
+    const preserved = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(readSqliteNumberPragma(preserved, "user_version")).toBe(6);
+      expect(
+        preserved.prepare("SELECT name FROM sqlite_schema WHERE name = 'commitment_search'").get(),
+      ).toEqual({ name: "commitment_search" });
+      expect(preserved.prepare("SELECT id FROM commitments").all()).toEqual([
+        { id: "retired-commitment" },
+      ]);
+    } finally {
+      preserved.close();
+    }
+  });
+
+  it("keeps unrelated schema identifiers named commitments usable", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+    const { DatabaseSync } = requireNodeSqlite();
+    const unrelated = new DatabaseSync(databasePath);
+    seedV6CommitmentSchema(unrelated);
+    unrelated.exec("CREATE VIEW commitment_metrics AS SELECT 1 AS commitments;");
+    unrelated.close();
+
+    const migrated = openOpenClawStateDatabase(options);
+    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+    expect(migrated.db.prepare("SELECT commitments FROM commitment_metrics").get()).toEqual({
+      commitments: 1,
+    });
+  });
+
+  it("refuses retirement when a broken retained view makes dependency resolution ambiguous", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    seedV6CommitmentSchema(legacy);
+    legacy.exec("CREATE VIEW unrelated_broken_view AS SELECT id FROM missing_unrelated_table;");
+    legacy.close();
+
+    expect(() => openOpenClawStateDatabase(options)).toThrow(
+      /Could not prove retained SQLite views and triggers independent of commitments/iu,
+    );
+    const preserved = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(readSqliteNumberPragma(preserved, "user_version")).toBe(6);
+      expect(
+        preserved
+          .prepare("SELECT name FROM sqlite_schema WHERE name = 'unrelated_broken_view'")
+          .get(),
+      ).toEqual({ name: "unrelated_broken_view" });
+      expect(preserved.prepare("SELECT id FROM commitments").all()).toEqual([
+        { id: "retired-commitment" },
+      ]);
     } finally {
       preserved.close();
     }

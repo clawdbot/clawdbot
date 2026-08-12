@@ -6,6 +6,7 @@ import {
   collectSqliteSchemaIssues,
   type SqliteSchemaCompatibility,
 } from "../infra/sqlite-schema-contract.js";
+import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   canRepairLegacyAuditEventsSchema,
@@ -92,6 +93,12 @@ CREATE TABLE commitments (
   updated_at_ms INTEGER NOT NULL,
   record_json TEXT NOT NULL
 );
+CREATE INDEX idx_commitments_scope_due
+  ON commitments(agent_id, session_key, status, due_earliest_ms, due_latest_ms);
+CREATE INDEX idx_commitments_status_due
+  ON commitments(status, due_earliest_ms, due_latest_ms);
+CREATE INDEX idx_commitments_agent_due
+  ON commitments(agent_id, status, due_earliest_ms, due_latest_ms, session_key);
 `;
 
 const RETIRED_COMMITMENTS_INDEX_NAMES = [
@@ -118,9 +125,20 @@ const RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
     "commitments.source": ["source TEXT NOT NULL DEFAULT 'unknown'"],
     "commitments.suggested_text": ["suggested_text TEXT NOT NULL DEFAULT ''"],
   },
+  allowedMissingIndexes: RETIRED_COMMITMENTS_INDEX_NAMES,
 };
 
-function hasExactRetiredCommitmentsSchema(
+const EARLY_RETIRED_COMMITMENTS_INDEX_NAMES = [
+  "idx_commitments_agent_due",
+  "idx_commitments_scope_due",
+  "idx_commitments_status_due",
+] as const;
+
+const EARLY_RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
+  allowedMissingIndexes: EARLY_RETIRED_COMMITMENTS_INDEX_NAMES,
+};
+
+function hasSupportedRetiredCommitmentsSchema(
   db: DatabaseSync,
   schemaSql: string,
   expectedIndexNames: readonly string[],
@@ -139,11 +157,9 @@ function hasExactRetiredCommitmentsSchema(
           ORDER BY type, name`,
     )
     .all() as Array<{ name: string; type: string }>;
-  return (
-    attachedObjects.length === expectedIndexNames.length &&
-    attachedObjects.every(
-      (object, index) => object.type === "index" && object.name === expectedIndexNames[index],
-    )
+  const expectedIndexes = new Set(expectedIndexNames);
+  return attachedObjects.every(
+    (object) => object.type === "index" && expectedIndexes.has(object.name),
   );
 }
 
@@ -155,6 +171,7 @@ function assertRecognizedRetiredCommitmentsSchema(db: DatabaseSync): void {
     db,
     "retired OpenClaw commitments schema",
     RETIRED_COMMITMENTS_SCHEMA_SQL,
+    RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY,
   );
   throw new Error(
     "Retired OpenClaw commitments schema has unsupported additional indexes; refusing destructive migration.",
@@ -163,13 +180,116 @@ function assertRecognizedRetiredCommitmentsSchema(db: DatabaseSync): void {
 
 function hasRecognizedRetiredCommitmentsSchema(db: DatabaseSync): boolean {
   return (
-    hasExactRetiredCommitmentsSchema(
+    hasSupportedRetiredCommitmentsSchema(
       db,
       RETIRED_COMMITMENTS_SCHEMA_SQL,
       RETIRED_COMMITMENTS_INDEX_NAMES,
       RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY,
-    ) || hasExactRetiredCommitmentsSchema(db, EARLY_RETIRED_COMMITMENTS_SCHEMA_SQL, [])
+    ) ||
+    hasSupportedRetiredCommitmentsSchema(
+      db,
+      EARLY_RETIRED_COMMITMENTS_SCHEMA_SQL,
+      EARLY_RETIRED_COMMITMENTS_INDEX_NAMES,
+      EARLY_RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY,
+    )
   );
+}
+
+function assertNoRetiredCommitmentsForeignKeys(db: DatabaseSync): void {
+  const tables = db
+    .prepare(
+      `SELECT name
+         FROM sqlite_schema
+        WHERE type = 'table' AND name <> 'commitments'
+        ORDER BY name`,
+    )
+    .all() as Array<{ name: string }>;
+  for (const table of tables) {
+    const foreignKeys = db
+      .prepare(`PRAGMA foreign_key_list(${quoteSqliteIdentifier(table.name)})`)
+      .all() as Array<{ table?: unknown }>;
+    if (
+      foreignKeys.some(
+        (foreignKey) =>
+          typeof foreignKey.table === "string" && foreignKey.table.toLowerCase() === "commitments",
+      )
+    ) {
+      throw new Error(
+        `Retired OpenClaw commitments schema is referenced by table ${table.name}; refusing destructive migration.`,
+      );
+    }
+  }
+}
+
+function collectRetainedSchemaSql(db: DatabaseSync): Map<string, string> {
+  return new Map(
+    (
+      db
+        .prepare(
+          `SELECT type, name, sql
+             FROM sqlite_schema
+            WHERE type IN ('trigger', 'view')
+              AND tbl_name <> 'commitments'
+              AND sql IS NOT NULL
+            ORDER BY type, name`,
+        )
+        .all() as Array<{ name: string; sql: string; type: string }>
+    ).map((object) => [`${object.type}:${object.name}`, object.sql]),
+  );
+}
+
+function assertNoRetiredCommitmentsSchemaDependencies(db: DatabaseSync): void {
+  const probeTable = "__openclaw_retired_commitments_probe";
+  if (tableExists(db, probeTable)) {
+    throw new Error(
+      `OpenClaw state database already contains ${probeTable}; refusing destructive migration.`,
+    );
+  }
+  const before = collectRetainedSchemaSql(db);
+  const savepoint = "openclaw_probe_commitments_dependencies";
+  db.exec(`SAVEPOINT ${savepoint};`);
+  let changedObject: string | undefined;
+  try {
+    db.exec(`ALTER TABLE commitments RENAME TO ${quoteSqliteIdentifier(probeTable)};`);
+    const after = collectRetainedSchemaSql(db);
+    changedObject = [...before].find(([object, sql]) => after.get(object) !== sql)?.[0];
+  } catch (error) {
+    db.exec(`ROLLBACK TO ${savepoint}; RELEASE ${savepoint};`);
+    // A broken retained object makes dependency resolution ambiguous. Refuse
+    // rather than discard rows that object may still own indirectly.
+    throw new Error(
+      "Could not prove retained SQLite views and triggers independent of commitments; refusing destructive migration.",
+      { cause: error },
+    );
+  }
+  db.exec(`ROLLBACK TO ${savepoint}; RELEASE ${savepoint};`);
+  if (changedObject) {
+    const [type, name] = changedObject.split(":", 2);
+    throw new Error(
+      `Retired OpenClaw commitments schema is referenced by ${type} ${name}; refusing destructive migration.`,
+    );
+  }
+}
+
+function assertVirtualTablesUsable(db: DatabaseSync, phase: "before" | "after"): void {
+  const virtualTables = db
+    .prepare(
+      `SELECT name
+         FROM sqlite_schema
+        WHERE type = 'table' AND lower(sql) LIKE 'create virtual table%'
+        ORDER BY name`,
+    )
+    .all() as Array<{ name: string }>;
+  for (const table of virtualTables) {
+    try {
+      db.prepare(`SELECT * FROM ${quoteSqliteIdentifier(table.name)} LIMIT 1`).all();
+    } catch (error) {
+      throw new Error(
+        `SQLite virtual table ${table.name} is unusable ${phase} commitments retirement.`,
+        { cause: error },
+      );
+    }
+  }
 }
 
 export function migrateRetiredCommitmentsSchema(
@@ -185,9 +305,21 @@ export function migrateRetiredCommitmentsSchema(
   // The commitments runtime was removed before v7; retained rows are inert
   // migration debt and have no remaining product owner or export contract.
   assertRecognizedRetiredCommitmentsSchema(db);
-  // DROP TABLE removes only the validated table's indexes and sqlite_stat rows.
-  db.exec("DROP TABLE commitments;");
-  return true;
+  assertNoRetiredCommitmentsForeignKeys(db);
+  assertNoRetiredCommitmentsSchemaDependencies(db);
+  assertVirtualTablesUsable(db, "before");
+  const savepoint = "openclaw_retire_commitments_v7";
+  db.exec(`SAVEPOINT ${savepoint};`);
+  try {
+    // DROP TABLE removes only the validated table's indexes and sqlite_stat rows.
+    db.exec("DROP TABLE commitments;");
+    assertVirtualTablesUsable(db, "after");
+    db.exec(`RELEASE ${savepoint};`);
+    return true;
+  } catch (error) {
+    db.exec(`ROLLBACK TO ${savepoint}; RELEASE ${savepoint};`);
+    throw error;
+  }
 }
 
 function hasCanonicalAgentDatabasesPrimaryKey(db: DatabaseSync): boolean {
