@@ -56,6 +56,9 @@ function messageForReason(params: {
   if (params.reason === "overloaded") {
     return "upstream provider overloaded";
   }
+  if (params.reason === "sensitive_output") {
+    return "provider rejected sensitive output";
+  }
   return params.rawError?.trim() || params.message.trim() || "request failed";
 }
 

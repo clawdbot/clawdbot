@@ -1,6 +1,6 @@
 // Covers user-facing formatting and sanitization of assistant/provider errors.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
@@ -161,6 +161,38 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatUserFacingAssistantErrorText(msg, { providerOwner: minimaxOwner })).toBe(
       "LLM request failed: provider rejected sensitive output.",
+    );
+  });
+  it("classifies MiniMax invalid-request sensitive envelopes before raw schema copy", () => {
+    const msg = makeAssistantMessageFixture({
+      provider: "minimax",
+      errorMessage:
+        '400 {"error":{"type":"invalid_request_error","code":"1027","message":"output new_sensitive: redacted proof"}}',
+      content: [],
+    });
+    const classifyFailoverReason = vi.fn(({ provider, errorMessage }) =>
+      provider === "minimax" && errorMessage.includes("new_sensitive")
+        ? "sensitive_output"
+        : undefined,
+    );
+    const minimaxOwner = {
+      id: "minimax",
+      classifyFailoverReason,
+    };
+
+    expect(formatAssistantErrorText(msg, { providerOwner: minimaxOwner })).toBe(
+      "LLM request failed: provider rejected sensitive output.",
+    );
+    expect(formatUserFacingAssistantErrorText(msg, { providerOwner: minimaxOwner })).toBe(
+      "LLM request failed: provider rejected sensitive output.",
+    );
+    expect(classifyFailoverReason).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "minimax",
+        errorMessage: msg.errorMessage,
+        errorType: "invalid_request_error",
+        status: 400,
+      }),
     );
   });
   it("returns a recovery hint for replay-invalid connection mismatch errors", () => {

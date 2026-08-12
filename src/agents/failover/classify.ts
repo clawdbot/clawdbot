@@ -429,11 +429,15 @@ export function classifyFailoverReason(
   raw: string,
   opts?: { provider?: string; providerPlugin?: PreparedProviderFailoverOwner },
 ): FailoverReason | null {
+  const apiError = parseApiErrorInfo(raw);
+  const leadingStatus = extractLeadingHttpStatus(raw);
   return failoverReasonFromClassification(
     classifyFailoverSignal(
       {
         message: raw,
         provider: opts?.provider,
+        status: leadingStatus?.code,
+        errorType: apiError?.type,
       },
       opts,
     ),

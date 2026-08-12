@@ -201,6 +201,14 @@ export function formatAssistantErrorText(
     );
   }
 
+  const failoverReason = classifyFailoverReason(raw, {
+    provider: opts?.provider ?? msg.provider,
+    providerPlugin: opts?.providerOwner,
+  });
+  if (failoverReason === "sensitive_output") {
+    return "LLM request failed: provider rejected sensitive output.";
+  }
+
   const apiError = parseApiErrorInfo(raw);
   if (apiError?.type?.toLowerCase().includes("invalid_request") && apiError.message?.trim()) {
     return `LLM request rejected: ${apiError.message.trim()}`;
@@ -210,15 +218,8 @@ export function formatAssistantErrorText(
     return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
   }
 
-  const failoverReason = classifyFailoverReason(raw, {
-    provider: opts?.provider ?? msg.provider,
-    providerPlugin: opts?.providerOwner,
-  });
   if (failoverReason === "billing") {
     return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
-  }
-  if (failoverReason === "sensitive_output") {
-    return "LLM request failed: provider rejected sensitive output.";
   }
   const transientCopy =
     failoverReason === "rate_limit" || failoverReason === "overloaded"
