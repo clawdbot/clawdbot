@@ -582,10 +582,16 @@ export function createMarkdownParser(): MarkdownIt {
       t("chat.imageLightbox.open", {
         title: hasAlt ? alt : t("chat.imageLightbox.untitled"),
       }),
-    renderExternalImageFallback: (src, renderedLabel) =>
-      parseWebLinkHref(src)
-        ? `<span class="markdown-external-image"><span>${escapeMarkdownHtml(t("chat.externalImage.notLoaded"))}: ${renderedLabel}</span> <a href="${escapeMarkdownHtml(src)}">${escapeMarkdownHtml(t("chat.externalImage.open"))}</a></span>`
-        : renderedLabel,
+    renderExternalImageFallback: (src, renderedLabel, linkedImage) => {
+      if (!parseWebLinkHref(src)) {
+        return renderedLabel;
+      }
+      const label = `<span>${escapeMarkdownHtml(t("chat.externalImage.notLoaded"))}: ${renderedLabel}</span>`;
+      const action = linkedImage
+        ? ""
+        : ` <a href="${escapeMarkdownHtml(src)}">${escapeMarkdownHtml(t("chat.externalImage.open"))}</a>`;
+      return `<span class="markdown-external-image">${label}${action}</span>`;
+    },
     interactiveImages: (env) =>
       (env as Partial<MarkdownRenderEnv> | undefined)?.interactiveImages === true,
     allowRemoteImages: (env) =>

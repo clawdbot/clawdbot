@@ -218,6 +218,22 @@ describe("toSanitizedMarkdownHtml", () => {
       expect(fragment.querySelector("a button")).toBeNull();
     });
 
+    it("preserves rich authored links around remote image placeholders", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(
+          "[Before ![Preview](https://example.com/image.png) after](https://example.com/full.png)",
+        ),
+      );
+      const links = fragment.querySelectorAll("a");
+      const placeholder = links[0]?.querySelector(".markdown-external-image");
+
+      expect(links).toHaveLength(1);
+      expect(links[0]?.getAttribute("href")).toBe("https://example.com/full.png");
+      expect(placeholder?.textContent).toBe("External image not loaded: Preview");
+      expect(placeholder?.querySelector("a")).toBeNull();
+      expect(fragment.querySelector("img")).toBeNull();
+    });
+
     it("tracks linked and standalone images across one inline token stream", () => {
       const fragment = htmlFragment(
         toSanitizedMarkdownHtml(
