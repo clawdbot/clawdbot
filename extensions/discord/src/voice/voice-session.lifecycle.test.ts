@@ -1,8 +1,4 @@
-import type {
-  MockCallSource,
-  TestRealtimeBridgeParams,
-  TestRealtimeSessionEntry,
-} from "./manager.e2e.test-support.js";
+import type { MockCallSource } from "./manager.e2e.test-support.js";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
 defineDiscordVoiceTests(
@@ -29,7 +25,6 @@ defineDiscordVoiceTests(
     expectConnectedStatus,
     getSessionEntry,
     getVoiceReceive,
-    beginSpeakerTurn,
     getLastAudioPlayer,
     expectOffEventWithFunction,
     createJoinedAgentProxyFixture,

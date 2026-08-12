@@ -1,12 +1,5 @@
-import type {
-  RealtimeVoiceAgentControlResult,
-  RealtimeVoiceSessionHarness,
-} from "openclaw/plugin-sdk/realtime-voice";
-import type {
-  MockCallSource,
-  TestRealtimeBridgeParams,
-  TestRealtimeSessionEntry,
-} from "./manager.e2e.test-support.js";
+import type { RealtimeVoiceAgentControlResult } from "openclaw/plugin-sdk/realtime-voice";
+import type { MockCallSource } from "./manager.e2e.test-support.js";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
 defineDiscordVoiceTests(

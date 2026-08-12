@@ -1,9 +1,5 @@
 import type { Readable } from "node:stream";
-import type {
-  MockCallSource,
-  TestRealtimeBridgeParams,
-  TestRealtimeSessionEntry,
-} from "./manager.e2e.test-support.js";
+import type { MockCallSource, TestRealtimeSessionEntry } from "./manager.e2e.test-support.js";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
 defineDiscordVoiceTests(
