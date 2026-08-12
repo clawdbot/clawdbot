@@ -6,10 +6,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import {
-  handleWorkerDesktopUpgrade,
-  mintWorkerDesktopObserverToken,
-  WORKER_DESKTOP_OBSERVE_PATH,
-} from "./desktop-observe.js";
+  DESKTOP_OBSERVE_PATH,
+  handleDesktopObserveUpgrade,
+  mintDesktopObserverToken,
+} from "./observe-bridge.js";
 
 const cleanup: Array<() => Promise<void>> = [];
 
@@ -20,11 +20,11 @@ afterEach(async () => {
 
 describe("worker desktop observer tokens", () => {
   it("mints opaque tokens that expire after 60 seconds", () => {
-    const minted = mintWorkerDesktopObserverToken({
-      environmentId: "worker:one",
+    const minted = mintDesktopObserverToken({
+      sourceKey: "worker:one",
       ownerEpoch: 3,
       control: true,
-      localSocketPath: "/tmp/desktop.sock",
+      attachment: { kind: "unix-socket", socketPath: "/tmp/desktop.sock" },
       nowMs: 1_000,
     });
     expect(minted.token).toMatch(/^[a-f0-9]{48}$/u);
@@ -55,8 +55,8 @@ async function createProxyHarness(
   const closeObserver = vi.fn();
   const httpServer = http.createServer();
   httpServer.on("upgrade", (req, socket, head) => {
-    handleWorkerDesktopUpgrade(req, socket, head, {
-      tunnels: {
+    handleDesktopObserveUpgrade(req, socket, head, {
+      registry: {
         attachObserver: (_environmentId, observer) => {
           closeObserver.mockImplementation((code: number, reason: string) => {
             observer.close(code, reason);
@@ -81,14 +81,14 @@ async function createProxyHarness(
     });
     await fs.rm(root, { recursive: true, force: true });
   });
-  const minted = mintWorkerDesktopObserverToken({
-    environmentId: "worker:pump",
+  const minted = mintDesktopObserverToken({
+    sourceKey: "worker:pump",
     ownerEpoch: 2,
     control: params.control ?? false,
-    localSocketPath,
+    attachment: { kind: "unix-socket", socketPath: localSocketPath },
   });
   const ws = new WebSocket(
-    `ws://127.0.0.1:${address.port}${WORKER_DESKTOP_OBSERVE_PATH}?token=${minted.token}`,
+    `ws://127.0.0.1:${address.port}${DESKTOP_OBSERVE_PATH}?token=${minted.token}`,
   );
   cleanup.push(async () => ws.terminate());
   await new Promise<void>((resolve, reject) => {
@@ -133,11 +133,11 @@ describe("worker desktop observer proxy", () => {
     const harness = await createProxyHarness();
     await expectUnauthorizedObserver(harness.observerUrl);
 
-    const expired = mintWorkerDesktopObserverToken({
-      environmentId: "worker:expired",
+    const expired = mintDesktopObserverToken({
+      sourceKey: "worker:expired",
       ownerEpoch: 1,
       control: false,
-      localSocketPath: "/tmp/expired.sock",
+      attachment: { kind: "unix-socket", socketPath: "/tmp/expired.sock" },
       nowMs: 0,
     });
     const observerUrl = new URL(harness.observerUrl);

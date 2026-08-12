@@ -1,30 +1,30 @@
 import crypto from "node:crypto";
 import type { IncomingMessage } from "node:http";
-import net from "node:net";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
-import type { WorkerDesktopTunnels } from "./desktop-tunnel.js";
+import { connectRfbAttachment, type RfbAttachment } from "./attachment.js";
 import { createRfbClientMessageFilter } from "./rfb-view-only-filter.js";
+import type { DesktopSessionRegistry } from "./session-registry.js";
 
-export const WORKER_DESKTOP_OBSERVE_PATH = "/worker-desktop/observe";
+export const DESKTOP_OBSERVE_PATH = "/desktop/observe";
 const TOKEN_TTL_MS = 60_000;
 const TOKEN_PATTERN = /^[a-f0-9]{48}$/u;
 const MAX_PAYLOAD_BYTES = 1024 * 1024;
 const PAUSE_BUFFERED_BYTES = 4 * 1024 * 1024;
 const RESUME_CHECK_MS = 25;
 
-type WorkerDesktopObserverTokenEntry = {
-  environmentId: string;
+type DesktopObserverTokenEntry = {
+  sourceKey: string;
   ownerEpoch: number;
   control: boolean;
-  localSocketPath: string;
+  attachment: RfbAttachment;
   expiresAt: number;
 };
 
-const observerTokens = new Map<string, WorkerDesktopObserverTokenEntry>();
+const observerTokens = new Map<string, DesktopObserverTokenEntry>();
 const desktopObserverWss = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD_BYTES });
 
-function pruneWorkerDesktopObserverTokens(nowMs: number): void {
+function pruneDesktopObserverTokens(nowMs: number): void {
   for (const [token, entry] of observerTokens) {
     if (entry.expiresAt <= nowMs) {
       observerTokens.delete(token);
@@ -32,32 +32,32 @@ function pruneWorkerDesktopObserverTokens(nowMs: number): void {
   }
 }
 
-export function mintWorkerDesktopObserverToken(params: {
-  environmentId: string;
+export function mintDesktopObserverToken(params: {
+  sourceKey: string;
   ownerEpoch: number;
   control: boolean;
-  localSocketPath: string;
+  attachment: RfbAttachment;
   nowMs?: number;
 }): { token: string; expiresAtMs: number } {
   const nowMs = params.nowMs ?? Date.now();
-  pruneWorkerDesktopObserverTokens(nowMs);
+  pruneDesktopObserverTokens(nowMs);
   const token = crypto.randomBytes(24).toString("hex");
   const expiresAtMs = nowMs + TOKEN_TTL_MS;
   observerTokens.set(token, {
-    environmentId: params.environmentId,
+    sourceKey: params.sourceKey,
     ownerEpoch: params.ownerEpoch,
     control: params.control,
-    localSocketPath: params.localSocketPath,
+    attachment: params.attachment,
     expiresAt: expiresAtMs,
   });
   return { token, expiresAtMs };
 }
 
-function consumeWorkerDesktopObserverToken(
+function consumeDesktopObserverToken(
   token: string,
   nowMs = Date.now(),
-): WorkerDesktopObserverTokenEntry | undefined {
-  pruneWorkerDesktopObserverTokens(nowMs);
+): DesktopObserverTokenEntry | undefined {
+  pruneDesktopObserverTokens(nowMs);
   const normalized = token.trim();
   if (!TOKEN_PATTERN.test(normalized)) {
     return undefined;
@@ -86,28 +86,28 @@ function rawDataBuffer(data: RawData): Buffer {
 }
 
 /** Upgrades one authenticated observer token into a raw bidirectional RFB stream. */
-export function handleWorkerDesktopUpgrade(
+export function handleDesktopObserveUpgrade(
   req: IncomingMessage,
   socket: Duplex,
   head: Buffer,
   deps: {
-    tunnels: Pick<WorkerDesktopTunnels, "attachObserver">;
+    registry: Pick<DesktopSessionRegistry, "attachObserver">;
     getBufferedAmount?: (ws: WebSocket) => number;
   },
 ): boolean {
   const resource = new URL(req.url ?? "/", "http://127.0.0.1");
-  if (resource.pathname !== WORKER_DESKTOP_OBSERVE_PATH) {
+  if (resource.pathname !== DESKTOP_OBSERVE_PATH) {
     return false;
   }
   const token = resource.searchParams.get("token") ?? "";
-  const entry = consumeWorkerDesktopObserverToken(token);
+  const entry = consumeDesktopObserverToken(token);
   if (!entry) {
     writeUnauthorized(socket);
     return true;
   }
   desktopObserverWss.handleUpgrade(req, socket, head, (ws) => {
     // View-only is enforced here at the RFB message boundary; the UI setting is only UX.
-    const observer = deps.tunnels.attachObserver(entry.environmentId, {
+    const observer = deps.registry.attachObserver(entry.sourceKey, {
       control: entry.control,
       ownerEpoch: entry.ownerEpoch,
       close: (code, reason) => ws.close(code, reason),
@@ -116,7 +116,7 @@ export function handleWorkerDesktopUpgrade(
       ws.close(1013, "desktop observer limit");
       return;
     }
-    const desktopSocket = net.connect(entry.localSocketPath);
+    const desktopSocket = connectRfbAttachment(entry.attachment);
     const clientMessageFilter = entry.control ? undefined : createRfbClientMessageFilter();
     let closed = false;
     let resumeTimer: ReturnType<typeof setInterval> | undefined;

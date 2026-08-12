@@ -5,6 +5,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
+import type { DesktopSessionRegistry } from "../desktop/session-registry.js";
 import { createWorkerDesktopTunnels } from "./desktop-tunnel.js";
 import {
   advanceWorkerSshAfterTransportExit,
@@ -108,6 +109,7 @@ type TunnelEntry = {
 
 type WorkerTunnelManagerOptions = {
   runner?: WorkerSshRunner;
+  desktopSessionRegistry?: DesktopSessionRegistry;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   backoff?: BackoffPolicy;
   now?: () => number;
@@ -145,7 +147,10 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
   const backoff = options.backoff ?? DEFAULT_BACKOFF;
   const now = options.now ?? Date.now;
   const stableConnectionMs = options.stableConnectionMs ?? DEFAULT_STABLE_CONNECTION_MS;
-  const desktop = createWorkerDesktopTunnels({ runner, now });
+  const desktop = createWorkerDesktopTunnels({
+    runner,
+    ...(options.desktopSessionRegistry ? { registry: options.desktopSessionRegistry } : {}),
+  });
   const entries = new Map<string, TunnelEntry>();
   const claimedOwnerEpochs = new Map<string, number>();
 

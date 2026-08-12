@@ -14,6 +14,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
+import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import { isLoopbackHost } from "./net.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
 import { resolveGatewayPluginConfig } from "./runtime-plugin-config.js";
@@ -117,13 +118,17 @@ export async function prepareGatewayKernelState(params: {
   const workerGatewayEndpoint = {
     resolve: (() => undefined) as () => { host: "127.0.0.1" | "::1"; port: number } | undefined,
   };
+  const desktopSessionRegistry = shouldStartWorkerEnvironmentService
+    ? createDesktopSessionRegistry()
+    : undefined;
   const workerEnvironmentRuntime =
-    workerEnvironmentStartup && shouldStartWorkerEnvironmentService
+    workerEnvironmentStartup && desktopSessionRegistry
       ? await startupTrace.measure("worker-environments.runtime-imports", async () => {
           const workerModule = await loadWorkerEnvironmentStartupModule();
           return await workerModule.createGatewayWorkerEnvironmentRuntime({
             getPluginRegistry: () => pluginRuntime.registry,
             resolveWorkerGateway: () => workerGatewayEndpoint.resolve(),
+            desktopSessionRegistry,
             startup: workerEnvironmentStartup,
             log,
           });
@@ -410,7 +415,7 @@ export async function prepareGatewayKernelState(params: {
     handleWatchNodeRequest: async (req: IncomingMessage, res: ServerResponse) =>
       (await watchNodeRequestHandler.current?.(req, res)) ?? false,
     workerIngressEnabled: Boolean(workerEnvironmentService),
-    workerDesktopTunnels: workerTunnelManager?.desktop,
+    desktopSessionRegistry: workerTunnelManager ? desktopSessionRegistry : undefined,
     clients: connectionState.clients,
   });
   const {
