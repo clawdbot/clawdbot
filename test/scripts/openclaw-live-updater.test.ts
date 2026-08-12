@@ -1537,7 +1537,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
   });
 
   test("accepts only the delayed exact target bundle process", () => {
-    const executable = "/Users/steipete/openclaw/dist/OpenClaw.app/Contents/MacOS/OpenClaw";
+    const executable = "/fixture/live-checkout/dist/OpenClaw.app/Contents/MacOS/OpenClaw";
     const foreign = "41 /tmp/agent/OpenClaw.app/Contents/MacOS/OpenClaw";
     expect(findExactMacTarget(foreign, executable)).toBeNull();
     expect(findExactMacTarget(`${foreign}\n42 ${executable} --attach-only`, executable)).toEqual({
@@ -3436,7 +3436,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     });
   });
 
-  test("keeps successful CLI stdout as one machine-readable JSON object", () => {
+  test("defaults to the current standalone checkout without a machine-specific path", () => {
     const { root, mirror, origin } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));
     writeBuild(mirror);
@@ -3453,14 +3453,19 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     chmodSync(pnpm, 0o755);
     chmodSync(gitShim, 0o755);
 
-    const result = spawnSync(process.execPath, [script, "--checkout", mirror], {
+    const result = spawnSync(process.execPath, [script], {
+      cwd: mirror,
       encoding: "utf8",
       env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
     });
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim().split("\n")).toHaveLength(1);
-    expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, updated: false });
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: true,
+      checkout: realpathSync(mirror),
+      updated: false,
+    });
     expect(result.stderr).toContain("child-output");
   });
 
