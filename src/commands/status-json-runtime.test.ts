@@ -85,7 +85,9 @@ describe("status-json-runtime", () => {
   });
 
   it("builds the full json output for status --json", async () => {
+    const env = { OPENCLAW_STATE_DIR: "/tmp/status-json-runtime-state" };
     const result = await resolveStatusJsonOutput({
+      env,
       scan: createScan(),
       opts: { deep: true, usage: true, timeoutMs: 1234 },
       includeSecurityAudit: true,
@@ -103,6 +105,7 @@ describe("status-json-runtime", () => {
       suppressHealthErrors: undefined,
     });
     expect(mocks.buildStatusJsonPayload).toHaveBeenCalledOnce();
+    expect(mocks.readBackupFreshness).toHaveBeenCalledWith(env);
     const payloadInput = requireStatusPayloadInput();
     expect(payloadInput.surface.gatewayConnection).toStrictEqual({
       url: "ws://127.0.0.1:18789",
@@ -141,6 +144,7 @@ describe("status-json-runtime", () => {
     });
 
     await resolveStatusJsonOutput({
+      env: {},
       scan: createScan(),
       opts: { deep: false, usage: false, timeoutMs: 500 },
       includeSecurityAudit: false,
@@ -178,6 +182,7 @@ describe("status-json-runtime", () => {
     });
 
     await resolveStatusJsonOutput({
+      env: {},
       scan: createScan(),
       opts: { deep: true, timeoutMs: 500 },
       includeSecurityAudit: false,

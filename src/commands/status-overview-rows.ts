@@ -34,6 +34,7 @@ import type { MemoryPluginStatus, MemoryStatusSnapshot } from "./status.scan.sha
 /** Builds the default `openclaw status` overview rows from scan, health, memory, and session inputs. */
 export function buildStatusCommandOverviewRows(
   params: {
+    env: NodeJS.ProcessEnv;
     opts: {
       deep?: boolean;
     };
@@ -153,7 +154,7 @@ export function buildStatusCommandOverviewRows(
       {
         Item: "Backups",
         Value: buildBackupStatusValue({
-          freshness: readBackupFreshness(),
+          freshness: readBackupFreshness(params.env),
           formatTimeAgo: params.formatTimeAgo,
         }),
       },

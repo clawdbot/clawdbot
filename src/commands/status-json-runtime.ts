@@ -54,6 +54,7 @@ type StatusJsonScanLike = {
 
 /** Builds the status JSON object from a completed scan plus optional runtime/deep probes. */
 export async function resolveStatusJsonOutput(params: {
+  env: NodeJS.ProcessEnv;
   scan: StatusJsonScanLike;
   opts: {
     deep?: boolean;
@@ -96,6 +97,9 @@ export async function resolveStatusJsonOutput(params: {
     lastHeartbeat,
     pluginCompatibility: params.includePluginCompatibility ? scan.pluginCompatibility : undefined,
   });
-  Object.assign(payload, { backups: readBackupFreshness() });
+  const backups = readBackupFreshness(params.env);
+  if (backups.latest || backups.latestOk) {
+    Object.assign(payload, { backups });
+  }
   return payload;
 }

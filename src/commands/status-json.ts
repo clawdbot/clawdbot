@@ -16,6 +16,7 @@ export async function statusJsonCommand(
   runtime: RuntimeEnv,
 ) {
   await runStatusJsonCommand({
+    env: process.env,
     opts,
     runtime,
     scanStatusJsonFast,

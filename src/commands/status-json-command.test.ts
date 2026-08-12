@@ -53,8 +53,10 @@ describe("runStatusJsonCommand", () => {
       secretDiagnostics: [],
     };
     const scanStatusJsonFast = vi.fn(async () => scan);
+    const env = { OPENCLAW_STATE_DIR: "/tmp/status-json-command-state" };
 
     await runStatusJsonCommand({
+      env,
       opts: { deep: true, usage: true, timeoutMs: 1234, all: true },
       runtime,
       scanStatusJsonFast,
@@ -65,6 +67,7 @@ describe("runStatusJsonCommand", () => {
 
     expect(scanStatusJsonFast).toHaveBeenCalledWith({ timeoutMs: 1234, all: true }, runtime);
     expect(mocks.resolveStatusJsonOutput).toHaveBeenCalledWith({
+      env,
       scan,
       opts: { deep: true, usage: true, timeoutMs: 1234, all: true },
       includeSecurityAudit: true,
@@ -74,6 +77,7 @@ describe("runStatusJsonCommand", () => {
     expect(mocks.writeRuntimeJson).toHaveBeenCalledWith(runtime, {
       built: true,
       input: {
+        env,
         scan,
         opts: { deep: true, usage: true, timeoutMs: 1234, all: true },
         includeSecurityAudit: true,

@@ -13,6 +13,7 @@ type StatusJsonCommandOptions = {
 
 /** Runs the fast status scan, resolves optional deep fields, and writes JSON through the runtime. */
 export async function runStatusJsonCommand(params: {
+  env: NodeJS.ProcessEnv;
   opts: StatusJsonCommandOptions;
   runtime: RuntimeEnv;
   includeSecurityAudit: boolean;
@@ -30,6 +31,7 @@ export async function runStatusJsonCommand(params: {
   writeRuntimeJson(
     params.runtime,
     await resolveStatusJsonOutput({
+      env: params.env,
       scan,
       opts: params.opts,
       includeSecurityAudit: params.includeSecurityAudit,
