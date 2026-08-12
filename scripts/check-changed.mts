@@ -448,7 +448,6 @@ const BACKEND_UNAVAILABLE_SIGNATURES = [
   /failed to (?:acquire|create|warm|start)\b[^\n]*\b(?:lease|testbox)/iu,
   // crabbox-wrapper prints this and exits before dispatching anything remote.
   /\[crabbox\] no ready provider for workload=/u,
-  /\[crabbox\] selected binary failed basic --version\/--help sanity checks/u,
 ];
 
 /**
