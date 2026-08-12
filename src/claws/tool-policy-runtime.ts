@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { digestClawAgentConfig } from "./agent-config-digest.js";
 import {
+  initializeCachedClawInstallSchemaVersions,
   readCachedClawInstallSchemaVersions,
   registerClawInstallSchemaVersionSnapshotListener,
 } from "./provenance-runtime-read.js";
@@ -44,10 +45,14 @@ function applyPreparedClawToolPolicyConsent(): void {
       continue;
     }
     if (snapshot.kind === "state-error") {
-      preparedClawToolPolicies.set(candidate.tools, {
-        kind: "state-error",
-        error: snapshot.error,
-      });
+      if (snapshot.ownershipUnknown || snapshot.knownAgentIds.has(candidate.agentId)) {
+        preparedClawToolPolicies.set(candidate.tools, {
+          kind: "state-error",
+          error: snapshot.error,
+        });
+      } else {
+        preparedClawToolPolicies.delete(candidate.tools);
+      }
       continue;
     }
     const schemaVersionRead = snapshot.schemaVersions.get(candidate.agentId);
@@ -99,6 +104,9 @@ function prepareClawToolPolicyConsent(
   const { readSchemaVersions, ...stateOptions } = options;
   preparedStateOptions = stateOptions;
   readPreparedSchemaVersions = readSchemaVersions ?? readCachedClawInstallSchemaVersions;
+  if (!readSchemaVersions) {
+    initializeCachedClawInstallSchemaVersions(stateOptions);
+  }
   applyPreparedClawToolPolicyConsent();
 }
 

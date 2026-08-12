@@ -1,5 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
-import { resolveDatabasePath } from "../state/openclaw-state-db-maintenance.js";
+import {
+  assertOpenClawStateDatabaseOwner,
+  resolveDatabasePath,
+} from "../state/openclaw-state-db-maintenance.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   registerOpenClawStateDatabaseLifecycleListener,
   type OpenClawStateDatabaseOptions,
@@ -16,7 +20,12 @@ type ClawInstallSchemaVersionRead =
 
 type ClawInstallSchemaVersionSnapshot =
   | { kind: "ready"; schemaVersions: Map<string, ClawInstallSchemaVersionRead> }
-  | { kind: "state-error"; error: unknown }
+  | {
+      kind: "state-error";
+      error: unknown;
+      knownAgentIds: ReadonlySet<string>;
+      ownershipUnknown: boolean;
+    }
   | { kind: "uninitialized" };
 
 // Install provenance is process-stable; only the state lifecycle and Claw mutations refresh it.
@@ -61,19 +70,59 @@ function readSchemaVersions(db: DatabaseSync): ClawInstallSchemaVersionSnapshot 
       schemaVersions,
     };
   } catch (error) {
-    return { kind: "state-error", error };
+    return {
+      kind: "state-error",
+      error,
+      knownAgentIds: new Set(),
+      ownershipUnknown: true,
+    };
   }
 }
 
+function knownAgentIds(
+  snapshot: ClawInstallSchemaVersionSnapshot | undefined,
+): ReadonlySet<string> {
+  if (snapshot?.kind === "ready") {
+    return new Set(snapshot.schemaVersions.keys());
+  }
+  return snapshot?.kind === "state-error" ? snapshot.knownAgentIds : new Set();
+}
+
+function isOwnershipUnknown(snapshot: ClawInstallSchemaVersionSnapshot | undefined): boolean {
+  return (
+    !snapshot ||
+    snapshot.kind === "uninitialized" ||
+    (snapshot.kind === "state-error" && snapshot.ownershipUnknown)
+  );
+}
+
 registerOpenClawStateDatabaseLifecycleListener((event) => {
+  const previous = snapshotsByPath.get(event.kind === "opened" ? event.database.path : event.path);
   if (event.kind === "opened") {
-    snapshotsByPath.set(event.database.path, readSchemaVersions(event.database.db));
+    const snapshot = readSchemaVersions(event.database.db);
+    snapshotsByPath.set(
+      event.database.path,
+      snapshot.kind === "state-error"
+        ? {
+            ...snapshot,
+            knownAgentIds: knownAgentIds(previous),
+            ownershipUnknown: isOwnershipUnknown(previous),
+          }
+        : snapshot,
+    );
   } else if (event.kind === "open-error") {
-    snapshotsByPath.set(event.path, { kind: "state-error", error: event.error });
+    snapshotsByPath.set(event.path, {
+      kind: "state-error",
+      error: event.error,
+      knownAgentIds: knownAgentIds(previous),
+      ownershipUnknown: isOwnershipUnknown(previous),
+    });
   } else {
     snapshotsByPath.set(event.path, {
       kind: "state-error",
       error: new Error("OpenClaw state database closed before consent provenance verification."),
+      knownAgentIds: knownAgentIds(previous),
+      ownershipUnknown: isOwnershipUnknown(previous),
     });
   }
   notifySnapshotListeners();
@@ -87,6 +136,30 @@ export function readCachedClawInstallSchemaVersions(
   options: OpenClawStateDatabaseOptions = {},
 ): ClawInstallSchemaVersionSnapshot {
   return snapshotsByPath.get(resolveSnapshotPath(options)) ?? { kind: "uninitialized" };
+}
+
+export function initializeCachedClawInstallSchemaVersions(
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  const path = resolveSnapshotPath(options);
+  if (snapshotsByPath.has(path)) {
+    return;
+  }
+  try {
+    const snapshot = withExistingOpenClawStateDatabaseReadOnly(({ db, path: pathname }) => {
+      assertOpenClawStateDatabaseOwner(db, { pathname });
+      return readSchemaVersions(db);
+    }, options);
+    snapshotsByPath.set(path, snapshot ?? { kind: "ready", schemaVersions: new Map() });
+  } catch (error) {
+    snapshotsByPath.set(path, {
+      kind: "state-error",
+      error,
+      knownAgentIds: new Set(),
+      ownershipUnknown: true,
+    });
+  }
+  notifySnapshotListeners();
 }
 
 export function registerClawInstallSchemaVersionSnapshotListener(listener: () => void): () => void {
