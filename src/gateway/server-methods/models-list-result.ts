@@ -56,7 +56,7 @@ import { resolveManifestProviderAuthChoices } from "../../plugins/provider-auth-
 import type { ProviderCatalogOutcome } from "../../plugins/provider-catalog.types.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayAgentRuntime } from "../../shared/session-types.js";
-import { loadDeferredCatalog, resolveDeferredAuthStore } from "../server-model-catalog-auth.js";
+import { loadDeferredCatalog } from "../server-model-catalog-auth.js";
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
 import { createModelsListAuthResolver } from "./models-list-auth-resolver.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -611,8 +611,7 @@ export async function buildModelsListResult(
   const outcomeProjection = providerOutcomes?.length ? { providerOutcomes } : {};
   const preparedProjectionOwner = ownerSnapshot ?? params.catalogProjector;
   const metadataSnapshot = preparedProjectionOwner?.metadataSnapshot;
-  const preparedAuthStore =
-    (await resolveDeferredAuthStore(ownerSnapshot)) ?? params.catalogProjector?.authStore;
+  const preparedAuthStore = ownerSnapshot?.authStore ?? params.catalogProjector?.authStore;
   if (!metadataSnapshot || !preparedAuthStore) {
     throw new Error("Gateway model catalog owner omitted prepared metadata or auth state");
   }

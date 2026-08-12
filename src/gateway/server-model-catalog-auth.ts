@@ -13,30 +13,29 @@ export function setPendingGatewayModelCatalogAuthStore(
   void pending.catch(() => undefined);
 }
 
-export async function resolveDeferredAuthStore(
-  snapshot:
-    | {
-        authStore?: AuthProfileStore;
-      }
-    | undefined,
-): Promise<AuthProfileStore | undefined> {
-  return snapshot
-    ? ((await pendingAuthStoreBySnapshot.get(snapshot)) ?? snapshot.authStore)
-    : undefined;
-}
-
-export function loadDeferredCatalog(
+export async function loadDeferredCatalog(
   context: Pick<GatewayRequestContext, "loadGatewayModelCatalogSnapshot">,
   agentId: string,
   readOnly: boolean,
 ) {
   // This timing control is Gateway-private; exposing it on GatewayRequestContext would turn an
   // implementation detail into a Plugin SDK contract.
-  return context.loadGatewayModelCatalogSnapshot({
+  const snapshot = await context.loadGatewayModelCatalogSnapshot({
     agentId,
     deferAuthRefresh: true,
     readOnly,
   } as NonNullable<Parameters<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>[0]> & {
     deferAuthRefresh: true;
   });
+  const pendingAuthStore = pendingAuthStoreBySnapshot.get(snapshot);
+  if (!pendingAuthStore) {
+    return snapshot;
+  }
+  try {
+    return { ...snapshot, authStore: (await pendingAuthStore) ?? snapshot.authStore };
+  } catch {
+    // Auth refresh is opportunistic browse data. Preserve the exact prepared generation when
+    // external credential discovery fails instead of failing the model catalog response.
+    return snapshot;
+  }
 }

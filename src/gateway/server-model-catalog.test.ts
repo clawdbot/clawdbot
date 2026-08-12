@@ -3,7 +3,7 @@ import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
 import { setPreparedModelRuntimeAuthStoreLoader } from "../agents/prepared-model-runtime-auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveDeferredAuthStore } from "./server-model-catalog-auth.js";
+import { loadDeferredCatalog } from "./server-model-catalog-auth.js";
 import {
   loadGatewayModelCatalog,
   loadGatewayModelCatalogSnapshot,
@@ -120,7 +120,12 @@ describe("gateway prepared model catalog", () => {
       getConfig: () => config,
       loadPublishedPreparedModelCatalogOwnerSnapshot,
     });
-    await expect(resolveDeferredAuthStore(deferred)).resolves.toEqual(
+    const loaded = await loadDeferredCatalog(
+      { loadGatewayModelCatalogSnapshot: vi.fn(async () => deferred) } as never,
+      "main",
+      true,
+    );
+    expect(loaded.authStore).toEqual(
       expect.objectContaining({ profiles: { "openai:refreshed": expect.any(Object) } }),
     );
     expect(loadAuthStore).toHaveBeenCalledWith(["openai"]);

@@ -11,6 +11,7 @@ import {
   loadAuthProfileStoreWithoutExternalProfiles,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../../agents/auth-profiles.js";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
@@ -21,6 +22,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { assertPluginMetadataSnapshotConsistency } from "../plugin-metadata.test-helpers.js";
+import { setPendingGatewayModelCatalogAuthStore } from "../server-model-catalog-auth.js";
 import { modelsHandlers } from "./models.js";
 import type { RespondFn } from "./types.js";
 
@@ -222,6 +224,7 @@ function requestModelsList(params: {
   }) => Promise<Array<Record<string, unknown>>>;
   reqId?: string;
   includeProviderCapabilities?: boolean;
+  deferredAuthStore?: Promise<AuthProfileStore>;
 }) {
   const respond = params.respond ?? vi.fn();
   const runtimeConfig = params.runtimeConfig ?? ({} as OpenClawConfig);
@@ -270,12 +273,16 @@ function requestModelsList(params: {
       ) => {
         const entries = await params.loadGatewayModelCatalog(loadParams);
         const owner = resolveOwnerFacts();
-        return {
+        const snapshot = {
           ...owner,
           ...(loadParams?.agentId ? { agentId: loadParams.agentId } : {}),
           entries,
           routeVariants: entries,
         };
+        if (params.deferredAuthStore) {
+          setPendingGatewayModelCatalogAuthStore(snapshot, params.deferredAuthStore);
+        }
+        return snapshot;
       },
       readPreparedGatewayModelCatalogSnapshot: async () => ({
         ...resolveOwnerFacts(),
@@ -665,6 +672,99 @@ describe("models.list", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  it("does not let deferred auth outlive the configured browse deadline", async () => {
+    await withoutOpenAIEnvAuth(async () => {
+      const authStore = createDeferred<AuthProfileStore>();
+      const runtimeConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://openai.example.com",
+              models: [{ id: "gpt-test", name: "GPT Test" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const { request, respond } = requestModelsList({
+          view: "configured",
+          runtimeConfig,
+          deferredAuthStore: authStore.promise,
+          loadGatewayModelCatalog: vi.fn(() =>
+            Promise.resolve([{ id: "gpt-test", name: "GPT Test", provider: "openai" }]),
+          ),
+          reqId: "req-models-list-slow-auth",
+        });
+
+        await vi.advanceTimersByTimeAsync(800);
+        await vi.runOnlyPendingTimersAsync();
+        await request;
+
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          {
+            models: [
+              {
+                id: "gpt-test",
+                name: "GPT Test",
+                provider: "openai",
+                agentRuntime: { id: "openclaw", source: "implicit" },
+                available: false,
+              },
+            ],
+          },
+          undefined,
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("keeps prepared auth when deferred auth refresh rejects", async () => {
+    await withoutOpenAIEnvAuth(async () => {
+      const runtimeConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://openai.example.com",
+              models: [{ id: "gpt-test", name: "GPT Test" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const { request, respond } = requestModelsList({
+        view: "configured",
+        runtimeConfig,
+        deferredAuthStore: Promise.reject(new Error("auth refresh failed")),
+        loadGatewayModelCatalog: vi.fn(() =>
+          Promise.resolve([{ id: "gpt-test", name: "GPT Test", provider: "openai" }]),
+        ),
+        reqId: "req-models-list-rejected-auth",
+      });
+
+      await request;
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        {
+          models: [
+            {
+              id: "gpt-test",
+              name: "GPT Test",
+              provider: "openai",
+              agentRuntime: { id: "openclaw", source: "implicit" },
+              available: false,
+            },
+          ],
+        },
+        undefined,
+      );
     });
   });
 
