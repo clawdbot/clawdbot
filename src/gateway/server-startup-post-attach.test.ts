@@ -33,7 +33,6 @@ const hoisted = vi.hoisted(() => {
   const createInternalHookEvent = vi.fn(() => startupHookEvent);
   const triggerInternalHook = vi.fn(async () => {});
   const scheduleGatewayUpdateCheck = vi.fn(() => () => {});
-  const startGatewayTailscaleExposure = vi.fn(async () => null);
   const logGatewayStartup = vi.fn();
   const scheduleSubagentRegistrySweep = vi.fn();
   const markStartupOrphanedMainSessionsForRecovery = vi.fn(async () => ({
@@ -96,7 +95,6 @@ const hoisted = vi.hoisted(() => {
     createInternalHookEvent,
     triggerInternalHook,
     scheduleGatewayUpdateCheck,
-    startGatewayTailscaleExposure,
     logGatewayStartup,
     scheduleSubagentRegistrySweep,
     markStartupOrphanedMainSessionsForRecovery,
@@ -256,10 +254,6 @@ vi.mock("../agents/auth-profiles.js", async () => {
 
 vi.mock("../agents/tools/transcripts-tool.js", () => ({
   createTranscriptsAutoStartService: hoisted.createTranscriptsAutoStartService,
-}));
-
-vi.mock("./server-tailscale.js", () => ({
-  startGatewayTailscaleExposure: hoisted.startGatewayTailscaleExposure,
 }));
 
 const {
@@ -476,7 +470,6 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.createInternalHookEvent.mockClear();
     hoisted.triggerInternalHook.mockClear();
     hoisted.scheduleGatewayUpdateCheck.mockClear();
-    hoisted.startGatewayTailscaleExposure.mockClear();
     hoisted.logGatewayStartup.mockClear();
     hoisted.scheduleSubagentRegistrySweep.mockClear();
     hoisted.markStartupOrphanedMainSessionsForRecovery.mockReset();
@@ -611,26 +604,6 @@ describe("startGatewayPostAttachRuntime", () => {
     });
     expect(hoisted.scheduleSubagentRegistrySweep).toHaveBeenCalledWith();
     expect(methodsAtRecoveryRegistration).toStrictEqual([["chat.history", "models.list"]]);
-  });
-
-  it("targets managed Tailscale at the bound private ingress port", async () => {
-    const startGatewayTailscaleExposure = vi.fn(async () => null);
-
-    await startGatewayPostAttachRuntime(
-      createPostAttachParams({
-        tailscaleMode: "serve",
-        tailscaleBackendPort: 19_000,
-      }),
-      createPostAttachRuntimeDeps({ startGatewayTailscaleExposure }),
-    );
-
-    expect(startGatewayTailscaleExposure).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tailscaleMode: "serve",
-        port: 18_789,
-        backendPort: 19_000,
-      }),
-    );
   });
 
   it("fences startup recovery as soon as its gateway close prelude begins", async () => {
@@ -932,44 +905,6 @@ describe("startGatewayPostAttachRuntime", () => {
 
     releaseSidecars?.();
     await waitForGatewayTestState(() => expect(sidecarsCompleted).toBe(true));
-  });
-
-  it("observes deferred startup logging failure while tailscale startup is pending", async () => {
-    const startupError = new Error("startup logging failed");
-    const unhandledRejections: unknown[] = [];
-    const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason);
-    let releaseTailscale: (() => void) | undefined;
-    const tailscaleStartup = new Promise<null>((resolve) => {
-      releaseTailscale = () => resolve(null);
-    });
-    const logGatewayStartup = vi.fn().mockRejectedValue(startupError);
-    process.on("unhandledRejection", onUnhandledRejection);
-
-    try {
-      const runtimePromise = startGatewayPostAttachRuntime(
-        createPostAttachParams({ sidecarStartup: "defer" }),
-        createPostAttachRuntimeDeps({
-          logGatewayStartup,
-          startGatewayTailscaleExposure: vi.fn(() => tailscaleStartup),
-        }),
-      );
-
-      await waitForGatewayTestState(() => {
-        expect(releaseTailscale).toBeTypeOf("function");
-        expect(logGatewayStartup).toHaveBeenCalledOnce();
-      });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(unhandledRejections).toEqual([]);
-
-      releaseTailscale?.();
-      const runtime = await runtimePromise;
-      await expect(runtime.startupSettled).rejects.toBe(startupError);
-    } finally {
-      releaseTailscale?.();
-      process.off("unhandledRejection", onUnhandledRejection);
-    }
   });
 
   it("retains a sidecar whose cleanup fails after startup logging rejects", async () => {
@@ -3077,30 +3012,6 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(startGatewaySidecarsValue).not.toHaveBeenCalled();
   });
 
-  it("rolls back managed Tailscale exposure when post-attach startup fails", async () => {
-    const startupError = new Error("sidecar startup failed");
-    const tailscaleCleanup = vi.fn(async () => {});
-    const startGatewayTailscaleExposure = vi.fn(async () => tailscaleCleanup);
-
-    await expect(
-      startGatewayPostAttachRuntime(
-        createPostAttachParams({
-          tailscaleMode: "serve",
-          tailscaleBackendPort: 19_000,
-        }),
-        createPostAttachRuntimeDeps({
-          startGatewayTailscaleExposure,
-          startGatewaySidecars: vi.fn(async () => {
-            throw startupError;
-          }),
-        }),
-      ),
-    ).rejects.toBe(startupError);
-
-    expect(startGatewayTailscaleExposure).toHaveBeenCalledTimes(1);
-    expect(tailscaleCleanup).toHaveBeenCalledTimes(1);
-  });
-
   it("does not start the worker environment sidecar after close begins", async () => {
     const startWorkerEnvironmentRuntime = vi.fn(() => ({ stop: vi.fn() }));
     const startGatewaySidecarsValue = vi.fn(async () => ({
@@ -3527,7 +3438,6 @@ function createPostAttachRuntimeDeps(
     scheduleGatewayUpdateCheck: hoisted.scheduleGatewayUpdateCheck,
     startGatewaySidecars: vi.fn(async () => ({ pluginServices: null, postReadySidecars: [] })),
     warmSystemCa: vi.fn(async () => {}),
-    startGatewayTailscaleExposure: hoisted.startGatewayTailscaleExposure,
     loadSubagentRegistrySweep: vi.fn(async () => hoisted.scheduleSubagentRegistrySweep),
     ...overrides,
   };
@@ -3546,15 +3456,7 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     isNixMode: false,
     broadcastToConnIds: vi.fn(),
     getClientConnIds: () => new Set(),
-    tailscaleMode: "off",
-    resetOnExit: false,
-    preserveFunnel: false,
     controlUiBasePath: "/",
-    logTailscale: {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    },
     gatewayPluginConfigAtStart: { hooks: { internal: { enabled: false } } } as never,
     activationSourceConfig: { hooks: { internal: { enabled: false } } } as never,
     pluginManifestRecords: [],

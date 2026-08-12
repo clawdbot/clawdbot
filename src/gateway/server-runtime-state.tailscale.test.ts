@@ -76,6 +76,29 @@ describe("managed Tailscale gateway ingress", () => {
     }
   });
 
+  it("keeps ordinary ingress closed until the managed route is claimed", async () => {
+    let releaseRouteClaim: () => void = () => {};
+    const routeClaim = new Promise<void>((resolve) => {
+      releaseRouteClaim = resolve;
+    });
+    const prepareManagedTailscaleIngress = vi.fn(async () => await routeClaim);
+    const runtime = await createGatewayRuntimeStateForTest(undefined, {
+      tailscaleMode: "serve",
+      prepareManagedTailscaleIngress,
+    });
+    openServers.push(runtime);
+
+    const starting = runtime.startListening();
+    await vi.waitFor(() => expect(prepareManagedTailscaleIngress).toHaveBeenCalledOnce());
+
+    expect(runtime.getTailscaleIngressEndpoint()).toMatchObject({ host: "127.0.0.1" });
+    expect(runtime.httpServer.listening).toBe(false);
+
+    releaseRouteClaim();
+    await starting;
+    expect(runtime.httpServer.listening).toBe(true);
+  });
+
   it("binds a distinct private listener and rejects the same headers on the ordinary listener", async () => {
     const runtime = await createGatewayRuntimeStateForTest(undefined, {
       tailscaleMode: "serve",

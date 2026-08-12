@@ -253,12 +253,13 @@ export async function prepareGatewayLifecycle(params: {
     },
     setPostAttachHandles: (handles: {
       stopGatewayUpdateCheck: typeof runtimeState.stopGatewayUpdateCheck;
-      tailscaleCleanup: typeof runtimeState.tailscaleCleanup;
       pluginServices: typeof runtimeState.pluginServices;
     }) => {
       runtimeState.stopGatewayUpdateCheck = handles.stopGatewayUpdateCheck;
-      runtimeState.tailscaleCleanup = handles.tailscaleCleanup;
       runtimeState.pluginServices = handles.pluginServices;
+    },
+    setTailscaleCleanup: (cleanup: typeof runtimeState.tailscaleCleanup) => {
+      runtimeState.tailscaleCleanup = cleanup;
     },
     setPluginServices: (pluginServices: typeof runtimeState.pluginServices) => {
       runtimeState.pluginServices = pluginServices;

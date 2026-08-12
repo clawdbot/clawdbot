@@ -119,6 +119,16 @@ function hasTailscaleProxyHeaders(req: IncomingMessage): boolean {
   );
 }
 
+function hasTailscaleOwnedHeaders(req: IncomingMessage): boolean {
+  return [
+    "tailscale-funnel-request",
+    "tailscale-headers-info",
+    "tailscale-user-login",
+    "tailscale-user-name",
+    "tailscale-user-profile-pic",
+  ].some((name) => req.headers[name] !== undefined);
+}
+
 function resolveTailscaleClientIp(req: IncomingMessage): string | undefined {
   return resolveClientIp({
     remoteAddr: req.socket.remoteAddress,
@@ -199,6 +209,12 @@ function resolveGatewayIngressAttribution(params: {
       remoteAddress,
       tailscaleWhois: params.tailscaleWhois ?? readTailscaleWhoisIdentity,
     });
+  }
+
+  // Tailscale strips and owns these headers on its proxy path. Seeing them on an
+  // ordinary listener cannot establish managed-listener provenance.
+  if (hasTailscaleOwnedHeaders(req)) {
+    return unattributableProxy(remoteAddress);
   }
 
   const hasProxyHeaders = hasForwardedRequestHeaders(req);

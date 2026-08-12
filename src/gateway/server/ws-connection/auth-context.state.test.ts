@@ -122,7 +122,7 @@ describe("resolveConnectAuthDecision", () => {
     expect(state.sharedAuthOk).toBe(false);
   });
 
-  it("resets the shared-secret limiter after device-token auth succeeds", async () => {
+  it("does not reset the shared-secret limiter after device-token auth succeeds", async () => {
     const rateLimiter = createLimiter();
     await resolveConnectAuthDecision({
       state: {
@@ -130,7 +130,6 @@ describe("resolveConnectAuthDecision", () => {
         authOk: false,
         authMethod: "token",
         sharedAuthOk: false,
-        sharedAuthProvided: true,
         pendingSharedAuthFailure: true,
         deviceTokenCandidate: "device-token",
         deviceTokenCandidateSource: "explicit-device-token",
@@ -146,7 +145,8 @@ describe("resolveConnectAuthDecision", () => {
       clientIp: CLIENT_IP,
     });
 
-    expect(rateLimiter.reset).toHaveBeenCalledWith(CLIENT_IP, "shared-secret");
+    expect(rateLimiter.reset).not.toHaveBeenCalledWith(CLIENT_IP, "shared-secret");
+    expect(rateLimiter.reset).toHaveBeenCalledWith(CLIENT_IP, "device-token");
   });
 
   it("does not let valid device reconnects consume remote shared-secret attempts", async () => {
@@ -157,6 +157,7 @@ describe("resolveConnectAuthDecision", () => {
       pruneIntervalMs: 0,
     });
     try {
+      limiter.recordFailure(CLIENT_IP, "shared-secret");
       for (let attempt = 0; attempt < 3; attempt += 1) {
         const state = await resolveTokenAuthState({
           connectAuth: { token: "device", deviceToken: "device" },
@@ -183,7 +184,7 @@ describe("resolveConnectAuthDecision", () => {
 
       expect(limiter.check(CLIENT_IP, "shared-secret")).toMatchObject({
         allowed: true,
-        remaining: 2,
+        remaining: 1,
       });
     } finally {
       limiter.dispose();

@@ -2354,7 +2354,7 @@ describe("handleControlUiHttpRequest", () => {
               "127.0.0.1",
               AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
             );
-            expect(rateLimiter.reset).toHaveBeenCalledWith(
+            expect(rateLimiter.reset).not.toHaveBeenCalledWith(
               "127.0.0.1",
               AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
             );
@@ -2400,7 +2400,7 @@ describe("handleControlUiHttpRequest", () => {
               "127.0.0.1",
               AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
             );
-            expect(rateLimiter.reset).toHaveBeenCalledWith(
+            expect(rateLimiter.reset).not.toHaveBeenCalledWith(
               "127.0.0.1",
               AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
             );

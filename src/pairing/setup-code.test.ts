@@ -713,7 +713,7 @@ describe("pairing setup code", () => {
         ...limitedPlaintextAccess,
       },
       runCommandWithTimeout,
-      expectedRunCommandCalls: 3,
+      expectedRunCommandCalls: 1,
     });
   });
 
@@ -759,26 +759,15 @@ describe("pairing setup code", () => {
         ...limitedPlaintextAccess,
       },
       runCommandWithTimeout,
-      expectedRunCommandCalls: 3,
+      expectedRunCommandCalls: 1,
     });
   });
 
-  it("adds a configured Tailscale Serve route to a LAN setup code", async () => {
+  it("does not advertise a legacy Serve route targeting ordinary LAN ingress", async () => {
     const defaultRoute = createDefaultRouteRunner("en0");
     const runCommandWithTimeout = vi.fn(async (argv: string[]) => {
       if (argv.includes("serve")) {
-        return {
-          code: 0,
-          stdout: JSON.stringify({
-            TCP: { "8443": { HTTPS: true } },
-            Web: {
-              "clawmac.tail.ts.net:8443": {
-                Handlers: { "/": { Proxy: "http://127.0.0.1:18789" } },
-              },
-            },
-          }),
-          stderr: "",
-        };
+        throw new Error("legacy Serve discovery must not run for a LAN bind");
       }
       return defaultRoute();
     });
@@ -797,12 +786,11 @@ describe("pairing setup code", () => {
       expected: {
         authLabel: "token",
         url: "ws://192.168.139.3:18789",
-        urls: ["ws://192.168.139.3:18789", "wss://clawmac.tail.ts.net:8443"],
         urlSource: "gateway.bind=lan",
         ...limitedPlaintextAccess,
       },
       runCommandWithTimeout,
-      expectedRunCommandCalls: 2,
+      expectedRunCommandCalls: 1,
     });
   });
 

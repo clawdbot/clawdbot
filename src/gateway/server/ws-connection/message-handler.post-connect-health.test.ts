@@ -838,7 +838,6 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         authOk: true,
         authMethod: "tailscale",
         sharedAuthOk: true,
-        sharedAuthProvided: false,
       });
       const harness = attachGatewayHarness({
         connId: "conn-tailscale-avatar-detached",

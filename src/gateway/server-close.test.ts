@@ -1641,12 +1641,16 @@ describe("createGatewayCloseHandler", () => {
     mocks.drainRetainedEmbeddingProviders.mockImplementation(async () => {
       closeOrder.push("embedding-providers");
     });
+    const tailscaleCleanup = vi.fn(async () => {
+      closeOrder.push("tailscale");
+    });
     const lifecycleUnsub = vi.fn();
     const taskUnsub = vi.fn();
     const transcriptUnsub = vi.fn();
     const stopTaskRegistryMaintenance = vi.fn();
     const close = createGatewayCloseHandler(
       createGatewayCloseTestDeps({
+        tailscaleCleanup,
         stopTaskRegistryMaintenance,
         lifecycleUnsub,
         taskUnsub,
@@ -1679,6 +1683,7 @@ describe("createGatewayCloseHandler", () => {
       "bundle-mcp",
       "bundle-lsp",
       "http-server",
+      "tailscale",
       "embedding-providers",
     ]);
   });

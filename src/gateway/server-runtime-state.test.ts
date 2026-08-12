@@ -11,7 +11,12 @@ import { createGatewayRuntimeStateForTest } from "./test-helpers.server-runtime-
 
 const mocks = vi.hoisted(() => ({
   listenGatewayHttpServer: vi.fn(
-    async (_params: { bindHost: string; port?: number; retryEaddrinuse?: boolean }) => {},
+    async (_params: {
+      httpServer: { address: () => unknown };
+      bindHost: string;
+      port?: number;
+      retryEaddrinuse?: boolean;
+    }) => {},
   ),
   resolveGatewayListenHosts: vi.fn(async (_bindHost: string) => ["127.0.0.1"]),
   pluginsHttpModuleLoaded: vi.fn(),
@@ -381,6 +386,58 @@ describe("createGatewayRuntimeState", () => {
     await expect(runtimeState.startListening()).resolves.toBeUndefined();
     expect(runtimeState.httpBindHosts).toEqual(["127.0.0.1"]);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("failed to bind loopback alias ::1"));
+  });
+
+  it("claims managed Tailscale routing before ordinary ingress starts listening", async () => {
+    const events: string[] = [];
+    mocks.listenGatewayHttpServer.mockImplementation(async ({ httpServer, port }) => {
+      events.push(port === 0 ? "private-listener" : "ordinary-listener");
+      if (port === 0) {
+        vi.spyOn(httpServer, "address").mockReturnValue({
+          address: "127.0.0.1",
+          family: "IPv4",
+          port: 19000,
+        });
+      }
+    });
+    const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
+      port: 18789,
+      tailscaleMode: "serve",
+      prepareManagedTailscaleIngress: async () => {
+        events.push("tailscale-route");
+      },
+    });
+
+    await runtimeState.startListening();
+
+    expect(events).toEqual(["private-listener", "tailscale-route", "ordinary-listener"]);
+  });
+
+  it("leaves ordinary ingress closed when managed Tailscale routing fails", async () => {
+    const routeFailure = new Error("route claim failed");
+    mocks.listenGatewayHttpServer.mockImplementation(async ({ httpServer, port }) => {
+      if (port === 0) {
+        vi.spyOn(httpServer, "address").mockReturnValue({
+          address: "127.0.0.1",
+          family: "IPv4",
+          port: 19000,
+        });
+      }
+    });
+    const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
+      port: 18789,
+      tailscaleMode: "serve",
+      prepareManagedTailscaleIngress: async () => {
+        throw routeFailure;
+      },
+    });
+
+    await expect(runtimeState.startListening()).rejects.toBe(routeFailure);
+    expect(mocks.listenGatewayHttpServer).toHaveBeenCalledTimes(1);
+    expect(mocks.listenGatewayHttpServer).toHaveBeenCalledWith(
+      expect.objectContaining({ port: 0, serviceName: "Tailscale gateway ingress" }),
+    );
+    expect(runtimeState.httpBindHosts).toEqual([]);
   });
 
   it("starts the shared sandbox host on a dedicated adjacent-port origin", async () => {

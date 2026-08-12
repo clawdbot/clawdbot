@@ -32,7 +32,6 @@ type ConnectAuthState = {
   authOk: boolean;
   authMethod: GatewayAuthResult["method"];
   sharedAuthOk: boolean;
-  sharedAuthProvided: boolean;
   pendingSharedAuthFailure: boolean;
   bootstrapTokenCandidate?: string;
   deviceTokenCandidate?: string;
@@ -186,7 +185,6 @@ export async function resolveConnectAuthState(params: {
     authMethod:
       authResult.method ?? (params.resolvedAuth.mode === "password" ? "password" : "token"),
     sharedAuthOk,
-    sharedAuthProvided,
     pendingSharedAuthFailure,
     bootstrapTokenCandidate,
     deviceTokenCandidate: deviceCredential,
@@ -333,9 +331,6 @@ async function resolveConnectAuthDecisionCore(
         deviceTokenSharedGatewaySessionGeneration = tokenCheck.issuer.generation;
       }
       params.rateLimiter?.reset(params.clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
-      if (params.state.sharedAuthProvided) {
-        params.rateLimiter?.reset(params.clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
-      }
     } else {
       authResult = {
         ok: false,

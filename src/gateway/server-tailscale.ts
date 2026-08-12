@@ -65,7 +65,7 @@ export async function startGatewayTailscaleExposure(params: {
       params.logTailscale.warn(
         `serve not changed because external Funnel status could not be inspected: ${formatErrorMessage(error)}`,
       );
-      return null;
+      throw error;
     }
     if (preservedFunnel) {
       params.logTailscale.warn(
@@ -78,10 +78,8 @@ export async function startGatewayTailscaleExposure(params: {
     }
   }
 
-  let routeEnabled = false;
   try {
     await applyRoute(params.backendPort);
-    routeEnabled = true;
     const host = await (
       params.tailscaleMode === "serve" ? getTailnetHostnameAfterServe() : getTailnetHostname()
     ).catch(() => null);
@@ -109,10 +107,7 @@ export async function startGatewayTailscaleExposure(params: {
     }
   } catch (err) {
     params.logTailscale.warn(`${params.tailscaleMode} failed: ${formatErrorMessage(err)}`);
-  }
-
-  if (!routeEnabled) {
-    return null;
+    throw err;
   }
 
   return async () => {

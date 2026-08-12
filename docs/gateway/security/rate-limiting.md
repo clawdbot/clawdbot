@@ -30,7 +30,9 @@ request handling. This is the brute-force guard for exposed Gateways.
 
 - Only _wrong_ credentials count. Missing credentials (a client that never
   sent a token) and successful authentications do not consume budget. A
-  successful auth normally resets the counter for that client IP.
+  successful auth normally resets the matching credential-class counter for
+  that client IP; success with a device token does not erase shared-secret
+  failures, or vice versa.
 - Defaults: 10 failures per 60 seconds, then a 5 minute lockout for that IP.
 - Loopback (`127.0.0.1` / `::1`) is exempt by default so local CLI sessions
   cannot be locked out.

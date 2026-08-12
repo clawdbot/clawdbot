@@ -834,9 +834,6 @@ export function createGatewayCloseHandler(
       if (params.bonjourStop) {
         await shutdownStep("bonjour", () => params.bonjourStop!(), warnings);
       }
-      if (params.tailscaleCleanup) {
-        await shutdownStep("tailscale", () => params.tailscaleCleanup!(), warnings);
-      }
       // ACPX owns agent-process cleanup, so plugin teardown must not overtake
       // the manager drain even when cancellation and handle close are slow.
       await measureCloseStep("acp-session-manager", () =>
@@ -1058,6 +1055,11 @@ export function createGatewayCloseHandler(
             }
           }
         });
+      }
+      // Persistent routes return to the stable port only after ordinary ingress
+      // has stopped accepting, so restart cannot expose proxy traffic there.
+      if (params.tailscaleCleanup) {
+        await shutdownStep("tailscale", () => params.tailscaleCleanup!(), warnings);
       }
       await disposeRuntimeWithShutdownGrace({
         label: "embedding-providers",

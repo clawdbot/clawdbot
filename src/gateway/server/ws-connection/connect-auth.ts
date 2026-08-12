@@ -350,7 +350,6 @@ async function authenticateGatewayConnectCore(
       authOk,
       authMethod,
       sharedAuthOk,
-      sharedAuthProvided: hasSharedAuth,
       pendingSharedAuthFailure,
       bootstrapTokenCandidate,
       deviceTokenCandidate,

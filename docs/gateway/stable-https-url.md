@@ -107,7 +107,7 @@ On the Gateway host, confirm that Serve is active:
 tailscale serve status
 ```
 
-The output should show an HTTPS route for `https://<host>.<tailnet>.ts.net` proxying to the Gateway port.
+The output should show an HTTPS route for `https://<host>.<tailnet>.ts.net` proxying to a private ephemeral loopback port owned by the Gateway.
 
 From another device on the same tailnet, check the HTTPS response:
 

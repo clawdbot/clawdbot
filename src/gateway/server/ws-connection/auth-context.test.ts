@@ -91,7 +91,6 @@ function createBaseState(overrides?: Partial<ConnectAuthState>): ConnectAuthStat
     authOk: false,
     authMethod: "token",
     sharedAuthOk: false,
-    sharedAuthProvided: true,
     pendingSharedAuthFailure: false,
     deviceTokenCandidate: "device-token",
     deviceTokenCandidateSource: "shared-token-fallback",

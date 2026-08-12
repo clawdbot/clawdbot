@@ -43,7 +43,31 @@ export async function startGatewayServerCore(
     shutdownRuntime,
   } = gatewayKernel;
   try {
-    const transport = await createGatewayHttpTransport(gatewayKernel.createHttpTransportOptions());
+    const transport = await createGatewayHttpTransport({
+      ...gatewayKernel.createHttpTransportOptions(),
+      // Off mode has always been a no-op in the exposure owner; resetOnExit only
+      // controls cleanup for a route this Gateway run actually applied.
+      ...(!gatewayKernel.minimalTestGateway && gatewayKernel.tailscaleMode !== "off"
+        ? {
+            prepareManagedTailscaleIngress: async ({ port: backendPort }) => {
+              const { startGatewayTailscaleExposure } = await import("./server-tailscale.js");
+              const cleanup = await startGatewayTailscaleExposure({
+                tailscaleMode: gatewayKernel.tailscaleMode,
+                resetOnExit: gatewayKernel.tailscaleConfig.resetOnExit ?? false,
+                serviceName: gatewayKernel.tailscaleConfig.serviceName,
+                preserveFunnel: gatewayKernel.tailscaleConfig.preserveFunnel ?? false,
+                port,
+                backendPort,
+                controlUiBasePath: gatewayKernel.controlUiBasePath,
+                logTailscale,
+              });
+              // The server close handle is not published until this callback settles.
+              // Startup failure therefore owns teardown before normal close can race it.
+              gatewayKernel.kernel.setTailscaleCleanup(cleanup);
+            },
+          }
+        : {}),
+    });
     gatewayKernel.transportBridge.attach(transport);
     const startup = await finishGatewayStartup({
       kernelRuntime: { ...gatewayKernel, ...transport },
@@ -56,7 +80,6 @@ export async function startGatewayServerCore(
       logChannels,
       logCron,
       logReload,
-      logTailscale,
       loadGatewayStartupPostAttachModule,
       waitForPostReadyWork: () => postReadyWorkBarrier,
     });

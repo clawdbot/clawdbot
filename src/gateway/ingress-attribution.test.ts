@@ -47,6 +47,18 @@ describe("gateway ingress attribution", () => {
     });
   });
 
+  it("rejects externally managed Funnel headers on an ordinary trusted-proxy listener", async () => {
+    const attribution = prepareGatewayIngressAttribution({
+      req: request({ forwardedFor: "203.0.113.10", funnel: true }),
+      trustedProxies: ["127.0.0.1"],
+    });
+
+    expect(attribution).toMatchObject({
+      kind: "unattributable-proxy",
+      reason: "proxy_attribution_required",
+    });
+  });
+
   it("attributes managed Serve by listener provenance and verifies its identity lazily", async () => {
     const req = request({ forwardedFor: "100.64.0.10", login: "alice@example.com" });
     markGatewayIngressTransport(req, { kind: "managed-tailscale", mode: "serve" });

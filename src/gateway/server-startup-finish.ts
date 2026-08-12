@@ -34,7 +34,6 @@ export async function finishGatewayStartup(params: {
   logChannels: GatewayLogger;
   logCron: GatewayLogger;
   logReload: GatewayLogger;
-  logTailscale: GatewayLogger;
   loadGatewayStartupPostAttachModule: () => Promise<
     typeof import("./server-startup-post-attach.js")
   >;
@@ -51,7 +50,6 @@ export async function finishGatewayStartup(params: {
     logChannels,
     logCron,
     logReload,
-    logTailscale,
     loadGatewayStartupPostAttachModule,
   } = params;
   const {
@@ -101,9 +99,6 @@ export async function finishGatewayStartup(params: {
     httpBindHosts,
     startChannels,
     broadcastPluginEvent,
-    tailscaleMode,
-    getTailscaleIngressEndpoint,
-    tailscaleConfig,
     controlUiBasePath,
     controlUiRootLifecycle,
     sidecarStartup,
@@ -255,14 +250,8 @@ export async function finishGatewayStartup(params: {
         broadcastToConnIds,
         getClientConnIds: gatewayRequestContext.getClientConnIds!,
         broadcastPluginEvent,
-        tailscaleMode,
-        tailscaleBackendPort: getTailscaleIngressEndpoint()?.port,
-        resetOnExit: tailscaleConfig.resetOnExit ?? false,
-        serviceName: tailscaleConfig.serviceName,
-        preserveFunnel: tailscaleConfig.preserveFunnel ?? false,
         controlUiBasePath,
         controlUiRootLifecycle,
-        logTailscale,
         gatewayPluginConfigAtStart,
         activationSourceConfig: startupActivationSourceConfig,
         pluginManifestRecords,

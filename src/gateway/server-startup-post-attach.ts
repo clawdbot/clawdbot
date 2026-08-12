@@ -4,7 +4,6 @@ import { loadGetReplyFromConfigRuntime } from "../auto-reply/reply/dispatch-from
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveStateDir } from "../config/paths.js";
-import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredInternalHooks } from "../hooks/configured.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -44,7 +43,6 @@ import {
   type GatewayStartupOutcomeRecorder,
 } from "./server-startup-outcomes.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
-import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
 import { warmMacOSSystemCaOffMainThread } from "./system-ca-warmup.js";
 const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
 const ACP_BACKEND_READY_POLL_MS = 50;
@@ -930,9 +928,6 @@ type GatewayPostAttachRuntimeDeps = {
   ) => Awaitable<ReturnType<typeof scheduleGatewayUpdateCheck>>;
   startGatewaySidecars: typeof startGatewaySidecars;
   warmSystemCa: typeof warmMacOSSystemCaOffMainThread;
-  startGatewayTailscaleExposure: (
-    ...args: Parameters<typeof startGatewayTailscaleExposure>
-  ) => ReturnType<typeof startGatewayTailscaleExposure>;
   loadSubagentRegistrySweep: () => Awaitable<() => void>;
 };
 
@@ -946,8 +941,6 @@ const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {
     (await import("../infra/update-startup.js")).scheduleGatewayUpdateCheck(...args),
   startGatewaySidecars,
   warmSystemCa: warmMacOSSystemCaOffMainThread,
-  startGatewayTailscaleExposure: async (...args) =>
-    (await import("./server-tailscale.js")).startGatewayTailscaleExposure(...args),
   loadSubagentRegistrySweep: async () =>
     (await import("../agents/subagents/registry/subagent-registry.js"))
       .scheduleSubagentRegistrySweep,
@@ -1086,19 +1079,8 @@ export async function startGatewayPostAttachRuntime(
     broadcastToConnIds: GatewayBroadcastToConnIdsFn;
     getClientConnIds: (filter?: (client: GatewayClient) => boolean) => ReadonlySet<string>;
     broadcastPluginEvent?: import("./server-broadcast-types.js").GatewayPluginEventBroadcastFn;
-    tailscaleMode: GatewayTailscaleMode;
-    tailscaleBackendPort?: number;
-    resetOnExit: boolean;
-    serviceName?: string;
-    preserveFunnel: boolean;
     controlUiBasePath: string;
     controlUiRootLifecycle?: GatewayControlUiRootLifecycle;
-    logTailscale: {
-      info: (msg: string) => void;
-      warn: (msg: string) => void;
-      error: (msg: string) => void;
-      debug?: (msg: string) => void;
-    };
     gatewayPluginConfigAtStart: OpenClawConfig;
     activationSourceConfig: OpenClawConfig;
     pluginManifestRecords: readonly PluginManifestRecord[];
@@ -1283,34 +1265,6 @@ export async function startGatewayPostAttachRuntime(
     start: updateCheck.start,
     stop: updateCheck.stop,
   });
-  let tailscaleCleanupPromise!: Promise<Awaited<
-    ReturnType<typeof runtimeDeps.startGatewayTailscaleExposure>
-  > | null>;
-  const tailscaleResident = params.residentRegistry.register({
-    name: "tailscale-exposure",
-    start: () => {
-      tailscaleCleanupPromise = params.minimalTestGateway
-        ? Promise.resolve(null)
-        : params.tailscaleMode === "off" && !params.resetOnExit
-          ? Promise.resolve(null)
-          : measureStartup(params.startupTrace, "post-attach.tailscale", () =>
-              runtimeDeps.startGatewayTailscaleExposure({
-                tailscaleMode: params.tailscaleMode,
-                resetOnExit: params.resetOnExit,
-                serviceName: params.serviceName,
-                preserveFunnel: params.preserveFunnel,
-                port: params.port,
-                backendPort: params.tailscaleBackendPort,
-                controlUiBasePath: params.controlUiBasePath,
-                logTailscale: params.logTailscale,
-              }),
-            );
-      return tailscaleCleanupPromise;
-    },
-    stop: async () => await (await tailscaleCleanupPromise)?.(),
-  });
-  void tailscaleResident.start();
-
   let pluginServicesReported = false;
   let reportedPluginServices: PluginServicesHandle | null = null;
   const reportPluginServices = (pluginServices: PluginServicesHandle | null) => {
@@ -1623,46 +1577,29 @@ export async function startGatewayPostAttachRuntime(
       params.log.warn(`gateway sidecars failed to start: ${String(err)}`);
     });
 
-  try {
-    if (params.sidecarStartup !== "defer") {
-      const [tailscaleCleanup, sidecarsResult] = await Promise.all([
-        tailscaleCleanupPromise,
-        sidecarsPromise,
-      ]);
-      updateCheckResident.start();
-      return {
-        stopGatewayUpdateCheck: updateCheckResident.stop,
-        tailscaleCleanup,
-        pluginServices: sidecarsResult.pluginServices,
-        startupSettled: Promise.resolve(),
-      };
-    }
-
-    const tailscaleCleanup = await tailscaleCleanupPromise;
+  if (params.sidecarStartup !== "defer") {
+    const sidecarsResult = await sidecarsPromise;
     updateCheckResident.start();
-    const startupSettled = Promise.all([sidecarsPromise, startupLogSettled.promise]).then(
-      () => undefined,
-    );
-    // Direct callers may ignore this handle; only the managed run loop observes it.
-    // Pre-handle so an ignored deferred sidecar failure never becomes an unhandled rejection.
-    void startupSettled.catch(() => {});
-
     return {
       stopGatewayUpdateCheck: updateCheckResident.stop,
-      tailscaleCleanup,
-      pluginServices: reportedPluginServices,
-      startupSettled,
+      pluginServices: sidecarsResult.pluginServices,
+      startupSettled: Promise.resolve(),
     };
-  } catch (error) {
-    // Post-attach has not handed this cleanup to the server lifecycle yet. Join
-    // Tailscale startup and release any route before its private listener closes.
-    try {
-      await tailscaleResident.stop();
-    } catch (cleanupError) {
-      params.log.warn(`gateway Tailscale rollback failed: ${String(cleanupError)}`);
-    }
-    throw error;
   }
+
+  updateCheckResident.start();
+  const startupSettled = Promise.all([sidecarsPromise, startupLogSettled.promise]).then(
+    () => undefined,
+  );
+  // Direct callers may ignore this handle; only the managed run loop observes it.
+  // Pre-handle so an ignored deferred sidecar failure never becomes an unhandled rejection.
+  void startupSettled.catch(() => {});
+
+  return {
+    stopGatewayUpdateCheck: updateCheckResident.stop,
+    pluginServices: reportedPluginServices,
+    startupSettled,
+  };
 }
 
 export const testing = {

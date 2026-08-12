@@ -406,7 +406,6 @@ async function authorizeControlUiReadRequestCore(
       if (deviceScopes) {
         verifiedDeviceScopes = deviceScopes;
         opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
-        opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
         resolvedAuthResult = { ok: true, method: "device-token" };
       } else {
         await recordDeferredSharedSecretFailure();

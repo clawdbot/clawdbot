@@ -814,8 +814,10 @@ Gateway or node host and check `openclaw nodes pending` again.
   Service name format; startup reports the derived Service URL.
 - `tailscale.preserveFunnel`: deprecated migration guard. When `true` and
   `tailscale.mode = "serve"`, OpenClaw checks `tailscale funnel status` before
-  re-applying Serve at startup. An external Funnel that still targets the
-  ordinary Gateway port cannot provide request provenance. OpenClaw leaves the
+  re-applying Serve at startup. If that status cannot be inspected, startup
+  fails before the ordinary Gateway listener opens. An external Funnel that
+  still targets the ordinary Gateway port cannot provide request provenance.
+  OpenClaw leaves the
   external route unchanged and warns; plugin-authenticated webhooks retain
   their own authentication, while Gateway-authenticated routes reject that
   ingress. First configure `gateway.auth.password` (prefer a SecretRef) or

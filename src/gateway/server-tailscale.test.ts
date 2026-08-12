@@ -83,6 +83,19 @@ describe("startGatewayTailscaleExposure", () => {
     expect(mocks.hasTailscaleFunnelRouteForPort).not.toHaveBeenCalled();
   });
 
+  it("fails startup when the managed route cannot be claimed", async () => {
+    const failure = new Error("tailscale unavailable");
+    mocks.enableTailscaleServe.mockRejectedValue(failure);
+
+    await expect(
+      startGatewayTailscaleExposure({
+        tailscaleMode: "serve",
+        port: 18789,
+        logTailscale: createLogger(),
+      }),
+    ).rejects.toBe(failure);
+  });
+
   it("cleans up the owned Serve route", async () => {
     const cleanup = await startGatewayTailscaleExposure({
       tailscaleMode: "serve",
@@ -154,19 +167,19 @@ describe("startGatewayTailscaleExposure", () => {
     );
   });
 
-  it("keeps the local Gateway up without changing exposure when Funnel status is unknown", async () => {
+  it("fails closed when preserved Funnel status cannot be inspected", async () => {
     const failure = new Error("tailscale status unavailable");
     const logTailscale = createLogger();
     mocks.hasTailscaleFunnelRouteForPort.mockRejectedValue(failure);
 
-    const cleanup = await startGatewayTailscaleExposure({
-      tailscaleMode: "serve",
-      port: 18789,
-      preserveFunnel: true,
-      logTailscale,
-    });
-
-    expect(cleanup).toBeNull();
+    await expect(
+      startGatewayTailscaleExposure({
+        tailscaleMode: "serve",
+        port: 18789,
+        preserveFunnel: true,
+        logTailscale,
+      }),
+    ).rejects.toBe(failure);
     expect(mocks.enableTailscaleServe).not.toHaveBeenCalled();
     expect(logTailscale.warn).toHaveBeenCalledWith(expect.stringContaining(failure.message));
   });
