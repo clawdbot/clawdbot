@@ -529,8 +529,8 @@ describe("channelsAddCommand", () => {
     {
       channel: "slack",
       options: {},
-      env: { SLACK_BOT_TOKEN: "", SLACK_APP_TOKEN: "" },
-      missing: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"],
+      env: { SLACK_BOT_TOKEN: "xoxb-token", SLACK_APP_TOKEN: "" },
+      missing: ["SLACK_APP_TOKEN"],
     },
     {
       channel: "buzz",
@@ -579,6 +579,38 @@ describe("channelsAddCommand", () => {
     });
 
     expect(writtenChannel(testCase.channel)).toEqual({ enabled: true });
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("commits Slack HTTP --use-env config without SLACK_APP_TOKEN", async () => {
+    vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-token");
+    vi.stubEnv("SLACK_APP_TOKEN", "");
+    await registerBundledSetupPlugin("slack");
+    const config: OpenClawConfig = {
+      channels: {
+        slack: {
+          mode: "http",
+          signingSecret: "test-signing-secret",
+        },
+      },
+    };
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      sourceConfig: config,
+      config,
+    });
+
+    await channelsAddCommand({ channel: "slack", useEnv: true }, runtime, {
+      hasFlags: true,
+    });
+
+    expect(writtenChannel("slack")).toMatchObject({
+      enabled: true,
+      mode: "http",
+      signingSecret: "test-signing-secret",
+    });
+    expect(writtenChannel("slack").appToken).toBeUndefined();
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });
