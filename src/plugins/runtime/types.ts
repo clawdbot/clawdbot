@@ -123,6 +123,8 @@ export type CodexReconciliationTranscriptItem = {
 /** Bounded session metadata available to the in-process Codex reconciler. */
 export type CodexReconciliationSession = {
   threadId: string;
+  /** Opaque, short-lived, one-time capability for this current session's transcript. */
+  transcriptCapability?: string;
   sessionId?: string;
   name?: string;
   fallbackName?: string;
@@ -158,6 +160,7 @@ export type CodexReconciliationProvider = {
       hostId: string;
       threadId: string;
       archived: boolean;
+      transcriptCapability: string;
       cursor?: string;
       limit?: number;
       signal?: AbortSignal;
