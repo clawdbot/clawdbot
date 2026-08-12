@@ -78,7 +78,7 @@ suite.define(() => {
         expect(await header.locator(".chat-pane__crumb-sep").count()).toBe(2);
         const parent = header.locator(".chat-pane__parent-session");
         const nestedTrail = await header.evaluate((root) => {
-          const parent = root.querySelector<HTMLElement>(".chat-pane__parent-session")!;
+          const parentCrumb = root.querySelector<HTMLElement>(".chat-pane__parent-session")!;
           const child = root.querySelector<HTMLElement>(".chat-pane__session-title")!;
           const parentText = root.querySelector<HTMLElement>(".chat-pane__parent-session-text")!;
           const childText = root.querySelector<HTMLElement>(".chat-pane__session-title-text")!;
@@ -87,7 +87,7 @@ suite.define(() => {
             childEllipses: childText.scrollWidth > childText.clientWidth,
             headerWidth: headerRect.width,
             parentEllipses: parentText.scrollWidth > parentText.clientWidth,
-            width: child.getBoundingClientRect().right - parent.getBoundingClientRect().left,
+            width: child.getBoundingClientRect().right - parentCrumb.getBoundingClientRect().left,
           };
         });
         expect(nestedTrail.parentEllipses).toBe(true);
