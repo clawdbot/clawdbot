@@ -134,6 +134,7 @@ export async function runStreamingReplacementRetentionScenario(
         event.roomId === context.roomId &&
         event.sender === context.sutUserId &&
         isMatrixQaMessageLikeKind(event.kind) &&
+        doesMatrixQaReplyBodyMatchToken(event, secondText) &&
         event.eventId !== secondDraftEventId &&
         event.replacesEventId === undefined,
       roomId: context.roomId,
@@ -161,13 +162,30 @@ export async function runStreamingReplacementRetentionScenario(
         cause: error,
       });
     });
-  if (secondRedaction.event.redactsEventId === firstDraftEventId) {
-    throw new Error("Matrix healthy replacement redacted the retained first-generation draft");
+  if (secondRedaction.event.redactsEventId !== secondDraftEventId) {
+    throw new Error(
+      `Matrix healthy replacement redacted ${secondRedaction.event.redactsEventId ?? "<unknown>"} instead of its own draft ${secondDraftEventId}`,
+    );
+  }
+  const duplicateRedaction = await client.waitForOptionalRoomEvent({
+    observedEvents: context.observedEvents,
+    predicate: (event) =>
+      event.roomId === context.roomId &&
+      event.sender === context.sutUserId &&
+      event.kind === "redaction",
+    roomId: context.roomId,
+    since: secondRedaction.since,
+    timeoutMs: Math.min(8_000, context.timeoutMs),
+  });
+  if (duplicateRedaction.matched) {
+    throw new Error(
+      `Matrix healthy replacement emitted a second redaction ${duplicateRedaction.event.eventId}`,
+    );
   }
   advanceMatrixQaActorCursor({
     actorId: "driver",
     syncState: context.syncState,
-    nextSince: secondRedaction.since,
+    nextSince: duplicateRedaction.since,
     startSince,
   });
   return {
@@ -176,7 +194,9 @@ export async function runStreamingReplacementRetentionScenario(
       faultRuleId: MATRIX_REPLACEMENT_FAULT_RULE_ID,
       firstDriverEventId,
       previewEventId: firstDraftEventId,
+      redactionCount: 1,
       redactionEventId: secondRedaction.event.eventId,
+      redactionTargetEventId: secondRedaction.event.redactsEventId,
       secondDriverEventId,
       secondReply: buildMatrixReplyArtifact(secondReply.event, secondText),
     },
@@ -186,6 +206,8 @@ export async function runStreamingReplacementRetentionScenario(
       `second draft event: ${secondDraftEventId}`,
       `second replacement event: ${secondReply.event.eventId}`,
       `second redaction event: ${secondRedaction.event.eventId}`,
+      `second redaction target: ${secondRedaction.event.redactsEventId}`,
+      "healthy replacement redaction count: 1",
     ].join("\n"),
   } satisfies MatrixQaScenarioExecution;
 }
