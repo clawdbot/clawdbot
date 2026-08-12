@@ -65,6 +65,7 @@ type GatewayConnectionOptions = {
   password?: string;
   tlsFingerprint?: string;
   allowConfiguredAuthForExactTarget?: boolean;
+  suppressEnvAuthFallback?: boolean;
 };
 
 type GatewayEvent = TuiEvent;
@@ -572,6 +573,7 @@ async function resolveGatewayConnection(
     env,
     authPolicy: "interactive",
     allowConfiguredAuthForExactTarget: opts.allowConfiguredAuthForExactTarget,
+    suppressEnvAuthFallback: opts.suppressEnvAuthFallback,
     ...(activeLocalGatewayPort ? { localPortOverride: activeLocalGatewayPort } : {}),
     explicitTlsFingerprint: opts.tlsFingerprint,
     allowStoredOriginAuth: hasStoredOriginDeviceAuth,

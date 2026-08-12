@@ -144,11 +144,9 @@ function resolveExactConfiguredGatewayTarget(params: {
       });
     }
   }
-  const matches = candidates.filter(({ target }) => target === params.explicitUrl);
-  const identities = new Map(
-    matches.map(({ identity }) => [`${identity.authSurface}\0${identity.tlsSource}`, identity]),
-  );
-  return identities.size === 1 ? identities.values().next().value : undefined;
+  // Direct-local is listed before publicOrigin so an identical URL retains
+  // the local listener's TLS identity instead of becoming ambiguous.
+  return candidates.find(({ target }) => target === params.explicitUrl)?.identity;
 }
 
 /** Resolve the only URL overrides allowed to displace configured Gateway targets. */
@@ -180,6 +178,8 @@ export async function resolveGatewayClientBootstrap(params: {
   authPolicy?: GatewayClientBootstrapAuthPolicy;
   /** Permit current-profile auth only after bootstrap proves an exact configured target match. */
   allowConfiguredAuthForExactTarget?: boolean;
+  /** Ignore ambient shared-auth fallback while still resolving configured SecretRefs. */
+  suppressEnvAuthFallback?: boolean;
   modeOverride?: GatewayCredentialMode;
   ignoreEnvUrlOverride?: boolean;
   localPortOverride?: number;
@@ -239,10 +239,7 @@ export async function resolveGatewayClientBootstrap(params: {
   const detectedUrlOverrideSource = resolveGatewayUrlOverrideSource(connection.urlSource);
   const urlOverrideSource = urlOverride.source ?? detectedUrlOverrideSource;
   const configuredTarget =
-    params.allowConfiguredAuthForExactTarget &&
-    urlOverrideSource === "cli" &&
-    !explicitAuth.token &&
-    !explicitAuth.password
+    params.allowConfiguredAuthForExactTarget && urlOverrideSource === "cli"
       ? resolveExactConfiguredGatewayTarget({
           buildConnectionDetails,
           config: params.config,
@@ -277,14 +274,16 @@ export async function resolveGatewayClientBootstrap(params: {
   if (params.skipImplicitAuth) {
     auth = explicitAuth;
   } else if (urlOverrideSource && !configuredTarget) {
-    auth = await resolveGatewayCredentialsWithSecretInputs({
-      config: params.config,
-      explicitAuth,
-      env,
-      urlOverride: connection.url,
-      urlOverrideSource,
-      modeOverride: params.modeOverride,
-    });
+    auth = params.suppressEnvAuthFallback
+      ? explicitAuth
+      : await resolveGatewayCredentialsWithSecretInputs({
+          config: params.config,
+          explicitAuth,
+          env,
+          urlOverride: connection.url,
+          urlOverrideSource,
+          modeOverride: params.modeOverride,
+        });
   } else if (params.authPolicy === "probe") {
     auth = await resolveGatewayProbeSurfaceAuth({ config: params.config, env, surface });
   } else if (params.authPolicy === "interactive") {
@@ -292,6 +291,7 @@ export async function resolveGatewayClientBootstrap(params: {
       config: params.config,
       env,
       explicitAuth,
+      suppressEnvAuthFallback: params.suppressEnvAuthFallback,
       surface,
     });
   } else {

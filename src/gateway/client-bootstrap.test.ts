@@ -202,6 +202,48 @@ describe("resolveGatewayClientBootstrap", () => {
         },
       } as never,
       gatewayUrl: localUrl,
+      explicitAuth: { token: "explicit-token" },
+      authPolicy: "interactive",
+      allowConfiguredAuthForExactTarget: true,
+      env: process.env,
+    });
+
+    expect(result.auth.token).toBe("explicit-token");
+    expect(result.tlsFingerprint).toBe("sha256:local");
+    expect(mockState.loadGatewayTlsRuntime).toHaveBeenCalledWith(tlsConfig);
+  });
+
+  it("prefers direct-local TLS ownership when publicOrigin resolves to the same URL", async () => {
+    const localUrl = "wss://127.0.0.1:18789/openclaw";
+    const tlsConfig = { enabled: true };
+    mockState.buildGatewayConnectionDetails
+      .mockReturnValueOnce({
+        url: localUrl,
+        urlSource: "cli --url",
+        message: `Gateway target: ${localUrl}`,
+      })
+      .mockReturnValueOnce({
+        url: "wss://127.0.0.1:18789",
+        urlSource: "local loopback",
+        message: "Gateway target: wss://127.0.0.1:18789",
+      });
+    mockState.loadGatewayTlsRuntime.mockResolvedValue({
+      enabled: true,
+      required: true,
+      fingerprintSha256: "sha256:local",
+    });
+
+    const result = await resolveGatewayClientBootstrap({
+      config: {
+        gateway: {
+          mode: "local",
+          publicOrigin: "https://127.0.0.1:18789",
+          controlUi: { basePath: "/openclaw" },
+          tls: tlsConfig,
+          auth: { mode: "token", token: "configured-token" },
+        },
+      } as never,
+      gatewayUrl: localUrl,
       authPolicy: "interactive",
       allowConfiguredAuthForExactTarget: true,
       env: process.env,

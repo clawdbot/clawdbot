@@ -263,6 +263,38 @@ describe("resolveGatewayConnection", () => {
     });
   });
 
+  it("suppresses ambient Gateway auth fallback for an exact handoff target", async () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", controlUi: { basePath: "/control" } },
+    });
+    loadDeviceIdentityIfPresentMock.mockReturnValue({ deviceId: "device-1" });
+    loadOriginDeviceTokenMock.mockImplementation(({ gatewayScope }: { gatewayScope: string }) =>
+      gatewayScope === "ws://127.0.0.1:18789/control"
+        ? { token: "stored-origin-token", scopes: ["operator.read"] }
+        : null,
+    );
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_URL: "wss://gateway-b.example/ws",
+        OPENCLAW_GATEWAY_TOKEN: "gateway-b-token",
+      },
+      async () => {
+        const result = await resolveGatewayConnection({
+          url: "ws://127.0.0.1:18789/control",
+          allowConfiguredAuthForExactTarget: true,
+          suppressEnvAuthFallback: true,
+        });
+
+        expect(result).toMatchObject({
+          deviceAuthScope: "ws://127.0.0.1:18789/control",
+          token: undefined,
+          password: undefined,
+        });
+      },
+    );
+  });
+
   it("reuses local SecretRef auth for an exact public-origin resume target", async () => {
     loadConfig.mockReturnValue({
       secrets: { providers: { default: { source: "env" } } },
@@ -278,21 +310,28 @@ describe("resolveGatewayConnection", () => {
       },
     });
 
-    await withEnvAsync({ PROFILE_GATEWAY_TOKEN: "resolved-profile-token" }, async () => {
-      const result = await resolveGatewayConnection({
-        url: "wss://gateway.example/openclaw",
-        allowConfiguredAuthForExactTarget: true,
-      });
+    await withEnvAsync(
+      {
+        PROFILE_GATEWAY_TOKEN: "resolved-profile-token",
+        OPENCLAW_GATEWAY_TOKEN: "unrelated-ambient-token",
+      },
+      async () => {
+        const result = await resolveGatewayConnection({
+          url: "wss://gateway.example/openclaw",
+          allowConfiguredAuthForExactTarget: true,
+          suppressEnvAuthFallback: true,
+        });
 
-      expect(result).toMatchObject({
-        url: "wss://gateway.example/openclaw",
-        token: "resolved-profile-token",
-      });
-      expect(result.tlsFingerprint).toBeUndefined();
-    });
+        expect(result).toMatchObject({
+          url: "wss://gateway.example/openclaw",
+          token: "resolved-profile-token",
+        });
+        expect(result.tlsFingerprint).toBeUndefined();
+      },
+    );
   });
 
-  it("reuses remote interactive auth and its TLS pin for an exact resume target", async () => {
+  it("keeps the remote TLS pin when explicit auth overrides exact-target credentials", async () => {
     loadConfig.mockReturnValue({
       gateway: {
         mode: "remote",
@@ -307,10 +346,11 @@ describe("resolveGatewayConnection", () => {
     await expect(
       resolveGatewayConnection({
         url: "wss://remote.example/gateway",
+        password: "explicit-password", // pragma: allowlist secret
         allowConfiguredAuthForExactTarget: true,
       }),
     ).resolves.toMatchObject({
-      password: "configured-remote-password",
+      password: "explicit-password",
       tlsFingerprint: "sha256:configured-remote-pin",
       url: "wss://remote.example/gateway",
     });
