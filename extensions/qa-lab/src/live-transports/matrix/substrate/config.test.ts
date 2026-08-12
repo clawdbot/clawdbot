@@ -374,6 +374,7 @@ describe("matrix qa config", () => {
                 chunkMode: "newline",
                 mode: "quiet",
                 preview: { toolProgress: false },
+                progress: { commandText: "status", maxLines: 2 },
               },
               threadBindings: {
                 enabled: false,
@@ -463,6 +464,7 @@ describe("matrix qa config", () => {
         chunkMode: "newline",
         mode: "quiet",
         preview: { adjacentPreview: "current", toolProgress: false },
+        progress: { commandText: "raw", currentOnly: "current", maxLines: 3 },
       },
       threadBindings: {
         adjacentBinding: "current",
@@ -541,6 +543,7 @@ describe("matrix qa config", () => {
         chunkMode: "length",
         mode: "off",
         preview: { adjacentPreview: "current", toolProgress: true },
+        progress: { commandText: "status", currentOnly: "current", maxLines: 3 },
       },
       threadBindings: {
         adjacentBinding: "current",
@@ -596,7 +599,10 @@ describe("matrix qa config", () => {
         },
         groupMentionPatterns: ["\\S"],
         groupPolicy: "open",
-        streaming: true,
+        streaming: {
+          mode: "partial",
+          progress: { commandText: "raw" },
+        },
       },
       sutAccessToken: "sut-token",
       sutAccountId: "sut",
@@ -613,11 +619,12 @@ describe("matrix qa config", () => {
       chunkMode: "length",
       mode: "partial",
       preview: { toolProgress: true },
+      progress: { commandText: "raw" },
     });
     expect(config.messages?.groupChat?.mentionPatterns).toEqual(["\\S"]);
   });
 
-  it("resets tool progress when a scalar streaming override follows an opt-out", () => {
+  it("resets QA streaming detail overrides when a scalar override follows", () => {
     const optedOut = buildMatrixQaConfig({} as OpenClawConfig, {
       driverUserId: "@driver:matrix-qa.test",
       homeserver: "http://127.0.0.1:28008/",
@@ -626,6 +633,7 @@ describe("matrix qa config", () => {
         streaming: {
           mode: "quiet",
           preview: { toolProgress: false },
+          progress: { commandText: "raw" },
         },
       },
       sutAccessToken: "sut-token",
@@ -650,6 +658,7 @@ describe("matrix qa config", () => {
       chunkMode: "length",
       mode: "quiet",
       preview: { toolProgress: false },
+      progress: { commandText: "raw" },
     });
     expect(reset.channels?.matrix?.accounts?.sut?.streaming).toEqual({
       block: { enabled: false },
