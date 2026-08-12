@@ -9,6 +9,19 @@ export type ScheduledToolPolicyContext =
   | Extract<CronScheduledToolPolicy, { mode: "trusted" }>
   | (Extract<CronScheduledToolPolicy, { mode: "account" }> & { ownerChannel?: string });
 
+/** Separates a scheduled creator's authorization identity from its delivery route. */
+export function resolveScheduledToolCallerContext(params: {
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
+  accountId?: string;
+  channel?: string;
+}): { accountId?: string; channel?: string | null } {
+  const policy = params.scheduledToolPolicy;
+  return {
+    accountId: policy?.ownerAccountId ?? params.accountId,
+    channel: policy?.mode === "account" ? (policy.ownerChannel ?? null) : params.channel,
+  };
+}
+
 /** Builds scheduled policy context only when both the cap and trusted owner exist. */
 export function resolveScheduledToolPolicyContext(params: {
   toolsAllow?: readonly string[];

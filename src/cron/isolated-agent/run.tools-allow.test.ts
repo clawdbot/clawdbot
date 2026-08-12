@@ -190,6 +190,7 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
         mode: "account",
         ownerSessionKey: "agent:main:whatsapp:group:team",
         ownerAccountId: "default",
+        ownerChannel: "whatsapp",
       });
     },
   );

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
+import {
+  resolveScheduledToolCallerContext,
+  resolveScheduledToolPolicyContext,
+} from "./scheduled-tool-policy.js";
 
 describe("resolveScheduledToolPolicyContext", () => {
   it("requires both a persisted cap and valid server provenance", () => {
@@ -61,5 +64,38 @@ describe("resolveScheduledToolPolicyContext", () => {
       ownerSessionKey: "agent:main:main",
       ownerAccountId: "work",
     });
+  });
+});
+
+describe("resolveScheduledToolCallerContext", () => {
+  it("uses account-bound creator identity without changing delivery identity", () => {
+    expect(
+      resolveScheduledToolCallerContext({
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: "agent:main:discord:group:ops",
+          ownerAccountId: "creator",
+          ownerChannel: "discord",
+        },
+        accountId: "delivery",
+        channel: "telegram",
+      }),
+    ).toEqual({ accountId: "creator", channel: "discord" });
+  });
+
+  it("makes an unprovable account-bound channel explicitly unavailable", () => {
+    expect(
+      resolveScheduledToolCallerContext({
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: "agent:main:main",
+          ownerAccountId: "creator",
+        },
+        accountId: "delivery",
+        channel: "telegram",
+      }),
+    ).toEqual({ accountId: "creator", channel: null });
   });
 });
