@@ -234,7 +234,7 @@ export function readChannelContextAdmissionEvidence(
 }
 
 /** Preserve private evidence when an owner intentionally replaces a finalized context object. */
-export function copyChannelContextAdmissionEvidence(source: object, target: object): void {
+export function copyChannelParticipantAdmissionEvidence(source: object, target: object): void {
   const evidence = state.evidenceByContext.get(source);
   if (evidence) {
     state.evidenceByContext.set(target, evidence);

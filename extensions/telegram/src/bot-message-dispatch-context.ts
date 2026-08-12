@@ -1,3 +1,4 @@
+import { copyChannelParticipantAdmissionEvidence } from "openclaw/plugin-sdk/channel-ingress-runtime";
 // Telegram plugin module recovers dispatch routing and group-history context.
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
@@ -74,7 +75,7 @@ function normalizeDispatchTelegramThreadPayload(params: {
   if (messageThreadId === params.threadSpec.id && transportThreadId === params.threadSpec.id) {
     return params.context;
   }
-  return {
+  const normalized = {
     ...params.context,
     ctxPayload: {
       ...params.context.ctxPayload,
@@ -82,6 +83,8 @@ function normalizeDispatchTelegramThreadPayload(params: {
       TransportThreadId: params.threadSpec.id,
     },
   };
+  copyChannelParticipantAdmissionEvidence(params.context.ctxPayload, normalized.ctxPayload);
+  return normalized;
 }
 
 function buildRecoveredTelegramChatActionSender(params: {
@@ -243,7 +246,7 @@ export function resolveDispatchTelegramContext(params: {
     action: "record_voice",
   });
   migrateRecoveredTelegramGroupHistory({ context: params.context, recoveredHistoryKey });
-  return {
+  const recovered = {
     ...params.context,
     historyKey: recoveredHistoryKey,
     threadSpec,
@@ -272,4 +275,6 @@ export function resolveDispatchTelegramContext(params: {
             ChannelStructuredContext: recoveredPromptContext,
           },
   };
+  copyChannelParticipantAdmissionEvidence(params.context.ctxPayload, recovered.ctxPayload);
+  return recovered;
 }
