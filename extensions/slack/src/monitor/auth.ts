@@ -19,7 +19,6 @@ import { collectSlackCursorPages } from "../cursor-pages.js";
 import { parseSlackTarget } from "../target-parsing.js";
 import {
   allowListMatches,
-  normalizeAllowList,
   normalizeAllowListLower,
   normalizeSlackAllowOwnerEntry,
   normalizeSlackSlug,
