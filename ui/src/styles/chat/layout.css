@@ -3796,15 +3796,27 @@ openclaw-chat-video-player {
   left: 0;
   right: 0;
   max-height: 288px;
-  overflow-y: auto;
+  overflow: hidden;
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
   border-radius: var(--menu-radius);
   box-shadow: var(--shadow-md);
   z-index: 30;
   margin-bottom: 4px;
+}
+
+.slash-menu__scroll {
+  box-sizing: border-box;
+  max-height: inherit;
+  overflow-y: auto;
   padding: var(--menu-padding);
   scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted) 35%, transparent) transparent;
+}
+
+.slash-menu__scroll::-webkit-scrollbar-track,
+.slash-menu__scroll::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 .slash-menu-group + .slash-menu-group {
@@ -3910,51 +3922,6 @@ openclaw-chat-video-player {
   color: var(--muted);
   white-space: nowrap;
   flex-shrink: 0;
-}
-
-.slash-menu-show-more {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  width: 100%;
-  padding: 8px 10px;
-  margin-top: 4px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--muted);
-  background: none;
-  border: none;
-  border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-.slash-menu-show-more:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.slash-menu-footer {
-  display: flex;
-  gap: 10px;
-  padding: 6px 10px 4px;
-  font-size: 0.68rem;
-  color: var(--muted);
-  border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
-  margin-top: 4px;
-}
-
-.slash-menu-footer kbd {
-  display: inline-block;
-  padding: 1px 4px;
-  font-size: 0.65rem;
-  font-family: var(--mono);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  background: var(--bg);
-  line-height: 1.3;
 }
 
 .chat-attachments-preview {

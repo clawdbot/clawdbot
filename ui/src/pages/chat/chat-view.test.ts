@@ -3997,6 +3997,35 @@ describe("chat slash menu accessibility", () => {
     expect(container.querySelector(".slash-menu-badge")).not.toBeNull();
   });
 
+  it("shows every command directly without an expander or keyboard footer", () => {
+    replaceSlashCommands([
+      {
+        key: "standard-command",
+        name: "standard-command",
+        description: "Standard command.",
+        tier: "standard",
+        category: "session",
+      },
+      {
+        key: "power-command",
+        name: "power-command",
+        description: "Power command.",
+        tier: "power",
+        category: "tools",
+      },
+    ]);
+    const harness = createSlashRerenderHarness();
+    const container = harness.inputAndRender(harness.container, "/");
+
+    expect(
+      Array.from(container.querySelectorAll<HTMLElement>(".slash-menu [role='option']")).map(
+        (option) => option.querySelector(".slash-menu-name")?.textContent?.trim(),
+      ),
+    ).toEqual(["/standard-command", "/power-command"]);
+    expect(container.querySelector(".slash-menu-show-more")).toBeNull();
+    expect(container.querySelector(".slash-menu-footer")).toBeNull();
+  });
+
   it("keeps filtered command DOM and keyboard order aligned with relevance", () => {
     replaceSlashCommands([
       {
