@@ -247,4 +247,47 @@ describe("Discord durable ingress", () => {
       }
     });
   });
+
+  it("dead-letters a retryable poison event instead of holding its lane for a day", async () => {
+    vi.useFakeTimers();
+    try {
+      await withQueue(async (queue) => {
+        const dispatch = vi.fn(async () => {
+          throw new Error("poison");
+        });
+        const monitor = createDiscordIngressMonitor({
+          accountId: "default",
+          client: {} as never,
+          runtime: runtime(),
+          queue,
+          dispatch,
+        });
+        monitor.start();
+        try {
+          const poison = createRawMessage("1006");
+          void monitor.accept(poison).catch(() => undefined);
+
+          // Ten virtual minutes is far beyond the retry ladder, and far short of
+          // the generic 24-hour dead-letter floor. If Discord inherits that floor
+          // the row is still pending here and its channel lane is blocked.
+          let terminal = false;
+          for (let tick = 0; tick < 40 && !terminal; tick += 1) {
+            await vi.advanceTimersByTimeAsync(15_000);
+            const verdict = await queue.enqueue("1006", payloadFor(poison));
+            terminal = verdict.kind === "failed";
+          }
+
+          expect(
+            terminal,
+            "poison event never reached a terminal state within ten virtual minutes: Discord is inheriting the generic 24-hour dead-letter floor, so one undeliverable event blocks its channel lane for a full day",
+          ).toBe(true);
+          expect(dispatch.mock.calls.length).toBeGreaterThan(1);
+        } finally {
+          await monitor.stop();
+        }
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

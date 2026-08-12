@@ -3,6 +3,7 @@ import { GatewayDispatchEvents, type APIMessage } from "discord-api-types/v10";
 import {
   createChannelIngressError,
   createChannelIngressMonitor,
+  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
@@ -147,6 +148,13 @@ export function createDiscordIngressMonitor(params: {
     },
     appendRetryDelaysMs: [0],
     drain: {
+      retryPolicy: {
+        maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+        // Discord drains each channel lane serially, so the generic 24-hour
+        // dead-letter floor lets one poison event block its channel lane for a
+        // full day while live traffic queues behind it. Matches LINE and Zalo.
+        deadLetterMinAgeMs: 0,
+      },
       resolveNonRetryableFailure: (error) => {
         if (error instanceof DiscordIngressPayloadError) {
           return { reason: "invalid-event", message: error.message };
