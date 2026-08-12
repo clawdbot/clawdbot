@@ -804,7 +804,6 @@ describe("resolveSandboxContext", () => {
       remote: { note: "test-remote" },
     });
     expect(result.skillUsagePaths).toEqual(skillUsagePaths);
-    expect(result.skillsSnapshot).toEqual(skillsSnapshot);
   }, 15_000);
 
   it("materializes skills into a hidden read-only workspace for writable sandboxes", async () => {

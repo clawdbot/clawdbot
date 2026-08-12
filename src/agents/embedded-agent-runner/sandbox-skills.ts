@@ -6,8 +6,13 @@
  */
 import path from "node:path";
 import { escapeSkillXml, type Skill } from "../../skills/loading/skill-contract.js";
-import type { SkillEligibilityContext, SkillSnapshot, SkillUsagePath } from "../../skills/types.js";
-import type { SkillEntry } from "../../skills/types.js";
+import { peekPublishedSyncedSkillsSnapshot } from "../../skills/loading/workspace-skill-sync-cache.js";
+import type {
+  SkillEligibilityContext,
+  SkillEntry,
+  SkillSnapshot,
+  SkillUsagePath,
+} from "../../skills/types.js";
 import type { SandboxContext } from "../sandbox/types.js";
 
 const MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS = [".openclaw", "sandbox-skills"] as const;
@@ -15,11 +20,7 @@ type SandboxSkillRuntimeContext = Pick<SandboxContext, "enabled"> &
   Partial<
     Pick<
       SandboxContext,
-      | "skillsEligibility"
-      | "skillsWorkspaceDir"
-      | "skillsSnapshot"
-      | "containerWorkdir"
-      | "workspaceAccess"
+      "skillsEligibility" | "skillsWorkspaceDir" | "containerWorkdir" | "workspaceAccess"
     >
   >;
 
@@ -214,9 +215,10 @@ export function resolveSandboxSkillRuntimeInputs(params: {
         : (params.sandbox.containerWorkdir ?? skillsWorkspaceDir);
     // Prefer the sync-published materialized catalog over a live rescan of the
     // shared skills directory. Host-path snapshots remain suppressed.
-    const materializedSnapshot = params.sandbox.skillsSnapshot
+    const publishedSnapshot = peekPublishedSyncedSkillsSnapshot(skillsWorkspaceDir);
+    const materializedSnapshot = publishedSnapshot
       ? remapMaterializedSkillsSnapshotForPrompt({
-          skillsSnapshot: params.sandbox.skillsSnapshot,
+          skillsSnapshot: publishedSnapshot,
           skillsWorkspaceDir,
           skillsPromptWorkspaceDir,
         })

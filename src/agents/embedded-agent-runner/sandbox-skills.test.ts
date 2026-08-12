@@ -5,7 +5,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createSyntheticSourceInfo, escapeSkillXml } from "../../skills/loading/skill-contract.js";
 import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
+import { syncWorkspaceSkills } from "../../skills/loading/workspace-skill-sync.runtime.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
+import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import {
   mapSandboxSkillEntriesForPrompt,
@@ -81,109 +83,112 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     });
   });
 
-  it("keeps the sync-published materialized catalog and remaps prompt paths for sandboxes", () => {
-    const materializedSnapshot: SkillSnapshot = {
-      prompt:
-        "<available_skills>\n  <skill>\n    <name>demo</name>\n    <description>Demo skill</description>\n    <location>/state/sandbox-skills/skills/demo/SKILL.md</location>\n  </skill>\n</available_skills>",
-      skills: [{ name: "demo", skillKey: "demo" }],
-      resolvedSkills: [
-        {
-          name: "demo",
-          description: "Demo skill",
-          filePath: "/state/sandbox-skills/skills/demo/SKILL.md",
-          baseDir: "/state/sandbox-skills/skills/demo",
-          source: "openclaw-workspace",
-          sourceInfo: createSyntheticSourceInfo("/state/sandbox-skills/skills/demo/SKILL.md", {
-            source: "openclaw-workspace",
-            baseDir: "/state/sandbox-skills/skills/demo",
-          }),
-          disableModelInvocation: false,
+  it("keeps the sync-published materialized catalog and remaps prompt paths for sandboxes", async () => {
+    const root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-skills-remap-")),
+    );
+    try {
+      const sourceWorkspace = path.join(root, "source");
+      const targetWorkspace = path.join(root, "state", "sandbox-skills");
+      const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
+      const managedSkillsDir = path.join(sourceWorkspace, ".managed");
+      await writeSkill({
+        dir: path.join(sourceWorkspace, "skills", "demo"),
+        name: "demo",
+        description: "Demo skill",
+      });
+      await syncWorkspaceSkills({
+        sourceWorkspaceDir: sourceWorkspace,
+        targetWorkspaceDir: targetWorkspace,
+        bundledSkillsDir,
+        managedSkillsDir,
+        pluginSkillsDir: path.join(sourceWorkspace, ".plugin-skills"),
+      });
+
+      const resolved = resolveSandboxSkillRuntimeInputs({
+        sandbox: {
+          enabled: true,
+          containerWorkdir: "/workspace",
+          skillsWorkspaceDir: targetWorkspace,
+          workspaceAccess: "rw",
         },
-      ],
-      version: 7,
-    };
+        effectiveWorkspace: path.join(root, "workspace"),
+        skillsSnapshot: snapshot,
+      });
 
-    const resolved = resolveSandboxSkillRuntimeInputs({
-      sandbox: {
-        enabled: true,
-        containerWorkdir: "/workspace",
-        skillsWorkspaceDir: "/state/sandbox-skills",
-        skillsSnapshot: materializedSnapshot,
-        workspaceAccess: "rw",
-      },
-      effectiveWorkspace: "/workspace",
-      skillsSnapshot: snapshot,
-    });
-
-    expect(resolved.skillsSnapshot?.skills).toEqual(materializedSnapshot.skills);
-    expect(resolved.skillsSnapshot?.prompt).toContain(
-      "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md",
-    );
-    expect(resolved.skillsSnapshot?.prompt).not.toContain(hostSkillPath);
-    expect(resolved.skillsSnapshot?.resolvedSkills?.[0]?.filePath).toBe(
-      "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md",
-    );
-    expect(resolved.skillsPromptWorkspaceDir).toBe("/workspace/.openclaw/sandbox-skills");
-    expect(resolved.skillsWorkspaceDir).toBe("/state/sandbox-skills");
-    expect(resolved.workspaceOnly).toBe(true);
+      expect(resolved.skillsSnapshot?.skills.map((skill) => skill.name)).toContain("demo");
+      expect(resolved.skillsSnapshot?.prompt).toContain(
+        "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md",
+      );
+      expect(resolved.skillsSnapshot?.prompt).not.toContain(hostSkillPath);
+      expect(
+        resolved.skillsSnapshot?.resolvedSkills?.some(
+          (skill) => skill.filePath === "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md",
+        ),
+      ).toBe(true);
+      expect(resolved.skillsPromptWorkspaceDir).toBe("/workspace/.openclaw/sandbox-skills");
+      expect(resolved.skillsWorkspaceDir).toBe(targetWorkspace);
+      expect(resolved.workspaceOnly).toBe(true);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
-  it("remaps XML-escaped special-character locations in published sandbox catalogs", () => {
-    const hostFilePath = "/state/sandbox-skills/skills/demo&alpha/SKILL.md";
-    const hostBaseDir = "/state/sandbox-skills/skills/demo&alpha";
-    const containerFilePath = "/workspace/.openclaw/sandbox-skills/skills/demo&alpha/SKILL.md";
-    const materializedSnapshot: SkillSnapshot = {
-      prompt: [
-        "<available_skills>",
-        "  <skill>",
-        "    <name>demo&amp;alpha</name>",
-        "    <description>Demo &amp; alpha</description>",
-        `    <location>${escapeSkillXml(hostFilePath)}</location>`,
-        "  </skill>",
-        "</available_skills>",
-      ].join("\n"),
-      skills: [{ name: "demo&alpha", skillKey: "demo&alpha" }],
-      resolvedSkills: [
-        {
-          name: "demo&alpha",
-          description: "Demo & alpha",
-          filePath: hostFilePath,
-          baseDir: hostBaseDir,
-          source: "openclaw-workspace",
-          sourceInfo: createSyntheticSourceInfo(hostFilePath, {
-            source: "openclaw-workspace",
-            baseDir: hostBaseDir,
-          }),
-          disableModelInvocation: false,
-        },
-      ],
-      version: 8,
-    };
-
-    const resolved = resolveSandboxSkillRuntimeInputs({
-      sandbox: {
-        enabled: true,
-        containerWorkdir: "/workspace",
-        skillsWorkspaceDir: "/state/sandbox-skills",
-        skillsSnapshot: materializedSnapshot,
-        workspaceAccess: "rw",
-      },
-      effectiveWorkspace: "/workspace",
-      skillsSnapshot: snapshot,
-    });
-    const prompt = resolveSkillsPrompt({
-      skillsSnapshot: resolved.skillsSnapshot,
-      workspaceDir: resolved.skillsPromptWorkspaceDir,
-    });
-
-    expect(resolved.skillsSnapshot?.resolvedSkills?.[0]?.filePath).toBe(containerFilePath);
-    expect(resolved.skillsSnapshot?.prompt).toContain(
-      `<location>${escapeSkillXml(containerFilePath)}</location>`,
+  it("remaps XML-escaped special-character locations in published sandbox catalogs", async () => {
+    const root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-skills-xml-")),
     );
-    expect(resolved.skillsSnapshot?.prompt).not.toContain(escapeSkillXml(hostFilePath));
-    expect(prompt).toContain(`<location>${escapeSkillXml(containerFilePath)}</location>`);
-    expect(prompt).not.toContain("/state/sandbox-skills/");
-    expect(prompt).not.toContain(hostSkillPath);
+    try {
+      const sourceWorkspace = path.join(root, "source");
+      const targetWorkspace = path.join(root, "state", "sandbox-skills");
+      const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
+      const managedSkillsDir = path.join(sourceWorkspace, ".managed");
+      const skillDirName = "demo&alpha";
+      await writeSkill({
+        dir: path.join(sourceWorkspace, "skills", skillDirName),
+        name: "demoalpha",
+        description: "Demo and alpha",
+      });
+      await syncWorkspaceSkills({
+        sourceWorkspaceDir: sourceWorkspace,
+        targetWorkspaceDir: targetWorkspace,
+        bundledSkillsDir,
+        managedSkillsDir,
+        pluginSkillsDir: path.join(sourceWorkspace, ".plugin-skills"),
+      });
+      const hostFilePath = path.join(targetWorkspace, "skills", skillDirName, "SKILL.md");
+      const containerFilePath = `/workspace/.openclaw/sandbox-skills/skills/${skillDirName}/SKILL.md`;
+
+      const resolved = resolveSandboxSkillRuntimeInputs({
+        sandbox: {
+          enabled: true,
+          containerWorkdir: "/workspace",
+          skillsWorkspaceDir: targetWorkspace,
+          workspaceAccess: "rw",
+        },
+        effectiveWorkspace: path.join(root, "workspace"),
+        skillsSnapshot: snapshot,
+      });
+      const prompt = resolveSkillsPrompt({
+        skillsSnapshot: resolved.skillsSnapshot,
+        workspaceDir: resolved.skillsPromptWorkspaceDir,
+      });
+
+      const remappedSkill = resolved.skillsSnapshot?.resolvedSkills?.find((skill) =>
+        skill.filePath.includes(`skills/${skillDirName}/SKILL.md`),
+      );
+
+      expect(remappedSkill?.filePath).toBe(containerFilePath);
+      expect(resolved.skillsSnapshot?.prompt).toContain(
+        `<location>${escapeSkillXml(containerFilePath)}</location>`,
+      );
+      expect(resolved.skillsSnapshot?.prompt).not.toContain(escapeSkillXml(hostFilePath));
+      expect(prompt).toContain(`<location>${escapeSkillXml(containerFilePath)}</location>`);
+      expect(prompt).not.toContain("/state/sandbox-skills/");
+      expect(prompt).not.toContain(hostSkillPath);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("falls back to the effective workspace for older sandbox contexts", () => {

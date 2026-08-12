@@ -1,4 +1,4 @@
-import type { SkillEligibilityContext, SkillSnapshot, SkillUsagePath } from "../../skills/types.js";
+import type { SkillEligibilityContext, SkillUsagePath } from "../../skills/types.js";
 /**
  * Sandbox runtime configuration and context types.
  *
@@ -103,8 +103,6 @@ export type SandboxContext = {
   skillsWorkspaceDir?: string;
   skillsEligibility?: SkillEligibilityContext;
   skillUsagePaths?: SkillUsagePath[];
-  /** Complete materialized skills catalog published by sync for this run. */
-  skillsSnapshot?: SkillSnapshot;
   workspaceAccess: SandboxWorkspaceAccess;
   runtimeId: string;
   runtimeLabel: string;
@@ -124,7 +122,5 @@ export type SandboxWorkspaceInfo = {
   skillsWorkspaceDir?: string;
   skillsEligibility?: SkillEligibilityContext;
   skillUsagePaths?: SkillUsagePath[];
-  /** Complete materialized skills catalog published by sync for this run. */
-  skillsSnapshot?: SkillSnapshot;
   workspaceAccess?: SandboxWorkspaceAccess;
 };

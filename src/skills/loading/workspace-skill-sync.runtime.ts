@@ -22,6 +22,10 @@ import { serializeByKey } from "./serialize.js";
 import { resolveSkillTelemetrySource } from "./source.js";
 import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
+import {
+  resolveSyncedSkillsCacheKey,
+  syncedSkillsUsageCache,
+} from "./workspace-skill-sync-cache.js";
 
 const fsp = fs.promises;
 const skillsLogger = createSubsystemLogger("skills");
@@ -52,16 +56,6 @@ export type SyncedWorkspaceSkills = {
   /** Complete materialized catalog for this sync generation (host destination paths). */
   skillsSnapshot: SkillSnapshot;
 };
-
-const syncedSkillsUsageCache = new Map<
-  string,
-  {
-    destinations: Map<string, string>;
-    manifestKey: string;
-    skillUsagePaths: SkillUsagePath[];
-    skillsSnapshot: SkillSnapshot;
-  }
->();
 
 function createEmptySyncedSkillsSnapshot(skillsVersion: number): SkillSnapshot {
   return {
@@ -197,7 +191,7 @@ export async function syncWorkspaceSkills(params: {
   }
 
   return await serializeByKey(`syncSkills:${targetDir}`, async () => {
-    const targetSkillsDir = path.join(targetDir, "skills");
+    const targetSkillsDir = resolveSyncedSkillsCacheKey(params.targetWorkspaceDir);
     const manifestPath = path.join(targetSkillsDir, SYNCED_SKILLS_MANIFEST_NAME);
     const skillsVersion = getSkillsSnapshotVersion(sourceDir);
     const skillsSnapshot = params.skillsSnapshot;
@@ -359,7 +353,8 @@ export async function syncWorkspaceSkills(params: {
       pruneMapToMaxSize(syncedSkillsUsageCache, 100);
       return { skillUsagePaths, skillsSnapshot: nextSkillsSnapshot };
     }
-    syncedSkillsUsageCache.delete(targetSkillsDir);
+    // Leave any previously published complete catalog in place. A failed
+    // refresh must not force concurrent readers onto a partial live tree.
     return { skillUsagePaths, skillsSnapshot: nextSkillsSnapshot };
   });
 }

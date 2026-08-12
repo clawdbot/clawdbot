@@ -528,7 +528,7 @@ describe("syncWorkspaceSkills", () => {
       expect(oldCatalog.some((name) => !liveNames.includes(name))).toBe(true);
       expect(newCatalog.every((name) => liveNames.includes(name))).toBe(false);
 
-      // Sandbox prompt readers consume the sync-published generation instead.
+      // Sandbox prompt readers peek the sync-published generation instead.
       const {
         skillsSnapshot: skillsSnapshotForRun,
         skillsPromptWorkspaceDir,
@@ -539,7 +539,6 @@ describe("syncWorkspaceSkills", () => {
           enabled: true,
           containerWorkdir: "/workspace",
           skillsWorkspaceDir: targetWorkspace,
-          skillsSnapshot: first.skillsSnapshot,
           workspaceAccess: "rw",
         },
         effectiveWorkspace: targetWorkspace,

@@ -46,7 +46,6 @@ async function syncSandboxSkillsToWorkspace(params: {
 }): Promise<{
   eligibility?: SkillEligibilityContext;
   skillUsagePaths?: SkillUsagePath[];
-  skillsSnapshot?: SkillSnapshot;
 }> {
   try {
     const [syncWorkspaceSkills, { getRemoteSkillEligibility }, { resolveNodeExecEligibility }] =
@@ -78,7 +77,6 @@ async function syncSandboxSkillsToWorkspace(params: {
     return {
       eligibility,
       skillUsagePaths: synced.skillUsagePaths,
-      skillsSnapshot: synced.skillsSnapshot,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : JSON.stringify(error);
@@ -102,7 +100,6 @@ async function ensureSandboxWorkspaceLayout(params: {
   skillsWorkspaceDir: string;
   skillsEligibility?: SkillEligibilityContext;
   skillUsagePaths?: SkillUsagePath[];
-  skillsSnapshot?: SkillSnapshot;
   workspaceDir: string;
 }> {
   const { cfg, rawSessionKey } = params;
@@ -151,7 +148,6 @@ async function ensureSandboxWorkspaceLayout(params: {
     skillsWorkspaceDir,
     ...(syncedSkills.eligibility ? { skillsEligibility: syncedSkills.eligibility } : {}),
     ...(syncedSkills.skillUsagePaths ? { skillUsagePaths: syncedSkills.skillUsagePaths } : {}),
-    ...(syncedSkills.skillsSnapshot ? { skillsSnapshot: syncedSkills.skillsSnapshot } : {}),
     workspaceDir,
   };
 }
@@ -240,7 +236,6 @@ async function resolveProvisionedSandboxContext(
     scopeKey,
     skillsEligibility,
     skillUsagePaths,
-    skillsSnapshot,
     skillsWorkspaceDir,
     workspaceDir,
   } = await ensureSandboxWorkspaceLayout({
@@ -337,7 +332,6 @@ async function resolveProvisionedSandboxContext(
     skillsWorkspaceDir,
     ...(skillsEligibility ? { skillsEligibility } : {}),
     ...(skillUsagePaths ? { skillUsagePaths } : {}),
-    ...(skillsSnapshot ? { skillsSnapshot } : {}),
     workspaceAccess: resolvedCfg.workspaceAccess,
     runtimeId: backend.runtimeId,
     runtimeLabel: backend.runtimeLabel,
@@ -398,7 +392,6 @@ export async function ensureSandboxWorkspaceForSession(params: {
     scopeKey,
     skillsEligibility,
     skillUsagePaths,
-    skillsSnapshot,
     skillsWorkspaceDir,
     workspaceDir,
   } = await ensureSandboxWorkspaceLayout({
@@ -423,7 +416,6 @@ export async function ensureSandboxWorkspaceForSession(params: {
     skillsWorkspaceDir,
     ...(skillsEligibility ? { skillsEligibility } : {}),
     ...(skillUsagePaths ? { skillUsagePaths } : {}),
-    ...(skillsSnapshot ? { skillsSnapshot } : {}),
     workspaceAccess: cfg.workspaceAccess,
   };
 }

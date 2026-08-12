@@ -286,9 +286,6 @@ async function resolveCliSkillsPrompt(params: {
       ...(sandboxWorkspace.skillsWorkspaceDir
         ? { skillsWorkspaceDir: sandboxWorkspace.skillsWorkspaceDir }
         : {}),
-      ...(sandboxWorkspace.skillsSnapshot
-        ? { skillsSnapshot: sandboxWorkspace.skillsSnapshot }
-        : {}),
       ...(sandboxWorkspace.workspaceAccess
         ? { workspaceAccess: sandboxWorkspace.workspaceAccess }
         : {}),
