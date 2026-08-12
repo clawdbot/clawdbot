@@ -43,6 +43,7 @@ export {
   runTopLevelReplyShapeScenario,
 } from "./scenario-runtime-thread.js";
 export {
+  runDraftRetainedOnFailedFinalDeliveryScenario,
   runPartialStreamingPreviewScenario,
   runQuietStreamingPreviewScenario,
 } from "./scenario-runtime-streaming-preview.js";
