@@ -177,20 +177,19 @@ export async function prepareAgentContentPhase(params: {
   const to = params.sessionKeyFromTo
     ? ""
     : (params.explicitRecipientSession?.to ?? params.requestedToRaw ?? "");
-  const explicitVoiceWakeSessionTarget =
-    params.requestedSessionKeyRaw
-      ? (() => {
-          const { cfg, canonicalKey } = loadSessionEntry(params.requestedSessionKeyRaw!, {
-            clone: false,
-          });
-          const routedAgentId = resolveAgentIdFromSessionKey(canonicalKey);
-          const compatibilityOwner = tryResolveSessionCompatibilityOwnerAgentId(cfg, canonicalKey);
-          if (!compatibilityOwner || routedAgentId !== compatibilityOwner) {
-            return true;
-          }
-          return canonicalKey !== resolveAgentMainSessionKey({ cfg, agentId: routedAgentId });
-        })()
-      : false;
+  const explicitVoiceWakeSessionTarget = params.requestedSessionKeyRaw
+    ? (() => {
+        const { cfg, canonicalKey } = loadSessionEntry(params.requestedSessionKeyRaw!, {
+          clone: false,
+        });
+        const routedAgentId = resolveAgentIdFromSessionKey(canonicalKey);
+        const compatibilityOwner = tryResolveSessionCompatibilityOwnerAgentId(cfg, canonicalKey);
+        if (!compatibilityOwner || routedAgentId !== compatibilityOwner) {
+          return true;
+        }
+        return canonicalKey !== resolveAgentMainSessionKey({ cfg, agentId: routedAgentId });
+      })()
+    : false;
   const canAutoRouteVoiceWake =
     !normalizeOptionalString(params.request.agentId) &&
     !explicitVoiceWakeSessionTarget &&
