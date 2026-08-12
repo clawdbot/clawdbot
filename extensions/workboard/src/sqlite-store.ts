@@ -380,6 +380,12 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
     "reconciliation_association_key",
     "reconciliation_association_key TEXT",
   );
+  ensureColumn(
+    db,
+    "workboard_card_links",
+    "last_source_observation_request_json",
+    "last_source_observation_request_json TEXT",
+  );
   const legacyLinks = db
     .prepare(
       `SELECT id FROM workboard_card_links
@@ -414,12 +420,6 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
     "workboard_card_links",
     "last_source_observation_id",
     "last_source_observation_id TEXT",
-  );
-  ensureColumn(
-    db,
-    "workboard_card_links",
-    "last_source_observation_request_json",
-    "last_source_observation_request_json TEXT",
   );
   ensureColumn(
     db,

@@ -120,6 +120,9 @@ describe("workboard sqlite batch card read", () => {
         );
         oldDb.exec("ALTER TABLE workboard_card_links DROP COLUMN stale_at");
         oldDb.exec("ALTER TABLE workboard_card_links DROP COLUMN stale_state");
+        oldDb.exec(
+          "ALTER TABLE workboard_card_links DROP COLUMN last_source_observation_request_json",
+        );
         oldDb.prepare("DELETE FROM workboard_schema_migrations WHERE id = ?").run("schema-5");
       } finally {
         oldDb.close();
