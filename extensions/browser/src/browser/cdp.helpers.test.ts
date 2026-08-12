@@ -167,7 +167,7 @@ describe("cdp helpers", () => {
     await expect(
       resolvePinnedHostnameWithPolicy("browser.example", {
         policy: scoped,
-        lookupFn: async () => [{ address: "10.0.0.8", family: 4 }],
+        lookupFn: (async () => [{ address: "10.0.0.8", family: 4 }]) as never,
       }),
     ).rejects.toThrow(/private\/internal\/special-use ip address/i);
   });
@@ -188,7 +188,7 @@ describe("cdp helpers", () => {
     await expect(
       resolvePinnedHostnameWithPolicy("browser.example", {
         policy: scoped,
-        lookupFn: async () => [{ address: "10.0.0.8", family: 4 }],
+        lookupFn: (async () => [{ address: "10.0.0.8", family: 4 }]) as never,
       }),
     ).resolves.toEqual(expect.objectContaining({ addresses: ["10.0.0.8"] }));
   });
