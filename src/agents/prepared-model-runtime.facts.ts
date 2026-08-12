@@ -21,10 +21,11 @@ import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-au
 import type { AgentCredentialMap } from "./agent-auth-credentials.js";
 import { resolveAmbientAgentCredentialsForDiscovery } from "./agent-auth-discovery.js";
 import {
-  discoverAuthStorage,
+  discoverAuthStorageFacts,
   discoverModels,
   discoverModelsFromCapturedSources,
 } from "./agent-model-discovery.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   buildInlineProviderModels,
   type InlineModelEntry,
@@ -73,7 +74,7 @@ import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimePluginGeneration,
 } from "./prepared-model-runtime.types.js";
-import type { AuthStorage, AuthStorageData } from "./sessions/auth-storage.js";
+import { AuthStorage, type AuthStorageData } from "./sessions/auth-storage.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
 const MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
@@ -82,6 +83,7 @@ const fullModelCatalogSnapshots = new WeakSet<ModelCatalogSnapshot>();
 type PreparedModelRuntimeAgentBaseFacts = {
   input: PreparedModelRuntimeInput;
   env: NodeJS.ProcessEnv;
+  authStore: AuthProfileStore;
   templateAuthStorage: AuthStorage;
   credentials: Readonly<AuthStorageData>;
   providerIds: string[];
@@ -120,7 +122,7 @@ function prepareAgentFacts(
   additionalProviderIds: readonly string[] = [],
 ): PreparedModelRuntimeAgentBaseFacts {
   const env = input.env ?? process.env;
-  const templateAuthStorage = discoverAuthStorage(input.agentDir, {
+  const authFacts = discoverAuthStorageFacts(input.agentDir, {
     config: input.config,
     // Prepared owners consume only the already-published runtime auth generation. External CLI
     // hydration belongs to startup/control-plane and turn-time producers, never rebuilds.
@@ -131,7 +133,8 @@ function prepareAgentFacts(
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     ...(input.env ? { env } : {}),
   });
-  const credentials = templateAuthStorage.getAll();
+  const credentials = authFacts.credentials;
+  const templateAuthStorage = authFacts.authStorage;
   const configuredModelRefs = collectPreparedModelRuntimeConfiguredRefs(
     input.config,
     input.agentId,
@@ -139,6 +142,7 @@ function prepareAgentFacts(
   return {
     input,
     env,
+    authStore: authFacts.store,
     templateAuthStorage,
     credentials,
     configuredModelRefs,
@@ -486,6 +490,12 @@ export function isPreparedModelCatalogFull(snapshot: ModelCatalogSnapshot): bool
   return fullModelCatalogSnapshots.has(snapshot);
 }
 
+/** Restores process-local provenance after a complete catalog crosses a worker boundary. */
+export function markPreparedModelCatalogFull(snapshot: ModelCatalogSnapshot): ModelCatalogSnapshot {
+  fullModelCatalogSnapshots.add(snapshot);
+  return snapshot;
+}
+
 function captureModelsJsonContents(agentDir: string): string | null {
   try {
     return fs.readFileSync(path.join(agentDir, "models.json"), "utf8");
@@ -645,7 +655,10 @@ export async function prepareAgentCatalogSource(
   pluginGeneration: PreparedModelRuntimePluginGeneration,
   catalogMode: PreparedModelRuntimeCatalogMode,
   persist = true,
-  sourceOptions: { providerDiscoveryProviderIds?: readonly string[] } = {},
+  sourceOptions: {
+    authStore?: AuthProfileStore;
+    providerDiscoveryProviderIds?: readonly string[];
+  } = {},
 ): Promise<PreparedModelRuntimeCatalogSource> {
   const { env, input, providerIds } = agentFacts;
   const providerOutcomes = new Map<string, ProviderCatalogOutcome>();
@@ -683,6 +696,7 @@ export async function prepareAgentCatalogSource(
   if (!persist) {
     const source = await planOpenClawModelsJsonSource(input.config, input.agentDir, {
       ...options,
+      ...(sourceOptions.authStore ? { authStore: sourceOptions.authStore } : {}),
       ...(catalogMode === "live" ? { onProviderCatalogOutcome: recordProviderOutcome } : {}),
     });
     return {

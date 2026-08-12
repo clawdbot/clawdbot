@@ -1,6 +1,8 @@
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { createOpenAIModelRoutesResolver } from "../../agents/openai-model-routes.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import { buildModelsListResult } from "./models-list-result.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -35,6 +37,10 @@ export async function listModels(params: {
       agentId: "main",
       agentDir: "/tmp/models-list-openai-agent",
       config,
+      authStore: loadAuthProfileStoreWithoutExternalProfiles("/tmp/models-list-openai-agent", {
+        allowKeychainPrompt: false,
+      }),
+      metadataSnapshot: loadManifestMetadataSnapshot({ config, env: process.env }),
       entries: params.catalog,
       routeVariants: params.catalog,
     }),
@@ -52,10 +58,13 @@ export async function listModels(params: {
           },
           catalogProjector: {
             metadataSnapshot: {
+              index: { plugins: [] },
+              manifestRegistry: { plugins: [] },
               plugins: [
                 { id: "test-provider", modelCatalog: { discovery: params.discoveryModes } },
               ],
             },
+            authStore: { version: 1, profiles: {} },
           } as never,
         }
       : {}),

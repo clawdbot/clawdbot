@@ -6,6 +6,13 @@ import {
 } from "./models-list-result.js";
 import type { GatewayRequestContext } from "./types.js";
 
+const metadataSnapshot = {
+  index: { plugins: [] },
+  manifestRegistry: { plugins: [] },
+  plugins: [],
+} as never;
+const emptyAuthStore = { version: 1, profiles: {} } as const;
+
 describe("models.list provider catalog outcomes", () => {
   it("preserves an auth rejection when no usable models are visible", async () => {
     const config = {} as OpenClawConfig;
@@ -13,6 +20,8 @@ describe("models.list provider catalog outcomes", () => {
       agentId: "main",
       agentDir: "/tmp/models-list-provider-outcomes-agent",
       config,
+      authStore: emptyAuthStore,
+      metadataSnapshot,
       entries: [],
       routeVariants: [],
       providerOutcomes: [
@@ -68,6 +77,7 @@ describe("models.list provider catalog outcomes", () => {
       cfg: config,
       agentId: "main",
       snapshot,
+      metadataSnapshot,
       preparedAuthStore: {
         version: 1,
         profiles: {
@@ -143,6 +153,7 @@ describe("models.list provider catalog outcomes", () => {
       cfg: config,
       agentId: "main",
       snapshot,
+      metadataSnapshot,
       preferredProfileId: "openai:accepted",
       preparedAuthStore: {
         version: 1,

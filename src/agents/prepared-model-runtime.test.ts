@@ -584,11 +584,8 @@ describe("prepared model runtime snapshots", () => {
     });
 
     expect(credentialFree).not.toBe(await prepareModelRuntimeSnapshot({ config, agentDir }));
-    expect(mocks.discoverAuthStorage).toHaveBeenNthCalledWith(
-      2,
-      agentDir,
-      expect.objectContaining({ readOnly: true, skipCredentials: true }),
-    );
+    expect(mocks.discoverAuthStorage).toHaveBeenCalledOnce();
+    expect(credentialFree.authStore).toEqual({ version: 1, profiles: {} });
   });
 
   it("reuses one lifecycle-owned snapshot without rediscovering files", async () => {

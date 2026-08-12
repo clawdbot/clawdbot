@@ -1,5 +1,7 @@
 import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-catalog-owner.js";
 import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
+import { getPreparedModelRuntimeAuthMaterializations } from "../agents/prepared-model-runtime-auth.js";
+import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.types.js";
 // Gateway catalog reads use the atomic prepared runtime generation.
 import { getRuntimeConfig } from "../config/io.js";
 import type {
@@ -51,30 +53,49 @@ export async function resetPreparedModelCatalogStateForTest(): Promise<void> {
 
 async function loadGatewayModelCatalogOwnerSnapshot(
   params?: LoadGatewayModelCatalogParams,
-): Promise<GatewayModelCatalogOwnerSnapshot> {
+): Promise<
+  GatewayModelCatalogOwnerSnapshot & {
+    authMaterializations: GatewayModelCatalogSnapshot["authMaterializations"];
+  }
+> {
   const loadOwner = await resolveLoader(params);
-  return resolvePublishedModelCatalogOwner(
-    await loadOwner({
-      ...(params?.agentId ? { agentId: params.agentId } : {}),
-      ...(params?.agentDir ? { agentDir: params.agentDir } : {}),
-      config: (params?.getConfig ?? getRuntimeConfig)(),
-      readOnly: params?.readOnly !== false,
-      ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    }),
-  );
+  const candidate = await loadOwner({
+    ...(params?.agentId ? { agentId: params.agentId } : {}),
+    ...(params?.agentDir ? { agentDir: params.agentDir } : {}),
+    config: (params?.getConfig ?? getRuntimeConfig)(),
+    readOnly: params?.readOnly !== false,
+    ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  });
+  return {
+    ...resolvePublishedModelCatalogOwner(candidate),
+    authMaterializations: getPreparedModelRuntimeAuthMaterializations(
+      candidate as PreparedModelRuntimeSnapshot,
+    ),
+  };
 }
 
-export async function loadGatewayModelCatalogSnapshot(
-  params?: LoadGatewayModelCatalogParams,
-): Promise<GatewayModelCatalogSnapshot> {
-  const owner = await loadGatewayModelCatalogOwnerSnapshot(params);
+function projectGatewayModelCatalogSnapshot(
+  owner: GatewayModelCatalogOwnerSnapshot & {
+    authMaterializations?: GatewayModelCatalogSnapshot["authMaterializations"];
+  },
+): GatewayModelCatalogSnapshot {
   return {
     ...owner.modelCatalog,
     agentId: owner.agentId,
     agentDir: owner.agentDir,
     workspaceDir: owner.workspaceDir,
     config: owner.config,
+    authModes: owner.authModes,
+    authStore: owner.authStore,
+    metadataSnapshot: owner.metadataSnapshot,
+    authMaterializations: owner.authMaterializations,
   };
+}
+
+export async function loadGatewayModelCatalogSnapshot(
+  params?: LoadGatewayModelCatalogParams,
+): Promise<GatewayModelCatalogSnapshot> {
+  return projectGatewayModelCatalogSnapshot(await loadGatewayModelCatalogOwnerSnapshot(params));
 }
 
 export async function loadGatewayModelCatalog(
@@ -96,4 +117,26 @@ export async function readPreparedGatewayModelCatalog(
     readOnly: true,
     ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   })?.entries;
+}
+
+/** Reads the published owner generation without activating full catalog discovery. */
+export async function readPreparedGatewayModelCatalogSnapshot(
+  params?: LoadGatewayModelCatalogParams,
+): Promise<GatewayModelCatalogSnapshot | undefined> {
+  const { getPublishedPreparedModelCatalogOwnerSnapshot } =
+    await import("../agents/prepared-model-catalog.js");
+  const config = (params?.getConfig ?? getRuntimeConfig)();
+  const candidate = getPublishedPreparedModelCatalogOwnerSnapshot({
+    ...(params?.agentId ? { agentId: params.agentId } : {}),
+    ...(params?.agentDir ? { agentDir: params.agentDir } : {}),
+    config,
+    ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  });
+  if (!candidate) {
+    return undefined;
+  }
+  return projectGatewayModelCatalogSnapshot({
+    ...resolvePublishedModelCatalogOwner(candidate),
+    authMaterializations: getPreparedModelRuntimeAuthMaterializations(candidate),
+  });
 }

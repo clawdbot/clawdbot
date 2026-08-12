@@ -408,8 +408,7 @@ describe("prepared model runtime owner selection", () => {
     });
     await snapshot?.loadFullModelCatalog?.();
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
-    expect(mocks.planOpenClawModelsJsonSource).toHaveBeenCalledOnce();
-    expect(mocks.buildPreparedModelCatalogSnapshot).toHaveBeenCalledOnce();
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
   });
 
   it("shares workspace facts while isolating each agent's configured model projection", async () => {
@@ -595,12 +594,12 @@ describe("prepared model runtime owner selection", () => {
     }));
     let activePlans = 0;
     let peakActivePlans = 0;
-    mocks.planOpenClawModelsJsonSource.mockImplementation(async (_config, agentDir) => {
+    mocks.runPreparedModelCatalogWorker.mockImplementation(async () => {
       activePlans += 1;
       peakActivePlans = Math.max(peakActivePlans, activePlans);
       await Promise.resolve();
       activePlans -= 1;
-      return { agentDir: String(agentDir), modelsJsonContents: null, pluginCatalogs: [] };
+      return { entries: [], routeVariants: [] };
     });
     const config = { agents: { defaults: { model: "openai/gpt-5.5" } } };
 
@@ -623,12 +622,12 @@ describe("prepared model runtime owner selection", () => {
     await Promise.all([loadAgentCatalog("agent-a"), loadAgentCatalog("agent-b")]);
 
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
-    expect(mocks.planOpenClawModelsJsonSource).toHaveBeenCalledTimes(2);
-    expect(mocks.buildPreparedModelCatalogSnapshot).toHaveBeenCalledTimes(2);
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(2);
     expect(peakActivePlans).toBe(1);
     expect(
-      mocks.buildPreparedModelCatalogSnapshot.mock.calls.map((call) => {
-        const credential = call[0].authCredentials.custom;
+      mocks.runPreparedModelCatalogWorker.mock.calls.map((call) => {
+        const credential = (call[0] as { input: { credentials: Record<string, unknown> } }).input
+          .credentials.custom as { type?: string; key?: string } | undefined;
         if (credential?.type !== "api_key") {
           throw new Error("expected prepared custom API key");
         }
@@ -653,13 +652,13 @@ describe("prepared model runtime owner selection", () => {
       workspaceDir: "/tmp/shared-prepared-runtime-workspace",
     });
     let releaseLazyPlan: (() => void) | undefined;
-    mocks.planOpenClawModelsJsonSource.mockImplementation(async (_config, agentDir) => {
+    mocks.runPreparedModelCatalogWorker.mockImplementation(async () => {
       if (!releaseLazyPlan) {
         await new Promise<void>((resolve) => {
           releaseLazyPlan = resolve;
         });
       }
-      return { agentDir: String(agentDir), modelsJsonContents: null, pluginCatalogs: [] };
+      return { entries: [], routeVariants: [] };
     });
 
     const staleCatalogLoad = snapshot?.loadFullModelCatalog?.();
@@ -669,13 +668,13 @@ describe("prepared model runtime owner selection", () => {
       { gatewayLifecycle: true, catalogMode: "live" },
     );
     await Promise.resolve();
-    expect(mocks.planOpenClawModelsJsonSource).toHaveBeenCalledOnce();
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
 
     releaseLazyPlan?.();
     await expect(staleCatalogLoad).rejects.toThrow("superseded");
     await replacement;
-    expect(mocks.planOpenClawModelsJsonSource).toHaveBeenCalledOnce();
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
   });
 

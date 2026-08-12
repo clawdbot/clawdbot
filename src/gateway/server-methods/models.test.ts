@@ -4,13 +4,16 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
+  getPreparedRuntimeAuthProfileStoreSnapshot,
+  loadAuthProfileStoreWithoutExternalProfiles,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../../agents/auth-profiles.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
@@ -223,6 +226,20 @@ function requestModelsList(params: {
   const respond = params.respond ?? vi.fn();
   const runtimeConfig = params.runtimeConfig ?? ({} as OpenClawConfig);
   const getRuntimeConfig = params.getRuntimeConfig ?? (() => runtimeConfig);
+  const resolveOwnerFacts = () => {
+    const config = getRuntimeConfig();
+    const agentId = params.agentId ?? resolveDefaultAgentId(config);
+    const agentDir = resolveAgentDir(config, agentId);
+    return {
+      agentId,
+      agentDir,
+      config,
+      authStore:
+        getPreparedRuntimeAuthProfileStoreSnapshot(agentDir) ??
+        loadAuthProfileStoreWithoutExternalProfiles(agentDir, { allowKeychainPrompt: false }),
+      metadataSnapshot: loadManifestMetadataSnapshot({ config, env: process.env }),
+    };
+  };
   const request = expectDefined(
     modelsHandlers["models.list"],
     'modelsHandlers["models.list"] test invariant',
@@ -252,15 +269,19 @@ function requestModelsList(params: {
         loadParams: Parameters<typeof params.loadGatewayModelCatalog>[0],
       ) => {
         const entries = await params.loadGatewayModelCatalog(loadParams);
-        const config = getRuntimeConfig();
+        const owner = resolveOwnerFacts();
         return {
-          agentId: loadParams?.agentId ?? resolveDefaultAgentId(config),
-          agentDir: "/tmp/models-list-agent",
-          config,
+          ...owner,
+          ...(loadParams?.agentId ? { agentId: loadParams.agentId } : {}),
           entries,
           routeVariants: entries,
         };
       },
+      readPreparedGatewayModelCatalogSnapshot: async () => ({
+        ...resolveOwnerFacts(),
+        entries: [],
+        routeVariants: [],
+      }),
       logGateway: {
         debug: vi.fn(),
       },
@@ -1329,7 +1350,7 @@ describe("models.list", () => {
     );
   });
 
-  it("uses refreshed persisted OAuth when the runtime auth snapshot is stale", async () => {
+  it("does not mix refreshed persisted OAuth into a stale runtime generation", async () => {
     await withModelsTestState(
       {
         layout: "state-only",
@@ -1374,7 +1395,7 @@ describe("models.list", () => {
                   id: "demo-model",
                   name: "Demo Model",
                   provider: "demo-provider",
-                  available: true,
+                  available: false,
                 },
               ],
             },

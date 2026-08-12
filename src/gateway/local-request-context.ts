@@ -135,6 +135,10 @@ function createLocalGatewayRequestContext(
         agentDir: owner.agentDir,
         workspaceDir: owner.workspaceDir,
         config: owner.config,
+        authModes: owner.authModes,
+        authStore: owner.authStore,
+        metadataSnapshot: owner.metadataSnapshot,
+        authMaterializations: [],
       };
     },
     readPreparedGatewayModelCatalog: async (loadParams) =>

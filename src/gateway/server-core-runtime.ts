@@ -84,6 +84,7 @@ export async function startGatewayCoreRuntime(input: {
   loadGatewayPluginBootstrapModule: () => Promise<typeof import("./server-plugin-bootstrap.js")>;
   loadGatewayModelCatalog: typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
   loadGatewayModelCatalogSnapshot: typeof import("./server-model-catalog.js").loadGatewayModelCatalogSnapshot;
+  readPreparedGatewayModelCatalogSnapshot: typeof import("./server-model-catalog.js").readPreparedGatewayModelCatalogSnapshot;
   readPreparedGatewayModelCatalog: typeof import("./server-model-catalog.js").readPreparedGatewayModelCatalog;
 }) {
   const {
@@ -97,6 +98,7 @@ export async function startGatewayCoreRuntime(input: {
     loadGatewayPluginBootstrapModule,
     loadGatewayModelCatalog,
     loadGatewayModelCatalogSnapshot,
+    readPreparedGatewayModelCatalogSnapshot,
     readPreparedGatewayModelCatalog,
   } = input;
   const {
@@ -653,6 +655,7 @@ export async function startGatewayCoreRuntime(input: {
     refreshAttachedGatewayDiscovery,
     loadGatewayModelCatalog,
     loadGatewayModelCatalogSnapshot,
+    readPreparedGatewayModelCatalogSnapshot,
     readPreparedGatewayModelCatalog,
   };
 }

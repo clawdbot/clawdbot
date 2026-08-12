@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildModelsListResult } from "./models-list-result.js";
@@ -15,6 +16,13 @@ import type { GatewayRequestContext } from "./types.js";
 const IMPLICIT_CODEX_RUNTIME = { id: "codex", source: "implicit" } as const;
 const IMPLICIT_OPENCLAW_RUNTIME = { id: "openclaw", source: "implicit" } as const;
 
+function preparedOwnerFacts(config: OpenClawConfig) {
+  return {
+    authStore: { version: 1, profiles: {} },
+    metadataSnapshot: loadManifestMetadataSnapshot({ config, env: process.env }),
+  } as const;
+}
+
 describe("models.list OpenAI routes", () => {
   it("does not reuse a preloaded catalog owned by another agent", async () => {
     const config = {
@@ -27,6 +35,7 @@ describe("models.list OpenAI routes", () => {
       Promise.resolve({
         agentDir: "/tmp/models-list-openai-agent",
         config,
+        ...preparedOwnerFacts(config),
         entries: [],
         routeVariants: [],
       }),
@@ -34,6 +43,14 @@ describe("models.list OpenAI routes", () => {
     const context = {
       getRuntimeConfig: () => config,
       loadGatewayModelCatalogSnapshot,
+      readPreparedGatewayModelCatalogSnapshot: async () => ({
+        agentId: "main",
+        agentDir: "/tmp/models-list-openai-agent",
+        config,
+        entries: [],
+        routeVariants: [],
+        ...preparedOwnerFacts(config),
+      }),
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
     const preloadedCatalog: ModelCatalogSnapshot = {
@@ -55,11 +72,12 @@ describe("models.list OpenAI routes", () => {
   });
 
   it("does not reuse a preloaded catalog from another config generation", async () => {
-    const config = {} as OpenClawConfig;
+    const config = { agents: { defaults: { model: "openai/current" } } } as OpenClawConfig;
     const loadGatewayModelCatalogSnapshot = vi.fn(() =>
       Promise.resolve({
         agentDir: "/tmp/models-list-openai-agent",
         config,
+        ...preparedOwnerFacts(config),
         entries: [],
         routeVariants: [],
       }),
@@ -76,7 +94,7 @@ describe("models.list OpenAI routes", () => {
         params: { view: "default" },
         preloadedCatalog: {
           agentId: "main",
-          config: {} as OpenClawConfig,
+          config: { agents: { defaults: { model: "openai/stale" } } } as OpenClawConfig,
           snapshot: { entries: [catalogEntry("stale", "openai-responses")], routeVariants: [] },
         },
       }),
@@ -91,6 +109,7 @@ describe("models.list OpenAI routes", () => {
       Promise.resolve({
         agentDir: "/tmp/models-list-openai-agent",
         config: replacementConfig,
+        ...preparedOwnerFacts(replacementConfig),
         entries: [],
         routeVariants: [],
       }),
@@ -99,6 +118,14 @@ describe("models.list OpenAI routes", () => {
     const context = {
       getRuntimeConfig: () => config,
       loadGatewayModelCatalogSnapshot,
+      readPreparedGatewayModelCatalogSnapshot: async () => ({
+        agentId: "main",
+        agentDir: "/tmp/models-list-openai-agent",
+        config,
+        entries: [],
+        routeVariants: [],
+        ...preparedOwnerFacts(config),
+      }),
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
 
@@ -127,6 +154,14 @@ describe("models.list OpenAI routes", () => {
     const context = {
       getRuntimeConfig: () => config,
       loadGatewayModelCatalogSnapshot,
+      readPreparedGatewayModelCatalogSnapshot: async () => ({
+        agentId: "main",
+        agentDir: "/tmp/models-list-openai-agent",
+        config,
+        entries: [],
+        routeVariants: [],
+        ...preparedOwnerFacts(config),
+      }),
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
 
@@ -170,6 +205,7 @@ describe("models.list OpenAI routes", () => {
           agentId: "main",
           agentDir: "/tmp/models-list-openai-agent",
           config,
+          ...preparedOwnerFacts(config),
           entries: [ownerEntry],
           routeVariants: [ownerEntry],
         }),
@@ -215,6 +251,7 @@ describe("models.list OpenAI routes", () => {
         agentDir: "/tmp/models-list-main-agent",
         workspaceDir: "/tmp/models-list-main-workspace",
         config: replacementConfig,
+        ...preparedOwnerFacts(replacementConfig),
         entries: [entry],
         routeVariants: [entry],
       })
@@ -223,6 +260,7 @@ describe("models.list OpenAI routes", () => {
         agentDir: "/tmp/models-list-main-agent",
         workspaceDir: "/tmp/models-list-main-workspace",
         config: replacementConfig,
+        ...preparedOwnerFacts(replacementConfig),
         entries: [entry],
         routeVariants: [entry],
       });
@@ -258,6 +296,7 @@ describe("models.list OpenAI routes", () => {
         agentDir: "/tmp/models-list-main-agent",
         workspaceDir: "/tmp/models-list-main-workspace",
         config: replacementConfig,
+        ...preparedOwnerFacts(replacementConfig),
         entries: [entry],
         routeVariants: [entry],
       })
@@ -266,6 +305,7 @@ describe("models.list OpenAI routes", () => {
         agentDir: "/tmp/models-list-worker-agent",
         workspaceDir: "/tmp/models-list-worker-workspace",
         config: replacementConfig,
+        ...preparedOwnerFacts(replacementConfig),
         entries: [entry],
         routeVariants: [entry],
       });
@@ -291,6 +331,7 @@ describe("models.list OpenAI routes", () => {
           agentDir: "/tmp/models-list-openai-agent",
           workspaceDir: "/tmp/models-list-openai-workspace",
           config,
+          ...preparedOwnerFacts(config),
           entries: [],
           routeVariants: [],
         }),
@@ -330,6 +371,7 @@ describe("models.list OpenAI routes", () => {
         Promise.resolve({
           agentDir: "/tmp/models-list-openai-agent",
           config,
+          ...preparedOwnerFacts(config),
           entries: [ownerlessEntry],
           routeVariants: [ownerlessEntry],
         }),
@@ -361,6 +403,7 @@ describe("models.list OpenAI routes", () => {
           agentId: "main",
           agentDir: "/tmp/models-list-main-agent",
           config,
+          ...preparedOwnerFacts(config),
           entries: [mainEntry],
           routeVariants: [mainEntry],
         }),
@@ -398,6 +441,7 @@ describe("models.list OpenAI routes", () => {
           agentId: "worker",
           agentDir: "/tmp/models-list-worker-agent",
           config,
+          ...preparedOwnerFacts(config),
           entries: [workerEntry],
           routeVariants: [workerEntry],
         }),

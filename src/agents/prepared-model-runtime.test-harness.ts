@@ -64,6 +64,10 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     pluginCatalogs: [],
   })),
   prepareStaticCatalog: vi.fn(async (..._args: unknown[]) => ({ entries: [] })),
+  runPreparedModelCatalogWorker: vi.fn(async (..._args: unknown[]) => ({
+    entries: [],
+    routeVariants: [],
+  })),
   resolveAmbientCredentials: vi.fn((..._args: unknown[]) => ({})),
   resolveStaticCatalogModel: vi.fn<StaticCatalogResolver>(() => undefined),
   warn: vi.fn(),
@@ -84,6 +88,27 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   resolvePluginMetadataSnapshot: () => preparedModelRuntimeMocks.pluginMetadataSnapshot,
 }));
 
+vi.mock("./prepared-model-catalog-worker.js", () => ({
+  createPreparedModelCatalogWorkerInput: ({
+    agentFacts,
+  }: {
+    agentFacts: {
+      input: unknown;
+      authStore: unknown;
+      credentials: unknown;
+      providerIds: unknown;
+    };
+  }) => ({
+    generationFingerprint: "test-generation",
+    input: agentFacts.input,
+    authStore: agentFacts.authStore,
+    credentials: agentFacts.credentials,
+    providerIds: agentFacts.providerIds,
+  }),
+  runPreparedModelCatalogWorker: (...args: unknown[]) =>
+    preparedModelRuntimeMocks.runPreparedModelCatalogWorker(...args),
+}));
+
 vi.mock("./model-catalog.js", () => ({
   buildPreparedModelCatalogSnapshot: (...args: Parameters<BuildPreparedModelCatalogSnapshot>) =>
     preparedModelRuntimeMocks.buildPreparedModelCatalogSnapshot(...args),
@@ -95,6 +120,34 @@ vi.mock("./agent-auth-discovery.js", () => ({
 }));
 
 vi.mock("./agent-model-discovery.js", () => ({
+  discoverAuthStorageFacts: (...args: unknown[]) => {
+    if ((args[1] as { skipCredentials?: boolean } | undefined)?.skipCredentials === true) {
+      return {
+        authStorage: { getAll: () => ({}), getOAuthProviders: () => [] },
+        store: { version: 1, profiles: {} },
+        credentials: {},
+      };
+    }
+    const authStorage = (preparedModelRuntimeMocks.discoverAuthStorage(...args) ??
+      preparedModelRuntimeMocks.authStorage) as {
+      getAll(): AuthStorageData;
+      getOAuthProviders(): unknown[];
+    };
+    const credentials = authStorage.getAll();
+    return {
+      authStorage,
+      store: preparedModelRuntimeMocks.preparedAuthStore ?? {
+        version: 1,
+        profiles: Object.fromEntries(
+          Object.entries(credentials).map(([provider, credential]) => [
+            `${provider}:default`,
+            { ...credential, provider },
+          ]),
+        ),
+      },
+      credentials,
+    };
+  },
   discoverAuthStorage: (...args: unknown[]) =>
     preparedModelRuntimeMocks.discoverAuthStorage(...args) ?? preparedModelRuntimeMocks.authStorage,
   discoverModels: (...args: unknown[]) => {
@@ -307,6 +360,10 @@ export function resetPreparedModelRuntimeHarness(): void {
       pluginCatalogs: [],
     }));
   preparedModelRuntimeMocks.prepareStaticCatalog.mockReset().mockResolvedValue({ entries: [] });
+  preparedModelRuntimeMocks.runPreparedModelCatalogWorker.mockReset().mockResolvedValue({
+    entries: [],
+    routeVariants: [],
+  });
   preparedModelRuntimeMocks.resolveAmbientCredentials.mockReset().mockReturnValue({});
   preparedModelRuntimeMocks.resolveStaticCatalogModel.mockReset().mockReturnValue(undefined);
   preparedModelRuntimeMocks.createStaticCatalogResolver

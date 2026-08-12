@@ -42,6 +42,9 @@ export function resolvePublishedModelCatalogOwner(
     agentDir: snapshot.agentDir,
     workspaceDir,
     config: snapshot.config,
+    authModes: snapshot.authModes,
+    authStore: snapshot.authStore,
+    metadataSnapshot: snapshot.metadataSnapshot,
     modelCatalog: snapshot.modelCatalog,
   });
 }
