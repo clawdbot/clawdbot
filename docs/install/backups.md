@@ -35,7 +35,8 @@ committed state safely.
 
 - One-off, everything, portable: `openclaw backup create` archive.
 - One database, compact and verified: `openclaw backup sqlite create`.
-- Regular protection: schedule either command and sync the output offsite.
+- Versioned and incremental by content: `openclaw backup git create`.
+- Regular protection: provision the Gateway-owned backup automation.
 - Continuous, incremental, seconds of data loss: replicate the databases with
   Litestream.
 
@@ -75,8 +76,27 @@ below cover them.
 
 ## Schedule backups
 
-Use your platform scheduler. A nightly cron example that snapshots the
-control-plane database and the `main` agent database:
+The recommended schedule is one Gateway-owned automation. This example backs
+up every registered database daily and pushes the current branch to `origin`:
+
+```bash
+openclaw backup enable --repository ~/Backups/openclaw-git --every 24h --push
+```
+
+Use `--global-only` or `--agent <id>` to narrow the scope. Add
+`--exclude-secrets` for a redacted Git history. Re-running the command updates
+the fixed scheduled job instead of creating another one. Disable it with:
+
+```bash
+openclaw backup disable
+```
+
+The Gateway must be reachable while enabling or disabling the schedule. There
+is no local fallback scheduler.
+
+As an alternative, use your platform scheduler directly. A nightly cron
+example that snapshots the control-plane database and the `main` agent
+database:
 
 ```bash
 0 3 * * * openclaw backup sqlite create --global --repository "$HOME/Backups/openclaw-sqlite" --json >> "$HOME/Backups/openclaw-backup.log" 2>&1
@@ -88,6 +108,11 @@ On macOS, a `launchd` job works the same way; on servers provisioned from the
 emits one machine-readable result per run, so the log doubles as a backup
 audit trail. Prune old snapshot directories on your own retention schedule.
 
+Every non-dry-run archive, local SQLite snapshot, and Git backup attempt is
+also recorded in the shared state database. `openclaw status` shows the newest
+attempt, and `openclaw doctor` suggests a one-off or scheduled backup when no
+successful run is recorded or the newest success is more than 14 days old.
+
 ## Copy backups offsite
 
 Archives and snapshot repositories are plain files, so any sync tool works.
@@ -97,10 +122,42 @@ An `rclone` example targeting an S3-compatible bucket:
 rclone sync ~/Backups/openclaw-sqlite remote:openclaw-backups/sqlite
 ```
 
-Because every archive and snapshot is a full copy, offsite syncs re-upload
+Because every archive and local snapshot is a full copy, offsite syncs re-upload
 each new backup in full. Deduplicating backup tools such as `restic` reduce
 storage at the destination but still read full snapshots as input. When
-upload size per backup matters, use continuous replication instead.
+upload size per backup matters, use Git-backed snapshots or continuous
+replication.
+
+## Versioned backups to a Git repository
+
+Git-backed backups dump each selected database into deterministic `schema.sql`,
+`manifest.json`, and per-table JSONL files, then create one commit for the
+whole run. Unchanged database content produces no commit, so Git stores and
+pushes only content changes by construction.
+
+```bash
+openclaw backup git init --repository ~/Backups/openclaw-git --remote <private-git-url>
+openclaw backup git create --repository ~/Backups/openclaw-git --all --push
+openclaw backup git log --repository ~/Backups/openclaw-git
+```
+
+The repository is ordinary Git and can use any remote, including GitHub. Keep
+the remote private: the default dump includes auth profiles, tokens, and other
+credential-bearing state. `--exclude-secrets` omits the documented secret
+tables when a redacted history is more useful than a credential-complete
+backup; see [Backup CLI](/cli/backup#versioned-git-backups) for the exact list.
+
+Verify or restore one database at any commit without overwriting a live file:
+
+```bash
+openclaw backup git verify --repository ~/Backups/openclaw-git --ref <commit> --global
+openclaw backup git restore --repository ~/Backups/openclaw-git --ref <commit> --agent main --target ./restored-agent.sqlite
+```
+
+Git restore converges derived search state: it rebuilds content-backed FTS5
+indexes, leaves transcript projection state for Gateway startup reconciliation,
+and leaves vector tables for memory indexing to recreate. It then verifies
+table hashes, SQLite integrity, and foreign keys.
 
 ## Continuous replication with Litestream
 
@@ -236,10 +293,12 @@ credentials directory, and workspace directories. See
 ### Restore a database
 
 For a snapshot, `openclaw backup sqlite restore <snapshot-directory> --target
-<new-database-path>` writes a re-verified database to a fresh target. For
-Litestream, `litestream restore` writes a fresh database file. Move either
-result into place while the Gateway is stopped, then start the Gateway and
-check `openclaw health` and `openclaw doctor`.
+<new-database-path>` writes a re-verified database to a fresh target. For Git
+history, `openclaw backup git restore --repository <dir> --ref <commit>
+(--global | --agent <id>) --target <new-database-path>` materializes and
+verifies a fresh database. For Litestream, `litestream restore` writes a fresh
+database file. Move the result into place while the Gateway is stopped, then
+start the Gateway and check `openclaw health` and `openclaw doctor`.
 
 After restoring onto a different OpenClaw version, preflight the database
 first with `openclaw database preflight`; see
