@@ -10,6 +10,10 @@ import net, { type Socket } from "node:net";
 import type { Duplex } from "node:stream";
 
 const PORTAL_AUTH_NAME = "openclaw_portal";
+// Cookies are hostname-scoped, not port-scoped. Per-target prefixes keep Gateway
+// and sibling portal cookies from leaking into an agent-run application.
+const PORTAL_COOKIE_PREFIX = "oc_portal_";
+const MAX_WEBSOCKET_RESPONSE_HEADER_BYTES = 64 * 1024;
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
   "keep-alive",
@@ -53,16 +57,43 @@ function readPortalCookie(cookieHeader: string | undefined): string | undefined 
   return undefined;
 }
 
-function stripPortalCookie(cookieHeader: string | undefined): string | undefined {
-  const retained = (cookieHeader?.split(";") ?? []).filter((segment) => {
+function portalCookiePrefix(targetPort: number): string {
+  return `${PORTAL_COOKIE_PREFIX}${targetPort}_`;
+}
+
+function readTargetCookies(
+  cookieHeader: string | undefined,
+  targetPort: number,
+): string | undefined {
+  const prefix = portalCookiePrefix(targetPort);
+  const retained = (cookieHeader?.split(";") ?? []).flatMap((segment) => {
     const separator = segment.indexOf("=");
-    return separator < 0 || segment.slice(0, separator).trim() !== PORTAL_AUTH_NAME;
+    if (separator <= 0) {
+      return [];
+    }
+    const name = segment.slice(0, separator).trim();
+    if (!name.startsWith(prefix) || name.length === prefix.length) {
+      return [];
+    }
+    return [`${name.slice(prefix.length)}=${segment.slice(separator + 1).trim()}`];
   });
-  const normalized = retained
-    .map((segment) => segment.trim())
-    .filter(Boolean)
-    .join("; ");
+  const normalized = retained.join("; ");
   return normalized || undefined;
+}
+
+function rewriteTargetCookie(cookie: string, targetPort: number): string | undefined {
+  const [cookiePair, ...attributes] = cookie.split(";");
+  const separator = cookiePair?.indexOf("=") ?? -1;
+  if (!cookiePair || separator <= 0) {
+    return undefined;
+  }
+  const name = cookiePair.slice(0, separator).trim();
+  if (!name) {
+    return undefined;
+  }
+  const retainedAttributes = attributes.filter((attribute) => !/^\s*domain\s*=/iu.test(attribute));
+  const suffix = retainedAttributes.length > 0 ? `;${retainedAttributes.join(";")}` : "";
+  return `${portalCookiePrefix(targetPort)}${name}=${cookiePair.slice(separator + 1)}${suffix}`;
 }
 
 function parsePortalUrl(req: IncomingMessage): URL | undefined {
@@ -106,6 +137,7 @@ function setProxyResponseHeader(
   res: ServerResponse,
   name: string,
   value: string | string[] | number,
+  targetPort: number,
 ): void {
   if (name !== "set-cookie") {
     res.setHeader(name, value);
@@ -115,7 +147,14 @@ function setProxyResponseHeader(
   const existingCookies =
     existing === undefined ? [] : Array.isArray(existing) ? existing : [existing];
   const targetCookies = Array.isArray(value) ? value : [String(value)];
-  res.setHeader("Set-Cookie", [...existingCookies.map(String), ...targetCookies]);
+  const rewrittenCookies = targetCookies.flatMap((cookie) => {
+    const rewritten = rewriteTargetCookie(cookie, targetPort);
+    return rewritten ? [rewritten] : [];
+  });
+  const cookies = [...existingCookies.map(String), ...rewrittenCookies];
+  if (cookies.length > 0) {
+    res.setHeader("Set-Cookie", cookies);
+  }
 }
 
 function htmlResponse(
@@ -157,7 +196,7 @@ function connectionHeaderTokens(headers: IncomingHttpHeaders): Set<string> {
   );
 }
 
-function proxyHeaders(headers: IncomingHttpHeaders): OutgoingHttpHeaders {
+function proxyHeaders(headers: IncomingHttpHeaders, targetPort?: number): OutgoingHttpHeaders {
   const result: OutgoingHttpHeaders = {};
   const connectionTokens = connectionHeaderTokens(headers);
   for (const [name, value] of Object.entries(headers)) {
@@ -169,8 +208,8 @@ function proxyHeaders(headers: IncomingHttpHeaders): OutgoingHttpHeaders {
     ) {
       continue;
     }
-    if (normalized === "cookie") {
-      const cookie = stripPortalCookie(Array.isArray(value) ? value.join("; ") : value);
+    if (normalized === "cookie" && targetPort !== undefined) {
+      const cookie = readTargetCookies(Array.isArray(value) ? value.join("; ") : value, targetPort);
       if (cookie) {
         result.cookie = cookie;
       }
@@ -198,7 +237,7 @@ export function handlePortalProxyRequest(params: {
     res.setHeader("Set-Cookie", portalCookie(target, tls));
   }
 
-  const headers = proxyHeaders(req.headers);
+  const headers = proxyHeaders(req.headers, target.targetPort);
   const originalHost = req.headers.host;
   headers.host = `localhost:${target.targetPort}`;
   headers["x-forwarded-for"] = req.socket.remoteAddress ?? "";
@@ -220,7 +259,7 @@ export function handlePortalProxyRequest(params: {
   proxyReq.once("response", (proxyRes) => {
     for (const [name, value] of Object.entries(proxyHeaders(proxyRes.headers))) {
       if (value !== undefined) {
-        setProxyResponseHeader(res, name, value);
+        setProxyResponseHeader(res, name, value, target.targetPort);
       }
     }
     res.statusCode = proxyRes.statusCode ?? 502;
@@ -251,7 +290,7 @@ function websocketHeaders(req: IncomingMessage, targetPort: number, requestPath:
       continue;
     }
     if (normalized === "cookie") {
-      const cookie = stripPortalCookie(Array.isArray(value) ? value.join("; ") : value);
+      const cookie = readTargetCookies(Array.isArray(value) ? value.join("; ") : value, targetPort);
       if (cookie) {
         lines.push(`cookie: ${cookie}`);
       }
@@ -270,6 +309,43 @@ function rejectPortalUpgrade(socket: Duplex): void {
     "HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain; charset=utf-8\r\n" +
       "Content-Length: 12\r\nConnection: close\r\n\r\nUnauthorized",
   );
+}
+
+function forwardWebSocketResponse(
+  targetSocket: Socket,
+  browserSocket: Duplex,
+  targetPort: number,
+): void {
+  let pending = Buffer.alloc(0);
+  const onData = (chunk: Buffer) => {
+    pending = Buffer.concat([pending, chunk]);
+    const headerEnd = pending.indexOf("\r\n\r\n");
+    if (headerEnd < 0) {
+      if (pending.length > MAX_WEBSOCKET_RESPONSE_HEADER_BYTES) {
+        targetSocket.destroy();
+        browserSocket.destroy();
+      }
+      return;
+    }
+
+    targetSocket.off("data", onData);
+    const headerLines = pending.subarray(0, headerEnd).toString("latin1").split("\r\n");
+    const rewrittenLines = headerLines.flatMap((line) => {
+      const separator = line.indexOf(":");
+      if (separator <= 0 || line.slice(0, separator).trim().toLowerCase() !== "set-cookie") {
+        return [line];
+      }
+      const rewritten = rewriteTargetCookie(line.slice(separator + 1).trimStart(), targetPort);
+      return rewritten ? [`${line.slice(0, separator)}: ${rewritten}`] : [];
+    });
+    browserSocket.write(`${rewrittenLines.join("\r\n")}\r\n\r\n`);
+    const remainder = pending.subarray(headerEnd + 4);
+    if (remainder.length > 0) {
+      browserSocket.write(remainder);
+    }
+    targetSocket.pipe(browserSocket);
+  };
+  targetSocket.on("data", onData);
 }
 
 /** Splices an authorized portal WebSocket upgrade into the loopback target. */
@@ -307,11 +383,11 @@ export function handlePortalProxyUpgrade(params: {
   socket.once("error", () => targetSocket.destroy());
   targetSocket.once("error", () => socket.destroy());
   targetSocket.once("connect", () => {
+    forwardWebSocketResponse(targetSocket, socket, target.targetPort);
     targetSocket.write(websocketHeaders(req, target.targetPort, authorization.requestPath));
     if (head.length > 0) {
       targetSocket.write(head);
     }
     socket.pipe(targetSocket);
-    targetSocket.pipe(socket);
   });
 }

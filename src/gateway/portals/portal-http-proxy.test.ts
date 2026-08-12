@@ -13,6 +13,8 @@ type HttpResult = {
 let targetPort = 0;
 let targetHandler: (req: IncomingMessage, res: ServerResponse) => void;
 let targetWebSocketPath: string | undefined;
+let targetWebSocketCookie: string | undefined;
+let targetWebSocketSetCookie: string | undefined;
 const targetServer = createServer((req, res) => targetHandler(req, res));
 const targetWss = new WebSocketServer({ server: targetServer });
 const services = new Set<GatewayPortalService>();
@@ -20,7 +22,13 @@ const services = new Set<GatewayPortalService>();
 beforeAll(async () => {
   targetWss.on("connection", (socket, req) => {
     targetWebSocketPath = req.url;
+    targetWebSocketCookie = req.headers.cookie;
     socket.on("message", (data) => socket.send(data));
+  });
+  targetWss.on("headers", (headers) => {
+    if (targetWebSocketSetCookie) {
+      headers.push(`Set-Cookie: ${targetWebSocketSetCookie}`);
+    }
   });
   await new Promise<void>((resolve, reject) => {
     targetServer.once("error", reject);
@@ -33,6 +41,8 @@ afterEach(async () => {
   await Promise.all([...services].map((service) => service.closeAll()));
   services.clear();
   targetWebSocketPath = undefined;
+  targetWebSocketCookie = undefined;
+  targetWebSocketSetCookie = undefined;
 });
 
 afterAll(async () => {
@@ -151,7 +161,7 @@ describe("portal HTTP proxy", () => {
       path: "/asset?q=1",
       headers: {
         Host: "portal.example:9999",
-        Cookie: `app=ok; openclaw_portal=${token}; theme=dark`,
+        Cookie: `openclaw_plugin_tab=secret; openclaw_portal=${token}`,
         Connection: "keep-alive, x-remove-me",
         "X-Remove-Me": "remove",
       },
@@ -164,11 +174,47 @@ describe("portal HTTP proxy", () => {
     expect(result.headers["keep-alive"]).not.toBe("upstream-secret=17");
     expect(received).toMatchObject({
       host: `localhost:${targetPort}`,
-      cookie: "app=ok; theme=dark",
       proto: "http",
       forwardedHost: "portal.example:9999",
     });
+    expect(received?.cookie).toBeUndefined();
     expect(received?.forwardedFor).toMatch(/127\.0\.0\.1|::ffff:127\.0\.0\.1/u);
+  });
+
+  it("isolates target cookies by portal port in both directions", async () => {
+    const receivedCookies: Array<string | undefined> = [];
+    targetHandler = (req, res) => {
+      receivedCookies.push(req.headers.cookie);
+      if (req.url === "/set") {
+        res.setHeader("Set-Cookie", "session=abc; Domain=target.example; Path=/; HttpOnly");
+      }
+      res.statusCode = 200;
+      res.end("proxied");
+    };
+    const portal = await portalService().open({ targetPort });
+    const token = portal.tokenQuery.slice("openclaw_portal=".length);
+    const prefix = `oc_portal_${targetPort}_`;
+
+    const initial = await httpCall({
+      port: portal.listenPort,
+      path: `/set?${portal.tokenQuery}`,
+    });
+    expect(initial.headers["set-cookie"]).toContain(`${prefix}session=abc; Path=/; HttpOnly`);
+    expect(initial.headers["set-cookie"]?.join("; ")).not.toContain("Domain=");
+
+    await httpCall({
+      port: portal.listenPort,
+      path: "/follow-up",
+      headers: {
+        Cookie: [
+          `openclaw_portal=${token}`,
+          `${prefix}session=abc`,
+          `oc_portal_${targetPort + 1}_session=other`,
+          "openclaw_plugin_tab=secret",
+        ].join("; "),
+      },
+    });
+    expect(receivedCookies).toEqual([undefined, "session=abc"]);
   });
 
   it("streams POST bodies to the target", async () => {
@@ -246,9 +292,15 @@ describe("portal HTTP proxy", () => {
   it("splices WebSockets and destroys upgraded sockets and listeners on close", async () => {
     const service = portalService();
     const portal = await service.open({ targetPort });
+    targetWebSocketSetCookie = "socket=ready; Domain=target.example; Path=/; HttpOnly";
+    let upgradeCookies: string[] | undefined;
     const ws = new WebSocket(
       `ws://127.0.0.1:${portal.listenPort}/hmr?channel=dev&${portal.tokenQuery}`,
+      { headers: { Cookie: "openclaw_plugin_tab=secret" } },
     );
+    ws.once("upgrade", (response) => {
+      upgradeCookies = response.headers["set-cookie"];
+    });
     await new Promise<void>((resolve, reject) => {
       ws.once("open", () => resolve());
       ws.once("error", reject);
@@ -266,6 +318,8 @@ describe("portal HTTP proxy", () => {
     ws.send("hot reload");
     expect(await echoed).toBe("hot reload");
     expect(targetWebSocketPath).toBe("/hmr?channel=dev");
+    expect(targetWebSocketCookie).toBeUndefined();
+    expect(upgradeCookies).toEqual([`oc_portal_${targetPort}_socket=ready; Path=/; HttpOnly`]);
 
     const closed = new Promise<void>((resolve) => {
       ws.once("close", () => resolve());
