@@ -372,6 +372,31 @@ export function projectReconciliationSourceObservation(
   };
 }
 
+function projectPrivateSourceObservation(value: unknown): WorkboardReconciliationSourceObservation {
+  const input = objectWithOnly(value, "source observation", SOURCE_OBSERVATION_FIELDS);
+  return projectReconciliationSourceObservation({
+    ...input,
+    cardId: readBoundedUtf8String(input.cardId, "cardId", MAX_TRIAGE_CARD_ID_LENGTH),
+    tenant: readBoundedUtf8String(input.tenant, "tenant", MAX_TENANT_LENGTH),
+    objectiveKey: readBoundedUtf8String(
+      input.objectiveKey,
+      "objectiveKey",
+      MAX_OBJECTIVE_KEY_LENGTH,
+    ),
+    sourceUrl: readSourceUrl(input.sourceUrl),
+    reconciliationAssociationKey: readBoundedUtf8String(
+      input.reconciliationAssociationKey,
+      "reconciliationAssociationKey",
+      MAX_ASSOCIATION_KEY_LENGTH,
+    ),
+    observationId: readBoundedUtf8String(
+      input.observationId,
+      "observationId",
+      MAX_OBSERVATION_ID_LENGTH,
+    ),
+  });
+}
+
 export class WorkboardReconciler {
   constructor(private readonly store: WorkboardStore) {}
 
@@ -480,7 +505,7 @@ export function createWorkboardReconciliationProvider(
     },
     async observeSource({ signal, ...input }) {
       signal?.throwIfAborted();
-      const result = await reconciler.observeSource(input);
+      const result = await reconciler.observeSource(projectPrivateSourceObservation(input));
       signal?.throwIfAborted();
       return result;
     },

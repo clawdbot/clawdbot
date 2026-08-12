@@ -33,6 +33,37 @@ function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T>
 }
 
 describe("WorkboardReconciler", () => {
+  it("enforces UTF-8 bounds for every private source-observation address without changing public projection", async () => {
+    const base = {
+      cardId: "card",
+      tenant: "acme",
+      objectiveKey: "objective",
+      sourceUrl: "codex://thread/source-observation",
+      reconciliationAssociationKey: "association-key",
+      observationId: "observation",
+      sourceState: "present" as const,
+      staleAfterMisses: 1,
+      observedAt: 1,
+      expectedRevision: 1,
+    };
+    const provider = createWorkboardReconciliationProvider(
+      new WorkboardReconciler(new WorkboardStore(createMemoryStore())),
+    );
+    for (const [field, value, maximum] of [
+      ["cardId", "é".repeat(61), 120],
+      ["tenant", "é".repeat(41), 80],
+      ["objectiveKey", "é".repeat(81), 160],
+      ["reconciliationAssociationKey", "é".repeat(81), 160],
+      ["observationId", "é".repeat(101), 200],
+    ] as const) {
+      const input = { ...base, [field]: value };
+      expect(projectReconciliationSourceObservation(input)).toMatchObject({ [field]: value });
+      await expect(provider.observeSource(input)).rejects.toThrow(
+        `${field} must be ${maximum} bytes or fewer.`,
+      );
+    }
+  });
+
   it("accepts bounded absolute source URIs while rejecting malformed or credentialed values", async () => {
     const base = {
       tenant: "acme",
