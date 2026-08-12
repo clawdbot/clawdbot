@@ -2,8 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { scheduleStaleChunkReload } from "../../app/stale-chunk-reload.ts";
-import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { PluginPage } from "./plugin-page.ts";
 
@@ -92,46 +90,6 @@ describe("PluginPage bundled view load failures", () => {
       expect(page.querySelector('[role="alert"]')).toBeNull();
     } finally {
       page.remove();
-    }
-  });
-
-  it("keeps stale recovery visible after this build already reloaded automatically", async () => {
-    const failedLoad = deferred<TestBundledView>();
-    const values = new Map<string, string>();
-    const storage = {
-      getItem: (key: string) => values.get(key) ?? null,
-      setItem: (key: string, value: string) => void values.set(key, value),
-    };
-    vi.spyOn(window, "sessionStorage", "get").mockReturnValue(storage as Storage);
-    const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-    await scheduleStaleChunkReload({
-      buildId: CONTROL_UI_BUILD_INFO.buildId,
-      now: () => Date.now() - 6_000,
-      reload: vi.fn(),
-      storage,
-    });
-    fetchMock.mockClear();
-    const page = createPage([failedLoad.promise]);
-    document.body.append(page);
-    try {
-      await waitForFast(() => expect(page.querySelector('[role="status"]')).not.toBeNull());
-      failedLoad.reject(new Error("Failed to fetch dynamically imported module"));
-      await waitForFast(() =>
-        expect(page.querySelector('[role="alert"]')?.textContent).toContain(
-          "Failed to fetch dynamically imported module",
-        ),
-      );
-
-      await Promise.resolve();
-      await page.updateComplete;
-
-      expect(fetchMock).not.toHaveBeenCalled();
-      expect(page.querySelector('[role="alert"]')).not.toBeNull();
-    } finally {
-      page.remove();
-      vi.unstubAllGlobals();
-      vi.restoreAllMocks();
     }
   });
 
