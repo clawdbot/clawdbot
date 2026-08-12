@@ -1,9 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  NODE_DESKTOP_STREAM_COMMAND,
-  NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS,
-} from "../../infra/node-commands.js";
+import { NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS } from "../../infra/node-commands.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
+import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import type { NodeRegistry } from "../node-registry.js";
 import { DesktopCredentialsRequiredError } from "./host-source-errors.js";

@@ -38,12 +38,12 @@ import {
 } from "../infra/host-env-security.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
-  NODE_DESKTOP_STREAM_COMMAND,
   NODE_DEVICE_APPS_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
 } from "../infra/node-commands.js";
 import { logWarn } from "../logger.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import type { NodeHostClient } from "./client.js";
 import { invokeNodeDesktopStream } from "./desktop-stream-command.js";

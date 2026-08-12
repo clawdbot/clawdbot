@@ -8,7 +8,6 @@ import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   NODE_BROWSER_PROXY_COMMANDS,
   NODE_DEVICE_APPS_COMMAND,
-  NODE_DESKTOP_STREAM_COMMAND,
   NODE_EXEC_APPROVALS_COMMANDS,
   NODE_FILE_COMMANDS,
   NODE_MCP_TOOLS_CALL_COMMAND,
@@ -16,6 +15,7 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
 import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime.js";
+import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import { normalizeDeviceMetadataForPolicy } from "./device-metadata-normalization.js";
 import { MOBILE_NODE_COMMANDS } from "./node-command-policy-mobile.js";
 import type { NodeSession } from "./node-registry.js";

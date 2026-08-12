@@ -3,8 +3,8 @@ import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createWebSocketStream, WebSocket, WebSocketServer, type RawData } from "ws";
-import { NODE_DESKTOP_ATTACH_PATH } from "../../infra/node-commands.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
+import { NODE_DESKTOP_ATTACH_PATH } from "../../shared/node-desktop-stream.js";
 import type { NodeRegistry } from "../node-registry.js";
 
 const DEFAULT_TICKET_TTL_MS = 60_000;

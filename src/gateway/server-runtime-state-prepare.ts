@@ -6,16 +6,15 @@ import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { NODE_DESKTOP_STREAM_COMMAND } from "../infra/node-commands.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { runtimeForLogger } from "../logging/subsystem.js";
 import { isGatewayDraining } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
+import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
-import { createNodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import { isLoopbackHost } from "./net.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
@@ -135,7 +134,12 @@ export async function prepareGatewayKernelState(params: {
       ? createDesktopSessionRegistry()
       : undefined;
   const nodeDesktopStreamBroker = nodeDesktopObserveAvailable
-    ? createNodeDesktopStreamBroker()
+    ? (
+        await startupTrace.measure(
+          "node-desktop.runtime-import",
+          () => import("./desktop/node-stream-broker.js"),
+        )
+      ).createNodeDesktopStreamBroker()
     : undefined;
   const hostDesktopService =
     hostDesktopConfig && hostDesktopEnabled && desktopSessionRegistry

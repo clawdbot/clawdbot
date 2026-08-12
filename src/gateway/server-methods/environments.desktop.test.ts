@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { HostDesktopCredentialsRequiredError } from "../desktop/host-source-errors.js";
 import { createHostDesktopService } from "../desktop/host-source.js";
+import { NODE_DESKTOP_SERVICE_CONTEXT } from "../desktop/node-source-context.js";
 import { createDesktopSessionRegistry } from "../desktop/session-registry.js";
 import { environmentsHandlers } from "./environments.js";
 
@@ -177,7 +178,7 @@ describe("desktop gateway methods", () => {
     const [ok, result] = await invoke(
       "desktop.observe",
       { source: { kind: "node", nodeId: "node-1" }, credentials },
-      { nodeDesktopService: { observe } },
+      { [NODE_DESKTOP_SERVICE_CONTEXT]: { observe } },
     );
     expect(ok).toBe(true);
     expect(result).not.toHaveProperty("vncPassword");

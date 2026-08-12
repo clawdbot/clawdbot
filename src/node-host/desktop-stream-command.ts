@@ -5,9 +5,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { WebSocket, type ClientOptions, type RawData } from "ws";
 import type { DesktopHostConfig } from "../config/types.desktop.js";
 import { classifyRfbSecurity, probeRfbServer } from "../gateway/desktop/rfb-probe.js";
-import { NODE_DESKTOP_ATTACH_PATH } from "../infra/node-commands.js";
 import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { NODE_DESKTOP_ATTACH_PATH } from "../shared/node-desktop-stream.js";
 
 const DEFAULT_DESKTOP_PORT = 5900;
 const PROBE_TIMEOUT_MS = 1_500;

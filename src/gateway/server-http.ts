@@ -18,7 +18,6 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
-import { NODE_DESKTOP_ATTACH_PATH } from "../infra/node-commands.js";
 import { parseDevicePairingJoinRequestPath } from "../pairing/join-code.js";
 import {
   getGatewaySuspendAdmissionPhase,
@@ -26,6 +25,7 @@ import {
   isGatewayWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { NODE_DESKTOP_ATTACH_PATH } from "../shared/node-desktop-stream.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
