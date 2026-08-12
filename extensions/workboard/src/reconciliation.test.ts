@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
 import { WorkboardReconciler, projectReconciliationSourceObservation } from "./reconciliation.js";
@@ -601,6 +602,98 @@ describe("WorkboardReconciler", () => {
         );
       } finally {
         reopened.close();
+      }
+    } finally {
+      if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("migrates a physical pre-v8 replay acknowledgement without exposing legacy link ids", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "workboard-pre-v8-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const stores = createWorkboardSqliteStores({ dbPath });
+    try {
+      const reconciler = new WorkboardReconciler(new WorkboardStore(stores.cards));
+      const created = await reconciler.apply({
+        sourceUrl: "https://example.test/legacy",
+        tenant: "acme",
+        objectiveKey: "deploy-api",
+        idempotencyKey: "legacy",
+        sourceUpdatedAt: 1,
+        card: { title: "Legacy replay" },
+      });
+      const withMaxLegacyLink = await reconciler.apply({
+        cardId: created.card.id,
+        sourceUrl: "https://example.test/legacy/max",
+        tenant: "acme",
+        objectiveKey: "deploy-api",
+        idempotencyKey: "legacy-max",
+        sourceUpdatedAt: 2,
+        expectedRevision: created.card.updatedAt,
+      });
+      const observation = {
+        cardId: created.card.id,
+        tenant: "acme",
+        objectiveKey: "deploy-api",
+        sourceUrl: "https://example.test/legacy",
+        idempotencyKey: "legacy",
+        reconciliationAssociationKey: created.link.reconciliationAssociationKey,
+        observationId: "legacy-ack",
+        sourceState: "present" as const,
+        staleAfterMisses: 2,
+        observedAt: 2,
+        expectedRevision: withMaxLegacyLink.card.updatedAt,
+      };
+      const first = await reconciler.observeSource(observation);
+      stores.close();
+
+      const legacy = openNodeSqliteDatabase(dbPath);
+      try {
+        legacy.exec("ALTER TABLE workboard_card_links DROP COLUMN reconciliation_association_key");
+        legacy
+          .prepare(
+            "UPDATE workboard_card_links SET last_source_observation_request_json = ? WHERE card_id = ?",
+          )
+          .run(JSON.stringify(observation), created.card.id);
+        legacy
+          .prepare("UPDATE workboard_card_links SET id = ? WHERE url = ? AND card_id = ?")
+          .run(`external:${"x".repeat(2000)}`, "https://example.test/legacy/max", created.card.id);
+        legacy.prepare("DELETE FROM workboard_schema_migrations WHERE id = ?").run("schema-8");
+      } finally {
+        legacy.close();
+      }
+
+      const migrated = createWorkboardSqliteStores({ dbPath });
+      try {
+        const listed = await new WorkboardReconciler(new WorkboardStore(migrated.cards)).list({
+          tenant: "acme",
+        });
+        const links = listed.cards[0]?.metadata?.links ?? [];
+        const key = links.find(
+          (link) => link.url === observation.sourceUrl,
+        )?.reconciliationAssociationKey;
+        expect(key).toMatch(/^legacy_[A-Za-z0-9_-]{16,160}$/);
+        expect(key?.length).toBeLessThanOrEqual(160);
+        expect(links.find((link) => link.id.length > 1000)?.reconciliationAssociationKey).toMatch(
+          /^legacy_[A-Za-z0-9_-]{16,160}$/,
+        );
+        const replay = await new WorkboardReconciler(
+          new WorkboardStore(migrated.cards),
+        ).observeSource({
+          ...observation,
+          reconciliationAssociationKey: key!,
+          expectedRevision: first.revision + 1,
+        });
+        expect(replay.revision).toBe(first.revision);
+        await expect(
+          new WorkboardReconciler(new WorkboardStore(migrated.cards)).observeSource({
+            ...observation,
+            reconciliationAssociationKey: key!,
+            sourceState: "missing-after-successful-full-scan",
+          }),
+        ).rejects.toThrow("observationId conflicts");
+      } finally {
+        migrated.close();
       }
     } finally {
       if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
