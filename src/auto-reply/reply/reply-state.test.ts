@@ -65,6 +65,10 @@ async function createCompactionSessionFixture(entry: SessionEntry) {
   return { storePath, sessionKey, sessionStore };
 }
 
+function requireStoredSession(stored: Record<string, SessionEntry>, sessionKey: string) {
+  return expectDefined(stored[sessionKey], "stored[sessionKey] test invariant");
+}
+
 describe("history helpers", () => {
   function createHistoryMapWithTwoEntries() {
     const historyMap = new Map<string, { sender: string; body: string }[]>();
@@ -262,7 +266,7 @@ describe("shouldRunMemoryFlush", () => {
   it("requires totalTokens and threshold", () => {
     expect(
       shouldRunMemoryFlush({
-        entry: { totalTokens: 0 },
+        entry: { totalTokens: 0, totalTokensFresh: true, totalTokensVersion: 1 },
         contextWindowTokens: 16_000,
         reserveTokensFloor: 20_000,
         softThresholdTokens: 4_000,
@@ -284,7 +288,7 @@ describe("shouldRunMemoryFlush", () => {
   it("skips when under threshold", () => {
     expect(
       shouldRunMemoryFlush({
-        entry: { totalTokens: 10_000 },
+        entry: { totalTokens: 10_000, totalTokensFresh: true, totalTokensVersion: 1 },
         contextWindowTokens: 100_000,
         reserveTokensFloor: 20_000,
         softThresholdTokens: 10_000,
@@ -295,7 +299,7 @@ describe("shouldRunMemoryFlush", () => {
   it("triggers at the threshold boundary", () => {
     expect(
       shouldRunMemoryFlush({
-        entry: { totalTokens: 85 },
+        entry: { totalTokens: 85, totalTokensFresh: true, totalTokensVersion: 1 },
         contextWindowTokens: 100,
         reserveTokensFloor: 10,
         softThresholdTokens: 5,
@@ -308,6 +312,8 @@ describe("shouldRunMemoryFlush", () => {
       shouldRunMemoryFlush({
         entry: {
           totalTokens: 90_000,
+          totalTokensFresh: true,
+          totalTokensVersion: 1,
           compactionCount: 2,
           memoryFlush: { kind: "succeeded", compactionCount: 2 },
         },
@@ -321,7 +327,12 @@ describe("shouldRunMemoryFlush", () => {
   it("runs when above threshold and not flushed", () => {
     expect(
       shouldRunMemoryFlush({
-        entry: { totalTokens: 96_000, compactionCount: 1 },
+        entry: {
+          totalTokens: 96_000,
+          totalTokensFresh: true,
+          totalTokensVersion: 1,
+          compactionCount: 1,
+        },
         contextWindowTokens: 100_000,
         reserveTokensFloor: 5_000,
         softThresholdTokens: 2_000,
@@ -337,14 +348,23 @@ describe("shouldRunMemoryFlush", () => {
     };
 
     for (const entry of [
-      { totalTokens: 95_000, compactionCount: 1 },
       {
         totalTokens: 95_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1 as const,
+        compactionCount: 1,
+      },
+      {
+        totalTokens: 95_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1 as const,
         compactionCount: 2,
         memoryFlush: { kind: "succeeded" as const, compactionCount: 1 },
       },
       {
         totalTokens: 95_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1 as const,
         compactionCount: 3,
         memoryFlush: { kind: "succeeded" as const, compactionCount: 2 },
       },
@@ -489,9 +509,7 @@ describe("incrementCompactionCount", () => {
     expect(count).toBe(3);
 
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").compactionCount,
-    ).toBe(3);
+    expect(requireStoredSession(stored, sessionKey).compactionCount).toBe(3);
   });
 
   it("persists incognito compaction metadata only in the scoped store", async () => {
@@ -548,19 +566,11 @@ describe("incrementCompactionCount", () => {
     });
 
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").compactionCount,
-    ).toBe(1);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      12_000,
-    );
+    expect(requireStoredSession(stored, sessionKey).compactionCount).toBe(1);
+    expect(requireStoredSession(stored, sessionKey).totalTokens).toBe(12_000);
     // input/output cleared since we only have the total estimate
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens,
-    ).toBeUndefined();
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
-    ).toBeUndefined();
+    expect(requireStoredSession(stored, sessionKey).inputTokens).toBeUndefined();
+    expect(requireStoredSession(stored, sessionKey).outputTokens).toBeUndefined();
   });
 
   it("accepts zero tokensAfter as a fresh post-compaction total", async () => {
@@ -584,21 +594,11 @@ describe("incrementCompactionCount", () => {
     });
 
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").compactionCount,
-    ).toBe(1);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      0,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(true);
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens,
-    ).toBeUndefined();
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
-    ).toBeUndefined();
+    expect(requireStoredSession(stored, sessionKey).compactionCount).toBe(1);
+    expect(requireStoredSession(stored, sessionKey).totalTokens).toBe(0);
+    expect(requireStoredSession(stored, sessionKey).totalTokensFresh).toBe(true);
+    expect(requireStoredSession(stored, sessionKey).inputTokens).toBeUndefined();
+    expect(requireStoredSession(stored, sessionKey).outputTokens).toBeUndefined();
   });
 
   it("prefers explicit compactionTokensAfter over last-call usage for run accounting", async () => {
@@ -625,12 +625,8 @@ describe("incrementCompactionCount", () => {
     });
 
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      12_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(true);
+    expect(requireStoredSession(stored, sessionKey).totalTokens).toBe(12_000);
+    expect(requireStoredSession(stored, sessionKey).totalTokensFresh).toBe(true);
   });
 
   it("preserves zero compactionTokensAfter for run accounting", async () => {
@@ -657,12 +653,8 @@ describe("incrementCompactionCount", () => {
     });
 
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      0,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(true);
+    expect(requireStoredSession(stored, sessionKey).totalTokens).toBe(0);
+    expect(requireStoredSession(stored, sessionKey).totalTokensFresh).toBe(true);
   });
 
   it("falls back to last-call usage when run compactionTokensAfter is non-finite", async () => {
@@ -689,12 +681,8 @@ describe("incrementCompactionCount", () => {
     });
 
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      90_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(true);
+    expect(requireStoredSession(stored, sessionKey).totalTokens).toBe(90_000);
+    expect(requireStoredSession(stored, sessionKey).totalTokensFresh).toBe(true);
   });
 
   it("ignores non-finite tokensAfter values", async () => {
@@ -716,15 +704,9 @@ describe("incrementCompactionCount", () => {
     });
 
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").compactionCount,
-    ).toBe(1);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      180_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(false);
+    expect(requireStoredSession(stored, sessionKey).compactionCount).toBe(1);
+    expect(requireStoredSession(stored, sessionKey).totalTokens).toBe(180_000);
+    expect(requireStoredSession(stored, sessionKey).totalTokensFresh).toBe(false);
   });
 
   it("increments compaction count by an explicit amount", async () => {
@@ -741,9 +723,7 @@ describe("incrementCompactionCount", () => {
     expect(count).toBe(4);
 
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").compactionCount,
-    ).toBe(4);
+    expect(requireStoredSession(stored, sessionKey).compactionCount).toBe(4);
   });
 
   it("updates sessionId when newSessionId is provided", async () => {
@@ -763,12 +743,8 @@ describe("incrementCompactionCount", () => {
     });
 
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").sessionId).toBe(
-      "new-session-id",
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").compactionCount,
-    ).toBe(2);
+    expect(requireStoredSession(stored, sessionKey).sessionId).toBe("new-session-id");
+    expect(requireStoredSession(stored, sessionKey).compactionCount).toBe(2);
   });
 
   it("keeps sessionId when newSessionId matches current sessionId", async () => {
@@ -788,12 +764,8 @@ describe("incrementCompactionCount", () => {
     });
 
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").sessionId).toBe(
-      "same-id",
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").compactionCount,
-    ).toBe(1);
+    expect(requireStoredSession(stored, sessionKey).sessionId).toBe("same-id");
+    expect(requireStoredSession(stored, sessionKey).compactionCount).toBe(1);
   });
 
   it("marks totalTokens stale when tokensAfter is not provided", async () => {
@@ -814,15 +786,9 @@ describe("incrementCompactionCount", () => {
     });
 
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").compactionCount,
-    ).toBe(1);
+    expect(requireStoredSession(stored, sessionKey).compactionCount).toBe(1);
     // totalTokens unchanged
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      180_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(false);
+    expect(requireStoredSession(stored, sessionKey).totalTokens).toBe(180_000);
+    expect(requireStoredSession(stored, sessionKey).totalTokensFresh).toBe(false);
   });
 });

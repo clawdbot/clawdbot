@@ -1,9 +1,8 @@
-import { normalizeAgentId } from "../routing/session-key.js";
 import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
-import { sessionObserverScopeKey } from "./session-observer-model.js";
+import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
 
 export function createSessionObserverAudience(params: {
   subscribers: SessionMessageSubscriberRegistry;
@@ -12,18 +11,7 @@ export function createSessionObserverAudience(params: {
   getDefaultAgentId: () => string;
 }) {
   const messageSubscriberKeys = (sessionKey: string, agentId: string): string[] => {
-    // sessions.messages.subscribe canonicalizes selected-agent global aliases
-    // to this same qualified key before registering the connection.
-    const scopedKey = sessionObserverScopeKey(sessionKey, agentId);
-    if (
-      sessionKey === "global" &&
-      normalizeAgentId(agentId) === normalizeAgentId(params.getDefaultAgentId())
-    ) {
-      // Keep legacy default-agent global subscribers while non-default global
-      // sessions remain confined to their agent-qualified stream.
-      return [scopedKey, sessionKey];
-    }
-    return [scopedKey];
+    return resolveSessionSubscriptionKeys(sessionKey, agentId, params.getDefaultAgentId());
   };
 
   const messageRecipients = (sessionKey: string, agentId: string): Set<string> => {
@@ -37,6 +25,15 @@ export function createSessionObserverAudience(params: {
   };
 
   return {
+    deliveryOptions(sessionKey: string, agentId: string) {
+      return {
+        agentId,
+        dropIfSlow: true,
+        sessionKeys: messageSubscriberKeys(sessionKey, agentId),
+        sessionSubscriptionVerified: true,
+      };
+    },
+
     has(sessionKey: string, agentId: string): boolean {
       for (const connId of messageRecipients(sessionKey, agentId)) {
         if (params.isVisible(connId)) {

@@ -49,6 +49,7 @@ import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-i
 import {
   asBoolean,
   asFiniteNumber,
+  isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { canonicalizeGoogleProviderBase64 } from "./base64.js";
@@ -725,6 +726,11 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.sendUserMessage(greetingPrompt);
   }
 
+  private rejectToolResult(error: Error): never {
+    this.config.onError?.(error);
+    throw error;
+  }
+
   submitToolResult(
     callId: string,
     result: unknown,
@@ -735,52 +741,65 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       if (this.seenFunctionCallIds.has(callId)) {
         return;
       }
-      this.config.onError?.(
+      this.rejectToolResult(
         new Error(
           `Google Live function response is missing a matching function call for ${callId}`,
         ),
       );
-      return;
     }
+    const isConsultTool = name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME;
+    if (options?.willContinue === true && !this.supportsToolResultContinuation) {
+      this.rejectToolResult(
+        new Error(`Google Live model ${this.model} does not support continuing tool responses`),
+      );
+    }
+    const wrapsResult = !result || typeof result !== "object" || Array.isArray(result);
+    const functionResponse: FunctionResponse = {
+      id: callId,
+      name,
+      response: wrapsResult ? { output: result } : (result as Record<string, unknown>),
+    };
+    if (isConsultTool && this.supportsToolResultContinuation) {
+      functionResponse.scheduling = FunctionResponseScheduling.WHEN_IDLE;
+      if (options?.willContinue === true) {
+        functionResponse.willContinue = true;
+      }
+    } else if (options?.willContinue === true) {
+      this.rejectToolResult(
+        new Error(
+          `Google Live continuation is only supported for ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME}`,
+        ),
+      );
+    }
+
+    let serializedResponse: string;
+    let normalizedResponse: FunctionResponse;
     try {
-      const isConsultTool = name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME;
-      if (options?.willContinue === true && !this.supportsToolResultContinuation) {
-        this.config.onError?.(
-          new Error(`Google Live model ${this.model} does not support continuing tool responses`),
-        );
-        return;
+      serializedResponse = JSON.stringify(functionResponse);
+      normalizedResponse = JSON.parse(serializedResponse) as FunctionResponse;
+      if (
+        !isRecord(normalizedResponse.response) ||
+        (wrapsResult && !Object.hasOwn(normalizedResponse.response, "output"))
+      ) {
+        throw new Error("Google Live function response is missing required JSON output");
       }
-      const functionResponse: FunctionResponse = {
-        id: callId,
-        name,
-        response:
-          result && typeof result === "object" && !Array.isArray(result)
-            ? (result as Record<string, unknown>)
-            : { output: result },
-      };
-      if (isConsultTool && this.supportsToolResultContinuation) {
-        functionResponse.scheduling = FunctionResponseScheduling.WHEN_IDLE;
-        if (options?.willContinue === true) {
-          functionResponse.willContinue = true;
-        }
-      } else if (options?.willContinue === true) {
-        this.config.onError?.(
-          new Error(
-            `Google Live continuation is only supported for ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME}`,
-          ),
-        );
-        return;
-      }
+    } catch (cause) {
+      this.rejectToolResult(
+        new Error("Google Live function response result is not JSON-serializable", { cause }),
+      );
+    }
+
+    try {
       const session = this.session;
       const canSendImmediately = Boolean(
         session && (!this.resumingSession || this.sessionConfigured),
       );
       if (session && canSendImmediately) {
         session.sendToolResponse({
-          functionResponses: [functionResponse],
+          functionResponses: [normalizedResponse],
         });
       } else {
-        this.queueToolResponseForReconnect(callId, functionResponse);
+        this.queueToolResponseForReconnect(callId, serializedResponse);
       }
       if (options?.willContinue !== true) {
         this.pendingFunctionNames.delete(callId);
@@ -793,6 +812,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       } else {
         this.failConnection(sendError);
       }
+      throw sendError;
     }
   }
 
@@ -1131,8 +1151,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.pendingToolResponseBytes = 0;
   }
 
-  private queueToolResponseForReconnect(callId: string, functionResponse: FunctionResponse): void {
-    const payload = JSON.stringify(functionResponse);
+  private queueToolResponseForReconnect(callId: string, payload: string): void {
     const payloadBytes = Buffer.byteLength(payload, "utf8");
     if (
       this.pendingToolResponses.length >= GOOGLE_REALTIME_MAX_PENDING_TOOL_RESPONSES ||

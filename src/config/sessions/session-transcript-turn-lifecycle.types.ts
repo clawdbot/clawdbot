@@ -4,6 +4,8 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 /** Authoritative lifecycle snapshot required for an atomic transcript admission. */
 export type SessionTranscriptTurnExpectedState = {
+  /** Rejects a run-owned turn after another admitted run takes writer ownership. */
+  expectedWriterRunId?: string;
   abortedLastRun: boolean | undefined;
   /** Fences recovery-only transcript writes against concurrent ownership changes. */
   mainRestartRecoveryCycleId: string | undefined;

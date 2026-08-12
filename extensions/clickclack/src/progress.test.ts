@@ -90,6 +90,32 @@ describe("ClickClack native agent progress", () => {
     });
   });
 
+  it("hides command metadata from item-only native progress", async () => {
+    const publishEphemeral = vi.fn().mockResolvedValue(undefined);
+    const publisher = createClickClackAgentProgressPublisher({
+      client: { publishEphemeral },
+      target: { workspaceId: "ws_1", channelId: "chn_1" },
+      turnId: "msg_1",
+    });
+
+    publisher.start();
+    publisher.onItemEvent({
+      itemId: "tool_1",
+      kind: "tool",
+      name: "server.exec",
+      meta: "echo private-sentinel",
+      commandBearing: true,
+      phase: "end",
+      status: "completed",
+    });
+    await publisher.finalize();
+
+    expect(JSON.stringify(publishEphemeral.mock.calls)).not.toContain("private-sentinel");
+    expect(publishEphemeral.mock.calls[1]?.[0].payload).toMatchObject({
+      line: { text: "🧩 Server.exec" },
+    });
+  });
+
   it("does not let a progress transport failure interrupt finalization", async () => {
     const onError = vi.fn();
     const publishEphemeral = vi

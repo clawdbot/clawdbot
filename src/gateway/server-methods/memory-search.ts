@@ -7,7 +7,7 @@ import type {
   MemorySearchResult,
 } from "../../memory-host-sdk/host/types.js";
 import { resolveMemorySearchStaleness } from "../../memory-host-sdk/host/types.js";
-import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
+import { getActiveMemorySearchManagerCore } from "../../plugins/memory-runtime.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -108,11 +108,11 @@ export const memorySearchHandlers: GatewayRequestHandlers = {
       return;
     }
     const agentId = requestedAgentId ?? resolveDefaultAgentId(cfg);
-    let acquired: Awaited<ReturnType<typeof getActiveMemorySearchManager>>;
+    let acquired: Awaited<ReturnType<typeof getActiveMemorySearchManagerCore>>;
     try {
       // Use the transient CLI lifecycle so request cleanup cannot close a shared manager.
       // manager.search owns the same lazy/on-search sync behavior as the existing CLI path.
-      acquired = await getActiveMemorySearchManager({
+      acquired = await getActiveMemorySearchManagerCore({
         cfg,
         agentId,
         purpose: "cli",

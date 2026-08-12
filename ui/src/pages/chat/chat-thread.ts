@@ -108,6 +108,8 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
       return (
         previous.kind === "notice" &&
         previous.text === next.text &&
+        previous.label === next.label &&
+        previous.startsTurn === next.startsTurn &&
         previous.timestamp === next.timestamp
       );
     case "divider":
@@ -349,17 +351,6 @@ export function buildCachedChatItems(
   cached.liveStreamIdentity = cached.liveStreamIndex === -1 ? null : liveStreamIdentity(input);
   cached.liveStreamPrefix = accumulatedIndexedStreamText(input.streamSegments);
   return items;
-}
-
-export function deletedChatItemsSignature(
-  deleted: { has: (key: string) => boolean },
-  chatItems: ReturnType<typeof buildChatItems>,
-): string {
-  const deletedKeys = chatItems
-    .map((item) => item.key)
-    .filter((key) => deleted.has(key))
-    .toSorted();
-  return deletedKeys.length === 0 ? "" : deletedKeys.join("\u0000");
 }
 
 export function getExpansionStateVersion(values: ReadonlyMap<string, boolean>): number {

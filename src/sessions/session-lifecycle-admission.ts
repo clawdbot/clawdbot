@@ -22,8 +22,6 @@ export {
 } from "./session-work-admission-handoff.js";
 
 export const SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS = 15_000;
-/** Stable gateway error for an archive rejected by an admitted or projected run. */
-export const SESSION_ARCHIVE_ACTIVE_RUN_ERROR = "Cannot archive a session with an active run.";
 type SessionWorkAdmission = HandoffSessionWorkAdmission & {
   interrupt?: () => void;
   released: Promise<void>;
@@ -50,6 +48,7 @@ type SessionLifecycleMutationTarget = {
 type SessionLifecycleMutationParams<T> = {
   kind?: SessionLifecycleMutationKind;
   prepare?: () => Promise<void>;
+  finalize?: () => Promise<void>;
   run: () => Promise<T>;
   signal?: AbortSignal;
 } & (SessionLifecycleMutationTarget | { targets: Iterable<SessionLifecycleMutationTarget> });
@@ -243,34 +242,40 @@ export async function runExclusiveSessionLifecycleMutation<T>(
           await params.prepare?.();
           return await runWithSessionIdentityLocks(identities, 0, params.run);
         } finally {
-          await runWithSessionIdentityLocks(identities, 0, async () => {
-            for (const identity of identities) {
-              if (params.kind) {
-                const kinds = ACTIVE_SESSION_LIFECYCLE_MUTATION_KINDS.get(identity);
-                const remainingKindCount = (kinds?.get(params.kind) ?? 1) - 1;
-                if (remainingKindCount > 0) {
-                  kinds?.set(params.kind, remainingKindCount);
-                } else {
-                  kinds?.delete(params.kind);
-                  if (kinds?.size === 0) {
-                    ACTIVE_SESSION_LIFECYCLE_MUTATION_KINDS.delete(identity);
+          // Resource finalization is part of the mutation: successors remain
+          // fenced until rollback or exact-generation cleanup has completed.
+          try {
+            await params.finalize?.();
+          } finally {
+            await runWithSessionIdentityLocks(identities, 0, async () => {
+              for (const identity of identities) {
+                if (params.kind) {
+                  const kinds = ACTIVE_SESSION_LIFECYCLE_MUTATION_KINDS.get(identity);
+                  const remainingKindCount = (kinds?.get(params.kind) ?? 1) - 1;
+                  if (remainingKindCount > 0) {
+                    kinds?.set(params.kind, remainingKindCount);
+                  } else {
+                    kinds?.delete(params.kind);
+                    if (kinds?.size === 0) {
+                      ACTIVE_SESSION_LIFECYCLE_MUTATION_KINDS.delete(identity);
+                    }
                   }
                 }
+                const remaining = (ACTIVE_SESSION_LIFECYCLE_MUTATIONS.get(identity) ?? 1) - 1;
+                if (remaining > 0) {
+                  ACTIVE_SESSION_LIFECYCLE_MUTATIONS.set(identity, remaining);
+                  continue;
+                }
+                ACTIVE_SESSION_LIFECYCLE_MUTATIONS.delete(identity);
+                const waiters = SESSION_LIFECYCLE_IDLE_WAITERS.get(identity);
+                SESSION_LIFECYCLE_IDLE_WAITERS.delete(identity);
+                for (const resolve of waiters ?? []) {
+                  resolve();
+                }
               }
-              const remaining = (ACTIVE_SESSION_LIFECYCLE_MUTATIONS.get(identity) ?? 1) - 1;
-              if (remaining > 0) {
-                ACTIVE_SESSION_LIFECYCLE_MUTATIONS.set(identity, remaining);
-                continue;
-              }
-              ACTIVE_SESSION_LIFECYCLE_MUTATIONS.delete(identity);
-              const waiters = SESSION_LIFECYCLE_IDLE_WAITERS.get(identity);
-              SESSION_LIFECYCLE_IDLE_WAITERS.delete(identity);
-              for (const resolve of waiters ?? []) {
-                resolve();
-              }
-            }
-            ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.delete(mutationRun);
-          });
+              ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS.delete(mutationRun);
+            });
+          }
         }
       }),
     "mutation",

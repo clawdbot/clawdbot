@@ -24,7 +24,7 @@ import {
   ArchivedTranscriptReader,
   attachOpenClawTranscriptMeta,
   buildSessionPreviewItems,
-  readLatestSessionUsageFromTranscriptAsync as readLatestSessionUsageFromTranscriptAsyncFile,
+  readLatestSessionUsageFromTranscriptFileAsync,
 } from "./session-utils.fs.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
 
@@ -234,7 +234,7 @@ export function extractMessageRole(message: unknown): string | undefined {
     : undefined;
 }
 
-export function extractMessageText(message: unknown): string | null {
+export function extractSessionTranscriptText(message: unknown): string | null {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
     return null;
   }
@@ -433,7 +433,7 @@ export async function readLatestSessionUsageFromTranscriptAsync(
     path.isAbsolute(artifactFile) &&
     artifactFile.endsWith(".jsonl")
   ) {
-    return await readLatestSessionUsageFromTranscriptAsyncFile(
+    return await readLatestSessionUsageFromTranscriptFileAsync(
       scope.sessionId,
       concreteStorePath,
       artifactFile,

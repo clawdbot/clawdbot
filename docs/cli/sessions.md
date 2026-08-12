@@ -93,9 +93,13 @@ openclaw sessions archive "agent:main:scratch-1" --json
 
 Archive uses the same `sessions.patch` lifecycle operation as the Control UI.
 It keeps the transcript, marks the session archived, and removes the session
-from the default active list. Already archived sessions are successful no-ops.
-Use `--dry-run` to validate every key and preview the result without changing
-session state.
+from the default active list. For a cloud-worker session with an active
+placement, the Gateway first stops the worker, reconciles its workspace, and
+reclaims the environment. If the placement is still transitioning or failed
+without proof that its environment is gone, the session remains unarchived;
+wait for the placement to settle, then retry. Agent main sessions remain
+protected. Already archived sessions are successful no-ops. Use `--dry-run` to
+validate every key and preview the result without changing session state.
 
 ## Delete sessions
 

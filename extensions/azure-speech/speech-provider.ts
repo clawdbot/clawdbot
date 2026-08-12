@@ -12,10 +12,10 @@ import type {
 } from "openclaw/plugin-sdk/speech-core";
 import {
   asFiniteNumber,
-  asObject,
   resolveSpeechProviderApiKey,
   trimToUndefined,
 } from "openclaw/plugin-sdk/speech-core";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   azureSpeechTTS,
   DEFAULT_AZURE_SPEECH_AUDIO_FORMAT,
@@ -68,12 +68,12 @@ function readAzureSpeechEnvEndpoint(): string | undefined {
 function resolveAzureSpeechConfigRecord(
   rawConfig: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
-  const providers = asObject(rawConfig.providers);
+  const providers = asOptionalRecord(rawConfig.providers);
   return (
-    asObject(providers?.["azure-speech"]) ??
-    asObject(providers?.azure) ??
-    asObject(rawConfig["azure-speech"]) ??
-    asObject(rawConfig.azure)
+    asOptionalRecord(providers?.["azure-speech"]) ??
+    asOptionalRecord(providers?.azure) ??
+    asOptionalRecord(rawConfig["azure-speech"]) ??
+    asOptionalRecord(rawConfig.azure)
   );
 }
 

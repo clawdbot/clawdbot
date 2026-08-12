@@ -3,21 +3,17 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { reclaimDefinitelyStaleFileLock } from "openclaw/plugin-sdk/file-lock";
-import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import {
-  ensureMemoryIndexSchema,
-  loadSqliteVecExtension,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-fs";
+// Doctor enumeration cold-loads this closure; the host engine schema pulls the
+// runtime-sqlite/kysely graph, so its helpers load lazily in the async migration.
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   legacyStateFileExists,
   type PluginDoctorStateMigration,
-} from "openclaw/plugin-sdk/runtime-doctor";
-import {
-  ensureOpenClawAgentDatabaseSchema,
-  openNodeSqliteDatabase,
-  resolveOpenClawAgentSqlitePath,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+// sqlite-runtime re-exports the agent-db/kysely graph; keep it lazy so doctor
+// enumeration does not cold-load it with this closure.
 import {
   importLegacyMemorySidecarIndex,
   LEGACY_MEMORY_SIDECAR_SUFFIXES,
@@ -33,10 +29,10 @@ type MemoryFtsTokenizer = "unicode61" | "trigram";
 
 function resolveConfiguredAgentIds(config: unknown): string[] {
   const cfg = config as { agents?: { entries?: unknown; list?: unknown } };
-  const entries = asRecord(cfg.agents?.entries);
+  const entries = asOptionalObjectRecord(cfg.agents?.entries);
   const listedIds = Array.isArray(cfg.agents?.list)
     ? cfg.agents.list.flatMap((entry) => {
-        const id = asRecord(entry)?.id;
+        const id = asOptionalObjectRecord(entry)?.id;
         return typeof id === "string" ? [id] : [];
       })
     : [];
@@ -44,46 +40,44 @@ function resolveConfiguredAgentIds(config: unknown): string[] {
   return ids.size > 0 ? [...ids] : [normalizeAgentId(undefined)];
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
-
 function readAgentMemorySearch(
   config: unknown,
   agentId: string,
 ): Record<string, unknown> | undefined {
-  const agents = asRecord(asRecord(config)?.agents);
-  const keyedEntries = asRecord(agents?.entries);
+  const agents = asOptionalObjectRecord(asOptionalObjectRecord(config)?.agents);
+  const keyedEntries = asOptionalObjectRecord(agents?.entries);
   const keyedEntry = keyedEntries
     ? Object.entries(keyedEntries).find(([id]) => normalizeAgentId(id) === agentId)?.[1]
     : undefined;
-  const keyedSearch = asRecord(asRecord(asRecord(keyedEntry)?.memory)?.search);
+  const keyedSearch = asOptionalObjectRecord(
+    asOptionalObjectRecord(asOptionalObjectRecord(keyedEntry)?.memory)?.search,
+  );
   if (keyedSearch) {
     return keyedSearch;
   }
   const entries = Array.isArray(agents?.list) ? agents.list : [];
   const entry = entries
-    .map(asRecord)
+    .map(asOptionalObjectRecord)
     .find(
       (candidate) =>
         normalizeAgentId(typeof candidate?.id === "string" ? candidate.id : undefined) === agentId,
     );
-  return asRecord(asRecord(entry?.memory)?.search);
+  return asOptionalObjectRecord(asOptionalObjectRecord(entry?.memory)?.search);
 }
 
 function readMemorySearchLayers(config: unknown, agentId: string): Record<string, unknown>[] {
-  const cfg = asRecord(config);
+  const cfg = asOptionalObjectRecord(config);
   return [
     readAgentMemorySearch(config, agentId),
-    asRecord(asRecord(cfg?.memory)?.search),
+    asOptionalObjectRecord(asOptionalObjectRecord(cfg?.memory)?.search),
     // Doctor still inspects the retired root shape to migrate its persisted sidecar path.
-    asRecord(cfg?.memorySearch),
+    asOptionalObjectRecord(cfg?.memorySearch),
   ].filter((value): value is Record<string, unknown> => value !== undefined);
 }
 
 function readStoreLayers(config: unknown, agentId: string): Record<string, unknown>[] {
   return readMemorySearchLayers(config, agentId).flatMap((search) => {
-    const store = asRecord(search.store);
+    const store = asOptionalObjectRecord(search.store);
     return store ? [store] : [];
   });
 }
@@ -98,7 +92,7 @@ function readNestedStoreLayers(
   key: string,
 ): Record<string, unknown>[] {
   return readStoreLayers(config, agentId).flatMap((store) => {
-    const nested = asRecord(store[key]);
+    const nested = asOptionalObjectRecord(store[key]);
     return nested ? [nested] : [];
   });
 }
@@ -144,6 +138,7 @@ async function collectLegacyMemorySidecarSources(params: {
   env: NodeJS.ProcessEnv;
   stateDir: string;
 }): Promise<LegacyMemorySidecarSource[]> {
+  const { resolveOpenClawAgentSqlitePath } = await import("openclaw/plugin-sdk/sqlite-runtime");
   const agentIds = new Set(resolveConfiguredAgentIds(params.config));
   const legacyDir = path.join(params.stateDir, "memory");
   const retrySidecars: Array<{ agentId: string; legacyPath: string }> = [];
@@ -373,6 +368,10 @@ async function migrateLegacyMemorySidecarSource(params: {
   changes: string[];
   warnings: string[];
 }): Promise<{ archiveReady: boolean }> {
+  const { ensureMemoryIndexSchema, loadSqliteVecExtension } =
+    await import("openclaw/plugin-sdk/memory-core-host-engine-schema");
+  const { ensureOpenClawAgentDatabaseSchema, openNodeSqliteDatabase } =
+    await import("openclaw/plugin-sdk/sqlite-runtime");
   // OpenClaw itself can leave a zero-byte placeholder at the legacy sidecar
   // path while the live index is the per-agent SQLite database. An empty file
   // holds no legacy rows, so remove it quietly instead of emitting a permanent
@@ -593,6 +592,53 @@ async function collectRetiredQmdFileLocks(stateDir: string): Promise<string[]> {
   }
   return lockPaths;
 }
+
+async function collectRetiredQmdWorkspaceHomes(stateDir: string): Promise<string[]> {
+  const agentsDir = path.join(stateDir, "agents");
+  const homes: string[] = [];
+  for (const entry of await readDirectoryEntries(agentsDir)) {
+    if (!entry.isDirectory() || entry.name !== normalizeAgentId(entry.name)) {
+      continue;
+    }
+    const agentDir = path.join(agentsDir, entry.name);
+    const agentEntries = await readDirectoryEntries(agentDir);
+    if (agentEntries.some((candidate) => candidate.name === "qmd" && candidate.isDirectory())) {
+      homes.push(path.join(agentDir, "qmd"));
+    }
+  }
+  return homes;
+}
+
+export const qmdWorkspaceStateMigration: PluginDoctorStateMigration = {
+  id: "memory-core-qmd-workspace-retired",
+  label: "Memory Core retired QMD workspaces",
+  doctorOnly: true,
+  async detectLegacyState(params) {
+    const homes = await collectRetiredQmdWorkspaceHomes(params.stateDir);
+    if (homes.length === 0) {
+      return null;
+    }
+    return {
+      preview: homes.map(
+        (home) =>
+          `- Retired Memory Core QMD workspace: ${home} -> remove derived index, config, cache, and session-export artifacts`,
+      ),
+    };
+  },
+  async migrateLegacyState(params) {
+    const changes: string[] = [];
+    const warnings: string[] = [];
+    for (const home of await collectRetiredQmdWorkspaceHomes(params.stateDir)) {
+      try {
+        await fs.rm(home, { recursive: true, force: true });
+        changes.push(`Removed retired Memory Core QMD workspace: ${home}`);
+      } catch (err) {
+        warnings.push(`Failed removing retired Memory Core QMD workspace ${home}: ${String(err)}`);
+      }
+    }
+    return { changes, warnings };
+  },
+};
 
 export const qmdLocksStateMigration: PluginDoctorStateMigration = {
   id: "memory-core-qmd-file-locks-to-sqlite-leases",

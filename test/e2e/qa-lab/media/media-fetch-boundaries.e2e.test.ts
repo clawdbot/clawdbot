@@ -99,14 +99,12 @@ async function expectNoPublishedMediaFiles(stateDir: string): Promise<void> {
   const files: string[] = [];
 
   const visit = async (directory: string): Promise<void> => {
-    const entries = await fs
-      .readdir(directory, { withFileTypes: true })
-      .catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") {
-          return [];
-        }
-        throw error;
-      });
+    const entries = await fs.readdir(directory, { withFileTypes: true }).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return [];
+      }
+      throw error;
+    });
     for (const entry of entries) {
       const entryPath = path.join(directory, entry.name);
       if (entry.isDirectory()) {

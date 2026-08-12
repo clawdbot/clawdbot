@@ -1,4 +1,4 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 import type { GatewayAgentRow } from "../api/types.ts";
 import type { AgentSelectionCapability } from "../app/agent-selection.ts";
 import { t } from "../i18n/index.ts";
@@ -26,6 +26,9 @@ export function renderAgentScopeControl(params: AgentScopeControlParams) {
       (agent) => agent.kind === "system" && normalizeAgentId(agent.id) === agentId,
     );
   const selectableAgents = listSelectableAgents(params.agents);
+  if (selectableAgents.length <= 1) {
+    return nothing;
+  }
   const agentsById = new Map(
     selectableAgents.map((agent) => {
       const agentId = normalizeAgentId(agent.id);

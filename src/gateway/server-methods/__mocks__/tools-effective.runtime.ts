@@ -60,9 +60,11 @@ export const resolveSessionMcpConfigSummary = vi.fn(() => ({
   fingerprint: "mcp:0",
   serverNames: [] as string[],
 }));
-export const buildBundleMcpToolsFromCatalog = vi.fn(() => []);
-export const applyFinalEffectiveToolPolicy = vi.fn(
-  (params: { bundledTools: unknown[] }) => params.bundledTools,
-);
-export const getActivePluginRegistryVersion = vi.fn(() => 1);
-export const getActivePluginChannelRegistryVersion = vi.fn(() => 1);
+export const toolsEffectiveRuntimeMockModule = {
+  buildBundleMcpToolsFromCatalog: vi.fn(() => []),
+  applyFinalEffectiveToolPolicy: vi.fn(
+    (params: { bundledTools: unknown[] }) => params.bundledTools,
+  ),
+  getActivePluginRegistryVersion: vi.fn(() => 1),
+  getActivePluginChannelRegistryVersion: vi.fn(() => 1),
+};

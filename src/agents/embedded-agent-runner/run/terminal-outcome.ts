@@ -33,7 +33,11 @@ export function isEmbeddedRunTerminalTimeout(outcome: AgentRunTerminalOutcome): 
 }
 
 export function isEmbeddedRunTerminalAbort(outcome: AgentRunTerminalOutcome): boolean {
-  return outcome.reason === "aborted" || outcome.reason === "cancelled";
+  return (
+    outcome.reason === "aborted" ||
+    outcome.reason === "cancelled" ||
+    outcome.reason === "superseded"
+  );
 }
 
 export function isEmbeddedRunTerminalInterrupted(outcome: AgentRunTerminalOutcome): boolean {

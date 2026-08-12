@@ -2,11 +2,10 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import { replaceGenericExternalRunFailureText } from "../agents/failover/user-copy.js";
 import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
-import { replaceGenericExternalRunFailureText } from "../auto-reply/reply/agent-runner-failure-copy.js";
 import { buildRecoverablePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import { sendDurableMessageBatch } from "../channels/message/runtime.js";
-import { markCommitmentsStatus } from "../commitments/store.js";
 import { patchSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { formatErrorMessage } from "./errors.js";
@@ -41,6 +40,9 @@ const log = heartbeatLog;
 const CLEARED_PENDING_FINAL_DELIVERY_FIELDS = {
   pendingFinalDelivery: undefined,
 } as const;
+
+const FIRST_HEARTBEAT_ALERT_PREAMBLE =
+  'First heartbeat alert: your bot runs periodic background checks and messages you only when something needs attention. Set agents.defaults.heartbeat.target: "none" to keep these internal.';
 
 // Clear pending-final only when this run produced it: the agent run stamps
 // createdAt during the run, so createdAt >= run start means we own it. An older
@@ -178,10 +180,8 @@ export async function finalizeHeartbeatOutcome(params: {
   outboundIdentity: ReturnType<typeof resolveAgentOutboundIdentity>;
 }): Promise<HeartbeatRunResult> {
   const { cfg, agentId, scheduledTasks, startedAt, wakeSource } = params.wake;
-  const { delivery, dueCommitmentIds, entry, previousUpdatedAt } = params.prepared;
+  const { delivery, entry, previousUpdatedAt } = params.prepared;
   const { runSessionKey, sessionKey, storePath, visibility } = params.prepared;
-  const markDueCommitments = (status: "dismissed" | "sent") =>
-    markCommitmentsStatus({ ids: dueCommitmentIds, status, nowMs: startedAt });
   const outcome = params.outcome;
   if (outcome.kind === "terminal-failure") {
     const failureChannel = delivery.channel;
@@ -296,7 +296,6 @@ export async function finalizeHeartbeatOutcome(params: {
         ? resolveIndicatorType(outcome.eventStatus)
         : undefined,
     });
-    await markDueCommitments("dismissed");
     consumeInspectedSystemEvents(params.wake, params.prepared);
     return { status: "ran", durationMs: Date.now() - startedAt };
   }
@@ -335,12 +334,15 @@ export async function finalizeHeartbeatOutcome(params: {
       channel: delivery.channel !== "none" ? delivery.channel : undefined,
       accountId: delivery.accountId,
     });
-    await markDueCommitments("dismissed");
     consumeInspectedSystemEvents(params.wake, params.prepared);
     return { status: "ran", durationMs: Date.now() - startedAt };
   }
 
-  const previewText = normalized.text;
+  const deliveryText =
+    delivery.implicitDefaultRoute && prevHeartbeatAt === undefined
+      ? `${FIRST_HEARTBEAT_ALERT_PREAMBLE}\n${normalized.text}`
+      : normalized.text;
+  const previewText = deliveryText;
   if (delivery.channel === "none" || !delivery.to) {
     emitHeartbeatEvent({
       status: "skipped",
@@ -406,7 +408,7 @@ export async function finalizeHeartbeatOutcome(params: {
     payloads: [
       copyReplyPayloadMetadata(replyPayload ?? {}, {
         ...replyPayload,
-        text: normalized.text,
+        text: deliveryText,
         mediaUrls,
       }),
     ],
@@ -417,11 +419,8 @@ export async function finalizeHeartbeatOutcome(params: {
     throw send.error;
   }
   const visibleSendSucceeded = send.status === "sent";
-  // Suppressed durable sends committed no visible channel message. Keep due
-  // commitments and heartbeat dedupe state active so a later heartbeat can retry.
   if (visibleSendSucceeded) {
-    await markDueCommitments("sent");
-    const hasHeartbeatText = Boolean(normalized.text.trim());
+    const hasHeartbeatText = Boolean(deliveryText.trim());
     await patchSessionEntry(
       { storePath, sessionKey },
       (current, context) => {

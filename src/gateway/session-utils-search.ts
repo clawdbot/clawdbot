@@ -6,7 +6,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { DEFAULT_MODEL } from "../agents/defaults.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
-import { getSessionDisplaySubagentRunByChildSessionKey } from "../agents/subagent-registry-read.js";
+import { getSessionDisplaySubagentRunByChildSessionKey } from "../agents/subagents/registry/subagent-registry-read.js";
 import {
   buildGroupDisplayName,
   type InternalSessionEntry,
@@ -27,7 +27,7 @@ import {
 import { buildGatewaySessionRow } from "./session-utils-row.js";
 import {
   isGroupOrChannelDisplaySession,
-  loadSessionEntryReadOnly,
+  loadGatewaySessionEntryReadOnly,
   parseGroupKey,
 } from "./session-utils-store.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
@@ -164,11 +164,14 @@ export function loadGatewaySessionLifecycleSnapshot(
   options?: LoadGatewaySessionRowOptions,
 ): { lifecycleRunId?: string; row: GatewaySessionRow | null } {
   const now = options?.now ?? Date.now();
-  const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntryReadOnly(sessionKey, {
-    clone: false,
-    includeStoreChildEntries: true,
-    ...(options?.agentId ? { agentId: options.agentId } : {}),
-  });
+  const { cfg, storePath, store, entry, canonicalKey } = loadGatewaySessionEntryReadOnly(
+    sessionKey,
+    {
+      clone: false,
+      includeStoreChildEntries: true,
+      ...(options?.agentId ? { agentId: options.agentId } : {}),
+    },
+  );
   if (!entry) {
     return { row: null };
   }

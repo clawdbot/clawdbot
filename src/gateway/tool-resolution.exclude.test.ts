@@ -410,7 +410,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     const schemaProperties = presentation?.parameters?.properties;
     expect(
       Object.keys(schemaProperties && typeof schemaProperties === "object" ? schemaProperties : {}),
-    ).toEqual(["command", "workdir", "env", "timeout", "host", "node"]);
+    ).toEqual(["command", "workdir", "env", "timeoutSeconds", "host", "node"]);
     const hostSchema = (
       schemaProperties && typeof schemaProperties === "object"
         ? (schemaProperties as Record<string, unknown>).host

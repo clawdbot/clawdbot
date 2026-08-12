@@ -1,17 +1,23 @@
 import {
   createSessionProjection,
+  readSessionMessageIdentity,
   reconcileSessionProjectionSnapshot,
   reduceSessionProjection,
   type SessionProjectionEvent,
+  type SessionMessageEnvelope,
   type SessionProjectionScope,
   type SessionProjectionState,
 } from "@openclaw/gateway-client/browser";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ApplicationInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 
 const chatSessionProjections = new WeakMap<object, SessionProjectionState>();
 
 type ChatSessionProjectionOwner = {
   sessionKey: string;
   chatMessages: unknown[];
+  client?: object | null;
+  initialUserMessage?: ApplicationInitialUserMessageHandoff;
   currentSessionId?: string | null;
   chatDisplayedLeafEntryId?: string | null;
 };
@@ -19,6 +25,9 @@ type ChatSessionProjectionOwner = {
 type ChatSessionProjectionScopeOptions = Omit<SessionProjectionScope, "sessionId"> & {
   sessionId?: string | null;
 };
+type InitialUserMessageHandoffEntry = NonNullable<
+  ReturnType<ApplicationInitialUserMessageHandoff["read"]>
+>;
 
 /** Every live, pending, terminal, and history path must identify the same pane and branch. */
 export function readChatSessionProjectionScope(
@@ -97,6 +106,54 @@ export function setChatSessionProjection(owner: object, projection: SessionProje
   chatSessionProjections.set(owner, projection);
 }
 
+function adoptInitialUserMessage(
+  message: unknown,
+  envelope: SessionMessageEnvelope | undefined,
+  handoff: InitialUserMessageHandoffEntry,
+): unknown {
+  const identity = readSessionMessageIdentity(message, envelope);
+  const handoffSequence = handoff.message["__openclaw"]?.seq ?? null;
+  if (
+    identity?.role !== "user" ||
+    identity.isImported ||
+    identity.runId !== handoff.pendingRunId ||
+    (handoffSequence !== null && identity.sequence !== handoffSequence)
+  ) {
+    return message;
+  }
+  const authoritative = asNullableRecord(message) ?? {};
+  const { media: _media, ...authoritativeMetadata } =
+    asNullableRecord(authoritative["__openclaw"]) ?? {};
+  return {
+    ...handoff.message,
+    ...authoritative,
+    content: handoff.message.content,
+    __openclaw: {
+      ...handoff.message["__openclaw"],
+      ...authoritativeMetadata,
+    },
+  };
+}
+
+/** Admit an accepted create-time prompt through the same reducer as ordinary sends. */
+export function admitInitialUserMessageHandoff(
+  owner: ChatSessionProjectionOwner,
+  sessionKey: string,
+): boolean {
+  const handoff = owner.initialUserMessage?.read(sessionKey, owner.client ?? null);
+  if (!handoff) {
+    return false;
+  }
+  const scope = readChatSessionProjectionScope(owner, { sessionKey });
+  const previousMessages = owner.chatMessages;
+  reduceChatSessionProjection(
+    owner,
+    { type: "sendPending", runId: handoff.pendingRunId, message: handoff.message },
+    { scope },
+  );
+  return owner.chatMessages !== previousMessages;
+}
+
 /** Publish the reducer and rendered transcript together; no caller maintains a second copy. */
 export function reduceChatSessionProjection(
   owner: ChatSessionProjectionOwner,
@@ -104,14 +161,46 @@ export function reduceChatSessionProjection(
   options: {
     scope?: SessionProjectionScope;
     messages?: readonly unknown[];
+    runActive?: boolean;
   } = {},
 ): SessionProjectionState {
   const scope = options.scope ?? readChatSessionProjectionScope(owner);
   const current = getChatSessionProjection(owner, options.messages ?? owner.chatMessages, scope);
-  const projection = reduceSessionProjection(current, { ...event, scope });
+  const sessionKey = scope.sessionKey ?? owner.sessionKey;
+  const handoff = owner.initialUserMessage?.read(sessionKey, owner.client ?? null) ?? null;
+  let adopted = false;
+  const adopt = (message: unknown, envelope?: SessionMessageEnvelope) => {
+    const next = handoff ? adoptInitialUserMessage(message, envelope, handoff) : message;
+    adopted ||= next !== message;
+    return next;
+  };
+  const preparedEvent =
+    event.type === "messagePersisted"
+      ? { ...event, message: adopt(event.message, event.envelope ?? event) }
+      : event.type === "snapshotLoaded"
+        ? { ...event, messages: event.messages.map((message) => adopt(message)) }
+        : event;
+  let projection = current;
+  if (event.type === "snapshotLoaded" && handoff && !adopted && options.runActive !== false) {
+    projection = reduceSessionProjection(projection, {
+      type: "sendPending",
+      runId: handoff.pendingRunId,
+      message: handoff.message,
+      scope,
+    });
+  }
+  projection = reduceSessionProjection(projection, { ...preparedEvent, scope });
+  const renderedMessagesMatch =
+    owner.chatMessages.length === projection.messages.length &&
+    owner.chatMessages.every((message, index) => message === projection.messages[index]);
   if (projection !== current) {
     setChatSessionProjection(owner, projection);
+  }
+  if (!renderedMessagesMatch) {
     owner.chatMessages = [...projection.messages];
+  }
+  if (adopted && options.runActive === false) {
+    owner.initialUserMessage?.clear(sessionKey);
   }
   return projection;
 }

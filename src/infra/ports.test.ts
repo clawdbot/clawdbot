@@ -1,4 +1,5 @@
 // Covers gateway port availability and diagnostics behavior.
+import { readFileSync } from "node:fs";
 import net from "node:net";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
@@ -155,6 +156,13 @@ afterEach(() => {
 });
 
 describe("ports helpers", () => {
+  it("keeps process inspection behind the busy-port diagnostics boundary", () => {
+    const source = readFileSync(new URL("./ports.ts", import.meta.url), "utf8");
+
+    expect(source).not.toMatch(/(?:import|export)[^;]+from "\.\/ports-inspect\.js"/u);
+    expect(source).toContain('await import("./ports-inspect.js")');
+  });
+
   it("ensurePortAvailable rejects when port busy", async () => {
     const server = net.createServer();
     const address = await listenServer(server, 0);

@@ -5,9 +5,11 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../agents/glob-pattern.js";
+import type { McpCodexToolAnnotations } from "../agents/mcp-codex-tool-approval.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { normalizeConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
+import type { McpCodexToolApprovalMode } from "../config/types.mcp.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import {
@@ -54,6 +56,10 @@ export type PluginToolMcpMeta = {
   toolName: string;
   operation: "tool" | "resources_list" | "resources_read" | "prompts_list" | "prompts_get";
   deniedBySession?: true;
+  codexApproval?: {
+    mode: McpCodexToolApprovalMode;
+    annotations?: McpCodexToolAnnotations;
+  };
   node?: {
     id: string;
     displayName?: string;

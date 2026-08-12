@@ -127,31 +127,44 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
         return;
       case "response.done": {
         const status = event.response?.status;
-        const output = event.response?.output ?? [];
-        if (status === undefined || status === "completed") {
-          for (const item of output) {
-            this.emitCompletedToolCall(item, event);
+        const output = Array.isArray(event.response?.output)
+          ? event.response.output.filter(isRecord)
+          : [];
+        try {
+          if (status === undefined || status === "completed") {
+            for (const item of output) {
+              this.emitCompletedToolCall(item, event);
+            }
           }
+          const terminalTranscript = output
+            .filter((item) => item.type === "message" && item.role === "assistant")
+            .flatMap((item) => (Array.isArray(item.content) ? item.content.filter(isRecord) : []))
+            .map((content) =>
+              typeof content.transcript === "string"
+                ? content.transcript
+                : typeof content.text === "string"
+                  ? content.text
+                  : "",
+            )
+            .join("");
+          this.flushAssistantTranscript(terminalTranscript);
+          if (status === "failed" || status === "incomplete") {
+            const details = event.response?.status_details;
+            const error = isRecord(details) ? details.error : undefined;
+            const reason = isRecord(details) ? normalizeOptionalString(details.reason) : undefined;
+            const message = error
+              ? readXaiRealtimeErrorDetail(error)
+              : `xAI realtime voice response ${status}${reason ? `: ${reason}` : ""}`;
+            this.config.onError?.(new Error(message));
+          }
+        } finally {
+          // Keep the response active through terminal tool discovery: callbacks can
+          // submit results synchronously and must not start the next response early.
+          this.responseActive = false;
+          this.responseCreateInFlight = false;
+          this.responseCancelInFlight = false;
+          this.flushPendingResponseCreate();
         }
-        const terminalTranscript = output
-          .filter((item) => item.type === "message" && item.role === "assistant")
-          .flatMap((item) => item.content ?? [])
-          .map((content) => content.transcript ?? content.text ?? "")
-          .join("");
-        this.flushAssistantTranscript(terminalTranscript);
-        this.responseActive = false;
-        this.responseCreateInFlight = false;
-        this.responseCancelInFlight = false;
-        if (status === "failed" || status === "incomplete") {
-          const details = event.response?.status_details;
-          const error = isRecord(details) ? details.error : undefined;
-          const reason = isRecord(details) ? normalizeOptionalString(details.reason) : undefined;
-          const message = error
-            ? readXaiRealtimeErrorDetail(error)
-            : `xAI realtime voice response ${status}${reason ? `: ${reason}` : ""}`;
-          this.config.onError?.(new Error(message));
-        }
-        this.flushPendingResponseCreate();
         return;
       }
       case "response.function_call_arguments.delta": {

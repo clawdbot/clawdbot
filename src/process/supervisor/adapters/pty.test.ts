@@ -3,6 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import {
   expectRealExitWinsOverSigkillFallback,
   expectWaitStaysPendingUntilSigkillFallback,
+  mockLinuxOomWrapperShell,
 } from "./test-support.js";
 
 const { spawnMock, ptyKillMock, signalProcessTreeMock } = vi.hoisted(() => ({
@@ -157,7 +158,7 @@ describe("createPtyAdapter", () => {
 
   it("forwards non-SIGTERM explicit signals to node-pty kill on non-Windows", async () => {
     const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
-    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
     try {
       spawnMock.mockReturnValue(createStubPty());
 
@@ -316,16 +317,21 @@ describe("createPtyAdapter", () => {
   it("wraps Linux PTY spawns so shell children inherit higher OOM score", async () => {
     const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const restoreLinuxShell = mockLinuxOomWrapperShell();
+    vi.resetModules();
     try {
+      const { createPtyAdapter: createLinuxPtyAdapter } = await import("./pty.js");
       const stub = createStubPty();
       spawnMock.mockReturnValue(stub);
 
-      await createPtyAdapter({
+      const adapter = await createLinuxPtyAdapter({
         shell: "bash",
         args: ["-lc", "env"],
         env: { PATH: "/usr/bin", BASH_ENV: "/tmp/bashenv", TERM: "dumb" },
       });
+      expect(adapter.oomScoreWrapperSelected).toBe(true);
     } finally {
+      restoreLinuxShell();
       if (originalPlatform) {
         Object.defineProperty(process, "platform", originalPlatform);
       }

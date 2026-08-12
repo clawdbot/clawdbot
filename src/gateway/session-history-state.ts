@@ -84,7 +84,7 @@ export function resolveSessionHistoryTailReadOptions(limit: number): {
   };
 }
 
-function resolveCursorSeq(cursor: string | undefined): number | undefined {
+export function resolveCursorSeq(cursor: string | undefined): number | undefined {
   if (!cursor) {
     return undefined;
   }

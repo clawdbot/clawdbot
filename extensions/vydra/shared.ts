@@ -16,6 +16,7 @@ import {
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
+  asOptionalRecord,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -48,17 +49,11 @@ type VydraJobPayload = {
   error?: string | { message?: string; detail?: string } | null;
 };
 
-function asObject(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function addUrlValue(value: unknown, urls: Set<string>): void {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (/^https?:\/\//iu.test(trimmed)) {
-      urls.add(trimmed);
+  const normalized = normalizeOptionalString(value);
+  if (normalized !== undefined) {
+    if (/^https?:\/\//iu.test(normalized)) {
+      urls.add(normalized);
     }
     return;
   }
@@ -69,11 +64,9 @@ function addUrlValue(value: unknown, urls: Set<string>): void {
   }
 }
 
-export const trimToUndefined = normalizeOptionalString;
-
 export function normalizeVydraBaseUrl(value: string | undefined): string {
   const fallback = DEFAULT_VYDRA_BASE_URL;
-  const trimmed = trimToUndefined(value);
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return fallback;
   }
@@ -95,10 +88,10 @@ export function normalizeVydraBaseUrl(value: string | undefined): string {
 }
 
 function resolveVydraBaseUrlFromConfig(cfg: unknown): string {
-  const models = asObject(asObject(cfg)?.models);
-  const providers = asObject(models?.providers);
-  const vydra = asObject(providers?.vydra);
-  return normalizeVydraBaseUrl(trimToUndefined(vydra?.baseUrl));
+  const models = asOptionalRecord(asOptionalRecord(cfg)?.models);
+  const providers = asOptionalRecord(models?.providers);
+  const vydra = asOptionalRecord(providers?.vydra);
+  return normalizeVydraBaseUrl(normalizeOptionalString(vydra?.baseUrl));
 }
 
 export async function resolveVydraRequestContext(params: {
@@ -150,25 +143,27 @@ export async function resolveVydraRequestContext(params: {
 }
 
 export function resolveVydraResponseJobId(payload: unknown): string | undefined {
-  const object = asObject(payload) as VydraJobPayload | undefined;
-  return trimToUndefined(object?.jobId) ?? trimToUndefined(object?.id);
+  const object = asOptionalRecord(payload) as VydraJobPayload | undefined;
+  return normalizeOptionalString(object?.jobId) ?? normalizeOptionalString(object?.id);
 }
 
 export function resolveVydraResponseStatus(payload: unknown): string | undefined {
-  return normalizeOptionalLowercaseString(trimToUndefined(asObject(payload)?.status));
+  return normalizeOptionalLowercaseString(
+    normalizeOptionalString(asOptionalRecord(payload)?.status),
+  );
 }
 
 function resolveVydraErrorMessage(payload: unknown): string | undefined {
-  const object = asObject(payload) as VydraJobPayload | undefined;
+  const object = asOptionalRecord(payload) as VydraJobPayload | undefined;
   const error = object?.error;
   if (typeof error === "string" && error.trim()) {
     return error.trim();
   }
-  const errorObject = asObject(error);
+  const errorObject = asOptionalRecord(error);
   return (
-    trimToUndefined(errorObject?.message) ??
-    trimToUndefined(errorObject?.detail) ??
-    trimToUndefined(object?.message)
+    normalizeOptionalString(errorObject?.message) ??
+    normalizeOptionalString(errorObject?.detail) ??
+    normalizeOptionalString(object?.message)
   );
 }
 
@@ -193,7 +188,7 @@ export function extractVydraResultUrls(payload: unknown, kind: VydraMediaKind): 
       }
       return;
     }
-    const object = asObject(value);
+    const object = asOptionalRecord(value);
     if (!object) {
       return;
     }

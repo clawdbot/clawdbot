@@ -207,9 +207,6 @@ export function createCodexAttemptNotificationController(
         if (completedTurn?.status === "interrupted" && state.sawCodexInterruptMarker) {
           projector.markAborted();
         }
-        if (!state.timedOut && !runAbortController.signal.aborted) {
-          await steeringQueue?.flushPending();
-        }
         completeTurn();
       }
     }
@@ -245,6 +242,7 @@ export function createCodexAttemptNotificationController(
     }
     if (isTerminalTurnNotificationForTurn(notification, turnId)) {
       state.terminalTurnNotificationQueued = true;
+      steeringQueueRef.current?.sealAdmission();
     }
     if (scope.turnId === turnId) {
       const modelToolCallId = readRawResponseToolCallId(notification);

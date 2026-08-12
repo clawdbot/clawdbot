@@ -1,5 +1,6 @@
+import { asFiniteNumber as optionalNumber } from "@openclaw/normalization-core/number-coercion";
 import type { PresenceEntry } from "../../api/types.ts";
-// Builds the unified nodes/devices inventory shown on the Nodes page.
+// Builds the unified node/device inventory shown on the Devices page.
 // The gateway exposes two overlapping views of the same machines: paired device
 // records (roles + tokens) and the node catalog (caps + live links). This module
 // joins them by id and groups duplicate pairings of the same client so the page
@@ -32,7 +33,7 @@ type NodeListEntry = {
   approvedAtMs?: number;
 };
 
-export type NodesInventoryEntry = {
+export type DeviceInventoryEntry = {
   id: string;
   name: string;
   displayName?: string;
@@ -54,11 +55,11 @@ export type NodesInventoryEntry = {
 };
 
 /** One machine cluster: the freshest pairing plus superseded duplicates. */
-export type NodesInventoryGroup = {
+export type DeviceInventoryGroup = {
   key: string;
   name: string;
-  primary: NodesInventoryEntry;
-  duplicates: NodesInventoryEntry[];
+  primary: DeviceInventoryEntry;
+  duplicates: DeviceInventoryEntry[];
 };
 
 const NODE_APPROVAL_STATES: ReadonlySet<string> = new Set([
@@ -67,10 +68,6 @@ const NODE_APPROVAL_STATES: ReadonlySet<string> = new Set([
   "pending-reapproval",
   "unapproved",
 ]);
-
-function optionalNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
 
 function stringList(value: unknown): string[] {
   if (!Array.isArray(value)) {
@@ -139,7 +136,7 @@ function buildEntry(
   device?: PairedDevice,
   node?: NodeListEntry,
   presence?: PresenceEntry,
-): NodesInventoryEntry {
+): DeviceInventoryEntry {
   const roles = device ? deviceRoles(device) : [];
   if (node?.paired && !roles.includes("node")) {
     // Legacy nodes/paired.json rows have no device record; they are still nodes.
@@ -185,7 +182,7 @@ function buildEntry(
   };
 }
 
-function groupKey(entry: NodesInventoryEntry): string {
+function groupKey(entry: DeviceInventoryEntry): string {
   const name = entry.displayName?.trim().toLowerCase();
   if (name) {
     return `name:${name}`;
@@ -199,11 +196,11 @@ function groupKey(entry: NodesInventoryEntry): string {
   return `id:${entry.id}`;
 }
 
-function entryRecency(entry: NodesInventoryEntry): number {
+function entryRecency(entry: DeviceInventoryEntry): number {
   return entry.lastSeenAtMs ?? entry.approvedAtMs ?? 0;
 }
 
-function compareEntries(left: NodesInventoryEntry, right: NodesInventoryEntry): number {
+function compareEntries(left: DeviceInventoryEntry, right: DeviceInventoryEntry): number {
   if (left.connected !== right.connected) {
     return left.connected ? -1 : 1;
   }
@@ -214,7 +211,7 @@ function compareEntries(left: NodesInventoryEntry, right: NodesInventoryEntry): 
   return left.id.localeCompare(right.id);
 }
 
-function compareGroups(left: NodesInventoryGroup, right: NodesInventoryGroup): number {
+function compareGroups(left: DeviceInventoryGroup, right: DeviceInventoryGroup): number {
   const order = compareEntries(left.primary, right.primary);
   if (order !== 0) {
     return order;
@@ -223,11 +220,11 @@ function compareGroups(left: NodesInventoryGroup, right: NodesInventoryGroup): n
 }
 
 /** Joins paired devices with node catalog rows and groups duplicate pairings. */
-export function buildNodesInventory(params: {
+export function buildDeviceInventory(params: {
   paired: PairedDevice[];
   nodes: Array<Record<string, unknown>>;
   presence?: PresenceEntry[];
-}): NodesInventoryGroup[] {
+}): DeviceInventoryGroup[] {
   const nodesById = new Map<string, NodeListEntry>();
   for (const raw of params.nodes) {
     const node = parseNodeListEntry(raw);
@@ -244,7 +241,7 @@ export function buildNodesInventory(params: {
       }
     }
   }
-  const entries: NodesInventoryEntry[] = [];
+  const entries: DeviceInventoryEntry[] = [];
   const seen = new Set<string>();
   for (const device of params.paired) {
     const id = normalizeOptionalString(device.deviceId);
@@ -260,7 +257,7 @@ export function buildNodesInventory(params: {
     }
   }
 
-  const groupsByKey = new Map<string, NodesInventoryEntry[]>();
+  const groupsByKey = new Map<string, DeviceInventoryEntry[]>();
   for (const entry of entries) {
     const key = groupKey(entry);
     const bucket = groupsByKey.get(key);
@@ -271,7 +268,7 @@ export function buildNodesInventory(params: {
     }
   }
 
-  const groups: NodesInventoryGroup[] = [];
+  const groups: DeviceInventoryGroup[] = [];
   for (const [key, bucket] of groupsByKey) {
     const sorted = bucket.toSorted(compareEntries);
     const primary = sorted[0];
@@ -303,7 +300,7 @@ export function buildNodesInventory(params: {
  * reconnect. Pre-provenance duplicates cannot be auto-pruned server-side, so
  * the same explicit admin confirmation is their cleanup boundary.
  */
-export function listStaleInventoryEntries(groups: NodesInventoryGroup[]): NodesInventoryEntry[] {
+export function listStaleInventoryEntries(groups: DeviceInventoryGroup[]): DeviceInventoryEntry[] {
   return groups.flatMap((group) =>
     group.duplicates.filter(
       (entry) =>
@@ -327,7 +324,7 @@ export function findGatewayPresence(presence: PresenceEntry[]): PresenceEntry | 
  */
 export function listUnpairedPresence(
   presence: PresenceEntry[],
-  groups: NodesInventoryGroup[],
+  groups: DeviceInventoryGroup[],
 ): PresenceEntry[] {
   const knownIds = new Set<string>();
   for (const group of groups) {
@@ -361,7 +358,7 @@ export function listUnpairedPresence(
 }
 
 /** Which pairing stores a removal must touch for this entry. */
-export function resolveInventoryRemoval(entry: NodesInventoryEntry): {
+export function resolveInventoryRemoval(entry: DeviceInventoryEntry): {
   removeNode: boolean;
   removeDevice: boolean;
 } {

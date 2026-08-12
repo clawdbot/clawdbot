@@ -224,7 +224,8 @@ describe("Zoom meeting platform adapter", () => {
     expect(script).toContain("join from browser");
     expect(script).toContain("host will let you in soon");
     expect(script).toContain("setSinkId");
-    expect(script).toContain("BlackHole");
+    expect(script).toContain("blackhole 2ch");
+    expect(script).toContain("openclaw meeting audio");
   });
 
   it("enables caption snapshots for durable notes in every mode", () => {
@@ -583,6 +584,68 @@ describe("Zoom meeting platform adapter", () => {
     });
     expect(meetingState).not.toHaveProperty("audioInputDeviceId");
   });
+
+  it.each(["BlackHole 2ch", "BlackHole 2ch (Virtual)", "OpenClaw Meeting Audio"])(
+    "recognizes the exact virtual audio input label %s",
+    async (deviceLabel) => {
+      const result = await runStatusFixture({
+        allowMicrophone: true,
+        document: statusDocument({
+          bodyText: "",
+          camera: pageControl("Start Video"),
+          leave: pageControl("Leave"),
+          microphone: pageControl("Mute my microphone"),
+        }),
+        navigator: {
+          mediaDevices: {
+            enumerateDevices: vi.fn(async () => [
+              { deviceId: "virtual-input", kind: "audioinput", label: deviceLabel },
+            ]),
+          },
+        },
+        readOnly: true,
+      });
+
+      expect(result).toMatchObject({
+        audioInputDeviceLabel: deviceLabel,
+        audioInputRouted: false,
+        manualAction: {
+          message:
+            "Verify the OpenClaw virtual audio device is selected as both the Zoom microphone and speaker before starting talk-back.",
+          reason: "zoom-audio-choice-required",
+        },
+      });
+    },
+  );
+
+  it.each(["OpenClaw Meeting Audio (Virtual)", "Monitor of OpenClaw Meeting Audio"])(
+    "rejects the non-contract virtual audio input label %s",
+    async (deviceLabel) => {
+      const result = await runStatusFixture({
+        allowMicrophone: true,
+        document: statusDocument({
+          bodyText: "",
+          camera: pageControl("Start Video"),
+          leave: pageControl("Leave"),
+          microphone: pageControl("Mute my microphone"),
+        }),
+        navigator: {
+          mediaDevices: {
+            enumerateDevices: vi.fn(async () => [
+              { deviceId: "virtual-input", kind: "audioinput", label: deviceLabel },
+            ]),
+          },
+        },
+        readOnly: true,
+      });
+
+      expect(result).not.toHaveProperty("audioInputDeviceLabel");
+      expect(result).toMatchObject({
+        audioInputRouted: false,
+        manualAction: { reason: "zoom-audio-choice-required" },
+      });
+    },
+  );
 
   it("retains meeting ownership through an unbounded lobby wait", async () => {
     const window: Record<string, unknown> = {};

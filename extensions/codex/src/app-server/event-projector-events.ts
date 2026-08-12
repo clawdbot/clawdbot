@@ -1,4 +1,11 @@
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type {
+  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  ToolProgressDetailMode,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  asFiniteNumber,
+  readStringField as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isNonSuccessItemStatus,
   itemKind,
@@ -9,6 +16,7 @@ import {
 } from "./event-projector-items.js";
 import {
   itemMeta,
+  isCommandBearingToolItem,
   itemToolArgs,
   itemToolResult,
   shouldSuppressChannelProgressForItem,
@@ -18,15 +26,59 @@ import {
   shouldEmitTranscriptToolProgress,
 } from "./event-projector-tool-progress.js";
 import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript.js";
-import {
-  readHookOutputEntries,
-  readNullableString,
-  readNumber,
-  readString,
-} from "./event-projector-values.js";
+import { readHookOutputEntries, readNullableString } from "./event-projector-values.js";
 import { isJsonObject, type CodexThreadItem, type JsonObject } from "./protocol.js";
 
 type AgentEvent = Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0];
+
+type NormalizedToolItemProjection = {
+  name: string;
+  status: ReturnType<typeof itemStatus>;
+  args: Record<string, unknown> | undefined;
+  meta: string | undefined;
+  event: AgentEvent | undefined;
+};
+
+export function projectNormalizedToolItem(params: {
+  phase: "start" | "result";
+  item: CodexThreadItem | undefined;
+  detailMode?: ToolProgressDetailMode;
+}): NormalizedToolItemProjection | undefined {
+  const { item } = params;
+  if (!item || !shouldSynthesizeToolProgressForItem(item)) {
+    return undefined;
+  }
+  const name = itemName(item);
+  if (!name) {
+    return undefined;
+  }
+  const status = params.phase === "result" ? itemStatus(item) : "running";
+  const args = itemToolArgs(item);
+  const commandBearing = isCommandBearingToolItem(item, args);
+  const meta = itemMeta(item, params.detailMode);
+  const event = shouldEmitTranscriptToolProgress(name, args)
+    ? {
+        stream: "tool",
+        data: {
+          phase: params.phase,
+          name,
+          itemId: item.id,
+          toolCallId: item.id,
+          ...(meta ? { meta } : {}),
+          ...(commandBearing ? { commandBearing: true as const } : {}),
+          ...(params.phase === "start" && args ? { args } : {}),
+          ...(params.phase === "result"
+            ? {
+                status,
+                isError: isNonSuccessItemStatus(status),
+                ...itemToolResult(item),
+              }
+            : {}),
+        },
+      }
+    : undefined;
+  return { name, status, args, meta, event };
+}
 
 export class CodexEventProjection {
   private reviewCount = 0;
@@ -77,7 +129,7 @@ export class CodexEventProjection {
     if (!run) {
       return;
     }
-    const durationMs = readNumber(run, "durationMs");
+    const durationMs = asFiniteNumber(run.durationMs);
     const entries = readHookOutputEntries(run.entries);
     const hookTurnId = readNullableString(params, "turnId");
     this.emitAgentEvent({
@@ -113,6 +165,9 @@ export class CodexEventProjection {
     if (!kind) {
       return;
     }
+    const name = itemName(item);
+    const args = itemToolArgs(item);
+    const commandBearing = isCommandBearingToolItem(item, args);
     const meta = itemMeta(item, this.toolProgress.toolProgressDetailMode());
     const suppressChannelProgress = shouldSuppressChannelProgressForItem(item);
     this.emitAgentEvent({
@@ -123,8 +178,9 @@ export class CodexEventProjection {
         kind,
         title: itemTitle(item),
         status: params.phase === "start" ? "running" : itemStatus(item),
-        ...(itemName(item) ? { name: itemName(item) } : {}),
+        ...(name ? { name } : {}),
         ...(meta ? { meta } : {}),
+        ...(commandBearing ? { commandBearing: true } : {}),
         ...(suppressChannelProgress ? { suppressChannelProgress: true } : {}),
       },
     });
@@ -134,46 +190,27 @@ export class CodexEventProjection {
     phase: "start" | "result";
     item: CodexThreadItem | undefined;
   }): Promise<void> {
+    const projection = projectNormalizedToolItem({
+      ...params,
+      detailMode: this.toolProgress.toolProgressDetailMode(),
+    });
+    if (!projection || !params.item) {
+      return;
+    }
     const { item } = params;
-    if (!item || !shouldSynthesizeToolProgressForItem(item)) {
-      return;
-    }
-    const name = itemName(item);
-    if (!name) {
-      return;
-    }
-    const status = params.phase === "result" ? itemStatus(item) : "running";
-    const args = itemToolArgs(item);
-    const meta = itemMeta(item, this.toolProgress.toolProgressDetailMode());
+    const { name, status, args, meta, event } = projection;
     this.toolTranscript.recordTrajectoryEvent({ phase: params.phase, item, name, args, status });
     if (params.phase === "result") {
       this.toolProgress.recordNativeToolError({ item, name, meta, status });
     }
-    if (!shouldEmitTranscriptToolProgress(name, args)) {
+    if (!event) {
       if (params.phase === "result") {
         this.toolTranscript.emitAfterToolCallObservation(item);
         await this.onNativeToolResultRecorded?.();
       }
       return;
     }
-    this.emitAgentEvent({
-      stream: "tool",
-      data: {
-        phase: params.phase,
-        name,
-        itemId: item.id,
-        toolCallId: item.id,
-        ...(meta ? { meta } : {}),
-        ...(params.phase === "start" && args ? { args } : {}),
-        ...(params.phase === "result"
-          ? {
-              status,
-              isError: isNonSuccessItemStatus(status),
-              ...itemToolResult(item),
-            }
-          : {}),
-      },
-    });
+    this.emitAgentEvent(event);
     if (params.phase === "result") {
       this.toolTranscript.emitAfterToolCallObservation(item);
       await this.onNativeToolResultRecorded?.();

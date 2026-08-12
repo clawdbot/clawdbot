@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { closeSync } from "node:fs";
 import { mkdir, realpath, rm } from "node:fs/promises";
-import { dirname, relative, resolve, sep } from "node:path";
+import { basename, dirname, relative, resolve, sep } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import { listAgentEntries, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { openLocalAgentAvatarFile } from "../agents/identity-avatar-file.js";
@@ -9,12 +9,13 @@ import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstra
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
-import { root as fsSafeRoot } from "../infra/fs-safe.js";
+import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { AVATAR_MAX_BYTES, isAvatarDataUrl, isAvatarHttpUrl } from "../shared/avatar-policy.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
 import { readClawStatus } from "./lifecycle-state.js";
 import type { PackageRemovalDeps } from "./package-remove.js";
+import { readClawManifestFile } from "./reader.js";
 import { isPortableClawAvatar } from "./schema-portability.js";
 import { parseClawManifest, parseClawOpenClawProfile } from "./schema.js";
 import { MAX_CLAW_MANIFEST_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
@@ -52,6 +53,8 @@ type ClawExportResult = {
   openClawProfile?: ClawOpenClawProfile;
   filesWritten: string[];
 };
+
+const DRIFTED_BOOTSTRAP_STATES = new Set<string>(["modified", "unsafe", "unknown"]);
 
 export class ClawExportError extends Error {
   constructor(
@@ -227,6 +230,38 @@ function derivativePackageVersion(manifest: ClawManifest, contents: ExportConten
 
 type ExportContent = { path: string; content: Buffer };
 
+async function readAuthorBootstrap(path: string): Promise<Buffer> {
+  const resolvedPath = resolve(resolveUserPath(path));
+  try {
+    const sourceRoot = await fsSafeRoot(dirname(resolvedPath));
+    const read = await sourceRoot.read(basename(resolvedPath), {
+      hardlinks: "reject",
+      maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+      nonBlockingRead: true,
+      symlinks: "reject",
+    });
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(read.buffer);
+    if (text.trim().length === 0) {
+      throw new ClawExportError(
+        "bootstrap_empty",
+        "Export BOOTSTRAP.md must contain reviewed first-run instructions.",
+      );
+    }
+    return read.buffer;
+  } catch (error) {
+    if (error instanceof ClawExportError) {
+      throw error;
+    }
+    const tooLarge = error instanceof FsSafeError && error.code === "too-large";
+    throw new ClawExportError(
+      tooLarge ? "bootstrap_oversized" : "bootstrap_invalid",
+      tooLarge
+        ? `Export BOOTSTRAP.md exceeds ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES} bytes.`
+        : `Could not read a safe UTF-8 BOOTSTRAP.md from ${JSON.stringify(resolvedPath)}: ${(error as Error).message}`,
+    );
+  }
+}
+
 function portableMcpServer(server: Record<string, unknown>): ClawMcpServer {
   const common = {
     ...(server.toolFilter && typeof server.toolFilter === "object"
@@ -268,6 +303,7 @@ export async function exportClawAgent(
     packageDeps?: PackageRemovalDeps;
     packagePreflight?: ClawPackagePreflight;
     sourceMcpServers?: Record<string, Record<string, unknown>>;
+    bootstrapPath?: string;
   },
 ): Promise<ClawExportResult> {
   const status = await readClawStatus(agentId, options);
@@ -325,6 +361,19 @@ export async function exportClawAgent(
       `Cannot export drifted packages: ${driftedPackages.map((pkg) => `${pkg.kind}:${pkg.ref}@${pkg.version} (${pkg.extensionCompatibility?.state ?? pkg.state})`).join(", ")}.`,
     );
   }
+  // A drifted package bootstrap is managed state like any other: exporting it
+  // silently would publish a package with no BOOTSTRAP.md at all. An explicitly
+  // reviewed --bootstrap replacement is the supported way through.
+  if (
+    record.install.bootstrap &&
+    !options.bootstrapPath &&
+    DRIFTED_BOOTSTRAP_STATES.has(record.bootstrapState)
+  ) {
+    throw new ClawExportError(
+      "bootstrap_drifted",
+      `Cannot export the package bootstrap ${JSON.stringify(record.bootstrap.path)} in ${JSON.stringify(record.bootstrapState)} state; restore the seeded file or pass a reviewed --bootstrap replacement.`,
+    );
+  }
   const unresolvedCronJobs = record.cronJobs.filter(
     (cron) => cron.status !== "complete" || !cron.schedulerJobId,
   );
@@ -345,6 +394,10 @@ export async function exportClawAgent(
         .join(", ")}.`,
     );
   }
+
+  const authorBootstrap = options.bootstrapPath
+    ? await readAuthorBootstrap(options.bootstrapPath)
+    : undefined;
 
   const workspace = await fsSafeRoot(record.install.workspace, {
     hardlinks: "reject",
@@ -372,18 +425,28 @@ export async function exportClawAgent(
     contents.push(avatar.sidecar);
   }
   let pendingPackageBootstrap: Buffer | undefined;
-  if (record.install.bootstrap && record.bootstrapState === "pending") {
-    pendingPackageBootstrap = await workspace.readBytes("BOOTSTRAP.md", {
-      maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
-    });
-    const contentDigest = `sha256:${createHash("sha256").update(pendingPackageBootstrap).digest("hex")}`;
+  if (!authorBootstrap && record.install.bootstrap && record.bootstrapState === "pending") {
+    try {
+      pendingPackageBootstrap = await workspace.readBytes("BOOTSTRAP.md", {
+        maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+      });
+    } catch (error) {
+      throw new ClawExportError(
+        "bootstrap_drifted",
+        `Cannot export the package bootstrap because BOOTSTRAP.md changed after inspection: ${(error as Error).message}`,
+      );
+    }
+    const contentDigest = `sha256:${createHash("sha256")
+      .update(pendingPackageBootstrap)
+      .digest("hex")}`;
     if (contentDigest !== record.install.bootstrap.contentDigest) {
       throw new ClawExportError(
         "bootstrap_drifted",
-        "Cannot export BOOTSTRAP.md because it changed during ownership inspection.",
+        "Cannot export the package bootstrap because BOOTSTRAP.md changed after inspection.",
       );
     }
   }
+  const exportedBootstrap = authorBootstrap ?? pendingPackageBootstrap;
   const bootstrapFiles: ClawManifest["workspace"]["bootstrapFiles"] = {};
   const files: ClawManifest["workspace"]["files"] = [];
   for (const file of contents) {
@@ -516,9 +579,7 @@ export async function exportClawAgent(
         ...contents,
         ...(clawMarkdownBody ? [{ path: "CLAW.md#body", content: clawMarkdownBody }] : []),
         ...(openClawProfileRaw ? [{ path: openClawProfilePath, content: openClawProfileRaw }] : []),
-        ...(pendingPackageBootstrap
-          ? [{ path: "BOOTSTRAP.md", content: pendingPackageBootstrap }]
-          : []),
+        ...(exportedBootstrap ? [{ path: "BOOTSTRAP.md", content: exportedBootstrap }] : []),
       ]),
       type: "module",
       openclaw: { claw: "CLAW.md" },
@@ -529,12 +590,22 @@ export async function exportClawAgent(
     filesWritten.push("package.json");
     await output.write("CLAW.md", clawMarkdownRaw, { overwrite: false });
     filesWritten.push("CLAW.md");
-    if (pendingPackageBootstrap) {
-      await output.write("BOOTSTRAP.md", pendingPackageBootstrap, { overwrite: false });
+    if (exportedBootstrap) {
+      await output.write("BOOTSTRAP.md", exportedBootstrap, { overwrite: false });
       filesWritten.push("BOOTSTRAP.md");
+    }
+    const reread = await readClawManifestFile(target);
+    if (!reread.ok) {
+      throw new ClawExportError(
+        "export_package_invalid",
+        reread.diagnostics.map((diagnostic) => diagnostic.message).join("; "),
+      );
     }
   } catch (error) {
     await rm(target, { recursive: true, force: true }).catch(() => undefined);
+    if (error instanceof ClawExportError) {
+      throw error;
+    }
     throw new ClawExportError(
       "export_write_failed",
       error instanceof Error ? error.message : String(error),

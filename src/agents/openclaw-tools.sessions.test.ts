@@ -25,7 +25,7 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 const loadSessionEntryByKeyMock = vi.fn();
-vi.mock("./subagent-announce-delivery.js", () => ({
+vi.mock("./subagents/announce/subagent-announce-delivery.js", () => ({
   loadSessionEntryByKey: (sessionKey: string) => loadSessionEntryByKeyMock(sessionKey),
 }));
 
@@ -52,9 +52,7 @@ import { compactToolOutputHint } from "./tool-schema-hints.js";
 import { testing as agentStepTesting } from "./tools/agent-step.test-support.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
-import { testing as sessionsResolutionTesting } from "./tools/sessions-resolution.test-support.js";
 import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
-import { testing as sessionsSendA2ATesting } from "./tools/sessions-send-tool.a2a.test-support.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
 const TEST_CONFIG = {
@@ -277,13 +275,6 @@ describe("sessions tools", () => {
         payloads: [{ text: "ANNOUNCE_SKIP", mediaUrl: null }],
         meta: { durationMs: 1 },
       }),
-      callGateway: (opts: unknown) => callGatewayMock(opts),
-    });
-    sessionsResolutionTesting.setDepsForTest({
-      callGateway: (opts: unknown) => callGatewayMock(opts),
-    });
-    sessionsSendA2ATesting.setDepsForTest({
-      callGateway: (opts: unknown) => callGatewayMock(opts),
     });
   });
   afterEach(resetGatewayWorkAdmission);
@@ -746,7 +737,7 @@ describe("sessions tools", () => {
     );
   });
 
-  it("sessions_history caps oversized payloads and strips heavy fields", async () => {
+  it("sessions_history caps oversized payloads and strips tool-owned heavy fields", async () => {
     const oversized = Array.from({ length: 80 }, (_, idx) => ({
       role: "assistant",
       content: [
@@ -757,14 +748,6 @@ describe("sessions tools", () => {
         {
           type: "thinking",
           thinking: "y".repeat(7000),
-          thinkingSignature: "sig".repeat(4000),
-          openclawReasoningReplay: {
-            v: 1,
-            source: "openai-responses",
-            provider: "openai",
-            api: "openai-chatgpt-responses",
-            model: "gpt-5.5",
-          },
         },
       ],
       details: {
@@ -813,8 +796,6 @@ describe("sessions tools", () => {
             type?: string;
             text?: string;
             thinking?: string;
-            thinkingSignature?: string;
-            openclawReasoningReplay?: unknown;
           }>;
         }
       | undefined;
@@ -824,8 +805,7 @@ describe("sessions tools", () => {
     expect(typeof textBlock?.text).toBe("string");
     expect((textBlock?.text ?? "").length <= 4015).toBe(true);
     const thinkingBlock = first?.content?.find((block) => block.type === "thinking");
-    expect(thinkingBlock?.thinkingSignature).toBeUndefined();
-    expect(thinkingBlock?.openclawReasoningReplay).toBeUndefined();
+    expect((thinkingBlock?.thinking ?? "").length <= 4015).toBe(true);
   });
 
   it("sessions_history enforces a hard byte cap even when a single message is huge", async () => {
@@ -1383,7 +1363,6 @@ describe("sessions tools", () => {
         payloads: [{ text: "announce now", mediaUrl: null }],
         meta: { durationMs: 1 },
       }),
-      callGateway: (opts: unknown) => callGatewayMock(opts),
     });
 
     const tool = getSessionTool("sessions_send", {
@@ -1513,7 +1492,6 @@ describe("sessions tools", () => {
           meta: { durationMs: 1 },
         };
       },
-      callGateway: (opts: unknown) => callGatewayMock(opts),
     });
 
     const tool = getSessionTool("sessions_send", {
@@ -1811,6 +1789,76 @@ describe("sessions tools", () => {
     const fallbackAgentIndex = calls.findIndex((call) => call.method === "agent");
     expect(firstFallbackHistoryIndex).toBeLessThan(fallbackAgentIndex);
     expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
+  });
+
+  it("sessions_send never reroutes an exact-incarnation grant to a Cron parent", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exact-cron-send-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const requesterKey = "agent:main:main";
+    const runScopedTargetKey = "agent:leasing-ops:cron:monthly-utility:run:run-exact";
+    const targetSessionId = "exact-cron-run-incarnation";
+    const queueMessage = vi.fn(async () => {});
+    try {
+      await upsertSessionEntry(
+        { agentId: "leasing-ops", sessionKey: runScopedTargetKey, storePath },
+        { sessionId: targetSessionId, updatedAt: 1 },
+      );
+      setActiveEmbeddedRun(
+        targetSessionId,
+        {
+          queueMessage,
+          isStreaming: () => false,
+          isCompacting: () => false,
+          supportsTranscriptCommitWait: true,
+          sourceReplyDeliveryMode: "message_tool_only",
+          abort: () => {},
+        },
+        runScopedTargetKey,
+      );
+      const calls: GatewayCall[] = [];
+      callGatewayMock.mockImplementation(async (opts: unknown) => {
+        const request = opts as GatewayCall;
+        calls.push(request);
+        if (request.method === "sessions.list") {
+          return {
+            path: storePath,
+            sessions: [{ key: runScopedTargetKey, kind: "direct" }],
+          };
+        }
+        if (request.method === "agent") {
+          throw new Error("exact target must not fall back to the durable Cron session");
+        }
+        return {};
+      });
+      const tool = createSessionsSendTool({
+        agentSessionKey: requesterKey,
+        expectedTargetSessionId: targetSessionId,
+        idempotencyKey: "worker-session-send:exact-cron-operation",
+        config: {
+          ...cloneTestConfig(),
+          session: {
+            ...cloneTestConfig().session,
+            store: storePath,
+          },
+        },
+        callGateway: callGatewayMock,
+      });
+
+      const result = await tool.execute("exact-cron-send", {
+        sessionKey: runScopedTargetKey,
+        message: "do not reroute this exact message",
+        timeoutSeconds: 0,
+      });
+
+      expect(sessionsSendDetails(result.details)).toMatchObject({
+        status: "error",
+        sessionKey: runScopedTargetKey,
+      });
+      expect(queueMessage).not.toHaveBeenCalled();
+      expect(calls.some((call) => call.method === "agent")).toBe(false);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("sessions_send rejects non-cron run-looking keys without durable-session fallback", async () => {
@@ -2206,7 +2254,6 @@ describe("sessions tools", () => {
         payloads: [{ text: "announce now", mediaUrl: null }],
         meta: { durationMs: 1 },
       }),
-      callGateway: (opts: unknown) => callGatewayMock(opts),
     });
 
     const tool = getSessionTool("sessions_send", {

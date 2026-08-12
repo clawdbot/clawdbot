@@ -111,7 +111,7 @@ function resolveEnvelopeTimezone(options: NormalizedEnvelopeOptions): ResolvedEn
 }
 
 /** Formats an envelope timestamp using local, UTC, user, or explicit IANA timezone rules. */
-export function formatEnvelopeTimestamp(
+export function formatAgentEnvelopeTimestamp(
   ts: number | Date | undefined,
   options?: EnvelopeFormatOptions,
 ): string | undefined {
@@ -202,7 +202,7 @@ export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
   if (ip) {
     parts.push(sanitizeEnvelopeHeaderPart(ip));
   }
-  const ts = formatEnvelopeTimestamp(params.timestamp, resolved);
+  const ts = formatAgentEnvelopeTimestamp(params.timestamp, resolved);
   if (ts) {
     parts.push(ts);
   }

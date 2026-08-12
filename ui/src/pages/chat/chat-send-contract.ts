@@ -8,6 +8,7 @@ import type { ChatCommandHost } from "./chat-commands.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import type { ChatSendTimingEntry } from "./chat-send-ack.ts";
 import type { ChatInputHistoryState } from "./input-history.ts";
+import type { QueuedMessageEdit } from "./queued-message-edit.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
@@ -23,6 +24,8 @@ export type ChatHost = ChatInputHistoryState &
     connectionEpoch?: number;
     chatAttachments: ChatAttachment[];
     chatQueue: ChatQueueItem[];
+    /** Set while a queued row is held out of the queue inside the composer. */
+    chatQueuedEdit?: QueuedMessageEdit | null;
     /** Active leaf of the history snapshot currently rendered by this pane. */
     chatDisplayedLeafEntryId?: string | null;
     chatRunId: string | null;

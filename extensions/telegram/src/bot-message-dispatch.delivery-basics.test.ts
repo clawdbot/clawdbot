@@ -77,7 +77,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
 
     const outbound = expectRecordFields(mockCallArg(deliverInboundReplyWithMessageSendContext), {
       channel: "telegram",
-      to: "123",
+      to: "telegram:123",
       accountId: "default",
       info: { kind: "final" },
       replyToMode: "first",

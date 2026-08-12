@@ -124,13 +124,30 @@ export function createMcpOAuthClientProvider(params: {
       updateStore((store) => ({ ...beginMcpOAuthAuthorization(store), clientInformation }));
     },
     tokens() {
-      return params.suppressStoredTokens ? undefined : readMcpOAuthStore(storeKey).tokens;
+      if (params.suppressStoredTokens) {
+        return undefined;
+      }
+      const store = readMcpOAuthStore(storeKey);
+      const discoveredAuthorizationServerUrl = store.discoveryState?.authorizationServerUrl;
+      if (!store.tokens?.refresh_token || discoveredAuthorizationServerUrl === undefined) {
+        return store.tokens;
+      }
+      return store.tokensAuthorizationServerUrl !== undefined &&
+        discoveredAuthorizationServerUrl === store.tokensAuthorizationServerUrl
+        ? store.tokens
+        : undefined;
     },
     saveTokens(tokens) {
       updateStore((store) => {
         const next: McpOAuthStore = { ...store, tokens };
         delete next.credentialState;
         delete next.pendingAuthorizationChallenge;
+        const issuedBy = store.discoveryState?.authorizationServerUrl;
+        if (issuedBy === undefined) {
+          delete next.tokensAuthorizationServerUrl;
+        } else {
+          next.tokensAuthorizationServerUrl = issuedBy;
+        }
         const tokenExpiresAt = resolveTokenExpiresAt(tokens);
         if (tokenExpiresAt === undefined) {
           delete next.tokenExpiresAt;
@@ -168,6 +185,7 @@ export function createMcpOAuthClientProvider(params: {
         if ((scope === "all" || scope === "tokens") && params.suppressStoredTokens !== true) {
           delete next.tokens;
           delete next.tokenExpiresAt;
+          delete next.tokensAuthorizationServerUrl;
           next.credentialState = "cleared";
         }
         if (scope === "all" || scope === "verifier") {

@@ -4,8 +4,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
+import { persistAgentSession } from "./attempt-execution.shared.js";
 import { loadTranscriptAppendRuntime } from "./runtime-loaders.js";
-import { persistSessionEntry } from "./session-helpers.js";
 
 const log = createSubsystemLogger("agents/assistant-transcript-repair");
 
@@ -58,7 +58,7 @@ export async function persistAssistantTranscriptRepairRecord(params: {
     createdAt: now,
   };
   try {
-    await persistSessionEntry({
+    await persistAgentSession({
       sessionStore: context.sessionStore,
       sessionKey: context.sessionKey,
       storePath: context.storePath,
@@ -148,7 +148,7 @@ export async function repairPendingAssistantTranscriptTurns(params: {
     return;
   }
   try {
-    await persistSessionEntry({
+    await persistAgentSession({
       sessionStore: context.sessionStore,
       sessionKey: context.sessionKey,
       storePath: context.storePath,

@@ -150,10 +150,12 @@ export function renderCustodianTranscriptEntry(params: {
   wizardValue: unknown;
   wizardDisabled: boolean;
   wizardSecretVisible: boolean;
+  showWizardCancel: boolean;
   onSelect: (label: string) => void;
   onSkip: () => void;
   onWizardValueChange: (value: unknown) => void;
   onWizardAnswer: (value: unknown) => void;
+  onWizardCancel: () => void;
   onToggleWizardSecretVisibility: () => void;
 }) {
   const question = params.message.question;
@@ -192,6 +194,16 @@ export function renderCustodianTranscriptEntry(params: {
             sensitiveRevealed: params.wizardSecretVisible,
             onValueChange: params.onWizardValueChange,
             onAnswer: params.onWizardAnswer,
+            leadingAction: params.showWizardCancel
+              ? html`<button
+                  class="btn btn--ghost custodian__wizard-cancel"
+                  type="button"
+                  ?disabled=${params.wizardDisabled}
+                  @click=${params.onWizardCancel}
+                >
+                  ${t("custodian.cancel")}
+                </button>`
+              : undefined,
             onToggleSensitiveVisibility: params.onToggleWizardSecretVisibility,
           })}
         </section>`

@@ -23,6 +23,7 @@ scenario:
     - src/tui/tui-pty-local.e2e.test.ts
   execution:
     kind: script
+    parallelSafe: true
     path: test/e2e/qa-lab/tui/tui-pty-evidence-producer.ts
     summary: Runs exact built local-TUI PTY assertions and authenticates their fresh Vitest results as QA evidence.
     timeoutMs: 360000

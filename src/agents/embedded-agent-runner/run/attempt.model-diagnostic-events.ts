@@ -1,3 +1,4 @@
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 /**
@@ -415,17 +416,6 @@ function modelCallSizeTimingFields(state: ModelCallObservationState): ModelCallS
       ? { timeToFirstByteMs: state.timeToFirstByteMs }
       : {}),
   };
-}
-
-function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  if (value === null || (typeof value !== "object" && typeof value !== "function")) {
-    return false;
-  }
-  try {
-    return typeof (value as { then?: unknown }).then === "function";
-  } catch {
-    return false;
-  }
 }
 
 function asyncIteratorFactory(value: unknown): (() => AsyncIterator<unknown>) | undefined {

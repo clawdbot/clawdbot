@@ -104,7 +104,7 @@ function isBlockedByMultiBotGuard(cfg: OpenClawConfig, accountId: string): boole
   return !resolveNormalizedAccountEntry(accounts, accountId, normalizeAccountId);
 }
 
-function resolveTelegramConfigAccessorAccount(params: {
+export function resolveTelegramConfigAccessorAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): TelegramConfigAccessorAccount {

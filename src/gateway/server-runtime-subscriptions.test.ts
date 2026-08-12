@@ -5,6 +5,8 @@ import {
   enqueueExecutionIdentityContextAtAdmission,
   hasExecutionIdentityAdmissionSink,
 } from "../audit/execution-identity-admission.js";
+import type { CronServiceState } from "../cron/service/state.js";
+import { tryFinishCronTaskRunWithoutHistory } from "../cron/service/task-runs.js";
 import {
   emitAgentAuditEvent,
   emitAgentEvent,
@@ -16,7 +18,12 @@ import {
   emitSessionTranscriptUpdate,
   type InternalSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
-import { createTaskRecord } from "../tasks/task-registry.js";
+import {
+  createTaskRecord,
+  markTaskLostById,
+  markTaskTerminalById,
+  recordTaskProgressByRunId,
+} from "../tasks/task-registry.js";
 import { getTaskRegistryObservers } from "../tasks/task-registry.store.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { installInMemoryTaskRegistryRuntime } from "../test-utils/task-registry-runtime.js";
@@ -27,6 +34,12 @@ import {
   createToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 import type { TaskEventPayload } from "./server-methods/task-summary.js";
+import { TerminalSessionManager } from "./terminal/session-manager.js";
+import {
+  baseOpenRequest,
+  makeFakePty,
+  taskAgentOwner,
+} from "./terminal/session-manager.test-helpers.js";
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -142,6 +155,7 @@ function createParams(): SubscriptionParams {
     sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
     chatAbortControllers: new Map(),
     restartRecoveryCandidates: new Map(),
+    terminalSessions: { closeAgentSessions: vi.fn() },
   };
 }
 
@@ -165,6 +179,7 @@ describe("startGatewayEventSubscriptions", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     await unsubs?.agentUnsub();
     unsubs?.heartbeatUnsub();
     unsubs?.transcriptUnsub();
@@ -397,6 +412,310 @@ describe("startGatewayEventSubscriptions", () => {
       notifyPolicy: "silent",
     });
     expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it("throttles live subagent progress per task and flushes before terminal status", async () => {
+    const broadcast = vi.fn<SubscriptionParams["broadcast"]>();
+    unsubs = startGatewayEventSubscriptions({ ...createParams(), broadcast });
+    await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+
+    const primary = createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:subagent:primary",
+      runId: "run-throttle-primary",
+      task: "Implement live progress",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+    });
+    const secondary = createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:subagent:secondary",
+      runId: "run-throttle-secondary",
+      task: "Review live progress",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+    });
+    if (!primary || !secondary) {
+      throw new Error("expected task records");
+    }
+    broadcast.mockClear();
+
+    for (const text of ["first", "second", "third"]) {
+      emitAgentEvent({
+        runId: primary.runId!,
+        stream: "assistant",
+        data: { text },
+      });
+    }
+    emitAgentEvent({
+      runId: secondary.runId!,
+      stream: "thinking",
+      data: { text: "parallel" },
+    });
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(broadcast).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    const firstFlush = broadcast.mock.calls
+      .filter(([event]) => event === "task")
+      .map(([, payload]) => payload as TaskEventPayload)
+      .filter(
+        (payload): payload is Extract<TaskEventPayload, { action: "upserted" }> =>
+          payload.action === "upserted",
+      );
+    expect(firstFlush).toHaveLength(2);
+    expect(firstFlush.find((event) => event.task.id === primary.taskId)?.task.lastActivity).toBe(
+      "third",
+    );
+    expect(firstFlush.find((event) => event.task.id === secondary.taskId)?.task.lastActivity).toBe(
+      "parallel",
+    );
+
+    broadcast.mockClear();
+    emitAgentEvent({
+      runId: secondary.runId!,
+      stream: "assistant",
+      data: { text: "OpenClaw runtime context (internal): Keep internal details private." },
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    const sanitizedActivity = broadcast.mock.calls.find(
+      ([event, payload]) =>
+        event === "task" &&
+        (payload as TaskEventPayload).action === "upserted" &&
+        (payload as Extract<TaskEventPayload, { action: "upserted" }>).task.id === secondary.taskId,
+    )?.[1] as Extract<TaskEventPayload, { action: "upserted" }> | undefined;
+    expect(sanitizedActivity?.task).not.toHaveProperty("lastActivity");
+    expect(JSON.stringify(sanitizedActivity)).not.toContain("OpenClaw runtime context");
+
+    broadcast.mockClear();
+    emitAgentEvent({
+      runId: primary.runId!,
+      stream: "assistant",
+      data: { text: "third" },
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(broadcast).not.toHaveBeenCalled();
+
+    emitAgentEvent({
+      runId: primary.runId!,
+      stream: "assistant",
+      data: { text: "final activity" },
+    });
+    markTaskTerminalById({ taskId: primary.taskId, status: "succeeded", endedAt: Date.now() });
+    const terminalFlush = broadcast.mock.calls
+      .filter(([event]) => event === "task")
+      .map(([, payload]) => payload as TaskEventPayload)
+      .filter(
+        (payload): payload is Extract<TaskEventPayload, { action: "upserted" }> =>
+          payload.action === "upserted" && payload.task.id === primary.taskId,
+      );
+    expect(terminalFlush.map((event) => event.task.status)).toEqual(["running", "completed"]);
+    expect(terminalFlush[0]?.task.lastActivity).toBe("final activity");
+    expect(terminalFlush[1]?.task).not.toHaveProperty("lastActivity");
+
+    broadcast.mockClear();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it("suppresses identical task summaries without delaying status transitions", async () => {
+    const broadcast = vi.fn<SubscriptionParams["broadcast"]>();
+    unsubs = startGatewayEventSubscriptions({ ...createParams(), broadcast });
+    await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
+    const runId = "run-identical-task-summary";
+    const task = createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:subagent:summary",
+      runId,
+      task: "Avoid duplicate broadcasts",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      startedAt: 100,
+      lastEventAt: 100,
+    });
+    if (!task) {
+      throw new Error("expected task record");
+    }
+    broadcast.mockClear();
+
+    for (let index = 0; index < 2; index += 1) {
+      recordTaskProgressByRunId({
+        runId,
+        runtime: "subagent",
+        lastEventAt: 200,
+        progressSummary: "Working",
+      });
+    }
+    markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 300 });
+
+    const taskEvents = broadcast.mock.calls
+      .filter(([event]) => event === "task")
+      .map(([, payload]) => payload as TaskEventPayload)
+      .filter(
+        (payload): payload is Extract<TaskEventPayload, { action: "upserted" }> =>
+          payload.action === "upserted",
+      );
+    expect(taskEvents.map((event) => event.task.status)).toEqual(["running", "completed"]);
+  });
+
+  it.each(["succeeded", "failed", "cancelled", "timed_out", "lost"] as const)(
+    "closes task-run terminals exactly once for a %s transition",
+    async (status) => {
+      const closeAgentSessions = vi.fn(() => 1);
+      unsubs = startGatewayEventSubscriptions({
+        ...createParams(),
+        terminalSessions: { closeAgentSessions },
+      });
+      await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
+
+      const task = createTaskRecord({
+        runtime: "cron",
+        requesterSessionKey: "",
+        ownerKey: "",
+        scopeKind: "system",
+        task: `${status} cron task`,
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+      });
+      if (!task) {
+        throw new Error("expected task record");
+      }
+      const terminalize = () => {
+        if (status === "lost") {
+          markTaskLostById({ taskId: task.taskId, endedAt: 2_000 });
+          return;
+        }
+        markTaskTerminalById({
+          taskId: task.taskId,
+          status,
+          endedAt: 2_000,
+        });
+      };
+
+      terminalize();
+      terminalize();
+
+      expect(closeAgentSessions).toHaveBeenCalledOnce();
+      expect(closeAgentSessions).toHaveBeenCalledWith(task.taskId);
+    },
+  );
+
+  it("closes a completed cron task terminal while preserving a conversation terminal", async () => {
+    const taskPty = makeFakePty();
+    const persistentPty = makeFakePty();
+    const ptys = [taskPty, persistentPty];
+    const manager = new TerminalSessionManager({
+      emit: vi.fn(),
+      spawn: async () => ptys.shift() ?? makeFakePty(),
+    });
+    unsubs = startGatewayEventSubscriptions({
+      ...createParams(),
+      terminalSessions: manager,
+    });
+    await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
+
+    const runId = "cron:job-1:run-1";
+    const runSessionKey = "agent:main:cron:job-1:run:run-1";
+    const task = createTaskRecord({
+      runtime: "cron",
+      requesterSessionKey: "",
+      ownerKey: "",
+      scopeKind: "system",
+      childSessionKey: runSessionKey,
+      runId,
+      task: "Cron task",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+    });
+    if (!task) {
+      throw new Error("expected task record");
+    }
+    const taskOpen = await manager.open(
+      baseOpenRequest({
+        owner: taskAgentOwner(runSessionKey, task.taskId),
+      }),
+    );
+    const persistentOpen = await manager.open(
+      baseOpenRequest({ owner: { kind: "agent", agentSessionKey: "agent:main:main" } }),
+    );
+    if (!taskOpen.ok || !persistentOpen.ok) {
+      throw new Error("expected terminal sessions");
+    }
+
+    tryFinishCronTaskRunWithoutHistory({ deps: { log: mockLog } } as unknown as CronServiceState, {
+      taskRunId: runId,
+      status: "ok",
+      endedAt: 2_000,
+      childSessionKey: runSessionKey,
+    });
+
+    expect(taskPty.killed).toBe(true);
+    expect(persistentPty.killed).toBe(false);
+    expect(manager.size).toBe(1);
+    expect(manager.listAgent("agent:main:main")).toHaveLength(1);
+  });
+
+  it("closes task-run terminals only after the authoritative task becomes terminal", async () => {
+    const events: string[] = [];
+    const closeAgentSessions = vi.fn((taskId: string) => {
+      events.push(`terminal:${taskId}`);
+      return 1;
+    });
+    const broadcast = vi.fn<SubscriptionParams["broadcast"]>((event, payload) => {
+      if (event === "task" && (payload as TaskEventPayload).action === "upserted") {
+        const taskPayload = payload as Extract<TaskEventPayload, { action: "upserted" }>;
+        events.push(`task:${taskPayload.task.status}`);
+      }
+    });
+    unsubs = startGatewayEventSubscriptions({
+      ...createParams(),
+      broadcast,
+      terminalSessions: { closeAgentSessions },
+    });
+    await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
+
+    const runSessionKey = "agent:main:cron:job-1:run:run-1";
+    const task = createTaskRecord({
+      runtime: "cron",
+      requesterSessionKey: "",
+      ownerKey: "",
+      scopeKind: "system",
+      childSessionKey: runSessionKey,
+      task: "Cron task",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+    });
+    if (!task) {
+      throw new Error("expected task record");
+    }
+    expect(closeAgentSessions).not.toHaveBeenCalled();
+    expect(events).toEqual(["task:running"]);
+
+    markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 2_000 });
+    expect(closeAgentSessions).toHaveBeenCalledOnce();
+    expect(closeAgentSessions).toHaveBeenCalledWith(task.taskId);
+    expect(events).toEqual(["task:running", "task:completed", `terminal:${task.taskId}`]);
+
+    // Later terminal-row updates cannot close terminals opened by a newer owner.
+    markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 2_001 });
+    expect(closeAgentSessions).toHaveBeenCalledOnce();
   });
 
   it("keeps a replacement gateway's task observer when a stale unsub runs late", async () => {

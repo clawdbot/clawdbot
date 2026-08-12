@@ -9,14 +9,12 @@ export const pluginRegistrationContractCases = {
   alibaba: {
     pluginId: "alibaba",
     videoGenerationProviderIds: ["alibaba"],
-    requireGenerateVideo: true,
   },
   anthropic: {
     pluginId: "anthropic",
     providerIds: ["anthropic"],
     mediaUnderstandingProviderIds: ["anthropic"],
     cliBackendIds: ["claude-cli"],
-    requireDescribeImages: true,
   },
   brave: {
     pluginId: "brave",
@@ -26,7 +24,6 @@ export const pluginRegistrationContractCases = {
     pluginId: "byteplus",
     providerIds: ["byteplus", "byteplus-plan"],
     videoGenerationProviderIds: ["byteplus"],
-    requireGenerateVideo: true,
   },
   comfy: {
     pluginId: "comfy",
@@ -34,8 +31,6 @@ export const pluginRegistrationContractCases = {
     imageGenerationProviderIds: ["comfy"],
     musicGenerationProviderIds: ["comfy"],
     videoGenerationProviderIds: ["comfy"],
-    requireGenerateImage: true,
-    requireGenerateVideo: true,
   },
   deepgram: {
     pluginId: "deepgram",
@@ -48,7 +43,6 @@ export const pluginRegistrationContractCases = {
   elevenlabs: {
     pluginId: "elevenlabs",
     speechProviderIds: ["elevenlabs"],
-    requireSpeechVoices: true,
   },
   exa: {
     pluginId: "exa",
@@ -60,8 +54,6 @@ export const pluginRegistrationContractCases = {
     imageGenerationProviderIds: ["fal"],
     musicGenerationProviderIds: ["fal"],
     videoGenerationProviderIds: ["fal"],
-    requireGenerateImage: true,
-    requireGenerateVideo: true,
   },
   firecrawl: {
     pluginId: "firecrawl",
@@ -78,9 +70,6 @@ export const pluginRegistrationContractCases = {
     mediaUnderstandingProviderIds: ["google"],
     imageGenerationProviderIds: ["google"],
     videoGenerationProviderIds: ["google"],
-    requireDescribeImages: true,
-    requireGenerateImage: true,
-    requireGenerateVideo: true,
   },
   gradium: {
     pluginId: "gradium",
@@ -97,7 +86,6 @@ export const pluginRegistrationContractCases = {
   microsoft: {
     pluginId: "microsoft",
     speechProviderIds: ["microsoft"],
-    requireSpeechVoices: true,
   },
   minimax: {
     pluginId: "minimax",
@@ -108,9 +96,6 @@ export const pluginRegistrationContractCases = {
     musicGenerationProviderIds: ["minimax", "minimax-portal"],
     videoGenerationProviderIds: ["minimax", "minimax-portal"],
     webSearchProviderIds: ["minimax"],
-    requireDescribeImages: true,
-    requireGenerateImage: true,
-    requireGenerateVideo: true,
   },
   mistral: {
     pluginId: "mistral",
@@ -121,7 +106,6 @@ export const pluginRegistrationContractCases = {
     providerIds: ["moonshot"],
     webSearchProviderIds: ["kimi"],
     mediaUnderstandingProviderIds: ["moonshot"],
-    requireDescribeImages: true,
     manifestAuthChoice: {
       pluginId: "kimi",
       choiceId: "kimi-code-api-key",
@@ -157,22 +141,16 @@ export const pluginRegistrationContractCases = {
     mediaUnderstandingProviderIds: ["openai"],
     imageGenerationProviderIds: ["openai"],
     videoGenerationProviderIds: ["openai"],
-    requireSpeechVoices: true,
-    requireDescribeImages: true,
-    requireGenerateImage: true,
-    requireGenerateVideo: true,
   },
   "opencode-go": {
     pluginId: "opencode-go",
     providerIds: ["opencode-go"],
     mediaUnderstandingProviderIds: ["opencode-go"],
-    requireDescribeImages: true,
   },
   opencode: {
     pluginId: "opencode",
     providerIds: ["opencode"],
     mediaUnderstandingProviderIds: ["opencode"],
-    requireDescribeImages: true,
   },
   openrouter: {
     pluginId: "openrouter",
@@ -181,9 +159,6 @@ export const pluginRegistrationContractCases = {
     imageGenerationProviderIds: ["openrouter"],
     musicGenerationProviderIds: ["openrouter"],
     videoGenerationProviderIds: ["openrouter"],
-    requireDescribeImages: true,
-    requireGenerateImage: true,
-    requireGenerateVideo: true,
   },
   parallel: {
     pluginId: "parallel",
@@ -196,7 +171,6 @@ export const pluginRegistrationContractCases = {
   pixverse: {
     pluginId: "pixverse",
     videoGenerationProviderIds: ["pixverse"],
-    requireGenerateVideo: true,
   },
   qwen: {
     pluginId: "qwen",
@@ -210,13 +184,10 @@ export const pluginRegistrationContractCases = {
     ],
     mediaUnderstandingProviderIds: ["qwen"],
     videoGenerationProviderIds: ["qwen"],
-    requireDescribeImages: true,
-    requireGenerateVideo: true,
   },
   runway: {
     pluginId: "runway",
     videoGenerationProviderIds: ["runway"],
-    requireGenerateVideo: true,
   },
   senseaudio: {
     pluginId: "senseaudio",
@@ -231,7 +202,6 @@ export const pluginRegistrationContractCases = {
     pluginId: "together",
     providerIds: ["together"],
     videoGenerationProviderIds: ["together"],
-    requireGenerateVideo: true,
   },
   "tts-local-cli": {
     pluginId: "tts-local-cli",
@@ -243,9 +213,6 @@ export const pluginRegistrationContractCases = {
     speechProviderIds: ["vydra"],
     imageGenerationProviderIds: ["vydra"],
     videoGenerationProviderIds: ["vydra"],
-    requireSpeechVoices: true,
-    requireGenerateImage: true,
-    requireGenerateVideo: true,
     manifestAuthChoice: {
       pluginId: "vydra",
       choiceId: "vydra-api-key",
@@ -263,11 +230,9 @@ export const pluginRegistrationContractCases = {
     mediaUnderstandingProviderIds: ["xai"],
     videoGenerationProviderIds: ["xai"],
     toolNames: ["code_execution", "x_search"],
-    requireGenerateVideo: true,
   },
   zai: {
     pluginId: "zai",
     mediaUnderstandingProviderIds: ["zai"],
-    requireDescribeImages: true,
   },
 } satisfies Record<string, PluginRegistrationContractParams>;

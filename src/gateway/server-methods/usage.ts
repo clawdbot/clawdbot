@@ -1140,7 +1140,6 @@ export const testApi = {
   sessionsUsageCache,
   sessionsUsageCacheKey,
 };
-export { testApi as __test };
 
 export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
 

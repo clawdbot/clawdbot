@@ -6,8 +6,9 @@ import type {
   SpeechProviderConfig,
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech";
-import { asObject, trimToUndefined } from "openclaw/plugin-sdk/speech";
+import { trimToUndefined } from "openclaw/plugin-sdk/speech";
 import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-core";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { DEFAULT_GRADIUM_VOICE_ID, GRADIUM_VOICES, normalizeGradiumBaseUrl } from "./shared.js";
 import { gradiumTTS } from "./tts.js";
 
@@ -18,8 +19,8 @@ type GradiumProviderConfig = {
 };
 
 function normalizeGradiumProviderConfig(rawConfig: Record<string, unknown>): GradiumProviderConfig {
-  const providers = asObject(rawConfig.providers);
-  const raw = asObject(providers?.gradium) ?? asObject(rawConfig.gradium);
+  const providers = asOptionalRecord(rawConfig.providers);
+  const raw = asOptionalRecord(providers?.gradium) ?? asOptionalRecord(rawConfig.gradium);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,

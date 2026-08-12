@@ -4,8 +4,9 @@ import type {
   WorkerInferenceTerminalFrame,
   WorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
-import { createDeferred } from "../../shared/deferred.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import type { WorkerInferenceSessionDrain } from "./inference-control-internal.js";
 import type { WorkerInferenceStore } from "./inference-store.js";
 import {
   createWorkerInferenceManager,
@@ -18,6 +19,17 @@ function waitForFast<T>(
   options: { timeout?: number; interval?: number } = {},
 ) {
   return vi.waitFor(callback, { interval: 1, ...options });
+}
+
+function beginSessionDrain(
+  manager: ReturnType<typeof createWorkerInferenceManager>,
+  sessionId: string,
+): WorkerInferenceSessionDrain {
+  return (
+    manager as typeof manager & {
+      beginSessionDrain(sessionId: string): WorkerInferenceSessionDrain;
+    }
+  ).beginSessionDrain(sessionId);
 }
 
 const REQUEST: WorkerInferenceStartParams = {
@@ -182,6 +194,53 @@ describe("worker inference manager", () => {
     await waitForFast(() => expect(signals).toHaveLength(2));
     expect(instance.cancelSession(REQUEST.sessionId, "new-run")).toEqual(["new-run"]);
     expect(signals[1]?.aborted).toBe(true);
+    await instance.stop();
+  });
+
+  it("blocks replacement inference until an exact session drain settles", async () => {
+    const pending = createDeferred<WorkerInferenceTerminalOutcome>();
+    const execute = vi.fn<WorkerInferenceExecutor>(async () => await pending.promise);
+    const instance = makeManager(execute);
+    accept(instance);
+    await waitForFast(() => expect(execute).toHaveBeenCalledOnce());
+
+    const drain = beginSessionDrain(instance, REQUEST.sessionId);
+    expect(drain.hasWork()).toBe(true);
+    expect(
+      instance.start({
+        identity: IDENTITY,
+        request: { ...REQUEST, runId: "replacement", turnId: "replacement" },
+        sink: createSink().sink,
+      }),
+    ).toEqual({ ok: false, reason: "cancelled" });
+
+    pending.resolve(ERROR);
+    await drain.drained;
+    expect(drain.hasWork()).toBe(false);
+    drain.release();
+    expect(
+      instance.start({
+        identity: IDENTITY,
+        request: { ...REQUEST, runId: "replacement", turnId: "replacement" },
+        sink: createSink().sink,
+      }),
+    ).toMatchObject({ ok: true });
+    await instance.stop();
+  });
+
+  it("rejects an inference drain when terminal persistence fails", async () => {
+    const store = createMemoryStore();
+    vi.spyOn(store, "complete").mockImplementation(() => {
+      throw new Error("write failed");
+    });
+    const pending = createDeferred<WorkerInferenceTerminalOutcome>();
+    const instance = makeManager(async () => await pending.promise, store);
+    accept(instance);
+
+    const drain = beginSessionDrain(instance, REQUEST.sessionId);
+    pending.resolve(ERROR);
+    await expect(drain.drained).rejects.toThrow("terminal persistence failed");
+    drain.release();
     await instance.stop();
   });
 

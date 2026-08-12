@@ -228,7 +228,7 @@ describeControlUiE2e("Control UI chat file links", () => {
 
       await page.goto(`${server.baseUrl}chat`);
       await page.locator(".chat-workspace-toggle").click();
-      await page.getByRole("complementary", { name: "Thread workspace" }).waitFor();
+      await page.getByRole("complementary", { name: "Session workspace" }).waitFor();
 
       await openPreview("notes.txt");
       await page.locator(".sidebar-file-view").waitFor({ state: "visible" });

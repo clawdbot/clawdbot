@@ -104,8 +104,8 @@ category changes remain reflected in the channel, but session archive, restore,
 reset, and deletion never archive or replace it. ClickClack owns channel archive
 and restore independently. `workspace`
 defaults to the account workspace, and `section` defaults to `Sessions`.
-`controlUrlBase` adds a link back to `/chat?session=<session-key>` in the
-OpenClaw Control UI.
+`controlUrlBase` adds canonical `/chat/<agent>/<session-ref>` links to the
+OpenClaw Control UI, preserving base paths. Main sessions use `/chat/<agent>`.
 
 ClickClack-managed embed URLs explicitly advertise host-theme support. The
 Control UI uses that provider-owned capability to apply its full palette before

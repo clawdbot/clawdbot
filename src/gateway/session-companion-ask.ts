@@ -1,13 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionCompanionExchange } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../agents/agent-scope.js";
 import {
   readBtwTranscriptMessages,
   resolveBtwSessionTranscriptPath,
 } from "../agents/btw-transcript.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
-import { extractAssistantText, stripToolMessages } from "../agents/tools/chat-history-text.js";
+import {
+  extractStoredAssistantText,
+  stripToolMessages,
+} from "../agents/tools/chat-history-text.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { resolveStorePath } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -157,7 +161,7 @@ function sanitizeSeedMessages(messages: unknown[]): SessionCompanionSeedMessage[
       const role = (message as { role?: unknown }).role;
       const text =
         role === "assistant"
-          ? normalizeSeedText(extractAssistantText(message) ?? "")
+          ? normalizeSeedText(extractStoredAssistantText(message) ?? "")
           : role === "user"
             ? extractUserText(message)
             : undefined;
@@ -257,6 +261,12 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
     runId,
     storePath,
   });
+  const preparedRunAdmission = prepareSystemAgentRunAdmission(
+    params.cfg,
+    runId,
+    params.agentId,
+    "session-companion.ask",
+  );
   try {
     const [{ SessionManager }, { runEmbeddedAgent }] = await Promise.all([
       import("../agents/sessions/index.js"),
@@ -267,6 +277,7 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       sessionManager.appendMessage(toRunnerHistoryMessage(message, selection));
     }
     const result = await runEmbeddedAgent({
+      preparedRunAdmission,
       sessionId: target.sessionId,
       sessionKey: target.sessionKey,
       sessionTarget: target,
@@ -307,6 +318,7 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       ""
     );
   } finally {
+    preparedRunAdmission.close();
     await removeInternalSessionEffectsSession(target);
   }
 }

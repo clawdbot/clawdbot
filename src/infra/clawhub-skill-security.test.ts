@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   fetchClawHubSkillVerification: vi.fn(),
 }));
 
-vi.mock("./clawhub.js", () => ({
+vi.mock("./clawhub-skills.js", () => ({
   fetchClawHubSkillSecurityVerdicts: mocks.fetchClawHubSkillSecurityVerdicts,
   fetchClawHubSkillVerification: mocks.fetchClawHubSkillVerification,
 }));

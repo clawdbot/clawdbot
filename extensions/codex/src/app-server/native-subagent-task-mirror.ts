@@ -3,6 +3,7 @@
  * runtime rows so parent sessions can observe child progress.
  */
 import type { AgentHarnessTaskRuntime } from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX } from "./native-subagent-task-ids.js";
 import type {
   CodexServerNotification,
@@ -358,7 +359,9 @@ export class CodexNativeSubagentTaskMirror {
       return;
     }
     const eventAt = this.now();
-    if (normalizedStatus === "pendingInit" || normalizedStatus === "running") {
+    if (isNonTerminalAgentStateStatus(normalizedStatus)) {
+      // Codex interrupted agents remain open and can resume; finalizing here
+      // makes cancellation sticky and discards their later successful result.
       this.runtime.recordTaskRunProgressByRunId({
         runId,
         lastEventAt: eventAt,
@@ -366,7 +369,9 @@ export class CodexNativeSubagentTaskMirror {
           trimOptional(message) ??
           (normalizedStatus === "pendingInit"
             ? "Codex native subagent is initializing."
-            : "Codex native subagent is running."),
+            : normalizedStatus === "interrupted"
+              ? "Codex native subagent was interrupted."
+              : "Codex native subagent is running."),
       });
       return;
     }
@@ -409,10 +414,7 @@ export class CodexNativeSubagentTaskMirror {
     this.terminalRunIds.add(runId);
     this.runtime.finalizeTaskRunByRunId({
       runId,
-      status:
-        normalizedStatus === "interrupted" || normalizedStatus === "shutdown"
-          ? "cancelled"
-          : "failed",
+      status: normalizedStatus === "shutdown" ? "cancelled" : "failed",
       endedAt: eventAt,
       lastEventAt: eventAt,
       error: trimOptional(message) ?? `Codex native subagent status: ${normalizedStatus}`,
@@ -501,11 +503,6 @@ function readStringArray(value: JsonValue | undefined): string[] {
   return value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "");
 }
 
-function readString(value: JsonObject, key: string): string | undefined {
-  const entry = value[key];
-  return typeof entry === "string" ? entry : undefined;
-}
-
 function readNullableString(value: JsonObject, key: string): string | null | undefined {
   const entry = value[key];
   return typeof entry === "string" || entry === null ? entry : undefined;
@@ -544,7 +541,7 @@ function isBlockedOrFailedCollabToolCallStatus(value: string | undefined): boole
 }
 
 function isNonTerminalAgentStateStatus(value: string | undefined): boolean {
-  return value === "pendingInit" || value === "running";
+  return value === "pendingInit" || value === "running" || value === "interrupted";
 }
 
 function isTerminalAgentStateStatus(value: string | undefined): boolean {

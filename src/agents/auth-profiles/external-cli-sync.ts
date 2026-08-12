@@ -15,11 +15,11 @@ import {
   MINIMAX_CLI_PROFILE_ID,
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
 } from "./constants.js";
-import { log } from "./constants.js";
+import { authProfilesLog } from "./constants.js";
+import { hasUsableOAuthCredential } from "./credential-state.js";
 import { isSafeToCopyOAuthIdentity } from "./oauth-identity.js";
 import {
   areOAuthCredentialsEquivalent,
-  hasUsableOAuthCredential,
   isSafeToAdoptBootstrapOAuthIdentity,
   shouldBootstrapFromExternalCliCredential,
 } from "./oauth-shared.js";
@@ -337,7 +337,7 @@ export function resolveExternalCliAuthProfiles(
           ? existing
           : undefined;
       if (existing && !existingOAuth) {
-        log.debug("kept explicit local auth over external cli bootstrap", {
+        authProfilesLog.debug("kept explicit local auth over external cli bootstrap", {
           profileId,
           provider: providerConfig.provider,
           localType: existing.type,
@@ -350,7 +350,7 @@ export function resolveExternalCliAuthProfiles(
         existingOAuth &&
         hasInlineOAuthTokenMaterial(existingOAuth)
       ) {
-        log.debug("kept local oauth over external cli bootstrap-only provider", {
+        authProfilesLog.debug("kept local oauth over external cli bootstrap-only provider", {
           profileId,
           provider: providerConfig.provider,
         });
@@ -359,7 +359,7 @@ export function resolveExternalCliAuthProfiles(
       if (
         existingOAuth &&
         !providerConfig.bootstrapOnly &&
-        hasUsableOAuthCredential(existingOAuth, now)
+        hasUsableOAuthCredential(existingOAuth, { now })
       ) {
         // Profiles synced before identity capture carry no email; backfill the
         // non-secret metadata once the CLI read proves it is the same login.
@@ -383,7 +383,7 @@ export function resolveExternalCliAuthProfiles(
         continue;
       }
       if (existingOAuth && !isSafeToUseExternalCliCredential(existingOAuth, creds)) {
-        log.warn("refused external cli oauth bootstrap: identity mismatch", {
+        authProfilesLog.warn("refused external cli oauth bootstrap: identity mismatch", {
           profileId,
           provider: providerConfig.provider,
         });
@@ -394,10 +394,13 @@ export function resolveExternalCliAuthProfiles(
         !isSafeToAdoptBootstrapOAuthIdentity(existingOAuth, creds) &&
         !areOAuthCredentialsEquivalent(existingOAuth, creds)
       ) {
-        log.warn("refused external cli oauth bootstrap: identity mismatch or missing binding", {
-          profileId,
-          provider: providerConfig.provider,
-        });
+        authProfilesLog.warn(
+          "refused external cli oauth bootstrap: identity mismatch or missing binding",
+          {
+            profileId,
+            provider: providerConfig.provider,
+          },
+        );
         continue;
       }
       if (
@@ -408,7 +411,7 @@ export function resolveExternalCliAuthProfiles(
         })
       ) {
         if (existingOAuth) {
-          log.debug("kept usable local oauth over external cli bootstrap", {
+          authProfilesLog.debug("kept usable local oauth over external cli bootstrap", {
             profileId,
             provider: providerConfig.provider,
             localExpires: existingOAuth.expires,
@@ -417,12 +420,15 @@ export function resolveExternalCliAuthProfiles(
         }
         continue;
       }
-      log.debug("used external cli oauth bootstrap because local oauth was missing or unusable", {
-        profileId,
-        provider: providerConfig.provider,
-        localExpires: existingOAuth?.expires,
-        externalExpires: creds.expires,
-      });
+      authProfilesLog.debug(
+        "used external cli oauth bootstrap because local oauth was missing or unusable",
+        {
+          profileId,
+          provider: providerConfig.provider,
+          localExpires: existingOAuth?.expires,
+          externalExpires: creds.expires,
+        },
+      );
       profiles.push({
         profileId,
         credential: creds,

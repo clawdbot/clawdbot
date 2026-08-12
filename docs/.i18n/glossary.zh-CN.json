@@ -676,6 +676,10 @@
     "target": "记忆概览"
   },
   {
+    "source": "QMD memory backend removal",
+    "target": "QMD 记忆后端移除"
+  },
+  {
     "source": "Active memory",
     "target": "主动记忆"
   },

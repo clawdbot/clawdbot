@@ -586,7 +586,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   if (anyReplyDelivered && participationThreadTs) {
     recordSlackThreadParticipation(account.accountId, message.channel, participationThreadTs, {
       agentId: route.agentId,
-      ...(prepared.eventScope ? { teamId: prepared.eventScope.teamId } : {}),
+      teamId: prepared.eventScope?.teamId,
     });
   }
   if (dispatchError) {

@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type {
-  PluginDoctorStateMigration,
-  PluginStateKeyedStore,
-} from "openclaw/plugin-sdk/runtime-doctor";
-import { fileExists } from "openclaw/plugin-sdk/security-runtime";
+import {
+  legacyStateFileExists,
+  type PluginDoctorStateMigration,
+  type PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { buildQQBotStateKey } from "./engine/utils/state-keys.js";
 
 type CredentialBackup = {
@@ -85,7 +85,9 @@ async function credentialBackupCandidates(stateDir: string): Promise<CredentialB
   accountFiles.sort((left, right) => left.sourcePath.localeCompare(right.sourcePath));
 
   const singlePath = path.join(dataDir, "credential-backup.json");
-  return fileExists(singlePath) ? [...accountFiles, { sourcePath: singlePath }] : accountFiles;
+  return (await legacyStateFileExists(singlePath))
+    ? [...accountFiles, { sourcePath: singlePath }]
+    : accountFiles;
 }
 
 async function readLegacyCredentialBackups(stateDir: string): Promise<LegacyCredentialBackup[]> {
@@ -114,7 +116,7 @@ async function archiveLegacySource(params: {
   warnings: string[];
 }): Promise<void> {
   const archivedPath = `${params.sourcePath}.migrated`;
-  if (fileExists(archivedPath)) {
+  if (await legacyStateFileExists(archivedPath)) {
     params.warnings.push(
       `Left QQBot credential backup in place because ${archivedPath} already exists`,
     );

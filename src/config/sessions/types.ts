@@ -9,7 +9,7 @@ import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-icon.js";
+import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { CronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
@@ -18,6 +18,10 @@ import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
 import type { MainRestartRecoveryState } from "./main-session-recovery.types.js";
+import type {
+  PendingDeliveryNoticeState,
+  PendingFinalDeliveryState,
+} from "./pending-final-delivery-types.js";
 import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
 import type {
   SessionCreatedActor,
@@ -61,12 +65,6 @@ export type SessionDeliveryState =
       context: DeliveryContext;
       origin: SessionOrigin;
     };
-
-type PendingFinalDeliveryState = {
-  createdAt: number;
-  context?: DeliveryContext;
-  intentId?: string;
-} & ({ kind: "replayable"; text: string } | { kind: "transport-only" });
 
 /**
  * Durable transcript-repair record: an assistant final that was delivered to
@@ -344,8 +342,6 @@ type SessionEntryCore = SessionRestartRecoveryState &
     archivedBy?: SessionCreatedActor;
     /** Timestamp (ms) when the session was pinned for quick access. */
     pinnedAt?: number;
-    /** Custom sidebar icon in the format accepted by the gateway protocol session-icon helper. */
-    icon?: string;
     /** Timestamp (ms) when an operator client last marked the session read. */
     lastReadAt?: number;
     /** Agent-declared sidebar presence; projection drops it after expiresAt. */
@@ -373,6 +369,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     worktree?: { id: string; branch: string; repoRoot: string };
     /** Explicit parent session linkage for dashboard-created child sessions. */
     parentSessionKey?: string;
+    /** Exact parent incarnation captured when this child was created. */
+    parentSessionId?: string;
     /** How this session node came to exist; written once and retained across sessionId rotations. */
     createdVia?: SessionCreatedVia;
     /** Actor that caused node creation, with an optional profile, session, or sender id; written once. */
@@ -524,6 +522,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
     outputTokens?: number;
     totalTokens?: number;
     pendingFinalDelivery?: PendingFinalDeliveryState;
+    pendingDeliveryNotice?: PendingDeliveryNoticeState;
     /**
      * Ordered durable backlog of delivered assistant finals that failed to
      * reach the canonical transcript. Session admission restores each item
@@ -596,6 +595,8 @@ export interface SessionEntry extends SessionEntryCore {}
 export type InternalSessionEntryCore = SessionEntryCore & {
   /** Run that owns the current non-terminal Gateway lifecycle projection. */
   lifecycleRunId?: string;
+  /** Run admitted by the session lane; overwritten at admission and checked by transcript writes. */
+  activeWriterRunId?: string;
   mainRestartRecovery?: MainRestartRecoveryState;
 };
 
@@ -800,7 +801,7 @@ export function mergeSessionEntryPreserveActivity(
   });
 }
 
-function resolveSessionTotalTokensValue(entry?: Pick<SessionEntry, "totalTokens"> | null) {
+export function resolveSessionTotalTokens(entry?: Pick<SessionEntry, "totalTokens"> | null) {
   const total = entry?.totalTokens;
   if (typeof total !== "number" || !Number.isFinite(total) || total < 0) {
     return undefined;
@@ -811,7 +812,7 @@ function resolveSessionTotalTokensValue(entry?: Pick<SessionEntry, "totalTokens"
 export function resolveFreshSessionTotalTokens(
   entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh" | "totalTokensVersion"> | null,
 ): number | undefined {
-  const total = resolveSessionTotalTokensValue(entry);
+  const total = resolveSessionTotalTokens(entry);
   if (total === undefined) {
     return undefined;
   }

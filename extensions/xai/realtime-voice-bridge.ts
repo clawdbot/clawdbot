@@ -22,6 +22,7 @@ import {
   XAI_REALTIME_MAX_RECONNECT_ATTEMPTS,
   XAI_REALTIME_WS_MAX_PAYLOAD_BYTES,
   readXaiRealtimeErrorDetail,
+  serializeXaiRealtimeToolResult,
   toXaiRealtimeWsUrl,
   type XaiRealtimeEvent,
 } from "./realtime-voice-config.js";
@@ -98,17 +99,29 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
     result: unknown,
     options?: RealtimeVoiceToolResultOptions,
   ): void {
-    if (this.lifecycle.phase() === "terminal") {
+    if (this.lifecycle.phase() === "terminal" || options?.willContinue === true) {
       return;
     }
     if (!this.canSubmitInput()) {
-      if (this.pendingToolResults.length < XAI_REALTIME_MAX_PENDING_TOOL_RESULTS) {
-        this.pendingToolResults.push({ callId, result, ...(options ? { options } : {}) });
-      } else {
-        this.config.onError?.(
-          new Error("xAI realtime voice pending tool result queue overflow during reconnect"),
-        );
+      let serialized: string;
+      try {
+        serialized = serializeXaiRealtimeToolResult(result);
+      } catch (error) {
+        this.config.onError?.(error as Error);
+        throw error;
       }
+      if (this.pendingToolResults.length >= XAI_REALTIME_MAX_PENDING_TOOL_RESULTS) {
+        const error = new Error(
+          "xAI realtime voice pending tool result queue overflow during reconnect",
+        );
+        this.config.onError?.(error);
+        throw error;
+      }
+      this.pendingToolResults.push({
+        callId,
+        result: JSON.parse(serialized) as unknown,
+        ...(options ? { options } : {}),
+      });
       return;
     }
     this.submitToolResultNow(callId, result, options);
