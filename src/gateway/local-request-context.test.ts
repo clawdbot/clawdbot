@@ -60,6 +60,9 @@ describe("local gateway request context", () => {
         agentDir: "/tmp/local-model-catalog-agent",
         workspaceDir: "/tmp/local-model-catalog-workspace",
         config: cfg,
+        authModes: {},
+        authStore: { version: 1, profiles: {} },
+        metadataSnapshot: { index: { plugins: [] }, plugins: [] } as never,
         modelCatalog: { entries: [], routeVariants: [] },
       });
 

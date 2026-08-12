@@ -21,12 +21,22 @@ function createOwner(
   api?: ModelCatalogEntry["api"],
 ): PreparedModelRuntimeSnapshot {
   const model = { id, name: id, provider, ...(api ? { api } : {}) };
+  const authStore: AuthProfileStore = {
+    version: 1,
+    profiles: Object.fromEntries(
+      Object.entries(credentials).map(([credentialProvider, credential]) => [
+        `${credentialProvider}:prepared`,
+        { ...credential, provider: credentialProvider },
+      ]),
+    ),
+  };
   return {
     agentId: "main",
     agentDir: `/tmp/${id}/agent`,
     workspaceDir: `/tmp/${id}/workspace`,
     activeProjectKeys: [],
     config,
+    authStore,
     authModes: resolveUsableAgentCredentialModes(credentials),
     metadataSnapshot: { index: { plugins: [] }, plugins: [] } as never,
     allowGatewaySubagentBinding: false,

@@ -1,4 +1,4 @@
-import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credentials.js";
+import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import type { RuntimeAuthMaterialization } from "../../agents/auth-profiles/runtime-materializations.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
+import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   loadGatewayModelCatalog,
@@ -33,11 +34,14 @@ function ownerSnapshot(
   config: OpenClawConfig,
   modelCatalog: ModelCatalogSnapshot = snapshot,
   agentId?: string,
-) {
+): PublishedModelCatalogOwnerCandidate {
   return {
     ...(agentId ? { agentId } : {}),
     agentDir: "/tmp/gateway-agent",
     config,
+    authModes: {},
+    authStore: { version: 1, profiles: {} },
+    metadataSnapshot: { index: { plugins: [] }, plugins: [] } as never,
     modelCatalog,
   };
 }

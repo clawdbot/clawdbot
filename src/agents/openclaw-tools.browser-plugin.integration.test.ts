@@ -202,6 +202,7 @@ describe("createOpenClawTools browser plugin integration", () => {
           workspaceDir: "/tmp",
           activeProjectKeys: [],
           config,
+          authStore: { version: 1, profiles: {} },
           authModes: {},
           metadataSnapshot,
           pluginRegistry,

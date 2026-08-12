@@ -5,7 +5,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import type { PreparedAgentCredentialModes } from "./agent-auth-credentials.js";
+import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
 import type { AgentHarnessPluginSelection } from "./harness/runtime-plugin-load-plan.js";

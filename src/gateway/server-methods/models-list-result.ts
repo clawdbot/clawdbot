@@ -3,7 +3,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asPositiveSafeInteger as resolvePositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credentials.js";
+import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import {
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
