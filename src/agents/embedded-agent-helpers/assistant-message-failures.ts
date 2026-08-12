@@ -45,6 +45,9 @@ export function isBillingAssistantError(msg: AssistantMessage | undefined): bool
 export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean {
   return msg?.stopReason === "error" && isAuthErrorMessage(msg.errorMessage ?? "");
 }
-export function isFailoverAssistantError(msg: AssistantMessage | undefined): boolean {
-  return classifyAssistantFailoverReason(msg) !== null;
+export function isFailoverAssistantError(
+  msg: AssistantMessage | undefined,
+  opts?: { provider?: string },
+): boolean {
+  return classifyAssistantFailoverReason(msg, opts) !== null;
 }
