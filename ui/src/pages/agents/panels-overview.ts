@@ -1,4 +1,5 @@
 // Control UI view renders agents panels overview screen content.
+import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import { html, nothing } from "lit";
 import type {
   AgentIdentityResult,
@@ -13,7 +14,6 @@ import { t } from "../../i18n/index.ts";
 import {
   buildModelOptions,
   normalizeModelValue,
-  parseFallbackList,
   resolveAgentConfig,
   resolveAgentRuntimeLabel,
   resolveAgentTextAvatar,
@@ -141,7 +141,7 @@ export function renderAgentOverview(params: {
     const input = e.target as HTMLInputElement;
     if (e.key === "Enter" || e.key === ",") {
       e.preventDefault();
-      const parsed = parseFallbackList(input.value);
+      const parsed = normalizeCsvOrLooseStringList(input.value);
       if (parsed.length > 0) {
         onModelFallbacksChange(agent.id, [...fallbackChips, ...parsed]);
         input.value = "";
@@ -357,7 +357,7 @@ export function renderAgentOverview(params: {
                 @keydown=${handleChipKeydown}
                 @blur=${(e: Event) => {
                   const input = e.target as HTMLInputElement;
-                  const parsed = parseFallbackList(input.value);
+                  const parsed = normalizeCsvOrLooseStringList(input.value);
                   if (parsed.length > 0) {
                     onModelFallbacksChange(agent.id, [...fallbackChips, ...parsed]);
                     input.value = "";

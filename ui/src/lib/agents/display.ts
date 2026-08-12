@@ -535,13 +535,6 @@ export function resolveEffectiveModelFallbacks(
   return resolveModelPrimary(entryModel) ? [] : resolveModelFallbacks(defaultModel);
 }
 
-export function parseFallbackList(value: string): string[] {
-  return value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
 type ConfiguredModelOption = {
   value: string;
   label: string;
