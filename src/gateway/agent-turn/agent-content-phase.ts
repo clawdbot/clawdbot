@@ -178,7 +178,7 @@ export async function prepareAgentContentPhase(params: {
     ? ""
     : (params.explicitRecipientSession?.to ?? params.requestedToRaw ?? "");
   const explicitVoiceWakeSessionTarget =
-    !agentId && params.requestedSessionKeyRaw
+    params.requestedSessionKeyRaw
       ? (() => {
           const { cfg, canonicalKey } = loadSessionEntry(params.requestedSessionKeyRaw!, {
             clone: false,
@@ -192,7 +192,11 @@ export async function prepareAgentContentPhase(params: {
         })()
       : false;
   const canAutoRouteVoiceWake =
-    !agentId && !explicitVoiceWakeSessionTarget && !params.requestedSessionId && !replyTo && !to;
+    !normalizeOptionalString(params.request.agentId) &&
+    !explicitVoiceWakeSessionTarget &&
+    !params.requestedSessionId &&
+    !replyTo &&
+    !to;
   if (Object.hasOwn(params.request, "voiceWakeTrigger") && canAutoRouteVoiceWake) {
     try {
       const route = resolveVoiceWakeRouteByTrigger({

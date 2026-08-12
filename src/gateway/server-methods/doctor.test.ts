@@ -80,7 +80,6 @@ const DOCTOR_MEMORY_TARGET_METHODS = [
   "doctor.memory.resetGroundedShortTerm",
   "doctor.memory.repairDreamingArtifacts",
   "doctor.memory.dedupeDreamDiary",
-  "doctor.memory.remHarness",
 ] as const;
 
 type DoctorMemoryMethod = (typeof DOCTOR_MEMORY_TARGET_METHODS)[number];

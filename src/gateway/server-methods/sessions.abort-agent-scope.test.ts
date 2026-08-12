@@ -308,7 +308,11 @@ describe("sessions.abort agent scope", () => {
     await callSessions("sessions.abort", { runId: "run-beta" }, { context, reqId: "req-2" });
 
     expect(resolveSessionKeyForRunMock).not.toHaveBeenCalled();
-    expectChatAbortParams({ sessionKey: "agent:beta:dashboard:target", runId: "run-beta" });
+    expectChatAbortParams({
+      sessionKey: "agent:beta:dashboard:target",
+      runId: "run-beta",
+      agentId: "beta",
+    });
   });
 
   it("resolves runId-only worker aborts to the owning session", async () => {
@@ -335,7 +339,7 @@ describe("sessions.abort agent scope", () => {
   it("aborts global-scope active runs for non-default agents", async () => {
     const activeRun = createActiveRun("global", { agentId: "work" });
     const context = createGlobalWorkRunContext(activeRun);
-    resolveSessionKeyForRunMock.mockReturnValue(undefined);
+    resolveSessionKeyForRunMock.mockReturnValue("global");
 
     await callSessions(
       "sessions.abort",
@@ -343,7 +347,7 @@ describe("sessions.abort agent scope", () => {
       { context, reqId: "req-global" },
     );
 
-    expect(resolveSessionKeyForRunMock).not.toHaveBeenCalled();
+    expect(resolveSessionKeyForRunMock).toHaveBeenCalledWith("run-global", { agentId: "work" });
     expectChatAbortParams({ sessionKey: "global", runId: "run-global", agentId: "work" });
   });
 

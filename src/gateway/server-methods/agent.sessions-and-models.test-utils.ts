@@ -2228,6 +2228,7 @@ describe("gateway agent handler", () => {
     expect(call.agentId).toBe("ops");
     expect(call.sessionKey).toBe("global");
     expect(mocks.loadSessionEntry).toHaveBeenCalledWith("global", {
+      agentId: "ops",
       clone: false,
     });
   });
@@ -2417,6 +2418,11 @@ describe("gateway agent handler", () => {
 
   it("preserves selected-global agent id on cached accepted responses", async () => {
     const context = makeContext();
+    mocks.listAgentIds.mockReturnValue(["main", "work"]);
+    mocks.loadConfigReturn = {
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      session: { scope: "global" },
+    };
     mocks.agentCommand.mockClear();
     context.dedupe.set("agent:cached-global-work", {
       ts: Date.now(),
