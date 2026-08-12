@@ -1228,6 +1228,19 @@ async function assertTrustedStagingRoot(
   return trustedRootPath;
 }
 
+/** Create or strictly admit a Git repository through the local snapshot root trust policy. */
+export async function ensurePrivateSnapshotRepositoryRoot(rootPath: string): Promise<string> {
+  try {
+    return await assertTrustedStagingRoot(await fs.lstat(rootPath), rootPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+  const receipt = await ensurePrivateDirectory(rootPath, "Git backup repository");
+  return await assertTrustedStagingRoot(receipt.identity, rootPath);
+}
+
 async function assertPrivateStagingDirectory(
   expectedIdentity: Stats,
   directoryPath: string,

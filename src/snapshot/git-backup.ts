@@ -13,11 +13,13 @@ import {
   GIT_BACKUP_TABLES,
   dumpGitBackupDatabase,
   gitBackupScopePath,
+  parseGitBackupManifest,
   restoreGitBackupDirectory,
   type GitBackupIdentity,
   type GitBackupManifest,
   type GitBackupRestoreResult,
 } from "./git-backup-codec.js";
+import { ensurePrivateSnapshotRepositoryRoot } from "./local-repository.js";
 import { createOpenClawSnapshotCopy } from "./openclaw-snapshot-copy.js";
 import type { SnapshotDatabaseRef } from "./snapshot-provider.js";
 
@@ -69,7 +71,14 @@ export async function initializeGitBackupRepository(params: {
       `Git backup repository must be outside the OpenClaw state directory: ${stateDir}`,
     );
   }
-  await fs.mkdir(repositoryPath, { recursive: true, mode: 0o700 });
+  try {
+    await ensurePrivateSnapshotRepositoryRoot(repositoryPath);
+  } catch (error) {
+    throw new Error(
+      `Git backup repository must be owned by the current user and not writable by other users: ${repositoryPath}. Fix its ownership and run chmod 700 ${repositoryPath}.`,
+      { cause: error },
+    );
+  }
   const probe = await runGit(repositoryPath, ["rev-parse", "--show-toplevel"], {
     env: params.gitEnv,
   });
@@ -84,7 +93,7 @@ export async function initializeGitBackupRepository(params: {
     });
     if (existing.code === 0 && existing.stdout.trim() !== remote) {
       throw new Error(
-        `Git backup repository already has a different origin: ${existing.stdout.trim()}`,
+        `Git backup repository already has a different origin: ${sanitizeGitBackupDiagnostic(existing.stdout.trim())}`,
       );
     }
     if (existing.code !== 0) {
@@ -96,6 +105,57 @@ export async function initializeGitBackupRepository(params: {
   return { repositoryPath };
 }
 
+async function isBackupOwnedScope(scopePath: string): Promise<boolean> {
+  const identity = await fs
+    .lstat(scopePath)
+    .catch((error: unknown) =>
+      (error as NodeJS.ErrnoException).code === "ENOENT" ? undefined : null,
+    );
+  if (identity === undefined) {
+    return true;
+  }
+  if (!identity?.isDirectory()) {
+    return false;
+  }
+  try {
+    const entries = await fs.readdir(scopePath);
+    if (entries.length === 0) {
+      return true;
+    }
+    parseGitBackupManifest(
+      await fs.readFile(path.join(scopePath, GIT_BACKUP_MANIFEST), "utf8"),
+      scopePath,
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function assertBackupOwnedScope(scopePath: string): Promise<void> {
+  if (!(await isBackupOwnedScope(scopePath))) {
+    throw new Error(
+      `Refusing to replace non-backup-owned path ${scopePath}; the repository must be dedicated to OpenClaw backups.`,
+    );
+  }
+}
+
+async function removeStaleAgentScopes(repositoryPath: string): Promise<void> {
+  const agentsPath = path.join(repositoryPath, "agents");
+  let entries: string[];
+  try {
+    entries = await fs.readdir(agentsPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+  const scopes = entries.map((entry) => path.join(agentsPath, entry));
+  await Promise.all(scopes.map(async (scope) => await assertBackupOwnedScope(scope)));
+  await Promise.all(scopes.map(async (scope) => await fs.rm(scope, { recursive: true })));
+}
+
 async function copyStagedScope(
   stagingRoot: string,
   repositoryPath: string,
@@ -104,6 +164,7 @@ async function copyStagedScope(
   const relative = gitBackupScopePath(identity);
   const source = path.join(stagingRoot, relative);
   const target = path.join(repositoryPath, relative);
+  await assertBackupOwnedScope(target);
   await fs.rm(target, { recursive: true, force: true });
   await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
   await fs.cp(source, target, { recursive: true, force: false });
@@ -167,7 +228,7 @@ export async function createGitBackup(params: {
       await fs.rm(copyPath, { force: true });
     }
     if (params.all) {
-      await fs.rm(path.join(repositoryPath, "agents"), { recursive: true, force: true });
+      await removeStaleAgentScopes(repositoryPath);
     }
     for (const database of params.databases) {
       await copyStagedScope(stagingRoot, repositoryPath, database.identity);

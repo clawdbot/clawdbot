@@ -260,7 +260,7 @@ export async function dumpGitBackupDatabase(params: {
   }
 }
 
-function parseManifest(value: string, source: string): GitBackupManifest {
+export function parseGitBackupManifest(value: string, source: string): GitBackupManifest {
   let parsed: unknown;
   try {
     parsed = JSON.parse(value) as unknown;
@@ -451,7 +451,7 @@ export async function restoreGitBackupDirectory(params: {
 }): Promise<GitBackupRestoreResult> {
   const targetPath = path.resolve(params.targetPath);
   await assertFreshRestoreTarget(targetPath);
-  const manifest = parseManifest(
+  const manifest = parseGitBackupManifest(
     await fs.readFile(path.join(params.sourcePath, GIT_BACKUP_MANIFEST), "utf8"),
     params.sourcePath,
   );

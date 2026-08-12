@@ -91,6 +91,20 @@ async function createFormatFixture(databasePath: string): Promise<void> {
   }
 }
 
+async function writeBackupManifest(scopePath: string, agentId: string): Promise<void> {
+  await fs.mkdir(scopePath, { recursive: true });
+  await fs.writeFile(
+    path.join(scopePath, "manifest.json"),
+    `${JSON.stringify({
+      schemaVersion: 1,
+      identity: { role: "agent", agentId },
+      userVersion: 1,
+      excludedTables: [],
+      tables: {},
+    })}\n`,
+  );
+}
+
 async function listTree(root: string): Promise<Array<[string, string]>> {
   const result: Array<[string, string]> = [];
   async function visit(directory: string): Promise<void> {
@@ -201,6 +215,82 @@ describe("Git-backed SQLite snapshots", () => {
     expect(await requireGit(repositoryPath, ["rev-list", "--count", "HEAD"])).toBe("1");
   });
 
+  it("preserves an unowned global namespace in an adopted repository", async () => {
+    const root = await tempRoot();
+    const { stateDir, database } = createStateDatabaseFixture(root);
+    const repositoryPath = path.join(root, "repository");
+    const operatorFile = path.join(repositoryPath, "global", "operator.txt");
+    await initializeGitBackupRepository({ repositoryPath, stateDir });
+    await fs.mkdir(path.dirname(operatorFile), { recursive: true });
+    await fs.writeFile(operatorFile, "operator-owned\n");
+
+    await expect(
+      createGitBackup({ repositoryPath, stateDir, databases: [database] }),
+    ).rejects.toThrow(/repository must be dedicated to OpenClaw backups/u);
+    await expect(fs.readFile(operatorFile, "utf8")).resolves.toBe("operator-owned\n");
+  });
+
+  it("removes stale backup-owned agent scopes for an all-database backup", async () => {
+    const root = await tempRoot();
+    const { stateDir, database } = createStateDatabaseFixture(root);
+    const repositoryPath = path.join(root, "repository");
+    const staleAgentPath = path.join(repositoryPath, "agents", "old-agent");
+    await initializeGitBackupRepository({ repositoryPath, stateDir });
+    await writeBackupManifest(staleAgentPath, "old-agent");
+
+    await createGitBackup({ repositoryPath, stateDir, databases: [database], all: true });
+
+    await expect(fs.lstat(staleAgentPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("aborts all-database cleanup before deleting an unowned agent scope", async () => {
+    const root = await tempRoot();
+    const { stateDir, database } = createStateDatabaseFixture(root);
+    const repositoryPath = path.join(root, "repository");
+    const ownedAgentPath = path.join(repositoryPath, "agents", "owned-agent");
+    const unownedFile = path.join(repositoryPath, "agents", "operator", "operator.txt");
+    await initializeGitBackupRepository({ repositoryPath, stateDir });
+    await writeBackupManifest(ownedAgentPath, "owned-agent");
+    await fs.mkdir(path.dirname(unownedFile), { recursive: true });
+    await fs.writeFile(unownedFile, "operator-owned\n");
+
+    await expect(
+      createGitBackup({ repositoryPath, stateDir, databases: [database], all: true }),
+    ).rejects.toThrow(/repository must be dedicated to OpenClaw backups/u);
+    await expect(fs.readFile(unownedFile, "utf8")).resolves.toBe("operator-owned\n");
+    await expect(
+      fs.readFile(path.join(ownedAgentPath, "manifest.json"), "utf8"),
+    ).resolves.toContain('"schemaVersion":1');
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "rejects group-writable adopted roots with a chmod hint",
+    async () => {
+      const root = await tempRoot();
+      const stateDir = path.join(root, "state");
+      const repositoryPath = path.join(root, "repository");
+      await fs.mkdir(stateDir);
+      await fs.mkdir(repositoryPath, { mode: 0o700 });
+      await fs.chmod(repositoryPath, 0o770);
+
+      await expect(initializeGitBackupRepository({ repositoryPath, stateDir })).rejects.toThrow(
+        /chmod 700/u,
+      );
+    },
+  );
+
+  it("accepts a private adopted root", async () => {
+    const root = await tempRoot();
+    const stateDir = path.join(root, "state");
+    const repositoryPath = path.join(root, "repository");
+    await fs.mkdir(stateDir);
+    await fs.mkdir(repositoryPath, { mode: 0o700 });
+
+    await expect(initializeGitBackupRepository({ repositoryPath, stateDir })).resolves.toEqual({
+      repositoryPath,
+    });
+  });
+
   it("uses a commit-scoped fallback identity when Git has no configured email", async () => {
     const root = await tempRoot();
     const { stateDir, database } = createStateDatabaseFixture(root);
@@ -254,6 +344,31 @@ describe("Git-backed SQLite snapshots", () => {
     expect(result.pushWarning).not.toContain(username);
     expect(result.pushWarning).not.toContain(password);
     expect(result.pushWarning?.length).toBeLessThanOrEqual(500);
+  });
+
+  it("redacts credential-bearing origins in conflict errors", async () => {
+    const root = await tempRoot();
+    const stateDir = path.join(root, "state");
+    const repositoryPath = path.join(root, "repository");
+    const username = ["synthetic", "origin-user"].join("-");
+    const password = ["synthetic", "origin-password"].join("-");
+    await fs.mkdir(stateDir);
+    await initializeGitBackupRepository({
+      repositoryPath,
+      stateDir,
+      remote: `https://${username}:${password}@example.invalid/first`,
+    });
+
+    const conflict = initializeGitBackupRepository({
+      repositoryPath,
+      stateDir,
+      remote: "https://example.invalid/second",
+    });
+    await expect(conflict).rejects.toThrow(
+      "Git backup repository already has a different origin: https://***@example.invalid/first",
+    );
+    await expect(conflict).rejects.not.toThrow(username);
+    await expect(conflict).rejects.not.toThrow(password);
   });
 
   it("round-trips losslessly, converges FTS, and omits derived vec and transcript state", async () => {
