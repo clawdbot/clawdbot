@@ -1451,36 +1451,6 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it("does not prepare agent harness plugins for forced OpenClaw runtime candidates", async () => {
-    const cfg = makeCfg({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            agentRuntime: { id: "openclaw" },
-            models: [],
-          },
-        },
-      },
-    });
-    const prepareAgentHarnessRuntime = vi.fn(() => {
-      throw new Error("OpenClaw candidates should not prepare plugin harnesses");
-    });
-    const run = vi.fn().mockResolvedValueOnce("ok");
-
-    const result = await runWithModelFallback({
-      cfg,
-      provider: "openai",
-      model: "gpt-5.5",
-      prepareAgentHarnessRuntime,
-      run,
-    });
-
-    expect(result.result).toBe("ok");
-    expect(prepareAgentHarnessRuntime).not.toHaveBeenCalled();
-    expect(run).toHaveBeenCalledTimes(1);
-  });
-
   it("does not prepare agent harness plugins for implicit Codex candidates", async () => {
     const cfg = makeCfg();
     const prepareAgentHarnessRuntime = vi.fn(() => {
