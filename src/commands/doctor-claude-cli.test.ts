@@ -55,6 +55,29 @@ function noteTitle(noteFn: ReturnType<typeof vi.fn>): string {
   return value;
 }
 
+function noteHealthyClaudeCliDirectories(params: {
+  homeDir: string;
+  workspaceDir: string;
+}): ReturnType<typeof vi.fn> {
+  const noteFn = vi.fn();
+  noteClaudeCliHealth(
+    {
+      agents: {
+        defaults: { model: { primary: "claude-cli/claude-sonnet-4-6" } },
+        entries: { main: { default: true } },
+      },
+    },
+    {
+      ...params,
+      noteFn,
+      store: createStore(),
+      readClaudeCliCredentials: () => ({ type: "api_key_helper" }),
+      resolveCommandPath: () => "/opt/homebrew/bin/claude",
+    },
+  );
+  return noteFn;
+}
+
 describe("resolveClaudeCliProjectDirForWorkspace", () => {
   it("matches Claude's sanitized workspace project dir shape", () => {
     expect(
@@ -327,6 +350,357 @@ describe("noteClaudeCliHealth", () => {
       );
 
       expect(noteFn).not.toHaveBeenCalled();
+    });
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "reports an inaccessible Claude project directory instead of silently treating it as missing",
+    async () => {
+      if (process.getuid?.() === 0) {
+        return;
+      }
+      await withTempHome(({ homeDir, workspaceDir }) => {
+        const projectDir = resolveClaudeCliProjectDirForWorkspace({ workspaceDir, homeDir });
+        fs.mkdirSync(projectDir, { recursive: true });
+        const projectsDir = path.dirname(projectDir);
+        fs.chmodSync(projectsDir, 0o000);
+
+        try {
+          expect(() => fs.statSync(projectDir)).toThrow(
+            expect.objectContaining({ code: "EACCES" }),
+          );
+
+          const noteFn = noteHealthyClaudeCliDirectories({ homeDir, workspaceDir });
+          expect(noteFn).toHaveBeenCalledOnce();
+          expect(noteBody(noteFn)).toContain("Claude project dir:");
+          expect(noteBody(noteFn)).toContain("is not readable by this user.");
+          expect(noteBody(noteFn)).toContain("- Fix: make the Claude project dir readable");
+        } finally {
+          fs.chmodSync(projectsDir, 0o755);
+        }
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "provides actionable repair guidance for a read-only Claude project directory",
+    async () => {
+      if (process.getuid?.() === 0) {
+        return;
+      }
+      await withTempHome(({ homeDir, workspaceDir }) => {
+        const projectDir = resolveClaudeCliProjectDirForWorkspace({ workspaceDir, homeDir });
+        fs.mkdirSync(projectDir, { recursive: true });
+        fs.chmodSync(projectDir, 0o555);
+
+        try {
+          const noteFn = noteHealthyClaudeCliDirectories({ homeDir, workspaceDir });
+          expect(noteFn).toHaveBeenCalledOnce();
+          expect(noteBody(noteFn)).toContain("is not writable by this user.");
+          expect(noteBody(noteFn)).toContain("- Fix: make the Claude project dir writable");
+        } finally {
+          fs.chmodSync(projectDir, 0o755);
+        }
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "reports a non-directory Claude project ancestor instead of silently treating it as missing",
+    async () => {
+      await withTempHome(({ homeDir, workspaceDir }) => {
+        const projectDir = resolveClaudeCliProjectDirForWorkspace({ workspaceDir, homeDir });
+        const projectsDir = path.dirname(projectDir);
+        fs.mkdirSync(path.dirname(projectsDir), { recursive: true });
+        fs.writeFileSync(projectsDir, "not a directory");
+
+        expect(() => fs.statSync(projectDir)).toThrow(expect.objectContaining({ code: "ENOTDIR" }));
+
+        const noteFn = noteHealthyClaudeCliDirectories({ homeDir, workspaceDir });
+        expect(noteFn).toHaveBeenCalledOnce();
+        expect(noteBody(noteFn)).toContain("Claude project dir:");
+        expect(noteBody(noteFn)).toContain("exists but is not a directory.");
+        expect(noteBody(noteFn)).toContain("- Fix: make the Claude project dir readable");
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each(["project", "workspace"] as const)(
+    "reports a dangling %s directory symlink instead of silently treating it as missing",
+    async (location) => {
+      await withTempHome(({ homeDir, workspaceDir }) => {
+        const projectDir = resolveClaudeCliProjectDirForWorkspace({ workspaceDir, homeDir });
+        const linkPath = location === "project" ? projectDir : workspaceDir;
+        if (location === "project") {
+          fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+        } else {
+          fs.rmdirSync(linkPath);
+        }
+        fs.symlinkSync(path.join(path.dirname(linkPath), "missing-claude-directory"), linkPath);
+
+        expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
+        expect(() => fs.statSync(linkPath)).toThrow(expect.objectContaining({ code: "ENOENT" }));
+
+        const noteFn = noteHealthyClaudeCliDirectories({ homeDir, workspaceDir });
+        expect(noteFn).toHaveBeenCalledOnce();
+        expect(noteBody(noteFn)).toContain(
+          location === "project" ? "Claude project dir:" : "Workspace:",
+        );
+        expect(noteBody(noteFn)).toContain("exists but is not a directory.");
+        expect(noteBody(noteFn)).toContain("- Fix:");
+        if (location === "project") {
+          expect(noteBody(noteFn)).toContain("remove the broken path");
+        }
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each(["project", "workspace"] as const)(
+    "reports a dangling %s directory ancestor symlink instead of silently treating it as missing",
+    async (location) => {
+      await withTempHome(({ homeDir, workspaceDir }) => {
+        const projectDir = resolveClaudeCliProjectDirForWorkspace({ workspaceDir, homeDir });
+        const ancestorPath =
+          location === "project"
+            ? path.dirname(projectDir)
+            : path.join(path.dirname(workspaceDir), "workspace-parent");
+        fs.mkdirSync(path.dirname(ancestorPath), { recursive: true });
+        fs.symlinkSync(path.join(homeDir, `missing-${location}-parent-target`), ancestorPath);
+        const checkedPath =
+          location === "project" ? projectDir : path.join(ancestorPath, "workspace");
+
+        expect(fs.lstatSync(ancestorPath).isSymbolicLink()).toBe(true);
+        expect(() => fs.lstatSync(checkedPath)).toThrow(
+          expect.objectContaining({ code: "ENOENT" }),
+        );
+
+        const noteFn = noteHealthyClaudeCliDirectories({
+          homeDir,
+          workspaceDir: location === "project" ? workspaceDir : checkedPath,
+        });
+        expect(noteFn).toHaveBeenCalledOnce();
+        expect(noteBody(noteFn)).toContain(
+          location === "project" ? "Claude project dir:" : "Workspace:",
+        );
+        expect(noteBody(noteFn)).toContain("exists but is not a directory.");
+        expect(noteBody(noteFn)).toContain("- Fix:");
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each(["project", "workspace"] as const)(
+    "preserves a healthy %s directory symlink",
+    async (location) => {
+      await withTempHome(({ homeDir, workspaceDir }) => {
+        const projectDir = resolveClaudeCliProjectDirForWorkspace({ workspaceDir, homeDir });
+        const linkPath = location === "project" ? projectDir : workspaceDir;
+        if (location === "project") {
+          fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+        } else {
+          fs.rmdirSync(linkPath);
+        }
+        const targetPath = path.join(homeDir, `healthy-${location}-target`);
+        fs.mkdirSync(targetPath, { recursive: true });
+        fs.symlinkSync(targetPath, linkPath);
+
+        expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
+        expect(noteHealthyClaudeCliDirectories({ homeDir, workspaceDir })).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each(["project", "workspace"] as const)(
+    "preserves a healthy %s directory ancestor symlink",
+    async (location) => {
+      await withTempHome(({ homeDir, workspaceDir }) => {
+        const projectDir = resolveClaudeCliProjectDirForWorkspace({ workspaceDir, homeDir });
+        const ancestorPath =
+          location === "project"
+            ? path.dirname(projectDir)
+            : path.join(path.dirname(workspaceDir), "workspace-parent");
+        fs.mkdirSync(path.dirname(ancestorPath), { recursive: true });
+        const targetPath = path.join(homeDir, `healthy-${location}-parent-target`);
+        fs.mkdirSync(targetPath, { recursive: true });
+        fs.symlinkSync(targetPath, ancestorPath);
+        const checkedPath =
+          location === "project" ? projectDir : path.join(ancestorPath, "workspace");
+        expect(fs.lstatSync(ancestorPath).isSymbolicLink()).toBe(true);
+        expect(
+          noteHealthyClaudeCliDirectories({
+            homeDir,
+            workspaceDir: location === "project" ? workspaceDir : checkedPath,
+          }),
+        ).not.toHaveBeenCalled();
+
+        fs.mkdirSync(checkedPath, { recursive: true });
+        expect(
+          noteHealthyClaudeCliDirectories({
+            homeDir,
+            workspaceDir: location === "project" ? workspaceDir : checkedPath,
+          }),
+        ).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each(["project", "workspace"] as const)(
+    "reports an unsearchable %s directory even when it is readable and writable",
+    async (location) => {
+      if (process.getuid?.() === 0) {
+        return;
+      }
+      await withTempHome(({ homeDir, workspaceDir }) => {
+        const projectDir = resolveClaudeCliProjectDirForWorkspace({ workspaceDir, homeDir });
+        const dirPath = location === "project" ? projectDir : workspaceDir;
+        fs.mkdirSync(dirPath, { recursive: true });
+        fs.chmodSync(dirPath, 0o666);
+
+        try {
+          expect(() => fs.accessSync(dirPath, fs.constants.R_OK)).not.toThrow();
+          expect(() => fs.accessSync(dirPath, fs.constants.W_OK)).not.toThrow();
+          expect(() => fs.accessSync(dirPath, fs.constants.X_OK)).toThrow(
+            expect.objectContaining({ code: "EACCES" }),
+          );
+
+          const noteFn = noteHealthyClaudeCliDirectories({ homeDir, workspaceDir });
+          expect(noteFn).toHaveBeenCalledOnce();
+          expect(noteBody(noteFn)).toContain(
+            location === "project" ? "Claude project dir:" : "Workspace:",
+          );
+          expect(noteBody(noteFn)).toContain("is not readable by this user.");
+          expect(noteBody(noteFn)).toContain("- Fix:");
+        } finally {
+          fs.chmodSync(dirPath, 0o755);
+        }
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each([
+    { location: "project", parentKind: "direct" },
+    { location: "project", parentKind: "symlinked" },
+    { location: "workspace", parentKind: "direct" },
+    { location: "workspace", parentKind: "symlinked" },
+  ] as const)(
+    "reports a missing $location directory under a $parentKind read-only parent",
+    async ({ location, parentKind }) => {
+      if (process.getuid?.() === 0) {
+        return;
+      }
+      await withTempHome(({ homeDir, workspaceDir }) => {
+        const projectDir = resolveClaudeCliProjectDirForWorkspace({ workspaceDir, homeDir });
+        const parentPath =
+          location === "project"
+            ? path.dirname(projectDir)
+            : path.join(path.dirname(workspaceDir), "read-only-workspace-parent");
+        fs.mkdirSync(path.dirname(parentPath), { recursive: true });
+        const parentTarget =
+          parentKind === "symlinked"
+            ? path.join(homeDir, `read-only-${location}-parent-target`)
+            : parentPath;
+        fs.mkdirSync(parentTarget, { recursive: true });
+        if (parentKind === "symlinked") {
+          fs.symlinkSync(parentTarget, parentPath);
+        }
+        const checkedPath =
+          location === "project" ? projectDir : path.join(parentPath, "workspace");
+        fs.chmodSync(parentTarget, 0o555);
+
+        try {
+          expect(() => fs.statSync(checkedPath)).toThrow(
+            expect.objectContaining({ code: "ENOENT" }),
+          );
+          expect(() => fs.mkdirSync(checkedPath)).toThrow(
+            expect.objectContaining({ code: "EACCES" }),
+          );
+
+          const noteFn = noteHealthyClaudeCliDirectories({
+            homeDir,
+            workspaceDir: location === "project" ? workspaceDir : checkedPath,
+          });
+          expect(noteFn).toHaveBeenCalledOnce();
+          expect(noteBody(noteFn)).toContain(
+            location === "project" ? "Claude project dir:" : "Workspace:",
+          );
+          expect(noteBody(noteFn)).toContain("is not writable by this user.");
+          expect(noteBody(noteFn)).toContain("- Fix:");
+        } finally {
+          fs.chmodSync(parentTarget, 0o755);
+        }
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each(["project", "workspace"] as const)(
+    "keeps a missing %s directory quiet when its parent is writable and searchable but unreadable",
+    async (location) => {
+      if (process.getuid?.() === 0) {
+        return;
+      }
+      await withTempHome(({ homeDir, workspaceDir }) => {
+        const projectDir = resolveClaudeCliProjectDirForWorkspace({ workspaceDir, homeDir });
+        const parentPath =
+          location === "project"
+            ? path.dirname(projectDir)
+            : path.join(path.dirname(workspaceDir), "write-only-workspace-parent");
+        fs.mkdirSync(parentPath, { recursive: true });
+        const checkedPath =
+          location === "project" ? projectDir : path.join(parentPath, "workspace");
+        fs.chmodSync(parentPath, 0o300);
+
+        try {
+          expect(() => fs.accessSync(parentPath, fs.constants.R_OK)).toThrow(
+            expect.objectContaining({ code: "EACCES" }),
+          );
+          expect(() =>
+            fs.accessSync(parentPath, fs.constants.W_OK | fs.constants.X_OK),
+          ).not.toThrow();
+          expect(
+            noteHealthyClaudeCliDirectories({
+              homeDir,
+              workspaceDir: location === "project" ? workspaceDir : checkedPath,
+            }),
+          ).not.toHaveBeenCalled();
+          expect(() => fs.mkdirSync(checkedPath)).not.toThrow();
+        } finally {
+          fs.chmodSync(parentPath, 0o755);
+        }
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "preserves actionable repair guidance for a read-only workspace",
+    async () => {
+      if (process.getuid?.() === 0) {
+        return;
+      }
+      await withTempHome(({ homeDir, workspaceDir }) => {
+        fs.chmodSync(workspaceDir, 0o555);
+
+        try {
+          const noteFn = noteHealthyClaudeCliDirectories({ homeDir, workspaceDir });
+          expect(noteBody(noteFn)).toContain("Workspace:");
+          expect(noteBody(noteFn)).toContain("is not writable by this user.");
+          expect(noteBody(noteFn)).toContain(
+            "- Fix: make the workspace a readable, writable directory for the gateway user.",
+          );
+        } finally {
+          fs.chmodSync(workspaceDir, 0o755);
+        }
+      });
+    },
+  );
+
+  it("preserves actionable repair guidance for a non-directory Claude project path", async () => {
+    await withTempHome(({ homeDir, workspaceDir }) => {
+      const projectDir = resolveClaudeCliProjectDirForWorkspace({ workspaceDir, homeDir });
+      fs.mkdirSync(path.dirname(projectDir), { recursive: true });
+      fs.writeFileSync(projectDir, "not a directory");
+
+      const noteFn = noteHealthyClaudeCliDirectories({ homeDir, workspaceDir });
+      expect(noteBody(noteFn)).toContain("exists but is not a directory.");
+      expect(noteBody(noteFn)).toContain("- Fix: make the Claude project dir readable");
     });
   });
 

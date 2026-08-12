@@ -1,6 +1,7 @@
 /** Doctor health note for Claude CLI binary, auth, and workspace/project directories. */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import {
   normalizeOptionalLowercaseString,
   resolvePrimaryStringValue,
@@ -29,6 +30,7 @@ import { readClaudeCliCredentialsCached } from "../agents/cli-credentials.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isErrno } from "../infra/errors.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -70,56 +72,59 @@ function resolveCommandVersion(
 }
 
 function probeDirectoryHealth(dirPath: string): ClaudeCliDirHealth {
-  try {
-    const stat = fs.statSync(dirPath);
-    if (!stat.isDirectory()) {
-      return "not_directory";
+  let candidate = dirPath; // A missing leaf can conceal a broken ancestor symlink.
+  while (true) {
+    let isSymlink = false;
+    try {
+      const entry = fs.lstatSync(candidate);
+      isSymlink = entry.isSymbolicLink();
+      const stat = isSymlink ? fs.statSync(candidate) : entry;
+      if (!stat.isDirectory()) {
+        return "not_directory";
+      }
+      break;
+    } catch (error) {
+      if (isErrno(error) && error.code === "ENOENT") {
+        if (isSymlink) {
+          return "not_directory";
+        }
+        const parent = path.dirname(candidate);
+        if (parent === candidate) {
+          return "missing";
+        }
+        candidate = parent;
+        continue;
+      }
+      return isErrno(error) && error.code === "ENOTDIR" ? "not_directory" : "unreadable";
     }
-  } catch {
-    return "missing";
   }
   try {
-    fs.accessSync(dirPath, fs.constants.R_OK);
+    // Missing children need parent search/write; existing directories also need read access.
+    // X_OK has no effect on Windows.
+    const readableAccess =
+      (candidate === dirPath ? fs.constants.R_OK : fs.constants.F_OK) |
+      (process.platform === "win32" ? fs.constants.F_OK : fs.constants.X_OK);
+    fs.accessSync(candidate, readableAccess);
   } catch {
     return "unreadable";
   }
   try {
-    fs.accessSync(dirPath, fs.constants.W_OK);
+    fs.accessSync(candidate, fs.constants.W_OK);
   } catch {
     return "readonly";
   }
-  return "present";
+  return candidate === dirPath ? "present" : "missing";
 }
 
-function formatWorkspaceProblemLine(
-  workspaceDir: string,
+function formatDirectoryProblemLine(
+  dirPath: string,
   health: ClaudeCliDirHealth,
-  agentId?: string,
+  label: string,
 ): string | null {
-  const label = agentId ? `Agent ${agentId} workspace` : "Workspace";
-  const display = shortenHomePath(workspaceDir);
   if (health === "present" || health === "missing") {
     return null;
   }
-  if (health === "not_directory") {
-    return `- ${label}: ${display} exists but is not a directory.`;
-  }
-  if (health === "unreadable") {
-    return `- ${label}: ${display} is not readable by this user.`;
-  }
-  return `- ${label}: ${display} is not writable by this user.`;
-}
-
-function formatProjectDirProblemLine(
-  projectDir: string,
-  health: ClaudeCliDirHealth,
-  agentId?: string,
-): string | null {
-  const label = agentId ? `Agent ${agentId} Claude project dir` : "Claude project dir";
-  const display = shortenHomePath(projectDir);
-  if (health === "present" || health === "missing") {
-    return null;
-  }
+  const display = shortenHomePath(dirPath);
   if (health === "not_directory") {
     return `- ${label}: ${display} exists but is not a directory.`;
   }
@@ -299,19 +304,13 @@ export function noteClaudeCliHealth(
 
   for (const target of workspaceTargets) {
     const agentLabel = showAgentLabels ? target.agentId : undefined;
-    const workspaceProblem = formatWorkspaceProblemLine(
+    const workspaceProblem = formatDirectoryProblemLine(
       target.workspaceDir,
       target.workspaceHealth,
-      agentLabel,
+      agentLabel ? `Agent ${agentLabel} workspace` : "Workspace",
     );
     if (workspaceProblem) {
       lines.push(workspaceProblem);
-    }
-    if (
-      target.workspaceHealth === "readonly" ||
-      target.workspaceHealth === "unreadable" ||
-      target.workspaceHealth === "not_directory"
-    ) {
       fixHints.push(
         `- Fix: make ${
           agentLabel ? `agent ${agentLabel}'s workspace` : "the workspace"
@@ -319,19 +318,18 @@ export function noteClaudeCliHealth(
       );
     }
 
-    const projectDirProblem = formatProjectDirProblemLine(
+    const projectDirProblem = formatDirectoryProblemLine(
       target.projectDir,
       target.projectDirHealth,
-      agentLabel,
+      agentLabel ? `Agent ${agentLabel} Claude project dir` : "Claude project dir",
     );
     if (projectDirProblem) {
       lines.push(projectDirProblem);
-    }
-    if (target.projectDirHealth === "unreadable" || target.projectDirHealth === "not_directory") {
+      const requiredAccess = target.projectDirHealth === "readonly" ? "writable" : "readable";
       fixHints.push(
         `- Fix: make ${
           agentLabel ? `agent ${agentLabel}'s Claude project dir` : "the Claude project dir"
-        } readable, or remove the broken path and let Claude recreate it.`,
+        } ${requiredAccess}, or remove the broken path and let Claude recreate it.`,
       );
     }
   }
