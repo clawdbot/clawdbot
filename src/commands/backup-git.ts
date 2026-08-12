@@ -18,7 +18,7 @@ import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 
-export type BackupGitCreateOptions = {
+type BackupGitCreateOptions = {
   repository?: string;
   all?: boolean;
   global?: boolean;

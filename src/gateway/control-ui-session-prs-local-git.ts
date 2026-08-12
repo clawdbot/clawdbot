@@ -1,4 +1,4 @@
-import { runGit } from "../infra/git-exec.js";
+import { runGit } from "../agents/worktrees/git.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   gitOutput,

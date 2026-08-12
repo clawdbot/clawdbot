@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
@@ -31,7 +32,7 @@ export type GitBackupManifest = {
   tables: Record<string, { rows: number; sha256: string }>;
 };
 
-export type GitBackupTableResult = {
+type GitBackupTableResult = {
   table: string;
   rows: number;
   sha256: string;
@@ -194,7 +195,7 @@ export async function dumpGitBackupDatabase(params: {
   excludeSecrets?: boolean;
 }): Promise<GitBackupManifest> {
   const identity = normalizeIdentity(params.identity);
-  const database = new DatabaseSync(params.snapshotPath, { readOnly: true });
+  const database = openNodeSqliteDatabase(params.snapshotPath, { readOnly: true });
   try {
     const entries = readSchemaEntries(database);
     const virtualTables = virtualTableNames(entries);
@@ -479,7 +480,7 @@ export async function restoreGitBackupDirectory(params: {
     /^CREATE\s+(?:UNIQUE\s+)?INDEX\b/iu.test(statement),
   );
   await fs.mkdir(path.dirname(targetPath), { recursive: true, mode: 0o700 });
-  const database = new DatabaseSync(targetPath);
+  const database = openNodeSqliteDatabase(targetPath);
   try {
     database.exec("PRAGMA foreign_keys = OFF; PRAGMA journal_mode = DELETE;");
     for (const statement of [...plainTables, ...indexes]) {

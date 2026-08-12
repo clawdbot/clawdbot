@@ -6,6 +6,7 @@ import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { StatusSummary } from "../status/types.js";
 import { VERSION } from "../version.js";
+import { buildBackupStatusValue, readBackupFreshness } from "./backup-health.js";
 import type { HealthSummary } from "./health.js";
 import {
   buildStatusOverviewRowsFromSurface,
@@ -13,7 +14,6 @@ import {
 } from "./status-overview-surface.ts";
 import {
   buildStatusAllAgentsValue,
-  buildBackupStatusValue,
   buildStatusEventsValue,
   buildStatusPluginCompatibilityValue,
   buildStatusProbesValue,
@@ -56,7 +56,6 @@ export function buildStatusCommandOverviewRows(
     muted: (value: string) => string;
     formatTimeAgo: (ageMs: number) => string;
     formatKTokens: (value: number) => string;
-    backupFreshness?: import("./backup-health.js").BackupFreshness;
     updateValue?: string;
     updateRestartValue?: string | null;
   } & StatusMemoryStateResolvers,
@@ -154,7 +153,7 @@ export function buildStatusCommandOverviewRows(
       {
         Item: "Backups",
         Value: buildBackupStatusValue({
-          freshness: params.backupFreshness ?? {},
+          freshness: readBackupFreshness(),
           formatTimeAgo: params.formatTimeAgo,
         }),
       },

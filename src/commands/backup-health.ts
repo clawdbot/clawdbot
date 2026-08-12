@@ -8,7 +8,7 @@ import {
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 
 // Backups older than two weeks no longer provide a useful routine recovery point.
-export const BACKUP_STALE_AFTER_MS = 14 * 24 * 60 * 60 * 1_000;
+const BACKUP_STALE_AFTER_MS = 14 * 24 * 60 * 60 * 1_000;
 
 export type BackupFreshness = {
   latest?: BackupRunRecord;
@@ -45,7 +45,7 @@ export function buildBackupStatusValue(params: {
 }
 
 /** Build the informational Doctor hint for missing or stale successful backups. */
-export function buildBackupDoctorHint(params: {
+function buildBackupDoctorHint(params: {
   freshness: BackupFreshness;
   now?: number;
 }): string | null {

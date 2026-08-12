@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   createVerifiedSqliteSnapshot,
   type SqliteSnapshotValidator,
@@ -69,12 +68,4 @@ export async function createOpenClawSnapshotCopy(params: {
     validate: buildSnapshotValidator(identity),
   });
   return { identity, ...result };
-}
-
-export function validateSnapshotOwner(
-  database: DatabaseSync,
-  pathname: string,
-  identity: SnapshotDatabaseIdentity,
-): void {
-  buildSnapshotValidator(normalizeSnapshotIdentity(identity))(database, pathname);
 }

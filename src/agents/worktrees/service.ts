@@ -13,7 +13,7 @@ import {
   requireGitBuffer,
   runGit,
   type GitResult,
-} from "../../infra/git-exec.js";
+} from "./git.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";

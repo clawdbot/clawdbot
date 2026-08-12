@@ -19,7 +19,7 @@ import type { SnapshotDatabaseRef } from "./snapshot-provider.js";
 
 const GIT_BACKUP_MATERIALIZE_MAX_BYTES = 1024 * 1024 * 1024;
 
-export type GitBackupCreateResult = {
+type GitBackupCreateResult = {
   repositoryPath: string;
   commit?: string;
   noChanges: boolean;
@@ -206,7 +206,7 @@ async function resolveGitCommit(repositoryPath: string, ref?: string): Promise<s
 }
 
 /** Materialize one database scope from a Git ref into a private temporary directory. */
-export async function materializeGitBackupRef(params: {
+async function materializeGitBackupRef(params: {
   repositoryPath: string;
   identity: GitBackupIdentity;
   ref?: string;

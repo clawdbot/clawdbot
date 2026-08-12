@@ -77,7 +77,7 @@ export async function resolveStatusJsonOutput(params: {
       suppressHealthErrors: params.suppressHealthErrors,
     });
 
-  return buildStatusJsonPayload({
+  const payload = buildStatusJsonPayload({
     summary: scan.summary,
     surface: buildStatusOverviewSurfaceFromScan({
       // The scan shape is intentionally narrower than the surface helper's full scan type.
@@ -90,11 +90,12 @@ export async function resolveStatusJsonOutput(params: {
     memoryPlugin: scan.memoryPlugin,
     agents: scan.agentStatus,
     secretDiagnostics: scan.secretDiagnostics,
-    backups: readBackupFreshness(),
     securityAudit,
     health,
     usage,
     lastHeartbeat,
     pluginCompatibility: params.includePluginCompatibility ? scan.pluginCompatibility : undefined,
   });
+  Object.assign(payload, { backups: readBackupFreshness() });
+  return payload;
 }

@@ -6,7 +6,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 
-export const BACKUP_CRON_JOB_NAME = "openclaw-backup-scheduled";
+const BACKUP_CRON_JOB_NAME = "openclaw-backup-scheduled";
 
 type BackupScheduleOptions = GatewayRpcOpts & {
   repository?: string;

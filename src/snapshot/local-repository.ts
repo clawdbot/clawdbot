@@ -34,7 +34,6 @@ import {
 import { publishVerifiedSqliteFile } from "../infra/sqlite-snapshot.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { runExec } from "../process/exec.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import {
   copySnapshotArtifact,
   hashSnapshotArtifact,

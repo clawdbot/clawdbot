@@ -1,4 +1,4 @@
-import { commandError, requireGit, runGit } from "../../infra/git-exec.js";
+import { commandError, requireGit, runGit } from "./git.js";
 
 type ResolvedWorktreeBase = {
   gitOperand: string;

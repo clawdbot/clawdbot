@@ -10,7 +10,7 @@ import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 
 type BackupRunDatabase = Pick<OpenClawStateDatabase, "backup_runs">;
 
-export type BackupRunKind = "archive" | "sqlite-snapshot" | "git";
+type BackupRunKind = "archive" | "sqlite-snapshot" | "git";
 
 export type BackupRunRecord = {
   id: string;

@@ -4,7 +4,20 @@ import { resolveStatusJsonOutput } from "./status-json-runtime.ts";
 
 const mocks = vi.hoisted(() => ({
   buildStatusJsonPayload: vi.fn((input) => ({ built: true, input })),
+  readBackupFreshness: vi.fn(() => ({
+    latest: {
+      id: "backup-1",
+      createdAt: 123,
+      archivePath: "/backups/git",
+      status: "ok" as const,
+      kind: "git" as const,
+    },
+  })),
   resolveStatusRuntimeSnapshot: vi.fn(),
+}));
+
+vi.mock("./backup-health.js", () => ({
+  readBackupFreshness: mocks.readBackupFreshness,
 }));
 
 vi.mock("./status-json-payload.ts", () => ({
@@ -113,6 +126,7 @@ describe("status-json-runtime", () => {
     expect(result).toEqual({
       built: true,
       input: payloadInput,
+      backups: mocks.readBackupFreshness(),
     });
   });
 

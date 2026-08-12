@@ -1,12 +1,58 @@
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { requireGitRaw } from "../../infra/git-exec.js";
+import {
+  commandError as commandErrorExec,
+  requireGit as requireGitExec,
+  requireGitBuffer as requireGitBufferExec,
+  requireGitRaw as requireGitRawExec,
+  runGit as runGitExec,
+} from "../../infra/git-exec.js";
+
+export type GitResult = {
+  stdout: string;
+  stderr: string;
+  code: number | null;
+};
 
 type WorktreeListEntry = {
   path: string;
   lockedReason?: string;
 };
+
+// Preserve the worktree-facing dependency contract while generic Git execution
+// remains owned by infra/git-exec.
+export async function runGit(
+  cwd: string,
+  args: string[],
+  options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array } = {},
+): Promise<GitResult> {
+  return await runGitExec(cwd, args, options);
+}
+
+export function commandError(command: string, result: GitResult): Error {
+  return commandErrorExec(command, result);
+}
+
+export async function requireGit(
+  cwd: string,
+  args: string[],
+  options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array } = {},
+): Promise<string> {
+  return await requireGitExec(cwd, args, options);
+}
+
+export async function requireGitRaw(cwd: string, args: string[]): Promise<string> {
+  return await requireGitRawExec(cwd, args);
+}
+
+export async function requireGitBuffer(
+  cwd: string,
+  args: string[],
+  options: { env?: NodeJS.ProcessEnv; input?: Uint8Array } = {},
+): Promise<Buffer> {
+  return await requireGitBufferExec(cwd, args, options);
+}
 
 function parseWorktreeList(output: string): WorktreeListEntry[] {
   const entries: WorktreeListEntry[] = [];

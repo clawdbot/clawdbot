@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  buildBackupDoctorHint,
   buildBackupStatusValue,
+  noteBackupDoctorHint,
   readBackupFreshness,
 } from "../commands/backup-health.js";
 import { recordBackupRunOutcome } from "./backup-run-records.js";
@@ -13,6 +13,9 @@ import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 const roots: string[] = [];
+const mocks = vi.hoisted(() => ({ note: vi.fn() }));
+
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 
 async function testEnv(): Promise<NodeJS.ProcessEnv> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-runs-test-"));
@@ -21,6 +24,8 @@ async function testEnv(): Promise<NodeJS.ProcessEnv> {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
+  mocks.note.mockReset();
   closeOpenClawStateDatabaseForTest();
   await Promise.all(
     roots.splice(0).map(async (root) => await fs.rm(root, { recursive: true, force: true })),
@@ -88,18 +93,29 @@ describe("backup run records", () => {
         formatTimeAgo,
       }),
     ).toBe("last attempt failed 72h ago (archive)");
-    const fresh = { ...failed, id: "ok", status: "ok" as const, kind: "git" as const };
-    expect(
-      buildBackupDoctorHint({ freshness: { latest: fresh, latestOk: fresh }, now: 1_000 }),
-    ).toBeNull();
-    expect(buildBackupDoctorHint({ freshness: {}, now: 1_000 })).toContain(
-      "No successful backup is recorded.",
+    noteBackupDoctorHint(env);
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("No successful backup is recorded."),
+      "Backups",
     );
-    expect(
-      buildBackupDoctorHint({
-        freshness: { latest: fresh, latestOk: fresh },
-        now: fresh.createdAt + 15 * 24 * 3_600_000,
-      }),
-    ).toContain("more than 14 days old");
+
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    recordBackupRunOutcome({
+      env,
+      archivePath: "/backup",
+      status: "ok",
+      kind: "git",
+      createdAt: 1,
+    });
+    mocks.note.mockClear();
+    noteBackupDoctorHint(env);
+    expect(mocks.note).not.toHaveBeenCalled();
+
+    vi.mocked(Date.now).mockReturnValue(1 + 15 * 24 * 3_600_000);
+    noteBackupDoctorHint(env);
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("more than 14 days old"),
+      "Backups",
+    );
   });
 });

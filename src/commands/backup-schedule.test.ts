@@ -8,11 +8,9 @@ vi.mock("../cli/gateway-rpc.js", async (importOriginal) => {
   return { ...actual, callGatewayFromCli };
 });
 
-import {
-  BACKUP_CRON_JOB_NAME,
-  backupDisableCommand,
-  backupEnableCommand,
-} from "./backup-schedule.js";
+import { backupDisableCommand, backupEnableCommand } from "./backup-schedule.js";
+
+const BACKUP_CRON_JOB_NAME = "openclaw-backup-scheduled";
 
 describe("scheduled backups", () => {
   beforeEach(() => {

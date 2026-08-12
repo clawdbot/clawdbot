@@ -1,7 +1,7 @@
 import { constants as fsConstants } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
-import { requireGitRaw } from "../../infra/git-exec.js";
+import { requireGitRaw } from "./git.js";
 import { worktreePathExists } from "./git.js";
 import {
   clearRegistryWorktreeProvisionedChunks,

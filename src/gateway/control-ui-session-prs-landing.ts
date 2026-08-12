@@ -3,7 +3,7 @@
 // baseline for working-tree stats, and whether new pushed work is provable
 // (the Create PR gate). Pure local-git reasoning; GitHub facts come in as
 // MergedPullHead records.
-import { runGit } from "../infra/git-exec.js";
+import { runGit } from "../agents/worktrees/git.js";
 
 /** Lowercased merged-PR head, the base it merged into, and its merge commit. */
 export type MergedPullHead = { sha: string; baseRef?: string; mergeCommitSha?: string };
