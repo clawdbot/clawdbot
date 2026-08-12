@@ -749,6 +749,7 @@ describe("WorkboardReconciler", () => {
       tenant: "acme",
       idempotencyKey: "run-17-a",
       sourceUpdatedAt: 100,
+      reconciliationAssociationKey: first.link.reconciliationAssociationKey,
       title: "First association",
     });
     expect(
@@ -794,7 +795,7 @@ describe("WorkboardReconciler", () => {
       sourceUpdatedAt: 100,
       card: { title: "A" },
     });
-    await reconciler.apply({
+    const persisted = await reconciler.apply({
       sourceUrl: "https://example.test/b",
       tenant: "acme",
       idempotencyKey: "b",
@@ -815,6 +816,7 @@ describe("WorkboardReconciler", () => {
       tenant: "acme",
       idempotencyKey: "b",
       sourceUpdatedAt: 200,
+      reconciliationAssociationKey: persisted.link.reconciliationAssociationKey,
       title: "Persisted B",
     });
   });
