@@ -9,9 +9,8 @@ import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { renderCloudProfileMenuItems, renderSessionMenuItem } from "./cloud-target.ts";
 import type { BrowserTarget, DraftBranches, DraftCloudProfile, DraftNode } from "./discovery.ts";
-import { folderDisplayName, isKnownWorkspacePath } from "./path.ts";
+import { folderDisplayName } from "./path.ts";
 import { disambiguate, isPhoneFamily, nodeTooltip } from "./place-labels.ts";
-import { recentPlaces, type RecentPlaceSource } from "./recent-places.ts";
 
 function parentFolderDisplayName(path: string): string | undefined {
   const trimmed = path.replace(/[\\/]+$/u, "");
@@ -165,9 +164,8 @@ export function renderPlaceSelect(params: {
   canWrite: boolean;
   folder: string;
   workspace: string;
-  workspaceRoots: readonly string[];
   projects: readonly ProjectRecord[];
-  recents?: readonly ProjectRecent[];
+  recents: readonly ProjectRecent[];
   projectQuery: string;
   projectSearchAvailable: boolean;
   projectAddAvailable: boolean;
@@ -178,10 +176,9 @@ export function renderPlaceSelect(params: {
   projectCloneBusy: boolean;
   projectCloneError: string | null;
   projectId: string;
-  sessions: readonly RecentPlaceSource[];
   execNodes: DraftNode[];
   gatewayName: string;
-  cloudProfiles: DraftCloudProfile[];
+  cloudProfiles: readonly DraftCloudProfile[];
   cloudProfileId: string;
   execNode: string;
   syncFolder: string;
@@ -261,33 +258,7 @@ export function renderPlaceSelect(params: {
       : gatewayLabel;
   const label = params.showDestinations ? `${folderLabel} · ${destinationLabel}` : folderLabel;
   const effectiveFolder = folder || params.workspace;
-  const allowGatewayFolder = (recentFolder: string) =>
-    params.isAdmin || isKnownWorkspacePath(params.workspaceRoots, recentFolder);
-  const serverRecents = params.recents?.filter((recent) =>
-    recent.kind === "project"
-      ? params.projects.some((project) => project.id === recent.projectId)
-      : recent.execNode
-        ? params.execNodes.some((node) => node.nodeId === recent.execNode)
-        : allowGatewayFolder(recent.folder),
-  );
-  const recents: ProjectRecent[] =
-    serverRecents ??
-    recentPlaces(params.sessions, {
-      workspace: params.workspace,
-      execNodes: params.execNodes,
-      allowGatewayFolder,
-    }).map((recent) => {
-      const item: ProjectRecent = {
-        kind: "folder",
-        folder: recent.folder,
-        displayName: folderDisplayName(recent.folder),
-      };
-      if (recent.execNode) {
-        item.execNode = recent.execNode;
-      }
-      return item;
-    });
-  const recentItems = recents.map((recent) => {
+  const recentItems = params.recents.map((recent) => {
     const node =
       recent.kind === "folder" && recent.execNode
         ? params.execNodes.find((candidate) => candidate.nodeId === recent.execNode)
@@ -498,7 +469,7 @@ export function renderPlaceSelect(params: {
                     ${t("newSession.projectsAdminHint")}
                   </div>`
                 : nothing}
-              ${recents.length > 0
+              ${params.recents.length > 0
                 ? html`
                     <div class="new-session-page__menu-title">${t("newSession.recentFolders")}</div>
                     ${recentItems.map((recent, index) => {
