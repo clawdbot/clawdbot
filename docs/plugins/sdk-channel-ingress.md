@@ -23,6 +23,7 @@ import {
   defineStableChannelIngressIdentity,
   resolveChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 
 const identity = defineStableChannelIngressIdentity({
   key: "platform-user-id",
@@ -49,6 +50,13 @@ const result = await resolveChannelMessageIngress({
   readStoreAllowFrom,
   command: hasControlCommand ? { allowTextCommands: true, hasControlCommand } : undefined,
 });
+
+const ctx = buildChannelInboundEventContext({
+  // Pass the exact host result; do not rebuild participant evidence from
+  // SenderId, From, session keys, routes, rooms, or message metadata.
+  channelIngress: result,
+  // ...normalized channel facts
+});
 ```
 
 Do not precompute effective allowlists, command owners, or command groups.
@@ -73,6 +81,17 @@ decisive `ingress.reasonCode`; no separate event projection is emitted.
 Deprecated third-party SDK helpers may rebuild older shapes internally. New
 bundled receive paths should not translate modern results back into local
 DTOs.
+
+When execution-identity audit collection is enabled, the inbound context
+builder privately carries the exact admitted participant to run admission.
+Queue collection retains attribution only when every contribution has valid
+evidence for the same participant; mixed, missing, stale, or unminted evidence
+is `unknown`. The carrier is opaque, bounded, one-shot, and diagnostic only.
+Adapters whose access owner cannot pass the resolver result may use
+`createChannelParticipantAdmissionEvidence(...)` on this same SDK subpath and
+pass it as `channelParticipantEvidence`; that path is attribution-only, never
+proof that participant identity affected access policy. Mark adapters that
+cannot supply participant identity with `channelIngress: "unsupported"`.
 
 ## Access groups
 

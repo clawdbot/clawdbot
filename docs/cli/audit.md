@@ -135,6 +135,15 @@ immutable connection-time audit fact. Ordinary session provenance stores no
 display label. An optional bounded, secret-redacted label can be retained only
 in execution identity after that audit storage is explicitly enabled.
 
+An admitted channel run can also show a pseudonymized person invoker. That
+identity comes from the channel's host-owned admission boundary, never from the
+conversation, room, route, account, thread, message, transport, session key, or
+display name. A collected run shows the person only when all queued inputs
+carry valid evidence for the same participant; mixed or missing evidence shows
+an unknown invoker. Its `channel/admission` receipt is enforced only when the
+participant affected every contributing access decision; otherwise it is
+attribution-only.
+
 A terminal approval receipt shows `allowed` or `denied`, its stable reason
 code, enforcement state, authoritative source boundary, policy and grant
 references, context fields used, and remediation. Expired and cancelled

@@ -86,10 +86,16 @@ state for these fields:
 - applicable grants and assurance evidence;
 - parent or child lineage when available.
 
-The foundation records direct local CLI ingress and Gateway boot-system ingress
-at their authoritative producers. Generic public ingress remains explicitly
-unknown when its boundary cannot prove a more specific source; OpenClaw never
-infers ingress or invoker identity from a session key. A direct local execution
+The foundation records direct local CLI ingress, Gateway boot-system ingress,
+and admitted channel participants at their authoritative producers. For a
+channel run, the person invoker comes from host-minted admission evidence; the
+room, route, account, thread, message, and transport remain non-principal
+facts. Collected messages retain a person only when every contribution proves
+the same participant. Mixed, missing, invalid, stale, or unminted evidence is
+unknown, and an adapter that explicitly lacks support is unsupported. OpenClaw
+never reconstructs a participant from `SenderId`, `From`, session keys, or
+routing metadata. Other public ingress remains explicitly unknown when its
+boundary cannot prove a more specific source. A direct local execution
 is `unattributed`: the Gateway cell, local CLI ingress, configured agent, and
 runtime binding are present, but no durable invoker principal is supplied at
 this boundary. A run becomes
@@ -114,6 +120,13 @@ Each present context projects one run-admission receipt. Its outcome
 is `not-applicable`, its policy and grant references are empty, and its reason
 states that no identity-aware policy or grant evaluation was proven. This is
 an explanation of admission evidence, not an enforcement claim.
+
+Admitted channel runs also project a `channel/admission` decision receipt after
+their exact context/execution/run tuple is queued. Coverage is `enforced` only
+when every contributing ingress decision was participant-aware and
+outcome-affecting. Wildcard/open policy and explicit attribution-only adapters
+remain `attribution-only`; mixed or missing evidence is `unknown`. Identity and
+the corresponding decision share the existing audit-writer FIFO.
 
 When the same `runId` has a retained terminal row in `operator_approvals`, the
 inspector also reads its owner-local `operator_approval_execution_identities`

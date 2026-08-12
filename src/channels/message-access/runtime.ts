@@ -8,6 +8,7 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import type { PairingChannel } from "../../pairing/pairing-store.types.js";
+import { bindChannelIngressAdmissionEvidence } from "./admission-evidence.js";
 import { decideChannelIngress } from "./decision.js";
 import { resolveChannelIngressEffectiveAllowFromLists } from "./effective-allow-from.js";
 import {
@@ -660,7 +661,7 @@ export async function resolveChannelMessageIngress(
   const routeAccess = projectRouteAccess({ ingress, route: params.route });
   const commandAccess = projectCommandAccess({ ingress, policy });
   const activationAccess = projectActivationAccess({ ingress });
-  return {
+  const result: ResolvedChannelMessageIngress = {
     state,
     ingress,
     senderAccess,
@@ -668,4 +669,17 @@ export async function resolveChannelMessageIngress(
     commandAccess,
     activationAccess,
   };
+  return bindChannelIngressAdmissionEvidence({
+    result,
+    channelId,
+    accountId: params.accountId,
+    rawPrincipalRef: params.subject.stableId,
+    participantOutcomeAffecting:
+      senderAccess.gate?.match?.matched === true &&
+      (senderAccess.reasonCode === "dm_policy_allowlisted" ||
+        senderAccess.reasonCode === "group_policy_allowed") &&
+      !(isGroup
+        ? state.allowlists.group.hasWildcard
+        : state.allowlists.dm.hasWildcard || state.allowlists.pairingStore.hasWildcard),
+  });
 }

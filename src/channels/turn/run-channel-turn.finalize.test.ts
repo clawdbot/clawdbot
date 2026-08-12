@@ -6,6 +6,12 @@ import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import {
+  bindChannelContextAdmissionEvidence,
+  configureChannelAdmissionEvidenceCollection,
+  createChannelParticipantAdmissionEvidence,
+  readChannelContextAdmissionEvidence,
+} from "../message-access/admission-evidence.js";
 import { outboundMessageIdentities } from "../message/outbound-echo-state.js";
 import { recordOutboundMessageIdentity } from "../message/outbound-echo.js";
 import type { RecordInboundSession } from "../session.types.js";
@@ -765,6 +771,50 @@ describe("channel turn finalize", () => {
     });
     expect(finalizedResult.dispatched).toBe(true);
     expect(finalizedResult.routeSessionKey).toBe("agent:observer:test:peer");
+  });
+
+  it("preserves private channel admission evidence when routing adds a DM scope", async () => {
+    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
+    try {
+      const ctx = createCtx();
+      const evidence = createChannelParticipantAdmissionEvidence({
+        channelId: "test",
+        participantId: "person-1",
+      });
+      bindChannelContextAdmissionEvidence({
+        context: ctx,
+        channelId: "test",
+        evidence,
+        rawPrincipalRef: "person-1",
+      });
+      dispatchReplyWithRoutedChannelDispatcherCore.mockImplementation(createDispatch());
+
+      await runChannelTurn({
+        channel: "test",
+        raw: {},
+        adapter: {
+          ingest: () => ({ id: "msg-evidence", rawText: "hello" }),
+          resolveTurn: () => ({
+            cfg,
+            channel: "test",
+            route: {
+              agentId: "main",
+              dmScope: "per-channel-peer",
+              sessionKey: "agent:main:test:peer",
+            },
+            ctxPayload: ctx,
+            delivery: { deliver: vi.fn() },
+            record: { onRecordError: vi.fn() },
+          }),
+        },
+      });
+
+      const dispatched = dispatchReplyWithRoutedChannelDispatcherCore.mock.calls[0]?.[0];
+      expect(dispatched?.ctx.DmScope).toBe("per-channel-peer");
+      expect(readChannelContextAdmissionEvidence(dispatched?.ctx ?? {})).toBe(evidence);
+    } finally {
+      clearCollection();
+    }
   });
 
   it("finalizes failed dispatches before rethrowing", async () => {

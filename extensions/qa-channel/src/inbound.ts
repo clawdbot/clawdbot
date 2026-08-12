@@ -400,6 +400,7 @@ export async function handleQaInbound(params: {
     },
     message: { body, bodyForAgent: inbound.text, rawBody: inbound.text, commandBody: inbound.text },
     media,
+    channelIngress: access,
     access: {
       commands: { authorized: true },
       mentions: { canDetectMention: isGroup, wasMentioned: Boolean(wasMentioned) },

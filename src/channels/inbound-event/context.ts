@@ -24,7 +24,12 @@ import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-channel-context.types.js";
 import { shouldIncludeSupplementalContext } from "../../security/context-visibility.js";
 import type { InboundImplicitMentionKind } from "../mention-gating.js";
+import {
+  bindChannelContextAdmissionEvidence,
+  type ChannelAdmissionEvidence,
+} from "../message-access/admission-evidence.js";
 import type { ChannelIngressCommandAccess } from "../message-access/runtime-types.js";
+import type { ResolvedChannelMessageIngress } from "../message-access/runtime-types.js";
 import type {
   CommandFacts,
   ConversationFacts,
@@ -101,6 +106,10 @@ export type BuildChannelInboundEventContextParams = {
   finalize?: FinalizeInboundContextFn;
   finalizeOptions?: FinalizeInboundContextOptions;
   extra?: Record<string, unknown>;
+  /** Host-resolved ingress result, or an explicit unsupported adapter marker. */
+  channelIngress?: ResolvedChannelMessageIngress | "unsupported";
+  /** Explicit attribution-only evidence minted by the host ingress SDK. */
+  channelParticipantEvidence?: ChannelAdmissionEvidence;
 };
 /**
  * @deprecated Prefer `BuildChannelInboundEventContextParams` with
@@ -569,7 +578,17 @@ export function buildChannelInboundEventContext(
         suppressSelfQuoteMedia: params.suppressSelfQuoteMedia,
       })
     : finalizeChannelInboundContextValue(finalizeParams);
-  return isPromiseLike(result)
-    ? result.then((finalized) => finalized.context as BuiltChannelInboundEventContext)
-    : (result.context as BuiltChannelInboundEventContext);
+  const bindEvidence = (finalized: FinalizeChannelInboundContextResult<typeof context>) => {
+    const built = finalized.context as BuiltChannelInboundEventContext;
+    bindChannelContextAdmissionEvidence({
+      context: built,
+      channelId: params.channel,
+      accountId: params.accountId,
+      ingress: params.channelIngress,
+      evidence: params.channelParticipantEvidence,
+      rawPrincipalRef: params.sender.id,
+    });
+    return built;
+  };
+  return isPromiseLike(result) ? result.then(bindEvidence) : bindEvidence(result);
 }

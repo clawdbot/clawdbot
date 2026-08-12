@@ -55,8 +55,10 @@ type Options = {
   crabboxClass: string;
   command:
     | "finish"
+    | "inspect"
     | "probe"
     | "publish"
+    | "restart"
     | "run"
     | "screenshot"
     | "send"
@@ -64,6 +66,7 @@ type Options = {
     | "status"
     | "view";
   crabboxBin: string;
+  chat?: string;
   desktopChatTitle: string;
   dryRun: boolean;
   envFile?: string;
@@ -155,6 +158,7 @@ type SessionFile = {
   };
   localRoot: string;
   localSut: {
+    configPath?: string;
     containerName?: string;
     sutAttestation?: { lane: "baseline" | "candidate"; sha: string };
     gatewayLog: string;
@@ -214,6 +218,8 @@ function usageText() {
     "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts [probe] [--text /status] [--expect OpenClaw]",
     "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts start [--tdlib-url <url>]",
     "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts send --session <session.json> --text <text>",
+    "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts inspect --session <session.json>",
+    "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts restart --session <session.json>",
     "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts run --session <session.json> -- <remote command>",
     "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts view --session <session.json> --message-id <id>",
     "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts screenshot --session <session.json>",
@@ -223,6 +229,7 @@ function usageText() {
     "",
     "Useful options:",
     "  --class <name>                Crabbox machine class. Default: standard.",
+    "  --chat <id|username>          Telegram chat override for send (for example @bot for DM).",
     "  --desktop-chat-title <name>   Telegram Desktop chat to select before recording.",
     "  --human-delay-fixed-ms <ms>   Set a fixed custom human delay before Gateway startup.",
     "  --id <cbx_id>                 Reuse an existing Crabbox desktop lease.",
@@ -316,8 +323,10 @@ export function parseArgs(argvInput: string[]): Options {
   argv = argv[0] === "--" ? argv.slice(1) : argv;
   const commands = new Set([
     "finish",
+    "inspect",
     "probe",
     "publish",
+    "restart",
     "run",
     "screenshot",
     "send",
@@ -388,6 +397,8 @@ export function parseArgs(argvInput: string[]): Options {
     };
     if (arg === "--class") {
       opts.crabboxClass = readValue();
+    } else if (arg === "--chat") {
+      opts.chat = readValue();
     } else if (arg === "--crabbox-bin") {
       opts.crabboxBin = readValue();
     } else if (arg === "--desktop-chat-title") {
@@ -496,7 +507,17 @@ export function parseArgs(argvInput: string[]): Options {
     throw new Error("run requires a remote command after --.");
   }
   if (
-    ["finish", "publish", "run", "screenshot", "send", "status", "view"].includes(command) &&
+    [
+      "finish",
+      "inspect",
+      "publish",
+      "restart",
+      "run",
+      "screenshot",
+      "send",
+      "status",
+      "view",
+    ].includes(command) &&
     !opts.sessionFile
   ) {
     throw new Error(`${command} requires --session.`);
@@ -509,6 +530,9 @@ export function parseArgs(argvInput: string[]): Options {
   }
   if (command !== "start" && opts.humanDelayFixedMs !== undefined) {
     throw new Error("--human-delay-fixed-ms is available only for start sessions.");
+  }
+  if (command !== "send" && opts.chat) {
+    throw new Error("--chat is available only for held-session sends.");
   }
   if (opts.mcpAppFixture && command !== "start") {
     throw new Error("--mcp-app-fixture is available only for start sessions.");
@@ -672,6 +696,42 @@ export function createOpenClawGatewaySpawnSpec(params: {
     npmExecPath: params.npmExecPath,
     platform: params.platform,
     pnpmArgs: ["openclaw", "gateway", "--port", String(params.gatewayPort)],
+  });
+  return {
+    args: spec.args,
+    command: spec.command,
+    options: {
+      cwd: spec.options.cwd,
+      env: spec.options.env,
+      shell: spec.options.shell,
+      windowsVerbatimArguments: spec.options.windowsVerbatimArguments,
+    },
+  };
+}
+
+export function createOpenClawCliSpawnSpec(params: {
+  args: string[];
+  env: NodeJS.ProcessEnv;
+  repoRoot: string;
+  nodeExecPath?: string;
+  npmExecPath?: string;
+  pnpmExecPath?: string;
+  platform?: NodeJS.Platform;
+}): GatewaySpawnSpec {
+  if (params.pnpmExecPath) {
+    return {
+      args: ["openclaw", ...params.args],
+      command: params.pnpmExecPath,
+      options: { cwd: params.repoRoot, env: params.env, shell: false },
+    };
+  }
+  const spec = createPnpmRunnerSpawnSpec({
+    cwd: params.repoRoot,
+    env: params.env,
+    nodeExecPath: params.nodeExecPath,
+    npmExecPath: params.npmExecPath,
+    platform: params.platform,
+    pnpmArgs: ["openclaw", ...params.args],
   });
   return {
     args: spec.args,
@@ -860,10 +920,12 @@ export function runCommand(params: {
   cwd: string;
   env?: NodeJS.ProcessEnv;
   outputFile?: string;
+  shell?: boolean | string;
   stdio?: "inherit" | "pipe";
   stdin?: string;
   timeoutKillGraceMs?: number;
   timeoutMs?: number;
+  windowsVerbatimArguments?: boolean;
 }) {
   return new Promise<CommandResult>((resolve, reject) => {
     if (params.outputFile) {
@@ -873,7 +935,9 @@ export function runCommand(params: {
       cwd: params.cwd,
       detached: process.platform !== "win32",
       env: params.env ?? process.env,
+      shell: params.shell,
       stdio: ["pipe", "pipe", "pipe"],
+      windowsVerbatimArguments: params.windowsVerbatimArguments,
     });
     activeCommandChildren.add(child);
     installCommandCleanupHandlers();
@@ -1195,6 +1259,47 @@ export async function waitForLog(
   );
 }
 
+export function readLogAfterOffset(
+  logPath: string,
+  offset: number,
+  maxBytes = LOG_READY_TAIL_BYTES,
+) {
+  const size = fs.statSync(logPath).size;
+  if (size <= offset) {
+    return "";
+  }
+  const start = Math.max(offset, size - Math.max(1, maxBytes));
+  const buffer = Buffer.alloc(size - start);
+  const fd = fs.openSync(logPath, "r");
+  try {
+    fs.readSync(fd, buffer, 0, buffer.length, start);
+  } finally {
+    fs.closeSync(fd);
+  }
+  return buffer.toString("utf8");
+}
+
+export async function waitForLogAfterOffset(params: {
+  label: string;
+  logPath: string;
+  offset: number;
+  pattern: RegExp;
+  timeoutMs: number;
+}) {
+  const started = Date.now();
+  while (Date.now() - started < params.timeoutMs) {
+    const text = readLogAfterOffset(params.logPath, params.offset);
+    if (params.pattern.test(text)) {
+      return text;
+    }
+    await sleep(250);
+  }
+  const text = readLogAfterOffset(params.logPath, params.offset);
+  throw new Error(
+    `${params.label} was not observed within ${params.timeoutMs}ms\n${sliceUtf16Safe(text, -4000)}`,
+  );
+}
+
 async function telegram(token: string, method: string, body: JsonObject = {}) {
   return await telegramBotApi(token, method, body);
 }
@@ -1289,7 +1394,7 @@ export function writeSutConfig(params: {
     },
     // Exercise the opt-in message audit surface: the DM probe should produce
     // inbound/outbound rows under the privacy-sensitive "direct" mode.
-    logging: { audit: { enabled: true, messages: "direct" } },
+    logging: { audit: { enabled: true, executionIdentity: true, messages: "direct" } },
     channels: {
       telegram: {
         allowFrom: [params.testerId],
@@ -2453,6 +2558,7 @@ sleep 1
 }
 
 export function renderRemoteProbe(params: {
+  chat?: string;
   expect: string[];
   outputPath?: string;
   sutUsername: string;
@@ -2469,6 +2575,9 @@ export function renderRemoteProbe(params: {
     params.outputPath ?? `${REMOTE_ROOT}/probe.json`,
     "--json",
   ];
+  if (params.chat) {
+    args.push("--chat", params.chat);
+  }
   for (const expected of params.expect) {
     args.push("--expect", expected);
   }
@@ -2960,6 +3069,8 @@ async function startSession(root: string, opts: Options, outputDir: string) {
       webvnc: `${opts.crabboxBin} webvnc --provider ${opts.provider} --target ${opts.target} --id ${leaseId} --open`,
       commands: {
         send: `openclaw-telegram-user-crabbox-proof send --session ${path.relative(root, pathname)} --text '/status'`,
+        inspect: `openclaw-telegram-user-crabbox-proof inspect --session ${path.relative(root, pathname)}`,
+        restart: `openclaw-telegram-user-crabbox-proof restart --session ${path.relative(root, pathname)}`,
         view: `openclaw-telegram-user-crabbox-proof view --session ${path.relative(root, pathname)} --message-id <message-id>`,
         run: `openclaw-telegram-user-crabbox-proof run --session ${path.relative(root, pathname)} -- bash -lc 'source ${REMOTE_ROOT}/env.sh && python3 ${REMOTE_ROOT}/user-driver.py transcript --limit 20 --json'`,
         finish: `openclaw-telegram-user-crabbox-proof finish --session ${path.relative(root, pathname)} --preview-crop telegram-window`,
@@ -3019,6 +3130,7 @@ async function sendSessionProbe(root: string, opts: Options, outputDir: string) 
   await writeExecutable(
     probeScript,
     renderRemoteProbe({
+      chat: opts.chat?.replaceAll("{sut}", session.credential.sutUsername),
       expect: opts.expect,
       outputPath: remoteProbe,
       sutUsername: session.credential.sutUsername,
@@ -3087,6 +3199,253 @@ async function statusSession(root: string, opts: Options, outputDir: string) {
     status: "pass",
     webvnc: `${opts.crabboxBin} webvnc --provider ${session.crabbox.provider} --target ${session.crabbox.target} --id ${session.crabbox.id} --open`,
   };
+}
+
+function sessionSutConfigPath(session: SessionFile) {
+  return session.localSut.configPath ?? path.join(session.localSut.tempRoot, "openclaw.json");
+}
+
+async function runSessionAuditCli(
+  root: string,
+  opts: Options,
+  session: SessionFile,
+  args: string[],
+) {
+  const spec = createOpenClawCliSpawnSpec({
+    args,
+    env: {
+      ...childProcessBaseEnv(),
+      OPENCLAW_CONFIG_PATH: sessionSutConfigPath(session),
+      OPENCLAW_STATE_DIR: session.localSut.stateDir,
+    },
+    repoRoot: root,
+    nodeExecPath: opts.nodeBin,
+    pnpmExecPath: opts.pnpmBin,
+  });
+  const cwd = spec.options.cwd;
+  return await runCommand({
+    command: spec.command,
+    args: spec.args,
+    cwd: typeof cwd === "string" ? cwd : cwd ? fileURLToPath(cwd) : root,
+    env: spec.options.env,
+    shell: spec.options.shell,
+    timeoutMs: opts.timeoutMs,
+    windowsVerbatimArguments: spec.options.windowsVerbatimArguments,
+  });
+}
+
+function parseCommandJson(result: CommandResult, label: string): JsonObject {
+  try {
+    const parsed = JSON.parse(result.stdout) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("expected a JSON object");
+    }
+    return parsed as JsonObject;
+  } catch (error) {
+    throw new Error(`${label} returned invalid JSON: ${coerceErrorMessage(error)}`, {
+      cause: error,
+    });
+  }
+}
+
+function inspectIdentityContext(result: JsonObject): JsonObject | undefined {
+  const identity = result.identity;
+  if (!identity || typeof identity !== "object" || Array.isArray(identity)) {
+    return undefined;
+  }
+  const record = identity as JsonObject;
+  return record.state === "present" && record.context && typeof record.context === "object"
+    ? (record.context as JsonObject)
+    : undefined;
+}
+
+async function inspectSessionIdentity(root: string, opts: Options, outputDir: string) {
+  const { session } = readSession(root, opts, outputDir);
+  const listed = parseCommandJson(
+    await runSessionAuditCli(root, opts, session, [
+      "audit",
+      "--kind",
+      "agent_run",
+      "--limit",
+      "500",
+      "--json",
+    ]),
+    "audit activity list",
+  );
+  const events = Array.isArray(listed.events) ? listed.events : [];
+  const runIds = [
+    ...new Set(
+      events.flatMap((event) => {
+        if (!event || typeof event !== "object" || Array.isArray(event)) {
+          return [];
+        }
+        const runId = (event as JsonObject).runId;
+        return typeof runId === "string" && runId.trim() ? [runId] : [];
+      }),
+    ),
+  ];
+  const inspections: Array<{ human: string; json: JsonObject; runId: string }> = [];
+  for (const runId of runIds) {
+    const json = parseCommandJson(
+      await runSessionAuditCli(root, opts, session, [
+        "audit",
+        "--run",
+        runId,
+        "--explain",
+        "--json",
+      ]),
+      `audit inspection ${runId}`,
+    );
+    const context = inspectIdentityContext(json);
+    if (!context) {
+      continue;
+    }
+    const ingress = context.ingress;
+    if (
+      !ingress ||
+      typeof ingress !== "object" ||
+      Array.isArray(ingress) ||
+      (ingress as JsonObject).kind !== "channel"
+    ) {
+      continue;
+    }
+    const human = (
+      await runSessionAuditCli(root, opts, session, ["audit", "--run", runId, "--explain"])
+    ).stdout;
+    inspections.push({ human, json, runId });
+  }
+  if (inspections.length < 2) {
+    throw new Error(
+      `Telegram DM/group proof requires at least two admitted channel runs; found ${inspections.length}.`,
+    );
+  }
+  const contextsByRun = Object.fromEntries(
+    inspections.map(({ json, runId }) => [runId, inspectIdentityContext(json)]),
+  );
+  const serialized = JSON.stringify({ contextsByRun, inspections });
+  for (const raw of [
+    session.credential.groupId,
+    session.credential.testerUserId,
+    session.credential.testerUsername,
+  ]) {
+    if (raw && serialized.includes(raw)) {
+      throw new Error("Telegram audit inspection retained a raw participant or room identifier.");
+    }
+  }
+  const principalRefs = new Set<string>();
+  for (const inspection of inspections) {
+    const context = inspectIdentityContext(inspection.json);
+    const invoker = context?.invoker;
+    const principal =
+      invoker && typeof invoker === "object" && !Array.isArray(invoker)
+        ? (invoker as JsonObject).principal
+        : undefined;
+    const principalRef =
+      principal && typeof principal === "object" && !Array.isArray(principal)
+        ? (principal as JsonObject).principalRef
+        : undefined;
+    const decisions = Array.isArray(inspection.json.decisions) ? inspection.json.decisions : [];
+    const hasChannelDecision = decisions.some((decision) => {
+      if (!decision || typeof decision !== "object" || Array.isArray(decision)) {
+        return false;
+      }
+      const action = (decision as JsonObject).action;
+      return (
+        action &&
+        typeof action === "object" &&
+        !Array.isArray(action) &&
+        (action as JsonObject).family === "channel" &&
+        (action as JsonObject).operation === "admission"
+      );
+    });
+    if (
+      !invoker ||
+      typeof invoker !== "object" ||
+      Array.isArray(invoker) ||
+      (invoker as JsonObject).state !== "present" ||
+      !principal ||
+      typeof principal !== "object" ||
+      Array.isArray(principal) ||
+      (principal as JsonObject).kind !== "person" ||
+      typeof principalRef !== "string" ||
+      !hasChannelDecision ||
+      !inspection.human.includes("Invoker [present]") ||
+      !inspection.human.includes("Decisions")
+    ) {
+      throw new Error(`Telegram run ${inspection.runId} omitted participant CLI evidence.`);
+    }
+    principalRefs.add(principalRef);
+  }
+  if (principalRefs.size !== 1) {
+    throw new Error("Telegram DM and group runs did not retain the same participant principal.");
+  }
+
+  const jsonPath = path.join(session.outputDir, "telegram-execution-identity.private.json");
+  const textPath = path.join(session.outputDir, "telegram-execution-identity.private.txt");
+  const previous = readJsonFile(jsonPath);
+  const previousContexts =
+    previous.contextsByRun &&
+    typeof previous.contextsByRun === "object" &&
+    !Array.isArray(previous.contextsByRun)
+      ? (previous.contextsByRun as JsonObject)
+      : undefined;
+  const stableAcrossRestart = previousContexts
+    ? Object.entries(previousContexts).every(
+        ([runId, context]) => JSON.stringify(contextsByRun[runId]) === JSON.stringify(context),
+      )
+    : undefined;
+  if (stableAcrossRestart === false) {
+    throw new Error("Telegram execution identity context changed across Gateway restart.");
+  }
+  fs.writeFileSync(
+    jsonPath,
+    `${JSON.stringify({ contextsByRun, runIds: inspections.map((item) => item.runId) }, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+  fs.chmodSync(jsonPath, 0o600);
+  fs.writeFileSync(
+    textPath,
+    inspections.map((item) => `# ${item.runId}\n${item.human.trim()}\n`).join("\n"),
+    { mode: 0o600 },
+  );
+  fs.chmodSync(textPath, 0o600);
+  return {
+    inspectionCount: inspections.length,
+    json: path.relative(root, jsonPath),
+    runIds: inspections.map((item) => item.runId),
+    stableAcrossRestart: stableAcrossRestart ?? null,
+    status: "pass",
+    text: path.relative(root, textPath),
+  };
+}
+
+async function restartSessionGateway(root: string, opts: Options, outputDir: string) {
+  const { session } = readSession(root, opts, outputDir);
+  if (session.localSut.containerName) {
+    throw new Error(
+      "Held-session restart requires the lifecycle-owned host Gateway; container sessions are unsupported.",
+    );
+  }
+  const pid = session.localSut.gatewayPid;
+  process.kill(pid, 0);
+  const offset = fs.statSync(session.localSut.gatewayLog).size;
+  process.kill(pid, "SIGUSR1");
+  await waitForLogAfterOffset({
+    label: "Gateway restart boundary",
+    logPath: session.localSut.gatewayLog,
+    offset,
+    pattern: /received SIGUSR1; restarting/u,
+    timeoutMs: opts.timeoutMs,
+  });
+  await waitForLogAfterOffset({
+    label: "Gateway restart readiness",
+    logPath: session.localSut.gatewayLog,
+    offset,
+    pattern: /gateway ready|restart trace: restart\.ready/u,
+    timeoutMs: opts.timeoutMs,
+  });
+  process.kill(pid, 0);
+  return { gatewayPid: pid, logOffset: offset, status: "pass" };
 }
 
 function telegramPrivatePostLink(groupId: string, messageId: string) {
@@ -3384,6 +3743,14 @@ async function main() {
   }
   if (opts.command === "send") {
     console.log(JSON.stringify(await sendSessionProbe(root, opts, outputDir), null, 2));
+    return;
+  }
+  if (opts.command === "inspect") {
+    console.log(JSON.stringify(await inspectSessionIdentity(root, opts, outputDir), null, 2));
+    return;
+  }
+  if (opts.command === "restart") {
+    console.log(JSON.stringify(await restartSessionGateway(root, opts, outputDir), null, 2));
     return;
   }
   if (opts.command === "run") {

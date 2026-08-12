@@ -118,6 +118,13 @@ the resolved state or decision. See
 [Channel ingress API](/plugins/sdk-channel-ingress) for the API design,
 ownership boundary, and test expectations.
 
+Pass the exact resolver result to `buildChannelInboundEventContext` as
+`channelIngress`. This preserves host-minted participant evidence through
+queued run admission without exposing it in message context fields. Never
+reconstruct that evidence from sender, route, room, account, thread, message,
+transport, or session values. Legacy adapters can explicitly pass
+`channelIngress: "unsupported"`; absence remains unknown, not an allow signal.
+
 ### Durable ingress and replay dedupe
 
 Channels adopting durable ingress should use `createChannelIngressMonitor`
