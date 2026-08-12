@@ -232,7 +232,10 @@ function resolveSelectedContextEnginePluginIds(params: {
     plugins,
     plugins.slots.contextEngine,
   );
-  return pluginId ? [pluginId] : [];
+  if (!pluginId || restrictiveAllowlistOmitsPlugin(params.config, pluginId)) {
+    return [];
+  }
+  return [pluginId];
 }
 
 /** Resolve manifest owners required by one selected non-core harness runtime. */

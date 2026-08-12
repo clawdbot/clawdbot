@@ -304,7 +304,7 @@ describe("harness runtime plugins", () => {
     },
   );
 
-  it("keeps the selected context-engine owner in the prepared runtime", () => {
+  it("drops a context-engine owner omitted by a restrictive allowlist", () => {
     const plan = resolveAgentRuntimePluginLoadPlan({
       config: {
         plugins: {
@@ -316,8 +316,25 @@ describe("harness runtime plugins", () => {
       selections: [],
     });
 
-    expect(plan.pluginIds).toEqual(["custom-context-engine"]);
-    expect(plan.config?.plugins?.allow).toEqual(["unrelated-plugin", "custom-context-engine"]);
+    expect(plan.pluginIds ?? []).not.toContain("custom-context-engine");
+    expect(plan.config?.plugins?.allow).toEqual(["unrelated-plugin"]);
+    expect(plan.config?.plugins?.entries?.["custom-context-engine"]).toBeUndefined();
+  });
+
+  it("keeps a context-engine owner explicitly allowed by a restrictive allowlist", () => {
+    const plan = resolveAgentRuntimePluginLoadPlan({
+      config: {
+        plugins: {
+          allow: ["custom-context-engine"],
+          slots: { contextEngine: "custom-context-engine" },
+        },
+      },
+      workspaceDir: "/tmp/workspace",
+      selections: [],
+    });
+
+    expect(plan.pluginIds ?? []).toContain("custom-context-engine");
+    expect(plan.config?.plugins?.allow).toContain("custom-context-engine");
     expect(plan.config?.plugins?.entries?.["custom-context-engine"]).toEqual({ enabled: true });
   });
 
