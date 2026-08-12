@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   createQaBusState,
@@ -327,6 +328,7 @@ async function runProof(options: ProducerOptions) {
       return marker ? [{ role: messageRole(message), marker }] : [];
     });
     if (
+      !isDeepStrictEqual(historyAfterFailure, committedBeforeKill) ||
       committedSequence.length !== COMMITTED_MARKERS.length ||
       committedSequence.some((entry, index) => entry.marker !== COMMITTED_MARKERS[index]) ||
       historyAfterFailure.some((message) => messageText(message).includes(VOLATILE_TEXT)) ||
@@ -388,6 +390,8 @@ async function runProof(options: ProducerOptions) {
       killedWorker: killed,
       durableTranscript: {
         cutoff: COMMITTED_MARKERS.length,
+        exactPreKillSnapshotRetained: true,
+        historyMessageCount: historyAfterFailure.length,
         exactMarkers: COMMITTED_MARKERS,
         sequence: committedSequence,
         markerCounts: countsAfterFailure,

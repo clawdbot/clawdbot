@@ -184,7 +184,10 @@ describe("worker bundle producer", () => {
           version: "1.2.3",
           type: "module",
           main: "./dist/index.js",
-          dependencies: { "partial-json": "0.1.7" },
+          dependencies: {
+            "@openclaw/fake-nested": "workspace:*",
+            "partial-json": "0.1.7",
+          },
           scripts: { build: "tsdown" },
           devDependencies: { vitest: "4.0.0" },
         })}\n`,
@@ -225,6 +228,21 @@ describe("worker bundle producer", () => {
       expect(vendored.dependencies).toEqual({ "partial-json": "0.1.7" });
       expect(vendored).not.toHaveProperty("scripts");
       expect(vendored).not.toHaveProperty("devDependencies");
+
+      await fs.writeFile(
+        path.join(vendorSource, "dist/index.js"),
+        'import { nested } from "@openclaw/fake-nested";\nexport const fake = nested;\n',
+        "utf8",
+      );
+      await expect(
+        createWorkerBundleProducer({
+          packageRoot,
+          cacheDir: path.join(root, "cache-with-runtime-workspace-dep"),
+          openclawVersion: "1.2.3",
+        }).prepare(),
+      ).rejects.toThrow(
+        "Vendored workspace dependency @openclaw/fake-nested remains referenced by @openclaw/fake-pkg dist",
+      );
     });
   });
 
