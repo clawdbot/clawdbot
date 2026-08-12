@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   RemoteProject,
   ProjectsSearchRemoteResult,
@@ -170,25 +171,27 @@ export function searchRemoteProjects(
   options: { env?: NodeJS.ProcessEnv; fetchImpl?: typeof fetch; now?: number } = {},
 ): Promise<ProjectsSearchRemoteResult> {
   const normalizedQuery = query.trim().toLowerCase();
+  const token = githubApiToken(options.env);
+  // Gateway reloads run in-process, so cache results must stay credential-scoped.
+  const cacheKey = `${normalizedQuery}\0${token ? createHash("sha256").update(token).digest("hex") : "anonymous"}`;
   const now = options.now ?? Date.now();
-  const cached = searchCache.get(normalizedQuery);
+  const cached = searchCache.get(cacheKey);
   if (cached && cached.expiresAt > now) {
-    searchCache.delete(normalizedQuery);
-    searchCache.set(normalizedQuery, cached);
+    searchCache.delete(cacheKey);
+    searchCache.set(cacheKey, cached);
     return cached.promise;
   }
-  const token = githubApiToken(options.env);
   const promise = searchProjectsUncached({
     query: query.trim(),
     fetchImpl: options.fetchImpl ?? fetch,
     token,
   }).catch((error: unknown) => {
-    if (searchCache.get(normalizedQuery)?.promise === promise) {
-      searchCache.delete(normalizedQuery);
+    if (searchCache.get(cacheKey)?.promise === promise) {
+      searchCache.delete(cacheKey);
     }
     throw error;
   });
-  searchCache.set(normalizedQuery, { expiresAt: now + SEARCH_CACHE_MS, promise });
+  searchCache.set(cacheKey, { expiresAt: now + SEARCH_CACHE_MS, promise });
   pruneMapToMaxSize(searchCache, SEARCH_CACHE_LIMIT);
   return promise;
 }
