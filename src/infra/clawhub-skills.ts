@@ -201,6 +201,7 @@ export async function searchClawHubSkills(params: {
   const results = result.results ?? [];
   for (const entry of results) {
     entry.icon = resolveClawHubImageUrl(entry.icon, params.baseUrl);
+    if (entry.ownerHandle == null) entry.ownerHandle = undefined;
   }
   return results;
 }
