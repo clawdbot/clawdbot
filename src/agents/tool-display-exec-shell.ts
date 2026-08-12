@@ -481,8 +481,17 @@ function splitTopLevel(
   return parts.map((part) => part.trim()).filter((part) => part.length > 0);
 }
 
+function hasShellCompoundCommand(command: string): boolean {
+  return /(?:^|;|&&|\|\||\n)\s*(?:(?:for|while|until|if|case)\b|\{)/u.test(command);
+}
+
 /** Splits a command on top-level stage separators such as `;`, `&&`, and `||`. */
 export function splitTopLevelStages(command: string): string[] {
+  // Shell keywords delimit compound commands, not standalone executables. This lightweight
+  // display parser cannot safely distinguish their internal separators from outer stages.
+  if (hasShellCompoundCommand(command)) {
+    return command.trim() ? [command.trim()] : [];
+  }
   return splitTopLevel(command, (char, index) => {
     if (char === ";") {
       return 1;

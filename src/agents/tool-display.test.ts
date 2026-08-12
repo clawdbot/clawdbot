@@ -263,6 +263,20 @@ describe("tool display details", () => {
     expect(detail).toBe("print lines 1-80 from extensions/discord/src/draft-stream.ts");
   });
 
+  it("keeps shell compound commands intact instead of inventing command stages", () => {
+    for (const command of [
+      'for d in $(find . -type d); do echo "$d"; ls "$d"; done',
+      "echo start && if test -f package.json; then pnpm test; fi",
+    ]) {
+      expect(splitTopLevelStages(command)).toEqual([command]);
+      expect(
+        formatToolDetail(
+          resolveToolDisplay({ name: "exec", args: { command }, detailMode: "explain" }),
+        ),
+      ).toBe(command);
+    }
+  });
+
   it("keeps normal search patterns concise", () => {
     for (const [command, expected] of [
       ['rg "foo|bar" src/agents', 'search "foo|bar" in src/agents'],
