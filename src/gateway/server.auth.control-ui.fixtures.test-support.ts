@@ -1,5 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
-import os from "node:os";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { expect } from "vitest";
 import {
@@ -45,8 +44,11 @@ export const REMOTE_BOOTSTRAP_HEADERS = {
 
 export const createOperatorIdentityFixture = async (identityPrefix: string) => {
   const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
-  const identityDir = await mkdtemp(path.join(os.tmpdir(), identityPrefix));
-  const identityPath = path.join(identityDir, "identity.sqlite");
+  const stateDir = process.env.OPENCLAW_STATE_DIR;
+  if (!stateDir) {
+    throw new Error("OPENCLAW_STATE_DIR must be set by the gateway test hooks");
+  }
+  const identityPath = path.join(stateDir, `${identityPrefix}${randomUUID()}.sqlite`);
   const identity = loadOrCreateDeviceIdentity({ path: identityPath });
   return {
     identityPath,

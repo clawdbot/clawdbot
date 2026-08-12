@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import type { WebSocket } from "ws";
 import {
   buildSignedDeviceForIdentity,
   createOperatorIdentityFixture,
