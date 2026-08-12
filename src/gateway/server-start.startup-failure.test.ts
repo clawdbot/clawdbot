@@ -179,6 +179,24 @@ async function createServerStartTestState(label: string): Promise<OpenClawTestSt
   return state;
 }
 
+// Makes any survivor registry's retirement observable through its disable-time runtime
+// lifecycle cleanup — a synthetic survivor and a real gateway's loader-activated registry
+// both retire through the same host-cleanup path, so both record here.
+function observeSurvivorLifecycleCleanup(survivor: PluginRegistry): string[] {
+  const lifecycleCleanupReasons: string[] = [];
+  survivor.runtimeLifecycles.push({
+    pluginId: "embedded-prior-plugin",
+    lifecycle: {
+      id: "embedded-prior-lifecycle",
+      cleanup: (ctx) => {
+        lifecycleCleanupReasons.push(ctx.reason);
+      },
+    },
+    source: "test",
+  });
+  return lifecycleCleanupReasons;
+}
+
 function createObservableSurvivor(): {
   survivor: PluginRegistry;
   lifecycleCleanupReasons: string[];
@@ -186,24 +204,12 @@ function createObservableSurvivor(): {
 } {
   // The surviving embedded gateway: a LOADED registry whose retirement is observable — a
   // runtime lifecycle cleanup hook plus a live dynamic scheduler job it owns.
-  const lifecycleCleanupReasons: string[] = [];
-  const schedulerCleanupReasons: string[] = [];
-  const survivor: PluginRegistry = {
-    ...createEmptyPluginRegistry(),
-    runtimeLifecycles: [
-      {
-        pluginId: "embedded-prior-plugin",
-        lifecycle: {
-          id: "embedded-prior-lifecycle",
-          cleanup: (ctx) => {
-            lifecycleCleanupReasons.push(ctx.reason);
-          },
-        },
-        source: "test",
-      },
-    ],
+  const survivor = createEmptyPluginRegistry();
+  return {
+    survivor,
+    lifecycleCleanupReasons: observeSurvivorLifecycleCleanup(survivor),
+    schedulerCleanupReasons: [],
   };
-  return { survivor, lifecycleCleanupReasons, schedulerCleanupReasons };
 }
 
 function registerSurvivorSchedulerJob(
@@ -478,6 +484,140 @@ describe("startGatewayServerCore staged-interval survivor request paths", () => 
           resetPluginRuntimeStateForTest();
           clearRuntimeConfigSnapshot();
           await state.cleanup();
+        }
+      }
+    },
+  );
+
+  // The reviewer's remaining trace: a second start that FULLY SUCCEEDS. The survivor serves
+  // its own capability through both staged intervals, and the replacement still completes —
+  // the displaced survivor retires exactly once, at finalize, never twice.
+  it(
+    "keeps the survivor's commands.list capability through a fully successful second start",
+    { timeout: START_BUDGET_MS },
+    async () => {
+      type IntervalProbe = {
+        activeIsSurvivor: boolean;
+        survivorRetired: boolean;
+        commandNames: string[];
+      };
+      const survivorPort = await getFreePort();
+      const state = await createServerStartTestState("gateway-start-success-probe");
+      const token = "gateway-start-success-probe-token";
+      await state.writeConfig({
+        gateway: {
+          auth: { mode: "token", token },
+          controlUi: { enabled: false },
+          port: survivorPort,
+        },
+      });
+      state.applyEnv();
+      resetPluginRuntimeStateForTest();
+      clearRuntimeConfigSnapshot();
+      let survivorServer: Awaited<ReturnType<typeof startGatewayServerCore>> | undefined;
+      let replacementServer: Awaited<ReturnType<typeof startGatewayServerCore>> | undefined;
+      let client: GatewayClient | undefined;
+      try {
+        survivorServer = await startGatewayServerCore(survivorPort, {
+          auth: { mode: "token", token },
+          bind: "loopback",
+          controlUiEnabled: false,
+          sidecarStartup: "start",
+        });
+        const survivorRegistry = getActivePluginRegistry();
+        expect(survivorRegistry).not.toBeNull();
+        registerSurvivorProbeCommand(survivorRegistry!);
+        // Retirement of the REAL survivor registry is observable through the same
+        // lifecycle/scheduler cleanup pair the synthetic survivors use.
+        const lifecycleCleanupReasons = observeSurvivorLifecycleCleanup(survivorRegistry!);
+        const schedulerCleanupReasons: string[] = [];
+        registerSurvivorSchedulerJob(survivorRegistry!, schedulerCleanupReasons);
+        client = await connectGatewayClient({
+          url: `ws://127.0.0.1:${survivorPort}`,
+          token,
+          scopes: ["operator.admin"],
+        });
+        expect(hasProbeCommand(await probeSurvivorCommandNames(client))).toBe(true);
+
+        // Probe both staged intervals of a second start that goes on to succeed: transport
+        // creation (pre-bind) and post-attach return in "start" mode (loaded, pre-finalize).
+        let preBindProbe: IntervalProbe | null = null;
+        let loadedProbe: IntervalProbe | null = null;
+        const probeInterval = async (): Promise<IntervalProbe> => ({
+          activeIsSurvivor: getActivePluginRegistry() === survivorRegistry,
+          survivorRetired: isPluginRegistryRetired(survivorRegistry!),
+          commandNames: await probeSurvivorCommandNames(client!),
+        });
+        stagedIntervalFixture.onTransportCreate = async () => {
+          stagedIntervalFixture.onTransportCreate = null;
+          preBindProbe = await probeInterval();
+        };
+        stagedIntervalFixture.afterPostAttach = async () => {
+          stagedIntervalFixture.afterPostAttach = null;
+          loadedProbe = await probeInterval();
+        };
+        const replacementPort = await getFreePort();
+        replacementServer = await startGatewayServerCore(replacementPort, {
+          auth: { mode: "token", token },
+          bind: "loopback",
+          controlUiEnabled: false,
+          sidecarStartup: "start",
+        });
+
+        expect(preBindProbe).not.toBeNull();
+        expect(loadedProbe).not.toBeNull();
+        const preBind = preBindProbe! as IntervalProbe;
+        const loaded = loadedProbe! as IntervalProbe;
+        console.log(
+          `[cycle45-proof] successful-start pre-bind interval probe: activeIsSurvivor=${preBind.activeIsSurvivor} survivorRetired=${preBind.survivorRetired} probeCommandListed=${hasProbeCommand(preBind.commandNames)}`,
+        );
+        console.log(
+          `[cycle45-proof] successful-start loaded-uncommitted interval probe: activeIsSurvivor=${loaded.activeIsSurvivor} survivorRetired=${loaded.survivorRetired} probeCommandListed=${hasProbeCommand(loaded.commandNames)}`,
+        );
+        // Pre-bind: the still-serving survivor keeps the process slot and its capability.
+        expect(preBind.activeIsSurvivor).toBe(true);
+        expect(preBind.survivorRetired).toBe(false);
+        expect(hasProbeCommand(preBind.commandNames)).toBe(true);
+        // Loaded-but-uncommitted: the attempt owns the slot by design, but the survivor is
+        // still un-retired and its own request path still serves its capability.
+        expect(loaded.survivorRetired).toBe(false);
+        expect(hasProbeCommand(loaded.commandNames)).toBe(true);
+
+        // Startup fully succeeded: the replacement's loaded registry owns the slot and the
+        // displaced survivor retired ONCE, at finalize.
+        expect(getActivePluginRegistry()).not.toBe(survivorRegistry);
+        expect(getActivePluginRegistry()).not.toBeNull();
+        expect(isPluginRegistryRetired(survivorRegistry!)).toBe(true);
+        await vi.waitFor(() => {
+          expect(lifecycleCleanupReasons).toEqual(["disable"]);
+          expect(schedulerCleanupReasons).toEqual(["disable"]);
+        });
+        expect(survivorSchedulerJobGeneration()).toBeUndefined();
+
+        // The completed replacement's own close must not fire a SECOND survivor retirement.
+        const closing = replacementServer.close({ reason: "cycle45 success probe done" });
+        replacementServer = undefined;
+        await closing;
+        await new Promise((resolve) => {
+          setTimeout(resolve, 100);
+        });
+        expect(lifecycleCleanupReasons).toEqual(["disable"]);
+        expect(schedulerCleanupReasons).toEqual(["disable"]);
+      } finally {
+        resetStagedIntervalFixture();
+        if (client) {
+          await disconnectGatewayClient(client).catch(() => {});
+        }
+        try {
+          await replacementServer?.close({ reason: "cycle45 success probe cleanup" });
+        } finally {
+          try {
+            await survivorServer?.close({ reason: "cycle45 success probe survivor cleanup" });
+          } finally {
+            resetPluginRuntimeStateForTest();
+            clearRuntimeConfigSnapshot();
+            await state.cleanup();
+          }
         }
       }
     },
