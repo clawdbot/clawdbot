@@ -3159,6 +3159,13 @@ openclaw-chat-video-player {
   box-shadow: none;
 }
 
+/* Fork (2026-08-12): voice/dictation input hidden per user preference — the
+   mic button and its microphone picker are never used on this gateway. */
+.chat-send-btn--voice,
+.chat-talk-input-picker {
+  display: none !important;
+}
+
 .chat-talk-control {
   display: inline-flex;
   align-items: center;

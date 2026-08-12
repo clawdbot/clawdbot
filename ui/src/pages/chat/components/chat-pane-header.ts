@@ -22,6 +22,20 @@ import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 
+/** Fork (2026-08-12): hard-reload the Control UI - clears cached app assets
+ * (service-worker / Cache Storage) then reloads, matching desktop
+ * Ctrl+Shift+R for mobile users who cannot force-reload. */
+async function hardReloadControlUi(): Promise<void> {
+  try {
+    if ("caches" in window) {
+      await Promise.all((await caches.keys()).map((key) => caches.delete(key)));
+    }
+  } catch {
+    // Cache clearing is best-effort; a plain reload still fetches fresh assets.
+  }
+  window.location.reload();
+}
+
 export type ChatPaneHeaderAction = "reveal" | "copy-path" | "copy-branch";
 
 type ChatPaneHeaderProps = {
@@ -493,6 +507,18 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             </openclaw-tooltip>`
           : nothing}
       </div>
+      ${props.mergedChrome || props.narrow
+        ? html`<openclaw-tooltip .content=${t("chat.hardRefresh")}>
+            <button
+              class="btn btn--ghost btn--icon chat-icon-btn chat-pane__refresh-btn"
+              type="button"
+              aria-label=${t("chat.hardRefresh")}
+              @click=${() => void hardReloadControlUi()}
+            >
+              ${icons.refresh}
+            </button>
+          </openclaw-tooltip>`
+        : nothing}
     </div>
   `;
 }

@@ -102,6 +102,12 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   display: none;
 }
 
+/* Fork (2026-08-12): the topbar command-palette search button is unused on
+   mobile - the hamburger drawer is the only navigation used. */
+.shell--mobile-nav .topbar-search {
+  display: none !important;
+}
+
 .shell--mobile-nav .shell-nav,
 .shell--mobile-nav.shell--nav-collapsed .shell-nav {
   position: fixed;

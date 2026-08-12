@@ -4639,6 +4639,7 @@ export const en: TranslationMap = {
     onboardingDisabled: "Disabled during setup",
     commandPaletteTitle: "Search or jump to… (⌘K)",
     openCommandPalette: "Open command palette",
+    hardRefresh: "Reload page (hard refresh)",
     docsOpensInNewTab: "{label} (opens in new tab)",
     updating: "Updating…",
     dismissUpdateBanner: "Dismiss update banner",

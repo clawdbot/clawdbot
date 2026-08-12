@@ -399,6 +399,13 @@ openclaw-chat-pane {
   margin-left: auto;
 }
 
+/* Fork (2026-08-12): hard-refresh button - pins to the header right edge
+   on mobile (where the action cluster is hidden); on desktop narrow panes
+   it sits right after the action cluster. */
+.chat-pane__refresh-btn {
+  margin-left: auto;
+}
+
 .chat-pane__sharing-menu {
   flex: 0 0 auto;
 }
@@ -435,6 +442,29 @@ openclaw-chat-pane {
   .chat-pane__presence {
     display: none;
   }
+
+  /* Fork (2026-08-12): mobile declutter — the header action buttons and
+     control chips are unused (the hamburger drawer is the only navigation
+     used), so hide them on phones. Desktop is untouched. */
+  .chat-pane__actions,
+  .chat-pane__workspace-menu,
+  .chat-pane__branches-menu,
+  .chat-pane__gateway-menu,
+  .chat-pane__sharing-menu,
+  .chat-pane__face-switch {
+    display: none !important;
+  }
+}
+
+/* Fork (2026-08-12): same declutter for the mobile-nav shell regardless of
+   viewport width (landscape phones, large touch devices). */
+.shell--mobile-nav .chat-pane__actions,
+.shell--mobile-nav .chat-pane__workspace-menu,
+.shell--mobile-nav .chat-pane__branches-menu,
+.shell--mobile-nav .chat-pane__gateway-menu,
+.shell--mobile-nav .chat-pane__sharing-menu,
+.shell--mobile-nav .chat-pane__face-switch {
+  display: none !important;
 }
 
 /* Plain web shell chrome overlays the first pane header. Expanded navigation
