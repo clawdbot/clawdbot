@@ -217,7 +217,7 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
           accountId: "org",
           config: {
             channels: {
-              C01234567: {
+              "team:T01234567:channel:C01234567": {
                 toolsBySender: {
                   [entry]: { deny: ["exec"] },
                   "*": { allow: ["exec"] },
