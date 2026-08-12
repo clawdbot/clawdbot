@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 // Bench Gateway Concurrency script measures gateway probes during synthetic streaming turns.
 import { randomUUID } from "node:crypto";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -27,6 +27,7 @@ import {
   validateCliArgs,
   waitForInitialProbe,
   writeGatewayBenchConfig,
+  writePluginFixtures,
 } from "./lib/gateway-bench-runtime.ts";
 import { createGatewayWsClient } from "./lib/gateway-ws-client.ts";
 
@@ -43,6 +44,11 @@ type TimedProbe = {
   error: string | null;
   latencyMs: number;
   ok: boolean;
+};
+
+type DiagnosticsTimelineSpan = {
+  durationMs?: number;
+  name?: string;
 };
 
 type ReadyProbe = TimedProbe & {
@@ -73,6 +79,7 @@ type BenchmarkRun = {
     durationMs: number;
     samples: GatewaySample[];
   };
+  pluginMetadataScans: ReturnType<typeof summarizePluginMetadataScans>;
   readyz: ReadyProbe[];
   sessionsList: TimedProbe[];
   turnCount: number;
@@ -82,11 +89,14 @@ type BenchmarkRun = {
 type CliOptions = {
   cadenceMs: number;
   concurrency: number;
+  cpuProfDir?: string;
   entry: string;
   json: boolean;
   output?: string;
+  pluginCount: number;
   runs: number;
   timeoutMs: number;
+  toolEvents: boolean;
   warmup: number;
 };
 
@@ -98,6 +108,7 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_WARMUP = 0;
 const MOCK_RESPONSE_CHUNK_DELAY_MS = 1_000;
 const MAX_CONCURRENCY = 64;
+const MAX_PLUGIN_COUNT = 100;
 const MAX_RUNS = 20;
 const MAX_WARMUP = 10;
 const MAX_SAMPLES_PER_RUN = 2_048;
@@ -108,12 +119,14 @@ const PROBE_WARMUP_TARGET_MS = 1_000;
 const PROBE_WARMUP_RETRY_DELAY_MS = 100;
 const GATEWAY_STDERR_TAIL_LINES = 20;
 const AGENT_WAIT_RPC_GRACE_MS = 5_000;
-const BOOLEAN_FLAGS = new Set(["--help", "-h", "--json"]);
+const BOOLEAN_FLAGS = new Set(["--help", "-h", "--json", "--tool-events"]);
 const VALUE_FLAGS = new Set([
   "--cadence-ms",
   "--concurrency",
+  "--cpu-prof-dir",
   "--entry",
   "--output",
+  "--plugin-count",
   "--runs",
   "--timeout-ms",
   "--warmup",
@@ -160,9 +173,16 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       "--concurrency",
       MAX_CONCURRENCY,
     ),
+    cpuProfDir: resolveOutputPath(parseFlagValue(argv, "--cpu-prof-dir")),
     entry: resolveEntry(parseFlagValue(argv, "--entry"), DEFAULT_ENTRY),
     json: hasFlag(argv, "--json"),
     output: resolveOutputPath(parseFlagValue(argv, "--output")),
+    pluginCount: parseBoundedNonNegativeInt(
+      parseFlagValue(argv, "--plugin-count"),
+      0,
+      "--plugin-count",
+      MAX_PLUGIN_COUNT,
+    ),
     runs: parseBoundedPositiveInt(parseFlagValue(argv, "--runs"), DEFAULT_RUNS, "--runs", MAX_RUNS),
     timeoutMs: parseBoundedPositiveInt(
       parseFlagValue(argv, "--timeout-ms"),
@@ -170,6 +190,7 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       "--timeout-ms",
       10 * 60_000,
     ),
+    toolEvents: hasFlag(argv, "--tool-events"),
     warmup: parseBoundedNonNegativeInt(
       parseFlagValue(argv, "--warmup"),
       DEFAULT_WARMUP,
@@ -188,11 +209,14 @@ Usage:
 
 Options:
   --concurrency <n>  Concurrent synthetic streaming turns (default: ${DEFAULT_CONCURRENCY})
+  --cpu-prof-dir <p> Write Gateway V8 CPU profiles to this directory
   --runs <n>         Measured gateway runs (default: ${DEFAULT_RUNS})
   --warmup <n>       Warmup gateway runs (default: ${DEFAULT_WARMUP})
   --cadence-ms <ms>  Probe cadence (default: ${DEFAULT_CADENCE_MS})
   --timeout-ms <ms>  Per-run cap, excluding probe warmup (default: ${DEFAULT_TIMEOUT_MS})
   --entry <path>     Gateway CLI entry file (default: ${DEFAULT_ENTRY})
+  --plugin-count <n> Configure synthetic plugins through plugins.load.paths (default: 0)
+  --tool-events      Make every synthetic turn execute a tool before replying
   --output <path>    Write machine-readable JSON to a file
   --json             Emit machine-readable JSON
   --help, -h         Show this text
@@ -219,6 +243,51 @@ function summarizeNumbers(values: readonly number[]): MetricSummary | null {
     p95: percentile(sorted, 95),
     p99: percentile(sorted, 99),
   };
+}
+
+function summarizePluginMetadataScans(events: readonly DiagnosticsTimelineSpan[]) {
+  const durations = events.flatMap((event) =>
+    event.name === "plugins.metadata.scan" &&
+    typeof event.durationMs === "number" &&
+    Number.isFinite(event.durationMs)
+      ? [event.durationMs]
+      : [],
+  );
+  return {
+    count: durations.length,
+    durationMs: summarizeNumbers(durations),
+    totalDurationMs: durations.reduce((sum, durationMs) => sum + durationMs, 0),
+  };
+}
+
+function readDiagnosticsTimelineSpans(timelinePath: string): DiagnosticsTimelineSpan[] {
+  try {
+    return readFileSync(timelinePath, "utf8")
+      .split(/\r?\n/u)
+      .filter(Boolean)
+      .flatMap((line) => {
+        try {
+          const event = JSON.parse(line) as {
+            durationMs?: unknown;
+            name?: unknown;
+            type?: unknown;
+          };
+          if (event.type !== "span.end" || typeof event.name !== "string") {
+            return [];
+          }
+          return [
+            {
+              name: event.name,
+              ...(typeof event.durationMs === "number" ? { durationMs: event.durationMs } : {}),
+            },
+          ];
+        } catch {
+          return [];
+        }
+      });
+  } catch {
+    return [];
+  }
 }
 
 function remainingMs(deadlineAt: number): number {
@@ -400,7 +469,12 @@ async function waitForGatewayDispatchReady(
   throw new Error("gateway did not finish dispatch-ready sidecars");
 }
 
-function buildConfig(root: string, mockPort: number, concurrency: number): string {
+function buildConfig(
+  root: string,
+  mockPort: number,
+  concurrency: number,
+  pluginCount: number,
+): string {
   const controlUiRoot = path.join(root, "control-ui");
   mkdirSync(controlUiRoot, { recursive: true });
   copyFileSync(
@@ -419,7 +493,9 @@ function buildConfig(root: string, mockPort: number, concurrency: number): strin
     ...(agents.defaults as Record<string, unknown>),
     maxConcurrent: concurrency,
   };
-  return writeGatewayBenchConfig(root, config, {});
+  const pluginFixtures =
+    pluginCount > 0 ? writePluginFixtures(root, { count: pluginCount }) : undefined;
+  return writeGatewayBenchConfig(root, config, { pluginFixtures });
 }
 
 async function connectGateway(port: number, deadlineAt: number) {
@@ -471,6 +547,7 @@ async function connectGateway(port: number, deadlineAt: number) {
     scopes: ["operator.read", "operator.write", "operator.admin"],
     caps: [],
   });
+  await requestRpc("sessions.subscribe", {});
   return {
     close: client.close,
     request: requestRpc,
@@ -480,11 +557,18 @@ async function connectGateway(port: number, deadlineAt: number) {
   };
 }
 
-async function runTurn(rpc: GatewayRpc, index: number, deadlineAt: number): Promise<void> {
+async function runTurn(
+  rpc: GatewayRpc,
+  index: number,
+  deadlineAt: number,
+  toolEvents = false,
+): Promise<void> {
   const requestedRunId = randomUUID();
   const started = await rpc<{ runId?: string; status?: string }>("agent", {
     sessionKey: `agent:main:gateway-concurrency-${index + 1}`,
-    message: `Reply with benchmark stream ${index + 1}.`,
+    message: toolEvents
+      ? `OPENCLAW_E2E_DRAFTPROOF benchmark tool stream ${index + 1}.`
+      : `Reply with benchmark stream ${index + 1}.`,
     deliver: false,
     idempotencyKey: requestedRunId,
   });
@@ -630,7 +714,8 @@ async function warmGatewayProbes(params: {
         sample.sessionsList.latencyMs,
         sample.controlUi.latencyMs,
       ) <= targetMs;
-    if (healthy && fast) {
+    const eventLoopSettled = sample.readyz.degraded !== true;
+    if (healthy && fast && eventLoopSettled) {
       return { durationMs: performance.now() - startedAt, samples };
     }
     await delay(
@@ -650,10 +735,14 @@ async function runGatewaySample(options: {
   concurrency: number;
   deadlineAt: number;
   entry: string;
+  cpuProfDir?: string;
+  pluginCount: number;
+  toolEvents: boolean;
 }): Promise<BenchmarkRun> {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-gateway-concurrency-"));
   const [port, mockPort] = await Promise.all([getFreePort(), getFreePort()]);
   const runStartedAt = performance.now();
+  const timelinePath = path.join(root, "diagnostics-timeline.jsonl");
   let gateway: ChildProcessWithoutNullStreams | undefined;
   let mockProvider: ChildProcessWithoutNullStreams | undefined;
   let client: Awaited<ReturnType<typeof connectGateway>> | undefined;
@@ -661,7 +750,7 @@ async function runGatewaySample(options: {
   let mockOutput = { readOutput: () => "", readStderrTail: () => "" };
 
   try {
-    const configPath = buildConfig(root, mockPort, options.concurrency);
+    const configPath = buildConfig(root, mockPort, options.concurrency, options.pluginCount);
     mockProvider = spawn(process.execPath, ["scripts/e2e/mock-openai-server.mjs"], {
       cwd: process.cwd(),
       detached: process.platform !== "win32",
@@ -676,16 +765,30 @@ async function runGatewaySample(options: {
     mockOutput = captureChildOutput(mockProvider);
     await waitForMockServer(mockPort, options.deadlineAt);
 
-    gateway = spawn(process.execPath, buildGatewayBenchChildArgs(options.entry, port), {
-      cwd: process.cwd(),
-      detached: process.platform !== "win32",
-      env: {
-        ...createGatewayBenchEnv(root, configPath, {
-          caseEnv: { OPENCLAW_SKIP_CHANNELS: "1" },
-        }),
-        OPENAI_API_KEY: "gateway-concurrency-benchmark",
+    if (options.cpuProfDir) {
+      mkdirSync(options.cpuProfDir, { recursive: true });
+    }
+    const gatewayArgs = buildGatewayBenchChildArgs(options.entry, port);
+    gateway = spawn(
+      process.execPath,
+      options.cpuProfDir
+        ? ["--cpu-prof", `--cpu-prof-dir=${options.cpuProfDir}`, ...gatewayArgs]
+        : gatewayArgs,
+      {
+        cwd: process.cwd(),
+        detached: process.platform !== "win32",
+        env: {
+          ...createGatewayBenchEnv(root, configPath, {
+            caseEnv: {
+              OPENCLAW_DIAGNOSTICS: "timeline",
+              OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath,
+              OPENCLAW_SKIP_CHANNELS: "1",
+            },
+          }),
+          OPENAI_API_KEY: "gateway-concurrency-benchmark",
+        },
       },
-    });
+    );
     gatewayOutput = captureChildOutput(gateway);
     const ready = await waitForInitialProbe({
       deadlineAt: options.deadlineAt,
@@ -717,6 +820,8 @@ async function runGatewaySample(options: {
     });
     const loadDeadlineAt = options.deadlineAt + probeWarmup.durationMs;
     client.setDeadlineAt(loadDeadlineAt);
+    // The benchmark compares runtime event work, so discard startup and lazy-import spans.
+    writeFileSync(timelinePath, "");
 
     const controlUi: ControlUiProbe[] = [];
     const readyz: ReadyProbe[] = [];
@@ -725,7 +830,7 @@ async function runGatewaySample(options: {
     const turnsStartedAt = performance.now();
     const turns = Promise.all(
       Array.from({ length: options.concurrency }, (_, index) =>
-        runTurn(rpc, index, loadDeadlineAt),
+        runTurn(rpc, index, loadDeadlineAt, options.toolEvents),
       ),
     ).finally(() => {
       turnsDone = true;
@@ -760,6 +865,7 @@ async function runGatewaySample(options: {
       controlUi,
       durationMs: performance.now() - runStartedAt,
       probeWarmup,
+      pluginMetadataScans: summarizePluginMetadataScans(readDiagnosticsTimelineSpans(timelinePath)),
       readyz,
       sessionsList,
       turnCount: options.concurrency,
@@ -797,6 +903,11 @@ function summarizeRuns(runs: readonly BenchmarkRun[]) {
     ),
     eventLoopUtilization: summarizeNumbers(
       readyz.flatMap((sample) => (sample.utilization == null ? [] : [sample.utilization])),
+    ),
+    pluginMetadataScanCount: runs.reduce((sum, run) => sum + run.pluginMetadataScans.count, 0),
+    pluginMetadataScanTotalDurationMs: runs.reduce(
+      (sum, run) => sum + run.pluginMetadataScans.totalDurationMs,
+      0,
     ),
     readyzLatencyMs: summarizeNumbers(readyz.map((sample) => sample.latencyMs)),
     readyzFailedSamples: readyz.filter((sample) => !sample.ok).length,
@@ -854,8 +965,10 @@ async function main(): Promise<void> {
     entry: options.entry,
     generatedAt: new Date().toISOString(),
     mode: "mock-streaming-agent",
+    pluginCount: options.pluginCount,
     runs,
     summary: summarizeRuns(runs),
+    toolEvents: options.toolEvents,
   };
   if (options.output) {
     mkdirSync(path.dirname(options.output), { recursive: true });
@@ -874,6 +987,7 @@ export const testing = {
   runBenchmarkSamples,
   runTurn,
   sampleGateway,
+  summarizePluginMetadataScans,
   summarizeNumbers,
   summarizeRuns,
   tailLines,
