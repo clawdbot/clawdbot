@@ -31,7 +31,7 @@ import type {
   WorkboardKeyedStore,
 } from "./persistence-types.js";
 const WORKBOARD_DB_RELATIVE_PATH = ["plugins", "workboard", "workboard.sqlite"] as const;
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 const WORKBOARD_SQLITE_BUSY_TIMEOUT_MS = 5000;
 const WORKBOARD_SQLITE_DIR_MODE = 0o700;
 const WORKBOARD_SQLITE_FILE_MODE = 0o600;
@@ -229,6 +229,7 @@ const WORKBOARD_SCHEMA_SQL = `
       lifecycle_status_source_updated_at INTEGER,
       failure_count INTEGER
       ,reconciliation_triage_json TEXT
+      ,reconciliation_objective_evidence_json TEXT
     ) STRICT;
     CREATE INDEX IF NOT EXISTS workboard_cards_board_status_idx
       ON workboard_cards(board_id, status, position);
@@ -407,6 +408,12 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
     "workboard_cards",
     "lifecycle_status_source_updated_at",
     "lifecycle_status_source_updated_at INTEGER",
+  );
+  ensureColumn(
+    db,
+    "workboard_cards",
+    "reconciliation_objective_evidence_json",
+    "reconciliation_objective_evidence_json TEXT",
   );
   ensureColumn(
     db,
@@ -944,6 +951,9 @@ function readMetadata(
   const reconciliationTriage = parseJson(row.reconciliation_triage_json) as
     | WorkboardMetadata["reconciliationTriage"]
     | undefined;
+  const reconciliationObjectiveEvidence = parseJson(row.reconciliation_objective_evidence_json) as
+    | WorkboardMetadata["reconciliationObjectiveEvidence"]
+    | undefined;
   const lifecycleStatusSourceUpdatedAt = numberValue(row, "lifecycle_status_source_updated_at");
   return optional({
     ...(attempts.length > 0 ? { attempts } : {}),
@@ -976,6 +986,7 @@ function readMetadata(
       : {}),
     ...(stale ? { stale } : {}),
     ...(reconciliationTriage ? { reconciliationTriage } : {}),
+    ...(reconciliationObjectiveEvidence ? { reconciliationObjectiveEvidence } : {}),
     ...(lifecycleStatusSourceUpdatedAt !== undefined ? { lifecycleStatusSourceUpdatedAt } : {}),
     ...(numberValue(row, "failure_count") !== undefined
       ? { failureCount: numberValue(row, "failure_count") }
@@ -1056,14 +1067,16 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
         execution_id, execution_kind, execution_engine, execution_mode, execution_status,
         execution_model, execution_session_key, execution_run_id, execution_started_at,
         execution_updated_at, automation_json, claim_json, template_id, archived_at, stale_json,
-        lifecycle_status_source_updated_at, failure_count, reconciliation_triage_json
+        lifecycle_status_source_updated_at, failure_count, reconciliation_triage_json,
+        reconciliation_objective_evidence_json
       ) VALUES (
         @id, @board_id, @title, @notes, @status, @priority, @agent_id, @session_key, @run_id,
         @task_id, @source_url, @position, @created_at, @updated_at, @started_at, @completed_at,
         @execution_id, @execution_kind, @execution_engine, @execution_mode, @execution_status,
         @execution_model, @execution_session_key, @execution_run_id, @execution_started_at,
         @execution_updated_at, @automation_json, @claim_json, @template_id, @archived_at,
-        @stale_json, @lifecycle_status_source_updated_at, @failure_count, @reconciliation_triage_json
+        @stale_json, @lifecycle_status_source_updated_at, @failure_count, @reconciliation_triage_json,
+        @reconciliation_objective_evidence_json
       )
       ON CONFLICT(id) DO UPDATE SET
         board_id = excluded.board_id,
@@ -1099,6 +1112,7 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
         lifecycle_status_source_updated_at = excluded.lifecycle_status_source_updated_at,
         failure_count = excluded.failure_count
         ,reconciliation_triage_json = excluded.reconciliation_triage_json
+        ,reconciliation_objective_evidence_json = excluded.reconciliation_objective_evidence_json
     `,
   ).run({
     id: card.id,
@@ -1135,6 +1149,7 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
     lifecycle_status_source_updated_at: bindNull(metadata?.lifecycleStatusSourceUpdatedAt),
     failure_count: bindNull(metadata?.failureCount),
     reconciliation_triage_json: jsonValue(metadata?.reconciliationTriage),
+    reconciliation_objective_evidence_json: jsonValue(metadata?.reconciliationObjectiveEvidence),
   });
 
   insertChildren(db, "workboard_card_labels", card.id, card.labels, (label, ordinal) => {

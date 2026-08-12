@@ -6,6 +6,7 @@ import type {
   WorkboardExternalExecutionLink,
   WorkboardReconciliationApplyResult,
   WorkboardReconciliationObservation,
+  WorkboardReconciliationObjectiveEvidence,
   WorkboardReconciliationSourceObservation,
   WorkboardReconciliationSourceObservationResult,
   WorkboardLink,
@@ -228,6 +229,32 @@ function rawSourceObservationEvidence(evidence: WorkboardLink) {
   };
 }
 
+function mergeObjectiveEvidence(
+  existing: WorkboardCard,
+  incoming: WorkboardReconciliationObjectiveEvidence | undefined,
+): WorkboardReconciliationObjectiveEvidence | undefined {
+  if (!incoming) return existing.metadata?.reconciliationObjectiveEvidence;
+  const current = existing.metadata?.reconciliationObjectiveEvidence;
+  if (
+    current &&
+    (current.projectCanonicalId !== incoming.projectCanonicalId ||
+      current.branch !== incoming.branch)
+  ) {
+    throw new Error("reconciliation objective evidence does not match card.");
+  }
+  if (!current) return incoming;
+  return {
+    projectCanonicalId: current.projectCanonicalId,
+    ...(current.branch === undefined ? {} : { branch: current.branch }),
+    trustedEvidence: [...current.trustedEvidence, ...incoming.trustedEvidence].filter(
+      (entry, index, entries) =>
+        entries.findIndex(
+          (other) => other.reference === entry.reference && other.sha256 === entry.sha256,
+        ) === index,
+    ),
+  };
+}
+
 // Capability layers split review boundaries only; the core still owns persistence and mutation order.
 export class WorkboardStore extends WorkboardNotificationStore {
   /**
@@ -274,6 +301,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
               : card.sourceUrl === link.sourceUrl;
           });
       if (existing) {
+        const objectiveEvidence = mergeObjectiveEvidence(existing, observation.objectiveEvidence);
         if (
           existing.metadata?.automation?.tenant !== undefined &&
           existing.metadata.automation.tenant !== link.tenant
@@ -289,7 +317,19 @@ export class WorkboardStore extends WorkboardNotificationStore {
           return reconciliationResult(existing, "conflict", link);
         }
         if (RECONCILIATION_PROTECTED_STATUSES.has(existing.status)) {
-          return reconciliationResult(existing, "protected", link);
+          if (!observation.objectiveEvidence)
+            return reconciliationResult(existing, "protected", link);
+          const protectedCard = await this.updateCard(
+            existing.id,
+            {
+              metadata: {
+                ...existing.metadata,
+                reconciliationObjectiveEvidence: objectiveEvidence,
+              },
+            },
+            { allowReconciliationObjectiveEvidence: true },
+          );
+          return reconciliationResult(protectedCard, "protected", link);
         }
         const latestAssociationSourceUpdatedAt = latestExternalSourceUpdatedAt(existing);
         if (
@@ -305,9 +345,12 @@ export class WorkboardStore extends WorkboardNotificationStore {
                 ...existing.metadata,
                 links: appendExternalLink(existing, link),
                 ...(observation.triage ? { reconciliationTriage: observation.triage } : {}),
+                ...(objectiveEvidence
+                  ? { reconciliationObjectiveEvidence: objectiveEvidence }
+                  : {}),
               },
             },
-            { allowReconciliationTriage: true },
+            { allowReconciliationTriage: true, allowReconciliationObjectiveEvidence: true },
           );
           return reconciliationResult(associated, "stale", reconciliationLinkFor(associated, link));
         }
@@ -327,9 +370,10 @@ export class WorkboardStore extends WorkboardNotificationStore {
               lifecycleStatusSourceUpdatedAt: link.sourceUpdatedAt,
               links: appendExternalLink(existing, link),
               ...(observation.triage ? { reconciliationTriage: observation.triage } : {}),
+              ...(objectiveEvidence ? { reconciliationObjectiveEvidence: objectiveEvidence } : {}),
             },
           },
-          { allowReconciliationTriage: true },
+          { allowReconciliationTriage: true, allowReconciliationObjectiveEvidence: true },
         );
         return reconciliationResult(updated, "applied", reconciliationLinkFor(updated, link));
       }
@@ -366,6 +410,9 @@ export class WorkboardStore extends WorkboardNotificationStore {
               },
             ],
             ...(observation.triage ? { reconciliationTriage: observation.triage } : {}),
+            ...(observation.objectiveEvidence
+              ? { reconciliationObjectiveEvidence: observation.objectiveEvidence }
+              : {}),
           },
         },
         undefined,
@@ -374,6 +421,9 @@ export class WorkboardStore extends WorkboardNotificationStore {
             ? {}
             : { reconciliationObjectiveKey: observation.objectiveKey }),
           ...(observation.triage === undefined ? {} : { reconciliationTriage: observation.triage }),
+          ...(observation.objectiveEvidence === undefined
+            ? {}
+            : { reconciliationObjectiveEvidence: observation.objectiveEvidence }),
         },
       );
       return reconciliationResult(created, "applied", reconciliationLinkFor(created, link));

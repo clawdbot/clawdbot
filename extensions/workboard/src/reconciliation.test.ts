@@ -300,6 +300,152 @@ describe("WorkboardReconciler", () => {
     }
   });
 
+  it("round-trips reconciliation-owned objective evidence while generic metadata cannot forge it", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "workboard-objective-evidence-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const objectiveEvidence = {
+      projectCanonicalId: `git:sha256:${"a".repeat(64)}`,
+      branch: "release/2026.08",
+      trustedEvidence: [{ reference: "git://openclaw/deploy/manifest", sha256: "b".repeat(64) }],
+    };
+    const moreEvidence = { reference: "codex://thread/deployproof", sha256: "c".repeat(64) };
+    const stores = createWorkboardSqliteStores({ dbPath });
+    let cardId = "";
+    try {
+      const store = new WorkboardStore(stores.cards, stores);
+      const reconciler = new WorkboardReconciler(store);
+      const created = await reconciler.apply({
+        sourceUrl: "https://example.test/runs/objective-evidence",
+        tenant: "acme",
+        objectiveKey: "deploy-api",
+        idempotencyKey: "objective-evidence-create",
+        sourceUpdatedAt: 100,
+        card: { title: "Deploy API" },
+        objectiveEvidence,
+      } as never);
+      cardId = created.card.id;
+      expect(created.card.metadata?.reconciliationObjectiveEvidence).toEqual(objectiveEvidence);
+
+      await store.update(cardId, {
+        status: "review",
+        metadata: {
+          reconciliationObjectiveEvidence: {
+            projectCanonicalId: `git:sha256:${"d".repeat(64)}`,
+            trustedEvidence: [],
+          },
+        },
+      });
+      expect((await store.get(cardId))?.metadata?.reconciliationObjectiveEvidence).toEqual(
+        objectiveEvidence,
+      );
+
+      const enriched = await reconciler.apply({
+        cardId,
+        sourceUrl: "https://example.test/runs/objective-evidence",
+        tenant: "acme",
+        objectiveKey: "deploy-api",
+        idempotencyKey: "objective-evidence-enriched",
+        sourceUpdatedAt: 101,
+        card: { title: "Deploy API" },
+        objectiveEvidence: { ...objectiveEvidence, trustedEvidence: [moreEvidence] },
+      } as never);
+      expect(enriched.card.status).toBe("review");
+      expect(enriched.card.metadata?.reconciliationObjectiveEvidence?.trustedEvidence).toEqual([
+        objectiveEvidence.trustedEvidence[0],
+        moreEvidence,
+      ]);
+      expect(
+        (await reconciler.list({ tenant: "acme" })).cards[0]?.metadata
+          ?.reconciliationObjectiveEvidence,
+      ).toEqual({
+        ...objectiveEvidence,
+        trustedEvidence: [objectiveEvidence.trustedEvidence[0], moreEvidence],
+      });
+      await expect(
+        reconciler.apply({
+          cardId,
+          sourceUrl: "https://example.test/runs/objective-evidence",
+          tenant: "acme",
+          objectiveKey: "deploy-api",
+          idempotencyKey: "objective-evidence-conflict",
+          sourceUpdatedAt: 102,
+          card: { title: "Deploy API" },
+          objectiveEvidence: {
+            projectCanonicalId: `git:sha256:${"e".repeat(64)}`,
+            branch: "release/2026.08",
+            trustedEvidence: [],
+          },
+        } as never),
+      ).rejects.toThrow("reconciliation objective evidence does not match card.");
+    } finally {
+      stores.close();
+    }
+
+    const reopened = createWorkboardSqliteStores({ dbPath });
+    try {
+      expect(
+        (await reopened.cards.lookup(cardId))?.card.metadata?.reconciliationObjectiveEvidence,
+      ).toEqual({
+        ...objectiveEvidence,
+        trustedEvidence: [objectiveEvidence.trustedEvidence[0], moreEvidence],
+      });
+    } finally {
+      reopened.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects invalid reconciliation objective evidence before mutation", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const reconciler = new WorkboardReconciler(store);
+    const generic = await store.create({
+      title: "Generic metadata cannot create objective evidence",
+      metadata: {
+        reconciliationObjectiveEvidence: {
+          projectCanonicalId: `git:sha256:${"f".repeat(64)}`,
+          trustedEvidence: [],
+        },
+      },
+    });
+    expect(generic.metadata?.reconciliationObjectiveEvidence).toBeUndefined();
+    const base = {
+      sourceUrl: "https://example.test/runs/objective-evidence-invalid",
+      tenant: "acme",
+      idempotencyKey: "objective-evidence-invalid",
+      sourceUpdatedAt: 100,
+      card: { title: "Must not mutate" },
+    };
+    for (const objectiveEvidence of [
+      { projectCanonicalId: "git:sha256:not-a-hash", trustedEvidence: [] },
+      {
+        projectCanonicalId: `git:sha256:${"a".repeat(64)}`,
+        branch: "bad\u0000branch",
+        trustedEvidence: [],
+      },
+      {
+        projectCanonicalId: `git:sha256:${"a".repeat(64)}`,
+        trustedEvidence: [{ reference: "https://example.test/raw", sha256: "b".repeat(64) }],
+      },
+      {
+        projectCanonicalId: `git:sha256:${"a".repeat(64)}`,
+        trustedEvidence: [{ reference: "git://openclaw/proof", sha256: "not-a-hash" }],
+      },
+    ]) {
+      await expect(reconciler.apply({ ...base, objectiveEvidence } as never)).rejects.toThrow();
+    }
+    expect(await store.list()).toHaveLength(1);
+    expect(() =>
+      projectReconciliationObservation({
+        ...base,
+        objectiveEvidence: {
+          projectCanonicalId: `git:sha256:${"a".repeat(64)}`,
+          trustedEvidence: [],
+          rawBody: "forbidden",
+        },
+      }),
+    ).toThrow("objectiveEvidence.rawBody is not allowed.");
+  });
+
   it("rejects unsafe reconciliation triage before mutation and ignores generic metadata injection", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const reconciler = new WorkboardReconciler(store);

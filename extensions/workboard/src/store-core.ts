@@ -6,6 +6,7 @@ import type {
   WorkboardLink,
   WorkboardMetadata,
   WorkboardReconciliationTriage,
+  WorkboardReconciliationObjectiveEvidence,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
 import type {
@@ -321,6 +322,7 @@ export class WorkboardCoreStore {
     options: {
       reconciliationObjectiveKey?: string;
       reconciliationTriage?: WorkboardReconciliationTriage;
+      reconciliationObjectiveEvidence?: WorkboardReconciliationObjectiveEvidence;
     } = {},
   ): Promise<WorkboardCard> {
     const now = Date.now();
@@ -398,6 +400,7 @@ export class WorkboardCoreStore {
         allowDependencyLinks: false,
         allowArchivedAt: false,
         allowReconciliationTriage: options.reconciliationTriage !== undefined,
+        allowReconciliationObjectiveEvidence: options.reconciliationObjectiveEvidence !== undefined,
       },
     );
     let syncedMetadata = trimMetadataToBudget(
@@ -410,6 +413,12 @@ export class WorkboardCoreStore {
           ...syncedMetadata.automation,
           objectiveKey: options.reconciliationObjectiveKey,
         },
+      });
+    }
+    if (options.reconciliationObjectiveEvidence) {
+      syncedMetadata = trimMetadataToBudget({
+        ...syncedMetadata,
+        reconciliationObjectiveEvidence: options.reconciliationObjectiveEvidence,
       });
     }
     const boardId = syncedMetadata.automation?.boardId ?? "default";
@@ -483,6 +492,7 @@ export class WorkboardCoreStore {
     options: {
       allowMetadataDependencyLinks?: boolean;
       allowReconciliationTriage?: boolean;
+      allowReconciliationObjectiveEvidence?: boolean;
       enforceStatusHolds?: boolean;
       preserveProofId?: string;
       updatedAt?: number;
@@ -545,6 +555,7 @@ export class WorkboardCoreStore {
     let metadata = normalizeMetadata(effectivePatch.metadata, existing.metadata, {
       allowDependencyLinks: options.allowMetadataDependencyLinks !== false,
       allowReconciliationTriage: options.allowReconciliationTriage === true,
+      allowReconciliationObjectiveEvidence: options.allowReconciliationObjectiveEvidence === true,
       preserveProofId: options.preserveProofId,
     });
     if (status !== existing.status && !hasFreshLifecycleStatusSource) {

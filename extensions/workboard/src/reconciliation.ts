@@ -5,8 +5,10 @@ import type {
   WorkboardExternalExecutionLink,
   WorkboardReconciliationApplyResult,
   WorkboardReconciliationObservation,
+  WorkboardReconciliationObjectiveEvidence,
   WorkboardReconciliationPage,
   WorkboardReconciliationTriage,
+  WorkboardReconciliationTriageEvidence,
   WorkboardReconciliationSourceObservation,
   WorkboardReconciliationSourceObservationResult,
   WorkboardStatus,
@@ -29,6 +31,8 @@ const MAX_TRIAGE_ENTRIES = 20;
 const MAX_TRIAGE_CARD_ID_LENGTH = 120;
 const MAX_TRIAGE_REFERENCE_LENGTH = 1024;
 const MAX_TRIAGE_BYTES = 16 * 1024;
+const MAX_PROJECT_CANONICAL_ID_LENGTH = 160;
+const MAX_BRANCH_LENGTH = 160;
 const DEFAULT_PAGE_SIZE = 50;
 const RECONCILIATION_PROTECTED_STATUSES = new Set<WorkboardStatus>(["blocked", "review", "done"]);
 
@@ -180,6 +184,7 @@ const OBSERVATION_FIELDS = new Set([
   "card",
   "link",
   "triage",
+  "objectiveEvidence",
 ]);
 const SOURCE_OBSERVATION_FIELDS = new Set([
   "cardId",
@@ -211,6 +216,7 @@ const CARD_FIELDS = new Set([
 const LINK_FIELDS = new Set(["title"]);
 const TRIAGE_FIELDS = new Set(["candidateCardIds", "evidence"]);
 const TRIAGE_EVIDENCE_FIELDS = new Set(["reference", "sha256"]);
+const OBJECTIVE_EVIDENCE_FIELDS = new Set(["projectCanonicalId", "branch", "trustedEvidence"]);
 
 function objectWithOnly(
   value: unknown,
@@ -290,6 +296,61 @@ function isSafeTriageReference(reference: string): boolean {
   }
 }
 
+function projectTrustedEvidence(value: unknown): WorkboardReconciliationTriageEvidence[] {
+  if (!Array.isArray(value) || value.length > MAX_TRIAGE_ENTRIES) {
+    throw new Error("trusted evidence supports at most 20 entries.");
+  }
+  const evidence = value.map((entry) => {
+    const input = objectWithOnly(entry, "trusted evidence", TRIAGE_EVIDENCE_FIELDS);
+    const reference = readBoundedString(
+      input.reference,
+      "trusted evidence reference",
+      MAX_TRIAGE_REFERENCE_LENGTH,
+    );
+    if (!isSafeTriageReference(reference))
+      throw new Error("trusted evidence reference is unsupported.");
+    if (typeof input.sha256 !== "string" || !/^[a-f0-9]{64}$/i.test(input.sha256)) {
+      throw new Error("trusted evidence sha256 must be 64 hexadecimal characters.");
+    }
+    return { reference, sha256: input.sha256.toLowerCase() };
+  });
+  return evidence.filter(
+    (entry, index) =>
+      evidence.findIndex(
+        (other) => other.reference === entry.reference && other.sha256 === entry.sha256,
+      ) === index,
+  );
+}
+
+function projectReconciliationObjectiveEvidence(
+  value: unknown,
+): WorkboardReconciliationObjectiveEvidence {
+  const input = objectWithOnly(value, "objectiveEvidence", OBJECTIVE_EVIDENCE_FIELDS);
+  const projectCanonicalId = readBoundedString(
+    input.projectCanonicalId,
+    "projectCanonicalId",
+    MAX_PROJECT_CANONICAL_ID_LENGTH,
+  );
+  if (!/^git:sha256:[a-f0-9]{64}$/i.test(projectCanonicalId)) {
+    throw new Error("projectCanonicalId must be a git:sha256 opaque identity.");
+  }
+  const branch =
+    input.branch === undefined
+      ? undefined
+      : readBoundedUtf8String(input.branch, "branch", MAX_BRANCH_LENGTH);
+  if (branch !== undefined && /\p{C}/u.test(branch))
+    throw new Error("branch must not contain control characters.");
+  const objectiveEvidence = {
+    projectCanonicalId: projectCanonicalId.toLowerCase(),
+    ...(branch === undefined ? {} : { branch }),
+    trustedEvidence: projectTrustedEvidence(input.trustedEvidence),
+  };
+  if (Buffer.byteLength(JSON.stringify(objectiveEvidence), "utf8") > MAX_TRIAGE_BYTES) {
+    throw new Error("reconciliation objective evidence must be 16384 bytes or fewer.");
+  }
+  return objectiveEvidence;
+}
+
 export function projectReconciliationObservation(
   value: unknown,
 ): WorkboardReconciliationObservation {
@@ -328,6 +389,9 @@ export function projectReconciliationObservation(
     ...(card === undefined ? {} : { card: card as WorkboardReconciliationObservation["card"] }),
     ...(link === undefined ? {} : { link: link as WorkboardReconciliationObservation["link"] }),
     ...(input.triage === undefined ? {} : { triage: projectReconciliationTriage(input.triage) }),
+    ...(input.objectiveEvidence === undefined
+      ? {}
+      : { objectiveEvidence: projectReconciliationObjectiveEvidence(input.objectiveEvidence) }),
   };
 }
 
