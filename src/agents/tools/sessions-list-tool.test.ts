@@ -66,6 +66,28 @@ function getSessionsListDetails(result: { details?: unknown }): SessionsListDeta
   return result.details as SessionsListDetails;
 }
 
+function sessionRow(key: string, classification = "dashboard", agentId = "main") {
+  return { key, agentId, kind: "direct", classification };
+}
+
+function mockSessionPages(pages: Array<Array<Record<string, unknown>>>) {
+  let pageIndex = 0;
+  let nextOffset = 0;
+  mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
+    const request = opts as { params?: { limit?: number; offset?: number } };
+    expect(request.params).toEqual(expect.objectContaining({ limit: 200, offset: nextOffset }));
+    const sessions = pages[pageIndex] ?? [];
+    pageIndex += 1;
+    nextOffset += sessions.length;
+    return {
+      path: "/tmp/sessions.json",
+      sessions,
+      hasMore: pageIndex < pages.length,
+      nextOffset: pageIndex < pages.length ? nextOffset : null,
+    };
+  });
+}
+
 describe("sessions-list-tool", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -153,6 +175,68 @@ describe("sessions-list-tool", () => {
         node: ["agent:main:node-device"],
       },
     });
+  });
+
+  it.each([
+    {
+      name: "hidden and global rows",
+      params: { limit: 1 },
+      pages: [
+        [
+          { key: "global", kind: "global", classification: "global", agentId: "main" },
+          sessionRow("agent:other:dashboard:hidden", "dashboard", "other"),
+        ],
+        [sessionRow("agent:main:main", "main")],
+      ],
+    },
+    {
+      name: "non-matching kinds",
+      params: { kinds: ["main"], limit: 1 },
+      pages: [[sessionRow("agent:main:dashboard:other")], [sessionRow("agent:main:main", "main")]],
+    },
+  ])("fills the requested output limit past $name", async ({ params, pages }) => {
+    mockSessionPages(pages);
+
+    const result = await createSessionsListTool({ config: VALID_CONFIG }).execute(
+      "paged-list",
+      params,
+    );
+
+    expect(getSessionsListDetails(result).sessions?.map((session) => session.key)).toEqual([
+      "agent:main:main",
+    ]);
+    expect(mocks.gatewayCall).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails visibly when Gateway pagination stalls", async () => {
+    mocks.gatewayCall.mockResolvedValue({
+      path: "/tmp/sessions.json",
+      sessions: [{ key: "global", kind: "global", classification: "global" }],
+      hasMore: true,
+      nextOffset: 0,
+    });
+
+    await expect(
+      createSessionsListTool({ config: VALID_CONFIG }).execute("stalled-list", { limit: 1 }),
+    ).rejects.toThrow("sessions.list returned invalid pagination");
+  });
+
+  it("deduplicates rows when a changing Gateway page overlaps the prior page", async () => {
+    const first = sessionRow("agent:main:dashboard:first");
+    const overlap = sessionRow("agent:main:dashboard:overlap");
+    const finalRow = { ...first, key: "agent:main:dashboard:final" };
+    mockSessionPages([
+      [first, overlap],
+      [overlap, finalRow],
+    ]);
+
+    const result = await createSessionsListTool({ config: VALID_CONFIG }).execute(
+      "overlapping-list",
+      { limit: 3 },
+    );
+    const keys = getSessionsListDetails(result).sessions?.map((session) => session.key) ?? [];
+
+    expect(keys).toEqual([first.key, overlap.key, finalRow.key]);
   });
 
   it("adds nonzero state versions with one batch lookup", async () => {

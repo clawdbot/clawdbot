@@ -190,50 +190,7 @@ export function createSessionsListTool(opts?: {
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
       const a2aPolicy = createAgentToAgentPolicy(cfg);
       const hydrateTranscriptFieldsAfterFiltering = includeDerivedTitles || includeLastMessage;
-
-      const list = await gatewayCall<{ sessions: Array<GatewaySessionListRow>; path: string }>({
-        method: "sessions.list",
-        params: {
-          limit,
-          activeMinutes,
-          label,
-          agentId,
-          search,
-          archived,
-          includeDerivedTitles: false,
-          includeLastMessage: false,
-          includeGlobal: !restrictToSpawned,
-          includeUnknown: !restrictToSpawned,
-          spawnedBy: restrictToSpawned ? effectiveRequesterKey : undefined,
-        },
-      });
-
-      // Cross-session tool output is copied into durable transcripts, so exposing
-      // incognito rows here would defeat their process-only lifetime.
-      const sessions = (Array.isArray(list?.sessions) ? list.sessions : []).filter(
-        (entry) => !entry || typeof entry !== "object" || !isIncognitoSessionKey(entry.key),
-      );
       const defaultAgentId = resolveDefaultAgentId(cfg);
-      const stateVersions = getSessionStateVersions(
-        sessions.flatMap((entry) => {
-          if (!entry || typeof entry !== "object" || typeof entry.key !== "string") {
-            return [];
-          }
-          let stateAgentId =
-            typeof entry.agentId === "string" && entry.agentId ? entry.agentId : undefined;
-          if (!stateAgentId) {
-            try {
-              stateAgentId = resolveAgentIdFromSessionKey(entry.key, defaultAgentId);
-            } catch {
-              // Malformed rows remain subject to the fail-closed visibility checker below,
-              // but cannot participate in agent state-version lookup.
-              return [];
-            }
-          }
-          return [{ sessionKey: entry.key, agentId: stateAgentId }];
-        }),
-      );
-      const storePath = typeof list?.path === "string" ? list.path : undefined;
       const visibilityGuard = createSessionVisibilityRowChecker({
         action: "list",
         defaultAgentId,
@@ -241,6 +198,107 @@ export function createSessionsListTool(opts?: {
         visibility,
         a2aPolicy,
       });
+      const sessions: GatewaySessionListRow[] = [];
+      const seenKeys = new Set<string>();
+      const outputLimit = limit ?? 100;
+      let offset = 0;
+      let storePath: string | undefined;
+      for (let pageIndex = 0; sessions.length < outputLimit; pageIndex += 1) {
+        const page = await gatewayCall<{
+          sessions?: GatewaySessionListRow[];
+          path?: string;
+          hasMore?: boolean;
+          nextOffset?: number | null;
+        }>({
+          method: "sessions.list",
+          params: {
+            limit: 200,
+            offset,
+            activeMinutes,
+            label,
+            agentId,
+            search,
+            archived,
+            includeDerivedTitles: false,
+            includeLastMessage: false,
+            includeGlobal: !restrictToSpawned,
+            includeUnknown: !restrictToSpawned,
+            spawnedBy: restrictToSpawned ? effectiveRequesterKey : undefined,
+          },
+        });
+        storePath ??= typeof page?.path === "string" ? page.path : undefined;
+        const pageSessions = Array.isArray(page?.sessions) ? page.sessions : [];
+        for (const entry of pageSessions) {
+          const key =
+            entry && typeof entry === "object" && typeof entry.key === "string" ? entry.key : "";
+          if (!key || seenKeys.has(key)) {
+            continue;
+          }
+          seenKeys.add(key);
+          // Cross-session tool output is copied into durable transcripts, so exposing
+          // incognito rows here would defeat their process-only lifetime.
+          if (isIncognitoSessionKey(key)) {
+            continue;
+          }
+          const access = visibilityGuard.check({
+            key,
+            agentId: typeof entry.agentId === "string" ? entry.agentId : undefined,
+            ownerSessionKey:
+              typeof (entry as { ownerSessionKey?: unknown }).ownerSessionKey === "string"
+                ? (entry as { ownerSessionKey?: string }).ownerSessionKey
+                : undefined,
+            spawnedBy: typeof entry.spawnedBy === "string" ? entry.spawnedBy : undefined,
+            parentSessionKey:
+              typeof entry.parentSessionKey === "string" ? entry.parentSessionKey : undefined,
+          });
+          const kind = classifySessionListKind(entry);
+          if (
+            access.allowed &&
+            key !== "unknown" &&
+            (key !== "global" || alias === "global") &&
+            (!allowedKinds || allowedKinds.has(kind))
+          ) {
+            sessions.push(entry);
+            if (sessions.length === outputLimit) {
+              break;
+            }
+          }
+        }
+        if (sessions.length === outputLimit || page?.hasMore !== true) {
+          break;
+        }
+        const nextOffset = page.nextOffset;
+        if (
+          typeof nextOffset !== "number" ||
+          !Number.isSafeInteger(nextOffset) ||
+          nextOffset !== offset + pageSessions.length
+        ) {
+          throw new Error(
+            `sessions.list returned invalid pagination metadata (offset=${offset}, nextOffset=${String(nextOffset)})`,
+          );
+        }
+        // Bound unstable Gateway snapshots by both request count and scanned rows.
+        if (pageIndex >= 49 || nextOffset > 10_000) {
+          throw new Error("sessions.list exceeded the 50-page/10,000-row pagination scan limit");
+        }
+        offset = nextOffset;
+      }
+
+      const stateVersions = getSessionStateVersions(
+        sessions.flatMap((entry) => {
+          const key = entry.key;
+          let stateAgentId =
+            typeof entry.agentId === "string" && entry.agentId ? entry.agentId : undefined;
+          if (!stateAgentId) {
+            try {
+              stateAgentId = resolveAgentIdFromSessionKey(key, defaultAgentId);
+            } catch {
+              return [];
+            }
+          }
+          return [{ sessionKey: key, agentId: stateAgentId }];
+        }),
+      );
       const rows: SessionListRow[] = [];
       const historyTargets: Array<{ row: SessionListRow; resolvedKey: string }> = [];
       const titleTargets: Array<{
@@ -253,42 +311,8 @@ export function createSessionsListTool(opts?: {
       }> = [];
 
       for (const entry of sessions) {
-        if (!entry || typeof entry !== "object") {
-          continue;
-        }
-        const key = typeof entry.key === "string" ? entry.key : "";
-        if (!key) {
-          continue;
-        }
-        const access = visibilityGuard.check({
-          key,
-          agentId: typeof entry.agentId === "string" ? entry.agentId : undefined,
-          ownerSessionKey:
-            typeof (entry as { ownerSessionKey?: unknown }).ownerSessionKey === "string"
-              ? (entry as { ownerSessionKey?: string }).ownerSessionKey
-              : undefined,
-          spawnedBy: typeof entry.spawnedBy === "string" ? entry.spawnedBy : undefined,
-          parentSessionKey:
-            typeof entry.parentSessionKey === "string" ? entry.parentSessionKey : undefined,
-        });
-        if (!access.allowed) {
-          continue;
-        }
-
-        // Gateway listings include pseudo/global rows for UI callers. The tool only exposes real
-        // sessions and the explicit global session when the requester is already global.
-        if (key === "unknown") {
-          continue;
-        }
-        if (key === "global" && alias !== "global") {
-          continue;
-        }
-
+        const key = entry.key;
         const kind = classifySessionListKind(entry);
-        if (allowedKinds && !allowedKinds.has(kind)) {
-          continue;
-        }
-
         const displayKey = resolveDisplaySessionKey({
           key,
           alias,
