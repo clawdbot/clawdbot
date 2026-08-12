@@ -241,7 +241,9 @@ export async function safeRemoveAttachmentsDir(
         }
         sandboxFsBridge = sandbox.fsBridge;
       } else {
-        sandboxFsBridge = (options?.createIngress ?? createSandboxWorkspaceIngressFsBridge)(sandbox);
+        sandboxFsBridge = (options?.createIngress ?? createSandboxWorkspaceIngressFsBridge)(
+          sandbox,
+        );
       }
     } catch {
       return false;

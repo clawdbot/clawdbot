@@ -437,7 +437,8 @@ describe("spawnSubagentDirect filename validation", () => {
         await fs.promises.rm(toHostPath(filePath), { recursive: true, force: true });
       },
     };
-    const resolveSandboxContext = vi.fn(async ({ agentId }: { agentId?: string }) => {
+    const resolveSandboxContext = vi.fn(async (params: unknown) => {
+      const agentId = (params as { agentId?: string }).agentId;
       if (agentId === "worker") {
         return {
           backendId: "docker",
@@ -742,7 +743,9 @@ describe("spawnSubagentDirect filename validation", () => {
         expect(resolveSandboxContext).toHaveBeenCalledWith(
           expect.objectContaining({ agentId: "worker", workspaceDir: workerWorkspaceDir }),
         );
-        expect(resolvePath).toHaveBeenCalledWith({ filePath: workerWorkspaceDir });
+        expect(resolvePath).toHaveBeenCalledWith({
+          filePath: path.join(workerWorkspaceDir, ".openclaw", "attachments"),
+        });
         expect(fs.existsSync(workerWorkspaceDir)).toBe(true);
       } finally {
         fs.rmSync(workerWorkspaceDir, { recursive: true, force: true });
