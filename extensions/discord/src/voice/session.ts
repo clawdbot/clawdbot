@@ -83,7 +83,7 @@ export type VoiceRealtimeSession = {
   isBargeInEnabled: () => boolean;
 };
 
-export type VoiceRealtimeLifecycle =
+type VoiceRealtimeLifecycle =
   | { status: "inactive"; generation: number }
   | { status: "starting"; generation: number; instance: VoiceRealtimeSession }
   | { status: "active"; generation: number; instance: VoiceRealtimeSession }
