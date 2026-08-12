@@ -3913,14 +3913,16 @@ describe("matrix monitor handler draft streaming", () => {
       });
 
       const result = await deliver(payload, { kind: "final" });
+      await finish();
       if (redactEventMock.mock.calls.length > 0) {
         throw new Error(
           [
             "non-visible replacement redacted the visible draft",
             `draftSendOrder=${sendSingleTextMessageMatrixMock.mock.invocationCallOrder[0] ?? "none"}`,
-            `redactionOrder=${redactEventMock.mock.invocationCallOrder[0] ?? "none"}`,
+            `redactionOrders=${redactEventMock.mock.invocationCallOrder.join(",")}`,
             `replacementOrder=${deliverMatrixRepliesMock.mock.invocationCallOrder[0] ?? "none"}`,
             `replacementResult=${JSON.stringify(result)}`,
+            `postHandlerRedactionCount=${redactEventMock.mock.calls.length}`,
           ].join(" "),
         );
       }
@@ -3930,7 +3932,6 @@ describe("matrix monitor handler draft streaming", () => {
         visibleReplySent: true,
         content: "Visible preview",
       });
-      await finish();
       expect(redactEventMock).not.toHaveBeenCalled();
     },
   );
