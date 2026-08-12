@@ -19,7 +19,7 @@ advances a milestone.
 | 1a  | Naming: session copy revert                                | landed      | #120667                            |
 | 1b  | Naming: devices consolidation                              | landed      | #120689                            |
 | 1c  | Cleanup: node-pairing → device-pairing merge               | landed      | #120726                            |
-| 2   | `openclaw resume` + web Continue in terminal               | in progress | #120664                            |
+| 2   | `openclaw resume` + web Continue in terminal               | in progress | #120664, #122870                   |
 | 3   | `openclaw connect` one-paste onboarding + `/j/` join route | in progress | #120768, #122499                   |
 | 4   | Picker: grouping, placement, liveness, enrichment          | in progress | #120804, #122531, #122635, #122774 |
 | F   | Real-wire session boundary harness                         | landed      | #121212                            |
