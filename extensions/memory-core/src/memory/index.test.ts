@@ -17,14 +17,17 @@ import {
   openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
-import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import {
+  createManagerIndexFixture,
+  type ManagerIndexFixture,
+} from "./manager-index.test-support.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import type { MemoryIndexManager } from "./manager.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
 describe("memory index", () => {
-  const fixture = createManagerIndexFixture({
+  const fixture: ManagerIndexFixture = createManagerIndexFixture({
     getMemorySearchManager,
     closeAllMemorySearchManagers,
   });
@@ -34,8 +37,6 @@ describe("memory index", () => {
     getFreshManager,
     getFtsSessionManager,
     getPersistentManager,
-    requireManager,
-    resetManager: resetManagerForTest,
     seedSessionTranscript: seedMemoryIndexSessionTranscript,
     trackManager,
   } = fixture;

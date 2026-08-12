@@ -1,9 +1,6 @@
 // Memory Core tests cover manager provider lifecycle fallback behavior.
-import fs from "node:fs/promises";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
-import type { MemoryIndexManager } from "./manager.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -13,14 +10,7 @@ describe("memory index", () => {
     closeAllMemorySearchManagers,
   });
   const { provider: providerFixture } = fixture;
-  const {
-    createConfig: createCfg,
-    getFreshManager,
-    getPersistentManager,
-    requireManager,
-    resetManager: resetManagerForTest,
-    trackManager,
-  } = fixture;
+  const { createConfig: createCfg, getFreshManager, getPersistentManager } = fixture;
 
   it("does not activate fallback during search when index identity is already mismatched", async () => {
     const cfg = createCfg({

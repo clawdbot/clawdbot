@@ -2,8 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createManagerIndexFixture } from "./manager-index.test-support.js";
-import type { MemoryIndexManager } from "./manager.js";
+import {
+  createManagerIndexFixture,
+  type ManagerIndexFixtureConfig,
+} from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -18,8 +20,6 @@ describe("memory index", () => {
     getFreshManager,
     getFtsSessionManager,
     getPersistentManager,
-    requireManager,
-    resetManager: resetManagerForTest,
     seedSessionTranscript: seedMemoryIndexSessionTranscript,
     trackManager,
   } = fixture;
@@ -46,14 +46,16 @@ describe("memory index", () => {
   it.each([
     {
       name: "zero vector weight",
-      config: { hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 } },
+      config: {
+        hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
+      } satisfies ManagerIndexFixtureConfig,
     },
     {
       name: "minimum score exceeds text weight",
       config: {
         minScore: 0.35,
         hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
-      },
+      } satisfies ManagerIndexFixtureConfig,
     },
   ])("finds keyword matches via hybrid search when $name", async ({ config }) => {
     await expectHybridKeywordSearchFindsMemory(createCfg(config));

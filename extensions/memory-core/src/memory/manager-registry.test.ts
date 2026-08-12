@@ -1,5 +1,4 @@
 // Memory Core tests cover manager registry behavior.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
@@ -7,7 +6,6 @@ import {
   closeAllMemoryIndexManagers,
   closeMemoryIndexManagersForAgent,
   MemoryIndexManager as RuntimeMemoryIndexManager,
-  type MemoryIndexManager,
 } from "./manager.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");

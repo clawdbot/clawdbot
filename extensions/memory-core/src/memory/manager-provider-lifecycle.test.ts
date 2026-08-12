@@ -1,10 +1,8 @@
 // Memory Core tests cover manager provider lifecycle availability behavior.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
-import type { MemoryIndexManager } from "./manager.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -19,7 +17,6 @@ describe("memory index", () => {
     getFreshManager,
     getPersistentManager,
     requireManager,
-    resetManager: resetManagerForTest,
     trackManager,
   } = fixture;
 

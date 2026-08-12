@@ -1,10 +1,8 @@
 // Memory Core tests cover manager provider lifecycle lease behavior.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
-import type { MemoryIndexManager } from "./manager.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -14,14 +12,7 @@ describe("memory index", () => {
     closeAllMemorySearchManagers,
   });
   const { provider: providerFixture } = fixture;
-  const {
-    createConfig: createCfg,
-    getFreshManager,
-    getPersistentManager,
-    requireManager,
-    resetManager: resetManagerForTest,
-    trackManager,
-  } = fixture;
+  const { createConfig: createCfg, getFreshManager, getPersistentManager, trackManager } = fixture;
 
   it("keeps an active FTS-only generation stable while fallback activates", async () => {
     const manager = await getFreshManager(
