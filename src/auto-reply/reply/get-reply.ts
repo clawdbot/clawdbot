@@ -201,9 +201,11 @@ function canSelfServeLocalPaths(params: {
   provider: string;
   model: string;
   opts?: GetReplyOptions;
+  hasProviderToolPolicy: boolean;
 }): boolean {
   if (
     params.opts?.disableTools === true ||
+    params.hasProviderToolPolicy ||
     !resolveEffectiveToolFsRootExpansionAllowed({ cfg: params.cfg, agentId: params.agentId })
   ) {
     return false;
@@ -549,6 +551,11 @@ export async function getReplyFromConfig(
             provider,
             model,
             opts: optsWithSkillFilter,
+            // Channel, session, and inline model selection happen after media
+            // preprocessing. A provider-specific policy is therefore not final yet.
+            hasProviderToolPolicy:
+              Object.keys(cfg.tools?.byProvider ?? {}).length > 0 ||
+              Object.keys(agentEntry?.tools?.byProvider ?? {}).length > 0,
           }),
           ...(shouldApplyLockedAudio ? { processingMode: "audio-only" as const } : {}),
         }),

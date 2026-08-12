@@ -444,6 +444,27 @@ describe("getReplyFromConfig message hooks", () => {
     );
   });
 
+  it("withholds local document self-service before a provider tool-policy override", async () => {
+    await getReplyFromConfig(
+      buildCtx({
+        SessionKey: "agent:main:main",
+        OriginatingChannel: undefined,
+        Provider: "webchat",
+        ChatType: "direct",
+        SenderId: "operator",
+      }),
+      undefined,
+      withFastReplyConfig({
+        channels: { modelByChannel: { webchat: { "*": "anthropic/claude-sonnet" } } },
+        tools: { byProvider: { anthropic: { deny: ["read"] } } },
+      }),
+    );
+
+    expect(mocks.applyMediaUnderstanding.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ selfServeLocalPaths: false }),
+    );
+  });
+
   it("keeps unconfigured audio with a model-locked harness", async () => {
     const sessionKey = "agent:main:harness:claude-cli:locked-unconfigured-audio";
     const sessionEntry = {
