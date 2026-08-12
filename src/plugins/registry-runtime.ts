@@ -881,7 +881,12 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             ) => ReturnType<PluginRuntime["codexReconciliation"]["claim"]>;
           };
           return {
-            register: base.register,
+            register: (provider) => {
+              if (pluginId !== "codex") {
+                throw new Error("Only the Codex plugin may register the reconciliation provider");
+              }
+              base.register(provider);
+            },
             claim: () => base.claimFor?.(pluginId),
           } satisfies PluginRuntime["codexReconciliation"];
         }
