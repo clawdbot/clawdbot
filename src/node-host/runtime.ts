@@ -26,6 +26,7 @@ import { handleInvoke, type NodeInvokeRequestPayload, type SkillBinsProvider } f
 import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
 import { buildNodeEventParams } from "./node-event-params.js";
 import { createNodeInvokeProgressWriter } from "./node-invoke-progress.js";
+import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
   ensureNodeHostPluginRegistry,
   isRegisteredNodeHostCommandDuplex,
@@ -305,6 +306,7 @@ export async function prepareNodeHostRuntime(params?: {
     initialInventory,
     start({ client, onInventoryChanged, onManifestChanged }) {
       const mcpAbort = new AbortController();
+      const workerSupervisor = createNodeWorkerSupervisor({ env });
       const skillBins = new SkillBinsCache(client, pathEnv);
       const activeInvokes = new Map<string, ActiveNodeInvoke>();
       const pluginCommandContext: OpenClawPluginNodeHostCommandContext = {
@@ -448,6 +450,7 @@ export async function prepareNodeHostRuntime(params?: {
         async close() {
           this.cancelAll();
           stopAvailabilityWatch();
+          await workerSupervisor.close();
           mcpAbort.abort();
           const resolved = manager ?? (await startup.catch(() => undefined));
           await resolved?.close();

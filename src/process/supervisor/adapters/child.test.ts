@@ -224,6 +224,20 @@ describe("createChildAdapter", () => {
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
   });
 
+  it("keeps an explicitly attached child out of a detached process group", async () => {
+    const { child } = createStubChild();
+    spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
+
+    await createChildAdapter({
+      argv: ["node", "worker"],
+      attached: true,
+      input: "{}",
+    });
+
+    expect(firstSpawnWithFallbackParams().options?.detached).toBe(false);
+    expect(firstSpawnWithFallbackParams().fallbacks).toEqual([]);
+  });
+
   it("writes secret input to an extra descriptor and zeroes the transient buffer", async () => {
     const { child } = createStubChild();
     const secretStream = new PassThrough();

@@ -78,6 +78,8 @@ function isServiceManagedRuntime(): boolean {
 
 export async function createChildAdapter(params: {
   argv: string[];
+  /** Keep this child in the parent's process group even outside service-managed runtimes. */
+  attached?: boolean;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   windowsVerbatimArguments?: boolean;
@@ -100,7 +102,8 @@ export async function createChildAdapter(params: {
   // In service-managed mode keep children attached so systemd/launchd can
   // stop the full process tree reliably. Outside service mode preserve the
   // existing POSIX detached behavior.
-  const useDetached = process.platform !== "win32" && !isServiceManagedRuntime();
+  const useDetached =
+    params.attached !== true && process.platform !== "win32" && !isServiceManagedRuntime();
 
   const stdio: SpawnStdioEntry[] = [stdinMode === "inherit" ? "inherit" : "pipe", "pipe", "pipe"];
   addSecretInputStdio(stdio, params.secretInput);

@@ -941,6 +941,24 @@ export interface NodeHostConfig {
   version: number;
 }
 
+export interface NodeWorkerLaunches {
+  completed_at_ms: number | null;
+  created_at_ms: number;
+  environment_id: string;
+  error_text: string | null;
+  gateway_namespace: string;
+  launch_id: string;
+  owner_epoch: number;
+  pid: number | null;
+  placement_generation: number;
+  plan_hash: string;
+  result_json: string | null;
+  run_id: string;
+  session_id: string;
+  state: string;
+  updated_at_ms: number;
+}
+
 export interface OfficialExternalPluginCatalogSnapshots {
   body: string;
   checksum: string;
@@ -1717,6 +1735,7 @@ export interface DB {
   model_catalog_remote: ModelCatalogRemote;
   native_hook_relay_bridges: NativeHookRelayBridges;
   node_host_config: NodeHostConfig;
+  node_worker_launches: NodeWorkerLaunches;
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
   onboarding_recommendations: OnboardingRecommendations;
   operator_approval_execution_identities: OperatorApprovalExecutionIdentities;

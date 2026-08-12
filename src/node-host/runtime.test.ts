@@ -8,6 +8,7 @@ import { prepareNodeHostRuntime } from "./runtime.js";
 
 const mocks = vi.hoisted(() => ({
   closeMcp: vi.fn(async () => undefined),
+  closeWorkerSupervisor: vi.fn(async () => undefined),
   handleInvoke: vi.fn(async () => undefined),
   progressStartHeartbeats: vi.fn(),
   progressWrite: vi.fn(async () => undefined),
@@ -37,6 +38,10 @@ vi.mock("./node-invoke-progress.js", () => ({
     stop: vi.fn(),
     flush: vi.fn(async () => undefined),
   })),
+}));
+
+vi.mock("./node-worker-supervisor.js", () => ({
+  createNodeWorkerSupervisor: vi.fn(() => ({ close: mocks.closeWorkerSupervisor })),
 }));
 
 vi.mock("./plugin-node-host.js", () => ({
@@ -178,6 +183,7 @@ describe("node-host invocation cancellation", () => {
     await runtime.close();
 
     expect(held.signal?.aborted).toBe(true);
+    expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
     held.release();
     await invoking;
   });
