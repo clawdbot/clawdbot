@@ -466,8 +466,8 @@ extension OnboardingView {
                 .font(.callout.weight(.semibold))
                 .frame(width: labelWidth, alignment: .leading)
             Picker("Transport", selection: self.manualRemoteTransportBinding) {
-                Text("SSH tunnel").tag(AppState.RemoteTransport.ssh)
-                Text("Direct (ws/wss)").tag(AppState.RemoteTransport.direct)
+                Text("Direct (WSS)").tag(AppState.RemoteTransport.direct)
+                Text("SSH tunnel (fallback)").tag(AppState.RemoteTransport.ssh)
             }
             .labelsHidden()
             .pickerStyle(.segmented)

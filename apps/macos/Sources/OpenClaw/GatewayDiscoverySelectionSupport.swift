@@ -41,28 +41,17 @@ enum GatewayDiscoverySelectionSupport {
 
     static func preferredTransport(
         for gateway: GatewayDiscoveryModel.DiscoveredGateway,
-        current: AppState.RemoteTransport) -> AppState.RemoteTransport
+        current _: AppState.RemoteTransport) -> AppState.RemoteTransport
     {
-        if self.shouldPreferDirectTransport(for: gateway) {
-            return .direct
-        }
-        return current
+        self.shouldPreferDirectTransport(for: gateway) ? .direct : .ssh
     }
 
     static func shouldPreferDirectTransport(
         for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> Bool
     {
-        guard GatewayDiscoveryHelpers.directUrl(for: gateway) != nil else { return false }
-        if gateway.gatewayTls || gateway.gatewayDirectReachable {
-            return true
-        }
-
-        guard let host = GatewayDiscoveryHelpers.resolvedServiceHost(for: gateway)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        else {
-            return false
-        }
-        return host.hasSuffix(".ts.net")
+        guard let rawURL = GatewayDiscoveryHelpers.directUrl(for: gateway),
+              let url = URL(string: rawURL)
+        else { return false }
+        return url.scheme?.lowercased() == "wss"
     }
 }

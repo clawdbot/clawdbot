@@ -33877,25 +33877,25 @@
       "kind": "ui-named-argument",
       "line": 630,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
-      "source": "SSH keeps the Gateway private; direct is best for HTTPS or Tailscale Serve.",
+      "source": "Direct WSS is the default; use SSH only when the Gateway has no secure routable endpoint.",
       "surface": "apple",
-      "id": "native.apple.0b3bf35360212894"
+      "id": "native.apple.32ba7efe60417e52"
     },
     {
       "kind": "ui-call",
       "line": 633,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
-      "source": "SSH tunnel",
+      "source": "Direct (WSS)",
       "surface": "apple",
-      "id": "native.apple.5120bd84625c827a"
+      "id": "native.apple.03dfd60f22269477"
     },
     {
       "kind": "ui-call",
       "line": 634,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
-      "source": "Direct (ws/wss)",
+      "source": "SSH tunnel (fallback)",
       "surface": "apple",
-      "id": "native.apple.c58937e43a5b4591"
+      "id": "native.apple.a1b8fc2242516ecc"
     },
     {
       "kind": "ui-named-argument",
@@ -35893,17 +35893,17 @@
       "kind": "ui-call",
       "line": 469,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
-      "source": "SSH tunnel",
+      "source": "Direct (WSS)",
       "surface": "apple",
-      "id": "native.apple.8413b40cd91c9a19"
+      "id": "native.apple.7a1dc96a7c7bfff4"
     },
     {
       "kind": "ui-call",
       "line": 470,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
-      "source": "Direct (ws/wss)",
+      "source": "SSH tunnel (fallback)",
       "surface": "apple",
-      "id": "native.apple.915c50965d971bb4"
+      "id": "native.apple.47ddc38fac319aa7"
     },
     {
       "kind": "ui-call",

@@ -5,18 +5,20 @@ read_when:
 title: "Remote control"
 ---
 
-This flow lets the macOS app act as a full remote control for an OpenClaw gateway running on another host (desktop/server). The app connects directly to trusted LAN/Tailnet gateway URLs, or manages an SSH tunnel when the remote gateway is loopback-only. Health checks, Voice Wake forwarding, and Web Chat reuse the same remote configuration from _Settings -> General_.
+This flow lets the macOS app act as a full remote control for an OpenClaw gateway running on another host (desktop/server). New remote configurations use direct WSS; discovery selects direct only when the advertised endpoint is `wss://`, and otherwise configures SSH. You can still manually configure a trusted private `ws://` Gateway URL. Health checks, Voice Wake forwarding, and Web Chat reuse the same remote configuration from _Settings -> General_.
 
 ## Modes
 
 - **Local (this Mac)**: everything runs on the laptop; no SSH involved.
-- **Remote over SSH (default)**: OpenClaw commands run on the remote host. The app opens an SSH connection with `-o BatchMode`, your chosen identity/key, and a local port-forward.
-- **Remote direct (ws/wss)**: no SSH tunnel; the app connects to the gateway URL directly (LAN, Tailscale, Tailscale Serve, or a public HTTPS reverse proxy).
+- **Remote direct (WSS default)**: the app connects directly to the Gateway's authenticated `wss://` endpoint, such as Tailscale Serve or an HTTPS reverse proxy.
+- **Remote over SSH (fallback)**: when a loopback-only Gateway has no secure routable endpoint, the app opens an SSH connection with `-o BatchMode`, your chosen identity/key, and a local port-forward.
 
 ## Remote transports
 
-- **SSH tunnel** (default): uses `ssh -N -L ...` to forward the gateway port to localhost. The gateway sees the node's IP as `127.0.0.1` because the tunnel is loopback.
-- **Direct (ws/wss)**: connects straight to the gateway URL. The gateway sees the real client IP.
+- **Direct (WSS default)**: connects straight to the Gateway URL with normal TLS certificate validation. The gateway sees the real client IP.
+- **SSH tunnel (fallback)**: uses `ssh -N -L ...` to forward the gateway port to localhost. The gateway sees the node's IP as `127.0.0.1` because the tunnel is loopback.
+
+Discovery intentionally does not auto-select plaintext `ws://` endpoints, including Tailnet and LAN endpoints: it falls back to SSH instead. A manually entered `ws://` URL remains valid only for localhost, private/LAN, link-local, `.local`, Tailnet, and Tailscale CGNAT hosts.
 
 The app disables SSH connection multiplexing and post-authentication backgrounding for its own SSH processes so it can monitor and restart the exact process, even if the selected alias enables `ControlMaster` or `ForkAfterAuthentication`.
 
@@ -44,11 +46,11 @@ openclaw-mac configure-remote \
   --token "$OPENCLAW_GATEWAY_TOKEN"
 ```
 
-Or for a gateway already reachable on a trusted LAN or Tailnet, skip SSH entirely:
+For the recommended direct route, configure a secure WSS endpoint (Tailscale Serve is the simplest loopback-preserving option):
 
 ```bash
 openclaw-mac configure-remote \
-  --direct-url ws://192.168.0.202:18789 \
+  --direct-url wss://gateway.example.ts.net \
   --token "$OPENCLAW_GATEWAY_TOKEN"
 ```
 
@@ -58,7 +60,7 @@ To configure from the UI instead:
 
 1. Open _Settings -> General_.
 2. Under **OpenClaw runs**, pick **Remote** and set:
-   - **Transport**: **SSH tunnel** or **Direct (ws/wss)**.
+   - **Transport**: **Direct (WSS)** by default, or **SSH tunnel (fallback)** when the Gateway has no secure routable endpoint.
    - **SSH target**: `user@host` (optional `:port`). If the gateway is on the same LAN and advertises Bonjour, pick it from the discovered list to auto-fill this field.
    - **Gateway URL** (Direct only): `wss://gateway.example.ts.net` (or `ws://...` for local/LAN).
    - **Identity file** (advanced): path to your key.
@@ -69,8 +71,8 @@ To configure from the UI instead:
 
 ## Web Chat
 
-- **SSH tunnel**: connects to the gateway over the forwarded WebSocket control port (default 18789).
-- **Direct (ws/wss)**: connects straight to the configured gateway URL.
+- **Direct (WSS)**: connects straight to the configured Gateway URL.
+- **SSH tunnel (fallback)**: connects to the gateway over the forwarded WebSocket control port (default 18789).
 - There is no separate Web Chat HTTP server.
 
 ## Permissions

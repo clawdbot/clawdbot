@@ -517,6 +517,11 @@ final class AppState {
         self.lastConfigFingerprint = Self.configFingerprint(configRoot)
         self.lastObservedGatewayConfig = Self.gatewayConfigSnapshot(configRoot)
         let configRemoteToken = GatewayRemoteConfig.resolveTokenValue(root: configRoot)
+        let configRemote = (configRoot["gateway"] as? [String: Any])?["remote"] as? [String: Any]
+        let hasConfigRemoteTarget = configRemote?.keys.contains("sshTarget") == true
+        let configRemoteTarget = (configRemote?["sshTarget"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let storedRemoteTarget = AppDefaults.standard.string(forKey: remoteTargetKey) ?? ""
         let configRemoteResolution = GatewayRemoteConfig.resolveTransportResolution(root: configRoot)
         let configRemoteTransport = configRemoteResolution.transport
         let configRemoteUrl = configRemoteResolution.directURL?.absoluteString
@@ -524,12 +529,6 @@ final class AppState {
         let resolvedConnectionMode = ConnectionModeResolver.resolve(root: configRoot).mode
         self.remoteTransport = configRemoteTransport
         self.connectionMode = resolvedConnectionMode
-
-        let configRemote = (configRoot["gateway"] as? [String: Any])?["remote"] as? [String: Any]
-        let hasConfigRemoteTarget = configRemote?.keys.contains("sshTarget") == true
-        let configRemoteTarget = (configRemote?["sshTarget"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let storedRemoteTarget = AppDefaults.standard.string(forKey: remoteTargetKey) ?? ""
         if resolvedConnectionMode == .remote,
            hasConfigRemoteTarget
         {
@@ -1545,7 +1544,7 @@ extension AppState {
         state.iconOverride = .system
         state.heartbeatsEnabled = true
         state.connectionMode = .local
-        state.remoteTransport = .ssh
+        state.remoteTransport = .direct
         state.canvasEnabled = true
         state.quickChatEnabled = true
         state.remoteTarget = "user@example.com"

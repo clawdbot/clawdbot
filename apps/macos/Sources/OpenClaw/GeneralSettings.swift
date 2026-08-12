@@ -627,11 +627,11 @@ struct GeneralSettings: View {
     private var remoteTransportRow: some View {
         SettingsCardRow(
             title: "Transport",
-            subtitle: "SSH keeps the Gateway private; direct is best for HTTPS or Tailscale Serve.")
+            subtitle: "Direct WSS is the default; use SSH only when the Gateway has no secure routable endpoint.")
         {
             Picker("Transport", selection: self.$state.remoteTransport) {
-                Text("SSH tunnel").tag(AppState.RemoteTransport.ssh)
-                Text("Direct (ws/wss)").tag(AppState.RemoteTransport.direct)
+                Text("Direct (WSS)").tag(AppState.RemoteTransport.direct)
+                Text("SSH tunnel (fallback)").tag(AppState.RemoteTransport.ssh)
             }
             .pickerStyle(.segmented)
             .frame(width: 320)

@@ -13,6 +13,7 @@ enum GatewayRemoteConfig {
         case explicit
         case inferredRemoteURL
         case legacySSH
+        case defaultDirect
     }
 
     struct TransportResolution: Equatable {
@@ -43,11 +44,17 @@ enum GatewayRemoteConfig {
         }
     }
 
-    static func resolveTransport(root: [String: Any]) -> AppState.RemoteTransport {
-        self.resolveTransportResolution(root: root).transport
+    static func resolveTransport(
+        root: [String: Any],
+        defaults: UserDefaults = AppDefaults.standard) -> AppState.RemoteTransport
+    {
+        self.resolveTransportResolution(root: root, defaults: defaults).transport
     }
 
-    static func resolveTransportResolution(root: [String: Any]) -> TransportResolution {
+    static func resolveTransportResolution(
+        root: [String: Any],
+        defaults: UserDefaults = AppDefaults.standard) -> TransportResolution
+    {
         let explicit = self.resolveExplicitTransport(root: root)
         switch explicit {
         case .direct:
@@ -61,6 +68,9 @@ enum GatewayRemoteConfig {
             break
         }
 
+        if self.hasLegacySSHRoute(root: root) {
+            return TransportResolution(transport: .ssh, source: .legacySSH, directURL: nil)
+        }
         if let url = self.resolveGatewayUrl(root: root),
            let host = url.host,
            !LoopbackHost.isLoopbackHost(host)
@@ -68,7 +78,29 @@ enum GatewayRemoteConfig {
             return TransportResolution(transport: .direct, source: .inferredRemoteURL, directURL: url)
         }
 
-        return TransportResolution(transport: .ssh, source: .legacySSH, directURL: nil)
+        if let legacySSHTarget = defaults.string(forKey: remoteTargetKey),
+           !legacySSHTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return TransportResolution(transport: .ssh, source: .legacySSH, directURL: nil)
+        }
+
+        // New remote clients connect to the Gateway application endpoint.
+        // Older macOS routes may retain their SSH target in UserDefaults.
+        return TransportResolution(transport: .direct, source: .defaultDirect, directURL: nil)
+    }
+
+    private static func hasLegacySSHRoute(root: [String: Any]) -> Bool {
+        guard let gateway = root["gateway"] as? [String: Any],
+              let remote = gateway["remote"] as? [String: Any]
+        else { return false }
+
+        if let target = remote["sshTarget"] as? String,
+           !target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return true
+        }
+        guard let url = self.resolveGatewayUrl(root: root), let host = url.host else { return false }
+        return LoopbackHost.isLoopbackHost(host)
     }
 
     private static func resolveExplicitTransport(root: [String: Any]) -> AppState.RemoteTransport? {
@@ -85,7 +117,7 @@ enum GatewayRemoteConfig {
         case AppState.RemoteTransport.ssh.rawValue:
             return .ssh
         default:
-            return .ssh
+            return .direct
         }
     }
 
