@@ -203,7 +203,7 @@ export const SETTINGS_NAVIGATION_GROUPS = [
 const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = [
   "ai-agents",
   "model-setup",
-  "lobsterdex",
+  "crabdex",
 ];
 export const SETTINGS_SEARCHABLE_SUBPAGE_ROUTES: readonly NavigationRouteId[] = ["ai-agents"];
 const SETTINGS_SUBPAGE_OWNER_ROUTES: Partial<
@@ -238,12 +238,12 @@ const NAVIGATION_ICONS: NavigationItem = {
   chat: "messageSquare",
   dashboard: "layoutDashboard",
   dashboards: "layoutDashboard",
-  custodian: "lobster",
+  custodian: "crab",
   config: "settings",
   profile: "circleUser",
   communications: "send",
   appearance: "palette",
-  lobsterdex: "bug",
+  crabdex: "bug",
   automation: "terminal",
   mcp: "wrench",
   memory: "book",
@@ -355,7 +355,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
     subtitleKey: "subtitles.communications",
   },
   appearance: { titleKey: "tabs.appearance", subtitleKey: "subtitles.appearance" },
-  lobsterdex: { titleKey: "tabs.lobsterdex", subtitleKey: "subtitles.lobsterdex" },
+  crabdex: { titleKey: "tabs.crabdex", subtitleKey: "subtitles.crabdex" },
   automation: { titleKey: "tabs.automation", subtitleKey: "subtitles.automation" },
   mcp: { titleKey: "tabs.mcp", subtitleKey: "subtitles.mcp" },
   memory: { titleKey: "tabs.memory", subtitleKey: "subtitles.memory" },

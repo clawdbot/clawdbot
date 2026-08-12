@@ -82,7 +82,7 @@ function appHtml(appModuleUrl: string): string {
   :root {
     --color-background-primary: #f6f5f3;
     --color-text-primary: #17171a;
-    --app-accent: #ff4f4f;
+    --app-accent: #2fbf71;
   }
   #theme-surface {
     background: var(--color-background-primary);

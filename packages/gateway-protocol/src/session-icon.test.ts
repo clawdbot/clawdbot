@@ -3,7 +3,7 @@ import { normalizeSessionIconInput, parseSessionIcon } from "./session-icon.js";
 
 describe("session icons", () => {
   it("parses named and single-grapheme emoji forms", () => {
-    expect(parseSessionIcon("name:lobster")).toEqual({ kind: "named", name: "lobster" });
+    expect(parseSessionIcon("name:crab")).toEqual({ kind: "named", name: "crab" });
     expect(parseSessionIcon("🦞")).toEqual({ kind: "emoji", emoji: "🦞" });
     expect(parseSessionIcon("👩🏽‍💻")).toEqual({ kind: "emoji", emoji: "👩🏽‍💻" });
     expect(parseSessionIcon("name:Nope")).toBeNull();

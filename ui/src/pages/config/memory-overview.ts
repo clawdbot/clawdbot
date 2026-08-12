@@ -1,11 +1,11 @@
 import { html, nothing } from "lit";
 import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
 import {
-  createLobsterPetLook,
-  lobsterLookStyle,
-  lobsterPetSeed,
-  renderLobsterSvg,
-} from "../../components/lobster-pet.ts";
+  createCrabPetLook,
+  crabLookStyle,
+  crabPetSeed,
+  renderCrabSvg,
+} from "../../components/crab-pet.ts";
 import {
   renderSettingsNavRow,
   renderSettingsRow,
@@ -60,7 +60,7 @@ function renderHero(props: MemoryOverviewProps) {
   const readyPayload = props.status.kind === "ready" ? props.status.payload : null;
   const error =
     props.status.kind === "error" || (readyPayload !== null && hasEmbeddingError(readyPayload));
-  const look = createLobsterPetLook(lobsterPetSeed(props.agentId ?? "memory"));
+  const look = createCrabPetLook(crabPetSeed(props.agentId ?? "memory"));
   const headline = off
     ? t("memoryPage.overview.hero.hibernating")
     : props.status.kind === "loading" || props.status.kind === "idle"
@@ -94,8 +94,8 @@ function renderHero(props: MemoryOverviewProps) {
 
   return html`
     <section class="memory-overview__hero ${off ? "memory-overview__hero--sleeping" : ""}">
-      <div class="memory-overview__lobster" style=${lobsterLookStyle(look)}>
-        ${renderLobsterSvg(look, pose)}
+      <div class="memory-overview__crab" style=${crabLookStyle(look)}>
+        ${renderCrabSvg(look, pose)}
       </div>
       <div class="memory-overview__hero-copy">
         <h2>${headline}</h2>

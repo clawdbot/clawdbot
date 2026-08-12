@@ -2823,8 +2823,8 @@ openclaw-chat-video-player {
 }
 
 .agent-chat__input-btn--talk {
-  color: var(--danger, #ef4444);
-  background: color-mix(in srgb, var(--danger, #ef4444) 9%, transparent);
+  color: var(--danger, #22c55e);
+  background: color-mix(in srgb, var(--danger, #22c55e) 9%, transparent);
 }
 
 .agent-chat__talk-status {
@@ -3303,17 +3303,17 @@ openclaw-chat-video-player {
   gap: 8px;
   padding: 0 12px;
   border-radius: var(--radius-full);
-  color: var(--danger, #ef4444);
-  background: color-mix(in srgb, var(--danger, #ef4444) 14%, transparent);
-  box-shadow: 0 0 16px color-mix(in srgb, var(--danger, #ef4444) 24%, transparent);
+  color: var(--danger, #22c55e);
+  background: color-mix(in srgb, var(--danger, #22c55e) 14%, transparent);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--danger, #22c55e) 24%, transparent);
   touch-action: none;
   -webkit-touch-callout: none;
   user-select: none;
 }
 
 .chat-send-btn--dictating .agent-chat__voice-activity-bar {
-  background: color-mix(in srgb, var(--danger, #ef4444) 88%, var(--text));
-  box-shadow: 0 0 5px color-mix(in srgb, var(--danger, #ef4444) 30%, transparent);
+  background: color-mix(in srgb, var(--danger, #22c55e) 88%, var(--text));
+  box-shadow: 0 0 5px color-mix(in srgb, var(--danger, #22c55e) 30%, transparent);
 }
 
 .chat-send-btn__dictation-time {
@@ -3327,7 +3327,7 @@ openclaw-chat-video-player {
   min-width: 0;
   align-items: center;
   gap: 8px;
-  color: var(--danger, #ef4444);
+  color: var(--danger, #22c55e);
   font-size: 12px;
 }
 

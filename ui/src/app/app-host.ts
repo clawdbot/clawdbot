@@ -2001,8 +2001,8 @@ class OpenClawShell extends OpenClawLightDomElement {
         sidebarLiveActivity: uiSettings.sidebarLiveActivity !== false,
         pinnedAgentIds: navigationSnapshot.pinnedAgentIds,
         themeMode: context.theme.mode,
-        lobsterPetVisits: uiSettings.lobsterPetVisits !== false,
-        lobsterPetSounds: uiSettings.lobsterPetSounds === true,
+        crabPetVisits: uiSettings.crabPetVisits !== false,
+        crabPetSounds: uiSettings.crabPetSounds === true,
         gatewayVersion:
           context.config.current.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? null,
         devGitBranch: context.config.current.devGitBranch,

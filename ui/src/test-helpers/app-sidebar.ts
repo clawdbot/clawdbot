@@ -68,7 +68,7 @@ export type SidebarLifecycleState = HTMLElement & {
   variant: "panel" | "drawer";
 };
 
-export type LobsterPetElement = HTMLElement & {
+export type CrabPetElement = HTMLElement & {
   runOutcome: "ok" | "error" | "aborted";
 };
 

@@ -1,5 +1,5 @@
 // Control UI view renders config screen content.
-import "../../styles/lobster-pet.css";
+import "../../styles/crab-pet.css";
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { normalizeChatMessageMaxWidth } from "../../app/settings.ts";

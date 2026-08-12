@@ -1001,7 +1001,7 @@ describe("video-generation runtime", () => {
           },
         },
       } as OpenClawConfig,
-      prompt: "animate a lobster",
+      prompt: "animate a crab",
       size: "1280x720",
       aspectRatio: "16:9",
       resolution: "720P",
@@ -1053,7 +1053,7 @@ describe("video-generation runtime", () => {
           },
         },
       } as OpenClawConfig,
-      prompt: "animate a lobster",
+      prompt: "animate a crab",
       resolution: "720P",
     });
 
@@ -1094,7 +1094,7 @@ describe("video-generation runtime", () => {
           },
         },
       } as OpenClawConfig,
-      prompt: "animate a lobster",
+      prompt: "animate a crab",
       resolution: "4K",
     });
 
@@ -1148,7 +1148,7 @@ describe("video-generation runtime", () => {
           },
         },
       } as OpenClawConfig,
-      prompt: "animate a lobster",
+      prompt: "animate a crab",
       size: "1280x720",
       inputImages: [{ buffer: Buffer.from("png"), mimeType: "image/png" }],
     });

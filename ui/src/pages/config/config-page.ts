@@ -666,12 +666,12 @@ export class ConfigPage extends OpenClawLightDomElement {
       realtimeTalkInputDeviceId: next.realtimeTalkInputDeviceId,
       realtimeTalkVideoDeviceId: next.realtimeTalkVideoDeviceId,
       composerHoldToRecord: next.composerHoldToRecord,
-      lobsterPetVisits: next.lobsterPetVisits,
-      lobsterPetSounds: next.lobsterPetSounds,
+      crabPetVisits: next.crabPetVisits,
+      crabPetSounds: next.crabPetSounds,
     });
     applyTextScale(this.settings.textScale);
     // theme.refresh() also republishes non-theme appearance prefs (text
-    // scale, lobster pet visits/sounds) to app-host subscribers.
+    // scale, crab pet visits/sounds) to app-host subscribers.
     this.context.theme.refresh();
   }
 
@@ -933,14 +933,14 @@ export class ConfigPage extends OpenClawLightDomElement {
             }
           });
       },
-      lobsterPetVisits: this.settings.lobsterPetVisits !== false,
-      setLobsterPetVisits: (enabled) =>
-        this.applySettings({ ...this.settings, lobsterPetVisits: enabled }),
-      lobsterPetSounds: this.settings.lobsterPetSounds === true,
-      setLobsterPetSounds: (enabled) =>
-        this.applySettings({ ...this.settings, lobsterPetSounds: enabled }),
-      lobsterdexHref: pathForRoute("lobsterdex", this.context.basePath),
-      onOpenLobsterdex: () => this.context.navigate("lobsterdex"),
+      crabPetVisits: this.settings.crabPetVisits !== false,
+      setCrabPetVisits: (enabled) =>
+        this.applySettings({ ...this.settings, crabPetVisits: enabled }),
+      crabPetSounds: this.settings.crabPetSounds === true,
+      setCrabPetSounds: (enabled) =>
+        this.applySettings({ ...this.settings, crabPetSounds: enabled }),
+      crabdexHref: pathForRoute("crabdex", this.context.basePath),
+      onOpenCrabdex: () => this.context.navigate("crabdex"),
       chatSendShortcut: normalizeChatSendShortcut(this.settings.chatSendShortcut),
       setChatSendShortcut: (value) => this.setSetting("chatSendShortcut", value),
       chatFollowUpMode: this.settings.chatFollowUpMode,

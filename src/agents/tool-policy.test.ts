@@ -68,13 +68,13 @@ describe("tool-policy", () => {
   });
 
   it("uses alsoAllow entries for plugin discovery without the synthetic allow-all", () => {
-    expect(collectExplicitAllowlist([pickSandboxToolPolicy({ alsoAllow: ["lobster"] })])).toEqual([
-      "lobster",
+    expect(collectExplicitAllowlist([pickSandboxToolPolicy({ alsoAllow: ["crab"] })])).toEqual([
+      "crab",
       DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
     ]);
     expect(
-      collectExplicitAllowlist([pickSandboxToolPolicy({ allow: [], alsoAllow: ["lobster"] })]),
-    ).toEqual(["*", "lobster"]);
+      collectExplicitAllowlist([pickSandboxToolPolicy({ allow: [], alsoAllow: ["crab"] })]),
+    ).toEqual(["*", "crab"]);
   });
 
   it("preserves explicit alsoAllow wildcards for plugin discovery", () => {

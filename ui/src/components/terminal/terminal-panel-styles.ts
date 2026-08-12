@@ -52,7 +52,7 @@ export const terminalPanelStyles = css`
   .tp-session-refresh {
     border: 0;
     background: transparent;
-    color: var(--accent, #ff5c5c);
+    color: var(--accent, #2fbf71);
     font: inherit;
     font-weight: 500;
     padding: 2px 4px;
@@ -136,15 +136,15 @@ export const terminalPanelStyles = css`
   .tp-connecting__spinner {
     width: 16px;
     height: 16px;
-    border: 2px solid color-mix(in srgb, var(--accent, #ff5c5c) 24%, transparent);
-    border-top-color: var(--accent, #ff5c5c);
+    border: 2px solid color-mix(in srgb, var(--accent, #2fbf71) 24%, transparent);
+    border-top-color: var(--accent, #2fbf71);
     border-radius: 50%;
     animation: tp-spin 0.8s linear infinite;
   }
   .tp-error {
     padding: 10px 12px;
     font-size: 12px;
-    color: var(--danger, #ff6b6b);
+    color: var(--danger, #22c55e);
   }
   @keyframes tp-spin {
     to {

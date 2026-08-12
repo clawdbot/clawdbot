@@ -59,10 +59,10 @@ class ResizableDivider extends OpenClawLitElement {
     :host(.dragging)::after,
     :host(:focus-visible)::after {
       width: 2px;
-      background: var(--accent, #ff5c5c);
+      background: var(--accent, #2fbf71);
     }
     :host(:focus-visible) {
-      outline: 2px solid var(--accent, #ff5c5c);
+      outline: 2px solid var(--accent, #2fbf71);
       outline-offset: 2px;
     }
     :host([orientation="horizontal"]) {

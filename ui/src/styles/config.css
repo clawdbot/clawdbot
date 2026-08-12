@@ -334,7 +334,7 @@
 
 .settings-theme-card--claw {
   --theme-chip-bg: #0e1015;
-  --theme-chip-accent: #ff5c5c;
+  --theme-chip-accent: #2fbf71;
   --theme-chip-accent-2: #14b8a6;
 }
 
@@ -352,7 +352,7 @@
 
 :root[data-theme-mode="light"] .settings-theme-card--claw {
   --theme-chip-bg: #faf9f7;
-  --theme-chip-accent: #bd4531;
+  --theme-chip-accent: #2fbf71;
   --theme-chip-accent-2: #0d9488;
 }
 

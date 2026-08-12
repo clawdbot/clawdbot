@@ -6,7 +6,7 @@ describe("runGatewayConversationList", () => {
   it("discovers a trusted directory peer without creating a session", async () => {
     let discovered: ConversationIdentity[] = [];
     const listPeers = vi.fn(async () => [
-      { kind: "user" as const, id: "peer-id-123", name: "Friendly Lobster", handle: "@molty" },
+      { kind: "user" as const, id: "peer-id-123", name: "Friendly Crab", handle: "@molty" },
     ]);
     const resolveOutboundSessionRoute = vi.fn(async () => ({
       sessionKey: "agent:main:reef:direct:peer-id-123",
@@ -63,7 +63,7 @@ describe("runGatewayConversationList", () => {
         resolvedTarget: {
           to: "peer-id-123",
           kind: "user",
-          display: "Friendly Lobster",
+          display: "Friendly Crab",
           source: "directory",
           resolutionSource: "directory",
         },
@@ -76,7 +76,7 @@ describe("runGatewayConversationList", () => {
         accountId: "default",
         kind: "direct",
         target: "reef:peer-id-123",
-        label: "Friendly Lobster",
+        label: "Friendly Crab",
       }),
     ]);
     expect(result.conversations[0]).not.toHaveProperty("sessionId");

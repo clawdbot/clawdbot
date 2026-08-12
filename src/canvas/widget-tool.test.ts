@@ -239,9 +239,9 @@ describe("show_widget", () => {
       `Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;`,
     );
     expect(html).toContain("<title>&lt;Status&gt;</title>");
-    expect(html).toContain("--accent:#bd4531");
-    expect(html).toContain("--accent:#ff5c5c");
-    expect(html).toContain("--accent-fill:#d13c3c");
+    expect(html).toContain("--accent:#2fbf71");
+    expect(html).toContain("--accent:#2fbf71");
+    expect(html).toContain("--accent-fill:#1f9d57");
     expect(html).toContain('<body class="svg-widget"><script>');
     expect(html).toContain("openclaw:widget-size");
     const manifest = JSON.parse(

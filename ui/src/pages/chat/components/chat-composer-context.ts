@@ -107,7 +107,7 @@ function getThemeNoticeColors() {
   }
   const rootStyle = getComputedStyle(document.documentElement);
   const warnHex = rootStyle.getPropertyValue("--warn").trim() || "#f59e0b";
-  const dangerHex = rootStyle.getPropertyValue("--danger").trim() || "#ef4444";
+  const dangerHex = rootStyle.getPropertyValue("--danger").trim() || "#22c55e";
   cachedThemeNoticeColors = {
     warnHex,
     dangerHex,

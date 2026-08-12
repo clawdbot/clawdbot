@@ -102,7 +102,7 @@ describe("handleTasksCommand task board", () => {
       childSessionKey: "agent:main:main",
       runId: "tool:video_generate:tasks-visible",
       label: "Video generation",
-      task: "friendly lobster surfing",
+      task: "friendly crab surfing",
       progressSummary: "Queued video generation",
       deliveryStatus: "not_applicable",
       notifyPolicy: "silent",

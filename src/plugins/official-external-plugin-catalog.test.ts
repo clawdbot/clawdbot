@@ -270,7 +270,7 @@ describe("official external plugin catalog", () => {
   it("curates featured external plugins with ClawHub install alternatives", () => {
     const featured = [
       ["diffs", "@openclaw/diffs", 40],
-      ["lobster", "@openclaw/lobster", 50],
+      ["crab", "@openclaw/crab", 50],
       ["tokenjuice", "@openclaw/tokenjuice", 60],
       ["memory-lancedb", "@openclaw/memory-lancedb", 70],
     ] as const;

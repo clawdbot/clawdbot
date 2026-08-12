@@ -519,7 +519,7 @@ function standaloneHostHtml(): { html: string; scriptHash: string } {
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>OpenClaw MCP App</title>
-<style>html,body{height:100%;margin:0;background:#fff;color:#111;font:14px system-ui,sans-serif}main{height:100%}iframe{display:block;width:100%;height:600px;border:0}.error{padding:16px;color:#b91c1c}</style>
+<style>html,body{height:100%;margin:0;background:#fff;color:#111;font:14px system-ui,sans-serif}main{height:100%}iframe{display:block;width:100%;height:600px;border:0}.error{padding:16px;color:#15803d}</style>
 <main id="host" aria-live="polite"></main>
 <script>${escapedSource}</script>`,
     scriptHash: createHash("sha256").update(escapedSource).digest("base64"),

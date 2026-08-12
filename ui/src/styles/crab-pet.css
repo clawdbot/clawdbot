@@ -1,5 +1,5 @@
 /* ============================================
-   Lobster pet – decorative status mascot that
+   Crab pet – decorative status mascot that
    perches on the sidebar footer.
    ============================================ */
 
@@ -11,7 +11,7 @@
 /* Every visit variant shares this zero-layout overlay strip above the footer.
    Its bottom edge sits 3px inside the bar so feet dangle over the divider, and
    overflow: hidden makes duck/peek/enter moves read as "behind the ledge". */
-openclaw-lobster-pet {
+openclaw-crab-pet {
   position: absolute;
   left: 0;
   right: 0;
@@ -23,7 +23,7 @@ openclaw-lobster-pet {
 }
 
 /* Departure/dismissal: duck down behind the ledge and fade. */
-.lobster-pet--away {
+.crab-pet--away {
   opacity: 0;
   visibility: hidden;
   transform: translateX(-50%) translateY(105%);
@@ -33,14 +33,14 @@ openclaw-lobster-pet {
     visibility 0s linear 0.3s;
 }
 
-.lobster-pet {
+.crab-pet {
   position: absolute;
   bottom: 0;
-  left: var(--lob-x, 80%);
+  left: var(--crab-x, 80%);
   /* Build multipliers stretch the sprite box; the svg renders with
      preserveAspectRatio="none", so the silhouette follows the box. */
-  width: calc(16px * var(--lob-scale, 2) * var(--lob-w, 1));
-  height: calc(14px * var(--lob-scale, 2) * var(--lob-h, 1));
+  width: calc(16px * var(--crab-scale, 2) * var(--crab-w, 1));
+  height: calc(14px * var(--crab-scale, 2) * var(--crab-h, 1));
   transform: translateX(-50%);
   pointer-events: auto;
   user-select: none;
@@ -52,18 +52,18 @@ openclaw-lobster-pet {
 /* Seeded glint tint rides its own variable, mapped here (before the palette
    rules) so palette and offline class rules still out-cascade it on both
    look surfaces. */
-.lobster-pet {
-  --lob-glint: var(--lob-glint-seed, #00e5cc);
+.crab-pet {
+  --crab-glint: var(--crab-glint-seed, #00e5cc);
 }
 
 /* The Elder does everything at Elder speed. */
-.lobster-pet--elder {
+.crab-pet--elder {
   transition: left 2.6s ease-in-out;
 }
 
-/* Completed Lobsterdex: a quiet golden trim along the ledge, earned once
+/* Completed Crabdex: a quiet golden trim along the ledge, earned once
    every palette has visited this browser. */
-openclaw-lobster-pet[data-dex-complete]::after {
+openclaw-crab-pet[data-dex-complete]::after {
   content: "";
   position: absolute;
   left: 8%;
@@ -82,104 +82,104 @@ openclaw-lobster-pet[data-dex-complete]::after {
   pointer-events: none;
 }
 
-/* ---- Rare palette variants (weights + lore in lobster-pet.ts) ---- */
+/* ---- Rare palette variants (weights + lore in crab-pet.ts) ---- */
 
 /* Ghost/albino: pale translucent shell, icy glints. */
-.lobster-pet--palette-ghost {
-  --lob-glint: #a8dcff;
+.crab-pet--palette-ghost {
+  --crab-glint: #a8dcff;
 }
 
-.lobster-pet--palette-ghost .lobster-pet__svg {
+.crab-pet--palette-ghost .crab-pet__svg {
   opacity: 0.62;
 }
 
 /* Lumen: photophore running lights. They pulse and glow in the dark theme;
    daylight (light theme) washes them down to faint speckles. */
-.lobster-pet--palette-lumen {
-  --lob-glint: #7ef5dd;
+.crab-pet--palette-lumen {
+  --crab-glint: #7ef5dd;
 }
 
-.lobster-pet--palette-magma {
-  --lob-glint: #ff8a5c;
+.crab-pet--palette-magma {
+  --crab-glint: #ff8a5c;
 }
 
-.lobster-pet--palette-oilslick {
-  --lob-glint: #c084fc;
+.crab-pet--palette-oilslick {
+  --crab-glint: #c084fc;
 }
 
-.lobster-pet--palette-aurora {
-  --lob-glint: #3ec9a0;
+.crab-pet--palette-aurora {
+  --crab-glint: #3ec9a0;
 }
 
-.lobster-pet--palette-nebula {
-  --lob-glint: #ff9de2;
+.crab-pet--palette-nebula {
+  --crab-glint: #ff9de2;
 }
 
-.lobster-pet--palette-glass {
-  --lob-glint: #bfeaff;
+.crab-pet--palette-glass {
+  --crab-glint: #bfeaff;
 }
 
-.lobster-pet--palette-geode {
-  --lob-glint: #c9a6ff;
-  --lob-shell2: #241b38;
+.crab-pet--palette-geode {
+  --crab-glint: #c9a6ff;
+  --crab-shell2: #241b38;
 }
 
-.lobster-pet--palette-phosphor {
-  --lob-glint: #3fff7d;
+.crab-pet--palette-phosphor {
+  --crab-glint: #3fff7d;
 }
 
-.lobster-pet--palette-heisenbug {
-  --lob-glint: #8be9fd;
+.crab-pet--palette-heisenbug {
+  --crab-glint: #8be9fd;
 }
 
-.lobster-pet--palette-blueprint {
-  --lob-glint: #cfe3ff;
+.crab-pet--palette-blueprint {
+  --crab-glint: #cfe3ff;
 }
 
-.lobster-pet--palette-clawtron {
-  --lob-glint: #ffb020;
+.crab-pet--palette-clawtron {
+  --crab-glint: #ffb020;
 }
 
-.lobster-pet--palette-selene {
-  --lob-glint: #8fa8ff;
+.crab-pet--palette-selene {
+  --crab-glint: #8fa8ff;
 }
 
-.lobster-pet--palette-eclipse {
-  --lob-glint: #ffd166;
+.crab-pet--palette-eclipse {
+  --crab-glint: #ffd166;
 }
 
-.lobster-pet--palette-sourdough {
-  --lob-glint: #e6bc82;
+.crab-pet--palette-sourdough {
+  --crab-glint: #e6bc82;
 }
 
-.lobster-pet--palette-zombie {
-  --lob-glint: #b8d49a;
+.crab-pet--palette-zombie {
+  --crab-glint: #b8d49a;
 }
 
-.lobster-pet--palette-plush {
-  --lob-glint: #ffb59e;
+.crab-pet--palette-plush {
+  --crab-glint: #ffb59e;
 }
 
-.lobster-pet--palette-disco {
-  --lob-glint: #cbd5e6;
+.crab-pet--palette-disco {
+  --crab-glint: #cbd5e6;
 }
 
-.lobster-pet--palette-eclipse .lobster-pet__svg {
+.crab-pet--palette-eclipse .crab-pet__svg {
   filter: drop-shadow(0 0 3px rgba(255, 209, 102, 0.72));
 }
 
 /* The cryptid is always photographed slightly out of focus. Its inner frame
    drifts independently so the outer breathe/facing transform stays intact. */
-.lobster-pet--palette-cryptid .lobster-pet__svg {
+.crab-pet--palette-cryptid .crab-pet__svg {
   filter: blur(1.1px) sepia(0.35) contrast(0.92);
 }
 
-.lob-cryptid-frame {
-  animation: lobster-pet-cryptid-sway 7s ease-in-out infinite alternate;
+.crab-cryptid-frame {
+  animation: crab-pet-cryptid-sway 7s ease-in-out infinite alternate;
   transform-origin: 60px 54px;
 }
 
-@keyframes lobster-pet-cryptid-sway {
+@keyframes crab-pet-cryptid-sway {
   from {
     transform: translate(-1.5px, 0.5px) rotate(-0.8deg);
   }
@@ -190,20 +190,20 @@ openclaw-lobster-pet[data-dex-complete]::after {
 
 /* Figlet's glyph art is terminal-light by default; light cards need real
    ink or the text washes out (mood-style var passthrough carries it). */
-.lobster-pet--palette-ascii {
-  --lob-ascii-ink: #d8dee6;
+.crab-pet--palette-ascii {
+  --crab-ascii-ink: #d8dee6;
 }
 
-:root[data-theme-mode="light"] .lobster-pet--palette-ascii {
-  --lob-ascii-ink: #46525e;
+:root[data-theme-mode="light"] .crab-pet--palette-ascii {
+  --crab-ascii-ink: #46525e;
 }
 
-.lob-balloon-frame {
-  animation: lobster-pet-balloon-float 4.5s ease-in-out infinite alternate;
+.crab-balloon-frame {
+  animation: crab-pet-balloon-float 4.5s ease-in-out infinite alternate;
   transform-origin: 60px 54px;
 }
 
-@keyframes lobster-pet-balloon-float {
+@keyframes crab-pet-balloon-float {
   from {
     transform: translateY(-2px) rotate(-1.5deg);
   }
@@ -212,21 +212,21 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-.lob-portal-ring {
-  animation: lobster-pet-portal-pulse 4s ease-in-out infinite alternate;
+.crab-portal-ring {
+  animation: crab-pet-portal-pulse 4s ease-in-out infinite alternate;
 }
 
-.lob-portal-ring--blue {
+.crab-portal-ring--blue {
   color: #4a9df8;
   filter: drop-shadow(0 0 4px #4a9df8);
 }
 
-.lob-portal-ring--orange {
+.crab-portal-ring--orange {
   color: #ff9a2e;
   filter: drop-shadow(0 0 4px #ff9a2e);
 }
 
-@keyframes lobster-pet-portal-pulse {
+@keyframes crab-pet-portal-pulse {
   from {
     opacity: 0.68;
   }
@@ -235,12 +235,12 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-.lob-skeleton__block {
-  animation: lobster-pet-skeleton-shimmer 1.8s ease-in-out infinite alternate;
+.crab-skeleton__block {
+  animation: crab-pet-skeleton-shimmer 1.8s ease-in-out infinite alternate;
   animation-delay: calc(var(--i, 0) * 0.12s);
 }
 
-@keyframes lobster-pet-skeleton-shimmer {
+@keyframes crab-pet-skeleton-shimmer {
   from {
     opacity: 0.55;
   }
@@ -249,18 +249,18 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-.lobster-pet--palette-blueprint .lob-antennae path {
+.crab-pet--palette-blueprint .crab-antennae path {
   stroke: #cfe3ff;
   stroke-dasharray: 4 3;
 }
 
 /* Magma seams glow like cooling cracks. Offline pets lose both heat and pulse. */
-.lob-magma {
+.crab-magma {
   filter: drop-shadow(0 0 3px rgba(255, 106, 61, 0.9));
-  animation: lobster-pet-magma 3.8s ease-in-out infinite;
+  animation: crab-pet-magma 3.8s ease-in-out infinite;
 }
 
-@keyframes lobster-pet-magma {
+@keyframes crab-pet-magma {
   0%,
   100% {
     opacity: 0.95;
@@ -270,68 +270,68 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-.lob-oilsheen {
-  animation: lobster-pet-oilslick 7s linear infinite;
+.crab-oilsheen {
+  animation: crab-pet-oilslick 7s linear infinite;
 }
 
-@keyframes lobster-pet-oilslick {
+@keyframes crab-pet-oilslick {
   to {
     filter: hue-rotate(360deg);
   }
 }
 
 /* Aurora bands wander independently; only dark themes add the polar glow. */
-.lob-aurora__band1 {
-  animation: lobster-pet-aurora-east 6.4s ease-in-out infinite alternate;
+.crab-aurora__band1 {
+  animation: crab-pet-aurora-east 6.4s ease-in-out infinite alternate;
 }
 
-.lob-aurora__band2 {
-  animation: lobster-pet-aurora-west 7.6s ease-in-out infinite alternate;
+.crab-aurora__band2 {
+  animation: crab-pet-aurora-west 7.6s ease-in-out infinite alternate;
 }
 
-:root:not([data-theme-mode="light"]) .lob-aurora {
+:root:not([data-theme-mode="light"]) .crab-aurora {
   filter: drop-shadow(0 0 3px rgba(78, 207, 166, 0.55));
 }
 
-@keyframes lobster-pet-aurora-east {
+@keyframes crab-pet-aurora-east {
   to {
     transform: translateX(3px);
   }
 }
 
-@keyframes lobster-pet-aurora-west {
+@keyframes crab-pet-aurora-west {
   to {
     transform: translateX(-3px);
   }
 }
 
-.lobster-pet--palette-nebula .lob-twinkle,
-.lobster-pet--palette-geode .lob-twinkle {
+.crab-pet--palette-nebula .crab-twinkle,
+.crab-pet--palette-geode .crab-twinkle {
   transform-box: fill-box;
   transform-origin: center;
-  animation: lobster-pet-twinkle 2s ease-in-out infinite;
+  animation: crab-pet-twinkle 2s ease-in-out infinite;
 }
 
-.lobster-pet--palette-glass .lobster-pet__svg {
+.crab-pet--palette-glass .crab-pet__svg {
   opacity: 0.38;
 }
 
-.lobster-pet--palette-glass .lob-glass-glints {
+.crab-pet--palette-glass .crab-glass-glints {
   transform-box: fill-box;
   transform-origin: center;
-  animation: lobster-pet-twinkle 2s ease-in-out infinite;
+  animation: crab-pet-twinkle 2s ease-in-out infinite;
 }
 
 /* Flicker owns opacity only. Breathe remains in the list because setting
    animation here replaces the base svg animation rather than adding to it. */
-.lobster-pet--palette-phosphor .lobster-pet__svg {
+.crab-pet--palette-phosphor .crab-pet__svg {
   animation:
-    lobster-pet-breathe 3.4s ease-in-out infinite,
-    lobster-pet-phosphor 3.2s linear infinite;
-  animation-delay: var(--lob-breathe-delay, 0s), 0s;
+    crab-pet-breathe 3.4s ease-in-out infinite,
+    crab-pet-phosphor 3.2s linear infinite;
+  animation-delay: var(--crab-breathe-delay, 0s), 0s;
 }
 
-@keyframes lobster-pet-phosphor {
+@keyframes crab-pet-phosphor {
   0%,
   87%,
   91%,
@@ -346,11 +346,11 @@ openclaw-lobster-pet[data-dex-complete]::after {
 
 /* The glitch rides an inner group so its translate never fights the svg's
    breathe/facing transform. Most of each cycle is intentionally quiet. */
-.lob-heisenbug-frame {
-  animation: lobster-pet-heisenbug 2.8s steps(1, end) infinite;
+.crab-heisenbug-frame {
+  animation: crab-pet-heisenbug 2.8s steps(1, end) infinite;
 }
 
-@keyframes lobster-pet-heisenbug {
+@keyframes crab-pet-heisenbug {
   0%,
   88%,
   100% {
@@ -367,11 +367,11 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-.lob-led {
-  animation: lobster-pet-led 1.6s steps(1, end) infinite;
+.crab-led {
+  animation: crab-pet-led 1.6s steps(1, end) infinite;
 }
 
-@keyframes lobster-pet-led {
+@keyframes crab-pet-led {
   0%,
   55%,
   100% {
@@ -385,32 +385,32 @@ openclaw-lobster-pet[data-dex-complete]::after {
 
 /* Pixel idle motion stays inside the replacement geometry, preserving the
    outer svg's facing and breathe transforms. */
-.lob-pixel-frame {
-  animation: lobster-pet-pixel-bob 0.9s steps(2, end) infinite;
+.crab-pixel-frame {
+  animation: crab-pet-pixel-bob 0.9s steps(2, end) infinite;
 }
 
-@keyframes lobster-pet-pixel-bob {
+@keyframes crab-pet-pixel-bob {
   50% {
     transform: translateY(-1.5px);
   }
 }
 
-.lob-lumen {
+.crab-lumen {
   filter: drop-shadow(0 0 3px rgba(126, 245, 221, 0.9));
-  animation: lobster-pet-lumen 3.2s ease-in-out infinite;
+  animation: crab-pet-lumen 3.2s ease-in-out infinite;
 }
 
-.lob-bee-wings ellipse {
+.crab-bee-wings ellipse {
   transform-box: fill-box;
   transform-origin: center;
-  animation: lobster-pet-bee-wing-left 0.25s ease-in-out infinite alternate;
+  animation: crab-pet-bee-wing-left 0.25s ease-in-out infinite alternate;
 }
 
-.lob-bee-wings ellipse:nth-child(2) {
-  animation-name: lobster-pet-bee-wing-right;
+.crab-bee-wings ellipse:nth-child(2) {
+  animation-name: crab-pet-bee-wing-right;
 }
 
-@keyframes lobster-pet-bee-wing-left {
+@keyframes crab-pet-bee-wing-left {
   from {
     transform: rotate(-30deg);
   }
@@ -419,7 +419,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-bee-wing-right {
+@keyframes crab-pet-bee-wing-right {
   from {
     transform: rotate(16deg);
   }
@@ -428,33 +428,33 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-.lob-disco {
-  animation: lobster-pet-disco-sweep 6s linear infinite;
+.crab-disco {
+  animation: crab-pet-disco-sweep 6s linear infinite;
 }
 
-.lob-disco rect:nth-child(3n + 1) {
+.crab-disco rect:nth-child(3n + 1) {
   transform-box: fill-box;
   transform-origin: center;
-  animation: lobster-pet-twinkle 2.4s ease-in-out infinite;
+  animation: crab-pet-twinkle 2.4s ease-in-out infinite;
 }
 
-.lob-disco rect:nth-child(3n + 4) {
+.crab-disco rect:nth-child(3n + 4) {
   animation-delay: 0.8s;
 }
 
-@keyframes lobster-pet-disco-sweep {
+@keyframes crab-pet-disco-sweep {
   to {
     filter: hue-rotate(360deg);
   }
 }
 
-:root[data-theme-mode="light"] .lob-lumen {
+:root[data-theme-mode="light"] .crab-lumen {
   filter: none;
   opacity: 0.3;
   animation: none;
 }
 
-@keyframes lobster-pet-lumen {
+@keyframes crab-pet-lumen {
   0%,
   100% {
     opacity: 1;
@@ -466,18 +466,18 @@ openclaw-lobster-pet[data-dex-complete]::after {
 
 /* Cotton candy: pastel two-tone with a slow iridescent drift. The breathe
    animation must ride along - a lone animation list would replace it. */
-.lobster-pet--palette-cottoncandy {
-  --lob-glint: #ff9fd6;
+.crab-pet--palette-cottoncandy {
+  --crab-glint: #ff9fd6;
 }
 
-.lobster-pet--palette-cottoncandy .lobster-pet__svg {
+.crab-pet--palette-cottoncandy .crab-pet__svg {
   animation:
-    lobster-pet-breathe 3.4s ease-in-out infinite,
-    lobster-pet-iridesce 8s linear infinite;
-  animation-delay: var(--lob-breathe-delay, 0s), 0s;
+    crab-pet-breathe 3.4s ease-in-out infinite,
+    crab-pet-iridesce 8s linear infinite;
+  animation-delay: var(--crab-breathe-delay, 0s), 0s;
 }
 
-@keyframes lobster-pet-iridesce {
+@keyframes crab-pet-iridesce {
   0%,
   100% {
     filter: hue-rotate(0deg) saturate(1);
@@ -489,28 +489,28 @@ openclaw-lobster-pet[data-dex-complete]::after {
 
 /* Shiny: saturated sheen plus twinkling sparks. The filter skips both retro
    palettes so their sticker-outline halos survive; sparkle spans carry the show. */
-.lobster-pet--shiny:not(.lobster-pet--palette-retro):not(.lobster-pet--palette-goldenretro):not(
-    .lobster-pet--palette-cryptid
+.crab-pet--shiny:not(.crab-pet--palette-retro):not(.crab-pet--palette-goldenretro):not(
+    .crab-pet--palette-cryptid
   )
-  .lobster-pet__svg {
+  .crab-pet__svg {
   filter: saturate(1.3) brightness(1.07);
 }
 
-.lobster-pet__sparkle {
+.crab-pet__sparkle {
   position: absolute;
   color: #ffe27a;
-  font-size: calc(4px * var(--lob-scale, 2));
+  font-size: calc(4px * var(--crab-scale, 2));
   line-height: 1;
   opacity: 0;
   pointer-events: none;
 }
 
-.lobster-pet--shiny .lobster-pet__sparkle {
-  animation: lobster-pet-twinkle 2.2s ease-in-out infinite;
+.crab-pet--shiny .crab-pet__sparkle {
+  animation: crab-pet-twinkle 2.2s ease-in-out infinite;
   animation-delay: calc(var(--i, 0) * 1.1s);
 }
 
-@keyframes lobster-pet-twinkle {
+@keyframes crab-pet-twinkle {
   0%,
   100% {
     opacity: 0;
@@ -524,24 +524,24 @@ openclaw-lobster-pet[data-dex-complete]::after {
 
 /* Retro: homage to the classic OpenClaw logo — white sticker outline around
    the whole sprite (the halo is two stacked 1px drop-shadows). */
-.lobster-pet--palette-retro .lobster-pet__svg,
-.lobster-pet--palette-goldenretro .lobster-pet__svg {
+.crab-pet--palette-retro .crab-pet__svg,
+.crab-pet--palette-goldenretro .crab-pet__svg {
   filter: drop-shadow(0 0 1.2px #f5f7fa) drop-shadow(0 0 1.2px #f5f7fa)
     drop-shadow(0 0 1.2px #f5f7fa);
 }
 
-.lobster-pet--palette-goldenretro .lobster-pet__svg {
+.crab-pet--palette-goldenretro .crab-pet__svg {
   animation:
-    lobster-pet-breathe 3.4s ease-in-out infinite,
-    lobster-pet-goldenretro-shimmer 4s ease-in-out infinite;
-  animation-delay: var(--lob-breathe-delay, 0s), 0s;
+    crab-pet-breathe 3.4s ease-in-out infinite,
+    crab-pet-goldenretro-shimmer 4s ease-in-out infinite;
+  animation-delay: var(--crab-breathe-delay, 0s), 0s;
 }
 
-.lobster-pet--palette-goldenretro .lob-retro-claw-line {
+.crab-pet--palette-goldenretro .crab-retro-claw-line {
   stroke: #b8860b;
 }
 
-@keyframes lobster-pet-goldenretro-shimmer {
+@keyframes crab-pet-goldenretro-shimmer {
   0%,
   100% {
     filter: saturate(1) brightness(1) drop-shadow(0 0 1.2px #f5f7fa) drop-shadow(0 0 1.2px #f5f7fa)
@@ -554,201 +554,201 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-/* Split two-tone: the right body half (drawn in lobster-pet.ts) plus the
+/* Split two-tone: the right body half (drawn in crab-pet.ts) plus the
    right claw and antenna wear the second shell color. */
-.lobster-pet--palette-split {
-  --lob-shell2: #46536b;
+.crab-pet--palette-split {
+  --crab-shell2: #46536b;
 }
 
-.lobster-pet--palette-split .lob-claw--r path {
-  fill: var(--lob-shell2);
+.crab-pet--palette-split .crab-claw--r path {
+  fill: var(--crab-shell2);
 }
 
-.lobster-pet--palette-split .lob-antennae path:last-of-type {
-  stroke: var(--lob-shell2);
+.crab-pet--palette-split .crab-antennae path:last-of-type {
+  stroke: var(--crab-shell2);
 }
 
-.lobster-pet--palette-notexture .lob-claw--l path {
+.crab-pet--palette-notexture .crab-claw--l path {
   fill: #ff00dc;
 }
 
-.lobster-pet--palette-notexture .lob-claw--r path {
+.crab-pet--palette-notexture .crab-claw--r path {
   fill: #111111;
 }
 
-.lobster-pet--palette-notexture .lob-antennae path:first-of-type {
+.crab-pet--palette-notexture .crab-antennae path:first-of-type {
   stroke: #ff00dc;
 }
 
-.lobster-pet--palette-notexture .lob-antennae path:last-of-type {
+.crab-pet--palette-notexture .crab-antennae path:last-of-type {
   stroke: #111111;
 }
 
-.lobster-pet--palette-chimera .lob-claw--l path {
-  fill: var(--lob-chimera-l);
+.crab-pet--palette-chimera .crab-claw--l path {
+  fill: var(--crab-chimera-l);
 }
 
-.lobster-pet--palette-chimera .lob-claw--r path {
-  fill: var(--lob-chimera-r);
+.crab-pet--palette-chimera .crab-claw--r path {
+  fill: var(--crab-chimera-r);
 }
 
-.lobster-pet--palette-chimera .lob-antennae path {
-  stroke: var(--lob-antennae-color);
+.crab-pet--palette-chimera .crab-antennae path {
+  stroke: var(--crab-antennae-color);
 }
 
 /* Disconnected pets lose their eye glow; declared after the palette glints so
    offline wins the cascade at equal specificity. */
-.lobster-pet--offline {
-  --lob-glint: #8a949d;
+.crab-pet--offline {
+  --crab-glint: #8a949d;
 }
 
-.lobster-pet--offline .lob-eye-open circle:nth-of-type(3),
-.lobster-pet--offline .lob-eye-open circle:nth-of-type(4) {
+.crab-pet--offline .crab-eye-open circle:nth-of-type(3),
+.crab-pet--offline .crab-eye-open circle:nth-of-type(4) {
   filter: none;
 }
 
 /* Offline also dims the lumen running lights - no power, no glow. */
-.lobster-pet--offline .lob-lumen {
+.crab-pet--offline .crab-lumen {
   filter: none;
   animation: none;
   opacity: 0.4;
 }
 
-.lobster-pet--offline .lob-magma {
+.crab-pet--offline .crab-magma {
   filter: none;
   animation: none;
   opacity: 0.35;
 }
 
-.lobster-pet--offline.lobster-pet--palette-phosphor .lobster-pet__svg {
-  animation: lobster-pet-breathe 3.4s ease-in-out infinite;
-  animation-delay: var(--lob-breathe-delay, 0s);
+.crab-pet--offline.crab-pet--palette-phosphor .crab-pet__svg {
+  animation: crab-pet-breathe 3.4s ease-in-out infinite;
+  animation-delay: var(--crab-breathe-delay, 0s);
 }
 
-.lobster-pet--offline .lob-scanlines {
+.crab-pet--offline .crab-scanlines {
   opacity: 0.05;
 }
 
-.lobster-pet--offline .lob-led {
+.crab-pet--offline .crab-led {
   animation: none;
   opacity: 0.2;
 }
 
-.lobster-pet--offline.lobster-pet--palette-eclipse .lobster-pet__svg {
+.crab-pet--offline.crab-pet--palette-eclipse .crab-pet__svg {
   filter: none;
 }
 
-.lobster-pet__body {
+.crab-pet__body {
   position: relative;
   width: 100%;
   height: 100%;
 }
 
-.lobster-pet__svg {
+.crab-pet__svg {
   display: block;
   width: 100%;
   height: 100%;
   /* Mighty claws scale past the 120x105 viewBox edges; let the svg paint
      outside its viewport — the host strip still clips at the ledge. */
   overflow: visible;
-  transform: scaleX(var(--lob-face, 1));
+  transform: scaleX(var(--crab-face, 1));
   transform-origin: 50% 100%;
 }
 
-:where(.lobster-pet) .lobster-pet__svg {
-  animation: lobster-pet-breathe 3.4s ease-in-out infinite;
-  animation-delay: var(--lob-breathe-delay, 0s);
+:where(.crab-pet) .crab-pet__svg {
+  animation: crab-pet-breathe 3.4s ease-in-out infinite;
+  animation-delay: var(--crab-breathe-delay, 0s);
 }
 
-.lob-claw {
+.crab-claw {
   transform-box: view-box;
 }
 
-.lob-claw--l {
+.crab-claw--l {
   transform-origin: 25px 52px;
 }
 
-.lob-claw--r {
+.crab-claw--r {
   transform-origin: 95px 52px;
 }
 
 /* Claw size scales the paths inside the group: act animations own the group
    transform, so scaling here composes instead of being overridden mid-wave.
    Per-side vars let crusher/pincer asymmetry size each claw on its own. */
-.lob-claw > path {
+.crab-claw > path {
   transform-box: view-box;
 }
 
-.lob-claw--l > path {
-  transform: scale(var(--lob-claw-l, 1));
+.crab-claw--l > path {
+  transform: scale(var(--crab-claw-l, 1));
   transform-origin: 25px 52px;
 }
 
-.lob-claw--r > path {
-  transform: scale(var(--lob-claw-r, 1));
+.crab-claw--r > path {
+  transform: scale(var(--crab-claw-r, 1));
   transform-origin: 95px 52px;
 }
 
-.lob-tail {
-  fill: color-mix(in srgb, var(--lob-shell, #35a55b) 78%, #10181f);
+.crab-tail {
+  fill: color-mix(in srgb, var(--crab-shell, #35a55b) 78%, #10181f);
 }
 
 /* ---- Idle blinking: crossfade open pupils and closed-lid curves ---- */
 
-.lobster-pet .lob-eye-closed {
+.crab-pet .crab-eye-closed {
   opacity: 0;
 }
 
 /* Exclude the nap act: a running blink animation would out-cascade the nap
    opacity rules below and keep the eyes open mid-nap. */
-.lobster-pet:not(.lobster-pet--act-nap, .lobster-pet--act-pet) .lob-eye-open {
-  animation: lobster-pet-blink-open 5.2s linear infinite;
-  animation-delay: var(--lob-blink-delay, 0s);
+.crab-pet:not(.crab-pet--act-nap, .crab-pet--act-pet) .crab-eye-open {
+  animation: crab-pet-blink-open 5.2s linear infinite;
+  animation-delay: var(--crab-blink-delay, 0s);
 }
 
-.lobster-pet:not(.lobster-pet--act-nap, .lobster-pet--act-pet) .lob-eye-closed {
-  animation: lobster-pet-blink-closed 5.2s linear infinite;
-  animation-delay: var(--lob-blink-delay, 0s);
+.crab-pet:not(.crab-pet--act-nap, .crab-pet--act-pet) .crab-eye-closed {
+  animation: crab-pet-blink-closed 5.2s linear infinite;
+  animation-delay: var(--crab-blink-delay, 0s);
 }
 
 /* ---- Entrances ----
    Walk pops up from behind the footer ledge; rare arrivals descend under a
-   balloon or pop out of a bubble. Durations mirror LOBSTER_PET_ENTRANCE_MS
-   in lobster-pet-plans.ts. */
+   balloon or pop out of a bubble. Durations mirror CRAB_PET_ENTRANCE_MS
+   in crab-pet-plans.ts. */
 
-.lobster-pet--entering .lobster-pet__body {
-  animation: lobster-pet-enter 0.45s ease-out;
+.crab-pet--entering .crab-pet__body {
+  animation: crab-pet-enter 0.45s ease-out;
 }
 
-.lobster-pet--enter-balloon .lobster-pet__body {
-  animation: lobster-pet-descend 1.25s ease-out;
+.crab-pet--enter-balloon .crab-pet__body {
+  animation: crab-pet-descend 1.25s ease-out;
 }
 
-.lobster-pet__balloon {
+.crab-pet__balloon {
   position: absolute;
   left: 24%;
   bottom: 92%;
-  width: calc(6.5px * var(--lob-scale, 2));
-  height: calc(10px * var(--lob-scale, 2));
+  width: calc(6.5px * var(--crab-scale, 2));
+  height: calc(10px * var(--crab-scale, 2));
   pointer-events: none;
-  animation: lobster-pet-balloon 1.25s ease-out forwards;
+  animation: crab-pet-balloon 1.25s ease-out forwards;
 }
 
-.lobster-pet--enter-bubble .lobster-pet__body {
-  animation: lobster-pet-bubble-rise 0.7s ease-out;
+.crab-pet--enter-bubble .crab-pet__body {
+  animation: crab-pet-bubble-rise 0.7s ease-out;
 }
 
-.lobster-pet__entry-bubble {
+.crab-pet__entry-bubble {
   position: absolute;
   inset: -12% -8%;
-  border: 1.5px solid var(--lob-glint, #00e5cc);
+  border: 1.5px solid var(--crab-glint, #00e5cc);
   border-radius: 50%;
   opacity: 0;
   pointer-events: none;
-  animation: lobster-pet-bubble-pop 0.7s ease-out forwards;
+  animation: crab-pet-bubble-pop 0.7s ease-out forwards;
 }
 
-@keyframes lobster-pet-descend {
+@keyframes crab-pet-descend {
   0% {
     transform: translateY(-170%);
   }
@@ -763,7 +763,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-balloon {
+@keyframes crab-pet-balloon {
   0%,
   70% {
     opacity: 1;
@@ -774,7 +774,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-bubble-rise {
+@keyframes crab-pet-bubble-rise {
   0% {
     transform: translateY(30%) scale(0.35);
   }
@@ -786,7 +786,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-bubble-pop {
+@keyframes crab-pet-bubble-pop {
   0% {
     opacity: 0.9;
     transform: scale(0.45);
@@ -807,217 +807,217 @@ openclaw-lobster-pet[data-dex-complete]::after {
 
 /* ---- Acts ---- */
 
-.lobster-pet--act-wave .lob-claw--r {
-  animation: lobster-pet-wave 1.4s ease-in-out;
-  animation-delay: var(--lob-act-delay, 0s);
+.crab-pet--act-wave .crab-claw--r {
+  animation: crab-pet-wave 1.4s ease-in-out;
+  animation-delay: var(--crab-act-delay, 0s);
 }
 
-.lobster-pet--act-snip .lob-claw {
-  animation: lobster-pet-snip 0.5s ease-in-out 2;
-  animation-delay: var(--lob-act-delay, 0s);
+.crab-pet--act-snip .crab-claw {
+  animation: crab-pet-snip 0.5s ease-in-out 2;
+  animation-delay: var(--crab-act-delay, 0s);
 }
 
-.lobster-pet--act-hop .lobster-pet__body {
-  animation: lobster-pet-hop 0.75s ease-in-out;
-  animation-delay: var(--lob-act-delay, 0s);
+.crab-pet--act-hop .crab-pet__body {
+  animation: crab-pet-hop 0.75s ease-in-out;
+  animation-delay: var(--crab-act-delay, 0s);
 }
 
-.lobster-pet--act-spin .lobster-pet__body {
-  animation: lobster-pet-spin 0.95s ease-in-out;
-  animation-delay: var(--lob-act-delay, 0s);
+.crab-pet--act-spin .crab-pet__body {
+  animation: crab-pet-spin 0.95s ease-in-out;
+  animation-delay: var(--crab-act-delay, 0s);
 }
 
-.lobster-pet--act-peek .lobster-pet__body {
-  animation: lobster-pet-peek 1.7s ease-in-out;
-  animation-delay: var(--lob-act-delay, 0s);
+.crab-pet--act-peek .crab-pet__body {
+  animation: crab-pet-peek 1.7s ease-in-out;
+  animation-delay: var(--crab-act-delay, 0s);
 }
 
-.lobster-pet--act-scuttle .lobster-pet__body {
-  animation: lobster-pet-waddle 0.3s ease-in-out infinite;
-  animation-delay: var(--lob-act-delay, 0s);
+.crab-pet--act-scuttle .crab-pet__body {
+  animation: crab-pet-waddle 0.3s ease-in-out infinite;
+  animation-delay: var(--crab-act-delay, 0s);
 }
 
-.lobster-pet--act-startle .lobster-pet__body {
-  animation: lobster-pet-startle 0.75s ease-out;
-  animation-delay: var(--lob-act-delay, 0s);
+.crab-pet--act-startle .crab-pet__body {
+  animation: crab-pet-startle 0.75s ease-out;
+  animation-delay: var(--crab-act-delay, 0s);
 }
 
-.lobster-pet--act-startle .lob-claw {
-  animation: lobster-pet-snip 0.38s ease-in-out 2;
-  animation-delay: var(--lob-act-delay, 0s);
+.crab-pet--act-startle .crab-claw {
+  animation: crab-pet-snip 0.38s ease-in-out 2;
+  animation-delay: var(--crab-act-delay, 0s);
 }
 
 /* Cheer: a finished run earns a double hop with a mid-air twirl, claws up. */
-.lobster-pet--act-cheer .lobster-pet__body {
-  animation: lobster-pet-cheer 1.3s ease-in-out;
-  animation-delay: var(--lob-act-delay, 0s);
+.crab-pet--act-cheer .crab-pet__body {
+  animation: crab-pet-cheer 1.3s ease-in-out;
+  animation-delay: var(--crab-act-delay, 0s);
 }
 
-.lobster-pet--act-cheer .lob-claw {
-  animation: lobster-pet-cheer-claws 1.3s ease-in-out;
-  animation-delay: var(--lob-act-delay, 0s);
+.crab-pet--act-cheer .crab-claw {
+  animation: crab-pet-cheer-claws 1.3s ease-in-out;
+  animation-delay: var(--crab-act-delay, 0s);
 }
 
 /* Petting: content closed eyes and a floating heart. */
-.lobster-pet--act-pet .lob-eye-open {
+.crab-pet--act-pet .crab-eye-open {
   opacity: 0;
 }
 
-.lobster-pet--act-pet .lob-eye-closed {
+.crab-pet--act-pet .crab-eye-closed {
   opacity: 1;
 }
 
-.lobster-pet__heart {
+.crab-pet__heart {
   position: absolute;
   left: 46%;
   bottom: 78%;
   color: #ff5c8a;
-  font-size: calc(5px * var(--lob-scale, 2));
+  font-size: calc(5px * var(--crab-scale, 2));
   line-height: 1;
   opacity: 0;
   pointer-events: none;
 }
 
-.lobster-pet--act-pet .lobster-pet__heart {
-  animation: lobster-pet-heart 1.4s ease-out;
+.crab-pet--act-pet .crab-pet__heart {
+  animation: crab-pet-heart 1.4s ease-out;
 }
 
 /* Sweep: after the droop, a quick tidy-up of the ledge with a broom. */
-.lobster-pet--act-sweep .lobster-pet__body {
-  animation: lobster-pet-sweep-body 1.8s ease-in-out;
-  animation-delay: var(--lob-act-delay, 0s);
+.crab-pet--act-sweep .crab-pet__body {
+  animation: crab-pet-sweep-body 1.8s ease-in-out;
+  animation-delay: var(--crab-act-delay, 0s);
 }
 
-.lobster-pet__broom {
+.crab-pet__broom {
   position: absolute;
   left: 74%;
   bottom: 4%;
-  width: calc(4.4px * var(--lob-scale, 2));
-  height: calc(7.4px * var(--lob-scale, 2));
+  width: calc(4.4px * var(--crab-scale, 2));
+  height: calc(7.4px * var(--crab-scale, 2));
   opacity: 0;
   pointer-events: none;
   transform-origin: 50% 92%;
 }
 
-.lobster-pet--act-sweep .lobster-pet__broom {
-  animation: lobster-pet-broom 1.8s ease-in-out;
-  animation-delay: var(--lob-act-delay, 0s);
+.crab-pet--act-sweep .crab-pet__broom {
+  animation: crab-pet-broom 1.8s ease-in-out;
+  animation-delay: var(--crab-act-delay, 0s);
 }
 
 /* Droop: a failed run earns sagging antennae and a slow, sad head shake. */
-.lobster-pet--act-droop .lobster-pet__body {
-  animation: lobster-pet-droop 1.6s ease-in-out;
-  animation-delay: var(--lob-act-delay, 0s);
+.crab-pet--act-droop .crab-pet__body {
+  animation: crab-pet-droop 1.6s ease-in-out;
+  animation-delay: var(--crab-act-delay, 0s);
 }
 
-.lobster-pet--act-droop .lob-antennae {
-  animation: lobster-pet-droop-antennae 1.6s ease-in-out;
+.crab-pet--act-droop .crab-antennae {
+  animation: crab-pet-droop-antennae 1.6s ease-in-out;
   transform-box: view-box;
   transform-origin: 60px 14px;
 }
 
 /* Vigil: long runs earn a settled, patient waiting pose. Acts pause, so a
    plain transform cannot fight the act animations. */
-.lobster-pet--vigil .lobster-pet__body {
+.crab-pet--vigil .crab-pet__body {
   transform: translateY(6%) scaleY(0.94);
 }
 
 /* Molt: shiver, squash, pop. */
-.lobster-pet--act-molt .lobster-pet__body {
-  animation: lobster-pet-molt 2.6s ease-in-out;
-  animation-delay: var(--lob-act-delay, 0s);
+.crab-pet--act-molt .crab-pet__body {
+  animation: crab-pet-molt 2.6s ease-in-out;
+  animation-delay: var(--crab-act-delay, 0s);
 }
 
 /* The abandoned shell: frozen, washed out, fading over a minute. */
-.lobster-pet--shell {
+.crab-pet--shell {
   pointer-events: none;
   cursor: default;
   filter: saturate(0.45) brightness(0.75);
-  animation: lobster-pet-shell-fade 60s linear forwards;
+  animation: crab-pet-shell-fade 60s linear forwards;
 }
 
-.lobster-pet--shell .lobster-pet__svg,
-.lobster-pet--shell .lob-eye-closed {
+.crab-pet--shell .crab-pet__svg,
+.crab-pet--shell .crab-eye-closed {
   animation: none;
 }
 
-.lobster-pet--shell .lob-eye-closed {
+.crab-pet--shell .crab-eye-closed {
   opacity: 1;
 }
 
 /* ---- Nap: eyes shut, z's drift up ---- */
 
-.lobster-pet--act-nap .lob-eye-open {
+.crab-pet--act-nap .crab-eye-open {
   opacity: 0;
 }
 
-.lobster-pet--act-nap .lob-eye-closed {
+.crab-pet--act-nap .crab-eye-closed {
   opacity: 1;
 }
 
-.lobster-pet__z {
+.crab-pet__z {
   position: absolute;
   left: 58%;
   bottom: 72%;
-  color: var(--lob-claw, #57c785);
+  color: var(--crab-claw, #57c785);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: calc(4.5px * var(--lob-scale, 2));
+  font-size: calc(4.5px * var(--crab-scale, 2));
   font-weight: 700;
   line-height: 1;
   opacity: 0;
   pointer-events: none;
 }
 
-.lobster-pet--act-nap .lobster-pet__z {
-  animation: lobster-pet-z 2s ease-out infinite;
+.crab-pet--act-nap .crab-pet__z {
+  animation: crab-pet-z 2s ease-out infinite;
   animation-delay: calc(var(--i, 0) * 0.7s);
 }
 
 /* Party days: confetti-colored z's. */
-.lobster-pet--party .lobster-pet__z:nth-of-type(1) {
+.crab-pet--party .crab-pet__z:nth-of-type(1) {
   color: #ffd166;
 }
 
-.lobster-pet--party .lobster-pet__z:nth-of-type(2) {
+.crab-pet--party .crab-pet__z:nth-of-type(2) {
   color: #5cd9c4;
 }
 
-.lobster-pet--party .lobster-pet__z:nth-of-type(3) {
+.crab-pet--party .crab-pet__z:nth-of-type(3) {
   color: #ff5c8a;
 }
 
 /* ---- Bubbles ---- */
 
-.lobster-pet__bubble {
+.crab-pet__bubble {
   position: absolute;
   left: 30%;
   bottom: 55%;
-  width: calc(2px * var(--lob-scale, 2));
-  height: calc(2px * var(--lob-scale, 2));
-  border: 1px solid var(--lob-claw, #57c785);
+  width: calc(2px * var(--crab-scale, 2));
+  height: calc(2px * var(--crab-scale, 2));
+  border: 1px solid var(--crab-claw, #57c785);
   border-radius: 50%;
   opacity: 0;
   pointer-events: none;
 }
 
-.lobster-pet--act-bubble .lobster-pet__bubble {
-  animation: lobster-pet-bubble 1.6s ease-out;
+.crab-pet--act-bubble .crab-pet__bubble {
+  animation: crab-pet-bubble 1.6s ease-out;
   animation-delay: calc(var(--i, 0) * 0.42s);
 }
 
 /* ---- Keyframes ---- */
 
-@keyframes lobster-pet-breathe {
+@keyframes crab-pet-breathe {
   0%,
   100% {
-    transform: scaleX(var(--lob-face, 1)) scaleY(1);
+    transform: scaleX(var(--crab-face, 1)) scaleY(1);
   }
   50% {
-    transform: scaleX(var(--lob-face, 1)) scaleY(0.96);
+    transform: scaleX(var(--crab-face, 1)) scaleY(0.96);
   }
 }
 
-@keyframes lobster-pet-blink-open {
+@keyframes crab-pet-blink-open {
   0%,
   93% {
     opacity: 1;
@@ -1032,7 +1032,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-blink-closed {
+@keyframes crab-pet-blink-closed {
   0%,
   93% {
     opacity: 0;
@@ -1047,7 +1047,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-enter {
+@keyframes crab-pet-enter {
   from {
     transform: translateY(105%);
   }
@@ -1056,7 +1056,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-wave {
+@keyframes crab-pet-wave {
   0%,
   100% {
     transform: translateY(0) rotate(0deg);
@@ -1071,7 +1071,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-snip {
+@keyframes crab-pet-snip {
   0%,
   100% {
     transform: scale(1);
@@ -1081,7 +1081,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-hop {
+@keyframes crab-pet-hop {
   0%,
   100% {
     transform: translateY(0);
@@ -1097,7 +1097,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-spin {
+@keyframes crab-pet-spin {
   from {
     transform: rotateY(0deg);
   }
@@ -1106,7 +1106,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-peek {
+@keyframes crab-pet-peek {
   0%,
   100% {
     transform: translateY(0);
@@ -1120,7 +1120,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-waddle {
+@keyframes crab-pet-waddle {
   0%,
   100% {
     transform: translateY(0) rotate(2.5deg);
@@ -1130,7 +1130,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-startle {
+@keyframes crab-pet-startle {
   0% {
     transform: translateY(0);
   }
@@ -1149,7 +1149,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-heart {
+@keyframes crab-pet-heart {
   0% {
     opacity: 0;
     transform: translate(0, 0) scale(0.6);
@@ -1163,7 +1163,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-sweep-body {
+@keyframes crab-pet-sweep-body {
   0%,
   100% {
     transform: translateX(0) rotate(0deg);
@@ -1182,7 +1182,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-broom {
+@keyframes crab-pet-broom {
   0%,
   100% {
     opacity: 0;
@@ -1206,7 +1206,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-droop {
+@keyframes crab-pet-droop {
   0%,
   100% {
     transform: translateY(0) rotate(0deg);
@@ -1225,7 +1225,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-droop-antennae {
+@keyframes crab-pet-droop-antennae {
   0%,
   100% {
     transform: translateY(0) scaleY(1);
@@ -1236,7 +1236,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-molt {
+@keyframes crab-pet-molt {
   0%,
   100% {
     transform: rotate(0deg) scaleY(1);
@@ -1260,7 +1260,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-shell-fade {
+@keyframes crab-pet-shell-fade {
   0% {
     opacity: 0.4;
   }
@@ -1269,7 +1269,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-cheer {
+@keyframes crab-pet-cheer {
   0%,
   100% {
     transform: translateY(0) rotateY(0deg);
@@ -1288,7 +1288,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-cheer-claws {
+@keyframes crab-pet-cheer-claws {
   0%,
   100% {
     transform: translateY(0) rotate(0deg);
@@ -1299,7 +1299,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-z {
+@keyframes crab-pet-z {
   0% {
     opacity: 0;
     transform: translate(0, 0);
@@ -1313,7 +1313,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-bubble {
+@keyframes crab-pet-bubble {
   0% {
     opacity: 0;
     transform: translate(0, 0) scale(0.6);
@@ -1328,32 +1328,32 @@ openclaw-lobster-pet[data-dex-complete]::after {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  openclaw-lobster-pet .lobster-pet,
-  openclaw-lobster-pet .lobster-pet *,
-  openclaw-lobster-pet .lobster-bottle,
-  openclaw-lobster-pet .lobster-bottle * {
+  openclaw-crab-pet .crab-pet,
+  openclaw-crab-pet .crab-pet *,
+  openclaw-crab-pet .crab-bottle,
+  openclaw-crab-pet .crab-bottle * {
     animation: none !important;
     transition: none !important;
   }
 
-  .lob-magma,
-  .lob-oilsheen,
-  .lob-aurora__band1,
-  .lob-aurora__band2,
-  .lob-twinkle,
-  .lob-glass-glints,
-  .lob-heisenbug-frame,
-  .lob-cryptid-frame,
-  .lob-balloon-frame,
-  .lob-portal-ring,
-  .lob-skeleton__block,
-  .lob-led,
-  .lob-pixel-frame,
-  .lob-bee-wings ellipse,
-  .lob-disco,
-  .lob-disco rect,
-  .lobster-pet--palette-goldenretro .lobster-pet__svg,
-  .lobster-pet--palette-phosphor .lobster-pet__svg {
+  .crab-magma,
+  .crab-oilsheen,
+  .crab-aurora__band1,
+  .crab-aurora__band2,
+  .crab-twinkle,
+  .crab-glass-glints,
+  .crab-heisenbug-frame,
+  .crab-cryptid-frame,
+  .crab-balloon-frame,
+  .crab-portal-ring,
+  .crab-skeleton__block,
+  .crab-led,
+  .crab-pixel-frame,
+  .crab-bee-wings ellipse,
+  .crab-disco,
+  .crab-disco rect,
+  .crab-pet--palette-goldenretro .crab-pet__svg,
+  .crab-pet--palette-phosphor .crab-pet__svg {
     animation: none !important;
   }
 }
@@ -1362,51 +1362,51 @@ openclaw-lobster-pet[data-dex-complete]::after {
 
 /* Passers cross the whole ledge once; left/right position comes from the
    crossing keyframes, not the perch variable, and each kind sets its own
-   crossing time through --lob-cross (LOBSTER_PASSER_CROSS_MS). */
-.lobster-pet--passer {
+   crossing time through --crab-cross (CRAB_PASSER_CROSS_MS). */
+.crab-pet--passer {
   pointer-events: none;
   cursor: default;
   bottom: 0;
 }
 
-.lobster-pet--passer .lobster-pet__body {
-  animation: lobster-pet-waddle 0.32s ease-in-out infinite;
+.crab-pet--passer .crab-pet__body {
+  animation: crab-pet-waddle 0.32s ease-in-out infinite;
 }
 
-.lobster-pet--passer-ltr {
-  animation: lobster-pet-cross-ltr var(--lob-cross, 11s) linear forwards;
+.crab-pet--passer-ltr {
+  animation: crab-pet-cross-ltr var(--crab-cross, 11s) linear forwards;
 }
 
-.lobster-pet--passer-rtl {
-  animation: lobster-pet-cross-rtl var(--lob-cross, 11s) linear forwards;
+.crab-pet--passer-rtl {
+  animation: crab-pet-cross-rtl var(--crab-cross, 11s) linear forwards;
 }
 
 /* The crab walks sideways by definition: it crosses while facing you and
    feels no need to explain itself. */
-.lobster-pet--crab .lobster-pet__body {
-  animation: lobster-pet-crab-scuttle 0.24s ease-in-out infinite;
+.crab-pet--crab .crab-pet__body {
+  animation: crab-pet-crab-scuttle 0.24s ease-in-out infinite;
 }
 
 /* The snail neither waddles nor hurries. */
-.lobster-pet--snail .lobster-pet__body {
+.crab-pet--snail .crab-pet__body {
   animation: none;
 }
 
 /* The duck bobs like the bath toy it is. */
-.lobster-pet--duck .lobster-pet__body {
-  animation: lobster-pet-duck-bob 1.6s ease-in-out infinite;
+.crab-pet--duck .crab-pet__body {
+  animation: crab-pet-duck-bob 1.6s ease-in-out infinite;
 }
 
 /* The jellyfish drifts above the ledge, pulsing softly. */
-.lobster-pet--jellyfish {
+.crab-pet--jellyfish {
   bottom: 12px;
 }
 
-.lobster-pet--jellyfish .lobster-pet__body {
-  animation: lobster-pet-jelly-pulse 2.4s ease-in-out infinite;
+.crab-pet--jellyfish .crab-pet__body {
+  animation: crab-pet-jelly-pulse 2.4s ease-in-out infinite;
 }
 
-@keyframes lobster-pet-cross-ltr {
+@keyframes crab-pet-cross-ltr {
   from {
     left: -6%;
   }
@@ -1415,7 +1415,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-cross-rtl {
+@keyframes crab-pet-cross-rtl {
   from {
     left: 106%;
   }
@@ -1424,7 +1424,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-crab-scuttle {
+@keyframes crab-pet-crab-scuttle {
   0%,
   100% {
     transform: translateY(0);
@@ -1434,7 +1434,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-duck-bob {
+@keyframes crab-pet-duck-bob {
   0%,
   100% {
     transform: translateY(0) rotate(-3deg);
@@ -1444,7 +1444,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-@keyframes lobster-pet-jelly-pulse {
+@keyframes crab-pet-jelly-pulse {
   0%,
   100% {
     transform: translateY(0) scaleY(1);
@@ -1458,10 +1458,10 @@ openclaw-lobster-pet[data-dex-complete]::after {
    Washes up on its own schedule, bobs until opened, and ebbs away. The
    fortune travels in the title tooltip. */
 
-.lobster-bottle {
+.crab-bottle {
   position: absolute;
   bottom: 0;
-  left: var(--lob-x, 50%);
+  left: var(--crab-x, 50%);
   width: 22px;
   height: 20px;
   transform: translateX(-50%);
@@ -1472,19 +1472,19 @@ openclaw-lobster-pet[data-dex-complete]::after {
   -webkit-tap-highlight-color: transparent;
 }
 
-.lobster-bottle__svg {
+.crab-bottle__svg {
   display: block;
   width: 100%;
   height: 100%;
   overflow: visible;
-  animation: lobster-bottle-bob 3.6s ease-in-out infinite;
+  animation: crab-bottle-bob 3.6s ease-in-out infinite;
 }
 
-.lobster-bottle--open .lobster-bottle__svg {
+.crab-bottle--open .crab-bottle__svg {
   animation: none;
 }
 
-@keyframes lobster-bottle-bob {
+@keyframes crab-bottle-bob {
   0%,
   100% {
     transform: rotate(0deg);
@@ -1494,33 +1494,33 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-/* ---- Lobsterdex (appearance settings gallery) ---- */
+/* ---- Crabdex (appearance settings gallery) ---- */
 
-.lobsterdex {
+.crabdex {
   display: flex;
   flex-wrap: wrap;
   gap: 7px;
   align-items: flex-end;
 }
 
-.lobsterdex__mini {
+.crabdex__mini {
   display: inline-block;
   position: relative;
   width: 26px;
   aspect-ratio: 120 / 105;
 }
 
-.lobsterdex__mini .lobster-pet__svg {
+.crabdex__mini .crab-pet__svg {
   animation: none;
 }
 
 /* Unseen palettes are dim silhouettes until one visits. */
-.lobsterdex__mini--unseen {
+.crabdex__mini--unseen {
   filter: grayscale(1) brightness(0.45) opacity(0.55);
 }
 
 /* A shiny of this palette has visited: a small gold spark on the mini. */
-.lobsterdex__mini-star {
+.crabdex__mini-star {
   position: absolute;
   top: -5px;
   right: -4px;
@@ -1530,38 +1530,38 @@ openclaw-lobster-pet[data-dex-complete]::after {
   pointer-events: none;
 }
 
-.lobsterdex__gallery {
+.crabdex__gallery {
   display: grid;
   gap: 12px;
   justify-items: start;
 }
 
-.lobsterdex__open {
+.crabdex__open {
   text-decoration: none;
 }
 
-.lobsterdex__tooltip {
+.crabdex__tooltip {
   display: grid;
   max-width: 230px;
   gap: 2px;
 }
 
-.lobsterdex__tooltip strong {
+.crabdex__tooltip strong {
   color: var(--text-strong);
 }
 
-.lobsterdex__tooltip span {
+.crabdex__tooltip span {
   color: var(--muted);
 }
 
-/* ---- Lobsterdex full-page collection ---- */
+/* ---- Crabdex full-page collection ---- */
 
-.lobsterdex-page {
+.crabdex-page {
   display: grid;
   gap: 22px;
 }
 
-.lobsterdex-page__header {
+.crabdex-page__header {
   position: relative;
   display: flex;
   gap: 20px;
@@ -1580,7 +1580,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
     var(--card);
 }
 
-.lobsterdex-page__header::after {
+.crabdex-page__header::after {
   position: absolute;
   right: 18px;
   bottom: 0;
@@ -1590,7 +1590,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   background: transparent;
 }
 
-.lobsterdex-page__header--complete::after {
+.crabdex-page__header--complete::after {
   background: linear-gradient(
     90deg,
     transparent,
@@ -1602,24 +1602,24 @@ openclaw-lobster-pet[data-dex-complete]::after {
   opacity: 0.7;
 }
 
-.lobsterdex-page__header h2,
-.lobsterdex-page__card h3,
-.lobsterdex-page__header p,
-.lobsterdex-page__card p {
+.crabdex-page__header h2,
+.crabdex-page__card h3,
+.crabdex-page__header p,
+.crabdex-page__card p {
   margin: 0;
 }
 
-.lobsterdex-page__header h2 {
+.crabdex-page__header h2 {
   font-size: 24px;
   letter-spacing: -0.025em;
 }
 
-.lobsterdex-page__header p {
+.crabdex-page__header p {
   margin-top: 4px;
   color: var(--muted);
 }
 
-.lobsterdex-page__count {
+.crabdex-page__count {
   flex: 0 0 auto;
   padding: 5px 9px;
   border: 1px solid var(--border);
@@ -1630,18 +1630,18 @@ openclaw-lobster-pet[data-dex-complete]::after {
   font-weight: 650;
 }
 
-.lobsterdex-page__header--complete .lobsterdex-page__count {
+.crabdex-page__header--complete .crabdex-page__count {
   border-color: color-mix(in srgb, #f4b840 55%, var(--border));
   color: color-mix(in srgb, #f4b840 75%, var(--text));
 }
 
-.lobsterdex-page__grid {
+.crabdex-page__grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: 12px;
 }
 
-.lobsterdex-page__card {
+.crabdex-page__card {
   position: relative;
   display: grid;
   grid-template-rows: 94px auto minmax(42px, auto) auto;
@@ -1656,11 +1656,11 @@ openclaw-lobster-pet[data-dex-complete]::after {
   text-align: center;
 }
 
-.lobsterdex-page__card--highlight {
-  animation: lobsterdex-card-highlight 2s ease-out;
+.crabdex-page__card--highlight {
+  animation: crabdex-card-highlight 2s ease-out;
 }
 
-@keyframes lobsterdex-card-highlight {
+@keyframes crabdex-card-highlight {
   0%,
   100% {
     border-color: var(--border);
@@ -1674,12 +1674,12 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-.lobsterdex-page__card--unseen {
+.crabdex-page__card--unseen {
   border-style: dashed;
   box-shadow: none;
 }
 
-.lobsterdex-page__sprite.lobster-pet {
+.crabdex-page__sprite.crab-pet {
   position: relative;
   bottom: auto;
   left: auto;
@@ -1691,28 +1691,28 @@ openclaw-lobster-pet[data-dex-complete]::after {
   pointer-events: none;
 }
 
-.lobsterdex-page__card h3 {
+.crabdex-page__card h3 {
   color: var(--text-strong);
   font-size: 14px;
   font-weight: 700;
 }
 
-.lobsterdex-page__lore {
+.crabdex-page__lore {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.4;
 }
 
-.lobsterdex-page__date {
+.crabdex-page__date {
   color: var(--muted);
   font-size: 10px;
 }
 
-.lobsterdex-page__dates {
+.crabdex-page__dates {
   min-height: 18px;
 }
 
-.lobsterdex-page__copy-link {
+.crabdex-page__copy-link {
   position: absolute;
   top: 8px;
   left: 8px;
@@ -1734,13 +1734,13 @@ openclaw-lobster-pet[data-dex-complete]::after {
     background 0.16s ease;
 }
 
-.lobsterdex-page__copy-link svg {
+.crabdex-page__copy-link svg {
   width: 15px;
   height: 15px;
 }
 
-.lobsterdex-page__card:hover .lobsterdex-page__copy-link,
-.lobsterdex-page__card:focus-within .lobsterdex-page__copy-link {
+.crabdex-page__card:hover .crabdex-page__copy-link,
+.crabdex-page__card:focus-within .crabdex-page__copy-link {
   opacity: 1;
   pointer-events: auto;
 }
@@ -1748,19 +1748,19 @@ openclaw-lobster-pet[data-dex-complete]::after {
 /* Touch screens have no hover to reveal the control; keep it tappable in a
    quieter resting state instead of unreachable. */
 @media (hover: none) {
-  .lobsterdex-page__copy-link {
+  .crabdex-page__copy-link {
     opacity: 0.55;
     pointer-events: auto;
   }
 }
 
-.lobsterdex-page__copy-link:hover,
-.lobsterdex-page__copy-link:focus-visible {
+.crabdex-page__copy-link:hover,
+.crabdex-page__copy-link:focus-visible {
   color: var(--text-strong);
   background: color-mix(in srgb, var(--accent) 13%, var(--card));
 }
 
-.lobsterdex-page__star {
+.crabdex-page__star {
   top: -1px;
   right: 1px;
   font-size: 14px;
@@ -1768,13 +1768,13 @@ openclaw-lobster-pet[data-dex-complete]::after {
 }
 
 @media (max-width: 540px) {
-  .lobsterdex-page__header {
+  .crabdex-page__header {
     align-items: flex-start;
     flex-direction: column;
     gap: 12px;
   }
 
-  .lobsterdex-page__grid {
+  .crabdex-page__grid {
     grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
   }
 }

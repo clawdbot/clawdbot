@@ -1,15 +1,15 @@
 import { html } from "lit";
 import { state } from "lit/decorators.js";
 import { titleForRoute } from "../../app-navigation.ts";
-import { getLobsterdexEntries } from "../../components/lobster-dex.ts";
-import type { LobsterPetPaletteId } from "../../components/lobster-pet-contract.ts";
-import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet.ts";
+import { getCrabdexEntries } from "../../components/crab-dex.ts";
+import type { CrabPetPaletteId } from "../../components/crab-pet-contract.ts";
+import { CRAB_PET_PALETTES } from "../../components/crab-pet.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import { renderLobsterdex } from "./view.ts";
+import { renderCrabdex } from "./view.ts";
 
-class LobsterdexPage extends OpenClawLightDomElement {
-  @state() private copiedPaletteId: LobsterPetPaletteId | null = null;
+class CrabdexPage extends OpenClawLightDomElement {
+  @state() private copiedPaletteId: CrabPetPaletteId | null = null;
   private copyResetTimer: number | null = null;
 
   override disconnectedCallback(): void {
@@ -21,31 +21,31 @@ class LobsterdexPage extends OpenClawLightDomElement {
   }
 
   protected override firstUpdated(): void {
-    const hashPrefix = "#lobsterdex-";
+    const hashPrefix = "#crabdex-";
     if (!location.hash.startsWith(hashPrefix)) {
       return;
     }
-    const palette = LOBSTER_PET_PALETTES.find(
+    const palette = CRAB_PET_PALETTES.find(
       (entry) => entry.id === location.hash.slice(hashPrefix.length),
     );
     if (!palette) {
       return;
     }
-    const card = this.querySelector<HTMLElement>(`#lobsterdex-${palette.id}`);
+    const card = this.querySelector<HTMLElement>(`#crabdex-${palette.id}`);
     if (!card) {
       return;
     }
     const clearHighlight = (event: AnimationEvent) => {
       // Palette animations bubble through the card too; only its own pulse
       // owns this transient deep-link marker.
-      if (event.target !== card || event.animationName !== "lobsterdex-card-highlight") {
+      if (event.target !== card || event.animationName !== "crabdex-card-highlight") {
         return;
       }
-      card.classList.remove("lobsterdex-page__card--highlight");
+      card.classList.remove("crabdex-page__card--highlight");
       card.removeEventListener("animationend", clearHighlight);
     };
     card.addEventListener("animationend", clearHighlight);
-    card.classList.add("lobsterdex-page__card--highlight");
+    card.classList.add("crabdex-page__card--highlight");
     // Double rAF: the workspace shell finishes layout after first render, and
     // scrolling immediately leaves the target beyond the settled viewport.
     requestAnimationFrame(() => {
@@ -53,8 +53,8 @@ class LobsterdexPage extends OpenClawLightDomElement {
     });
   }
 
-  private readonly copyLink = async (paletteId: LobsterPetPaletteId): Promise<void> => {
-    const url = `${location.origin}${location.pathname}#lobsterdex-${paletteId}`;
+  private readonly copyLink = async (paletteId: CrabPetPaletteId): Promise<void> => {
+    const url = `${location.origin}${location.pathname}#crabdex-${paletteId}`;
     try {
       await navigator.clipboard.writeText(url);
     } catch {
@@ -73,10 +73,10 @@ class LobsterdexPage extends OpenClawLightDomElement {
   override render() {
     return html`
       <section class="content-header">
-        <div class="page-title">${titleForRoute("lobsterdex")}</div>
+        <div class="page-title">${titleForRoute("crabdex")}</div>
       </section>
       ${renderSettingsWorkspace(
-        renderLobsterdex(getLobsterdexEntries(), {
+        renderCrabdex(getCrabdexEntries(), {
           copiedPaletteId: this.copiedPaletteId,
           onCopyLink: (paletteId) => void this.copyLink(paletteId),
         }),
@@ -85,6 +85,6 @@ class LobsterdexPage extends OpenClawLightDomElement {
   }
 }
 
-if (!customElements.get("openclaw-lobsterdex-page")) {
-  customElements.define("openclaw-lobsterdex-page", LobsterdexPage);
+if (!customElements.get("openclaw-crabdex-page")) {
+  customElements.define("openclaw-crabdex-page", CrabdexPage);
 }

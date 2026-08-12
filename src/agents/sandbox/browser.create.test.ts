@@ -82,7 +82,7 @@ vi.mock("../../runtime.js", () => ({
 vi.mock("../../plugin-sdk/browser-profiles.js", () => ({
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS: 60_000,
   DEFAULT_BROWSER_EVALUATE_ENABLED: true,
-  DEFAULT_OPENCLAW_BROWSER_COLOR: "#FF4500",
+  DEFAULT_OPENCLAW_BROWSER_COLOR: "#2FBF71",
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME: "openclaw",
   resolveProfile: (
     resolved: { cdpHost: string; cdpIsLoopback: boolean; profiles?: Record<string, unknown> },
@@ -102,7 +102,7 @@ vi.mock("../../plugin-sdk/browser-profiles.js", () => ({
       cdpUrl: profile.cdpUrl ?? `http://${resolved.cdpHost}:${profile.cdpPort}`,
       cdpHost: resolved.cdpHost,
       cdpIsLoopback: resolved.cdpIsLoopback,
-      color: profile.color ?? "#FF4500",
+      color: profile.color ?? "#2FBF71",
       driver: "openclaw",
       attachOnly: true,
     };
@@ -636,7 +636,7 @@ describe("ensureSandboxBrowser create args", () => {
           remoteCdpHandshakeTimeoutMs: 3000,
           localLaunchTimeoutMs: 15_000,
           localCdpReadyTimeoutMs: 8_000,
-          color: "#FF4500",
+          color: "#2FBF71",
           headless: false,
           noSandbox: false,
           attachOnly: true,
@@ -651,7 +651,7 @@ describe("ensureSandboxBrowser create args", () => {
           profiles: {
             openclaw: {
               cdpPort: 49100,
-              color: "#FF4500",
+              color: "#2FBF71",
             },
           },
           ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
@@ -700,7 +700,7 @@ describe("ensureSandboxBrowser create args", () => {
           remoteCdpHandshakeTimeoutMs: 3000,
           localLaunchTimeoutMs: 15_000,
           localCdpReadyTimeoutMs: 8_000,
-          color: "#FF4500",
+          color: "#2FBF71",
           headless: false,
           noSandbox: false,
           attachOnly: true,
@@ -715,7 +715,7 @@ describe("ensureSandboxBrowser create args", () => {
           profiles: {
             openclaw: {
               cdpPort: 49100,
-              color: "#FF4500",
+              color: "#2FBF71",
             },
           },
         },

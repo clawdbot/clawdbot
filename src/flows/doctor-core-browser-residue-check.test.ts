@@ -46,7 +46,7 @@ describe("browser clawd profile residue health check", () => {
 
   it("reports legacy clawd profile residue through doctor lint", async () => {
     browserMocks.detectLegacyClawdBrowserProfileResidue.mockResolvedValueOnce(residue);
-    const cfg: OpenClawConfig = { browser: { profiles: { openclaw: { color: "#FF4500" } } } };
+    const cfg: OpenClawConfig = { browser: { profiles: { openclaw: { color: "#2FBF71" } } } };
     const check = requireBrowserResidueCheck();
 
     const findings = await check.detect({
@@ -75,7 +75,7 @@ describe("browser clawd profile residue health check", () => {
       changes: ["Archived legacy clawd managed browser profile residue."],
       warnings: [],
     });
-    const cfg: OpenClawConfig = { browser: { profiles: { openclaw: { color: "#FF4500" } } } };
+    const cfg: OpenClawConfig = { browser: { profiles: { openclaw: { color: "#2FBF71" } } } };
     const check = requireBrowserResidueCheck();
     const ctx: HealthRepairContext = {
       mode: "fix",

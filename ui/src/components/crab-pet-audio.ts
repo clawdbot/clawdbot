@@ -1,13 +1,13 @@
-export type LobsterPetChirpKind = "poke" | "pet";
+export type CrabPetChirpKind = "poke" | "pet";
 
 // Opt-in (default off) tiny synth chirps: a descending blub for pokes, a
 // rising coo for pets. Only ever called from pointer gestures, so the
 // AudioContext is created inside a user activation and never blocked by
 // autoplay policy. Sound is decoration - any audio failure is swallowed.
-export function playLobsterPetChirp(
+export function playCrabPetChirp(
   audioCtx: AudioContext | null,
   soundsEnabled: boolean,
-  kind: LobsterPetChirpKind,
+  kind: CrabPetChirpKind,
 ): AudioContext | null {
   let ctx = audioCtx;
   if (!soundsEnabled) {
@@ -45,8 +45,8 @@ export function playLobsterPetChirp(
   return ctx;
 }
 
-export function previewLobsterChirp(): void {
-  const ctx = playLobsterPetChirp(null, true, "poke");
+export function previewCrabChirp(): void {
+  const ctx = playCrabPetChirp(null, true, "poke");
   if (!ctx) {
     return;
   }

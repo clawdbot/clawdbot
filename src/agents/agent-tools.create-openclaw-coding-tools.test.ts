@@ -1138,12 +1138,12 @@ describe("createOpenClawCodingTools", () => {
     createOpenClawToolsMock.mockClear();
 
     createOpenClawCodingTools({
-      config: { tools: { alsoAllow: ["lobster"] } },
+      config: { tools: { alsoAllow: ["crab"] } },
     });
 
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
     expect(latestCreateOpenClawToolsOptions().pluginToolAllowlist).toStrictEqual([
-      "lobster",
+      "crab",
       DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
     ]);
   });

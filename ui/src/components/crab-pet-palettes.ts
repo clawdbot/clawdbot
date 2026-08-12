@@ -1,9 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import type { LobsterPetLook, LobsterPetPalette } from "./lobster-pet-contract.ts";
+import type { CrabPetLook, CrabPetPalette } from "./crab-pet-contract.ts";
 
-// Rarity ladder loosely mirrors real lobster genetics: blue and gold lead into
+// Rarity ladder loosely mirrors real crab genetics: blue and gold lead into
 // terminal fantasies whose geometry and styling key off each id.
-export const LOBSTER_PALETTE_WEIGHTS: Array<[LobsterPetPalette, number]> = [
+export const CRAB_PALETTE_WEIGHTS: Array<[CrabPetPalette, number]> = [
   [{ id: "emerald", shell: "#35a55b", claw: "#57c785" }, 26],
   [{ id: "blue", shell: "#4a7dfc", claw: "#7fa4ff" }, 7],
   [{ id: "gold", shell: "#f4b840", claw: "#f9d47a" }, 5],
@@ -31,17 +31,21 @@ export const LOBSTER_PALETTE_WEIGHTS: Array<[LobsterPetPalette, number]> = [
   [{ id: "cryptid", shell: "#6e6257", claw: "#7d7263" }, 0.9],
   [{ id: "flatpack", shell: "#d9c9a8", claw: "#d9c9a8" }, 0.9],
   [{ id: "tinfoil", shell: "#9aa4ad", claw: "#a8b2bb" }, 0.9],
-  [{ id: "actual", shell: "#a63c28", claw: "#8f3220" }, 0.9],
+  [{ id: "actual", shell: "#2e7d46", claw: "#3f9d63" }, 0.9],
   [{ id: "cottoncandy", shell: "#f6a8c9", claw: "#a5c6f0" }, 0.8],
   [{ id: "disco", shell: "#b8c4d8", claw: "#cbd5e6" }, 0.8],
   [{ id: "chimera", shell: "#b0685a", claw: "#b0685a" }, 0.75],
-  [{ id: "pixel", shell: "#d84c3e", claw: "#ef8f6a" }, 0.7],
+  [{ id: "pixel", shell: "#2fbf71", claw: "#8ee3af" }, 0.7],
   [{ id: "blueprint", shell: "#123a66", claw: "#123a66" }, 0.7],
   [{ id: "phosphor", shell: "#0d2415", claw: "#0f2b19" }, 0.7],
   // Terminal ink rides a theme var so the glyph art stays legible on light
   // cards; the CSS contract passes var() values through untouched (mood).
   [
-    { id: "ascii", shell: "var(--lob-ascii-ink, #d8dee6)", claw: "var(--lob-ascii-ink, #d8dee6)" },
+    {
+      id: "ascii",
+      shell: "var(--crab-ascii-ink, #d8dee6)",
+      claw: "var(--crab-ascii-ink, #d8dee6)",
+    },
     0.7,
   ],
   [{ id: "portal", shell: "#4a9df8", claw: "#ff9a2e" }, 0.7],
@@ -51,31 +55,31 @@ export const LOBSTER_PALETTE_WEIGHTS: Array<[LobsterPetPalette, number]> = [
   [{ id: "heisenbug", shell: "#262a33", claw: "#343945" }, 0.6],
   [{ id: "invisible", shell: "rgba(127,140,160,0.07)", claw: "rgba(127,140,160,0.07)" }, 0.55],
   // The classic-logo grails stay the final, strictly rarest two entries.
-  [{ id: "retro", shell: "#e8262c", claw: "#f04a3e" }, 0.5],
+  [{ id: "retro", shell: "#2fbf71", claw: "#57c785" }, 0.5],
   [{ id: "goldenretro", shell: "#e8b422", claw: "#f6cf5a" }, 0.1],
 ];
 
-export const LOBSTER_PET_PALETTES: readonly LobsterPetPalette[] = LOBSTER_PALETTE_WEIGHTS.map(
+export const CRAB_PET_PALETTES: readonly CrabPetPalette[] = CRAB_PALETTE_WEIGHTS.map(
   ([palette]) => palette,
 );
 
 const CHIMERA_DONOR_IDS = ["emerald", "blue", "gold", "banana", "watermelon"] as const;
 
-export const CANONICAL_CHIMERA_PARTS: NonNullable<LobsterPetLook["chimeraParts"]> = {
+export const CANONICAL_CHIMERA_PARTS: NonNullable<CrabPetLook["chimeraParts"]> = {
   body: "#35a55b",
   clawLeft: "#4a7dfc",
   clawRight: "#f4b840",
   antennae: "#3f9d63",
 };
 
-export function rollChimeraParts(rng: () => number): NonNullable<LobsterPetLook["chimeraParts"]> {
+export function rollChimeraParts(rng: () => number): NonNullable<CrabPetLook["chimeraParts"]> {
   const remaining = CHIMERA_DONOR_IDS.map((id) =>
     expectDefined(
-      LOBSTER_PET_PALETTES.find((palette) => palette.id === id),
+      CRAB_PET_PALETTES.find((palette) => palette.id === id),
       `chimera donor palette ${id}`,
     ),
   );
-  const pick = (): LobsterPetPalette => {
+  const pick = (): CrabPetPalette => {
     const index = Math.floor(rng() * remaining.length);
     return expectDefined(remaining.splice(index, 1)[0], "distinct chimera donor");
   };
@@ -88,5 +92,5 @@ export function rollChimeraParts(rng: () => number): NonNullable<LobsterPetLook[
 }
 
 export function chimeraBodyClaw(bodyColor: string): string | undefined {
-  return LOBSTER_PET_PALETTES.find((palette) => palette.shell === bodyColor)?.claw;
+  return CRAB_PET_PALETTES.find((palette) => palette.shell === bodyColor)?.claw;
 }
