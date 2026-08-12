@@ -21,6 +21,7 @@ import {
 } from "./session-accessor.sqlite-transcript-sequences.js";
 import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
 import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-write.js";
+import { resolveSessionTranscriptRuntimeTarget } from "./session-accessor.transcript-target.js";
 import { appendTranscriptMessage, emitTranscriptUpdate } from "./session-accessor.transcript.js";
 import type {
   SessionTranscriptWriteScope,
@@ -170,7 +171,13 @@ export async function persistSessionTranscriptTurn(
     target.sessionId
   ) {
     return await persistExpectedSessionTranscriptTurn(
-      { ...scope, storePath: target.storePath },
+      {
+        ...scope,
+        agentId: target.agentId,
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        storePath: target.storePath,
+      },
       {
         ...options,
         expectedSessionId: target.sessionId,
@@ -397,27 +404,32 @@ async function resolveTranscriptTurnTarget(
       agentId,
       env: scope.env,
     });
+  const runtimeTarget = scope.sessionStore
+    ? undefined
+    : await resolveSessionTranscriptRuntimeTarget({
+        agentId,
+        ...(scope.env ? { env: scope.env } : {}),
+        sessionId: scope.sessionId,
+        sessionKey,
+        storePath,
+      });
+  const resolvedSessionKey = runtimeTarget?.sessionKey ?? sessionKey;
   const resolved = scope.sessionStore
-    ? resolveSessionEntryFromStore({ store: scope.sessionStore, sessionKey })
-    : resolveSessionEntrySelection(
-        {
-          agentId,
-          ...(scope.env ? { env: scope.env } : {}),
-          sessionKey,
-          storePath,
-        },
-        { readOnly: true },
-      );
+    ? resolveSessionEntryFromStore({ store: scope.sessionStore, sessionKey: resolvedSessionKey })
+    : undefined;
   // Mirrors can represent either durable Gateway state or memory-only internal
   // sessions. Classify that provenance without materializing SQLite state.
-  const persistedEntry = scope.sessionStore
-    ? loadSessionEntryReadOnly({ ...scope, agentId, sessionKey, storePath })
-    : resolved?.existing;
+  const persistedEntry = loadSessionEntryReadOnly({
+    ...scope,
+    agentId,
+    sessionKey: resolvedSessionKey,
+    storePath,
+  });
   const sessionEntry = resolved?.existing ?? scope.sessionEntry ?? persistedEntry;
   return {
     agentId,
     sessionId: scope.sessionId,
-    sessionKey: resolved?.normalizedKey ?? sessionKey,
+    sessionKey: runtimeTarget?.sessionKey ?? resolved?.normalizedKey ?? resolvedSessionKey,
     storePath,
     sessionEntry,
     entryFromPersistedStore: persistedEntry != null,

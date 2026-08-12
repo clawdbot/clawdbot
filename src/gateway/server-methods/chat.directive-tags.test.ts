@@ -117,6 +117,7 @@ const mockState = vi.hoisted(() => ({
   onAfterAgentRunStart: null as (() => void) | null,
   agentRunId: "run-agent-1",
   sessionEntry: {} as Record<string, unknown>,
+  sessionIdsByKey: new Map<string, string>(),
   sessionMissing: false,
   loadSessionEntryCalls: [] as Array<{ rawKey: string; opts?: { agentId?: string } }>,
   lastDispatchCtx: undefined as MsgContext | undefined,
@@ -236,7 +237,7 @@ vi.mock("../session-utils.js", async () => {
     const entry = mockState.sessionMissing
       ? undefined
       : {
-          sessionId: mockState.sessionId,
+          sessionId: mockState.sessionIdsByKey.get(rawKey) ?? mockState.sessionId,
           sessionFile: mockState.transcriptPath,
           ...mockState.sessionEntry,
         };
@@ -1302,6 +1303,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.onAfterAgentRunStart = null;
     mockState.agentRunId = "run-agent-1";
     mockState.sessionEntry = {};
+    mockState.sessionIdsByKey.clear();
     mockState.sessionMissing = false;
     mockState.loadSessionEntryCalls = [];
     mockState.lastDispatchCtx = undefined;
@@ -2452,13 +2454,23 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   it("persists non-agent plugin-bound replies in the binding-owned session", async () => {
     await createTranscriptFixture("openclaw-chat-send-plugin-binding-history-");
     const targetSessionKey = "plugin-binding:codex:history123";
+    const targetSessionId = "plugin-binding-history-session";
+    await replaceSessionEntry(
+      {
+        agentId: "main",
+        sessionKey: `agent:main:${targetSessionKey}`,
+        storePath: mockState.storePath,
+      },
+      { sessionId: targetSessionId, updatedAt: Date.now() },
+    );
+    mockState.sessionIdsByKey.set(targetSessionKey, targetSessionId);
     mockState.finalPayload = setReplyPayloadMetadata(
       { text: "bound history reply" },
       {
         sourceReplyTranscriptMirror: {
           sessionKey: targetSessionKey,
           agentId: "main",
-          expectedSessionId: mockState.sessionId,
+          expectedSessionId: targetSessionId,
         },
       },
     );
