@@ -1,10 +1,7 @@
+import childProcess from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  WORKER_PROTOCOL_FEATURES,
-  WORKER_RPC_SET_VERSION,
-} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
@@ -12,53 +9,21 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
+import {
+  inspectNodeWorkerProcessIdentity,
+  requireNodeWorkerProcessIdentity,
+} from "./node-worker-process-identity.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
+import {
+  TEST_WORKER_CREDENTIAL,
+  TEST_WORKER_SOURCE,
+  testWorkerDescriptor,
+  testWorkerLaunchInput,
+  writeNodeWorkerFixture,
+} from "./node-worker-supervisor.test-support.js";
 
 type NodeWorkerSupervisor = ReturnType<typeof createNodeWorkerSupervisor>;
-
-const BUNDLE_HASH = "a".repeat(64);
-const CREDENTIAL = 'node worker/"credential\\secret?';
-const CHILD_SOURCE = String.raw`
-import fs from "node:fs";
-import path from "node:path";
-let input = "";
-for await (const chunk of process.stdin) input += chunk;
-const descriptor = JSON.parse(input);
-const mode = descriptor.assignment.prompt;
-if (mode === "wait") {
-  setInterval(() => {}, 1000);
-} else if (mode === "secret-fail") {
-  await new Promise((resolve) => setTimeout(resolve, 500));
-  const credential = descriptor.admission.credential;
-  const escaped = JSON.stringify(credential).slice(1, -1);
-  process.stderr.write(
-    "failure " + "x".repeat(5000) + " " + credential + " " + encodeURIComponent(credential) + " " + escaped,
-  );
-  process.exit(7);
-} else if (mode === "secret-success") {
-  await new Promise((resolve) => setTimeout(resolve, 500));
-  const credential = descriptor.admission.credential;
-  process.stdout.write(
-    JSON.stringify({ raw: credential, encoded: encodeURIComponent(credential), status: "completed" }) + "\n",
-  );
-} else if (mode === "overflow") {
-  process.stdout.write("x".repeat(70 * 1024));
-} else if (mode === "fast-terminal") {
-  const marker = path.join(descriptor.assignment.workspaceDir, "fast-terminal-marker");
-  process.once("SIGTERM", () => {
-    fs.writeFileSync(marker, "signal");
-    process.exit(143);
-  });
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  fs.writeFileSync(marker, "normal");
-  process.stdout.write(JSON.stringify({ status: "completed" }) + "\n");
-} else {
-  await new Promise((resolve) => setTimeout(resolve, 25));
-  process.stdout.write(JSON.stringify({ argv: process.argv.slice(2), status: "completed" }) + "\n");
-}
-`;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -68,63 +33,15 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-function descriptor(workspaceDir: string, prompt = "success"): WorkerLaunchDescriptor {
-  return {
-    version: 3,
-    connectionEndpoint: { kind: "unix", socketPath: "/tmp/openclaw-worker/gateway.sock" },
-    admission: {
-      environmentId: "environment-1",
-      credential: CREDENTIAL,
-      sessionId: "session-1",
-      ownerEpoch: 3,
-      rpcSetVersion: WORKER_RPC_SET_VERSION,
-      handshake: {
-        bundleHash: BUNDLE_HASH,
-        openclawVersion: "2026.8.1",
-        protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
-      },
-    },
-    assignment: {
-      agentId: "agent-1",
-      operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
-      agentRuntimeIdentityToken: "signed-runtime-token",
-      runId: "run-1",
-      turnId: "turn-1",
-      prompt,
-      suppressPromptTranscript: false,
-      workspaceDir,
-      modelRef: { provider: "provider-1", model: "model-1" },
-      inferenceOptions: {},
-      initialMessages: [],
-      transcript: { baseLeafId: null, nextSeq: 1 },
-      liveEvents: { ackedSeq: 0, nextSeq: 1 },
-      toolAuthority: { allowedToolNames: [] },
-    },
-  };
-}
-
 function fixture() {
   const root = tempDirs.make("node-worker-supervisor-");
-  const stateDir = path.join(root, "state-root");
-  const bundleRoot = path.join(root, "bundles-root");
-  const workspaceDir = path.join(root, "workspace");
-  const bundleDir = path.join(bundleRoot, "gateway-1", "bundles", BUNDLE_HASH);
-  fs.mkdirSync(bundleDir, { recursive: true });
-  fs.mkdirSync(workspaceDir, { recursive: true });
-  fs.writeFileSync(path.join(bundleDir, "openclaw.mjs"), CHILD_SOURCE);
-  const env = { OPENCLAW_STATE_DIR: stateDir };
+  const { bundleRoot, env, stateDir, workspaceDir } = writeNodeWorkerFixture(root);
   const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
   return { bundleRoot, env, root, stateDir, supervisor, workspaceDir };
 }
 
 function launchInput(workspaceDir: string, launchId: string, prompt = "success") {
-  return {
-    launchId,
-    gatewayNamespace: "gateway-1",
-    bundleHash: BUNDLE_HASH,
-    placementGeneration: 4,
-    descriptor: descriptor(workspaceDir, prompt),
-  };
+  return testWorkerLaunchInput(workspaceDir, launchId, prompt);
 }
 
 async function waitForTerminal(supervisor: NodeWorkerSupervisor, launchId: string) {
@@ -142,6 +59,25 @@ async function waitForTerminal(supervisor: NodeWorkerSupervisor, launchId: strin
 }
 
 describe("node worker supervisor", () => {
+  it("keeps construction and close inert without resolving process identity", async () => {
+    const root = tempDirs.make("node-worker-inert-");
+    const { bundleRoot, env } = writeNodeWorkerFixture(root);
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    const spawnSync = vi.spyOn(childProcess, "spawnSync");
+    const execFileSync = vi.spyOn(childProcess, "execFileSync");
+    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+    try {
+      const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
+      await supervisor.close();
+      expect(spawnSync).not.toHaveBeenCalled();
+      expect(execFileSync).not.toHaveBeenCalled();
+    } finally {
+      if (originalPlatform) {
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
+    }
+  });
+
   it("keeps the additive table absent until the first stateful operation", async () => {
     const { bundleRoot, env, supervisor } = fixture();
     const database = openOpenClawStateDatabase({ env });
@@ -164,36 +100,55 @@ describe("node worker supervisor", () => {
     await active.close();
   });
 
-  it("recovers pending and running launches once per live database handle", async () => {
+  it("keeps pending and running launches owned by a live supervisor unchanged", async () => {
     const { bundleRoot, env, supervisor } = fixture();
     supervisor.status("schema-probe");
     const database = openOpenClawStateDatabase({ env }).db;
+    const supervisorIdentity = requireNodeWorkerProcessIdentity(process.pid);
     const insert = database.prepare(`
       INSERT INTO node_worker_launches (
         launch_id, plan_hash, gateway_namespace, environment_id, session_id,
-        owner_epoch, placement_generation, run_id, state, pid,
+        owner_epoch, placement_generation, run_id, state,
+        supervisor_pid, supervisor_start_time, worker_pid, worker_start_time,
         result_json, error_text, completed_at_ms, created_at_ms, updated_at_ms
-      ) VALUES (?, ?, 'gateway-1', 'environment-1', 'session-1', 3, 4, 'run-1', ?, ?, NULL, NULL, NULL, 1, 1)
+      ) VALUES (?, ?, 'gateway-1', 'environment-1', 'session-1', 3, 4, 'run-1', ?, ?, ?, ?, ?, NULL, NULL, NULL, 1, 1)
     `);
-    insert.run("pending-launch", "b".repeat(64), "pending", null);
-    insert.run("running-launch", "c".repeat(64), "running", 4321);
+    insert.run(
+      "pending-launch",
+      "b".repeat(64),
+      "pending",
+      supervisorIdentity.pid,
+      supervisorIdentity.startTime,
+      null,
+      null,
+    );
+    insert.run(
+      "running-launch",
+      "c".repeat(64),
+      "running",
+      supervisorIdentity.pid,
+      supervisorIdentity.startTime,
+      process.pid,
+      supervisorIdentity.startTime,
+    );
 
     const sameHandle = createNodeWorkerSupervisor({ bundleRoot, env });
-    expect(sameHandle.status("pending-launch")).toMatchObject({ state: "pending", pid: null });
-    expect(sameHandle.status("running-launch")).toMatchObject({ state: "running", pid: 4321 });
+    expect(sameHandle.status("pending-launch")).toMatchObject({ state: "pending", worker: null });
+    expect(sameHandle.status("running-launch")).toMatchObject({
+      state: "running",
+      worker: supervisorIdentity,
+    });
     await supervisor.close();
     await sameHandle.close();
     closeOpenClawStateDatabaseForTest();
 
-    const reopened = openOpenClawStateDatabase({ env }).db;
+    openOpenClawStateDatabase({ env });
     const recovered = createNodeWorkerSupervisor({ bundleRoot, env });
-    expect(recovered.status("pending-launch")).toMatchObject({ state: "interrupted", pid: null });
-    expect(recovered.status("running-launch")).toMatchObject({ state: "interrupted", pid: null });
-    expect(() =>
-      reopened
-        .prepare("UPDATE node_worker_launches SET state = 'completed' WHERE launch_id = ?")
-        .run("pending-launch"),
-    ).toThrow();
+    expect(recovered.status("pending-launch")).toMatchObject({ state: "pending", worker: null });
+    expect(recovered.status("running-launch")).toMatchObject({
+      state: "running",
+      worker: supervisorIdentity,
+    });
     await recovered.close();
   });
 
@@ -213,21 +168,21 @@ describe("node worker supervisor", () => {
     const completed = await waitForTerminal(supervisor, input.launchId);
     expect(completed).toMatchObject({ state: "completed", errorText: null });
     expect(JSON.parse(completed.resultJson ?? "null")).toEqual({
-      argv: ["worker"],
+      argv: ["worker", "--internal-worker-ipc"],
       status: "completed",
     });
     expect(await supervisor.launch(input)).toEqual(completed);
     await expect(
       supervisor.launch({
         ...input,
-        descriptor: descriptor(workspaceDir, "different-plan"),
+        descriptor: testWorkerDescriptor(workspaceDir, "different-plan"),
       }),
     ).rejects.toThrow("replayed with a different plan");
 
     const row = openOpenClawStateDatabase({ env })
       .db.prepare("SELECT * FROM node_worker_launches WHERE launch_id = ?")
       .get(input.launchId);
-    expect(JSON.stringify(row)).not.toContain(CREDENTIAL);
+    expect(JSON.stringify(row)).not.toContain(TEST_WORKER_CREDENTIAL);
     await supervisor.close();
   });
 
@@ -247,9 +202,9 @@ describe("node worker supervisor", () => {
     const failure = await waitForTerminal(supervisor, failureInput.launchId);
     const overflow = await waitForTerminal(supervisor, overflowInput.launchId);
     const representations = [
-      CREDENTIAL,
-      encodeURIComponent(CREDENTIAL),
-      JSON.stringify(CREDENTIAL).slice(1, -1),
+      TEST_WORKER_CREDENTIAL,
+      encodeURIComponent(TEST_WORKER_CREDENTIAL),
+      JSON.stringify(TEST_WORKER_CREDENTIAL).slice(1, -1),
     ];
     expect(success.state).toBe("completed");
     expect(JSON.parse(success.resultJson ?? "null")).toEqual({
@@ -270,7 +225,7 @@ describe("node worker supervisor", () => {
     await supervisor.close();
   });
 
-  it("does not signal a child after markRunning observes its terminal receipt", async () => {
+  it("does not open or signal a child after markRunning observes its terminal receipt", async () => {
     const { supervisor, workspaceDir } = fixture();
     const input = launchInput(workspaceDir, "fast-terminal-launch", "fast-terminal");
     vi.spyOn(NodeWorkerLaunchStore.prototype, "markRunning").mockImplementation(
@@ -278,6 +233,8 @@ describe("node worker supervisor", () => {
         return this.finish({
           launchId: params.launchId,
           planHash: params.planHash,
+          supervisor: params.supervisor,
+          worker: null,
           state: "completed",
           resultJson: '{"status":"completed"}',
         });
@@ -286,14 +243,30 @@ describe("node worker supervisor", () => {
 
     expect(await supervisor.launch(input)).toMatchObject({ state: "completed" });
     const marker = path.join(workspaceDir, "fast-terminal-marker");
-    await vi.waitFor(() => expect(fs.readFileSync(marker, "utf8")).toBe("normal"));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 150);
+    });
+    expect(fs.existsSync(marker)).toBe(false);
+    await supervisor.close();
+  });
+
+  it("records a gated child that exits before journal readiness as terminal", async () => {
+    const { supervisor, workspaceDir } = fixture();
+    const input = launchInput(workspaceDir, "prestart-exit-launch", "exit-before-start");
+    const exitedPath = path.join(workspaceDir, "prestart-exited");
+
+    await supervisor.launch(input);
+    const terminal = await waitForTerminal(supervisor, input.launchId);
+
+    expect(fs.existsSync(exitedPath)).toBe(true);
+    expect(terminal.state).toBe("failed");
     await supervisor.close();
   });
 
   it.each([
     ["cancel", "cancelled"],
     ["close", "interrupted"],
-  ] as const)("records %s while awaiting the attached child", async (operation, state) => {
+  ] as const)("records %s while awaiting the owned child", async (operation, state) => {
     const { supervisor, workspaceDir } = fixture();
     const input = launchInput(workspaceDir, `${operation}-launch`, "wait");
     expect(await supervisor.launch(input)).toMatchObject({ state: "running" });
@@ -304,7 +277,70 @@ describe("node worker supervisor", () => {
       await supervisor.close();
     }
 
-    expect(supervisor.status(input.launchId)).toMatchObject({ state, pid: null });
+    expect(supervisor.status(input.launchId)).toMatchObject({
+      state,
+      worker: { pid: expect.any(Number), startTime: expect.any(Number) },
+    });
+    await supervisor.close();
+  });
+
+  it.each([
+    ["cancel", "cancelled"],
+    ["close", "interrupted"],
+  ] as const)(
+    "%s during startup closes the gate before worker code runs",
+    async (operation, state) => {
+      const { supervisor, workspaceDir } = fixture();
+      const input = launchInput(workspaceDir, `${operation}-startup-launch`, "tree");
+      const originalMarkRunning = Object.getOwnPropertyDescriptor(
+        NodeWorkerLaunchStore.prototype,
+        "markRunning",
+      )?.value as NodeWorkerLaunchStore["markRunning"];
+      let stopping: Promise<unknown> | undefined;
+      vi.spyOn(NodeWorkerLaunchStore.prototype, "markRunning").mockImplementation(
+        function (this: NodeWorkerLaunchStore, params) {
+          const receipt = Reflect.apply(originalMarkRunning, this, [params]);
+          stopping =
+            operation === "cancel" ? supervisor.cancel(input.launchId) : supervisor.close();
+          return receipt;
+        },
+      );
+
+      await supervisor.launch(input);
+      await stopping;
+
+      expect(supervisor.status(input.launchId)?.state).toBe(state);
+      expect(fs.existsSync(path.join(workspaceDir, "grandchild.pid"))).toBe(false);
+      await supervisor.close();
+    },
+  );
+
+  it.each([
+    ["cancel", "cancelled"],
+    ["close", "interrupted"],
+  ] as const)("%s terminates the worker-owned grandchild", async (operation, state) => {
+    const { supervisor, workspaceDir } = fixture();
+    const input = launchInput(workspaceDir, `${operation}-tree-launch`, "tree");
+    const running = await supervisor.launch(input);
+    expect(running.state).toBe("running");
+    const grandchildPath = path.join(workspaceDir, "grandchild.pid");
+    await vi.waitFor(() => expect(fs.existsSync(grandchildPath)).toBe(true));
+    const grandchildPid = Number(fs.readFileSync(grandchildPath, "utf8"));
+    const grandchild = requireNodeWorkerProcessIdentity(grandchildPid);
+    expect(inspectNodeWorkerProcessIdentity(grandchild)).toBe("live");
+
+    if (operation === "cancel") {
+      await supervisor.cancel(input.launchId);
+    } else {
+      await supervisor.close();
+    }
+
+    const terminal = supervisor.status(input.launchId);
+    expect(terminal).toMatchObject({ state, worker: running.worker });
+    await vi.waitFor(() => {
+      expect(inspectNodeWorkerProcessIdentity(running.worker!)).not.toBe("live");
+      expect(inspectNodeWorkerProcessIdentity(grandchild)).not.toBe("live");
+    });
     await supervisor.close();
   });
 
@@ -314,7 +350,7 @@ describe("node worker supervisor", () => {
     const escapedBundle = path.join(bundleRoot, "gateway-1", "bundles", escapedHash);
     const outsideEntry = path.join(root, "outside.mjs");
     fs.mkdirSync(escapedBundle, { recursive: true });
-    fs.writeFileSync(outsideEntry, CHILD_SOURCE);
+    fs.writeFileSync(outsideEntry, TEST_WORKER_SOURCE);
     fs.symlinkSync(outsideEntry, path.join(escapedBundle, "openclaw.mjs"));
     const input = launchInput(workspaceDir, "escaped-entry");
     input.bundleHash = escapedHash;

@@ -71,6 +71,12 @@ function resolveChildInvocation(params: {
 }
 
 type ChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null>;
+type WorkerChildAdapter = ChildAdapter & {
+  closeStartGate?: () => void;
+  openStartGate?: () => Promise<void>;
+};
+
+const WORKER_START_MESSAGE = { type: "openclaw-worker-start-v1" } as const;
 
 function isServiceManagedRuntime(): boolean {
   return Boolean(process.env.OPENCLAW_SERVICE_MARKER?.trim());
@@ -78,15 +84,15 @@ function isServiceManagedRuntime(): boolean {
 
 export async function createChildAdapter(params: {
   argv: string[];
-  /** Keep this child in the parent's process group even outside service-managed runtimes. */
-  attached?: boolean;
+  /** Own a separately signalable tree whose private IPC channel gates worker startup. */
+  ownedWorker?: true;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   windowsVerbatimArguments?: boolean;
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
   secretInput?: SpawnSecretInput;
-}): Promise<ChildAdapter> {
+}): Promise<WorkerChildAdapter> {
   const baseEnv = params.env ? toStringEnv(params.env) : undefined;
   const invocation = resolveChildInvocation({
     argv: params.argv,
@@ -99,14 +105,17 @@ export async function createChildAdapter(params: {
 
   const stdinMode = params.stdinMode ?? (params.input !== undefined ? "pipe-closed" : "inherit");
 
-  // In service-managed mode keep children attached so systemd/launchd can
-  // stop the full process tree reliably. Outside service mode preserve the
-  // existing POSIX detached behavior.
+  // A detached POSIX child is still a descendant in the service cgroup/job, but
+  // owns a process group that can be killed without touching the node host.
   const useDetached =
-    params.attached !== true && process.platform !== "win32" && !isServiceManagedRuntime();
+    process.platform !== "win32" &&
+    (params.ownedWorker !== undefined || !isServiceManagedRuntime());
 
   const stdio: SpawnStdioEntry[] = [stdinMode === "inherit" ? "inherit" : "pipe", "pipe", "pipe"];
   addSecretInputStdio(stdio, params.secretInput);
+  if (params.ownedWorker !== undefined) {
+    stdio.push("ipc");
+  }
 
   const options: SpawnOptions = {
     cwd: params.cwd,
@@ -120,17 +129,34 @@ export async function createChildAdapter(params: {
   const spawned = await spawnWithFallback({
     argv: [preparedSpawn.command, ...preparedSpawn.args],
     options,
-    fallbacks: useDetached
-      ? [
-          {
-            label: "no-detach",
-            options: { detached: false },
-          },
-        ]
-      : [],
+    fallbacks:
+      useDetached && params.ownedWorker === undefined
+        ? [
+            {
+              label: "no-detach",
+              options: { detached: false },
+            },
+          ]
+        : [],
   });
 
   const child = spawned.child as ChildProcessWithoutNullStreams;
+  if (params.ownedWorker !== undefined && (!child.connected || !child.channel)) {
+    spawned.child.kill("SIGKILL");
+    throw new Error("worker lifecycle IPC channel was not created");
+  }
+  const disconnectWorkerIpc = () => {
+    if (!child.connected) {
+      return;
+    }
+    try {
+      child.disconnect();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ERR_IPC_DISCONNECTED") {
+        throw error;
+      }
+    }
+  };
   // Pipe errors can arrive before output subscribers attach. Close remains
   // responsible for decoder flush and Windows drain completion.
   const ignoreOutputStreamError = () => {};
@@ -492,8 +518,40 @@ export async function createChildAdapter(params: {
   const dispose = () => {
     clearForceKillWaitFallback();
     clearForcedWindowsCloseTimer();
+    if (params.ownedWorker !== undefined) {
+      disconnectWorkerIpc();
+    }
     child.removeAllListeners();
   };
+
+  const closeStartGate = params.ownedWorker ? disconnectWorkerIpc : undefined;
+
+  let startGateOpened = false;
+  const openStartGate = params.ownedWorker
+    ? async () => {
+        if (startGateOpened) {
+          return;
+        }
+        startGateOpened = true;
+        await new Promise<void>((resolve, reject) => {
+          if (!child.connected) {
+            reject(new Error("worker lifecycle IPC channel closed before startup"));
+            return;
+          }
+          try {
+            child.send(WORKER_START_MESSAGE, (error) => {
+              if (error) {
+                reject(error);
+                return;
+              }
+              resolve();
+            });
+          } catch (error) {
+            reject(toErrorObject(error, "worker lifecycle IPC send failed"));
+          }
+        });
+      }
+    : undefined;
 
   return {
     pid: child.pid ?? undefined,
@@ -504,5 +562,7 @@ export async function createChildAdapter(params: {
     wait,
     kill,
     dispose,
+    closeStartGate,
+    openStartGate,
   };
 }

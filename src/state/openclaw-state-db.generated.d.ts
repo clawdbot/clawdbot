@@ -949,14 +949,17 @@ export interface NodeWorkerLaunches {
   gateway_namespace: string;
   launch_id: string;
   owner_epoch: number;
-  pid: number | null;
   placement_generation: number;
   plan_hash: string;
   result_json: string | null;
   run_id: string;
   session_id: string;
   state: string;
+  supervisor_pid: number;
+  supervisor_start_time: number;
   updated_at_ms: number;
+  worker_pid: number | null;
+  worker_start_time: number | null;
 }
 
 export interface OfficialExternalPluginCatalogSnapshots {

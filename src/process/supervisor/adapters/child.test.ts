@@ -57,8 +57,23 @@ function createStubChild(pid = 1234) {
   Object.defineProperty(child, "killed", { value: false, configurable: true, writable: true });
   Object.defineProperty(child, "exitCode", { value: null, configurable: true, writable: true });
   Object.defineProperty(child, "signalCode", { value: null, configurable: true, writable: true });
+  Object.defineProperty(child, "channel", { value: {}, configurable: true });
+  Object.defineProperty(child, "connected", { value: true, configurable: true, writable: true });
   const killMock = vi.fn(() => true);
+  const sendMock = vi.fn((_message: unknown, ...args: unknown[]) => {
+    const callback = args.findLast((value) => typeof value === "function") as
+      | ((error: Error | null) => void)
+      | undefined;
+    callback?.(null);
+    return true;
+  });
+  const disconnectMock = vi.fn(() => {
+    Object.defineProperty(child, "connected", { value: false, configurable: true, writable: true });
+    child.emit("disconnect");
+  });
   child.kill = killMock as ChildProcess["kill"];
+  child.send = sendMock as ChildProcess["send"];
+  child.disconnect = disconnectMock as ChildProcess["disconnect"];
   const emitClose = (code: number | null, signal: NodeJS.Signals | null = null) => {
     child.emit("close", code, signal);
   };
@@ -71,7 +86,7 @@ function createStubChild(pid = 1234) {
     });
     child.emit("exit", code, signal);
   };
-  return { child, killMock, emitClose, emitExit };
+  return { child, disconnectMock, killMock, sendMock, emitClose, emitExit };
 }
 
 async function createAdapterHarness(params?: {
@@ -224,18 +239,28 @@ describe("createChildAdapter", () => {
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
   });
 
-  it("keeps an explicitly attached child out of a detached process group", async () => {
-    const { child } = createStubChild();
+  it("creates owned worker trees in a dedicated POSIX process group without fallback", async () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "service-managed";
+    const { child, disconnectMock, sendMock } = createStubChild();
     spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
 
-    await createChildAdapter({
+    const adapter = await createChildAdapter({
       argv: ["node", "worker"],
-      attached: true,
+      ownedWorker: true,
       input: "{}",
     });
 
-    expect(firstSpawnWithFallbackParams().options?.detached).toBe(false);
+    expect(firstSpawnWithFallbackParams().options?.detached).toBe(process.platform !== "win32");
     expect(firstSpawnWithFallbackParams().fallbacks).toEqual([]);
+    expect(firstSpawnWithFallbackParams().options?.stdio).toEqual(["pipe", "pipe", "pipe", "ipc"]);
+
+    await adapter.openStartGate?.();
+    expect(sendMock).toHaveBeenCalledWith(
+      { type: "openclaw-worker-start-v1" },
+      expect.any(Function),
+    );
+    adapter.closeStartGate?.();
+    expect(disconnectMock).toHaveBeenCalledOnce();
   });
 
   it("writes secret input to an extra descriptor and zeroes the transient buffer", async () => {

@@ -878,7 +878,13 @@ CREATE TABLE IF NOT EXISTS node_worker_launches (
     CHECK (length(run_id) BETWEEN 1 AND 256 AND instr(run_id, char(0)) = 0),
   state TEXT NOT NULL
     CHECK (state IN ('pending', 'running', 'completed', 'failed', 'interrupted', 'cancelled')),
-  pid INTEGER CHECK (pid IS NULL OR pid BETWEEN 1 AND 2147483647),
+  supervisor_pid INTEGER NOT NULL CHECK (supervisor_pid BETWEEN 1 AND 2147483647),
+  supervisor_start_time INTEGER NOT NULL
+    CHECK (supervisor_start_time BETWEEN 0 AND 9007199254740991),
+  worker_pid INTEGER CHECK (worker_pid IS NULL OR worker_pid BETWEEN 1 AND 2147483647),
+  worker_start_time INTEGER CHECK (
+    worker_start_time IS NULL OR worker_start_time BETWEEN 0 AND 9007199254740991
+  ),
   result_json TEXT CHECK (
     result_json IS NULL
     OR (
@@ -903,19 +909,22 @@ CREATE TABLE IF NOT EXISTS node_worker_launches (
   updated_at_ms INTEGER NOT NULL CHECK (
     updated_at_ms BETWEEN created_at_ms AND 9007199254740991
   ),
+  CHECK ((worker_pid IS NULL) = (worker_start_time IS NULL)),
   CHECK (
     (state = 'pending'
-      AND pid IS NULL AND result_json IS NULL AND error_text IS NULL AND completed_at_ms IS NULL)
+      AND worker_pid IS NULL AND result_json IS NULL AND error_text IS NULL
+      AND completed_at_ms IS NULL)
     OR
     (state = 'running'
-      AND pid IS NOT NULL AND result_json IS NULL AND error_text IS NULL AND completed_at_ms IS NULL)
+      AND worker_pid IS NOT NULL AND result_json IS NULL AND error_text IS NULL
+      AND completed_at_ms IS NULL)
     OR
     (state = 'completed'
-      AND pid IS NULL AND result_json IS NOT NULL AND error_text IS NULL
+      AND result_json IS NOT NULL AND error_text IS NULL
       AND completed_at_ms BETWEEN created_at_ms AND updated_at_ms)
     OR
     (state IN ('failed', 'interrupted', 'cancelled')
-      AND pid IS NULL AND result_json IS NULL AND error_text IS NOT NULL
+      AND result_json IS NULL AND error_text IS NOT NULL
       AND completed_at_ms BETWEEN created_at_ms AND updated_at_ms)
   )
 ) STRICT;
