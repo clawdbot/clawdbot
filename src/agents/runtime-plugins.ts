@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { promoteMatchingRuntimeContextEngineRegistrations } from "../context-engine/registry.js";
+import { adoptRuntimeContextEngineRegistrations } from "../context-engine/registry.js";
 import { listRuntimePluginIdsFromRegistry } from "../plugins/active-runtime-registry.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -117,12 +117,13 @@ export function loadAgentRuntimePluginRegistryHandle(
   params: AgentRuntimePluginRegistryParams,
 ): PluginRegistry {
   const load = resolveAgentRuntimePluginRegistryLoad(params);
+  // Discovery-only load: full mode can replace process-global sandbox backends.
+  // Copy runtime context engines from the composition-root registry instead.
   const pluginRegistry = loadPluginRegistryHandle({ ...load.loadOptions, activate: false });
   const activeRegistry = getActivePluginRegistry();
-  if (activeRegistry) {
-    promoteMatchingRuntimeContextEngineRegistrations(pluginRegistry, activeRegistry);
-  }
-  return pluginRegistry;
+  return activeRegistry
+    ? adoptRuntimeContextEngineRegistrations(pluginRegistry, activeRegistry)
+    : pluginRegistry;
 }
 
 /** Binds a scoped plugin generation when a direct host has no Gateway owner. */
