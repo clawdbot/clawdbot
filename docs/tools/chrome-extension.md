@@ -79,7 +79,7 @@ openclaw config set browser.defaultProfile chrome
 {
   browser: {
     profiles: {
-      chrome: { driver: "extension", color: "#FF4500" },
+      chrome: { driver: "extension", color: "#2FBF71" },
     },
   },
 }

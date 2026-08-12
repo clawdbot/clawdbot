@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import OpenClawChatUI
+@testable import OpenCrustaceanChatUI
 
 struct ChatWorkingProgressTests {
     private let session = "agent:main:main"
@@ -161,7 +161,7 @@ struct ChatWorkingProgressTests {
             "Nautiling",
             "Krilling",
             "Barnacling",
-            "Lobstering",
+            "Clawing",
             "Tidepooling",
             "Pearling",
             "Snapping",

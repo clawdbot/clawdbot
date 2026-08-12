@@ -90,7 +90,7 @@ function buildDroppedMarker(target: FileLogQueueEntry, count: number): FileLogQu
       date,
       hostname: target.hostname,
       logLevelName: "WARN",
-      name: "openclaw",
+      name: "opencrustacean",
     },
     time: formatTimestamp(date, { style: "long" }),
     hostname: target.hostname,

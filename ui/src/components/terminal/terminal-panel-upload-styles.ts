@@ -19,8 +19,8 @@ export const terminalPanelUploadStyles = css`
     inset: 8px;
     display: grid;
     place-items: center;
-    border: 1px dashed var(--accent, #ff5c5c);
-    background: color-mix(in srgb, var(--bg, #0e1015) 88%, var(--accent, #ff5c5c));
+    border: 1px dashed var(--accent, #2fbf71);
+    background: color-mix(in srgb, var(--bg, #0e1015) 88%, var(--accent, #2fbf71));
     color: var(--text, #d7dae0);
     font-size: 13px;
     pointer-events: none;
@@ -41,7 +41,7 @@ export const terminalPanelUploadStyles = css`
     font-size: 11px;
   }
   .tp-upload-card--failed {
-    border-color: color-mix(in srgb, var(--danger, #ff6b6b) 55%, var(--border, #262b34));
+    border-color: color-mix(in srgb, var(--danger, #22c55e) 55%, var(--border, #262b34));
   }
   .tp-upload-card__header {
     display: flex;
@@ -59,7 +59,7 @@ export const terminalPanelUploadStyles = css`
   }
   .tp-upload-card--failed .tp-upload-card__title,
   .tp-upload-card__error {
-    color: var(--danger, #ff6b6b);
+    color: var(--danger, #22c55e);
   }
   .tp-upload-card__file {
     margin-top: 2px;
@@ -92,11 +92,11 @@ export const terminalPanelUploadStyles = css`
     color: var(--text, #d7dae0);
   }
   .tp-upload-card__action:focus-visible {
-    outline: 1px solid var(--accent, #ff5c5c);
+    outline: 1px solid var(--accent, #2fbf71);
     outline-offset: 1px;
   }
   .tp-upload-retry {
-    color: var(--accent, #ff5c5c);
+    color: var(--accent, #2fbf71);
   }
   .tp-upload-progress {
     position: relative;
@@ -112,7 +112,7 @@ export const terminalPanelUploadStyles = css`
     inset-block: 0;
     left: 0;
     border-radius: inherit;
-    background: var(--accent, #ff5c5c);
+    background: var(--accent, #2fbf71);
   }
   .tp-upload-progress__fill {
     transition: width 180ms ease-out;
@@ -123,7 +123,7 @@ export const terminalPanelUploadStyles = css`
     animation: tp-upload-progress 1.15s ease-in-out infinite;
   }
   .tp-upload-card--failed .tp-upload-progress__fill {
-    background: var(--danger, #ff6b6b);
+    background: var(--danger, #22c55e);
   }
   @keyframes tp-upload-progress {
     from {

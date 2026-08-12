@@ -11,7 +11,7 @@ import {
   createSessionsHarness,
   createSessionState,
   deferred,
-  type LobsterPetElement,
+  type CrabPetElement,
   mountSidebar,
   type SidebarLifecycleState,
   successfulSessionPatch,
@@ -173,7 +173,7 @@ describe("AppSidebar session pagination", () => {
   });
 });
 
-describe("AppSidebar lobster outcome wiring", () => {
+describe("AppSidebar crab outcome wiring", () => {
   it.each([
     ["panel", "failed", "error"],
     ["panel", "killed", "aborted"],
@@ -211,7 +211,7 @@ describe("AppSidebar lobster outcome wiring", () => {
       });
       await sidebar.updateComplete;
 
-      const pet = sidebar.querySelector<LobsterPetElement>("openclaw-lobster-pet");
+      const pet = sidebar.querySelector<CrabPetElement>("openclaw-crab-pet");
       expect(pet?.runOutcome).toBe(expectedOutcome);
     },
   );

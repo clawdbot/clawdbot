@@ -988,7 +988,7 @@ export function renderSessionWorkspaceRail(
             aria-label=${t("custodian.panel.toggle")}
             @click=${sessionWorkspace.onToggleCustodian}
           >
-            ${icons.lobster}
+            ${icons.crab}
           </button>
         </openclaw-tooltip>
       `

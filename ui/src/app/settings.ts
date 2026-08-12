@@ -200,8 +200,8 @@ export type UiSettings = {
   textScale?: TextScaleStop; // Browser-local text scale percentage
   customTheme?: ImportedCustomTheme;
   locale?: string;
-  lobsterPetVisits?: boolean; // Whether the sidebar lobster pet drops by (default true)
-  lobsterPetSounds?: boolean; // Opt-in poke/pet chirps from the lobster (default false)
+  crabPetVisits?: boolean; // Whether the sidebar crab pet drops by (default true)
+  crabPetSounds?: boolean; // Opt-in poke/pet chirps from the crab (default false)
 };
 
 type LastActiveSessionHost = {
@@ -540,8 +540,8 @@ export function loadSettings(): UiSettings {
       textScale: normalizeTextScale(parsed.textScale, defaults.textScale),
       customTheme: customTheme ?? undefined,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
-      ...(parsed.lobsterPetVisits === false ? { lobsterPetVisits: false } : {}),
-      ...(parsed.lobsterPetSounds === true ? { lobsterPetSounds: true } : {}),
+      ...(parsed.crabPetVisits === false ? { crabPetVisits: false } : {}),
+      ...(parsed.crabPetSounds === true ? { crabPetSounds: true } : {}),
     };
     // Scoped blobs from builds that persisted tokens durably get rewritten once
     // so the plaintext token leaves localStorage.
@@ -682,8 +682,8 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     ...(next.locale ? { locale: next.locale } : {}),
     // Visits default on; only an explicit opt-out persists. Sounds default
     // off; only an explicit opt-in persists.
-    ...(next.lobsterPetVisits === false ? { lobsterPetVisits: false } : {}),
-    ...(next.lobsterPetSounds === true ? { lobsterPetSounds: true } : {}),
+    ...(next.crabPetVisits === false ? { crabPetVisits: false } : {}),
+    ...(next.crabPetSounds === true ? { crabPetSounds: true } : {}),
   };
   const serialized = JSON.stringify(persisted);
   unpersistedSettings = next;

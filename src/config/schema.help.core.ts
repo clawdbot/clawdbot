@@ -157,6 +157,14 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Optional HTTP response security headers applied by the gateway process itself. Prefer setting these at your reverse proxy when TLS terminates there.",
   "gateway.http.securityHeaders.strictTransportSecurity":
     "Value for the Strict-Transport-Security response header. Set only on HTTPS origins that you fully control; use false to explicitly disable.",
+  "gateway.ws":
+    "Gateway WebSocket protocol tuning for keepalive/liveness. Raise the grace period when clients on flaky networks (mobile radio handoff, Tailscale paths) drop mid-run; the default tolerates ~2.5 minutes of silence.",
+  "gateway.ws.keepalive":
+    "WebSocket keepalive ping tuning. The gateway pings each connected client and terminates sockets that miss too many consecutive pongs, freeing half-open TCP connections.",
+  "gateway.ws.keepalive.pingIntervalMs":
+    "Interval between WebSocket keepalive pings in milliseconds. Default: 30000. Lower values detect dead peers faster but add traffic; the pings themselves keep NAT/Tailscale paths alive, so leave near default unless you have a specific liveness requirement.",
+  "gateway.ws.keepalive.maxMissedPongs":
+    "Consecutive missed pongs tolerated before the gateway terminates a socket as half-open. Default: 5 (about 2.5 minutes at the default 30s ping). Raise to survive longer network stalls without reconnect; raise cautiously, since each dead socket held open retains session state.",
   "gateway.remote.url": "Remote Gateway WebSocket URL (ws:// or wss://).",
   "gateway.remote.token":
     "Bearer token used to authenticate this client to a remote gateway in token-auth deployments. Store via secret/env substitution and rotate alongside remote gateway auth changes.",

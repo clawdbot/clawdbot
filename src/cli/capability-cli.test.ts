@@ -90,7 +90,7 @@ const mocks = vi.hoisted(() => ({
     return {};
   }),
   describeImageFile: vi.fn(async () => ({
-    text: "friendly lobster",
+    text: "friendly crab",
     provider: "openai",
     model: "gpt-4.1-mini",
   })),
@@ -100,11 +100,11 @@ const mocks = vi.hoisted(() => ({
     mime: "image/jpeg",
   })),
   describePreparedImageWithModel: vi.fn(async () => ({
-    text: "friendly lobster",
+    text: "friendly crab",
     model: "gpt-4.1-mini",
   })),
   describeImageFileWithModel: vi.fn(async () => ({
-    text: "friendly lobster",
+    text: "friendly crab",
     model: "gpt-4.1-mini",
   })),
   generateImage: vi.fn(),
@@ -1656,7 +1656,7 @@ describe("capability cli", () => {
       "image",
       "generate",
       "--prompt",
-      "friendly lobster",
+      "friendly crab",
       "--output",
       tempOutput,
       "--json",
@@ -1676,13 +1676,13 @@ describe("capability cli", () => {
       "image",
       "generate",
       "--prompt",
-      "friendly lobster",
+      "friendly crab",
       "--timeout-ms",
       "180000",
       "--json",
     );
 
-    expect(firstImageGenerationCall()?.prompt).toBe("friendly lobster");
+    expect(firstImageGenerationCall()?.prompt).toBe("friendly crab");
     expect(firstImageGenerationCall()?.timeoutMs).toBe(180000);
   });
 
@@ -2037,7 +2037,7 @@ describe("capability cli", () => {
       "video",
       "generate",
       "--prompt",
-      "friendly lobster",
+      "friendly crab",
       "--output",
       outputBase,
       "--json",
@@ -2072,7 +2072,7 @@ describe("capability cli", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      runCap("capability", "video", "generate", "--prompt", "friendly lobster", "--json"),
+      runCap("capability", "video", "generate", "--prompt", "friendly crab", "--json"),
     ).rejects.toThrow("exit 1");
 
     expect(fetchMock).not.toHaveBeenCalled();
@@ -2101,7 +2101,7 @@ describe("capability cli", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await runCap("capability", "video", "generate", "--prompt", "friendly lobster", "--json");
+    await runCap("capability", "video", "generate", "--prompt", "friendly crab", "--json");
 
     const fetchCalls = fetchMock.mock.calls as unknown as Array<[string]>;
     expect(fetchCalls[0]?.[0]).toBe("http://127.0.0.2:40123/private-video.mp4");
@@ -2130,7 +2130,7 @@ describe("capability cli", () => {
       "video",
       "generate",
       "--prompt",
-      "friendly lobster",
+      "friendly crab",
       "--model",
       "minimax/MiniMax-Hailuo-2.3",
       "--size",
@@ -2149,7 +2149,7 @@ describe("capability cli", () => {
     );
 
     const videoCall = firstVideoGenerationCall();
-    expect(videoCall?.prompt).toBe("friendly lobster");
+    expect(videoCall?.prompt).toBe("friendly crab");
     expect(videoCall?.modelOverride).toBe("minimax/MiniMax-Hailuo-2.3");
     expect(videoCall?.size).toBe("1280x768");
     expect(videoCall?.aspectRatio).toBe("16:9");
@@ -2169,7 +2169,7 @@ describe("capability cli", () => {
     });
 
     await expect(
-      runCap("capability", "video", "generate", "--prompt", "friendly lobster", "--json"),
+      runCap("capability", "video", "generate", "--prompt", "friendly crab", "--json"),
     ).rejects.toThrow("exit 1");
     expectRuntimeErrorContains("Video asset at index 0 has neither buffer nor url");
   });
@@ -2208,7 +2208,7 @@ describe("capability cli", () => {
 
     // No --output: forces the in-memory buffered fallback path.
     await expect(
-      runCap("capability", "video", "generate", "--prompt", "friendly lobster", "--json"),
+      runCap("capability", "video", "generate", "--prompt", "friendly crab", "--json"),
     ).rejects.toThrow("exit 1");
 
     // Real path was driven: the provider URL was actually fetched...
@@ -2245,7 +2245,7 @@ describe("capability cli", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      runCap("capability", "video", "generate", "--prompt", "friendly lobster", "--json"),
+      runCap("capability", "video", "generate", "--prompt", "friendly crab", "--json"),
     ).rejects.toThrow("exit 1");
 
     expectRuntimeErrorContains("vydra generated video download failed");
@@ -2267,7 +2267,7 @@ describe("capability cli", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     // No --output: in-memory buffered fallback path, under cap.
-    await runCap("capability", "video", "generate", "--prompt", "friendly lobster", "--json");
+    await runCap("capability", "video", "generate", "--prompt", "friendly crab", "--json");
 
     const fetchCalls = fetchMock.mock.calls as unknown as Array<[string]>;
     expect(fetchCalls[0]?.[0]).toBe("https://example.com/small-video.mp4");
@@ -2303,7 +2303,7 @@ describe("capability cli", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      runCap("capability", "video", "generate", "--prompt", "friendly lobster", "--json"),
+      runCap("capability", "video", "generate", "--prompt", "friendly crab", "--json"),
     ).rejects.toThrow("exit 1");
 
     // Cap resolved from config (2 MiB = 2097152), not the 16 MiB default.
@@ -2325,7 +2325,7 @@ describe("capability cli", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await runCap("capability", "video", "generate", "--prompt", "friendly lobster", "--json");
+    await runCap("capability", "video", "generate", "--prompt", "friendly crab", "--json");
 
     const output = firstJsonOutput();
     expect(output?.capability).toBe("video.generate");
@@ -3135,7 +3135,7 @@ describe("capability cli", () => {
       const mediaRuntime = await import("../media-understanding/runtime.js");
       dispatchMock = vi.mocked(mediaRuntime.describeVideoFile);
       dispatchMock.mockResolvedValue({
-        text: "friendly lobster",
+        text: "friendly crab",
         provider: "openai",
         model: "gpt-4.1-mini",
       } as never);

@@ -504,7 +504,7 @@ describe("plugin-sdk subpath exports", () => {
     for (const deniedSubpath of [
       "acpx",
       "device-pair",
-      "lobster",
+      "crab",
       "pairing-access",
       "provider-model-definitions",
       "qa-channel",

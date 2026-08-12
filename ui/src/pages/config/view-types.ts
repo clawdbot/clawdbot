@@ -122,12 +122,12 @@ export type ConfigProps = {
   sessionObserverDisabled?: boolean;
   setSessionObserverEnabled?: (enabled: boolean) => void;
   setSessionObserverUtilityModel?: (selection: SessionObserverModelSelection) => void;
-  lobsterPetVisits?: boolean;
-  setLobsterPetVisits?: (enabled: boolean) => void;
-  lobsterPetSounds?: boolean;
-  setLobsterPetSounds?: (enabled: boolean) => void;
-  lobsterdexHref?: string;
-  onOpenLobsterdex?: () => void;
+  crabPetVisits?: boolean;
+  setCrabPetVisits?: (enabled: boolean) => void;
+  crabPetSounds?: boolean;
+  setCrabPetSounds?: (enabled: boolean) => void;
+  crabdexHref?: string;
+  onOpenCrabdex?: () => void;
   chatSendShortcut: ChatSendShortcut;
   setChatSendShortcut: (value: ChatSendShortcut) => void;
   chatFollowUpMode: ChatFollowUpMode | undefined;

@@ -12,7 +12,7 @@ type TerminalTheme = NonNullable<
 // Shared 8 + bright 8; foreground/background/cursor are overridden per mode below.
 const ANSI = {
   black: "#1b1e26",
-  red: "#ff6b6b",
+  red: "#22c55e",
   green: "#4ec9a8",
   yellow: "#e5c07b",
   blue: "#5aa2ff",
@@ -30,11 +30,11 @@ const ANSI = {
 } as const;
 
 // Dark mirrors the claw tokens in styles/base.css (`--bg` #0e1015,
-// `--accent` #ff5c5c) — keep them in sync when the tokens change. Light is a
+// `--accent` #2fbf71) — keep them in sync when the tokens change. Light is a
 // deliberate neutral cool white: the light theme families diverge (ivory,
 // cool white, parchment) and the canvas gets only a binary mode.
 const DYNAMIC_COLORS = {
-  dark: { background: "#0e1015", cursor: "#ff5c5c", foreground: "#d7dae0" },
+  dark: { background: "#0e1015", cursor: "#2fbf71", foreground: "#d7dae0" },
   light: { background: "#f7f8fa", cursor: "#1b1e26", foreground: "#1b1e26" },
 } as const satisfies Record<"dark" | "light", TerminalDefaultColors>;
 

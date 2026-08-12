@@ -551,11 +551,11 @@ describe("sessions tool", () => {
       callGateway: callGateway as never,
     });
 
-    await tool.execute("patch-icon", { action: "patch", icon: "  name:lobster  " });
+    await tool.execute("patch-icon", { action: "patch", icon: "  name:crab  " });
     await tool.execute("clear-icon", { action: "patch", icon: "" });
 
     expect(callGateway.mock.calls).toEqual([
-      ["sessions.patch", { key: "agent:main:main", icon: "name:lobster" }],
+      ["sessions.patch", { key: "agent:main:main", icon: "name:crab" }],
       ["sessions.patch", { key: "agent:main:main", icon: null }],
     ]);
   });

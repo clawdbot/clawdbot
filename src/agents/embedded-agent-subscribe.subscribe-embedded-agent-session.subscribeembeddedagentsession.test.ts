@@ -675,11 +675,11 @@ describe("subscribeEmbeddedAgentSession", () => {
           source: "music_generation",
           childSessionKey: "music_generate:task-123",
           announceType: "music generation task",
-          taskLabel: "lobster boss theme",
+          taskLabel: "crab boss theme",
           status: "ok",
           statusLabel: "completed successfully",
-          result: "Generated 1 track.\nMEDIA:/tmp/lobster-boss.mp3",
-          mediaUrls: ["/tmp/lobster-boss.mp3"],
+          result: "Generated 1 track.\nMEDIA:/tmp/crab-boss.mp3",
+          mediaUrls: ["/tmp/crab-boss.mp3"],
           replyInstruction: "Reply normally.",
         },
       ],
@@ -702,7 +702,7 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     expectBlockReplyPayload(onBlockReply, {
       text: "Here it is.",
-      mediaUrls: ["/tmp/lobster-boss.mp3"],
+      mediaUrls: ["/tmp/crab-boss.mp3"],
       trustedLocalMedia: true,
     });
   });

@@ -57,7 +57,7 @@ enum ChatWorkingPhrase {
         String(localized: "Nautiling"),
         String(localized: "Krilling"),
         String(localized: "Barnacling"),
-        String(localized: "Lobstering"),
+        String(localized: "Clawing"),
         String(localized: "Tidepooling"),
         String(localized: "Pearling"),
         String(localized: "Snapping"),
@@ -187,7 +187,7 @@ struct ChatTurnRecapSessionRow: Equatable, Sendable {
         self.outputTokens = outputTokens
     }
 
-    init(_ entry: OpenClawChatSessionEntry) {
+    init(_ entry: OpenCrustaceanChatSessionEntry) {
         self.init(
             status: entry.status,
             endedAt: entry.endedAt,

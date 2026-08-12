@@ -1,14 +1,10 @@
 // Control UI view renders dreaming screen content.
-import "../../../styles/lobster-pet.css";
+import "../../../styles/crab-pet.css";
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { createCrabPetLook, crabPetSeed, renderCrabSvg } from "../../../components/crab-pet.ts";
 import { renderHubTabs } from "../../../components/hub-tabs.ts";
-import {
-  createLobsterPetLook,
-  lobsterPetSeed,
-  renderLobsterSvg,
-} from "../../../components/lobster-pet.ts";
 import "../../../components/modal-dialog.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
@@ -263,13 +259,13 @@ const STARS: {
   { top: 88, left: 18, size: 2, delay: 2.3, hue: "neutral" },
 ];
 
-// The dreams sleeper is the same seeded lobster that visits the sidebar for
+// The dreams sleeper is the same seeded crab that visits the sidebar for
 // this agent (eyes closed), so the pet identity carries across surfaces.
 function renderDreamsCameo(agentId: string) {
-  const look = createLobsterPetLook(lobsterPetSeed(agentId));
-  const style = `--lob-shell:${look.palette.shell};--lob-claw:${look.palette.claw}`;
+  const look = createCrabPetLook(crabPetSeed(agentId));
+  const style = `--crab-shell:${look.palette.shell};--crab-claw:${look.palette.claw}`;
   return html`
-    <div class="dreams__lobster" style=${style}>${renderLobsterSvg(look, { sleeping: true })}</div>
+    <div class="dreams__crab" style=${style}>${renderCrabSvg(look, { sleeping: true })}</div>
   `;
 }
 

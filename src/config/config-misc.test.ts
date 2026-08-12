@@ -485,17 +485,17 @@ describe("diagnostics.otel.captureContent", () => {
 
 describe("ui.seamColor", () => {
   it("accepts hex colors", () => {
-    const res = validateConfigObject({ ui: { seamColor: "#FF4500" } });
+    const res = validateConfigObject({ ui: { seamColor: "#2FBF71" } });
     expect(res.ok).toBe(true);
   });
 
   it("rejects non-hex colors", () => {
-    const res = validateConfigObject({ ui: { seamColor: "lobster" } });
+    const res = validateConfigObject({ ui: { seamColor: "crab" } });
     expect(res.ok).toBe(false);
   });
 
   it("rejects invalid hex length", () => {
-    const res = validateConfigObject({ ui: { seamColor: "#FF4500FF" } });
+    const res = validateConfigObject({ ui: { seamColor: "#2FBF71FF" } });
     expect(res.ok).toBe(false);
   });
 });
@@ -894,7 +894,7 @@ describe("config identity/materialization regressions", () => {
           main: {
             identity: {
               name: "Samantha Sloth",
-              theme: "space lobster",
+              theme: "space crab",
               emoji: "🦞",
             },
             groupChat: { mentionPatterns: ["@openclaw"] },

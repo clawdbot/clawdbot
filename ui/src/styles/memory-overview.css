@@ -13,20 +13,20 @@
     linear-gradient(145deg, var(--card), var(--bg-accent));
 }
 
-.memory-overview__lobster {
+.memory-overview__crab {
   width: min(100%, 190px);
   aspect-ratio: 120 / 105;
   margin: 0 auto;
   transform-origin: 50% 82%;
 }
 
-.memory-overview__lobster .lobster-pet__svg {
+.memory-overview__crab .crab-pet__svg {
   width: 100%;
   height: 100%;
   overflow: visible;
 }
 
-.memory-overview__hero--sleeping .memory-overview__lobster {
+.memory-overview__hero--sleeping .memory-overview__crab {
   opacity: 0.56;
   filter: saturate(0.7);
 }
@@ -59,11 +59,11 @@
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .memory-overview__lobster {
+  .memory-overview__crab {
     animation: memory-overview-breathe 5.5s ease-in-out infinite;
   }
 
-  .memory-overview__lobster .lob-reading-book__page-glow {
+  .memory-overview__crab .crab-reading-book__page-glow {
     animation: memory-overview-book-shimmer 7s ease-in-out infinite;
   }
 }

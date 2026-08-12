@@ -1,24 +1,24 @@
 import { getSafeLocalStorage } from "../local-storage.ts";
-import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
+import { getCrabdex, getCrabdexEntries } from "./crab-dex.ts";
 import type {
-  LobsterPasserKind,
-  LobsterPetEntrance,
-  LobsterPetLook,
-  LobsterPetMode,
-  LobsterPetPersonalityId,
-  LobsterRunOutcome,
-} from "./lobster-pet-contract.ts";
+  CrabPasserKind,
+  CrabPetEntrance,
+  CrabPetLook,
+  CrabPetMode,
+  CrabPetPersonalityId,
+  CrabRunOutcome,
+} from "./crab-pet-contract.ts";
 import {
-  LOBSTER_PET_PALETTES,
-  canonicalLobsterLook,
-  lobsterPetName,
+  CRAB_PET_PALETTES,
+  canonicalCrabLook,
+  crabPetName,
   mulberry32,
   SPOT_ZONES,
-} from "./lobster-pet-look.ts";
+} from "./crab-pet-look.ts";
 
 export { SPOT_ZONES };
 
-export type LobsterPetAct =
+export type CrabPetAct =
   | "wave"
   | "snip"
   | "hop"
@@ -37,12 +37,12 @@ export type LobsterPetAct =
 type ActProfile = {
   // [min, max] delay before the next act.
   delayMs: [number, number];
-  acts: Array<[LobsterPetAct, number]>;
+  acts: Array<[CrabPetAct, number]>;
 };
 
-// Act windows mirror the CSS animation durations in lobster-pet.css so jsdom
+// Act windows mirror the CSS animation durations in crab-pet.css so jsdom
 // tests and browsers clear acts on the same clock without animationend.
-export const LOBSTER_PET_ACT_DURATION_MS: Record<LobsterPetAct, number> = {
+export const CRAB_PET_ACT_DURATION_MS: Record<CrabPetAct, number> = {
   wave: 1400,
   snip: 1000,
   hop: 750,
@@ -59,7 +59,7 @@ export const LOBSTER_PET_ACT_DURATION_MS: Record<LobsterPetAct, number> = {
   sweep: 1800,
 };
 
-const PERSONALITIES: Record<LobsterPetPersonalityId, ActProfile> = {
+const PERSONALITIES: Record<CrabPetPersonalityId, ActProfile> = {
   sleepy: {
     delayMs: [6000, 12000],
     acts: [
@@ -105,7 +105,7 @@ const PERSONALITIES: Record<LobsterPetPersonalityId, ActProfile> = {
 
 // Busy and offline override the personality: the pet is a status indicator
 // first. Busy scurries (no naps mid-run); offline paces and peeks.
-const LOBSTER_PET_MODE_ACTS: Record<Exclude<LobsterPetMode, "idle">, ActProfile> = {
+const CRAB_PET_MODE_ACTS: Record<Exclude<CrabPetMode, "idle">, ActProfile> = {
   busy: {
     delayMs: [2200, 4500],
     acts: [
@@ -126,21 +126,21 @@ const LOBSTER_PET_MODE_ACTS: Record<Exclude<LobsterPetMode, "idle">, ActProfile>
   },
 };
 
-export function resolveLobsterActProfile(
-  mode: LobsterPetMode,
-  personality: LobsterPetPersonalityId | null,
+export function resolveCrabActProfile(
+  mode: CrabPetMode,
+  personality: CrabPetPersonalityId | null,
   now: Date = new Date(),
 ): ActProfile | null {
   if (mode === "busy" || mode === "offline") {
-    return LOBSTER_PET_MODE_ACTS[mode];
+    return CRAB_PET_MODE_ACTS[mode];
   }
-  if (isLobsterNightTime(now)) {
+  if (isCrabNightTime(now)) {
     return PERSONALITIES.sleepy;
   }
   return personality ? PERSONALITIES[personality] : null;
 }
 
-export function resolveLobsterFinishAct(outcome: LobsterRunOutcome): LobsterPetAct {
+export function resolveCrabFinishAct(outcome: CrabRunOutcome): CrabPetAct {
   return outcome === "error" ? "droop" : outcome === "aborted" ? "startle" : "cheer";
 }
 
@@ -149,13 +149,13 @@ export const LEAVE_MS = 350;
 // Arrival theatrics: most visits walk up from behind the ledge; a few float
 // in under a balloon or pop out of a bubble. Rolled per arrival from the
 // component's dedicated entrance stream so visit scheduling stays untouched.
-export function pickLobsterEntrance(roll: number): LobsterPetEntrance {
+export function pickCrabEntrance(roll: number): CrabPetEntrance {
   return roll < 0.06 ? "balloon" : roll < 0.13 ? "bubble" : "walk";
 }
 
 // How long each entrance owns the `entering` flag; mirrors the entrance
-// animation durations in lobster-pet.css.
-export const LOBSTER_PET_ENTRANCE_MS: Record<LobsterPetEntrance, number> = {
+// animation durations in crab-pet.css.
+export const CRAB_PET_ENTRANCE_MS: Record<CrabPetEntrance, number> = {
   walk: 450,
   balloon: 1250,
   bubble: 700,
@@ -163,7 +163,7 @@ export const LOBSTER_PET_ENTRANCE_MS: Record<LobsterPetEntrance, number> = {
 
 // One full ledge crossing per passer kind. The snail is the point of the
 // snail: glance away, glance back, still crossing.
-export const LOBSTER_PASSER_CROSS_MS: Record<LobsterPasserKind, number> = {
+export const CRAB_PASSER_CROSS_MS: Record<CrabPasserKind, number> = {
   stranger: 11_000,
   crab: 11_000,
   snail: 90_000,
@@ -171,7 +171,7 @@ export const LOBSTER_PASSER_CROSS_MS: Record<LobsterPasserKind, number> = {
   jellyfish: 16_000,
 };
 
-export type LobsterPetAnchor = "ledge" | "bar";
+export type CrabPetAnchor = "ledge" | "bar";
 
 // The historical bar visit keeps its compact left-to-center roaming and scale
 // cap, while CSS places it on the same ledge as regular visits.
@@ -190,32 +190,32 @@ export const VISIT_GAP_MS = [360_000, 1_080_000] as const;
 // Rare-event loads, planned per seed so tests can probe them purely: a molt
 // load sheds its shell during the first idle act and sizes up one tier; a
 // twin load brings a mini copycat along on every visit.
-export function isLobsterMoltLoad(seed: number): boolean {
+export function isCrabMoltLoad(seed: number): boolean {
   return mulberry32((seed ^ 0x301d) >>> 0)() < 0.12;
 }
 
-export function isLobsterTwinLoad(seed: number): boolean {
+export function isCrabTwinLoad(seed: number): boolean {
   return mulberry32((seed ^ 0x7715) >>> 0)() < 0.04;
 }
 
-export type LobsterPasserPlan = {
-  kind: LobsterPasserKind;
+export type CrabPasserPlan = {
+  kind: CrabPasserKind;
   atMs: number;
   direction: 1 | -1;
 };
 
 // Once per load, someone else might just... pass through. Strangers are
-// other lobsters that never stop; the rest of the traffic is a crab (not a
-// lobster, refuses to discuss it), a snail, a rubber duck, or a jellyfish.
+// other crabs that never stop; the rest of the traffic is a crab (not a
+// crab, refuses to discuss it), a snail, a rubber duck, or a jellyfish.
 // The 9.5% event gate is unchanged from the two-kind era — variety widened,
-// frequency did not. None of them count for the Lobsterdex.
-export function planLobsterPasser(seed: number): LobsterPasserPlan | null {
+// frequency did not. None of them count for the Crabdex.
+export function planCrabPasser(seed: number): CrabPasserPlan | null {
   const rng = mulberry32((seed ^ 0xcab) >>> 0);
   const roll = rng();
   if (roll >= 0.095) {
     return null;
   }
-  const kind: LobsterPasserKind =
+  const kind: CrabPasserKind =
     roll < 0.015
       ? "crab"
       : roll < 0.027
@@ -230,18 +230,18 @@ export function planLobsterPasser(seed: number): LobsterPasserPlan | null {
   return { kind, atMs, direction };
 }
 
-// A very rare load hosts the Elder: a huge, barnacled, unhurried lobster.
-// Lobsters famously never really stop growing; this one simply started
+// A very rare load hosts the Elder: a huge, barnacled, unhurried crab.
+// Crabs famously never really stop growing; this one simply started
 // earlier than everyone else.
-function isLobsterElderLoad(seed: number): boolean {
+function isCrabElderLoad(seed: number): boolean {
   return mulberry32((seed ^ 0xe1d3) >>> 0)() < 0.015;
 }
 
-// Sometimes the visitor is not a stranger at all: a palette the Lobsterdex
+// Sometimes the visitor is not a stranger at all: a palette the Crabdex
 // already remembers comes back wearing its recorded name. Returns the chosen
 // palette id, or null for an ordinary load. Candidates are passed in
 // (sorted) so this stays a pure plan.
-function planLobsterOldFriend(seed: number, knownPaletteIds: readonly string[]): string | null {
+function planCrabOldFriend(seed: number, knownPaletteIds: readonly string[]): string | null {
   if (knownPaletteIds.length === 0) {
     return null;
   }
@@ -252,32 +252,29 @@ function planLobsterOldFriend(seed: number, knownPaletteIds: readonly string[]):
   return knownPaletteIds[Math.floor(rng() * knownPaletteIds.length)] ?? null;
 }
 
-export type LobsterLoadIdentity = {
+export type CrabLoadIdentity = {
   elder: boolean;
   oldFriend: boolean;
   friendName: string | null;
   dexComplete: boolean;
-  look: LobsterPetLook;
+  look: CrabPetLook;
 };
 
 // Rare per-load identities, resolved on top of the seeded look: the Elder
 // outranks an old-friend return, and retro-geometry looks (grail or anniversary
-// dress code) are never repainted. Lobsterdex completion is snapshotted here too,
+// dress code) are never repainted. Crabdex completion is snapshotted here too,
 // so the golden ledge trim appears between loads, never mid-visit.
-export function resolveLobsterLoadIdentity(
-  seed: number,
-  look: LobsterPetLook,
-): LobsterLoadIdentity {
-  const seen = getLobsterdex();
-  const dexComplete = LOBSTER_PET_PALETTES.every((palette) => seen.has(palette.id));
-  const base: LobsterLoadIdentity = {
+export function resolveCrabLoadIdentity(seed: number, look: CrabPetLook): CrabLoadIdentity {
+  const seen = getCrabdex();
+  const dexComplete = CRAB_PET_PALETTES.every((palette) => seen.has(palette.id));
+  const base: CrabLoadIdentity = {
     elder: false,
     oldFriend: false,
     friendName: null,
     dexComplete,
     look,
   };
-  if (isLobsterElderLoad(seed)) {
+  if (isCrabElderLoad(seed)) {
     // The Elder never molts or crushes: it is already every size it needs.
     return {
       ...base,
@@ -296,39 +293,37 @@ export function resolveLobsterLoadIdentity(
     return base;
   }
   const known = [...seen]
-    .filter((id) => LOBSTER_PET_PALETTES.some((palette) => palette.id === id))
+    .filter((id) => CRAB_PET_PALETTES.some((palette) => palette.id === id))
     .toSorted();
-  const friendId = planLobsterOldFriend(seed, known);
-  const palette = friendId
-    ? LOBSTER_PET_PALETTES.find((entry) => entry.id === friendId)
-    : undefined;
+  const friendId = planCrabOldFriend(seed, known);
+  const palette = friendId ? CRAB_PET_PALETTES.find((entry) => entry.id === friendId) : undefined;
   if (!palette) {
     return base;
   }
   return {
     ...base,
     oldFriend: true,
-    friendName: getLobsterdexEntries().get(palette.id)?.name ?? null,
+    friendName: getCrabdexEntries().get(palette.id)?.name ?? null,
     look: {
       ...look,
       palette,
-      chimeraParts: palette.id === "chimera" ? canonicalLobsterLook(palette).chimeraParts : null,
+      chimeraParts: palette.id === "chimera" ? canonicalCrabLook(palette).chimeraParts : null,
     },
   };
 }
 
 // The displayed base name before honorifics: rare identities override the
 // seeded catalog name.
-export function lobsterLoadDisplayName(identity: LobsterLoadIdentity, seed: number): string {
+export function crabLoadDisplayName(identity: CrabLoadIdentity, seed: number): string {
   if (identity.elder) {
     return "Methuselah";
   }
-  return identity.friendName ?? lobsterPetName(identity.look, seed);
+  return identity.friendName ?? crabPetName(identity.look, seed);
 }
 
 // Ledge lore, delivered by sea. Shown through the bottle's title tooltip
 // (the pet-name channel), so there is no i18n surface.
-export const LOBSTER_BOTTLE_FORTUNES = [
+export const CRAB_BOTTLE_FORTUNES = [
   "the tide returns every branch to shore",
   "molt before you feel ready",
   "a shell is just armor you outgrew",
@@ -339,13 +334,13 @@ export const LOBSTER_BOTTLE_FORTUNES = [
   "barnacles are only patient passengers",
   "no current lasts forever",
   "bury your treasure in version control",
-  "the crab was a lobster all along",
+  "the crab was a crab all along",
   "small claws, firm grip",
   "rest is also progress",
   "what washes away was never pinned",
 ] as const;
 
-export type LobsterBottlePlan = {
+export type CrabBottlePlan = {
   atMs: number;
   spotPct: number;
   fortuneIndex: number;
@@ -353,23 +348,23 @@ export type LobsterBottlePlan = {
 
 // A few loads beach a message in a bottle somewhere on the ledge. It is not
 // the pet's: it appears on its own clock and outlives visits.
-export function planLobsterBottle(seed: number): LobsterBottlePlan | null {
+export function planCrabBottle(seed: number): CrabBottlePlan | null {
   const rng = mulberry32((seed ^ 0xb077) >>> 0);
   if (rng() >= 0.03) {
     return null;
   }
   const atMs = Math.round(45_000 + rng() * 855_000);
   const spotPct = Math.round(15 + rng() * 70);
-  const fortuneIndex = Math.floor(rng() * LOBSTER_BOTTLE_FORTUNES.length);
+  const fortuneIndex = Math.floor(rng() * CRAB_BOTTLE_FORTUNES.length);
   return { atMs, spotPct, fortuneIndex };
 }
 
 // The pet notices gateway upgrades: the first page load on a new version, it
 // shows up carrying a bindle (moving day). The very first version sighting
 // only records a baseline - no bindle without a previous home.
-const MOVING_DAY_KEY = "openclaw.control.lobsterpet.gatewayVersion.v1";
+const MOVING_DAY_KEY = "openclaw.control.crabpet.gatewayVersion.v1";
 
-export function detectLobsterMovingDay(version: string): boolean {
+export function detectCrabMovingDay(version: string): boolean {
   try {
     const storage = getSafeLocalStorage();
     if (!storage) {
@@ -387,7 +382,7 @@ export function detectLobsterMovingDay(version: string): boolean {
 }
 
 // Late-night visitors are always sleepy, whatever their daytime personality.
-function isLobsterNightTime(now: Date = new Date()): boolean {
+function isCrabNightTime(now: Date = new Date()): boolean {
   const hour = now.getHours();
   return hour >= 22 || hour < 6;
 }

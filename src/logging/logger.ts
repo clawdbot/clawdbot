@@ -590,7 +590,7 @@ export function isFileLogLevelEnabled(level: LogLevel): boolean {
 function buildLogger(settings: ResolvedRuntimeSettings): TsLogger<LogObj> {
   const silent = settings.level === "silent";
   const logger = new TsLogger<LogObj>({
-    name: "openclaw",
+    name: "opencrustacean",
     maskValuesOfKeys: [],
     // tslog reports Infinity as an out-of-range setting even though its runtime filter supports it.
     minLevel: levelToMinLevel(silent ? "fatal" : settings.level),

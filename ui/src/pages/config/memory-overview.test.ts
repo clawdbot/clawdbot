@@ -5,17 +5,17 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
 
-// The hero derives its lobster from lobsterPetSeed, which mixes in a random
+// The hero derives its crab from crabPetSeed, which mixes in a random
 // per-load salt, so the palette (and with it sprite geometry like the sleeping
 // eye peek) varies per test process. Pin a canonical look so pose assertions
 // stay deterministic.
-vi.mock("../../components/lobster-pet.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../components/lobster-pet.ts")>();
+vi.mock("../../components/crab-pet.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../components/crab-pet.ts")>();
   return {
     ...actual,
-    createLobsterPetLook: () =>
-      actual.canonicalLobsterLook(
-        expectDefined(actual.LOBSTER_PET_PALETTES[0], "canonical lobster palette"),
+    createCrabPetLook: () =>
+      actual.canonicalCrabLook(
+        expectDefined(actual.CRAB_PET_PALETTES[0], "canonical crab palette"),
       ),
   };
 });
@@ -108,7 +108,7 @@ describe("renderMemoryOverview", () => {
 
     expect(container.textContent).toContain("Memory is awake");
     expect(container.textContent).toContain("memory-core · hybrid search");
-    expect(container.querySelector(".lob-reading-book")).not.toBeNull();
+    expect(container.querySelector(".crab-reading-book")).not.toBeNull();
     expect(container.textContent).toContain("Sleep schedule");
     expect(container.textContent).toContain("Europe/Vienna");
     expect(container.textContent).toContain("Promoted today");
@@ -122,7 +122,7 @@ describe("renderMemoryOverview", () => {
     expect(container.textContent).toContain("Memory needs attention");
     expect(container.textContent).toContain("gateway request failed");
     expect(container.textContent).toContain("Retry");
-    expect(container.querySelector(".lob-reading-book")).toBeNull();
+    expect(container.querySelector(".crab-reading-book")).toBeNull();
   });
 
   it("renders the dimmed sleeping hero when the engine is off", () => {
@@ -131,8 +131,8 @@ describe("renderMemoryOverview", () => {
     expect(container.textContent).toContain("Memory is hibernating");
     expect(container.textContent).toContain("Open Settings");
     expect(container.querySelector(".memory-overview__hero--sleeping")).not.toBeNull();
-    expect(container.querySelector(".lobster-pet__svg")).not.toBeNull();
-    expect(container.querySelector(".lob-reading-book")).toBeNull();
+    expect(container.querySelector(".crab-pet__svg")).not.toBeNull();
+    expect(container.querySelector(".crab-reading-book")).toBeNull();
   });
 
   it("hibernates a disabled pinned engine and points to Settings", () => {
@@ -154,7 +154,7 @@ describe("renderMemoryOverview", () => {
     expect(container.textContent).toContain("Memory is hibernating");
     expect(container.textContent).toContain("selected memory engine is disabled");
     expect(container.textContent).toContain("Open Settings");
-    expect(container.querySelector(".lob-reading-book")).toBeNull();
+    expect(container.querySelector(".crab-reading-book")).toBeNull();
     expect(container.textContent).not.toContain("Engine health");
     expect(container.textContent).not.toContain("Sleep schedule");
   });

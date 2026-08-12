@@ -1,4 +1,4 @@
-export const LOG_PREFIX = "openclaw";
+export const LOG_PREFIX = "opencrustacean";
 export const LOG_SUFFIX = ".log";
 
 export function canUseNodeFs(): boolean {

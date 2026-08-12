@@ -100,7 +100,7 @@ describe("session discussion panel", () => {
     document.documentElement.dataset.themeMode = "light";
     document.documentElement.style.setProperty("--bg", "#faf9f7");
     document.documentElement.style.setProperty("--card", "#ffffff");
-    document.documentElement.style.setProperty("--accent", "#bd4531");
+    document.documentElement.style.setProperty("--accent", "#2fbf71");
     const panel = mount({
       loadInfo: vi.fn().mockResolvedValue({
         state: "open",
@@ -122,7 +122,7 @@ describe("session discussion panel", () => {
         tokens: expect.objectContaining({
           surface: "#faf9f7",
           card: "#ffffff",
-          accent: "#bd4531",
+          accent: "#2fbf71",
         }),
       }),
       "https://discussion.example",

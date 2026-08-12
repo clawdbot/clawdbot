@@ -15,7 +15,7 @@ async function renderLightbox() {
   render(
     html`<openclaw-image-lightbox
       src="data:image/png;base64,cG5n"
-      title="Generated lobster"
+      title="Generated crab"
     ></openclaw-image-lightbox>`,
     container,
   );
@@ -69,7 +69,7 @@ describe("openclaw-image-lightbox", () => {
     const { modal } = await renderLightbox();
     const root = modal.shadowRoot;
 
-    expect(root?.querySelector<HTMLImageElement>("img")?.alt).toBe("Generated lobster");
+    expect(root?.querySelector<HTMLImageElement>("img")?.alt).toBe("Generated crab");
     expect(root?.querySelector<HTMLImageElement>("img")?.src).toBe("data:image/png;base64,cG5n");
     await vi.waitFor(() =>
       expect(root?.querySelector<HTMLAnchorElement>("a")?.href).toBe("blob:lightbox-original"),
@@ -85,7 +85,7 @@ describe("openclaw-image-lightbox", () => {
     render(
       html`<openclaw-image-lightbox
         src="data:image/png;charset=utf-8;base64,cG5n"
-        title="Generated lobster"
+        title="Generated crab"
       ></openclaw-image-lightbox>`,
       container,
     );

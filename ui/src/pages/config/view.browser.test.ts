@@ -1601,7 +1601,7 @@ describe("config view", () => {
     expect(onCameraRefresh).toHaveBeenCalledOnce();
   });
 
-  it("previews lobster sounds only when the user enables them", () => {
+  it("previews crab sounds only when the user enables them", () => {
     const param = () => ({
       setValueAtTime: vi.fn(),
       exponentialRampToValueAtTime: vi.fn(),
@@ -1637,18 +1637,18 @@ describe("config view", () => {
       element.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
     };
 
-    const setLobsterPetSounds = vi.fn();
+    const setCrabPetSounds = vi.fn();
     const disabled = renderConfigView({
       activeSection: "__appearance__",
       includeSections: ["__appearance__"],
-      lobsterPetVisits: true,
-      setLobsterPetVisits: vi.fn(),
-      lobsterPetSounds: false,
-      setLobsterPetSounds,
+      crabPetVisits: true,
+      setCrabPetVisits: vi.fn(),
+      crabPetSounds: false,
+      setCrabPetSounds,
     });
     const disabledRow = Array.from(
       disabled.container.querySelectorAll<HTMLElement>(".settings-row--toggle"),
-    ).find((candidate) => candidate.textContent?.includes("Lobster sounds"));
+    ).find((candidate) => candidate.textContent?.includes("Crab sounds"));
     const disabledSwitch = disabledRow?.querySelector<HTMLElement & { checked: boolean }>(
       "wa-switch",
     );
@@ -1660,19 +1660,19 @@ describe("config view", () => {
     expect(audioContextCtor).not.toHaveBeenCalled();
     activateSwitch(disabledSwitch, true);
     expect(audioContextCtor).toHaveBeenCalledTimes(1);
-    expect(setLobsterPetSounds).toHaveBeenCalledWith(true);
+    expect(setCrabPetSounds).toHaveBeenCalledWith(true);
 
     const enabled = renderConfigView({
       activeSection: "__appearance__",
       includeSections: ["__appearance__"],
-      lobsterPetVisits: true,
-      setLobsterPetVisits: vi.fn(),
-      lobsterPetSounds: true,
-      setLobsterPetSounds,
+      crabPetVisits: true,
+      setCrabPetVisits: vi.fn(),
+      crabPetSounds: true,
+      setCrabPetSounds,
     });
     const enabledRow = Array.from(
       enabled.container.querySelectorAll<HTMLElement>(".settings-row--toggle"),
-    ).find((candidate) => candidate.textContent?.includes("Lobster sounds"));
+    ).find((candidate) => candidate.textContent?.includes("Crab sounds"));
     const enabledSwitch = enabledRow?.querySelector<HTMLElement & { checked: boolean }>(
       "wa-switch",
     );
@@ -1694,7 +1694,7 @@ describe("config view", () => {
 
     activateSwitch(enabledSwitch, false);
     expect(audioContextCtor).toHaveBeenCalledTimes(1);
-    expect(setLobsterPetSounds).toHaveBeenLastCalledWith(false);
+    expect(setCrabPetSounds).toHaveBeenLastCalledWith(false);
   });
 
   it("renders and changes the live sidebar activity preference", () => {
@@ -1715,29 +1715,29 @@ describe("config view", () => {
     expect(setSidebarLiveActivity).toHaveBeenCalledWith(false);
   });
 
-  it("uses rich Lobsterdex lore tooltips and opens the full collection", () => {
+  it("uses rich Crabdex lore tooltips and opens the full collection", () => {
     const firstSeenAt = new Date("2026-07-10T12:00:00.000Z").getTime();
     vi.stubGlobal("localStorage", window.localStorage);
     localStorage.setItem(
-      "openclaw.control.lobsterdex.v1",
+      "openclaw.control.crabdex.v1",
       JSON.stringify({
         crimson: { firstSeenAt, name: "Ruby", shinySeenAt: firstSeenAt },
       }),
     );
-    const onOpenLobsterdex = vi.fn();
+    const onOpenCrabdex = vi.fn();
     try {
       const { container } = renderConfigView({
         activeSection: "__appearance__",
         includeSections: ["__appearance__"],
-        lobsterPetVisits: true,
-        setLobsterPetVisits: vi.fn(),
-        lobsterPetSounds: true,
-        setLobsterPetSounds: vi.fn(),
-        lobsterdexHref: "/settings/lobsterdex",
-        onOpenLobsterdex,
+        crabPetVisits: true,
+        setCrabPetVisits: vi.fn(),
+        crabPetSounds: true,
+        setCrabPetSounds: vi.fn(),
+        crabdexHref: "/settings/crabdex",
+        onOpenCrabdex,
       });
 
-      const seen = container.querySelector(".lobster-pet--palette-crimson");
+      const seen = container.querySelector(".crab-pet--palette-crimson");
       const seenTooltip = seen?.closest("openclaw-tooltip");
       expect(seen?.hasAttribute("title")).toBe(false);
       expect(seen?.getAttribute("aria-label")).toContain("Ruby ✦");
@@ -1748,16 +1748,16 @@ describe("config view", () => {
         new Date(firstSeenAt).toLocaleDateString(),
       );
 
-      const unseen = container.querySelector(".lobster-pet--palette-watermelon");
+      const unseen = container.querySelector(".crab-pet--palette-watermelon");
       expect(unseen?.getAttribute("aria-label")).toContain("Ripe when thumped.");
       expect(
         unseen?.closest("openclaw-tooltip")?.querySelector('[slot="content"]')?.textContent,
       ).toContain("Ripe when thumped.");
 
-      container.querySelector<HTMLAnchorElement>(".lobsterdex__open")?.click();
-      expect(onOpenLobsterdex).toHaveBeenCalledOnce();
+      container.querySelector<HTMLAnchorElement>(".crabdex__open")?.click();
+      expect(onOpenCrabdex).toHaveBeenCalledOnce();
     } finally {
-      localStorage.removeItem("openclaw.control.lobsterdex.v1");
+      localStorage.removeItem("openclaw.control.crabdex.v1");
       vi.unstubAllGlobals();
     }
   });

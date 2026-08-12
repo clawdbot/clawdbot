@@ -146,22 +146,22 @@ export const toolIcons = {
   spark: strokeIcon(svg` <path
     d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"
   />`),
-  lobster: html`
+  crab: html`
     <svg viewBox="0 0 120 120" fill="none">
       <defs>
-        <linearGradient id="lob-g" x1="0%" y1="0%" x2="100%" y2="100%">
+        <linearGradient id="crab-g" x1="0%" y1="0%" x2="100%" y2="100%">
           <stop offset="0%" stop-color="#35a55b" />
           <stop offset="100%" stop-color="#1f6b38" />
         </linearGradient>
       </defs>
       <path
         d="M60 10C30 10 15 35 15 55C15 75 30 95 45 100L45 110L55 110L55 100C55 100 60 102 65 100L65 110L75 110L75 100C90 95 105 75 105 55C105 35 90 10 60 10Z"
-        fill="url(#lob-g)"
+        fill="url(#crab-g)"
       />
-      <path d="M20 45C5 40 0 50 5 60C10 70 20 65 25 55C28 48 25 45 20 45Z" fill="url(#lob-g)" />
+      <path d="M20 45C5 40 0 50 5 60C10 70 20 65 25 55C28 48 25 45 20 45Z" fill="url(#crab-g)" />
       <path
         d="M100 45C115 40 120 50 115 60C110 70 100 65 95 55C92 48 95 45 100 45Z"
-        fill="url(#lob-g)"
+        fill="url(#crab-g)"
       />
       <path d="M45 15Q35 5 30 8" stroke="#35a55b" stroke-width="3" stroke-linecap="round" />
       <path d="M75 15Q85 5 90 8" stroke="#35a55b" stroke-width="3" stroke-linecap="round" />

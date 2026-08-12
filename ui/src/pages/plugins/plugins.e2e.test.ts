@@ -59,9 +59,9 @@ const workboardEnabled = {
   state: "enabled",
 } satisfies PluginCatalogItem;
 
-const lobsterPlugin = {
-  id: "lobster",
-  name: "Lobster",
+const crabPlugin = {
+  id: "crab",
+  name: "Crab",
   description: "Run typed workflows with resumable approvals.",
   kind: ["plugin"],
   origin: "official",
@@ -70,7 +70,7 @@ const lobsterPlugin = {
   state: "not-installed",
   featured: true,
   order: 50,
-  install: { source: "clawhub", packageName: "@openclaw/lobster" },
+  install: { source: "clawhub", packageName: "@openclaw/crab" },
 } satisfies PluginCatalogItem;
 
 const remoteIconPlugin = {
@@ -103,20 +103,15 @@ const calendarPlugin = {
   removable: true,
 } satisfies PluginCatalogItem;
 
-const initialInventory = inventory([workboardDisabled, lobsterPlugin, remoteIconPlugin]);
+const initialInventory = inventory([workboardDisabled, crabPlugin, remoteIconPlugin]);
 const installedInventory = inventory([
   workboardDisabled,
-  lobsterPlugin,
+  crabPlugin,
   remoteIconPlugin,
   calendarPlugin,
 ]);
-const finalInventory = inventory([
-  workboardEnabled,
-  lobsterPlugin,
-  remoteIconPlugin,
-  calendarPlugin,
-]);
-const uninstalledInventory = inventory([workboardEnabled, lobsterPlugin, remoteIconPlugin]);
+const finalInventory = inventory([workboardEnabled, crabPlugin, remoteIconPlugin, calendarPlugin]);
+const uninstalledInventory = inventory([workboardEnabled, crabPlugin, remoteIconPlugin]);
 
 const calendarSearchResponse = {
   results: [
@@ -417,10 +412,10 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await page.getByRole("tab", { name: /^Discover/u }).click();
       await page.getByRole("heading", { name: /^Featured/u }).waitFor();
       await page.getByRole("heading", { name: /^Connect your world/u }).waitFor();
-      const lobsterCard = page.locator('[data-plugin-id="lobster"]');
-      await lobsterCard.getByRole("button", { name: "Install Lobster" }).waitFor();
+      const crabCard = page.locator('[data-plugin-id="crab"]');
+      await crabCard.getByRole("button", { name: "Install Crab" }).waitFor();
       // Bundled art renders instead of monogram fallbacks for curated plugins.
-      await lobsterCard.locator(".plugins-tile img").waitFor({ state: "attached" });
+      await crabCard.locator(".plugins-tile img").waitFor({ state: "attached" });
       const remoteIconCard = page.locator('[data-plugin-id="remote-icon"]');
       const remoteIcon = remoteIconCard.locator(".plugins-tile img.plugins-icon");
       await remoteIcon.waitFor({ state: "visible" });

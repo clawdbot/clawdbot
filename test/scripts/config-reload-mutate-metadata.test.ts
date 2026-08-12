@@ -50,7 +50,7 @@ describe("config reload metadata mutator", () => {
     expect(result.stderr).toBe("");
     expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual({
       gateway: { port: 18789 },
-      ui: { seamColor: "#ff6600" },
+      ui: { seamColor: "#2fbf71" },
       plugins: {
         entries: {
           demo: { enabled: true },

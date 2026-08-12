@@ -66,13 +66,13 @@ OpenClaw uses a lobster palette for CLI output:
 
 | Token          | Hex       | Used for                             |
 | -------------- | --------- | ------------------------------------ |
-| `accent`       | `#FF5A2D` | Headings, labels, primary highlights |
-| `accentBright` | `#FF7A3D` | Command names, emphasis              |
-| `accentDim`    | `#D14A22` | Secondary highlight text             |
-| `info`         | `#FF8A5B` | Informational values                 |
+| `accent`       | `#2FBF71` | Headings, labels, primary highlights |
+| `accentBright` | `#57C785` | Command names, emphasis              |
+| `accentDim`    | `#1F9D57` | Secondary highlight text             |
+| `info`         | `#57C785` | Informational values                 |
 | `success`      | `#2FBF71` | Success states                       |
 | `warn`         | `#FFB020` | Warnings, option flags, fallbacks    |
-| `error`        | `#E23D2D` | Errors, failures                     |
+| `error`        | `#22C55E` | Errors, failures                     |
 | `muted`        | `#8B7F77` | De-emphasis, metadata                |
 
 Palette source of truth: `packages/terminal-core/src/palette.ts`.

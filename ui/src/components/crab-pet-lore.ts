@@ -1,12 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import type { LobsterPetPaletteId } from "./lobster-pet-contract.ts";
+import type { CrabPetPaletteId } from "./crab-pet-contract.ts";
 
-type LobsterPaletteLore = {
+type CrabPaletteLore = {
   flavor: string;
   hint: string;
 };
 
-const RARE_NAMES: Partial<Record<LobsterPetPaletteId, string>> = {
+const RARE_NAMES: Partial<Record<CrabPetPaletteId, string>> = {
   blue: "Blueberry",
   gold: "Goldie",
   lumen: "Glimmer",
@@ -77,20 +77,17 @@ const PET_NAMES = [
   "Moss",
 ] as const;
 
-export function lobsterPaletteName(paletteId: LobsterPetPaletteId): string {
+export function crabPaletteName(paletteId: CrabPetPaletteId): string {
   return RARE_NAMES[paletteId] ?? paletteId;
 }
 
-export function lobsterRandomName(seed: number): string {
-  return expectDefined(
-    PET_NAMES[(seed >>> 3) % PET_NAMES.length],
-    "lobster pet name catalog entry",
-  );
+export function crabRandomName(seed: number): string {
+  return expectDefined(PET_NAMES[(seed >>> 3) % PET_NAMES.length], "crab pet name catalog entry");
 }
 
-// Like pet names and bottle fortunes, Lobsterdex lore is an English-only
+// Like pet names and bottle fortunes, Crabdex lore is an English-only
 // easter-egg channel rather than product UI copy.
-export const LOBSTER_PALETTE_LORE: Record<LobsterPetPaletteId, LobsterPaletteLore> = {
+export const CRAB_PALETTE_LORE: Record<CrabPetPaletteId, CrabPaletteLore> = {
   emerald: {
     flavor: "The classic green, first in every tide pool.",
     hint: "Where every story starts.",
@@ -115,7 +112,7 @@ export const LOBSTER_PALETTE_LORE: Record<LobsterPetPaletteId, LobsterPaletteLor
     flavor: "Listens to your bugs. Judges silently.",
     hint: "Quack.",
   },
-  watermelon: { flavor: "Contains 6% lobster.", hint: "Ripe when thumped." },
+  watermelon: { flavor: "Contains 6% crab.", hint: "Ripe when thumped." },
   clawtron: { flavor: "60% rivets, 40% love.", hint: "Beep boop snip." },
   selene: { flavor: "Carries the current moon on its belly.", hint: "Waxes and wanes." },
   geode: { flavor: "Rock outside, amethyst inside.", hint: "Crack the surface." },
@@ -124,7 +121,7 @@ export const LOBSTER_PALETTE_LORE: Record<LobsterPetPaletteId, LobsterPaletteLor
     flavor: "Fully transparent. Nothing to hide.",
     hint: "Easy to miss, hard to forget.",
   },
-  split: { flavor: "Two lobsters, one shell.", hint: "Can't pick a side." },
+  split: { flavor: "Two crabs, one shell.", hint: "Can't pick a side." },
   sourdough: {
     flavor: "Started from a starter. 24-hour proof.",
     hint: "Still proofing.",
@@ -140,7 +137,7 @@ export const LOBSTER_PALETTE_LORE: Record<LobsterPetPaletteId, LobsterPaletteLor
   flatpack: { flavor: "Some assembly required.", hint: "Missing one screw." },
   tinfoil: { flavor: "The tide is a psyop.", hint: "They know." },
   actual: {
-    flavor: "An actual lobster. Unsettling, honestly.",
+    flavor: "An actual crab. Unsettling, honestly.",
     hint: "Anatomically correct.",
   },
   disco: { flavor: "Born under a mirror ball.", hint: "The night is still young." },
@@ -149,7 +146,7 @@ export const LOBSTER_PALETTE_LORE: Record<LobsterPetPaletteId, LobsterPaletteLor
     flavor: "Final hardware pending approval.",
     hint: "Still on the drawing board.",
   },
-  phosphor: { flavor: "80 columns, 24 rows, one lobster.", hint: "Hums at sixty hertz." },
+  phosphor: { flavor: "80 columns, 24 rows, one crab.", hint: "Hums at sixty hertz." },
   ascii: { flavor: "Renders anywhere. Even over SSH.", hint: "chmod +x" },
   portal: { flavor: "Arrives before it leaves.", hint: "Mind the gap." },
   notexture: { flavor: "Texture not found.", hint: "404." },

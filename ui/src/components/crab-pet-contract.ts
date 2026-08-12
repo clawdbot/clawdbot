@@ -1,10 +1,10 @@
-export type LobsterPetMode = "idle" | "busy" | "offline";
+export type CrabPetMode = "idle" | "busy" | "offline";
 
-export type LobsterRunOutcome = "ok" | "error" | "aborted";
+export type CrabRunOutcome = "ok" | "error" | "aborted";
 
-export type LobsterPetPersonalityId = "sleepy" | "zoomy" | "friendly" | "showoff";
+export type CrabPetPersonalityId = "sleepy" | "zoomy" | "friendly" | "showoff";
 
-export type LobsterPetPaletteId =
+export type CrabPetPaletteId =
   | "emerald"
   | "blue"
   | "gold"
@@ -48,21 +48,21 @@ export type LobsterPetPaletteId =
   | "retro"
   | "goldenretro";
 
-// Pass-through ledge visitors. Strangers are other lobsters; everyone else
-// is, at best, lobster-adjacent. None of them count for the Lobsterdex.
-export type LobsterPasserKind = "stranger" | "crab" | "snail" | "duck" | "jellyfish";
+// Pass-through ledge visitors. Strangers are other crabs; everyone else
+// is, at best, crab-adjacent. None of them count for the Crabdex.
+export type CrabPasserKind = "stranger" | "crab" | "snail" | "duck" | "jellyfish";
 
 // How an arriving pet gets onto the ledge. Rolled per arrival from its own
 // seeded stream; "walk" is the classic pop-up from behind the ledge.
-export type LobsterPetEntrance = "walk" | "balloon" | "bubble";
+export type CrabPetEntrance = "walk" | "balloon" | "bubble";
 
-export type LobsterPetPalette = {
-  id: LobsterPetPaletteId;
+export type CrabPetPalette = {
+  id: CrabPetPaletteId;
   shell: string;
   claw: string;
 };
 
-export type LobsterPetAccessory =
+export type CrabPetAccessory =
   | "none"
   | "crown"
   | "sprout"
@@ -73,29 +73,29 @@ export type LobsterPetAccessory =
   | "barnacle"
   | "monocle";
 
-export type LobsterPetAntennae = "perky" | "droopy";
+export type CrabPetAntennae = "perky" | "droopy";
 
-export type LobsterPetBuild = "round" | "squat" | "slender";
+export type CrabPetBuild = "round" | "squat" | "slender";
 
-export type LobsterPetClawSize = "dainty" | "regular" | "mighty";
+export type CrabPetClawSize = "dainty" | "regular" | "mighty";
 
-export type LobsterPetLook = {
-  palette: LobsterPetPalette;
+export type CrabPetLook = {
+  palette: CrabPetPalette;
   scale: number;
-  accessory: LobsterPetAccessory;
-  antennae: LobsterPetAntennae;
+  accessory: CrabPetAccessory;
+  antennae: CrabPetAntennae;
   side: "left" | "right";
   spotPct: number;
   facing: 1 | -1;
-  personality: LobsterPetPersonalityId;
+  personality: CrabPetPersonalityId;
   blinkDelayS: number;
-  build: LobsterPetBuild;
-  clawSize: LobsterPetClawSize;
+  build: CrabPetBuild;
+  clawSize: CrabPetClawSize;
   tailFan: boolean;
   // Pokemon-style shiny roll (~1 in 512): sparkles plus a saturated sheen,
-  // logged separately in the Lobsterdex.
+  // logged separately in the Crabdex.
   shiny: boolean;
-  // Real lobsters carry a crusher and a pincer; when set, that side's claw
+  // Real crabs carry a crusher and a pincer; when set, that side's claw
   // grows mighty while the other stays dainty (overrides clawSize).
   crusherSide: "left" | "right" | null;
   freckles: boolean;
@@ -112,17 +112,17 @@ export type LobsterPetLook = {
   } | null;
 };
 
-// One salt per page load: revisiting the UI re-rolls every session's lobster,
+// One salt per page load: revisiting the UI re-rolls every session's crab,
 // while re-renders within a load stay stable for a given session key.
 const LOAD_SALT = Math.trunc(Math.random() * 0xffffffff);
 
-export function lobsterPetSeed(sessionKey: string): number {
+export function crabPetSeed(sessionKey: string): number {
   return (fnv1aUtf16(sessionKey) ^ LOAD_SALT) >>> 0;
 }
 
 // The most recently active session with a terminal status decides how the
 // pet reacts when the busy state clears: failures earn sympathy, not cheers.
-export function resolveLobsterRunOutcome(
+export function resolveCrabRunOutcome(
   sessions:
     | ReadonlyArray<{
         status?: "running" | "done" | "failed" | "killed" | "timeout";
@@ -132,8 +132,8 @@ export function resolveLobsterRunOutcome(
       }>
     | null
     | undefined,
-): LobsterRunOutcome {
-  let latest: { at: number; outcome: LobsterRunOutcome } | null = null;
+): CrabRunOutcome {
+  let latest: { at: number; outcome: CrabRunOutcome } | null = null;
   for (const row of sessions ?? []) {
     if (!row.status || row.status === "running") {
       continue;
@@ -142,7 +142,7 @@ export function resolveLobsterRunOutcome(
     // move on unrelated events (reads, renames) and only serve as fallbacks.
     const at = row.endedAt ?? row.lastActivityAt ?? row.updatedAt ?? 0;
     if (!latest || at > latest.at) {
-      const outcome: LobsterRunOutcome =
+      const outcome: CrabRunOutcome =
         row.status === "failed" || row.status === "timeout"
           ? "error"
           : row.status === "killed"
@@ -154,10 +154,10 @@ export function resolveLobsterRunOutcome(
   return latest?.outcome ?? "ok";
 }
 
-export function resolveLobsterPetMode(
+export function resolveCrabPetMode(
   connected: boolean,
   sessions: ReadonlyArray<{ hasActiveRun?: boolean | null }> | null | undefined,
-): LobsterPetMode {
+): CrabPetMode {
   if (!connected) {
     return "offline";
   }

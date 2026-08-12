@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 16 16" role="img" aria-label="Pixel lobster">
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 16 16" role="img" aria-label="Pixel crab">
   <rect width="16" height="16" fill="none"/>
   <!-- outline -->
-  <g fill="#3a0a0d">
+  <g fill="#0a2e1c">
     <rect x="1" y="5" width="1" height="3"/>
     <rect x="2" y="4" width="1" height="1"/>
     <rect x="2" y="8" width="1" height="1"/>
@@ -25,7 +25,7 @@
   </g>
 
   <!-- body -->
-  <g fill="#ff4f40">
+  <g fill="#2fbf71">
     <rect x="5" y="3" width="6" height="1"/>
     <rect x="4" y="4" width="8" height="1"/>
     <rect x="3" y="5" width="10" height="1"/>
@@ -38,7 +38,7 @@
   </g>
 
   <!-- claws -->
-  <g fill="#ff775f">
+  <g fill="#57c785">
     <rect x="1" y="6" width="2" height="1"/>
     <rect x="2" y="5" width="1" height="1"/>
     <rect x="2" y="7" width="1" height="1"/>
@@ -57,4 +57,3 @@
     <rect x="9" y="4" width="1" height="1"/>
   </g>
 </svg>
-

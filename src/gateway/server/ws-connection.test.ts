@@ -253,12 +253,12 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(handlerParams.setClient(racedClient)).toBe(false);
     expect(clients).toEqual(new Set([firstClient]));
 
-    vi.advanceTimersByTime(25_000);
+    vi.advanceTimersByTime(30_000);
     expect(socket.ping).toHaveBeenCalledOnce();
 
     socket.emit("close", 1000, Buffer.from("done"));
     expect(clients.size).toBe(0);
-    vi.advanceTimersByTime(25_000);
+    vi.advanceTimersByTime(30_000);
     expect(socket.ping).toHaveBeenCalledOnce();
   });
 
@@ -281,22 +281,22 @@ describe("attachGatewayWsConnectionHandler", () => {
       }),
     ).toBe(true);
 
-    vi.advanceTimersByTime(25_000);
+    vi.advanceTimersByTime(30_000);
     expect(socket.ping).toHaveBeenCalledTimes(1);
     expect(touchPresenceMock).not.toHaveBeenCalled();
     socket.emit("pong");
     expect(touchPresenceMock).toHaveBeenCalledWith("ping-client");
 
-    vi.advanceTimersByTime(25_000);
+    vi.advanceTimersByTime(30_000);
     expect(socket.ping).toHaveBeenCalledTimes(2);
     expect(socket.terminate).not.toHaveBeenCalled();
 
     socket.emit("close", 1000, Buffer.from("done"));
-    vi.advanceTimersByTime(25_000);
+    vi.advanceTimersByTime(30_000);
     expect(socket.ping).toHaveBeenCalledTimes(2);
   });
 
-  it("terminates a connection after one missed protocol pong", async () => {
+  it("terminates a connection after the keepalive grace period of missed pongs", async () => {
     vi.useFakeTimers();
     const unregister = vi.fn();
     const clients = new Set<unknown>();
@@ -330,17 +330,34 @@ describe("attachGatewayWsConnectionHandler", () => {
     ).toBe(true);
     expect(clients.size).toBe(1);
 
-    vi.advanceTimersByTime(25_000);
+    // One missed pong must NOT terminate yet (default grace is 5 missed pongs).
+    vi.advanceTimersByTime(30_000);
     expect(socket.ping).toHaveBeenCalledTimes(1);
     expect(socket.terminate).not.toHaveBeenCalled();
 
-    vi.advanceTimersByTime(25_000);
+    vi.advanceTimersByTime(30_000);
+    expect(socket.ping).toHaveBeenCalledTimes(2);
+    expect(socket.terminate).not.toHaveBeenCalled();
+
+    // Reach the default grace period (5 consecutive missed pongs at 30s).
+    vi.advanceTimersByTime(30_000);
+    expect(socket.ping).toHaveBeenCalledTimes(3);
+    expect(socket.terminate).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(30_000);
+    expect(socket.ping).toHaveBeenCalledTimes(4);
+    expect(socket.terminate).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(30_000);
+    expect(socket.ping).toHaveBeenCalledTimes(5);
+    expect(socket.terminate).not.toHaveBeenCalled();
+
+    // 5th consecutive missed pong -> terminate, no further pings after close.
+    vi.advanceTimersByTime(30_000);
+    expect(socket.ping).toHaveBeenCalledTimes(5);
     expect(socket.terminate).toHaveBeenCalledTimes(1);
-    expect(socket.ping).toHaveBeenCalledTimes(1);
     expect(unregister).toHaveBeenCalledTimes(1);
     expect(clients.size).toBe(0);
 
-    vi.advanceTimersByTime(25_000);
+    vi.advanceTimersByTime(30_000);
     expect(socket.terminate).toHaveBeenCalledTimes(1);
   });
 

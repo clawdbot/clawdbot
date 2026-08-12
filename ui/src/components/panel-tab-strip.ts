@@ -134,7 +134,7 @@ export const panelTabStripStyles = css`
   }
   .tabstrip-tab[active]::part(base) {
     color: var(--text, #d7dae0);
-    border-bottom-color: var(--accent, #ff5c5c);
+    border-bottom-color: var(--accent, #2fbf71);
   }
   .tabstrip-tab.is-exited::part(base) {
     opacity: 0.55;
@@ -144,7 +144,7 @@ export const panelTabStripStyles = css`
   }
   .tabstrip-tab__icon {
     display: inline-flex;
-    color: var(--accent, #ff5c5c);
+    color: var(--accent, #2fbf71);
   }
   .tabstrip-tab.is-exited .tabstrip-tab__icon {
     color: var(--muted, #8a919e);
@@ -160,9 +160,9 @@ export const panelTabStripStyles = css`
     color: var(--muted, #8a919e);
   }
   .tabstrip-tab__badge {
-    border: 1px solid color-mix(in srgb, var(--accent, #ff5c5c) 45%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent, #2fbf71) 45%, transparent);
     border-radius: 999px;
-    color: var(--accent, #ff5c5c);
+    color: var(--accent, #2fbf71);
     font-size: 9px;
     line-height: 14px;
     padding: 0 5px;
@@ -215,7 +215,7 @@ export const panelTabStripStyles = css`
     background: color-mix(in srgb, var(--text, #d7dae0) 6%, transparent);
   }
   .tabstrip-tab[active] + .tabstrip-tab__close {
-    border-bottom-color: var(--accent, #ff5c5c);
+    border-bottom-color: var(--accent, #2fbf71);
   }
   .tabstrip-tab__close:hover,
   .tabstrip-tab__close:focus-visible {

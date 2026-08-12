@@ -55,7 +55,7 @@ describe("createVideoGenerateTool status actions", () => {
         ownerKey: "agent:main:discord:direct:123",
         scopeKind: "session",
         runId: "tool:video_generate:active",
-        task: "friendly lobster surfing",
+        task: "friendly crab surfing",
         status: "running",
         deliveryStatus: "not_applicable",
         notifyPolicy: "silent",
@@ -65,7 +65,7 @@ describe("createVideoGenerateTool status actions", () => {
     ]);
 
     const result = createVideoGenerateDuplicateGuardResult("agent:main:discord:direct:123", {
-      prompt: "friendly lobster surfing",
+      prompt: "friendly crab surfing",
     });
 
     const [content] = result?.content ?? [];
@@ -114,7 +114,7 @@ describe("createVideoGenerateTool status actions", () => {
         ownerKey: "agent:main:discord:direct:123",
         scopeKind: "session",
         runId: "tool:video_generate:active",
-        task: "friendly lobster surfing",
+        task: "friendly crab surfing",
         status: "queued",
         deliveryStatus: "not_applicable",
         notifyPolicy: "silent",
@@ -157,8 +157,8 @@ describe("createVideoGenerateTool status actions", () => {
       sourcePrefix: "video_generate",
       taskId: "task-recent-video",
       runId: "tool:video_generate:recent",
-      taskLabel: "friendly lobster surfing",
-      requestKey: "video-request:friendly-lobster",
+      taskLabel: "friendly crab surfing",
+      requestKey: "video-request:friendly-crab",
       providerId: "google",
       progressSummary: "Generating video",
       nowMs: now - 20_000,
@@ -173,7 +173,7 @@ describe("createVideoGenerateTool status actions", () => {
         ownerKey: "agent:main:discord:direct:123",
         scopeKind: "session",
         runId: "tool:video_generate:recent",
-        task: "friendly lobster surfing",
+        task: "friendly crab surfing",
         status: "succeeded",
         deliveryStatus: "not_applicable",
         notifyPolicy: "silent",
@@ -184,7 +184,7 @@ describe("createVideoGenerateTool status actions", () => {
     ]);
 
     const result = createVideoGenerateDuplicateGuardResult("agent:main:discord:direct:123", {
-      requestKey: "video-request:friendly-lobster",
+      requestKey: "video-request:friendly-crab",
     });
     const text = (result?.content?.[0] as { text: string } | undefined)?.text ?? "";
 

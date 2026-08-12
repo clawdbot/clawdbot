@@ -1,22 +1,22 @@
-// The lobster pet's art locker: every static SVG sprite the look renderer
+// The crab pet's art locker: every static SVG sprite the look renderer
 // and scene composer draw from - accessories, rare-palette geometry, retro
 // homage parts, ledge visitors, and the bottle. Pure presentation; all
-// selection logic stays in lobster-pet-look.ts.
+// selection logic stays in crab-pet-look.ts.
 import { svg, type TemplateResult } from "lit";
 import type {
-  LobsterPasserKind,
-  LobsterPetAccessory,
-  LobsterPetAntennae,
-  LobsterPetPaletteId,
-} from "./lobster-pet-contract.ts";
+  CrabPasserKind,
+  CrabPetAccessory,
+  CrabPetAntennae,
+  CrabPetPaletteId,
+} from "./crab-pet-contract.ts";
 import {
   CHIMERA_STITCHES,
   ECLIPSE_CORONA,
   NOTEXTURE_CHECKER,
   WATERMELON_RIND,
-} from "./lobster-pet-sprites-wild.ts";
+} from "./crab-pet-sprites-wild.ts";
 
-export const ACCESSORY_SPRITES: Record<Exclude<LobsterPetAccessory, "none">, TemplateResult> = {
+export const ACCESSORY_SPRITES: Record<Exclude<CrabPetAccessory, "none">, TemplateResult> = {
   crown: svg`
     <path
       d="M46 12 L46 2 L53 8 L60 0 L67 8 L74 2 L74 12 Q60 8 46 12 Z"
@@ -58,7 +58,7 @@ export const ACCESSORY_SPRITES: Record<Exclude<LobsterPetAccessory, "none">, Tem
   `,
   // Elder wear: a patient little colony riding the shell's shoulder.
   barnacle: svg`
-    <g class="lob-barnacles">
+    <g class="crab-barnacles">
       <path d="M32 22 L36.5 13 L41 22 Z" fill="#cfd8de" />
       <path d="M42 18 L45.5 11 L49 18 Z" fill="#b8c4cc" />
       <path d="M27 26 L30 20.5 L33 26 Z" fill="#b8c4cc" />
@@ -66,9 +66,9 @@ export const ACCESSORY_SPRITES: Record<Exclude<LobsterPetAccessory, "none">, Tem
       <circle cx="45.5" cy="15" r="0.9" fill="#8a949d" />
     </g>
   `,
-  // National Lobster Day formal wear: gold rim, chain, no further questions.
+  // National Crab Day formal wear: gold rim, chain, no further questions.
   monocle: svg`
-    <g class="lob-monocle" fill="none" stroke="#f4b840">
+    <g class="crab-monocle" fill="none" stroke="#f4b840">
       <circle cx="75" cy="32" r="8.5" stroke-width="2.5" />
       <path d="M81 39 Q85 48 80 56" stroke-width="1.5" />
     </g>
@@ -76,9 +76,9 @@ export const ACCESSORY_SPRITES: Record<Exclude<LobsterPetAccessory, "none">, Tem
 };
 
 // Light speckle trait; skipped on palettes whose identity is already
-// pattern-driven (see renderLobsterSvg).
+// pattern-driven (see renderCrabSvg).
 export const FRECKLE_SPOTS = svg`
-  <g class="lob-freckles" fill="#ffffff" opacity="0.3">
+  <g class="crab-freckles" fill="#ffffff" opacity="0.3">
     <circle cx="42" cy="45" r="1.6" />
     <circle cx="50" cy="41" r="1.2" />
     <circle cx="70" cy="45" r="1.6" />
@@ -89,9 +89,9 @@ export const FRECKLE_SPOTS = svg`
 `;
 
 // Lumen photophores: dotted running lights along the shell. The glow (and
-// its dark-theme-only intensity) lives in lobster-pet.css.
+// its dark-theme-only intensity) lives in crab-pet.css.
 const LUMEN_SPOTS = svg`
-  <g class="lob-lumen" fill="#7ef5dd">
+  <g class="crab-lumen" fill="#7ef5dd">
     <circle cx="36" cy="54" r="2.4" />
     <circle cx="50" cy="66" r="2" />
     <circle cx="66" cy="70" r="2.2" />
@@ -102,7 +102,7 @@ const LUMEN_SPOTS = svg`
 `;
 
 const MAGMA_SEAMS = svg`
-  <g class="lob-magma" fill="none" stroke="#ff6a3d" stroke-width="2" stroke-linecap="round">
+  <g class="crab-magma" fill="none" stroke="#ff6a3d" stroke-width="2" stroke-linecap="round">
     <path d="M40 44 L48 54 L42 66 L50 78" />
     <path d="M74 40 L68 52 L78 64" />
     <path d="M56 82 L62 90" />
@@ -110,71 +110,71 @@ const MAGMA_SEAMS = svg`
 `;
 
 const OILSLICK_SHEEN = svg`
-  <g class="lob-oilsheen">
+  <g class="crab-oilsheen">
     <ellipse cx="46" cy="60" rx="22" ry="11" fill="#7f77dd" opacity="0.3" transform="rotate(-14 46 60)" />
     <ellipse cx="76" cy="74" rx="17" ry="8" fill="#1d9e75" opacity="0.28" transform="rotate(10 76 74)" />
   </g>
 `;
 
 const AURORA_BANDS = svg`
-  <g class="lob-aurora" fill="none" stroke-linecap="round">
-    <path class="lob-aurora__band1" d="M24 62 Q48 48 70 58 T102 54" stroke="#4ecfa6" stroke-width="6" opacity="0.5" />
-    <path class="lob-aurora__band2" d="M28 76 Q54 62 78 72 T100 68" stroke="#a184ec" stroke-width="5" opacity="0.45" />
+  <g class="crab-aurora" fill="none" stroke-linecap="round">
+    <path class="crab-aurora__band1" d="M24 62 Q48 48 70 58 T102 54" stroke="#4ecfa6" stroke-width="6" opacity="0.5" />
+    <path class="crab-aurora__band2" d="M28 76 Q54 62 78 72 T100 68" stroke="#a184ec" stroke-width="5" opacity="0.45" />
   </g>
 `;
 
 const NEBULA_STARS = svg`
-  <g class="lob-nebula-stars">
+  <g class="crab-nebula-stars">
     <circle cx="38" cy="52" r="1" fill="#fff" />
     <circle cx="52" cy="70" r="1.2" fill="#fff" />
     <circle cx="84" cy="48" r="1.4" fill="#fff" />
     <circle cx="66" cy="86" r="1" fill="#fff" />
     <circle cx="72" cy="60" r="1.6" fill="#8be9fd" />
     <circle cx="46" cy="40" r="1.4" fill="#ff9de2" />
-    <path class="lob-twinkle" d="M60 52 L61.5 55.5 L65 57 L61.5 58.5 L60 62 L58.5 58.5 L55 57 L58.5 55.5 Z" fill="#fff" />
+    <path class="crab-twinkle" d="M60 52 L61.5 55.5 L65 57 L61.5 58.5 L60 62 L58.5 58.5 L55 57 L58.5 55.5 Z" fill="#fff" />
   </g>
 `;
 
 const GLASS_GLINTS = svg`
-  <g class="lob-glass-glints" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" opacity="0.7">
+  <g class="crab-glass-glints" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" opacity="0.7">
     <path d="M34 22 L28 32" />
     <path d="M40 16 L37 22" />
   </g>
 `;
 
 const GEODE_FACETS = svg`
-  <g class="lob-geode-facets">
+  <g class="crab-geode-facets">
     <polygon points="70,34 80,30 78,44" fill="#9b6ff0" />
     <polygon points="82,46 94,42 88,58" fill="#b48ef0" />
     <polygon points="72,58 84,62 74,74" fill="#7a4fd0" />
     <polygon points="86,68 96,64 90,80" fill="#9b6ff0" />
-    <circle class="lob-twinkle" cx="90" cy="50" r="1.8" fill="#fff" />
+    <circle class="crab-twinkle" cx="90" cy="50" r="1.8" fill="#fff" />
   </g>
 `;
 
 const PHOSPHOR_SCANLINES = svg`
-  <g class="lob-scanlines" stroke="#3fff7d" stroke-width="1" opacity="0.16">
+  <g class="crab-scanlines" stroke="#3fff7d" stroke-width="1" opacity="0.16">
     <path d="M40 20 H80 M30 27 H90 M26 34 H94 M21 41 H99 M18 48 H102 M17 55 H103 M17 62 H103 M18 69 H102 M22 76 H98 M31 83 H89 M45 90 H75" />
   </g>
 `;
 
 export const GLITCH_GHOSTS = svg`
-  <g class="lob-glitch-ghosts">
+  <g class="crab-glitch-ghosts">
     <path d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z" transform="translate(-3 0)" fill="#ff3355" opacity="0.4" />
     <path d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z" transform="translate(3 1)" fill="#22d3ee" opacity="0.4" />
   </g>
 `;
 
 const BLUEPRINT_MARKS = svg`
-  <g class="lob-blueprint" fill="none" stroke="#cfe3ff">
-    <path class="lob-bp-outline" d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z" stroke-width="1.5" stroke-dasharray="5 3" />
+  <g class="crab-blueprint" fill="none" stroke="#cfe3ff">
+    <path class="crab-bp-outline" d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z" stroke-width="1.5" stroke-dasharray="5 3" />
     <path d="M54 58 H66 M60 52 V64" stroke-width="1" opacity="0.7" />
     <path d="M16 100 H104" stroke-width="1" stroke-dasharray="2 3" opacity="0.7" />
   </g>
 `;
 
 const MECHA_PLATES = svg`
-  <g class="lob-mecha">
+  <g class="crab-mecha">
     <g fill="none" stroke="#5f6a75" stroke-width="1.5">
       <path d="M28 56 Q60 66 92 56" />
       <path d="M34 74 Q60 82 86 74" />
@@ -184,21 +184,21 @@ const MECHA_PLATES = svg`
       <circle cx="60" cy="64" r="1.4" />
       <circle cx="84" cy="61" r="1.4" />
     </g>
-    <circle class="lob-led" cx="89" cy="7" r="3" fill="#ff4444" />
+    <circle class="crab-led" cx="89" cy="7" r="3" fill="#ff4444" />
   </g>
 `;
 
 export function SELENE_MOON(phaseIndex: number): TemplateResult {
   const phase = ((Math.round(phaseIndex) % 8) + 8) % 8;
   if (phase === 0) {
-    return svg`<g class="lob-selene-moon"><circle cx="60" cy="64" r="12" fill="#26304a" /><circle cx="60" cy="64" r="11" fill="none" stroke="#f4f7fc" stroke-width="1" /></g>`;
+    return svg`<g class="crab-selene-moon"><circle cx="60" cy="64" r="12" fill="#26304a" /><circle cx="60" cy="64" r="11" fill="none" stroke="#f4f7fc" stroke-width="1" /></g>`;
   }
   if (phase === 4) {
-    return svg`<g class="lob-selene-moon"><circle cx="60" cy="64" r="12" fill="#26304a" /><circle cx="60" cy="64" r="11" fill="#f4f7fc" /></g>`;
+    return svg`<g class="crab-selene-moon"><circle cx="60" cy="64" r="12" fill="#26304a" /><circle cx="60" cy="64" r="11" fill="#f4f7fc" /></g>`;
   }
   const darkOffset = phase < 4 ? [-5, -9, -14][phase - 1] : [14, 9, 5][phase - 5];
   return svg`
-    <g class="lob-selene-moon">
+    <g class="crab-selene-moon">
       <circle cx="60" cy="64" r="12" fill="#26304a" />
       <circle cx="60" cy="64" r="11" fill="#f4f7fc" />
       <circle cx=${60 + (darkOffset ?? 0)} cy="64" r="11" fill="#26304a" />
@@ -206,40 +206,40 @@ export function SELENE_MOON(phaseIndex: number): TemplateResult {
   `;
 }
 
-export function PIXEL_LOBSTER(openEyeStyle: string, closedEyeStyle: string): TemplateResult {
+export function PIXEL_CRAB(openEyeStyle: string, closedEyeStyle: string): TemplateResult {
   return svg`
-    <g class="lob-pixel-frame" shape-rendering="crispEdges">
-      <g class="lob-pixel-antennae" fill="#d84c3e">
-        <rect x="30" y="0" width="6" height="6" /><rect x="36" y="6" width="6" height="6" /><rect x="42" y="12" width="6" height="6" />
-        <rect x="84" y="0" width="6" height="6" /><rect x="78" y="6" width="6" height="6" /><rect x="72" y="12" width="6" height="6" />
+    <g class="crab-pixel-frame" shape-rendering="crispEdges">
+      <g class="crab-pixel-antennae" fill="#2fbf71">
+        <rect x="42" y="0" width="6" height="12" />
+        <rect x="72" y="0" width="6" height="12" />
       </g>
-      <g class="lob-pixel-claws">
-        <path d="M18 42 H6 V48 H0 V60 H6 V66 H18 V60 H24 V48 H18 Z M6 48 H12 V60 H6 Z" fill="#d84c3e" />
-        <rect x="6" y="60" width="12" height="6" fill="#a83428" />
-        <path d="M102 42 H114 V48 H120 V60 H114 V66 H102 V60 H96 V48 H102 Z M108 48 H114 V60 H108 Z" fill="#d84c3e" />
-        <rect x="102" y="60" width="12" height="6" fill="#a83428" />
+      <g class="crab-pixel-claws">
+        <path d="M18 42 H6 V48 H0 V60 H6 V66 H18 V60 H24 V48 H18 Z M6 48 H12 V60 H6 Z" fill="#2fbf71" />
+        <rect x="6" y="60" width="12" height="6" fill="#1f9d57" />
+        <path d="M102 42 H114 V48 H120 V60 H114 V66 H102 V60 H96 V48 H102 Z M108 48 H114 V60 H108 Z" fill="#2fbf71" />
+        <rect x="102" y="60" width="12" height="6" fill="#1f9d57" />
       </g>
       <!-- Main cells keep the palette variable so offline and mood-style tinting still read. -->
-      <g class="lob-pixel-body" fill="var(--lob-shell, #d84c3e)">
+      <g class="crab-pixel-body" fill="var(--crab-shell, #2fbf71)">
         <rect x="42" y="12" width="36" height="6" /><rect x="36" y="18" width="48" height="6" />
         <rect x="30" y="24" width="60" height="6" /><rect x="24" y="30" width="72" height="48" />
         <rect x="30" y="78" width="60" height="12" /><rect x="36" y="90" width="48" height="6" />
         <rect x="36" y="96" width="12" height="9" /><rect x="72" y="96" width="12" height="9" />
       </g>
-      <g fill="#ef8f6a"><rect x="36" y="24" width="24" height="6" /><rect x="30" y="30" width="18" height="12" /><rect x="24" y="42" width="12" height="12" /></g>
-      <g fill="#a83428"><rect x="30" y="78" width="60" height="12" /><rect x="36" y="90" width="48" height="6" /><rect x="36" y="96" width="12" height="9" /><rect x="72" y="96" width="12" height="9" /></g>
-      <g class="lob-eye-open" style=${openEyeStyle}>
+      <g fill="#8ee3af"><rect x="36" y="24" width="24" height="6" /><rect x="30" y="30" width="18" height="12" /><rect x="24" y="42" width="12" height="12" /></g>
+      <g fill="#1f9d57"><rect x="30" y="78" width="60" height="12" /><rect x="36" y="90" width="48" height="6" /><rect x="36" y="96" width="12" height="9" /><rect x="72" y="96" width="12" height="9" /></g>
+      <g class="crab-eye-open" style=${openEyeStyle}>
         <rect x="42" y="30" width="6" height="6" fill="#0a1014" /><rect x="72" y="30" width="6" height="6" fill="#0a1014" />
         <rect x="42" y="30" width="2.5" height="2.5" fill="#fff" /><rect x="72" y="30" width="2.5" height="2.5" fill="#fff" />
       </g>
-      <g class="lob-eye-closed" style=${closedEyeStyle} fill="#0a1014"><rect x="42" y="33" width="6" height="3" /><rect x="72" y="33" width="6" height="3" /></g>
+      <g class="crab-eye-closed" style=${closedEyeStyle} fill="#0a1014"><rect x="42" y="33" width="6" height="3" /><rect x="72" y="33" width="6" height="3" /></g>
     </g>
   `;
 }
 
 // Palettes whose identity is already pattern-driven skip the freckle trait;
 // stacking speckle sets reads as noise, not a variant.
-export const PATTERNED_PALETTES: ReadonlySet<LobsterPetPaletteId> = new Set([
+export const PATTERNED_PALETTES: ReadonlySet<CrabPetPaletteId> = new Set([
   "split",
   "retro",
   "lumen",
@@ -290,7 +290,7 @@ const BANANA_MARKS = svg`
 `;
 
 const BEE_PARTS = svg`
-  <g class="lob-bee-wings" fill="#ffffff" opacity="0.45">
+  <g class="crab-bee-wings" fill="#ffffff" opacity="0.45">
     <ellipse cx="38" cy="14" rx="8" ry="4.5" transform="rotate(-24 38 14)" />
     <ellipse cx="82" cy="14" rx="8" ry="4.5" transform="rotate(24 82 14)" />
   </g>
@@ -337,7 +337,7 @@ const PLUSH_SEAMS = svg`
     <path d="M30 32 Q60 4 90 32" />
     <path d="M60 50 Q58 72 60 96" />
   </g>
-  <g class="lob-plush-button">
+  <g class="crab-plush-button">
     <circle cx="78" cy="44" r="3.5" fill="#7a4a3a" />
     <circle cx="76.8" cy="44" r="0.7" fill="#e8967a" />
     <circle cx="79.2" cy="44" r="0.7" fill="#e8967a" />
@@ -345,7 +345,7 @@ const PLUSH_SEAMS = svg`
 `;
 
 const DISCO_FACETS = svg`
-  <g class="lob-disco" fill="#ffffff">
+  <g class="crab-disco" fill="#ffffff">
     <rect x="42" y="18" width="4" height="4" opacity="0.3" /><rect x="52" y="16" width="4" height="4" opacity="0.5" />
     <rect x="63" y="17" width="4" height="4" opacity="0.25" /><rect x="74" y="20" width="4" height="4" opacity="0.4" />
     <rect x="31" y="40" width="4" height="4" opacity="0.4" /><rect x="53" y="39" width="4" height="4" opacity="0.25" />
@@ -356,7 +356,7 @@ const DISCO_FACETS = svg`
   </g>
 `;
 
-export const PALETTE_OVERLAYS: Partial<Record<LobsterPetPaletteId, TemplateResult>> = {
+export const PALETTE_OVERLAYS: Partial<Record<CrabPetPaletteId, TemplateResult>> = {
   lumen: LUMEN_SPOTS,
   magma: MAGMA_SEAMS,
   oilslick: OILSLICK_SHEEN,
@@ -382,27 +382,27 @@ export const PALETTE_OVERLAYS: Partial<Record<LobsterPetPaletteId, TemplateResul
 
 // Split two-tone: the right half of the body (down to the belly midline)
 // repainted in the second shell color; the right claw and antenna follow via
-// CSS. Mirrors the famous bilateral half-and-half lobsters.
+// CSS. Mirrors the famous bilateral half-and-half crabs.
 export const SPLIT_HALF = svg`
   <path
-    class="lob-split-half"
+    class="crab-split-half"
     d="M60 8 C88 8 104 32 104 52 C104 72 90 90 76 95 L76 104 L66 104 L66 96 C64 96.8 62 97.1 60 97.1 L60 8 Z"
-    fill="var(--lob-shell2, #46536b)"
+    fill="var(--crab-shell2, #46536b)"
   />
 `;
 
 // Retro homage parts (classic OpenClaw logo): one oversized raised claw with
 // a pincer notch, tall V antennae, angry brows, and a smirk. The mega claw
-// lives inside the .lob-claw--r group so wave/snip acts swing it.
+// lives inside the .crab-claw--r group so wave/snip acts swing it.
 export const RETRO_MEGA_CLAW = svg`
   <path
     d="M95 55 C112 53 119 39 116 25 C113 11 99 5 91 12 C88 15 87 19 88 23 C83 27 83 36 88 43 C91 49 93 52 95 55 Z"
-    fill="var(--lob-claw)"
+    fill="var(--crab-claw)"
   />
   <path
     d="M92 14 C97 22 99 31 95 41"
-    class="lob-retro-claw-line"
-    stroke="#b8151b"
+    class="crab-retro-claw-line"
+    stroke="#1f9d57"
     stroke-width="3"
     stroke-linecap="round"
     fill="none"
@@ -410,9 +410,9 @@ export const RETRO_MEGA_CLAW = svg`
 `;
 
 export const RETRO_ANTENNAE = svg`
-  <g class="lob-antennae" stroke="var(--lob-shell)" stroke-width="4" stroke-linecap="round" fill="none">
-    <path d="M50 16 Q45 4 37 1" />
-    <path d="M70 16 Q75 4 83 1" />
+  <g class="crab-antennae" stroke="var(--crab-shell)" stroke-width="4" stroke-linecap="round" fill="none">
+    <path d="M50 16 L48 8" />
+    <path d="M70 16 L72 8" />
   </g>
 `;
 
@@ -425,18 +425,17 @@ export const RETRO_FACE = svg`
 `;
 
 // Tail-fan lobes peek out diagonally behind the lower body (drawn before the
-// body path so they read as "behind"). Fill color lives in lobster-pet.css.
+// body path so they read as "behind"). Fill color lives in crab-pet.css.
 export const TAIL_FAN = svg`
-  <g class="lob-tail">
-    <ellipse cx="16" cy="84" rx="11" ry="7" transform="rotate(-32 16 84)" />
-    <ellipse cx="104" cy="84" rx="11" ry="7" transform="rotate(32 104 84)" />
+  <g class="crab-tail">
+    <ellipse cx="60" cy="94" rx="8" ry="4.5" />
   </g>
 `;
 
 // Moving-day bindle: a stick over the shoulder with a polka-dot bundle,
 // carried for the whole first load after a gateway upgrade.
 export const BINDLE = svg`
-  <g class="lob-bindle">
+  <g class="crab-bindle">
     <path d="M70 62 L99 30" stroke="#8a5a2b" stroke-width="3.5" stroke-linecap="round" />
     <circle cx="101" cy="27" r="9.5" fill="#e8b04b" />
     <circle cx="98" cy="24" r="1.6" fill="#b6791f" />
@@ -445,10 +444,10 @@ export const BINDLE = svg`
   </g>
 `;
 
-// On lobster days (see src/shared/lobster-day.ts, shared with the CLI
+// On crab days (see src/shared/crab-day.ts, shared with the CLI
 // banner cousin) the pet wears a little sailor cap - unless the seed already
 // rolled headwear, which keeps its place.
-export const HEADWEAR: ReadonlySet<LobsterPetAccessory> = new Set([
+export const HEADWEAR: ReadonlySet<CrabPetAccessory> = new Set([
   "crown",
   "sprout",
   "santa",
@@ -457,7 +456,7 @@ export const HEADWEAR: ReadonlySet<LobsterPetAccessory> = new Set([
 ]);
 
 export const SAILOR_CAP = svg`
-  <g class="lob-cap">
+  <g class="crab-cap">
     <path d="M46 10 Q60 -3 74 10 L74 13 Q60 7 46 13 Z" fill="#f5f7fa" />
     <path d="M45 12 Q60 6 75 12 L75 16 Q60 10.5 45 16 Z" fill="#dfe7ee" />
     <circle cx="60" cy="2.5" r="1.8" fill="#3b6ea5" />
@@ -473,38 +472,38 @@ export const GRUMPY_FACE = svg`
   </g>
 `;
 
-export const ANTENNAE_SPRITES: Record<LobsterPetAntennae, TemplateResult> = {
+export const ANTENNAE_SPRITES: Record<CrabPetAntennae, TemplateResult> = {
   perky: svg`
-    <g class="lob-antennae" stroke="var(--lob-shell)" stroke-width="4" stroke-linecap="round" fill="none">
-      <path d="M46 14 Q38 4 31 7" />
-      <path d="M74 14 Q82 4 89 7" />
+    <g class="crab-antennae" stroke="var(--crab-shell)" stroke-width="4" stroke-linecap="round" fill="none">
+      <path d="M46 14 L46 7" />
+      <path d="M74 14 L74 7" />
     </g>
   `,
   droopy: svg`
-    <g class="lob-antennae" stroke="var(--lob-shell)" stroke-width="4" stroke-linecap="round" fill="none">
-      <path d="M46 14 Q36 8 34 18" />
-      <path d="M74 14 Q84 8 86 18" />
+    <g class="crab-antennae" stroke="var(--crab-shell)" stroke-width="4" stroke-linecap="round" fill="none">
+      <path d="M46 14 L45 8" />
+      <path d="M74 14 L75 8" />
     </g>
   `,
 };
 
-// Not a lobster. Wide shell, eye stalks, walks sideways across the ledge,
-// and the Lobsterdex refuses to acknowledge it.
+// Not a crab. Wide shell, eye stalks, walks sideways across the ledge,
+// and the Crabdex refuses to acknowledge it.
 function renderCrabSvg() {
   return svg`
     <svg
-      class="lobster-pet__svg"
+      class="crab-pet__svg"
       viewBox="0 0 120 105"
       preserveAspectRatio="none"
       aria-hidden="true"
     >
-      <g stroke="#a63a2e" stroke-width="4" stroke-linecap="round" fill="none">
+      <g stroke="#2e7d46" stroke-width="4" stroke-linecap="round" fill="none">
         <path d="M22 78 L8 88" />
         <path d="M28 88 L16 99" />
         <path d="M98 78 L112 88" />
         <path d="M92 88 L104 99" />
       </g>
-      <g stroke="#c44536" stroke-width="3.5" stroke-linecap="round" fill="none">
+      <g stroke="#2fbf71" stroke-width="3.5" stroke-linecap="round" fill="none">
         <path d="M44 38 L40 24" />
         <path d="M76 38 L80 24" />
       </g>
@@ -512,27 +511,27 @@ function renderCrabSvg() {
       <circle cx="80" cy="22" r="4.5" fill="#0a1014" />
       <circle cx="41.5" cy="20.5" r="1.8" fill="#ffd166" />
       <circle cx="81.5" cy="20.5" r="1.8" fill="#ffd166" />
-      <ellipse cx="60" cy="70" rx="46" ry="30" fill="#c44536" />
+      <ellipse cx="60" cy="70" rx="46" ry="30" fill="#2fbf71" />
       <ellipse cx="48" cy="60" rx="16" ry="9" fill="#ffffff" opacity="0.1" />
       <path
         d="M16 58 C2 52 -2 62 4 72 C10 82 20 76 24 66 C26 60 22 58 16 58 Z"
-        fill="#d95f4b"
+        fill="#57c785"
       />
       <path
         d="M104 58 C118 52 122 62 116 72 C110 82 100 76 96 66 C94 60 98 58 104 58 Z"
-        fill="#d95f4b"
+        fill="#57c785"
       />
-      <path d="M48 82 Q60 90 72 82" stroke="#7e2a20" stroke-width="3" stroke-linecap="round" fill="none" />
+      <path d="M48 82 Q60 90 72 82" stroke="#1f9d57" stroke-width="3" stroke-linecap="round" fill="none" />
     </svg>
   `;
 }
 
-// Also not a lobster. Crosses the ledge on its own schedule, which is to
+// Also not a crab. Crosses the ledge on its own schedule, which is to
 // say: eventually.
 function renderSnailSvg() {
   return svg`
     <svg
-      class="lobster-pet__svg"
+      class="crab-pet__svg"
       viewBox="0 0 120 105"
       preserveAspectRatio="none"
       aria-hidden="true"
@@ -566,7 +565,7 @@ function renderSnailSvg() {
 function renderDuckSvg() {
   return svg`
     <svg
-      class="lobster-pet__svg"
+      class="crab-pet__svg"
       viewBox="0 0 120 105"
       preserveAspectRatio="none"
       aria-hidden="true"
@@ -587,12 +586,12 @@ function renderDuckSvg() {
 function renderJellyfishSvg() {
   return svg`
     <svg
-      class="lobster-pet__svg"
+      class="crab-pet__svg"
       viewBox="0 0 120 105"
       preserveAspectRatio="none"
       aria-hidden="true"
     >
-      <g class="lob-jelly-tentacles" stroke="#9f7dfa" stroke-width="2.5" stroke-linecap="round" fill="none" opacity="0.8">
+      <g class="crab-jelly-tentacles" stroke="#9f7dfa" stroke-width="2.5" stroke-linecap="round" fill="none" opacity="0.8">
         <path d="M40 58 Q35 74 42 90" />
         <path d="M54 61 Q52 78 57 96" />
         <path d="M68 61 Q71 78 64 94" />
@@ -610,10 +609,7 @@ function renderJellyfishSvg() {
   `;
 }
 
-export const PASSER_SPRITES: Record<
-  Exclude<LobsterPasserKind, "stranger">,
-  () => TemplateResult
-> = {
+export const PASSER_SPRITES: Record<Exclude<CrabPasserKind, "stranger">, () => TemplateResult> = {
   crab: renderCrabSvg,
   snail: renderSnailSvg,
   duck: renderDuckSvg,
@@ -624,7 +620,7 @@ export const PASSER_SPRITES: Record<
 // to the fortune — the pet-name tooltip channel, so no i18n surface.
 export function renderBottleSvg(opened: boolean) {
   return svg`
-    <svg class="lobster-bottle__svg" viewBox="0 0 48 44" aria-hidden="true">
+    <svg class="crab-bottle__svg" viewBox="0 0 48 44" aria-hidden="true">
       <g transform="rotate(-16 24 30)">
         <rect x="5" y="18" width="30" height="16" rx="7" fill="#7fc8b8" opacity="0.72" />
         <rect x="33" y="22" width="9" height="8" rx="2.5" fill="#7fc8b8" opacity="0.72" />
@@ -647,7 +643,7 @@ export function renderBottleSvg(opened: boolean) {
 // Balloon entrance rig: rendered inside the body while the descent plays,
 // then unmounts with the entering flag.
 export const BALLOON = svg`
-  <svg class="lobster-pet__balloon" viewBox="0 0 40 62" aria-hidden="true">
+  <svg class="crab-pet__balloon" viewBox="0 0 40 62" aria-hidden="true">
     <path d="M20 34 Q23 46 18 60" stroke="#8a949d" stroke-width="1.5" fill="none" />
     <ellipse cx="20" cy="16" rx="13" ry="15" fill="#ff5c8a" />
     <path d="M17 30 L20 34.5 L23 30 Z" fill="#e0446f" />
@@ -655,9 +651,9 @@ export const BALLOON = svg`
   </svg>
 `;
 
-export const PASSER_TITLES: Record<LobsterPasserKind, string> = {
+export const PASSER_TITLES: Record<CrabPasserKind, string> = {
   stranger: "a stranger",
-  crab: "definitely a lobster",
+  crab: "definitely a crab",
   snail: "in no particular hurry",
   duck: "a duck. obviously",
   jellyfish: "just drifting",

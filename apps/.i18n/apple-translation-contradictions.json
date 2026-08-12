@@ -838,50 +838,50 @@
     },
     {
       "locale": "fr",
-      "source": "Asking OpenClaw",
+      "source": "Asking OpenCrustacean",
       "translations": [
-        "Demande à OpenClaw",
-        "Interrogation d’OpenClaw"
+        "Demande à OpenCrustacean",
+        "Interrogation d’OpenCrustacean"
       ]
     },
     {
       "locale": "id",
-      "source": "Asking OpenClaw",
+      "source": "Asking OpenCrustacean",
       "translations": [
-        "Bertanya kepada OpenClaw",
-        "Meminta OpenClaw"
+        "Bertanya kepada OpenCrustacean",
+        "Meminta OpenCrustacean"
       ]
     },
     {
       "locale": "ja-JP",
-      "source": "Asking OpenClaw",
+      "source": "Asking OpenCrustacean",
       "translations": [
-        "OpenClaw に問い合わせ中",
-        "OpenClawに問い合わせ中"
+        "OpenCrustacean に問い合わせ中",
+        "OpenCrustaceanに問い合わせ中"
       ]
     },
     {
       "locale": "ko",
-      "source": "Asking OpenClaw",
+      "source": "Asking OpenCrustacean",
       "translations": [
-        "OpenClaw에 문의 중",
-        "OpenClaw에 요청 중"
+        "OpenCrustacean에 문의 중",
+        "OpenCrustacean에 요청 중"
       ]
     },
     {
       "locale": "pl",
-      "source": "Asking OpenClaw",
+      "source": "Asking OpenCrustacean",
       "translations": [
-        "Pytanie OpenClaw",
-        "Pytanie do OpenClaw"
+        "Pytanie OpenCrustacean",
+        "Pytanie do OpenCrustacean"
       ]
     },
     {
       "locale": "tr",
-      "source": "Asking OpenClaw",
+      "source": "Asking OpenCrustacean",
       "translations": [
-        "OpenClaw'a soruluyor",
-        "OpenClaw’a soruluyor"
+        "OpenCrustacean'a soruluyor",
+        "OpenCrustacean’a soruluyor"
       ]
     },
     {
@@ -6723,82 +6723,82 @@
     },
     {
       "locale": "ar",
-      "source": "OpenClaw cannot determine the current iOS location permission.",
+      "source": "OpenCrustacean cannot determine the current iOS location permission.",
       "translations": [
-        "لا يستطيع OpenClaw تحديد إذن الموقع الحالي في iOS.",
-        "يتعذّر على OpenClaw تحديد إذن الموقع الحالي في iOS."
+        "لا يستطيع OpenCrustacean تحديد إذن الموقع الحالي في iOS.",
+        "يتعذّر على OpenCrustacean تحديد إذن الموقع الحالي في iOS."
       ]
     },
     {
       "locale": "fr",
-      "source": "OpenClaw cannot determine the current iOS location permission.",
+      "source": "OpenCrustacean cannot determine the current iOS location permission.",
       "translations": [
-        "OpenClaw ne peut pas déterminer l'autorisation de localisation iOS actuelle.",
-        "OpenClaw ne peut pas déterminer l’autorisation de localisation iOS actuelle."
+        "OpenCrustacean ne peut pas déterminer l'autorisation de localisation iOS actuelle.",
+        "OpenCrustacean ne peut pas déterminer l’autorisation de localisation iOS actuelle."
       ]
     },
     {
       "locale": "hi",
-      "source": "OpenClaw cannot determine the current iOS location permission.",
+      "source": "OpenCrustacean cannot determine the current iOS location permission.",
       "translations": [
-        "OpenClaw वर्तमान iOS लोकेशन अनुमति निर्धारित नहीं कर सकता।",
-        "OpenClaw वर्तमान iOS स्थान अनुमति निर्धारित नहीं कर सकता।"
+        "OpenCrustacean वर्तमान iOS लोकेशन अनुमति निर्धारित नहीं कर सकता।",
+        "OpenCrustacean वर्तमान iOS स्थान अनुमति निर्धारित नहीं कर सकता।"
       ]
     },
     {
       "locale": "it",
-      "source": "OpenClaw cannot determine the current iOS location permission.",
+      "source": "OpenCrustacean cannot determine the current iOS location permission.",
       "translations": [
-        "OpenClaw non può determinare l’autorizzazione alla posizione iOS attuale.",
-        "OpenClaw non riesce a determinare l'attuale autorizzazione alla posizione di iOS."
+        "OpenCrustacean non può determinare l’autorizzazione alla posizione iOS attuale.",
+        "OpenCrustacean non riesce a determinare l'attuale autorizzazione alla posizione di iOS."
       ]
     },
     {
       "locale": "ja-JP",
-      "source": "OpenClaw cannot determine the current iOS location permission.",
+      "source": "OpenCrustacean cannot determine the current iOS location permission.",
       "translations": [
-        "OpenClaw は現在の iOS 位置情報の権限を確認できません。",
-        "OpenClaw は現在の iOS 位置情報許可を判別できません。"
+        "OpenCrustacean は現在の iOS 位置情報の権限を確認できません。",
+        "OpenCrustacean は現在の iOS 位置情報許可を判別できません。"
       ]
     },
     {
       "locale": "ru",
-      "source": "OpenClaw cannot determine the current iOS location permission.",
+      "source": "OpenCrustacean cannot determine the current iOS location permission.",
       "translations": [
-        "OpenClaw не может определить текущее разрешение iOS на доступ к местоположению.",
-        "OpenClaw не удается определить текущее разрешение iOS на доступ к геопозиции."
+        "OpenCrustacean не может определить текущее разрешение iOS на доступ к местоположению.",
+        "OpenCrustacean не удается определить текущее разрешение iOS на доступ к геопозиции."
       ]
     },
     {
       "locale": "th",
-      "source": "OpenClaw cannot determine the current iOS location permission.",
+      "source": "OpenCrustacean cannot determine the current iOS location permission.",
       "translations": [
-        "OpenClaw ไม่สามารถระบุการอนุญาตตำแหน่งที่ตั้งของ iOS ในปัจจุบันได้",
-        "OpenClaw ไม่สามารถระบุการอนุญาตตำแหน่งที่ตั้งปัจจุบันของ iOS ได้"
+        "OpenCrustacean ไม่สามารถระบุการอนุญาตตำแหน่งที่ตั้งของ iOS ในปัจจุบันได้",
+        "OpenCrustacean ไม่สามารถระบุการอนุญาตตำแหน่งที่ตั้งปัจจุบันของ iOS ได้"
       ]
     },
     {
       "locale": "tr",
-      "source": "OpenClaw cannot determine the current iOS location permission.",
+      "source": "OpenCrustacean cannot determine the current iOS location permission.",
       "translations": [
-        "OpenClaw geçerli iOS konum iznini belirleyemiyor.",
-        "OpenClaw mevcut iOS konum iznini belirleyemiyor."
+        "OpenCrustacean geçerli iOS konum iznini belirleyemiyor.",
+        "OpenCrustacean mevcut iOS konum iznini belirleyemiyor."
       ]
     },
     {
       "locale": "uk",
-      "source": "OpenClaw cannot determine the current iOS location permission.",
+      "source": "OpenCrustacean cannot determine the current iOS location permission.",
       "translations": [
-        "OpenClaw не може визначити поточний дозвіл iOS на геолокацію.",
-        "OpenClaw не може визначити поточний дозвіл iOS на доступ до геолокації."
+        "OpenCrustacean не може визначити поточний дозвіл iOS на геолокацію.",
+        "OpenCrustacean не може визначити поточний дозвіл iOS на доступ до геолокації."
       ]
     },
     {
       "locale": "ko",
-      "source": "OpenClaw unavailable",
+      "source": "OpenCrustacean unavailable",
       "translations": [
-        "OpenClaw를 사용할 수 없습니다",
-        "OpenClaw을 사용할 수 없습니다"
+        "OpenCrustacean를 사용할 수 없습니다",
+        "OpenCrustacean을 사용할 수 없습니다"
       ]
     },
     {
@@ -10109,18 +10109,18 @@
     },
     {
       "locale": "hi",
-      "source": "Updating OpenClaw",
+      "source": "Updating OpenCrustacean",
       "translations": [
-        "OpenClaw अपडेट किया जा रहा है",
-        "OpenClaw को अपडेट किया जा रहा है"
+        "OpenCrustacean अपडेट किया जा रहा है",
+        "OpenCrustacean को अपडेट किया जा रहा है"
       ]
     },
     {
       "locale": "ja-JP",
-      "source": "Updating OpenClaw",
+      "source": "Updating OpenCrustacean",
       "translations": [
-        "OpenClaw を更新中",
-        "OpenClawを更新中"
+        "OpenCrustacean を更新中",
+        "OpenCrustaceanを更新中"
       ]
     },
     {

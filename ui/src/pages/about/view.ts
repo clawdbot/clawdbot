@@ -1,14 +1,14 @@
-import "../../styles/lobster-pet.css";
+import "../../styles/crab-pet.css";
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing, type TemplateResult } from "lit";
 import type { ControlUiBuildInfo } from "../../build-info.ts";
-import { icons } from "../../components/icons.ts";
 import {
-  canonicalLobsterLook,
-  LOBSTER_PET_PALETTES,
-  lobsterLookStyle,
-  renderLobsterSvg,
-} from "../../components/lobster-pet.ts";
+  canonicalCrabLook,
+  CRAB_PET_PALETTES,
+  crabLookStyle,
+  renderCrabSvg,
+} from "../../components/crab-pet.ts";
+import { icons } from "../../components/icons.ts";
 import {
   renderSettingsPage,
   renderSettingsRow,
@@ -158,19 +158,19 @@ function renderCommit(props: AboutProps) {
 // The poke button replays the claw wave; ambient motion lives in about.css.
 function renderHero(props: AboutProps) {
   const palette =
-    LOBSTER_PET_PALETTES.find((entry) => entry.id === "emerald") ??
-    expectDefined(LOBSTER_PET_PALETTES[0], "about lobster palette");
-  const look = canonicalLobsterLook(palette);
+    CRAB_PET_PALETTES.find((entry) => entry.id === "emerald") ??
+    expectDefined(CRAB_PET_PALETTES[0], "about crab palette");
+  const look = canonicalCrabLook(palette);
   return html`
     <section class="about-hero">
       <button
         type="button"
         class="about-hero__clawd ${props.clawdWaving ? "about-hero__clawd--wave" : ""}"
-        style=${lobsterLookStyle(look)}
+        style=${crabLookStyle(look)}
         aria-label=${t("aboutPage.waveHello")}
         @click=${props.onPokeClawd}
       >
-        ${renderLobsterSvg(look)}
+        ${renderCrabSvg(look)}
       </button>
       <h2 class="about-hero__name">${t("aboutPage.productName")}</h2>
       <p class="about-hero__tagline">${t("aboutPage.tagline")}</p>

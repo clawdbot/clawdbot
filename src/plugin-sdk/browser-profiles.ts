@@ -18,7 +18,7 @@ export const DEFAULT_OPENCLAW_BROWSER_ENABLED = true;
 /** Default setting for model/tool browser page evaluation. */
 export const DEFAULT_BROWSER_EVALUATE_ENABLED = true;
 /** Default browser profile accent color shown in UI surfaces. */
-export const DEFAULT_OPENCLAW_BROWSER_COLOR = "#FF4500";
+export const DEFAULT_OPENCLAW_BROWSER_COLOR = "#2FBF71";
 /** Default OpenClaw-managed browser profile name. */
 export const DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME = "openclaw";
 /** Default browser profile selected when config omits a profile name. */
