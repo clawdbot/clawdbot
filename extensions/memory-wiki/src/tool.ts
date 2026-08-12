@@ -98,6 +98,10 @@ const WikiClaimSchema = Type.Object(
 // so even an explicit caller cannot request an unbounded listing.
 const WIKI_OPEN_ITEMS_DEFAULT_LIMIT = 20;
 const WIKI_OPEN_ITEMS_MAX_LIMIT = 100;
+// OpenClaw's provider conversion truncates tool-result text at 8,000
+// characters. Keep the *combined* rendered text and structured details well
+// below that boundary so the selected items stay intact in both representations.
+const WIKI_OPEN_ITEMS_RESULT_MAX_CHARS = 7_000;
 // Bound individual model-visible fields as well as the number of returned
 // items. This prevents a single malformed or unusually long question/claim
 // from consuming an unbounded share of an agent's context window.
@@ -156,6 +160,7 @@ function truncateOpenItemText(value: string): string {
 
 function boundMemoryWikiOpenItem<
   T extends {
+    kind: WikiOpenItemKind;
     text: string;
     pagePath: string;
     pageTitle: string;
@@ -195,6 +200,43 @@ function boundMemoryWikiOpenItem<
         }
       : {}),
   };
+}
+
+function renderMemoryWikiOpenItems(
+  items: Array<{
+    kind: string;
+    text: string;
+    pagePath: string;
+    claimId?: string;
+    confidence?: number;
+  }>,
+): string {
+  return items.length === 0
+    ? "No open wiki items."
+    : items
+        .map((item, index) => {
+          const claimSuffix = item.claimId ? ` (claim ${item.claimId})` : "";
+          const confidenceSuffix =
+            typeof item.confidence === "number"
+              ? ` (confidence ${item.confidence.toFixed(2)})`
+              : "";
+          return `${index + 1}. [${item.kind}] ${item.text}\nPage: ${item.pagePath}${claimSuffix}${confidenceSuffix}`;
+        })
+        .join("\n\n");
+}
+
+function hasMemoryWikiOpenItemsResultBudget(
+  items: ReturnType<typeof boundMemoryWikiOpenItem>[],
+  vaultCounts: ReturnType<typeof countMemoryWikiOpenItems>,
+): boolean {
+  const text = renderMemoryWikiOpenItems(items);
+  const details = {
+    counts: countMemoryWikiOpenItems(items),
+    vaultCounts,
+    items,
+    truncated: false,
+  };
+  return text.length + JSON.stringify(details).length <= WIKI_OPEN_ITEMS_RESULT_MAX_CHARS;
 }
 
 export function createWikiStatusTool(
@@ -347,20 +389,16 @@ export function createWikiOpenItemsTool(
       // entire vault. The schema maximum bounds explicit callers.
       const limit = params.limit ?? WIKI_OPEN_ITEMS_DEFAULT_LIMIT;
       items = items.slice(0, limit);
-      const boundedItems = items.map(boundMemoryWikiOpenItem);
-      const text =
-        boundedItems.length === 0
-          ? "No open wiki items."
-          : boundedItems
-              .map((item, index) => {
-                const claimSuffix = item.claimId ? ` (claim ${item.claimId})` : "";
-                const confidenceSuffix =
-                  typeof item.confidence === "number"
-                    ? ` (confidence ${item.confidence.toFixed(2)})`
-                    : "";
-                return `${index + 1}. [${item.kind}] ${item.text}\nPage: ${item.pagePath}${claimSuffix}${confidenceSuffix}`;
-              })
-              .join("\n\n");
+      const boundedItems: ReturnType<typeof boundMemoryWikiOpenItem>[] = [];
+      for (const item of items) {
+        const candidate = [...boundedItems, boundMemoryWikiOpenItem(item)];
+        if (!hasMemoryWikiOpenItemsResultBudget(candidate, result.counts)) {
+          break;
+        }
+        boundedItems.push(candidate.at(-1)!);
+      }
+      const truncated = boundedItems.length < items.length;
+      const text = renderMemoryWikiOpenItems(boundedItems);
       return {
         content: [{ type: "text", text }],
         // counts describe the returned (filtered/limited) items; vaultCounts is
@@ -369,6 +407,7 @@ export function createWikiOpenItemsTool(
           counts: countMemoryWikiOpenItems(boundedItems),
           vaultCounts: result.counts,
           items: boundedItems,
+          truncated,
         },
       };
     },

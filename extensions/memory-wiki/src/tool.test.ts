@@ -253,6 +253,26 @@ describe("memory-wiki tools", () => {
     expect(String(item?.text)).toHaveLength(500);
   });
 
+  it("enforces one aggregate budget across rendered text and structured details", async () => {
+    const { rootDir, config } = await harness.createVault({ initialize: true });
+    const questions = Array.from({ length: 100 }, (_, index) => `  - ${"x".repeat(500)} ${index}`);
+    await writeSynthesisPage(rootDir, path.join("syntheses", "large.md"), [
+      "id: synth-large",
+      "title: Large",
+      "questions:",
+      ...questions,
+    ]);
+
+    const tool = createWikiOpenItemsTool(config);
+    const result = await tool.execute("open-items-aggregate-budget", { limit: 100 });
+    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+    const details = asSchemaObject(result.details);
+
+    expect(details.truncated).toBe(true);
+    expect((details.items as unknown[]).length).toBeLessThan(100);
+    expect(text.length + JSON.stringify(details).length).toBeLessThanOrEqual(7_000);
+  });
+
   it("excludes foreign and unowned bridge-page items for sandboxed callers", async () => {
     const { rootDir, config } = await harness.createVault({ initialize: true });
     const writeBridgeQuestion = async (slug: string, agentIds: string[], question: string) => {
