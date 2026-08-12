@@ -1,6 +1,18 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-
 const INTERNAL_PROTOCOL_FIELD = "x-openclaw-internal";
+
+/**
+ * Local copy of `isRecord` from `@openclaw/normalization-core/record-coerce`.
+ *
+ * Deliberately inlined rather than imported: `gateway-protocol` does not
+ * otherwise depend on `normalization-core`, and adding that package edge is a
+ * dependency-graph change that upstream's `dependency-guard` CI job blocks
+ * without a secops override. The predicate is a three-line pure type guard with
+ * no dependencies of its own, so duplicating it is far cheaper than carrying an
+ * unmergeable manifest edit. Keep this in sync with the canonical definition.
+ */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 
 export function internalProtocolField<T extends object>(schema: T): T {
   Object.defineProperty(schema, INTERNAL_PROTOCOL_FIELD, {

@@ -3298,5 +3298,54 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await closeBrowserPage(page);
     }
   });
+
+  it("matches the reading prototype's transcript letter spacing without changing shared text", async () => {
+    const page = await openBrowserPage(1366, 900);
+    try {
+      await page.setContent(`<!doctype html><html data-theme-mode="dark"><head><style>${readUiCss()}</style></head><body>
+        <div class="chat-thread chat-thread--direct" role="log">
+          <div class="chat-thread-inner">
+            <div class="chat-group assistant">
+              <div class="chat-group-messages">
+                <div class="chat-bubble">
+                  <div class="chat-text">
+                    <p>Aa Bb Cc — Smooth reading depends on the shape, spacing, and contrast of every glyph in a transcript.</p>
+                    <p>Keep this fixture about text rendering; width and block rhythm are intentionally not asserted here.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <section class="custodian-surface">
+          <div class="chat-bubble"><div class="chat-text">Custodian output</div></div>
+        </section>
+        <div class="chat-notice"><div class="chat-text chat-notice__body">Compact notice</div></div>
+        <div class="cron-run-entry__body chat-text">Cron output</div>
+      </body></html>`);
+
+      const transcriptLetterSpacing = await page
+        .locator(".chat-thread .chat-bubble .chat-text")
+        .evaluate((element) => getComputedStyle(element).letterSpacing);
+      const custodianLetterSpacing = await page
+        .locator(".custodian-surface .chat-bubble .chat-text")
+        .evaluate((element) => getComputedStyle(element).letterSpacing);
+      const noticeLetterSpacing = await page
+        .locator(".chat-notice .chat-text")
+        .evaluate((element) => getComputedStyle(element).letterSpacing);
+      const cronLetterSpacing = await page
+        .locator(".cron-run-entry__body.chat-text")
+        .evaluate((element) => getComputedStyle(element).letterSpacing);
+      const bodyLetterSpacing = await page
+        .locator("body")
+        .evaluate((element) => getComputedStyle(element).letterSpacing);
+      expect(transcriptLetterSpacing).toBe("normal");
+      expect(custodianLetterSpacing).toBe(bodyLetterSpacing);
+      expect(noticeLetterSpacing).toBe(bodyLetterSpacing);
+      expect(cronLetterSpacing).toBe(bodyLetterSpacing);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
