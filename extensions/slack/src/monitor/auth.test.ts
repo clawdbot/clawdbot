@@ -426,11 +426,11 @@ describe("resolveSlackCommandIngress", () => {
     const result = await resolveSlackCommandIngress({
       ctx: makeAuthorizeCtx(),
       teamId,
-      senderId: "U_SHARED",
+      senderId: "U01234567",
       channelType: "channel",
-      channelId: "C_SHARED",
+      channelId: "C01234567",
       ownerAllowFromLower: [],
-      channelUsers: ["team:T11111111:user:U_SHARED"],
+      channelUsers: ["team:T11111111:user:U01234567"],
       allowTextCommands: false,
       hasControlCommand: false,
     });
