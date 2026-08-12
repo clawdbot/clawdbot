@@ -3698,29 +3698,31 @@ describe("chat slash menu accessibility", () => {
       animationFrames.push(callback);
       return animationFrames.length;
     });
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function () {
-      const height = 28;
-      let top = 0;
-      if (this.classList.contains("slash-menu-item")) {
-        const scrollRegion = this.closest<HTMLElement>(".slash-menu__scroll");
-        const options = Array.from(
-          scrollRegion?.querySelectorAll<HTMLElement>(".slash-menu-item") ?? [],
-        );
-        top = options.indexOf(this) * height - (scrollRegion?.scrollTop ?? 0);
-      }
-      const bottom = this.classList.contains("slash-menu__scroll") ? height * 2 : top + height;
-      return {
-        bottom,
-        height: bottom - top,
-        left: 0,
-        right: 240,
-        top,
-        width: 240,
-        x: 0,
-        y: top,
-        toJSON: () => ({}),
-      };
-    });
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: HTMLElement) {
+        const height = 28;
+        let top = 0;
+        if (this.classList.contains("slash-menu-item")) {
+          const scrollRegion = this.closest<HTMLElement>(".slash-menu__scroll");
+          const options = Array.from(
+            scrollRegion?.querySelectorAll<HTMLElement>(".slash-menu-item") ?? [],
+          );
+          top = options.indexOf(this) * height - (scrollRegion?.scrollTop ?? 0);
+        }
+        const bottom = this.classList.contains("slash-menu__scroll") ? height * 2 : top + height;
+        return {
+          bottom,
+          height: bottom - top,
+          left: 0,
+          right: 240,
+          top,
+          width: 240,
+          x: 0,
+          y: top,
+          toJSON: () => ({}),
+        };
+      },
+    );
     const { container } = createReactiveDraftHarness();
     document.body.append(container);
     inputDraftAtEnd(container, "Use $");
