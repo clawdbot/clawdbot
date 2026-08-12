@@ -308,6 +308,91 @@ describe("write-cli-startup-metadata", () => {
   });
 
   it.runIf(process.platform !== "win32")(
+    "preserves shared state when a canceled process group cannot be proven dead",
+    async () => {
+      const tempRoot = createTempDir("openclaw-startup-metadata-undrained-tree-");
+      const distDir = path.join(tempRoot, "dist");
+      const extensionsDir = path.join(tempRoot, "extensions");
+      const outputPath = path.join(distDir, "cli-startup-metadata.json");
+      const child = Object.assign(createSpawnTextChild(), { pid: 123 });
+      const realProcessKill = process.kill.bind(process);
+      const processKill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+        if (pid === -123) {
+          return true;
+        }
+        return realProcessKill(pid, signal);
+      });
+      let renderStateDir = "";
+
+      writeStartupMetadataSourceSignatureFixture(tempRoot);
+      writeFixtureFile(distDir, "root-help-fixture.js", "export function outputRootHelp() {}\n");
+
+      try {
+        const writePromise = testing.writeCliStartupMetadata({
+          distDir,
+          outputPath,
+          extensionsDir,
+          sourceRootDir: tempRoot,
+          renderBundledRootHelpText: async () => "Usage: openclaw\n",
+          renderSourceBrowserHelpText: (renderContext, taskContext) => {
+            renderStateDir = renderContext.env?.OPENCLAW_STATE_DIR ?? "";
+            if (!taskContext) {
+              throw new Error("missing render task context");
+            }
+            return testing.spawnText(["openclaw.mjs", "browser", "--help"], {
+              cwd: tempRoot,
+              env: process.env,
+              failureMessage: "browser render failed",
+              killGraceMs: 10,
+              maxOutputBytes: 1024,
+              onTerminalFailure: taskContext.reportFailure,
+              signal: taskContext.signal,
+              spawnProcess: (() => child as unknown as ReturnType<typeof spawn>) as typeof spawn,
+              timeoutMs: 5_000,
+            });
+          },
+          renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
+          renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
+          renderSourceSubcommandHelpTextRecord: () => ({
+            doctor: "Usage: openclaw doctor\n",
+            gateway: "Usage: openclaw gateway\n",
+            models: "Usage: openclaw models\n",
+            plugins: "Usage: openclaw plugins\n",
+            sessions: "Usage: openclaw sessions\n",
+            tasks: "Usage: openclaw tasks\n",
+          }),
+        });
+        await new Promise((resolve) => setImmediate(resolve));
+        child.stderr.write("primary browser failure\n");
+        child.emit("close", 7, null);
+
+        const error = await writePromise.then(
+          () => undefined,
+          (reason: unknown) => reason,
+        );
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).message).toContain("primary browser failure");
+        expect((error as Error).message).toContain(
+          `Preserved CLI startup metadata render state: ${renderStateDir}`,
+        );
+        expect(error).toMatchObject({
+          preserveRenderState: true,
+          processTreeCleanupFailure: {
+            code: "EPROCESSGROUP_CLEANUP_FAILED",
+          },
+        });
+        expect(existsSync(renderStateDir)).toBe(true);
+        expect(existsSync(outputPath)).toBe(false);
+      } finally {
+        processKill.mockRestore();
+        if (renderStateDir) {
+          fs.rmSync(renderStateDir, { force: true, recursive: true });
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "cancels a default-batch sibling process tree after another command fails",
     async () => {
       const actualSpawn = (
@@ -921,13 +1006,14 @@ describe("write-cli-startup-metadata", () => {
       extensionsDir,
       sourceRootDir: tempRoot,
       renderBundledRootHelpText: async () => "Usage: openclaw\n",
-      renderSourceBrowserHelpText: (renderContext) => {
+      renderSourceBrowserHelpText: async (renderContext) => {
         stateDir = renderContext.env?.OPENCLAW_STATE_DIR ?? "";
         const sqliteDir = path.join(stateDir, "state");
         mkdirSync(sqliteDir, { recursive: true });
         for (const suffix of ["", "-shm", "-wal"]) {
           writeFileSync(path.join(sqliteDir, `openclaw.sqlite${suffix}`), "fixture", "utf8");
         }
+        await new Promise((resolve) => setImmediate(resolve));
         if (failRender) {
           throw new Error("browser help failed");
         }

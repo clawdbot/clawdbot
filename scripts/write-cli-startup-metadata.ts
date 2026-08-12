@@ -101,6 +101,10 @@ type RenderTaskContext = {
   reportFailure: (error: unknown) => void;
   signal: AbortSignal;
 };
+type SourceHelpRenderer<T = string> = (
+  renderContext: RootHelpRenderContext,
+  taskContext?: RenderTaskContext,
+) => Awaitable<T>;
 type KillableChild = {
   kill(signal: NodeJS.Signals): boolean;
   pid?: number;
@@ -111,19 +115,12 @@ type RunTaskkill = (
   options: { stdio: "ignore" },
 ) => { error?: unknown; status?: number | null } | undefined;
 
-class MissingBundledRootHelpError extends Error {
-  readonly code = "CLI_STARTUP_ROOT_HELP_BUNDLE_MISSING";
-}
-
-function isMissingBundledRootHelpError(error: unknown): error is MissingBundledRootHelpError {
-  return error instanceof MissingBundledRootHelpError;
-}
-
 class CliStartupMetadataRenderSupervisor {
   readonly #abortController = new AbortController();
   readonly #parentSignalHandlers: Array<{ handler: () => void; signal: NodeJS.Signals }> = [];
   #firstFailure: Error | undefined;
   #parentSignal: NodeJS.Signals | null = null;
+  #preserveRenderState = false;
 
   constructor() {
     const signals: NodeJS.Signals[] =
@@ -148,7 +145,18 @@ class CliStartupMetadataRenderSupervisor {
     return this.#abortController.signal;
   }
 
+  get preserveRenderState(): boolean {
+    return this.#preserveRenderState;
+  }
+
   reportFailure(error: unknown): void {
+    if (
+      error instanceof Error &&
+      "preserveRenderState" in error &&
+      error.preserveRenderState === true
+    ) {
+      this.#preserveRenderState = true;
+    }
     if (this.#firstFailure || this.#parentSignal) {
       return;
     }
@@ -156,27 +164,28 @@ class CliStartupMetadataRenderSupervisor {
     this.#abortController.abort(this.#firstFailure);
   }
 
-  run<T>(render: (context: RenderTaskContext) => Awaitable<T>): Promise<T> {
-    return Promise.resolve()
-      .then(async () => {
-        if (this.signal.aborted) {
-          throw this.signal.reason ?? new Error("CLI startup metadata render aborted");
-        }
-        return await render({
-          reportFailure: (error) => this.reportFailure(error),
-          signal: this.signal,
-        });
-      })
-      .then(
-        (value) => value,
-        (error: unknown) => {
-          this.reportFailure(error);
-          throw error;
-        },
-      );
+  async run<T>(render: (context: RenderTaskContext) => Awaitable<T>): Promise<T> {
+    // Register every sibling before a synchronous renderer can abort the shared group.
+    await Promise.resolve();
+    if (this.signal.aborted) {
+      throw this.signal.reason ?? new Error("CLI startup metadata render aborted");
+    }
+    try {
+      return await render({
+        reportFailure: (error) => this.reportFailure(error),
+        signal: this.signal,
+      });
+    } catch (error) {
+      this.reportFailure(error);
+      throw error;
+    }
   }
 
-  finish(primaryFailure: unknown, cleanupError?: unknown): never | void {
+  finish(
+    primaryFailure: unknown,
+    cleanupError?: unknown,
+    preservedStateDir?: string,
+  ): never | void {
     for (const { signal, handler } of this.#parentSignalHandlers) {
       process.off(signal, handler);
     }
@@ -198,6 +207,9 @@ class CliStartupMetadataRenderSupervisor {
     }
     if (cleanupError) {
       Object.assign(failure, { cleanupError });
+    }
+    if (preservedStateDir) {
+      failure.message += `\nPreserved CLI startup metadata render state: ${preservedStateDir}`;
     }
     throw failure;
   }
@@ -436,22 +448,26 @@ async function settleRootHelpRenderPromises<T extends readonly unknown[]>(
   stateDir: string,
   supervisor: CliStartupMetadataRenderSupervisor,
 ): Promise<{ -readonly [P in keyof T]: Awaited<T[P]> }> {
-  let result: { -readonly [P in keyof T]: Awaited<T[P]> } | undefined;
-  let primaryFailure: unknown;
-  try {
-    result = await Promise.all(values);
-  } catch (error) {
-    primaryFailure = error;
-  }
-  await Promise.allSettled(values);
+  const settled = await Promise.allSettled(values);
+  const rejected = settled.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
   let cleanupError: unknown;
-  try {
-    cleanupRootHelpRenderStateDir(stateDir);
-  } catch (error) {
-    cleanupError = error;
+  if (!supervisor.preserveRenderState) {
+    try {
+      cleanupRootHelpRenderStateDir(stateDir);
+    } catch (error) {
+      cleanupError = error;
+    }
   }
-  supervisor.finish(primaryFailure, cleanupError);
-  return result as { -readonly [P in keyof T]: Awaited<T[P]> };
+  supervisor.finish(
+    rejected?.reason,
+    cleanupError,
+    supervisor.preserveRenderState ? stateDir : undefined,
+  );
+  return settled.map((result) => (result as PromiseFulfilledResult<unknown>).value) as {
+    -readonly [P in keyof T]: Awaited<T[P]>;
+  };
 }
 
 function createIsolatedRootHelpRenderContext(
@@ -488,7 +504,14 @@ function createSpawnTextFailure(params: {
   cause?: unknown;
   detail?: string;
   failureMessage: string;
-  kind: "aborted" | "nonzero-exit" | "output-limit" | "spawn-error" | "stream-error" | "timeout";
+  kind:
+    | "aborted"
+    | "nonzero-exit"
+    | "output-limit"
+    | "process-tree-cleanup"
+    | "spawn-error"
+    | "stream-error"
+    | "timeout";
   startedAt: number;
 }): Error {
   const elapsedMs = Date.now() - params.startedAt;
@@ -503,7 +526,9 @@ function createSpawnTextFailure(params: {
           ? "ETIMEDOUT"
           : params.kind === "aborted"
             ? "EABORTED"
-            : "ECLI_STARTUP_METADATA_RENDER",
+            : params.kind === "process-tree-cleanup"
+              ? "EPROCESSGROUP_CLEANUP_FAILED"
+              : "ECLI_STARTUP_METADATA_RENDER",
       elapsedMs,
       renderFailureKind: params.kind,
     },
@@ -548,12 +573,9 @@ async function spawnText(
     let stdout = "";
     let stderr = "";
     let outputBytes = 0;
-    let outputExceeded = false;
-    let outputStreamError: { streamName: "stdout" | "stderr"; error: Error } | undefined;
     let settled = false;
-    let timedOut = false;
-    let aborted = false;
     let terminalFailure: Error | undefined;
+    let processTreeCleanupFailure: Error | undefined;
     let waitingForKillGrace = false;
     let forceKillInFlight = false;
     let childClosedResult: { code: number | null; signal: NodeJS.Signals | null } | null = null;
@@ -597,20 +619,28 @@ async function spawnText(
       options.onTerminalFailure?.(error);
       return error;
     };
+    const createFailure = (
+      kind: Parameters<typeof createSpawnTextFailure>[0]["kind"],
+      detail: string,
+      cause?: unknown,
+    ) =>
+      createSpawnTextFailure({
+        cause,
+        detail,
+        failureMessage: options.failureMessage,
+        kind,
+        startedAt,
+      });
+    const fail = (
+      kind: Parameters<typeof createSpawnTextFailure>[0]["kind"],
+      detail: string,
+      cause?: unknown,
+    ) => recordTerminalFailure(createFailure(kind, detail, cause));
     const abortListener = () => {
       if (settled || terminalFailure) {
         return;
       }
-      aborted = true;
-      recordTerminalFailure(
-        createSpawnTextFailure({
-          cause: options.signal?.reason,
-          detail: "aborted after sibling failure",
-          failureMessage: options.failureMessage,
-          kind: "aborted",
-          startedAt,
-        }),
-      );
+      fail("aborted", "aborted after sibling failure", options.signal?.reason);
       signalChild("SIGTERM");
       scheduleKill();
     };
@@ -628,20 +658,19 @@ async function spawnText(
     };
     const finishClose = (result: { code: number | null; signal: NodeJS.Signals | null }) => {
       settle(() => {
-        if (result.code === 0 && !terminalFailure && !timedOut && !outputExceeded && !aborted) {
+        if (result.code === 0 && !terminalFailure) {
           resolve(stdout);
           return;
         }
         const detail = stderr.trim() || (result.signal ? `terminated by ${result.signal}` : "");
-        reject(
-          terminalFailure ??
-            createSpawnTextFailure({
-              detail,
-              failureMessage: options.failureMessage,
-              kind: "nonzero-exit",
-              startedAt,
-            }),
-        );
+        const failure = terminalFailure ?? createFailure("nonzero-exit", detail);
+        if (processTreeCleanupFailure) {
+          Object.assign(failure, {
+            preserveRenderState: true,
+            processTreeCleanupFailure,
+          });
+        }
+        reject(failure);
       });
     };
     const scheduleKill = () => {
@@ -660,17 +689,22 @@ async function spawnText(
         void forceDrain.then((drained) => {
           forceKillInFlight = false;
           if (!drained) {
-            recordTerminalFailure(
-              createSpawnTextFailure({
-                detail: `process group did not exit within ${killGraceMs}ms after SIGKILL`,
-                failureMessage: options.failureMessage,
-                kind: "nonzero-exit",
-                startedAt,
-              }),
+            processTreeCleanupFailure = Object.assign(
+              createFailure(
+                "process-tree-cleanup",
+                `process group did not exit within ${killGraceMs}ms after SIGKILL`,
+              ),
+              { preserveRenderState: true },
             );
+            options.onTerminalFailure?.(processTreeCleanupFailure);
           }
           if (childClosedResult) {
             finishClose(childClosedResult);
+          } else if (!drained) {
+            child.stdout.destroy();
+            child.stderr.destroy();
+            child.unref?.();
+            finishClose({ code: null, signal: "SIGKILL" });
           }
         });
       }, killGraceMs);
@@ -701,50 +735,25 @@ async function spawnText(
     const failOutputStream = (streamName: "stdout" | "stderr", error: Error) => {
       // Keep the first stop cause: killing for a timeout or output cap can make
       // the stdio pipes fail secondarily while the child is shutting down.
-      if (outputStreamError || timedOut || outputExceeded) {
+      if (terminalFailure) {
         return;
       }
-      outputStreamError = { streamName, error };
-      recordTerminalFailure(
-        createSpawnTextFailure({
-          cause: error,
-          detail: `${streamName} read error: ${error.message}`,
-          failureMessage: options.failureMessage,
-          kind: "stream-error",
-          startedAt,
-        }),
-      );
+      fail("stream-error", `${streamName} read error: ${error.message}`, error);
       requestStop();
     };
     const timeout = setTimeout(() => {
-      timedOut = true;
-      recordTerminalFailure(
-        createSpawnTextFailure({
-          detail: `timed out after ${options.timeoutMs}ms`,
-          failureMessage: options.failureMessage,
-          kind: "timeout",
-          startedAt,
-        }),
-      );
+      fail("timeout", `timed out after ${options.timeoutMs}ms`);
       requestStop();
     }, options.timeoutMs);
     timeout.unref();
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
-      if (outputExceeded) {
+      if (terminalFailure) {
         return;
       }
       outputBytes += Buffer.byteLength(chunk);
       if (outputBytes > maxOutputBytes) {
-        outputExceeded = true;
-        recordTerminalFailure(
-          createSpawnTextFailure({
-            detail: `output exceeded ${maxOutputBytes} bytes`,
-            failureMessage: options.failureMessage,
-            kind: "output-limit",
-            startedAt,
-          }),
-        );
+        fail("output-limit", `output exceeded ${maxOutputBytes} bytes`);
         requestStop();
         return;
       }
@@ -752,20 +761,12 @@ async function spawnText(
     });
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
-      if (outputExceeded) {
+      if (terminalFailure) {
         return;
       }
       outputBytes += Buffer.byteLength(chunk);
       if (outputBytes > maxOutputBytes) {
-        outputExceeded = true;
-        recordTerminalFailure(
-          createSpawnTextFailure({
-            detail: `output exceeded ${maxOutputBytes} bytes`,
-            failureMessage: options.failureMessage,
-            kind: "output-limit",
-            startedAt,
-          }),
-        );
+        fail("output-limit", `output exceeded ${maxOutputBytes} bytes`);
         requestStop();
         return;
       }
@@ -778,14 +779,10 @@ async function spawnText(
       failOutputStream("stderr", error);
     });
     child.once("error", (error) => {
-      const failure = recordTerminalFailure(
-        createSpawnTextFailure({
-          cause: error,
-          detail: error instanceof Error ? error.message : String(error),
-          failureMessage: options.failureMessage,
-          kind: "spawn-error",
-          startedAt,
-        }),
+      const failure = fail(
+        "spawn-error",
+        error instanceof Error ? error.message : String(error),
+        error,
       );
       settle(() => {
         reject(failure);
@@ -794,14 +791,7 @@ async function spawnText(
     child.once("close", (code, signal) => {
       const result = { code, signal };
       if (code !== 0 && !terminalFailure) {
-        recordTerminalFailure(
-          createSpawnTextFailure({
-            detail: stderr.trim() || (signal ? `terminated by ${signal}` : ""),
-            failureMessage: options.failureMessage,
-            kind: "nonzero-exit",
-            startedAt,
-          }),
-        );
+        fail("nonzero-exit", stderr.trim() || (signal ? `terminated by ${signal}` : ""));
       }
       if (processGroupIsAlive()) {
         childClosedResult = result;
@@ -831,9 +821,7 @@ async function renderBundledRootHelpText(
   }
   const bundleIdentity = resolveCliStartupRootHelpBundleIdentity(_distDirOverride);
   if (!bundleIdentity) {
-    throw new MissingBundledRootHelpError(
-      "No root-help bundle found in dist; cannot write CLI startup metadata.",
-    );
+    throw new Error("No root-help bundle found in dist; cannot write CLI startup metadata.");
   }
   const moduleUrl = pathToFileURL(path.join(_distDirOverride, bundleIdentity.bundleName)).href;
   const renderOptions = {
@@ -991,26 +979,11 @@ async function writeCliStartupMetadata(options?: {
   extensionsDir?: string;
   sourceRootDir?: string;
   renderBundledRootHelpText?: typeof renderBundledRootHelpText;
-  renderSourceRootHelpText?: (
-    renderContext: RootHelpRenderContext,
-    taskContext?: RenderTaskContext,
-  ) => Awaitable<string>;
-  renderSourceBrowserHelpText?: (
-    renderContext: RootHelpRenderContext,
-    taskContext?: RenderTaskContext,
-  ) => Awaitable<string>;
-  renderSourceSecretsHelpText?: (
-    renderContext: RootHelpRenderContext,
-    taskContext?: RenderTaskContext,
-  ) => Awaitable<string>;
-  renderSourceNodesHelpText?: (
-    renderContext: RootHelpRenderContext,
-    taskContext?: RenderTaskContext,
-  ) => Awaitable<string>;
-  renderSourceSubcommandHelpTextRecord?: (
-    renderContext: RootHelpRenderContext,
-    taskContext?: RenderTaskContext,
-  ) => Awaitable<PrecomputedSubcommandHelpText>;
+  renderSourceRootHelpText?: SourceHelpRenderer;
+  renderSourceBrowserHelpText?: SourceHelpRenderer;
+  renderSourceSecretsHelpText?: SourceHelpRenderer;
+  renderSourceNodesHelpText?: SourceHelpRenderer;
+  renderSourceSubcommandHelpTextRecord?: SourceHelpRenderer<PrecomputedSubcommandHelpText>;
 }): Promise<void> {
   const resolvedDistDir = options?.distDir ?? distDir;
   const resolvedOutputPath = options?.outputPath ?? outputPath;
@@ -1098,25 +1071,20 @@ async function writeCliStartupMetadata(options?: {
   const supervisor = new CliStartupMetadataRenderSupervisor();
   const rootHelpTextPromise = reusableRootHelpText
     ? Promise.resolve(reusableRootHelpText)
-    : supervisor.run(async (taskContext) => {
-        try {
-          return await (options?.renderBundledRootHelpText ?? renderBundledRootHelpText)(
-            resolvedDistDir,
-            renderContext,
-            taskContext,
-          );
-        } catch (error) {
-          if (!isMissingBundledRootHelpError(error)) {
-            throw error;
-          }
-          // Keep the fallback asynchronous: sibling help renders share this
-          // event loop, so blocking here can turn completed children into false timeouts.
-          return await (options?.renderSourceRootHelpText ?? renderSourceRootHelpText)(
-            renderContext,
-            taskContext,
-          );
-        }
-      });
+    : supervisor.run(async (taskContext) =>
+        bundleIdentity
+          ? (options?.renderBundledRootHelpText ?? renderBundledRootHelpText)(
+              resolvedDistDir,
+              renderContext,
+              taskContext,
+            )
+          : // Missing built metadata is the only source-fallback contract. A built
+            // renderer failure is terminal and must cancel the whole render group.
+            (options?.renderSourceRootHelpText ?? renderSourceRootHelpText)(
+              renderContext,
+              taskContext,
+            ),
+      );
   const hasCustomCommandRenderer =
     options?.renderSourceBrowserHelpText ||
     options?.renderSourceSecretsHelpText ||
