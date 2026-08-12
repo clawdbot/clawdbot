@@ -4000,14 +4000,25 @@ describe("task-registry", () => {
     });
   });
 
-  it("retries the same state-change event after explicit suppression", async () => {
+  it.each([
+    {
+      name: "retries intentional suppression",
+      suppressionReason: "cancelled_by_message_sending_hook",
+      expectedSendCount: 2,
+    },
+    {
+      name: "does not retry adapter ambiguity",
+      suppressionReason: "adapter_returned_no_identity",
+      expectedSendCount: 1,
+    },
+  ] as const)("$name for the same state-change event", async (testCase) => {
     await withTaskRegistryTempDir(async () => {
       hoisted.sendMessageMock.mockResolvedValue({
         channel: "guildchat",
         to: "guildchat:123",
         via: "direct",
         deliveryStatus: "suppressed",
-        suppressionReason: "cancelled_by_message_sending_hook",
+        suppressionReason: testCase.suppressionReason,
       });
       const task = createTaskFixture("acp", {
         deliveryStatus: undefined,
@@ -4022,7 +4033,7 @@ describe("task-registry", () => {
       await maybeDeliverTaskStateChangeUpdate(task.taskId, event);
       await maybeDeliverTaskStateChangeUpdate(task.taskId, event);
 
-      expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(2);
+      expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(testCase.expectedSendCount);
     });
   });
 

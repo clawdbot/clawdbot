@@ -452,9 +452,17 @@ async function maybeDeliverTaskStateChangeUpdateUnderAdmission(
       },
     });
     if (sendResult.deliveryStatus === "suppressed") {
-      throw new Error(
-        `background task state change suppressed: ${sendResult.suppressionReason ?? "unknown reason"}`,
-      );
+      if (sendResult.suppressionReason !== "adapter_returned_no_identity") {
+        throw new Error(
+          `background task state change suppressed: ${sendResult.suppressionReason ?? "unknown reason"}`,
+        );
+      }
+      taskRegistryLog.warn("Background task state change delivery was not confirmed", {
+        taskId,
+        ownerKey: current.ownerKey,
+        requesterOrigin: owner.requesterOrigin,
+        suppressionReason: sendResult.suppressionReason,
+      });
     }
     upsertTaskDeliveryState({
       taskId,
