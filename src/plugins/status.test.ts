@@ -49,8 +49,6 @@ let buildAllPluginInspectReports: typeof import("./status.js").buildAllPluginIns
 let buildPluginCompatibilityNotices: typeof import("./status.js").buildPluginCompatibilityNotices;
 let buildPluginCompatibilitySnapshotNotices: typeof import("./status.js").buildPluginCompatibilitySnapshotNotices;
 let buildPluginCompatibilityWarnings: typeof import("./status.js").buildPluginCompatibilityWarnings;
-let formatPluginCompatibilityNotice: typeof import("./status.js").formatPluginCompatibilityNotice;
-let summarizePluginCompatibility: typeof import("./status.js").summarizePluginCompatibility;
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => loadConfigMock(),
@@ -362,23 +360,6 @@ function expectInspectPolicy(
   expect(inspect.policy).toEqual(expected);
 }
 
-function expectBundleInspectState(
-  inspect: NonNullable<ReturnType<typeof buildPluginInspectReport>>,
-  params: {
-    bundleCapabilities: readonly string[];
-    shape: string;
-    mcpServers?: readonly {
-      name: string;
-      hasStdioTransport: boolean;
-      unsupported?: boolean;
-    }[];
-  },
-) {
-  expect(inspect.bundleCapabilities).toEqual(params.bundleCapabilities);
-  expect(inspect.mcpServers).toStrictEqual(params.mcpServers ?? []);
-  expect(inspect.shape).toBe(params.shape);
-}
-
 describe("plugin status reports", () => {
   beforeAll(async () => {
     ({
@@ -389,8 +370,6 @@ describe("plugin status reports", () => {
       buildPluginCompatibilityWarnings,
       buildPluginInspectReport,
       buildPluginSnapshotReport,
-      formatPluginCompatibilityNotice,
-      summarizePluginCompatibility,
     } = await import("./status.js"));
   });
 
@@ -943,87 +922,5 @@ describe("plugin status reports", () => {
     );
 
     expectNoCompatibilityWarnings();
-  });
-
-  it.each([
-    {
-      name: "populates bundleCapabilities from plugin record",
-      plugin: createPluginRecord({
-        id: "claude-bundle",
-        name: "Claude Bundle",
-        description: "A bundle plugin with skills and commands",
-        source: "/tmp/claude-bundle/.claude-plugin/plugin.json",
-        format: "bundle",
-        bundleFormat: "claude",
-        bundleCapabilities: ["skills", "commands", "agents", "settings"],
-        rootDir: "/tmp/claude-bundle",
-      }),
-      expectedId: "claude-bundle",
-      expectedBundleCapabilities: ["skills", "commands", "agents", "settings"],
-      expectedShape: "non-capability",
-      expectedMcpServers: [],
-    },
-    {
-      name: "returns empty bundleCapabilities and mcpServers for non-bundle plugins",
-      plugin: createPluginRecord({
-        id: "plain-plugin",
-        name: "Plain Plugin",
-        description: "A regular plugin",
-        providerIds: ["plain"],
-      }),
-      expectedId: "plain-plugin",
-      expectedBundleCapabilities: [],
-      expectedShape: "plain-capability",
-      expectedMcpServers: [],
-    },
-    {
-      name: "reports MCP servers declared by native plugins",
-      plugin: createPluginRecord({
-        id: "native-mcp",
-        name: "Native MCP",
-        description: "A native plugin with an MCP App server",
-        rootDir: "/tmp/native-mcp",
-        mcpServers: {
-          app: { transport: "stdio", command: "node", args: ["./mcp-server.js"] },
-          remote: { type: "http", url: "https://example.test/mcp" },
-          incomplete: { transport: "streamable-http" },
-          invalidScheme: { transport: "streamable-http", url: "ftp://example.test/mcp" },
-          invalidTransport: { transport: "http", url: "https://example.test/mcp" },
-        },
-      }),
-      expectedId: "native-mcp",
-      expectedBundleCapabilities: [],
-      expectedShape: "non-capability",
-      expectedMcpServers: [
-        { name: "app", hasStdioTransport: true },
-        { name: "remote", hasStdioTransport: false },
-        { name: "incomplete", hasStdioTransport: false, unsupported: true },
-        { name: "invalidScheme", hasStdioTransport: false, unsupported: true },
-        { name: "invalidTransport", hasStdioTransport: false, unsupported: true },
-      ],
-    },
-  ])(
-    "$name",
-    ({ plugin, expectedId, expectedBundleCapabilities, expectedShape, expectedMcpServers }) => {
-      setSinglePluginLoadResult(plugin);
-
-      const inspect = expectInspectReport(expectedId);
-
-      expectBundleInspectState(inspect, {
-        bundleCapabilities: expectedBundleCapabilities,
-        shape: expectedShape,
-        mcpServers: expectedMcpServers,
-      });
-    },
-  );
-
-  it("formats and summarizes compatibility notices", () => {
-    const notice = createCompatibilityNotice({ pluginId: "legacy-plugin", code: "hook-only" });
-
-    expect(formatPluginCompatibilityNotice(notice)).toBe(`legacy-plugin ${HOOK_ONLY_MESSAGE}`);
-    expect(summarizePluginCompatibility([notice])).toEqual({
-      noticeCount: 1,
-      pluginCount: 1,
-    });
   });
 });

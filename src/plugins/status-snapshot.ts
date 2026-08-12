@@ -2,6 +2,8 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+<<<<<<< HEAD
+import { buildPluginStaticInventory } from "./loader-records.js";
 import {
   appendPluginControlPlaneWorkspaceDiagnostic,
   resolvePluginControlPlaneWorkspace,
@@ -81,6 +83,7 @@ function buildPluginRecordFromInstalledIndex(
     migrationProviderIds: [...(manifest?.contracts?.migrationProviders ?? [])],
     agentHarnessIds: [],
     cliCommands: [],
+    staticInventory: buildPluginStaticInventory(manifest),
     services: [],
     gatewayDiscoveryServiceIds: [],
     commands: [...(manifest?.commandAliases?.map((alias) => alias.name) ?? [])],

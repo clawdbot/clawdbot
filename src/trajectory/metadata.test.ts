@@ -147,6 +147,11 @@ describe("trajectory metadata", () => {
       migrationProviderIds: [],
       agentHarnessIds: ["openclaw"],
       cliCommands: [],
+      staticInventory: {
+        commandAliases: [],
+        cliCommandHints: [],
+        routeActivationHints: [],
+      },
       services: [],
       gatewayDiscoveryServiceIds: [],
       commands: [],

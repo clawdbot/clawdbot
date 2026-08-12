@@ -364,6 +364,18 @@ export async function runPluginsInspectCommand(
   );
   lines.push(...formatInspectSection("Commands", inspect.commands));
   lines.push(...formatInspectSection("CLI commands", inspect.cliCommands));
+  lines.push(
+    ...formatInspectSection("Declared command aliases", inspect.staticInventory.commandAliases),
+  );
+  lines.push(
+    ...formatInspectSection("Declared CLI command hints", inspect.staticInventory.cliCommandHints),
+  );
+  lines.push(
+    ...formatInspectSection(
+      "Declared route activation hints",
+      inspect.staticInventory.routeActivationHints,
+    ),
+  );
   lines.push(...formatInspectSection("Services", inspect.services));
   lines.push(...formatInspectSection("Gateway methods", inspect.gatewayMethods ?? []));
   lines.push(

@@ -204,7 +204,9 @@ function listCommandTriggerReasons(
       ? "manifest-cli-command-owner"
       : null,
     listHasNormalizedValue(
-      (plugin.commandAliases ?? []).flatMap((alias) => alias.cliCommand ?? alias.name),
+      (plugin.commandAliases ?? []).flatMap(
+        (alias) => alias.cliCommand ?? (alias.kind === "runtime-slash" ? [] : alias.name),
+      ),
       command,
       normalizeCommandId,
     )

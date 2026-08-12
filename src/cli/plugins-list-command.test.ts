@@ -20,6 +20,11 @@ type SnapshotPlugin = {
   enabled: boolean;
   commands?: string[];
   agentHarnessIds?: string[];
+  staticInventory?: {
+    commandAliases: string[];
+    cliCommandHints: string[];
+    routeActivationHints: string[];
+  };
 };
 
 function mockPluginListSnapshot(
@@ -40,7 +45,14 @@ function mockPluginListSnapshot(
       workspaceScope: scope?.workspaceScope ?? "selected",
       registrySource: "config",
       registryDiagnostics: [],
-      plugins,
+      plugins: plugins.map((plugin) => ({
+        ...plugin,
+        staticInventory: plugin.staticInventory ?? {
+          commandAliases: [],
+          cliCommandHints: [],
+          routeActivationHints: [],
+        },
+      })),
       diagnostics: scope?.diagnostics ?? [],
     }),
   }));
@@ -124,6 +136,11 @@ describe("runPluginsListCommand", () => {
             enabled: true,
             commands: ["demo"],
             agentHarnessIds: ["runtime-only"],
+            staticInventory: {
+              commandAliases: [],
+              cliCommandHints: [],
+              routeActivationHints: [],
+            },
           },
         ],
         diagnostics: [],
@@ -183,7 +200,18 @@ describe("runPluginsListCommand", () => {
           source: "config",
           diagnostics: [],
         },
-        plugins: [{ id: "demo", enabled: true, commands: ["demo"] }],
+        plugins: [
+          {
+            id: "demo",
+            enabled: true,
+            commands: ["demo"],
+            staticInventory: {
+              commandAliases: [],
+              cliCommandHints: [],
+              routeActivationHints: [],
+            },
+          },
+        ],
         diagnostics: [],
       },
     ]);

@@ -15,7 +15,7 @@ export type PluginHttpRouteRegistration = RegistryTypesPluginHttpRouteRegistrati
   gatewayRuntimeScopeSurface?: OpenClawPluginGatewayRuntimeScopeSurface;
 };
 
-export type { PluginRecord, PluginRegistry } from "./registry-types.js";
+export type { PluginRecord, PluginRegistry, PluginStaticInventory } from "./registry-types.js";
 export { createEmptyPluginRegistry } from "./registry-empty.js";
 
 function clonePluginRecord(record: RegistryPluginRecord): RegistryPluginRecord {

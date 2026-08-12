@@ -15,7 +15,9 @@ function toPluginListJsonRecord(plugin: PluginRecord): Omit<PluginRecord, "agent
   // Snapshot listing never imports plugin runtimes, so it cannot observe harness registrations.
   // Omit the field instead of serializing the registry-compatible empty placeholder.
   const { agentHarnessIds: _agentHarnessIds, ...record } = plugin;
-  return record;
+  return {
+    ...record,
+  };
 }
 
 async function loadHumanListModules() {

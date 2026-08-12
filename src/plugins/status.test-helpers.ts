@@ -37,6 +37,11 @@ export function createPluginRecord(
     contextEngineIds: [],
     agentHarnessIds: [],
     cliCommands: [],
+    staticInventory: {
+      commandAliases: [],
+      cliCommandHints: [],
+      routeActivationHints: [],
+    },
     services: [],
     gatewayDiscoveryServiceIds: [],
     commands: [],

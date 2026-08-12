@@ -22,6 +22,7 @@ import {
   type PluginInspectShape,
 } from "./inspect-shape.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
+import { normalizePluginStaticInventory } from "./loader-records.js";
 import { loadPluginRegistryHandle, resolveCompatibleRuntimePluginRegistry } from "./loader.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
@@ -30,7 +31,7 @@ import {
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
 import { resolveBundledProviderCompatPluginIds } from "./providers.js";
-import type { PluginRegistry } from "./registry.js";
+import type { PluginRegistry, PluginStaticInventory } from "./registry.js";
 import { listImportedRuntimePluginIds } from "./runtime.js";
 import {
   buildPluginRuntimeLoadOptions,
@@ -90,6 +91,7 @@ export type PluginInspectReport = {
   }>;
   commands: string[];
   cliCommands: string[];
+  staticInventory: PluginStaticInventory;
   services: string[];
   gatewayDiscoveryServices: string[];
   gatewayMethods: string[];
@@ -313,6 +315,7 @@ function buildPluginReport(
     plugins: registry.plugins.map((plugin) =>
       Object.assign({}, plugin, {
         imported: plugin.format !== `bundle` && importedPluginIds.has(plugin.id),
+        staticInventory: normalizePluginStaticInventory(plugin.staticInventory),
         version: resolveReportedPluginVersion(plugin, params?.env),
         dependencyStatus:
           plugin.dependencyStatus ??
@@ -467,6 +470,7 @@ export function buildPluginInspectReport(params: {
     tools,
     commands: [...plugin.commands],
     cliCommands: [...plugin.cliCommands],
+    staticInventory: normalizePluginStaticInventory(plugin.staticInventory),
     services: [...plugin.services],
     gatewayDiscoveryServices: [...plugin.gatewayDiscoveryServiceIds],
     gatewayMethods,
