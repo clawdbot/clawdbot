@@ -117,7 +117,7 @@ export class ScopeUpgradeCoordinator {
       const now = Date.now();
       if (now >= entry.expiresAtMs) {
         this.retainTerminal(entry);
-        return { status: "expired", requestId };
+        return { status: "expired", requestId: entry.requestId };
       }
       const wake = entry.wake.promise;
       const result = await this.readDurableResult(entry);
