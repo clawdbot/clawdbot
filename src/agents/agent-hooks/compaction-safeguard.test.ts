@@ -623,19 +623,21 @@ describe("compaction-safeguard summary budgets", () => {
     expect(capped.endsWith("x")).toBe(true);
   });
 
-  it("gives the structured body at least half the budget when a large suffix squeezes it", () => {
+  it("keeps a fitting suffix whole instead of tail-slicing it below the cap", () => {
+    // Regression guard for sub-cap suffixes: split-turn and preserved recent
+    // turns are contractually kept intact, so a suffix that fits under the cap
+    // must NOT be tail-sliced to reserve body budget.
     const body = "## Decisions\n" + "y".repeat(4000);
     const largeSuffix = "## Preserved turns\n" + "z".repeat(MAX_COMPACTION_SUMMARY_CHARS - 2000);
 
     const capped = capCompactionSummaryPreservingSuffix(body, largeSuffix);
 
     expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
-    // Body floor: the structured body keeps its full content when it fits in
-    // the half-budget floor instead of being squeezed to the remainder.
+    // Suffix (14K < 16K cap) stays intact in full.
+    expect(capped.endsWith(largeSuffix)).toBe(true);
+    expect(capped).toContain("## Preserved turns");
+    // Body absorbs the remainder exactly as before this change.
     expect(capped.startsWith("## Decisions")).toBe(true);
-    expect(capped).toContain("y".repeat(4000));
-    // Suffix tail must still be preserved (workspace rules live at the tail).
-    expect(capped.endsWith("z")).toBe(true);
   });
 
   it("keeps the body and suffix whole when they fit within the cap", () => {

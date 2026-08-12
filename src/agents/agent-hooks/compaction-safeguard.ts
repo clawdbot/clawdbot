@@ -581,18 +581,20 @@ function capCompactionSummaryPreservingSuffix(
   if (maxChars <= 0) {
     return capCompactionSummary(`${summaryBody}${suffix}`, maxChars);
   }
-  // Structured body keeps a floor share; suffix keeps its TAIL (workspace
-  // rules and post-compaction instructions are appended last). When both fit,
-  // bodyBudget/suffixBudget cover their full lengths, so nothing is cut.
-  const bodyBudget = Math.min(
-    summaryBody.length,
-    Math.max(Math.floor(maxChars / 2), maxChars - suffix.length),
-  );
-  const suffixBudget = Math.max(0, maxChars - bodyBudget);
+  if (suffix.length >= maxChars) {
+    // Suffix alone exceeds the cap (tool-heavy turns). Current main evicts the
+    // structured body entirely; instead reserve it a floor share (up to half)
+    // and keep the suffix TAIL, where workspace rules and post-compaction
+    // instructions live. Keep the suffix whole whenever it fits below.
+    const bodyBudget = Math.min(summaryBody.length, Math.floor(maxChars / 2));
+    const suffixBudget = maxChars - bodyBudget;
+    const cappedBody = capCompactionSummary(summaryBody, bodyBudget);
+    const cappedSuffix = sliceUtf16Safe(suffix, -suffixBudget);
+    return `${cappedBody}${cappedSuffix}`;
+  }
+  const bodyBudget = Math.max(0, maxChars - suffix.length);
   const cappedBody = capCompactionSummary(summaryBody, bodyBudget);
-  const cappedSuffix =
-    suffix.length > suffixBudget ? sliceUtf16Safe(suffix, -suffixBudget) : suffix;
-  return `${cappedBody}${cappedSuffix}`;
+  return `${cappedBody}${suffix}`;
 }
 
 function resolveSummaryReserveTokens(
