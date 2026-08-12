@@ -837,7 +837,9 @@ final class GatewayConnectionController {
             host: pending.isManual ? prompt.host : nil,
             port: pending.isManual ? prompt.port : nil,
             useTLS: true,
-            contextPath: pending.isManual ? pending.url.percentEncodedPath : nil,
+            contextPath: pending.isManual
+                ? URLComponents(url: pending.url, resolvingAgainstBaseURL: false)?.percentEncodedPath
+                : nil,
             lastConnectedAtMs: nil)
         guard self.persistActiveGateway(registryEntry) else {
             _ = GatewayTLSStore.clearFingerprint(stableID: pending.stableID)
