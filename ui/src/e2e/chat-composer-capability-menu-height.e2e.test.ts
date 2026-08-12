@@ -114,28 +114,7 @@ suite.define(() => {
           await page.mouse.move(menuCenter.x, menuCenter.y);
           await page.mouse.wheel(0, 1);
         }
-        const clip = await dropdown.evaluate((node) => {
-          const menu = node.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
-          const composerElement = node.closest<HTMLElement>(".agent-chat__input");
-          if (!menu || !composerElement) {
-            throw new Error("expected capability menu and composer bounds");
-          }
-          const menuRect = menu.getBoundingClientRect();
-          const composerRect = composerElement.getBoundingClientRect();
-          return {
-            x: Math.max(0, Math.min(menuRect.left, composerRect.left) - 20),
-            y: Math.max(0, menuRect.top - 20),
-            width:
-              Math.max(menuRect.right, composerRect.right) -
-              Math.min(menuRect.left, composerRect.left) +
-              40,
-            height: Math.max(menuRect.bottom, composerRect.bottom) - menuRect.top + 40,
-          };
-        });
-        await page.screenshot({
-          path: path.join(artifactDir, `${theme}-${captureStage}.png`),
-          clip,
-        });
+        await page.screenshot({ path: path.join(artifactDir, `${theme}-${captureStage}.png`) });
       };
 
       if (captureStage === "before") {
@@ -166,11 +145,14 @@ suite.define(() => {
               "--chat-composer-popover-max-height",
             ),
           ),
+          viewportHeight: window.innerHeight,
         };
       });
+      const compactHeightCap = Math.min(layout.token, 420, layout.viewportHeight * 0.5);
       expect(layout.scrollHeight).toBeGreaterThan(layout.clientHeight);
       expect(layout.scrollTop).toBeGreaterThan(0);
-      expect(layout.maxHeight).toBeLessThanOrEqual(layout.token + 1);
+      expect(layout.maxHeight).toBeLessThanOrEqual(compactHeightCap + 1);
+      expect(layout.clientHeight).toBeLessThanOrEqual(compactHeightCap + 1);
       expect(layout.overscrollY).toBe("contain");
       expect(layout.backOffset).toBeGreaterThanOrEqual(0);
       expect(layout.backOffset).toBeLessThanOrEqual(1);
