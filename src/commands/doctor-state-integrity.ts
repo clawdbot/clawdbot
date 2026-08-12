@@ -1316,6 +1316,10 @@ export async function noteStateIntegrity(
     );
   }
 
+  // Meeting transcripts live in the shared state database, so their migration
+  // must not depend on resolving one default agent for per-agent session repairs.
+  await noteMeetingTranscriptOwnership({ cfg, env, prompter, warnings, changes });
+
   if (!agentId || !sessionsDir || !storePath || !absoluteStorePath || !displaySessionsDir) {
     warnings.push(
       "- Skipped default-agent session and transcript integrity checks because the agent roster does not have exactly one default.",
@@ -1570,8 +1574,6 @@ export async function noteStateIntegrity(
       }
     }
   }
-
-  await noteMeetingTranscriptOwnership({ cfg, env, prompter, warnings, changes });
 
   if (warnings.length > 0) {
     noteFn(warnings.join("\n"), "State integrity");
