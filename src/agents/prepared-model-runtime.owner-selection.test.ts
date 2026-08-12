@@ -582,7 +582,7 @@ describe("prepared model runtime owner selection", () => {
     }
   });
 
-  it("serializes on-demand full catalogs while preserving agent credentials", async () => {
+  it("serializes on-demand full catalogs across prepared owners", async () => {
     mocks.configuredAgentIds = ["agent-a", "agent-b"];
     mocks.configuredWorkspaces.set("agent-a", "/tmp/shared-prepared-runtime-workspace");
     mocks.configuredWorkspaces.set("agent-b", "/tmp/shared-prepared-runtime-workspace");
@@ -624,16 +624,6 @@ describe("prepared model runtime owner selection", () => {
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
     expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(2);
     expect(peakActivePlans).toBe(1);
-    expect(
-      mocks.runPreparedModelCatalogWorker.mock.calls.map((call) => {
-        const credential = (call[0] as { input: { credentials: Record<string, unknown> } }).input
-          .credentials.custom as { type?: string; key?: string } | undefined;
-        if (credential?.type !== "api_key") {
-          throw new Error("expected prepared custom API key");
-        }
-        return credential.key;
-      }),
-    ).toEqual(["test-key:/tmp/configured-agent-a", "test-key:/tmp/configured-agent-b"]);
   });
 
   it("serializes a lazy catalog plan before a superseding generation", async () => {

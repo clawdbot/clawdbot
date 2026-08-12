@@ -11,9 +11,14 @@ import {
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owner.js";
+import { getPreparedModelFullCatalogAuth } from "./prepared-model-catalog-worker.js";
 import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
 import type { ResolvedPublishedModelCatalogOwner } from "./prepared-model-catalog.types.js";
-import { copyPreparedModelRuntimeAuthState } from "./prepared-model-runtime-auth.js";
+import {
+  getPreparedModelRuntimeAuthMaterializations,
+  setPreparedModelRuntimeAuthMaterializations,
+  setPreparedModelRuntimeAuthStore,
+} from "./prepared-model-runtime-auth.js";
 import { isPreparedModelCatalogFull } from "./prepared-model-runtime.facts.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -63,11 +68,22 @@ async function materializeRequestedModelCatalog(
     return snapshot;
   }
   const modelCatalog = await snapshot.loadFullModelCatalog();
-  if (modelCatalog === snapshot.modelCatalog) {
-    return snapshot;
+  const fullAuth = getPreparedModelFullCatalogAuth(modelCatalog);
+  if (!fullAuth) {
+    throw new Error("prepared full model catalog omitted its auth generation");
   }
-  const materialized = Object.freeze({ ...snapshot, modelCatalog });
-  copyPreparedModelRuntimeAuthState(snapshot, materialized);
+  const materialized = Object.freeze({
+    ...snapshot,
+    authModes: fullAuth.authModes,
+    modelCatalog,
+  });
+  // A materialized full read owns the worker's refreshed auth generation. Do not copy the
+  // original loader or Gateway projection would start a second, split refresh after discovery.
+  setPreparedModelRuntimeAuthStore(materialized, fullAuth.authStore);
+  setPreparedModelRuntimeAuthMaterializations(
+    materialized,
+    getPreparedModelRuntimeAuthMaterializations(snapshot),
+  );
   return materialized;
 }
 

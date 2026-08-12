@@ -4,6 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
@@ -13,14 +14,12 @@ import {
   type PreparedModelRuntimeAgentFacts,
 } from "./prepared-model-runtime.facts.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
-import type { AuthStorageData } from "./sessions/auth-storage.js";
 
 export type PreparedModelCatalogWorkerInput = Readonly<{
   kind: "catalog";
   generationFingerprint: string;
   input: PreparedModelRuntimeInput;
   authStore: AuthProfileStore;
-  credentials: Readonly<AuthStorageData>;
   providerIds: readonly string[];
 }>;
 
@@ -41,6 +40,8 @@ export type PreparedModelWorkerResult =
       kind: "catalog";
       generationFingerprint: string;
       snapshot: ModelCatalogSnapshot;
+      authStore: AuthProfileStore;
+      authModes: PreparedAgentCredentialModes;
     }>
   | Readonly<{
       status: "ok";
@@ -49,6 +50,22 @@ export type PreparedModelWorkerResult =
       authStore: AuthProfileStore;
     }>
   | Readonly<{ status: "failed"; error: string }>;
+
+const authByFullCatalog = new WeakMap<
+  object,
+  Readonly<{ authStore: AuthProfileStore; authModes: PreparedAgentCredentialModes }>
+>();
+
+export function setPreparedModelFullCatalogAuth(
+  modelCatalog: object,
+  auth: Readonly<{ authStore: AuthProfileStore; authModes: PreparedAgentCredentialModes }>,
+): void {
+  authByFullCatalog.set(modelCatalog, auth);
+}
+
+export function getPreparedModelFullCatalogAuth(modelCatalog: object) {
+  return authByFullCatalog.get(modelCatalog);
+}
 
 // Cold source/plugin loading can take well over a minute. Three minutes preserves exact full-view
 // discovery while bounding a wedged provider; expiry rejects and never returns partial results.
@@ -68,14 +85,12 @@ function fingerprintPreparedModelCatalogPlugins(snapshot: PluginMetadataSnapshot
 export function fingerprintPreparedModelCatalogGeneration(params: {
   input: PreparedModelRuntimeInput;
   authStore: AuthProfileStore;
-  credentials: Readonly<AuthStorageData>;
   providerIds: readonly string[];
   pluginMetadataSnapshot: PluginMetadataSnapshot;
 }): string {
   return fingerprintPreparedRuntimeFacts({
     input: params.input,
     authStore: params.authStore,
-    credentials: params.credentials,
     providerIds: params.providerIds,
     pluginFingerprint: fingerprintPreparedModelCatalogPlugins(params.pluginMetadataSnapshot),
   });
@@ -110,7 +125,7 @@ export function createPreparedModelCatalogWorkerInput(params: {
   const input: PreparedModelRuntimeInput = {
     ...(source.agentId ? { agentId: source.agentId } : {}),
     agentDir: source.agentDir,
-    inheritedAuthDir: source.agentDir,
+    inheritedAuthDir: source.inheritedAuthDir ?? source.agentDir,
     ...(source.workspaceDir ? { workspaceDir: source.workspaceDir } : {}),
     ...(source.readOnly ? { readOnly: true } : {}),
     skipCredentials: true,
@@ -122,20 +137,17 @@ export function createPreparedModelCatalogWorkerInput(params: {
     config: source.config,
   };
   const authStore = projectWorkerAuthStore(params.agentFacts.authStore);
-  const credentials = { ...params.agentFacts.credentials };
   const providerIds = [...params.agentFacts.providerIds];
   return {
     kind: "catalog",
     generationFingerprint: fingerprintPreparedModelCatalogGeneration({
       input,
       authStore,
-      credentials,
       providerIds,
       pluginMetadataSnapshot: params.pluginMetadataSnapshot,
     }),
     input,
     authStore,
-    credentials,
     providerIds,
   };
 }
@@ -304,7 +316,12 @@ export function runPreparedModelCatalogWorker(params: {
       if (message.kind !== "catalog") {
         throw new Error("prepared model catalog worker returned an auth refresh result");
       }
-      return markPreparedModelCatalogFull(message.snapshot);
+      const modelCatalog = markPreparedModelCatalogFull(message.snapshot);
+      setPreparedModelFullCatalogAuth(modelCatalog, {
+        authStore: message.authStore,
+        authModes: message.authModes,
+      });
+      return modelCatalog;
     },
   });
 }

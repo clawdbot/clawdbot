@@ -7,7 +7,11 @@ import {
 } from "../../agents/agent-auth-credentials.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import { setPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
+import { setPreparedModelFullCatalogAuth } from "../../agents/prepared-model-catalog-worker.js";
+import {
+  getPreparedModelRuntimeAuthStore,
+  setPreparedModelRuntimeAuthStore,
+} from "../../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -490,10 +494,15 @@ describe("gateway chat metadata runtime", () => {
       "openai",
       "openai-chatgpt-responses",
     );
-    const loadFullModelCatalog = vi.fn(async () => ({
+    const fullCatalog = {
       ...owner.modelCatalog,
       providerOutcomes: [{ provider: "openai", status: "auth-rejected" as const }],
-    }));
+    };
+    setPreparedModelFullCatalogAuth(fullCatalog, {
+      authStore: getPreparedModelRuntimeAuthStore(owner)!,
+      authModes: owner.authModes,
+    });
+    const loadFullModelCatalog = vi.fn(async () => fullCatalog);
     harness.setOwner({
       ...owner,
       loadFullModelCatalog,

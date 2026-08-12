@@ -19,6 +19,7 @@ import {
 } from "./plugin-model-catalog.js";
 import {
   createPreparedModelCatalogWorkerInput,
+  getPreparedModelFullCatalogAuth,
   runPreparedModelCatalogWorker,
 } from "./prepared-model-catalog-worker.js";
 import { copyPreparedModelRuntimeAuthState } from "./prepared-model-runtime-auth.js";
@@ -37,6 +38,7 @@ const REF_ONLY_API_ENV = "OPENCLAW_WORKER_REF_ONLY_API_KEY";
 const REF_ONLY_TOKEN_PROVIDER_ID = `${PROVIDER_ID}-ref-token`;
 const REF_ONLY_TOKEN_ENV = "OPENCLAW_WORKER_REF_ONLY_TOKEN";
 const DURABLE_AUTH_PROVIDER_ID = `${PROVIDER_ID}-durable-auth`;
+const DURABLE_AUTH_KEY = "post-startup-durable-key-not-real";
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
@@ -68,6 +70,7 @@ module.exports = {
         run(context) {
           const refOnlyApi = context.resolveProviderApiKey(${JSON.stringify(REF_ONLY_API_PROVIDER_ID)}).apiKey;
           const refOnlyToken = context.resolveProviderApiKey(${JSON.stringify(REF_ONLY_TOKEN_PROVIDER_ID)}).apiKey;
+          const durableAuth = context.resolveProviderApiKey(${JSON.stringify(DURABLE_AUTH_PROVIDER_ID)}).apiKey;
           const hasRefOnlyApi = refOnlyApi === ${JSON.stringify(REF_ONLY_API_ENV)} || refOnlyApi === process.env[${JSON.stringify(REF_ONLY_API_ENV)}];
           const hasRefOnlyToken = refOnlyToken === ${JSON.stringify(REF_ONLY_TOKEN_ENV)} || refOnlyToken === process.env[${JSON.stringify(REF_ONLY_TOKEN_ENV)}];
           return { provider: {
@@ -79,6 +82,9 @@ module.exports = {
                 id: \`ref-proof-api-\${hasRefOnlyApi}-token-\${hasRefOnlyToken}\`,
                 name: "Ref-only worker proof",
               },
+              ...(durableAuth === ${JSON.stringify(DURABLE_AUTH_KEY)}
+                ? [{ id: "post-startup-auth-model", name: "Post-startup auth model" }]
+                : []),
             ],
           } };
         },
@@ -211,6 +217,42 @@ async function waitForMarker(marker: string): Promise<void> {
 }
 
 describe("prepared model catalog worker boundary", () => {
+  it("refreshes durable auth before provider hooks decide catalog membership", async () => {
+    const fixture = await createStaticSnapshot(0);
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [`${DURABLE_AUTH_PROVIDER_ID}:default`]: {
+            type: "api_key",
+            provider: DURABLE_AUTH_PROVIDER_ID,
+            key: DURABLE_AUTH_KEY,
+          },
+        },
+      },
+      fixture.agentDir,
+    );
+
+    const catalog = await fixture.snapshot.loadFullModelCatalog?.();
+    expect(catalog?.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          provider: PROVIDER_ID,
+          id: "post-startup-auth-model",
+        }),
+      ]),
+    );
+    expect(getPreparedModelFullCatalogAuth(catalog!)).toMatchObject({
+      authStore: {
+        profiles: {
+          [`${DURABLE_AUTH_PROVIDER_ID}:default`]: expect.objectContaining({
+            key: DURABLE_AUTH_KEY,
+          }),
+        },
+      },
+    });
+  });
+
   it("refreshes durable auth profiles added, updated, and removed after startup", async () => {
     const fixture = await createStaticSnapshot(0);
     const route = {

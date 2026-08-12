@@ -118,9 +118,7 @@ function createFullModelCatalogAccess(params: {
   pluginGeneration: PreparedModelRuntimePluginGeneration;
   agentBuildCompletions: Map<string, Promise<void>>;
   isCurrent: () => boolean;
-  eagerCatalog?: ModelCatalogSnapshot;
 }): PreparedModelRuntimeCatalogAccess {
-  const eagerCatalog = params.eagerCatalog;
   // Concurrent readers share discovery, but completed results are discarded so
   // refreshable providers can publish changed inventory on the next explicit read.
   let pending: Promise<ModelCatalogSnapshot> | undefined;
@@ -168,9 +166,6 @@ function createFullModelCatalogAccess(params: {
       return promise;
     },
     loadFullModelCatalog: () => {
-      if (eagerCatalog) {
-        return Promise.resolve(eagerCatalog);
-      }
       if (!pending) {
         pending = runSerializedPreparedModelRuntimeTask({
           agentDir: params.agentFacts.input.agentDir,
@@ -501,7 +496,6 @@ async function buildSnapshotBatch(
           pluginGeneration,
           agentBuildCompletions,
           isCurrent: generationGuards.get(input) ?? (() => false),
-          ...(catalogMode === "live" ? { eagerCatalog: catalogFacts.modelCatalog } : {}),
         }),
       ),
       pluginGeneration,
