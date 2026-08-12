@@ -121,7 +121,7 @@ export type ChatThreadProps = {
   backgroundTasks?: BackgroundTasksProps;
 };
 
-export type TranscriptInteractionProps = Pick<
+type TranscriptInteractionProps = Pick<
   ChatThreadProps,
   | "paneId"
   | "runActive"

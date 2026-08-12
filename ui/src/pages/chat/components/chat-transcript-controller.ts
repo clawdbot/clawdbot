@@ -303,9 +303,9 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     this.pendingScrollOffset = null;
   }
 
-  render(
-    rows: readonly TranscriptRow[],
-    renderRow: (row: TranscriptRow) => unknown,
+  render<T>(
+    rows: readonly TranscriptRow<T>[],
+    renderRow: (row: TranscriptRow<T>) => unknown,
     announcement: TranscriptAnnouncement | null,
     announce: boolean,
     overlay: unknown = nothing,

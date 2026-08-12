@@ -51,15 +51,15 @@ import {
   type ChatThreadProps,
   type ChatThreadState,
 } from "./chat-thread-interactions.ts";
-import {
-  type ChatTranscriptSession,
-  type TranscriptAnnouncement,
-  type TranscriptRow,
+import type {
+  ChatTranscriptSession,
+  TranscriptAnnouncement,
+  TranscriptRow,
 } from "./chat-transcript-controller.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
-export type ChatTranscriptProjection = {
+type ChatTranscriptProjection = {
   isDirectThread: boolean;
   isEmpty: boolean;
   showLoadingSkeleton: boolean;
@@ -177,7 +177,7 @@ function guardChatRenderItems(
 export function projectChatTranscript(
   props: ChatThreadProps,
   transcript: ChatTranscriptSession,
-): TemplateResult {
+): ChatTranscriptProjection {
   const state = getTranscriptState(props.paneId);
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const displayStream = props.stream ?? null;

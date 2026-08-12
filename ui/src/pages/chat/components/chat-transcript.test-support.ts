@@ -6,7 +6,7 @@ export const observedElements = new Set<Element>();
 export const resizeObservers = new Set<RecordingResizeObserver>();
 export const transcriptDomState = { measuredRowHeight: 100 };
 
-export class RecordingResizeObserver implements ResizeObserver {
+class RecordingResizeObserver implements ResizeObserver {
   private readonly targets = new Set<Element>();
 
   constructor(private readonly callback: ResizeObserverCallback) {
