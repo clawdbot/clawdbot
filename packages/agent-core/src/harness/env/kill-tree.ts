@@ -190,91 +190,57 @@ function getProcessStartTime(pid: number): string | undefined {
 }
 
 function getUnixProcessTreePids(rootPid: number): ProcessSnapshot[] {
-  if (!Number.isFinite(rootPid) || rootPid <= 1) {
-    return [];
-  }
-
+  if (!Number.isFinite(rootPid) || rootPid <= 1) return [];
   const childrenMap = new Map<number, number[]>();
 
   if (process.platform === "linux") {
     try {
-      const entries = readdirSync("/proc");
-      for (const entry of entries) {
-        if (!/^\d+$/.test(entry)) {
-          continue;
-        }
-        try {
-          const stat = readFileSync(`/proc/${entry}/stat`, "utf8");
-          const commEnd = stat.lastIndexOf(")");
-          if (commEnd < 0) {
-            continue;
-          }
-          const fields = stat
-            .slice(commEnd + 1)
-            .trim()
-            .split(/\s+/);
-          const ppid = Number(fields[1]);
-          const pid = Number(entry);
-          if (Number.isInteger(ppid) && Number.isInteger(pid) && ppid > 0 && pid > 1) {
-            let list = childrenMap.get(ppid);
-            if (!list) {
-              list = [];
+      for (const entry of readdirSync("/proc")) {
+        const pid = Number(entry);
+        if (pid > 1) {
+          try {
+            const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+            const ppid = Number(
+              stat
+                .slice(stat.lastIndexOf(")") + 1)
+                .trim()
+                .split(/\s+/)[1],
+            );
+            if (ppid > 0) {
+              const list = childrenMap.get(ppid) ?? [];
+              list.push(pid);
               childrenMap.set(ppid, list);
             }
-            list.push(pid);
-          }
-        } catch {
-          // Ignore process that disappeared mid-scan
+          } catch {}
         }
       }
-    } catch {
-      // Procfs unavailable or failed
-    }
+    } catch {}
   }
 
   if (childrenMap.size === 0) {
     try {
-      const res = spawnSync("ps", ["-ax", "-o", "pid=,ppid="], {
-        encoding: "utf8",
-        timeout: 1000,
-      });
-      if (!res.error && res.status === 0 && res.stdout) {
-        const lines = res.stdout.split("\n");
-        for (const line of lines) {
-          const parts = line.trim().split(/\s+/);
-          if (parts.length >= 2) {
-            const pid = Number(parts[0]);
-            const ppid = Number(parts[1]);
-            if (Number.isInteger(ppid) && Number.isInteger(pid) && ppid > 0 && pid > 1) {
-              let list = childrenMap.get(ppid);
-              if (!list) {
-                list = [];
-                childrenMap.set(ppid, list);
-              }
-              list.push(pid);
-            }
+      const res = spawnSync("ps", ["-ax", "-o", "pid=,ppid="], { encoding: "utf8", timeout: 1000 });
+      if (res.stdout) {
+        for (const line of res.stdout.split("\n")) {
+          const [pid, ppid] = line.trim().split(/\s+/).map(Number);
+          if (ppid > 0 && pid > 1) {
+            const list = childrenMap.get(ppid) ?? [];
+            list.push(pid);
+            childrenMap.set(ppid, list);
           }
         }
       }
-    } catch {
-      // Ignore ps failure
-    }
+    } catch {}
   }
 
   const result: ProcessSnapshot[] = [];
   const visited = new Set<number>();
 
   function traverse(currentPid: number) {
-    if (visited.has(currentPid)) {
-      return;
-    }
+    if (visited.has(currentPid)) return;
     visited.add(currentPid);
-
-    const children = childrenMap.get(currentPid) ?? [];
-    for (const childPid of children) {
-      if (childPid > 1 && childPid !== currentPid) {
-        traverse(childPid);
-      }
+    for (const childPid of childrenMap.get(currentPid) ?? []) {
+      if (childPid > 1 && childPid !== currentPid) traverse(childPid);
     }
     result.push({ pid: currentPid, startTime: getProcessStartTime(currentPid) });
   }
@@ -293,28 +259,22 @@ function signalProcessTreeUnix(
     try {
       process.kill(-pid, signal);
       return [];
-    } catch {
-      // Process group does not exist or we lack permission; try direct pid tree.
-    }
+    } catch {}
   }
 
-  const resolvedPidsToSignal = pidsToSignal ?? getUnixProcessTreePids(pid);
-
-  for (const p of resolvedPidsToSignal) {
+  const resolved = pidsToSignal ?? getUnixProcessTreePids(pid);
+  for (const p of resolved) {
     try {
       if (
-        signal === "SIGKILL" &&
-        (p.startTime === undefined || getProcessStartTime(p.pid) !== p.startTime)
+        signal !== "SIGKILL" ||
+        p.startTime === undefined ||
+        getProcessStartTime(p.pid) === p.startTime
       ) {
-        continue;
+        process.kill(p.pid, signal);
       }
-      process.kill(p.pid, signal);
-    } catch {
-      // Already gone.
-    }
+    } catch {}
   }
-
-  return resolvedPidsToSignal;
+  return resolved;
 }
 
 function runTaskkill(args: string[], onExit?: (code: number | null) => void): Promise<void> {
