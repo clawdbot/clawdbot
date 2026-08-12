@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { isValidProfileName } from "../cli/profile-utils.js";
+import { resolveProfileStateDir } from "../cli/profile-utils.js";
 import { resolveGatewayNativeServiceIdentityConflict } from "../daemon/constants.js";
 import { resolveHomeRelativePath, resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
@@ -126,18 +126,6 @@ export function isDefaultStateDir(
   );
 }
 
-/** Canonical state directory name for the selected profile, mirroring root `--profile`. */
-function profileStateDirName(env: NodeJS.ProcessEnv): string | null {
-  const profile = env.OPENCLAW_PROFILE?.trim();
-  if (!profile || profile.toLowerCase() === "default") {
-    return NEW_STATE_DIRNAME;
-  }
-  if (!isValidProfileName(profile)) {
-    return null;
-  }
-  return `${NEW_STATE_DIRNAME}-${profile}`;
-}
-
 export function resolveNativeServiceProfileConflict(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
@@ -187,13 +175,14 @@ export function isDefaultInstallIdentity(
   ) {
     return false;
   }
-  const stateDirName = profileStateDirName(env);
-  // Environment profiles can bypass root CLI parsing. Reject them before path
-  // construction so separators or dot segments cannot authorize a host service.
-  if (!stateDirName) {
+  let canonicalStateDir: string;
+  try {
+    canonicalStateDir = resolveProfileStateDir(env.OPENCLAW_PROFILE ?? "default", env, homedir);
+  } catch {
+    // Environment profiles can bypass root CLI parsing. Reject invalid names
+    // before path construction so separators cannot authorize a host service.
     return false;
   }
-  const canonicalStateDir = path.join(accountHome, stateDirName);
   if (
     normalizePathForComparison(resolveStateDir(env, envHomedir(env))) !==
     normalizePathForComparison(canonicalStateDir)
@@ -202,7 +191,7 @@ export function isDefaultInstallIdentity(
   }
   // Default installs historically allow implicit legacy config discovery.
   // Named profiles must resolve their own config so they cannot inherit the default profile.
-  if (stateDirName === NEW_STATE_DIRNAME && !env.OPENCLAW_CONFIG_PATH?.trim()) {
+  if (!isNamedProfile(env) && !env.OPENCLAW_CONFIG_PATH?.trim()) {
     return true;
   }
   return (

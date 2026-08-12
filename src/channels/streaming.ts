@@ -820,7 +820,7 @@ export function resolveChannelStreamingPreviewToolProgress(
   /**
    * The channel's resolved stream mode. Only the caller knows it: channels pick
    * their own default when `streaming.mode` is unset (Telegram uses "progress",
-   * Discord uses "off", and Slack uses "partial"), and this helper has no
+   * Discord uses "off", and Slack uses "progress"), and this helper has no
    * channel identity to guess with. Omitting it reads the configured mode and
    * treats unset as "partial".
    */
@@ -885,6 +885,7 @@ export function resolveChannelStreamingSuppressDefaultToolProgressMessages(
   entry: StreamingCompatEntry | null | undefined,
   options?: {
     draftStreamActive?: boolean;
+    mode?: StreamingMode;
     previewToolProgressEnabled?: boolean;
     previewStreamingEnabled?: boolean;
   },
@@ -892,7 +893,7 @@ export function resolveChannelStreamingSuppressDefaultToolProgressMessages(
   if (options?.draftStreamActive === false || options?.previewStreamingEnabled === false) {
     return false;
   }
-  const mode = resolveChannelPreviewStreamMode(entry, "off");
+  const mode = options?.mode ?? resolveChannelPreviewStreamMode(entry, "off");
   if (mode === "off") {
     return false;
   }

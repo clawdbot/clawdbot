@@ -908,6 +908,43 @@ describe("createInboundDebouncer", () => {
     expect(completed).toEqual(["2", "1"]);
   });
 
+  it("hands pre-admission completion failures to the source lifecycle once", async () => {
+    const sessionError = new Error("Session changed while starting work. Retry.");
+    const onFailed = vi.fn(async () => {});
+    const onError = vi.fn();
+    let attempt = 0;
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      onFlush: (_items, createFlush) =>
+        createFlush({
+          lifecycle: { onFailed },
+          dispatch: async (lifecycle) => {
+            attempt += 1;
+            if (attempt === 1) {
+              throw sessionError;
+            }
+            await lifecycle.onAdopted();
+            throw new Error("post-adoption failure");
+          },
+        }),
+      onError,
+    });
+
+    await expect(debouncer.enqueue({ key: "a", id: "failed-before-admission" })).resolves.toBe(
+      undefined,
+    );
+    await expect(debouncer.enqueue({ key: "a", id: "failed-after-admission" })).resolves.toBe(
+      undefined,
+    );
+    await debouncer.drain();
+
+    expect(onFailed).toHaveBeenCalledOnce();
+    expect(onFailed).toHaveBeenCalledWith(sessionError);
+    expect(onError).toHaveBeenCalledTimes(2);
+    expect(onError.mock.calls[0]?.[0]).toBe(sessionError);
+  });
+
   it("drains same-key flushes queued before their completion is tracked", async () => {
     const started: string[] = [];
     let releaseFirst!: () => void;
@@ -969,6 +1006,45 @@ describe("createInboundDebouncer", () => {
     await expect(debouncer.enqueue({ key: "a", id: "2" })).resolves.toBeUndefined();
 
     expect(calls).toEqual(["1", "2"]);
+  });
+
+  it("releases serialized keys when custom completion rejects before admission", async () => {
+    const failure = new Error("custom flush failed");
+    const calls: string[] = [];
+    const reported: unknown[] = [];
+    const pendingAdmission = new Promise<void>(() => {});
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      serializeImmediate: true,
+      buildKey: (item) => item.key,
+      onFlush: (items) => {
+        const id = items[0]?.id ?? "";
+        calls.push(id);
+        if (id === "first") {
+          return { admission: pendingAdmission, completion: Promise.reject(failure) };
+        }
+        return flushOnCompletion(() => {});
+      },
+      onError: (error) => {
+        reported.push(error);
+        throw new Error("observer failed");
+      },
+    });
+
+    const first = debouncer.enqueue({ key: "a", id: "first" });
+    await vi.waitFor(() => expect(calls).toEqual(["first"]));
+    const second = debouncer.enqueue({ key: "a", id: "second" });
+    const secondOutcome = await Promise.race([
+      second.then(() => "completed" as const),
+      new Promise<"stalled">((resolve) => {
+        setTimeout(() => resolve("stalled"), 100);
+      }),
+    ]);
+
+    expect(secondOutcome).toBe("completed");
+    await Promise.all([first, second, debouncer.drain()]);
+    expect(calls).toEqual(["first", "second"]);
+    expect(reported).toEqual([failure]);
   });
 
   it("does not leak unhandled rejections when a keyed flush failure is awaited", async () => {
@@ -1431,36 +1507,6 @@ describe("resolveGroupRequireMention", () => {
   });
 
   it("uses Slack fallback resolver semantics for default-account wildcard channels", async () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        slack: {
-          defaultAccount: "work",
-          accounts: {
-            work: {
-              channels: {
-                "*": { requireMention: false },
-              },
-            },
-          },
-        },
-      },
-    };
-    const ctx: TemplateContext = {
-      Provider: "slack",
-      From: "slack:channel:C123",
-      GroupSubject: "#alerts",
-    };
-    const groupResolution: GroupKeyResolution = {
-      key: "slack:group:C123",
-      channel: "slack",
-      id: "C123",
-      chatType: "group",
-    };
-
-    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
-  });
-
-  it("keeps core reply-stage resolution aligned for Slack default-account wildcard fallbacks", async () => {
     const cfg: OpenClawConfig = {
       channels: {
         slack: {

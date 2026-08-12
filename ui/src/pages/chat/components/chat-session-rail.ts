@@ -202,6 +202,24 @@ function companionHasActivity(thread: ChatSessionCompanionThread): boolean {
   );
 }
 
+const COMPANION_HINT_KEYS = {
+  busy: "chat.rail.askBusy",
+  "history-unavailable": "chat.rail.askHistoryUnavailable",
+  missing: "chat.rail.askMissing",
+  "model-unavailable": "chat.rail.askModelUnavailable",
+  "rate-limited": "chat.rail.askRateLimited",
+  unavailable: "chat.rail.askUnavailable",
+} as const satisfies Record<
+  NonNullable<ChatSessionCompanionThread["hint"]>,
+  Parameters<typeof t>[0]
+>;
+
+function companionHintKey(
+  hint: NonNullable<ChatSessionCompanionThread["hint"]>,
+): Parameters<typeof t>[0] {
+  return COMPANION_HINT_KEYS[hint];
+}
+
 export class ChatSessionRailElement extends OpenClawLightDomElement {
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) digest: SessionObserverDigest | null = null;
@@ -216,6 +234,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
     pendingQuestion: null,
     failedQuestion: null,
     hint: null,
+    retryable: false,
     draft: "",
   };
   @property({ attribute: false }) connected = false;
@@ -495,12 +514,19 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
               <article class="chat-session-rail__exchange chat-session-rail__exchange--error">
                 <div class="chat-session-rail__question">${this.companion.failedQuestion}</div>
                 <div class="chat-session-rail__hint">
-                  ${t(
-                    this.companion.hint === "busy"
-                      ? "chat.rail.askBusy"
-                      : "chat.rail.askUnavailable",
-                  )}
+                  ${t(companionHintKey(this.companion.hint))}
                 </div>
+                ${this.companion.retryable && this.connected && this.onSubmit
+                  ? html`
+                      <button
+                        class="btn btn--secondary chat-session-rail__retry"
+                        type="button"
+                        @click=${() => this.onSubmit?.(this.companion.failedQuestion ?? "")}
+                      >
+                        ${t("chat.rail.askRetry")}
+                      </button>
+                    `
+                  : nothing}
               </article>
             `
           : nothing}

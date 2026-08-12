@@ -6,10 +6,7 @@ import {
   type TranscriptTurnBoundary,
 } from "../../config/sessions/session-accessor.js";
 import type { TranscriptTurnAdmission } from "../../config/sessions/transcript-entry-anchor.js";
-import type {
-  ContextEngine,
-  ContextEngineTurnAdvancementIdempotency,
-} from "../../context-engine/types.js";
+import type { ContextEngine } from "../../context-engine/types.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -40,16 +37,13 @@ type AcceptedContextEngineTurnOutboxPayload = Readonly<{
   boundary: TranscriptTurnBoundary;
   isHeartbeat: boolean;
   state: "accepted";
-  turnAdvancementIdempotency?: ContextEngineTurnAdvancementIdempotency;
 }>;
 
 type ReadyContextEngineTurnOutboxPayload = Readonly<{
   boundary: TranscriptTurnBoundary;
   isHeartbeat: boolean;
   messages: AgentMessage[];
-  prePromptMessageCount?: number;
   state: "ready";
-  turnAdvancementIdempotency?: ContextEngineTurnAdvancementIdempotency;
 }>;
 
 type ContextEngineTurnReadFailureKind = Exclude<
@@ -201,7 +195,6 @@ export function acceptContextEngineTurnIntent(params: {
   engineId: string;
   isHeartbeat: boolean;
   ownerPluginId?: string;
-  turnAdvancementIdempotency: ContextEngineTurnAdvancementIdempotency;
 }): void {
   writeContextEngineTurnOutboxPayload({
     ...params,
@@ -209,7 +202,6 @@ export function acceptContextEngineTurnIntent(params: {
       boundary: params.boundary,
       isHeartbeat: params.isHeartbeat,
       state: "accepted",
-      turnAdvancementIdempotency: params.turnAdvancementIdempotency,
     },
   });
 }
@@ -306,10 +298,6 @@ export function recoverContextEngineTurnOutbox(params: {
       boundary: payload.boundary,
       maxEvents: RECOVERED_TURN_MAX_EVENTS,
       maxBytes: RECOVERED_TURN_MAX_BYTES,
-      messageRange:
-        payload.turnAdvancementIdempotency === "atomic-idempotent-turn-local-v1"
-          ? "turn-local-v1"
-          : "full-transcript-v1",
     });
     if (closedTurn.kind !== "ok") {
       if (isRetryableContextEngineTurnReadFailure(closedTurn.kind)) {
@@ -339,11 +327,6 @@ export function recoverContextEngineTurnOutbox(params: {
         boundary: payload.boundary,
         isHeartbeat: payload.isHeartbeat,
         messages: closedTurn.messages,
-        prePromptMessageCount:
-          payload.turnAdvancementIdempotency === "atomic-idempotent-turn-local-v1"
-            ? undefined
-            : closedTurn.prePromptMessageCount,
-        turnAdvancementIdempotency: payload.turnAdvancementIdempotency,
       },
     });
   }
@@ -358,10 +341,7 @@ export async function drainContextEngineTurnOutbox(params: {
   limit?: number;
   warn: (message: string) => void;
 }): Promise<{ pending: boolean }> {
-  if (
-    typeof params.engine.commitTurn !== "function" &&
-    typeof params.engine.commitTurnLocal !== "function"
-  ) {
+  if (typeof params.engine.commitTurn !== "function") {
     return { pending: false };
   }
   let remaining = Math.max(0, params.limit ?? 16);
@@ -463,17 +443,9 @@ async function commitPendingContextEngineTurn(
       },
       isHeartbeat: payload.isHeartbeat,
     };
-    const turnLocal = payload.turnAdvancementIdempotency === "atomic-idempotent-turn-local-v1";
-    const result = turnLocal
-      ? await params.engine.commitTurnLocal?.(commonParams)
-      : await params.engine.commitTurn?.({
-          ...commonParams,
-          prePromptMessageCount: payload.prePromptMessageCount ?? 0,
-        });
+    const result = await params.engine.commitTurn?.(commonParams);
     if (!result) {
-      throw new Error(
-        `context engine does not implement ${turnLocal ? "commitTurnLocal" : "commitTurn"}`,
-      );
+      throw new Error("context engine does not implement commitTurn");
     }
     if (result.status !== "committed" && result.status !== "duplicate") {
       throw new Error(`invalid commitTurn result status: ${String(result.status)}`);

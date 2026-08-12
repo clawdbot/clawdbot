@@ -325,7 +325,16 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   LocationAddress?: string;
   LocationSource?: string;
   LocationIsLive?: boolean;
+  LocationLivePeriodSeconds?: number;
   LocationCaption?: string;
+  /** Stable identity of the provider update that carried this message. */
+  ProviderUpdateId?: string;
+  /** Provider update kind, for example `message` or `edited_message`. */
+  ProviderUpdateKind?: string;
+  /** Provider-native timestamp for the original message. */
+  ProviderMessageTimestamp?: number;
+  /** Provider-native timestamp for an edited message update. */
+  ProviderEditTimestamp?: number;
   /** Provider label. */
   Provider?: string;
   /** Provider surface label. Prefer this over `Provider` when available. */

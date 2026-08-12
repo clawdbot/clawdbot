@@ -25,11 +25,8 @@ import { resolveOutboundAttachmentFromBuffer } from "../../media/outbound-attach
 import { MEDIA_MAX_BYTES } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
-import { readBooleanParam as readBooleanParamShared } from "../../plugin-sdk/boolean-param.js";
+import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
-
-/** Shared boolean param reader used by message-action argument normalization. */
-export const readBooleanParam = readBooleanParamShared;
 
 const BASE_ACTION_MEDIA_SOURCE_PARAM_KEYS = [
   "media",
@@ -702,8 +699,8 @@ export async function hydrateAttachmentParamsForAction(params: {
     return;
   }
   const forceDocument =
-    readBooleanParamShared(params.args, "forceDocument") ??
-    readBooleanParamShared(params.args, "asDocument") ??
+    readBooleanParam(params.args, "forceDocument") ??
+    readBooleanParam(params.args, "asDocument") ??
     false;
   await hydrateAttachmentActionPayload({
     cfg: params.cfg,

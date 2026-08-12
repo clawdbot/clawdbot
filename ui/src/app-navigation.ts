@@ -1,9 +1,9 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 // Control UI app navigation defines sidebar and settings presentation metadata.
 import type { RouteId } from "./app-route-paths.ts";
 import type { IconName } from "./components/icons.ts";
 import { i18n, t } from "./i18n/index.ts";
-import { normalizeLowercaseStringOrEmpty } from "./lib/string-coerce.ts";
 
 export type NavigationRouteId = RouteId;
 

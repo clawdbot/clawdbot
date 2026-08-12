@@ -139,7 +139,7 @@ creates a device pairing request that must be approved.
 Use an already connected Control UI session with `operator.admin` access:
 
 1. Open the Control UI and go to **Settings → Devices**.
-2. On the **Devices** page, click **Pair mobile device**.
+2. On the **Devices** page, click **Pair device**.
 3. Keep **Full access (recommended)**, or select **Limited access** to omit
    administrative Gateway controls.
 4. Click **Create setup code**.

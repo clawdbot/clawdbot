@@ -17,7 +17,10 @@
  *   {@link createAuthRateLimiter} and pass it where needed.
  */
 
-import { resolveIntegerOption, resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+import {
+  resolveIntegerOption,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { isLoopbackAddress, resolveClientIp } from "./net.js";
 
 // ---------------------------------------------------------------------------
@@ -56,9 +59,15 @@ export const AUTH_RATE_LIMIT_SCOPE_NODE_REAPPROVAL = "node-reapproval";
 // device signature can queue the bootstrap-pairing flow behind their
 // requests, blocking legitimate node onboarding during the attack.
 export const AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN = "bootstrap-token";
+// Public join-code exchange burns SQLite state, so misses are serialized and
+// throttled before they can queue unbounded writes behind the shared DB lock.
+export const AUTH_RATE_LIMIT_SCOPE_DEVICE_JOIN = "device-join";
 // Public watchOS challenge issuance is throttled separately from credential
 // failures so challenge floods cannot displace legitimate device handshakes.
 export const AUTH_RATE_LIMIT_SCOPE_WATCH_CHALLENGE = "watch-challenge";
+// Public worker admission verifies a high-entropy dispatch credential, but
+// failures still need their own per-IP budget before store-backed retries.
+export const AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION = "worker-admission";
 export const AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH = "hook-auth";
 const BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX = "browser-origin:";
 const IDENTITY_RATE_LIMIT_KEY_PREFIX = "identity:";

@@ -1,5 +1,7 @@
 // Collects daemon status from service files, config snapshots, ports, probes, and plugin drift.
 import fs from "node:fs/promises";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import JSON5 from "json5";
 import type { classifyGatewayConnectFailure } from "../../../packages/gateway-protocol/src/connect-error-details.js";
@@ -28,6 +30,7 @@ import { projectGatewayUrlForDiagnostics } from "../../gateway/connection-detail
 import { resolveAdvertisedControlUiLinks } from "../../gateway/control-ui-links.js";
 import { gatewaySecretInputPathCanWin } from "../../gateway/credentials-secret-inputs.js";
 import { trimToUndefined } from "../../gateway/credentials.js";
+import type { HostDesktopStatus } from "../../gateway/desktop/host-source.js";
 import { resolveGatewayRequiredListenHosts } from "../../gateway/net.js";
 import { resolveGatewayProbeCredentialConfig } from "../../gateway/probe-auth.js";
 import {
@@ -39,7 +42,6 @@ import {
   inspectBestEffortPrimaryTailnetIPv4,
   resolveBestEffortGatewayBindHostForDisplay,
 } from "../../infra/network-discovery-display.js";
-import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { formatPortDiagnostics } from "../../infra/ports-format.js";
 import {
   inspectPortConnections,
@@ -174,10 +176,7 @@ function resolveSnapshotRuntimeConfig(snapshot: ConfigFileSnapshot | null): Open
 }
 
 function coerceStatusConfig(value: unknown): OpenClawConfig {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-  return value as OpenClawConfig;
+  return asNonArrayRecord(value) as OpenClawConfig;
 }
 
 function hasOwnKey(value: unknown, key: string): boolean {
@@ -314,6 +313,7 @@ export type DaemonStatus = {
     mismatch?: boolean;
   };
   gateway?: GatewayStatusSummary;
+  hostDesktop?: HostDesktopStatus;
   port?: {
     port: number;
     status: PortUsageStatus;
@@ -568,7 +568,10 @@ function hasActiveGatewayExecProbeCredential(params: {
         explicitAuth: params.explicitAuth,
         modeOverride: params.mode,
         path,
+        // Remote probe config suppresses ambient credentials across auth types.
+        // Mirror that owner here so env auth cannot hide a winning exec ref.
         remoteTokenFallback: "remote-only",
+        remotePasswordFallback: "remote-only",
       })
     ) {
       return false;
@@ -791,6 +794,10 @@ export async function gatherDaemonStatus(
     }
   }
 
+  const hostDesktop = await (
+    await import("../../gateway/desktop/host-source.js")
+  ).inspectHostDesktop({ config: daemonCfg.desktop?.host });
+
   return {
     cli: resolveCliStatusSummary(),
     logFile: resolveConfiguredLogFilePath(cliCfg),
@@ -823,6 +830,7 @@ export async function gatherDaemonStatus(
           }
         : {}),
     },
+    hostDesktop: hostDesktop.status,
     port: portStatus,
     ...(portCliStatus ? { portCli: portCliStatus } : {}),
     ...(establishedClients ? { connections: establishedClients } : {}),

@@ -3,6 +3,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   abortActiveReplyRuns,
   abortReplyRunBySessionId,
@@ -23,7 +24,7 @@ import {
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { getRuntimeConfig } from "../../config/io.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import {
@@ -40,7 +41,6 @@ import {
 import { logMessageQueuedWithBacklogPolicy } from "../../logging/diagnostic-runtime.js";
 import { diagnosticLogger as diag, logSessionStateChange } from "../../logging/diagnostic.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 import {
   ACTIVE_EMBEDDED_RUNS,
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
@@ -978,7 +978,7 @@ function tryLoadForceClearSessionSnapshot(
   try {
     const cfg = getRuntimeConfig();
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
-    const storePath = resolveStorePath(cfg.session?.store, { agentId });
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
     const entry = loadSessionEntry({ sessionKey, storePath });
     if (!entry || entry.status !== "running") {
       return undefined;

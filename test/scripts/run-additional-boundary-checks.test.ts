@@ -254,6 +254,14 @@ describe("run-additional-boundary-checks", () => {
     });
   });
 
+  it("keeps the production plugin normalization boundary in CI checks", () => {
+    expect(BOUNDARY_CHECKS).toContainEqual({
+      label: "extension-normalization-core-bypass-boundary",
+      command: "pnpm",
+      args: ["run", "lint:extensions:no-normalization-core-bypass"],
+    });
+  });
+
   it("keeps native and Node state schema versions aligned in CI", () => {
     expect(BOUNDARY_CHECKS).toContainEqual({
       label: "native-state-schema-version",

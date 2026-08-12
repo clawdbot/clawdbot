@@ -20,6 +20,7 @@ import { mintAgentRuntimeIdentityToken } from "../../agent-runtime-identity-toke
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import type { HealthSummary } from "../../health/types.js";
+import { getGatewayLocalUserIngress } from "../../local-user-ingress.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { handleGatewayRequest } from "../../server-methods.js";
 import { resolveGatewayCronCreatorAuthorityAdmission } from "../../server-methods/cron-creator-authority-admission.js";
@@ -88,6 +89,12 @@ vi.mock("../../../config/config.js", () => ({
   getRuntimeConfig: loadConfigMock,
   loadConfig: loadConfigMock,
 }));
+
+function localUserIngressFor(client: unknown) {
+  return typeof client === "object" && client !== null
+    ? getGatewayLocalUserIngress(client)
+    : undefined;
+}
 
 vi.mock("../../../config/io.js", () => ({
   getRuntimeConfig: loadConfigMock,
@@ -726,6 +733,25 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
             hasAvatar: false,
           },
         });
+        expect(localUserIngressFor(first.harness.client)).toMatchObject({
+          facts: {
+            ingress: {
+              kind: "gateway-client",
+              rawSourceRef: profileId,
+              state: "present",
+            },
+            invoker: {
+              state: "present",
+              kind: "person",
+              rawPrincipalRef: profileId,
+              displayLabel: "alice",
+            },
+            assurance: expect.arrayContaining([
+              expect.objectContaining({ kind: "durable-profile" }),
+              expect.objectContaining({ kind: "trusted-proxy" }),
+            ]),
+          },
+        });
 
         expect(setAvatar(profileId!, new Uint8Array([1, 2, 3]), "image/png").ok).toBe(true);
         const second = await connect("second");
@@ -817,6 +843,15 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
           authenticatedUserIsTailscaleProvider: true,
           authenticatedUserProfile: { displayName: "Ada Lovelace", hasAvatar: false },
         });
+        expect(localUserIngressFor(harness.client)).toMatchObject({
+          facts: {
+            invoker: { state: "present", kind: "person", displayLabel: "Ada Lovelace" },
+            assurance: expect.arrayContaining([
+              expect.objectContaining({ kind: "durable-profile" }),
+              expect.objectContaining({ kind: "tailscale-whois" }),
+            ]),
+          },
+        });
         expect(adoptTailscaleProfileAvatarMock).toHaveBeenCalledOnce();
       });
       expect(harness.socketSend).toHaveBeenCalled();
@@ -843,7 +878,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     });
   });
 
-  it("falls back to email identity when durable profile resolution fails", async () => {
+  it("keeps presence fallback but records unknown invoker when profile resolution fails", async () => {
     ensureProfileForEmailMock.mockImplementationOnce(() => {
       throw new Error("profile store unavailable");
     });
@@ -858,6 +893,19 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       );
     });
     expect(harness.client).toMatchObject({ authenticatedUserId: "alice@example.com" });
+    expect(localUserIngressFor(harness.client)).toMatchObject({
+      facts: {
+        ingress: expect.not.objectContaining({ rawSourceRef: expect.anything() }),
+        invoker: { state: "unknown" },
+        assurance: [
+          {
+            kind: "trusted-proxy",
+            rawEvidenceRef: "gateway-auth:trusted-proxy",
+            strength: "boundary-verified",
+          },
+        ],
+      },
+    });
     expect(harness.client).not.toMatchObject({ authenticatedUserProfile: expect.anything() });
     expect(harness.logWsControl.warn).toHaveBeenCalledTimes(1);
     expect(harness.logWsControl.warn).toHaveBeenCalledWith(
@@ -903,6 +951,11 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     });
     expect(upsertPresenceMock).not.toHaveBeenCalled();
     expect(harness.client).not.toMatchObject({ authenticatedUserId: expect.anything() });
+    const localUserIngress = localUserIngressFor(harness.client);
+    expect(localUserIngress).toMatchObject({
+      facts: { ingress: expect.not.objectContaining({ rawSourceRef: expect.anything() }) },
+    });
+    expect(localUserIngress?.facts.invoker).toBeUndefined();
     expect(ensureProfileForEmailMock).not.toHaveBeenCalled();
   });
 

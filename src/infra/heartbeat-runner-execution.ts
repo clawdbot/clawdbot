@@ -6,6 +6,7 @@ import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lane
 import { listActiveEmbeddedRunSessionKeys } from "../agents/embedded-agent-runner/run-state.js";
 import { transitionMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-state.js";
 import {
+  type HeartbeatTerminalToolFailure,
   resolveHeartbeatReplyPayload,
   resolveHeartbeatTerminalToolFailure,
 } from "../auto-reply/heartbeat-reply-payload.js";
@@ -14,6 +15,7 @@ import {
   resolveHeartbeatToolResponseFromReplyResult,
 } from "../auto-reply/heartbeat-tool-response.js";
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
+import { resolveReplyOperationAgentTurn } from "../auto-reply/reply/reply-operation-agent-turn-state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -25,7 +27,7 @@ import {
 import type { ChannelHeartbeatDeps } from "../channels/plugins/types.public.js";
 import { createReplyPrefixContext } from "../channels/reply-prefix.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   applySessionEntryLifecycleMutation,
   loadExactSessionEntry,
@@ -507,7 +509,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
       configuredSessionKey: configuredSession.sessionKey,
       sessionEntry: entry,
     });
-    const isolatedStorePath = resolveStorePath(cfg.session?.store, { agentId });
+    const isolatedStorePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
     const staleIsolatedSessionKey = resolveStaleHeartbeatIsolatedSessionKey({
       sessionKey,
       isolatedSessionKey,
@@ -676,9 +678,11 @@ export async function invokeHeartbeatAgentRun(
   );
   const heartbeatToolResponse = resolveHeartbeatToolResponseFromReplyResult(replyResult);
   const heartbeatScratchProposal = resolveHeartbeatScratchProposalFromReplyResult(replyResult);
-  const heartbeatTerminalToolFailure = resolveHeartbeatTerminalToolFailure(replyResult);
+  const heartbeatTerminalToolFailure: HeartbeatTerminalToolFailure | undefined =
+    resolveHeartbeatTerminalToolFailure(replyResult);
   const selectedReplyPayload = resolveHeartbeatReplyPayload(replyResult);
   const replyPayload = selectedReplyPayload;
+  const agentRunFailed = resolveReplyOperationAgentTurn(replyOperationRunState) === "failed";
   if (
     heartbeatScratchProposal !== undefined &&
     heartbeatToolResponse &&
@@ -714,6 +718,7 @@ export async function invokeHeartbeatAgentRun(
     kind: "completed",
     heartbeatToolResponse,
     heartbeatTerminalToolFailure,
+    agentRunFailed,
     replyPayload,
   } as const;
 }

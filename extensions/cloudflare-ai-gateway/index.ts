@@ -24,7 +24,7 @@ const PROVIDER_ID = "cloudflare-ai-gateway";
 const PROVIDER_ENV_VAR = "CLOUDFLARE_AI_GATEWAY_API_KEY";
 const PROFILE_ID = "cloudflare-ai-gateway:default";
 function readRequiredTextInput(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+  return normalizeOptionalString(value) ?? "";
 }
 
 async function resolveCloudflareGatewayMetadataInteractive(ctx: {

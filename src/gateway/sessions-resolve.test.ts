@@ -28,7 +28,7 @@ vi.mock("./session-utils.js", async () => {
     listSessionsFromStore: hoisted.listSessionsFromStoreMock,
     resolveGatewaySessionStoreTargetWithStore:
       hoisted.resolveGatewaySessionStoreTargetWithStoreMock,
-    loadCombinedSessionStoreForGateway: hoisted.loadCombinedSessionStoreForGatewayMock,
+    loadCombinedSessionStoreForGatewayCore: hoisted.loadCombinedSessionStoreForGatewayMock,
   };
 });
 

@@ -19,9 +19,7 @@ import { resolveAgentAvatarUrlFromSource } from "../agents/identity-avatar-file.
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
-import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { insideGitCheckout } from "../agents/worktrees/git.js";
-import { listThinkingLevelOptions } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import {
@@ -34,7 +32,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import { listGatewayAgentsBasic } from "./agent-list.js";
-import { resolveGatewaySessionThinkingDefault } from "./session-utils-model.js";
+import { resolveGatewayModelThinkingProfile } from "./session-utils-model.js";
 import {
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
@@ -253,18 +251,6 @@ export function isGroupOrChannelDisplaySession(
   );
 }
 
-function isStorePathTemplate(store?: string): boolean {
-  return typeof store === "string" && store.includes("{agentId}");
-}
-
-export function resolveConcreteSessionStorePath(storePath: string | undefined): string | undefined {
-  const trimmed = storePath?.trim();
-  if (!trimmed || trimmed === "(multiple)" || isStorePathTemplate(trimmed)) {
-    return undefined;
-  }
-  return trimmed;
-}
-
 function normalizeFallbackList(values: readonly string[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -356,20 +342,15 @@ export function listAgentsForGateway(
       sessionKey,
       acpRuntime: false,
     });
-    const thinkingRuntime = resolveEffectiveAgentRuntime({
+    const agentModelCatalog = options?.modelCatalogByAgentId?.get(id) ?? modelCatalog;
+    const thinkingProfile = resolveGatewayModelThinkingProfile({
       cfg,
-      provider: resolvedModel.provider,
-      modelId: resolvedModel.model,
       agentId: id,
+      provider: resolvedModel.provider,
+      model: resolvedModel.model,
+      modelCatalog: agentModelCatalog,
       sessionKey,
     });
-    const agentModelCatalog = options?.modelCatalogByAgentId?.get(id) ?? modelCatalog;
-    const thinkingLevels = listThinkingLevelOptions(
-      resolvedModel.provider,
-      resolvedModel.model,
-      agentModelCatalog,
-      thinkingRuntime,
-    );
     const workspace = resolveAgentWorkspaceDir(cfg, id);
     // Must mirror the sessions.create worktree preflight: subdirectory workspaces inside a
     // repo are worktree-capable, so the UI toggle and the create path cannot diverge.
@@ -383,16 +364,10 @@ export function listAgentsForGateway(
         workspace,
         workspaceGit,
         agentRuntime,
-        thinkingLevels,
-        thinkingOptions: thinkingLevels.map((level) => level.label),
-        thinkingDefault: resolveGatewaySessionThinkingDefault({
-          cfg,
-          provider: resolvedModel.provider,
-          model: resolvedModel.model,
-          agentId: id,
-          modelCatalog: agentModelCatalog,
-          agentRuntime: thinkingRuntime,
-        }),
+        // Preserve the established serialized projection order for byte-stable responses.
+        thinkingLevels: thinkingProfile.thinkingLevels,
+        thinkingOptions: thinkingProfile.thinkingLevels.map((level) => level.label),
+        thinkingDefault: thinkingProfile.thinkingDefault,
       },
       model ? { model } : {},
     );

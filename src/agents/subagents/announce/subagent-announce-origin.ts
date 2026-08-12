@@ -15,7 +15,7 @@ import {
 } from "../../../channels/route-projection.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import {
-  stripTargetKindPrefix,
+  stripOutboundTargetKindPrefix,
   stripTargetProviderPrefix,
   stripTargetTopicSuffix,
 } from "../../../infra/outbound/channel-target-prefix.js";
@@ -55,7 +55,10 @@ function normalizeAnnounceRouteTarget(context?: DeliveryContext): string | undef
     ? getLoadedChannelPluginForRead(channel as ChannelId)?.messaging
     : undefined;
   const route = stripTargetTopicSuffix(
-    stripTargetKindPrefix(stripTargetProviderPrefix(rawTo, channel ?? ""), ["group", "channel"]),
+    stripOutboundTargetKindPrefix(stripTargetProviderPrefix(rawTo, channel ?? ""), [
+      "group",
+      "channel",
+    ]),
   );
   const normalized = messaging?.normalizeTarget?.(route) ?? route;
   return normalized || undefined;

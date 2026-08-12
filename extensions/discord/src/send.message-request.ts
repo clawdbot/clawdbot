@@ -8,6 +8,9 @@ import {
   type MessagePayloadObject,
   type TopLevelComponents,
 } from "./internal/discord.js";
+import { stripUndefinedFields } from "./internal/undefined-fields.js";
+
+export { stripUndefinedFields };
 
 const SUPPRESS_EMBEDS_FLAG = MessageFlags.SuppressEmbeds;
 export const SUPPRESS_NOTIFICATIONS_FLAG = MessageFlags.SuppressNotifications;
@@ -128,10 +131,6 @@ export function buildDiscordMessageRequest(params: DiscordMessageRequestParams) 
     nonce,
     enforce_nonce: nonce ? true : undefined,
   });
-}
-
-export function stripUndefinedFields<T extends object>(value: T): T {
-  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;
 }
 
 function hasV2Components(components?: TopLevelComponents[]): boolean {

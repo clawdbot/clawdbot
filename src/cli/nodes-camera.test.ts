@@ -522,7 +522,7 @@ describe("nodes camera helpers", () => {
     expect(tracked.wasCanceled()).toBe(true);
   });
 
-  it("removes partially written file when url stream fails", async () => {
+  it("preserves an existing file when url stream fails", async () => {
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new TextEncoder().encode("partial"));
@@ -533,6 +533,10 @@ describe("nodes camera helpers", () => {
 
     await withCameraTempDir(async (dir) => {
       const out = path.join(dir, "broken.bin");
+      const sentinel = Buffer.from("existing-camera");
+      await fs.writeFile(out, sentinel);
+      await fs.chmod(out, 0o640);
+
       await expect(
         writeCameraPayloadToFile({
           filePath: out,
@@ -540,7 +544,40 @@ describe("nodes camera helpers", () => {
           expectedHost: "198.51.100.42",
         }),
       ).rejects.toThrow(/stream exploded/i);
-      await expectPathMissing(out);
+      await expect(fs.readFile(out)).resolves.toEqual(sentinel);
+      if (process.platform !== "win32") {
+        expect((await fs.stat(out)).mode & 0o777).toBe(0o640);
+      }
+      expect(await fs.readdir(dir)).toEqual(["broken.bin"]);
+    });
+  });
+
+  it("rejects a url stream that closes without data", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.close();
+      },
+    });
+    stubFetchResponse(new Response(stream, { status: 200 }));
+
+    await withCameraTempDir(async (dir) => {
+      const out = path.join(dir, "empty.bin");
+      const sentinel = Buffer.from("existing-camera");
+      await fs.writeFile(out, sentinel);
+      await fs.chmod(out, 0o640);
+
+      await expect(
+        writeCameraPayloadToFile({
+          filePath: out,
+          payload: { url: "https://198.51.100.42/empty.bin" },
+          expectedHost: "198.51.100.42",
+        }),
+      ).rejects.toThrow(/empty download/i);
+      await expect(fs.readFile(out)).resolves.toEqual(sentinel);
+      if (process.platform !== "win32") {
+        expect((await fs.stat(out)).mode & 0o777).toBe(0o640);
+      }
+      expect(await fs.readdir(dir)).toEqual(["empty.bin"]);
     });
   });
 });

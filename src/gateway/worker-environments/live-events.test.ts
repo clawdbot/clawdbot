@@ -155,7 +155,7 @@ describe("worker live events", () => {
       target,
     });
   const create = (updatedAt = 20) =>
-    sessions.upsertSessionEntry(
+    sessions.upsertSessionEntryCore(
       { agentId: "main", sessionKey: KEY, storePath: store },
       { sessionId: SID, updatedAt },
     );

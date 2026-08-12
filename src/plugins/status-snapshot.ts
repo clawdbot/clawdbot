@@ -3,6 +3,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import {
   loadPluginRegistrySnapshotWithMetadata,
@@ -31,46 +32,6 @@ type PluginRegistrySnapshotReportParams = {
   env?: NodeJS.ProcessEnv;
   logger?: PluginLogger;
 };
-
-type TraceDetails = Record<string, boolean | number | string | undefined>;
-
-function isPluginLifecycleTraceEnabled(): boolean {
-  const raw = process.env.OPENCLAW_PLUGIN_LIFECYCLE_TRACE?.trim().toLowerCase();
-  return raw === "1" || raw === "true" || raw === "yes";
-}
-
-function formatTraceValue(value: boolean | number | string): string {
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  return JSON.stringify(value);
-}
-
-function tracePluginLifecyclePhase<T>(phase: string, fn: () => T, details?: TraceDetails): T {
-  if (!isPluginLifecycleTraceEnabled()) {
-    return fn();
-  }
-  const start = process.hrtime.bigint();
-  let status: "error" | "ok" | undefined;
-  try {
-    const result = fn();
-    status = "ok";
-    return result;
-  } catch (error) {
-    status = "error";
-    throw error;
-  } finally {
-    const elapsedMs = Number(process.hrtime.bigint() - start) / 1_000_000;
-    const detailText = Object.entries(details ?? {})
-      .filter((entry): entry is [string, boolean | number | string] => entry[1] !== undefined)
-      .map(([key, value]) => `${key}=${formatTraceValue(value)}`)
-      .join(" ");
-    const suffix = detailText ? ` ${detailText}` : "";
-    console.error(
-      `[plugins:lifecycle] phase=${JSON.stringify(phase)} ms=${elapsedMs.toFixed(2)} status=${status ?? "error"}${suffix}`,
-    );
-  }
-}
 
 function buildPluginRecordFromInstalledIndex(
   plugin: import("./installed-plugin-index.js").InstalledPluginIndexRecord,

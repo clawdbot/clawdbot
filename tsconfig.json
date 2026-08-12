@@ -108,6 +108,9 @@
       ],
       "@openclaw/media-generation-core/*": ["./packages/media-generation-core/src/*"],
       "@openclaw/media-core": ["./packages/media-core/src/index.ts"],
+      "@openclaw/media-core/attachment-classify": [
+        "./packages/media-core/src/attachment-classify.ts"
+      ],
       "@openclaw/media-core/base64": ["./packages/media-core/src/base64.ts"],
       "@openclaw/media-core/constants": ["./packages/media-core/src/constants.ts"],
       "@openclaw/media-core/content-length": ["./packages/media-core/src/content-length.ts"],
@@ -155,6 +158,9 @@
         "./packages/normalization-core/src/error-coercion.ts"
       ],
       "@openclaw/normalization-core/expect": ["./packages/normalization-core/src/expect.ts"],
+      "@openclaw/normalization-core/json-coercion": [
+        "./packages/normalization-core/src/json-coercion.ts"
+      ],
       "@openclaw/normalization-core/json-schema": [
         "./packages/normalization-core/src/json-schema.ts"
       ],

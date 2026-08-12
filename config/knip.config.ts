@@ -21,6 +21,8 @@ const repositoryScriptEntries = [
   "apps/android/scripts/build-release-artifacts.ts!",
   "scripts/bundle-a2ui.mts!",
   "scripts/build-discord-activity-sdk.mts!",
+  "scripts/check-control-ui-performance.mts!",
+  "scripts/check-control-ui-precompressed-assets.mts!",
   "scripts/check-live-cache.ts!",
   "scripts/check-package-dist-imports.mjs!",
   "scripts/dev/ios-node-e2e.ts!",
@@ -569,6 +571,7 @@ const config = {
         "src/boolean-coercion.ts!",
         "src/error-coercion.ts!",
         "src/expect.ts!",
+        "src/json-coercion.ts!",
         "src/number-coercion.ts!",
         "src/phone-presentation.ts!",
         "src/record-coerce.ts!",
@@ -600,6 +603,7 @@ const config = {
     "packages/media-core": {
       entry: [
         "src/index.ts!",
+        "src/attachment-classify.ts!",
         "src/base64.ts!",
         "src/constants.ts!",
         "src/content-length.ts!",

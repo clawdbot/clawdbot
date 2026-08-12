@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { Model } from "openclaw/plugin-sdk/llm";
+import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import type { Model, ProviderContext } from "openclaw/plugin-sdk/llm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetGoogleVertexAdcState } from "./google-oauth.test-support.js";
 
@@ -130,6 +131,16 @@ async function runGeminiStreamResult(
     ),
   );
   return stream.result();
+}
+
+function withProviderContextHandoff(
+  options: Record<string, unknown>,
+  handoff: () => Promise<ProviderContext>,
+): Record<string, unknown> {
+  return new Proxy(options, {
+    get: (target, property, receiver) =>
+      typeof property === "symbol" ? handoff : Reflect.get(target, property, receiver),
+  });
 }
 
 async function runGoogleVertexStreamResult(params: {
@@ -466,6 +477,157 @@ describe("google transport stream", () => {
     vi.doUnmock("openclaw/plugin-sdk/provider-transport-runtime");
     vi.doUnmock("google-auth-library");
     vi.resetModules();
+  });
+
+  it("resolves qualified AI Studio video after payload hooks and preserves part order", async () => {
+    mockGoogleTextResponse();
+    const videoData = "current-video-base64";
+    const quicktimeData = "current-quicktime-base64";
+    const imageData = "current-image-base64";
+    const providerContext: ProviderContext = {
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "before" },
+            { type: "image", mimeType: "image/png", data: imageData },
+            { type: "video", mimeType: "video/mp4", data: videoData },
+            { type: "video", mimeType: "video/quicktime", data: quicktimeData },
+            { type: "text", text: "after" },
+          ],
+          timestamp: 0,
+        },
+      ],
+    };
+    const handoff = vi.fn(async () => providerContext);
+    const onPayload = vi.fn((payload: unknown) => {
+      expect(JSON.stringify(payload)).not.toContain(videoData);
+      expect(JSON.stringify(payload)).not.toContain(quicktimeData);
+      expect(JSON.stringify(payload)).toContain("native video slot unavailable");
+      return payload;
+    });
+
+    const result = await runGeminiStreamResult({
+      model: buildGeminiModel({ input: ["text", "image", "video"] as never }),
+      context: { messages: [{ role: "user", content: "fallback", timestamp: 0 }] },
+      options: withProviderContextHandoff({ onPayload }, handoff),
+    });
+    expect(result.errorMessage).toBeUndefined();
+
+    const body = parseRequestJsonBody(
+      requireRequestInit(requireMockCall(guardedFetchMock, 0, "guarded fetch"), "guarded fetch"),
+    ) as { contents: GoogleTestContentTurn[] };
+    expect(body.contents[0]?.parts).toEqual([
+      { text: "before" },
+      { inlineData: { mimeType: "image/png", data: imageData } },
+      { inlineData: { mimeType: "video/mp4", data: videoData } },
+      { inlineData: { mimeType: "video/quicktime", data: quicktimeData } },
+      { text: "after" },
+    ]);
+    expect(handoff).toHaveBeenCalledOnce();
+    expect(onPayload).toHaveBeenCalledOnce();
+  });
+
+  it("omits cloned and hook-injected video slots", async () => {
+    mockGoogleTextResponse();
+    const trustedData = "trusted-video-base64";
+    const injectedData = "injected-video-base64";
+    const providerContext: ProviderContext = {
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "video", mimeType: "video/mp4", data: trustedData }],
+          timestamp: 0,
+        },
+      ],
+    };
+    await runGeminiStreamResult({
+      model: buildGeminiModel({ input: ["text", "image", "video"] as never }),
+      options: withProviderContextHandoff(
+        {
+          onPayload: (payload: unknown) => {
+            const cloned = structuredClone(payload) as {
+              contents: GoogleTestContentTurn[];
+            };
+            cloned.contents[0]?.parts.push({
+              inlineData: { mimeType: "video/mp4", data: injectedData },
+            });
+            return cloned;
+          },
+        },
+        async () => providerContext,
+      ),
+    });
+    const bodyText = requireRequestInit(
+      requireMockCall(guardedFetchMock, 0, "guarded fetch"),
+      "guarded fetch",
+    ).body as string;
+    expect(bodyText).not.toContain(trustedData);
+    expect(bodyText).not.toContain(injectedData);
+    expect(bodyText).toContain("native video slot unavailable");
+  });
+
+  it("rejects unsupported Google video MIME after the payload hook", async () => {
+    mockGoogleTextResponse();
+    const videoData = "unsupported-mime-video";
+    const onPayload = vi.fn((payload: unknown) => {
+      expect(JSON.stringify(payload)).not.toContain(videoData);
+      return payload;
+    });
+    await runGeminiStreamResult({
+      model: buildGeminiModel({ input: ["text", "image", "video"] as never }),
+      options: withProviderContextHandoff({ onPayload }, async () => ({
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "video", mimeType: "video/x-msvideo", data: videoData }],
+            timestamp: 0,
+          },
+        ],
+      })),
+    });
+    const body = requireRequestInit(
+      requireMockCall(guardedFetchMock, 0, "guarded fetch"),
+      "guarded fetch",
+    ).body as string;
+    expect(body).not.toContain(videoData);
+    expect(body).toContain("unsupported Google video MIME type");
+  });
+
+  it("evicts trusted video until the exact serialized request is below 20MB", async () => {
+    mockGoogleTextResponse();
+    const providerContext: ProviderContext = {
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "video", mimeType: "video/mp4", data: "A".repeat(20_000_000) }],
+          timestamp: 0,
+        },
+      ],
+    };
+    await runGeminiStreamResult({
+      model: buildGeminiModel({ input: ["text", "image", "video"] as never }),
+      options: withProviderContextHandoff({}, async () => providerContext),
+    });
+    const body = requireRequestInit(
+      requireMockCall(guardedFetchMock, 0, "guarded fetch"),
+      "guarded fetch",
+    ).body as string;
+    expect(new TextEncoder().encode(body).byteLength).toBeLessThan(20_000_000);
+    expect(body).toContain("native video slot unavailable");
+  });
+
+  it("returns a useful provider error when the non-video request still exceeds 20MB", async () => {
+    const result = await runGeminiStreamResult({
+      context: {
+        messages: [{ role: "user", content: "A".repeat(20_000_000), timestamp: 0 }],
+      },
+    });
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "Google request body must be smaller than 20000000 bytes",
+    });
+    expect(guardedFetchMock).not.toHaveBeenCalled();
   });
 
   it("uses the guarded fetch transport and parses Gemini SSE output", async () => {
@@ -822,6 +984,15 @@ describe("google transport stream", () => {
       requireRequestInit(requireMockCall(guardedFetchMock, 1, "guarded fetch"), "guarded fetch"),
       { "x-goog-api-key": "gemini-key-2" },
     );
+    const firstBody = requireRequestInit(
+      requireMockCall(guardedFetchMock, 0, "guarded fetch"),
+      "guarded fetch",
+    ).body;
+    const secondBody = requireRequestInit(
+      requireMockCall(guardedFetchMock, 1, "guarded fetch"),
+      "guarded fetch",
+    ).body;
+    expect(secondBody).toBe(firstBody);
   });
 
   it.each([
@@ -1247,6 +1418,52 @@ describe("google transport stream", () => {
       expect(retryBody.tools).toEqual(firstBody.tools);
     },
   );
+
+  it("keeps oversized-video shedding in the Gemini 3 retry payload", async () => {
+    vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
+    guardedFetchMock
+      .mockResolvedValueOnce(
+        new Response(new ReadableStream<Uint8Array>(), {
+          headers: { "content-type": "text/event-stream" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        buildSseResponse([
+          {
+            candidates: [{ content: { parts: [{ text: "recovered" }] }, finishReason: "STOP" }],
+          },
+        ]),
+      );
+
+    const result = await runGeminiStreamResult({
+      model: buildGeminiModel({
+        id: "gemini-3.1-pro-preview",
+        name: "Gemini 3.1 Pro Preview",
+        input: ["text", "image", "video"] as never,
+      }),
+      options: withProviderContextHandoff({ reasoning: "high" }, async () => ({
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "video", mimeType: "video/mp4", data: "A".repeat(20_000_000) }],
+            timestamp: 0,
+          },
+        ],
+      })),
+    });
+
+    expect(result.errorMessage).toBeUndefined();
+    expect(result.content).toEqual([{ type: "text", text: "recovered" }]);
+    expect(guardedFetchMock).toHaveBeenCalledTimes(2);
+    for (const index of [0, 1]) {
+      const body = requireRequestInit(
+        requireMockCall(guardedFetchMock, index, "guarded fetch"),
+        "guarded fetch",
+      ).body as string;
+      expect(new TextEncoder().encode(body).byteLength).toBeLessThan(20_000_000);
+      expect(body).toContain("native video slot unavailable");
+    }
+  });
 
   it("does not retry a genuinely empty Gemini 3 response", async () => {
     vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
@@ -2894,17 +3111,4 @@ describe("google transport stream", () => {
   });
 });
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

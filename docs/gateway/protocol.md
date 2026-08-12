@@ -275,17 +275,22 @@ go through normal pairing and scope-upgrade checks.
 
 ### Worker role and closed protocol
 
-Cloud workers use a dedicated loopback ingress through the gateway-owned,
-host-key-pinned SSH tunnel. It accepts only worker identity and never dispatches
-general auth, node events, operator RPCs, or plugin methods. A strict `connect`
-verifies a hash-at-rest, short-lived credential bound to the environment, bundle
-hash, owner epoch, RPC-set version, expiry, and one nullable session; it
-separately checks the current version and feature set. Success returns minimal
-`worker-hello-ok`; feature negotiation is independent of the general protocol
-version. Frames stay under 64 KiB, except a negotiated `worker.inference.start`
-frame may be up to 25 MiB. The closed allowlist contains `worker.heartbeat`,
-`worker.transcript.commit`, `worker.live-event`, `worker.inference.start`, and
-`worker.inference.cancel`.
+Workers use a closed protocol through either the public
+`/__openclaw__/worker` WebSocket path on the main TLS endpoint or the dedicated
+loopback ingress reached through the gateway-owned, host-key-pinned SSH tunnel.
+The route selects worker mode before reading frames, so it never dispatches
+general auth, node events, operator RPCs, or plugin methods. Public admission
+shares the main per-client pre-auth budget and authentication rate limiter; its
+wire errors collapse credential and environment details to
+`admission-rejected`, while trusted gateway diagnostics retain the internal
+reason. A strict `connect` verifies a hash-at-rest, short-lived credential bound
+to the environment, bundle hash, owner epoch, RPC-set version, expiry, and one
+nullable session; it separately checks the current version and feature set.
+Success returns minimal `worker-hello-ok`; feature negotiation is independent of
+the general protocol version. Frames stay under 64 KiB, except a negotiated
+`worker.inference.start` frame may be up to 25 MiB. The closed allowlist contains
+`worker.heartbeat`, `worker.transcript.commit`, `worker.live-event`,
+`worker.inference.start`, and `worker.inference.cancel`.
 
 Transcript commits use owner-epoch fencing, a gateway-owned session binding,
 base-leaf compare-and-swap, and durable sequence replay; the gateway generates
@@ -520,7 +525,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `last-heartbeat` returns the latest persisted heartbeat event.
     - `set-heartbeats` toggles heartbeat processing on the gateway.
     - `gateway.restart.preflight` is a deprecated, read-only compatibility preview of restart-specific active work. It does not close admission, create a suspension lease, or provide the atomic full-work fence of `gateway.suspend.prepare`; new restart flows should call `gateway.restart.request`.
-    - `gateway.suspend.prepare` creates a short cooperative-suspension lease only when tracked Gateway work is idle. `gateway.suspend.status` checks that lease, and `gateway.suspend.resume` releases it after thaw or an aborted host operation.
+    - `gateway.suspend.prepare` creates a short cooperative-suspension lease only when tracked Gateway work is idle. While prepared, authenticated WebSocket connects remain available, but every method except `gateway.suspend.*` is fenced. `gateway.suspend.status` checks the lease, and `gateway.suspend.resume` releases it after thaw or an aborted host operation.
 
   </Accordion>
 
@@ -646,7 +651,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `sessions.send` sends a message into an existing session.
     - `sessions.steer` is the interrupt-and-steer variant for an active session.
     - `sessions.abort` aborts active work for a session. Pass `key` plus optional `runId`, or `runId` alone for active runs the gateway can resolve to a session. Supplying `runId` keeps cancellation scoped to that run. Set `clearQueued: true` on a key-only non-global request to also discard followup and lane queues owned by that session. Existing callers that omit `clearQueued` preserve those queues. The literal `global` key keeps the existing agent-qualified `chat.abort` ownership rules and does not perform non-global followup or lane cleanup.
-    - `sessions.patch` updates session metadata/overrides and reports the resolved canonical model plus effective `agentRuntime`. Session organization fields and the per-session `model` override require `operator.write`; thinking, fast, verbose, trace, reasoning, and other privileged overrides require `operator.admin`. Only an admin model selection can persist as the configured agent default. With `archived: true`, the Gateway protects agent main sessions (including `global` when global scope is configured) and the `unknown` sentinel; for every other real session it first fences new admission, cancels exact-session active, pending, queued, reply, embedded, and worker work, and waits for admission and runtime terminal-persistence drains before committing `archivedAt`. A cancellation, drain, or persistence failure returns retryable `UNAVAILABLE` and leaves the session unarchived. `sessions.patchMany` prepares archive targets in input order inside the same batch lifecycle fence and returns ordered per-target outcomes. Spawn lineage (`spawnedBy`, `spawnedWorkspaceDir`, `spawnedCwd`, `spawnDepth`, `subagentRole`, `subagentControlScope`) is no longer publicly patchable; those facts are written once by trusted creation paths, and requests that still send them are rejected.
+    - `sessions.patch` updates session metadata/overrides and reports the resolved canonical model plus effective `agentRuntime`. Session organization fields and the per-session `model` override require `operator.write`; thinking, fast, verbose, trace, reasoning, and other privileged overrides require `operator.admin`. Only an admin model selection can persist as the configured agent default. Archive and restore patches require the caller-observed `sessionId` from `sessions.list` or `sessions.describe` as `expectedSessionId`; missing or changed targets fail without materializing or mutating a replacement. With `archived: true`, the Gateway protects agent main sessions (including `global` when global scope is configured) and the `unknown` sentinel; for every other real session it first fences new admission, cancels exact-session active, pending, queued, reply, embedded, and worker work, and waits for admission and runtime terminal-persistence drains before committing `archivedAt`. A cancellation, drain, or persistence failure returns retryable `UNAVAILABLE` and leaves the session unarchived. `sessions.patchMany` carries `expectedSessionId` per target, prepares archive targets in input order inside the same batch lifecycle fence, and returns ordered per-target outcomes. Spawn lineage (`spawnedBy`, `spawnedWorkspaceDir`, `spawnedCwd`, `spawnDepth`, `subagentRole`, `subagentControlScope`) is no longer publicly patchable; those facts are written once by trusted creation paths, and requests that still send them are rejected.
     - `sessions.reset`, `sessions.delete`, and `sessions.compact` perform session maintenance.
     - `sessions.get` returns the full stored session row.
     - Chat execution still uses `chat.history`, `chat.send`, `chat.abort`, and `chat.inject`. `chat.history` is display-normalized for UI clients: inline directive tags are stripped from visible text, plain-text tool-call XML payloads (`<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks) and leaked ASCII/full-width model control tokens are stripped, pure silent-token assistant rows (exact `NO_REPLY` / `no_reply`) are omitted, and oversized rows can be replaced with placeholders.

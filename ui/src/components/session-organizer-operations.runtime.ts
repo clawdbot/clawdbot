@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { loadSettings, patchSettings } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
@@ -6,7 +7,6 @@ import {
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
-import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { showToast } from "../lib/toast.ts";
 import type {
   SidebarRecentSession,
@@ -51,7 +51,17 @@ export async function patchSession(
     key: session.key,
     ...patch,
     agentId,
+    ...(typeof patch.archived === "boolean" && session.sessionId
+      ? { expectedSessionId: session.sessionId }
+      : {}),
   };
+  if (typeof patch.archived === "boolean" && !session.sessionId?.trim()) {
+    host.sessionData.publishSessionMutationError(
+      scope,
+      "Session lifecycle action requires a durable session identity.",
+    );
+    return "failed";
+  }
   if (
     !requireSessionMutationAccess(host, scope, { method: "sessions.patch", params: requestParams })
   ) {
@@ -60,6 +70,7 @@ export async function patchSession(
   try {
     const patched = await scope.sessions.patch(session.key, patch, {
       agentId,
+      ...(typeof patch.archived === "boolean" ? { expectedSessionId: session.sessionId } : {}),
       ...(refresh.deferListRefresh ? { deferListRefresh: true } : {}),
     });
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {

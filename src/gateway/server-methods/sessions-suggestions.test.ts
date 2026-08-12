@@ -4,7 +4,7 @@ import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
-import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
 import {
   addSessionSuggestion,
@@ -79,7 +79,7 @@ const defaultSuggestionSession = {
 } as const;
 
 function upsertDefaultSuggestionSession() {
-  return upsertSessionEntry({ agentId: "main", sessionKey }, defaultSuggestionSession);
+  return upsertSessionEntryCore({ agentId: "main", sessionKey }, defaultSuggestionSession);
 }
 
 function client(profileId: string, displayName: string, admin = false): GatewayClient {
@@ -205,7 +205,7 @@ describe("session suggestion handlers", () => {
   it("hides draft suggestions from members while owner and admin can list", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const draftKey = "agent:main:draft-suggestions";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: draftKey },
         {
           sessionId: "session-draft",
@@ -287,7 +287,7 @@ describe("session suggestion handlers", () => {
   it("keeps incognito suggestion and typing surfaces admin-only", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const incognitoKey = "agent:main:dashboard:incognito-suggestions";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: incognitoKey },
         {
           sessionId: "session-incognito",
@@ -356,7 +356,7 @@ describe("session suggestion handlers", () => {
   it("rejects archived suggestion creation and non-dismiss resolutions", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const archivedKey = "agent:main:archived-suggestions";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: archivedKey },
         {
           sessionId: "session-archived",
@@ -707,7 +707,7 @@ describe("session suggestion handlers", () => {
       );
       expect(notViewing.responses[0]?.[1]).toEqual({ ok: true, broadcast: false });
 
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
           sessionId: "session-main",
@@ -870,7 +870,7 @@ describe("session suggestion handlers", () => {
 
   it("returns a structured error when the session is replaced after dispatch", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
           sessionId: "session-before-dispatch",
@@ -898,7 +898,7 @@ describe("session suggestion handlers", () => {
       );
       await vi.waitFor(() => expect(mocks.handleChatSend).toHaveBeenCalledOnce());
 
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
           sessionId: "session-after-dispatch",
@@ -929,7 +929,7 @@ describe("session suggestion handlers", () => {
     "maps a session replacement during %s to the structured terminal error",
     async (phase) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        await upsertSessionEntry(
+        await upsertSessionEntryCore(
           { agentId: "main", sessionKey },
           {
             sessionId: "session-race",
@@ -984,7 +984,7 @@ describe("session suggestion handlers", () => {
 
   it("keeps an unexpected claim-release failure retryable", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
           sessionId: "session-release-failure",

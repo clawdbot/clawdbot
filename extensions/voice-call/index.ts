@@ -4,6 +4,7 @@ import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
+  asNonArrayRecord as asParamRecord,
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -86,12 +87,6 @@ const VoiceCallToolSchema = Type.Union([
     dtmfSequence: Type.Optional(Type.String({ description: "DTMF digits to play before connect" })),
   }),
 ]);
-
-function asParamRecord(params: unknown): Record<string, unknown> {
-  return params && typeof params === "object" && !Array.isArray(params)
-    ? (params as Record<string, unknown>)
-    : {};
-}
 
 function isCliOnlyProcess(): boolean {
   return process.env.OPENCLAW_CLI === "1" && !process.argv.slice(2).includes("gateway");

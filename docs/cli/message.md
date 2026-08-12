@@ -98,8 +98,9 @@ true}`. `--pin` is shorthand for pinned delivery when the channel supports
   it.
 - `--reply-to <id>`, `--thread-id <id>` (Telegram forum topic; Slack thread
   timestamp, same field as `--reply-to`).
-- `--force-document` (Telegram, WhatsApp): send images/GIFs/videos as
-  documents to avoid channel compression.
+- `--force-document`: preserve original image bytes on Slack, or send
+  images/GIFs/videos as documents on Telegram and WhatsApp, to avoid channel
+  compression.
 - `--silent` (Telegram, Discord): send without a notification.
 - `--gif-playback` (WhatsApp only): treat video media as GIF playback.
 

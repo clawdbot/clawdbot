@@ -24,7 +24,7 @@ if (typeof forceGc !== "function") {
 const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-entry-cache-proof-"));
 const importSource = async (relativePath: string) =>
   import(pathToFileURL(path.join(repoRoot, relativePath)).href);
-const { upsertSessionEntry } = (await importSource(
+const { upsertSessionEntryCore } = (await importSource(
   "src/config/sessions/session-accessor.js",
 )) as SessionAccessorModule;
 const { readSessionEntryCache } = (await importSource(
@@ -72,7 +72,7 @@ try {
   );
   for (const [index, scope] of readOnlyScopes.entries()) {
     fs.mkdirSync(scope.env.OPENCLAW_STATE_DIR, { recursive: true });
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       label: `${index}:${"x".repeat(readOnlyPayloadBytes)}`,
       sessionId: `read-only-${index}`,
       updatedAt: index + 1,
@@ -106,7 +106,7 @@ try {
   for (let index = 0; index < lruHandleCount; index += 1) {
     const scope = createScope("lru", index);
     fs.mkdirSync(scope.env.OPENCLAW_STATE_DIR, { recursive: true });
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       label: `${index}:${"y".repeat(lruPayloadBytes)}`,
       sessionId: `lru-${index}`,
       updatedAt: index + 1,

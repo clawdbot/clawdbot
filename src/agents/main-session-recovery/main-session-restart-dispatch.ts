@@ -19,6 +19,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CommandLane } from "../../process/lanes.js";
 import { MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import {
   deliveryContextFromSession,
   normalizeDeliveryContext,
@@ -41,10 +42,11 @@ import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import { normalizeFiniteTimestamp } from "./main-session-restart-recovery-shared.js";
 
 const log = createSubsystemLogger("main-session-restart-recovery");
-const RESTART_RECOVERY_RESUME_MESSAGE =
-  "[System] Your previous turn was interrupted by a gateway restart while " +
-  "OpenClaw was waiting on tool/model work. Continue from the existing " +
-  "transcript and finish the interrupted response.";
+const RESTART_RECOVERY_RESUME_MESSAGE = formatSystemTurnPrompt(
+  "Your previous turn was interrupted by a gateway restart while " +
+    "OpenClaw was waiting on tool/model work. Continue from the existing " +
+    "transcript and finish the interrupted response.",
+);
 
 type RestartRecoveryTerminalStatus = "error" | "ok" | "timeout";
 

@@ -28,7 +28,7 @@ const hoisted = vi.hoisted(() => ({
       mode: "oauth",
     }),
   ),
-  resolveApiKeyForProviderMock: vi.fn(async () => ({
+  resolveApiKeyForProviderCoreMock: vi.fn(async () => ({
     [API_KEY_FIELD]: "test-token",
     source: "test",
     mode: "oauth",
@@ -51,7 +51,7 @@ const {
   completeMock,
   ensureOpenClawModelsJsonMock,
   getApiKeyForModelMock,
-  resolveApiKeyForProviderMock,
+  resolveApiKeyForProviderCoreMock,
   requireApiKeyMock,
   setRuntimeApiKeyMock,
   discoverModelsMock,
@@ -119,7 +119,7 @@ vi.mock("../agents/models-config.js", async () => ({
 vi.mock("../agents/model-auth.js", () => ({
   applySecretRefHeaderSentinels: (model: unknown) => model,
   getApiKeyForModelCore: getApiKeyForModelMock,
-  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
+  resolveApiKeyForProviderCore: resolveApiKeyForProviderCoreMock,
   [REQUIRE_API_KEY_FIELD]: requireApiKeyMock,
 }));
 

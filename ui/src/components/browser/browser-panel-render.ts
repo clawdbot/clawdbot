@@ -21,7 +21,7 @@ function renderTabStrip(controller: BrowserPanelController) {
     tabs: controller.tabs,
     activeTargetId: controller.activeTargetId,
     onSelect: (targetId) => void controller.selectTab(targetId),
-    onClose: (targetId) => void controller.closeTab(targetId),
+    onClose: (targetId) => controller.closeTab(targetId),
     onNew: () => controller.beginNewTab(),
   });
 }

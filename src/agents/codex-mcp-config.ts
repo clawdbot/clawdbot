@@ -5,6 +5,7 @@
  */
 import crypto from "node:crypto";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import {
@@ -16,7 +17,7 @@ import { isRecord } from "../utils.js";
 import {
   decodeHeaderEnvPlaceholder,
   normalizeBundleMcpServerConfig,
-  normalizeStringRecord,
+  normalizeMcpStringRecord,
 } from "./bundle-mcp-adapter.js";
 import { prepareOwnedBundleMcpDataDirs } from "./bundle-mcp-config.js";
 import type {
@@ -27,16 +28,6 @@ import type {
 import { shouldCreateBundleMcpRuntimeForAttempt } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { resolveProjectedMcpCodexToolApprovalMode } from "./mcp-codex-tool-approval.js";
 import { partitionMcpServersByConnectionScope } from "./mcp-connection-resolver.js";
-
-function normalizeToolFilterList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .filter((entry): entry is string => typeof entry === "string")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
 
 function assertCodexExactToolFilters(
   serverName: string,
@@ -61,8 +52,8 @@ function applyCodexToolFilter(
   if (!isRecord(server.toolFilter)) {
     return;
   }
-  const include = normalizeToolFilterList(server.toolFilter.include);
-  const exclude = normalizeToolFilterList(server.toolFilter.exclude);
+  const include = normalizeTrimmedStringList(server.toolFilter.include);
+  const exclude = normalizeTrimmedStringList(server.toolFilter.exclude);
   assertCodexExactToolFilters(name, "include", include);
   assertCodexExactToolFilters(name, "exclude", exclude);
   if (include.length > 0) {
@@ -85,7 +76,7 @@ export function applyCodexSessionMcpToolDenials(
     return server;
   }
   const toolFilter = isRecord(server.toolFilter) ? server.toolFilter : {};
-  const existing = normalizeToolFilterList(toolFilter.exclude);
+  const existing = normalizeTrimmedStringList(toolFilter.exclude);
   return {
     ...server,
     toolFilter: {
@@ -106,7 +97,7 @@ export function normalizeCodexMcpServerConfig(
   if (defaultToolsApprovalMode) {
     next.default_tools_approval_mode = defaultToolsApprovalMode;
   }
-  const httpHeaders = normalizeStringRecord(server.headers);
+  const httpHeaders = normalizeMcpStringRecord(server.headers);
   if (httpHeaders) {
     const staticHeaders: Record<string, string> = {};
     const envHeaders: Record<string, string> = {};
@@ -170,7 +161,7 @@ function fingerprintCodexMcpServersConfig(config: CodexMcpServersConfig): string
 }
 
 /** Load bundle MCP config for one Codex app-server thread. */
-export function loadCodexBundleMcpThreadConfig(
+export function loadCodexBundleMcpThreadConfigCore(
   params: LoadCodexBundleMcpThreadConfigParams,
 ): CodexBundleMcpThreadConfig {
   const shouldCreateRuntime = shouldCreateBundleMcpRuntimeForAttempt({

@@ -121,6 +121,7 @@ target server during config edits.
         },
         auth: "oauth",
         oauth: {
+          identity: "per-requester", // shared | per-requester; default: shared
           scope: "docs.read",
         },
         sslVerify: true,
@@ -156,6 +157,11 @@ target server during config edits.
   OAuth. Run `openclaw mcp login <name>` to store tokens under OpenClaw state.
 - `mcp.servers.<name>.oauth`: optional OAuth scope, redirect URL, and client
   metadata URL overrides.
+- `mcp.servers.<name>.oauth.identity`: credential ownership. Omit it or set
+  `"shared"` for operator-managed credentials; set `"per-requester"` to isolate
+  credentials for each authenticated sender. Per-requester OAuth requires an
+  HTTP server URL, cannot use `oauth.authProfileId`, and requires
+  `gateway.publicOrigin` for its callback.
 - `mcp.servers.<name>.sslVerify`, `clientCert`, `clientKey`: HTTP TLS controls
   for private endpoints and mutual TLS.
 - `mcp.servers.<name>.toolFilter`: optional per-server tool selection. `include`
@@ -561,6 +567,60 @@ See [Plugins](/tools/plugin).
 
 ---
 
+## Desktop
+
+The host desktop source lets the Control UI Desktop panel connect to the Gateway
+machine. It can attach to an existing loopback RFB server, or supervise a
+headless TigerVNC/XFCE desktop on Linux. It is a Labs feature and is off by
+default.
+
+```json5
+{
+  desktop: {
+    host: {
+      enabled: true,
+      managed: true,
+      // port: 5900, // Setting a port selects attach mode instead.
+      // passwordFile: "/path/to/vnc-password.txt",
+    },
+  },
+}
+```
+
+- `desktop.host.enabled`: advertises **This machine** as a desktop source after
+  the Gateway restarts.
+- `desktop.host.managed`: Linux only. Starts a gateway-supervised, loopback-only
+  TigerVNC/XFCE desktop lazily on the first observation and stops it after the
+  desktop session's linger period. Default: `false`.
+- `desktop.host.port`: loopback RFB port on `127.0.0.1` (default: `5900`).
+- `desktop.host.passwordFile`: optional UTF-8 VNC password file for attach mode.
+  Without it, the Control UI prompts for a VNC password and keeps it in browser
+  memory for that connection. Managed mode always creates its own ephemeral
+  password.
+
+OpenClaw connects only through loopback. An explicit `port` always selects
+attach mode, and an existing RFB listener on port `5900` takes precedence over
+managed mode. Managed mode requires `Xtigervnc`, `tigervncpasswd`, and
+`startxfce4`; on Debian/Ubuntu, install
+`tigervnc-standalone-server tigervnc-tools xfce4-session`. The Gateway creates a
+fresh temporary VNC password for each managed session, never persists it, and
+supervises both the VNC server and XFCE session.
+
+Without managed mode, configure third-party servers to listen on loopback when
+they support it. On Linux, use loopback-only TigerVNC or `x11vnc`; GNOME Remote
+Desktop's VeNCrypt mode is not supported. On Windows, enable VNC authentication
+and loopback access in the VNC server.
+
+On macOS, enable **System Settings → General → Sharing → Screen Sharing**.
+Modern Screen Sharing uses ARD account authentication, so the Gateway performs
+that handshake and gives the browser an already-authenticated no-auth RFB
+stream. The macOS account password is not returned in the observe result, URL,
+or logs. `openclaw doctor` can offer an explicitly confirmed `sudo launchctl`
+repair when Screen Sharing is off; enabling the macOS system service may expose
+it on other network interfaces according to macOS Sharing settings.
+
+---
+
 ## Gateway
 
 ```json5
@@ -569,6 +629,7 @@ See [Plugins](/tools/plugin).
     mode: "local", // local | remote
     port: 18789,
     bind: "loopback",
+    publicOrigin: "https://gateway.example.com",
     auth: {
       mode: "token", // none | token | password | trusted-proxy
       token: "your-token",
@@ -656,6 +717,14 @@ See [Plugins](/tools/plugin).
 
 - `mode`: `local` (run gateway) or `remote` (connect to remote gateway). Gateway refuses to start unless `local`.
 - `port`: single multiplexed port for WS + HTTP. Precedence: `--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > `18789`.
+- `publicOrigin`: optional externally reachable HTTPS origin of the Gateway,
+  without a path, query, or credentials. HTTP is accepted only for literal
+  loopback hosts (`localhost`, `127.0.0.1`, or `[::1]`) during local development.
+  Per-requester MCP OAuth requires this value and uses
+  `<publicOrigin>/oauth/mcp/callback` as its callback URL.
+  Slack session-card actions and plugin-generated viewer links also use this
+  origin. Set `gateway.controlUi.basePath` separately when the Control UI is
+  served below a reverse-proxy path prefix.
 - `bind`: `auto`, `loopback` (default), `lan` (`0.0.0.0`), `tailnet` (Tailscale IPv4 when available, otherwise loopback), or `custom` (one IPv4 address). A resolved `tailnet` address and any `custom` address other than `127.0.0.1` or `0.0.0.0` require `127.0.0.1` on the same port for same-host clients; startup fails if either listener cannot bind. Non-loopback exposure remains limited to the selected interface.
 - **Legacy bind aliases**: use bind mode values in `gateway.bind` (`auto`, `loopback`, `lan`, `tailnet`, `custom`), not host aliases (`0.0.0.0`, `127.0.0.1`, `localhost`, `::`, `::1`).
 - **Docker note**: the default `loopback` bind listens on `127.0.0.1` inside the container. With Docker bridge networking (`-p 18789:18789`), traffic arrives on `eth0`, so the gateway is unreachable. Use `--network host`, or set `bind: "lan"` (or `bind: "custom"` with `customBindHost: "0.0.0.0"`) to listen on all interfaces.

@@ -276,10 +276,6 @@ function signalProcessTree(child: ChildProcess, signal: NodeJS.Signals, pids: nu
   }
 }
 
-function run(cmd: string, args: string[]): void {
-  runSpawnCall(resolveSpawnCall(cmd, args), cmd);
-}
-
 function runPnpm(args: string[], envOverride?: NodeJS.ProcessEnv): void {
   runSpawnCall(resolvePnpmSpawnCall(args, envOverride), "pnpm");
 }
@@ -355,11 +351,6 @@ function main(argv: string[] = process.argv.slice(2)): void {
     assertRealOutputRoot(path.join(repoRoot, "dist"));
   }
 
-  if (process.env.OPENCLAW_BUILD_ALL_NO_PNPM === "1" && action === "build") {
-    run(process.execPath, [path.join(repoRoot, "node_modules/vite/bin/vite.js"), "build", ...rest]);
-    return;
-  }
-
   if (action === "install") {
     runPnpm(["install", ...rest]);
     return;
@@ -368,10 +359,40 @@ function main(argv: string[] = process.argv.slice(2)): void {
     return;
   }
 
-  if (!depsInstalled(action === "test" ? "test" : "build")) {
+  const noPnpmBuild = action === "build" && process.env.OPENCLAW_BUILD_ALL_NO_PNPM === "1";
+  if (!noPnpmBuild && !depsInstalled(action === "test" ? "test" : "build")) {
     const installEnv = process.env;
     const installArgs = ["install"];
     runPnpmSync(installArgs, installEnv);
+  }
+
+  if (action === "build") {
+    const buildCall = noPnpmBuild
+      ? resolveSpawnCall(process.execPath, [
+          path.join(repoRoot, "node_modules/vite/bin/vite.js"),
+          "build",
+          ...rest,
+        ])
+      : resolvePnpmSpawnCall(["run", "build", ...rest]);
+    runSpawnCallSync(buildCall, "Control UI build");
+    if (rest.some((arg) => arg === "--help" || arg === "-h")) {
+      return;
+    }
+    for (const validator of [
+      "check-control-ui-precompressed-assets.mts",
+      "check-control-ui-performance.mts",
+    ]) {
+      runSpawnCallSync(
+        resolveSpawnCall(
+          process.execPath,
+          ["--import", "tsx", path.join(repoRoot, "scripts", validator)],
+          process.env,
+          { cwd: repoRoot },
+        ),
+        validator,
+      );
+    }
+    return;
   }
 
   runPnpm(["run", script, ...rest]);

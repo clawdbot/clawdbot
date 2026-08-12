@@ -24,6 +24,8 @@ export type SessionPatch = {
 
 export type SessionPatchOptions = {
   agentId?: string;
+  /** Durable identity observed with the row before an archive or restore action. */
+  expectedSessionId?: string;
   /** Let a caller with stricter lifecycle ownership publish the resolved model value. */
   deferModelOverride?: boolean;
   /** Keep optimistic model state bound to the UI owner that initiated the patch. */

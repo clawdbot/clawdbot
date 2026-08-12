@@ -85,14 +85,17 @@ export function createOpenClawAgentHarness(): AgentHarnessV2 {
     contextEngineHostCapabilities: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST.capabilities,
     supports: () => ({ supported: true, priority: 0 }),
     runAttempt: (params) => runEmbeddedAttempt(params as EmbeddedRunAttemptParams),
-    runIsolatedCompletion: async (params) => {
+    runIsolatedCompletionV2: async (params) => {
+      if (params.authorization.owner !== "host") {
+        throw new Error("The built-in OpenClaw harness requires host-prepared authorization.");
+      }
       const timeoutSignal = AbortSignal.timeout(params.timeoutMs);
       const signal = params.abortSignal
         ? AbortSignal.any([params.abortSignal, timeoutSignal])
         : timeoutSignal;
       const assistant = await completeWithPreparedSimpleCompletionModel({
-        model: params.model,
-        auth: params.auth,
+        model: params.authorization.model,
+        auth: params.authorization.auth,
         cfg: params.config,
         context: {
           systemPrompt: params.systemPrompt,

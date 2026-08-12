@@ -569,7 +569,6 @@ export { prependAgentSteeringPrompt };
 
 const publicApi = createSubagentRegistryPublicApi({
   runs: subagentRuns,
-  deps: () => subagentRegistryDeps,
   persist: persistSubagentRuns,
   persistOrThrow: persistSubagentRunsOrThrow,
   restoreOnce: () => subagentRestorer.restoreOnce(),

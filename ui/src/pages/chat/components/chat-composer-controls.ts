@@ -309,7 +309,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
             ? nothing
             : html`
                 <span
-                  class="agent-chat__sr-only agent-chat__voice-status"
+                  class="sr-only agent-chat__voice-status"
                   role="status"
                   aria-live="polite"
                   aria-atomic="true"

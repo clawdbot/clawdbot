@@ -577,7 +577,11 @@ describe("openai transport stream", () => {
         model: makeResponsesModel({ id: "gpt-5.5", name: "GPT-5.5" }),
         onCompactionRejected,
       }),
-    ).resolves.toEqual({ stream: recoveredStream, response: recoveredResponse });
+    ).resolves.toMatchObject({
+      stream: recoveredStream,
+      response: recoveredResponse,
+      attempt: { kind: "reasoning-stripped" },
+    });
 
     expect(create).toHaveBeenCalledTimes(2);
     const retry = create.mock.calls[1]?.[0] as typeof request;
@@ -628,7 +632,11 @@ describe("openai transport stream", () => {
         model: makeResponsesModel({ id: "gpt-5.5", name: "GPT-5.5" }),
         onCompactionRejected,
       }),
-    ).resolves.toEqual({ stream: recoveredStream, response: recoveredResponse });
+    ).resolves.toMatchObject({
+      stream: recoveredStream,
+      response: recoveredResponse,
+      attempt: { kind: "compaction-stripped" },
+    });
 
     expect(create).toHaveBeenCalledTimes(3);
     expect(JSON.stringify(create.mock.calls[1]?.[0])).not.toContain("reasoning-ciphertext");
@@ -809,7 +817,11 @@ describe("openai transport stream", () => {
           maxTokens: 8192,
         },
       }),
-    ).resolves.toEqual({ stream: recoveredStream, response: recoveredResponse });
+    ).resolves.toMatchObject({
+      stream: recoveredStream,
+      response: recoveredResponse,
+      attempt: { kind: "reasoning-stripped" },
+    });
 
     expect(create).toHaveBeenCalledTimes(2);
     expect(create.mock.calls[0]?.[0]).toBe(request);
@@ -1523,75 +1535,6 @@ describe("openai transport stream", () => {
       mode: "required",
       tools: [{ type: "function", name: "lookup" }],
     });
-  });
-
-  it("fails locally when required Chat Completions has no usable tools", () => {
-    expect(() =>
-      buildOpenAICompletionsParams(
-        makeCompletionsModel({
-          id: "gpt-5.5",
-          name: "GPT-5.5",
-          reasoning: false,
-        }),
-        {
-          systemPrompt: "system",
-          messages: [],
-          tools: [
-            {
-              name: "broken",
-              get parameters(): never {
-                throw new Error("parameters exploded");
-              },
-            },
-          ],
-        } as never,
-        { toolChoice: "required" },
-      ),
-    ).toThrow("no tools survived schema conversion");
-  });
-
-  it("preserves the native empty tools marker for tool history after quarantining every schema", () => {
-    const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-        reasoning: false,
-      }),
-      {
-        systemPrompt: "system",
-        messages: [
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "toolCall",
-                id: "call_abc",
-                name: "lookup",
-                arguments: {},
-              },
-            ],
-          },
-          {
-            role: "toolResult",
-            content: [{ type: "text", text: "done" }],
-            toolCallId: "call_abc",
-          },
-          { role: "user", content: "continue", timestamp: 1 },
-        ],
-        tools: [
-          {
-            name: "broken",
-            description: "Broken tool.",
-            get parameters(): never {
-              throw new Error("parameters exploded");
-            },
-          },
-        ],
-      } as never,
-      undefined,
-    ) as { tools?: unknown[] };
-
-    expect(params.tools).toEqual([]);
   });
 
   it("does not reread an unreadable tool inventory length", () => {

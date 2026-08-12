@@ -1,13 +1,13 @@
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 /**
  * Subagent spawn-depth lookup helpers.
  *
  * Reads persisted session store state to recover spawn depth and parent lineage across restarts.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveStorePath } from "../../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { listSessionEntriesReadOnly } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { parseStrictNonNegativeInteger } from "../../../infra/parse-finite-number.js";
 import { getSubagentDepth, parseAgentSessionKey } from "../../../sessions/session-key-utils.js";
 import { resolveDefaultAgentId } from "../../agent-scope.js";
 
@@ -105,7 +105,9 @@ function resolveEntryForSessionKey(params: {
     if (!parsed?.agentId) {
       continue;
     }
-    const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed.agentId });
+    const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
+      agentId: parsed.agentId,
+    });
     let store = params.cache.get(storePath);
     if (!store) {
       store = readSubagentSessionStore(storePath, parsed.agentId);

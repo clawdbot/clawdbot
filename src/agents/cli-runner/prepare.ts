@@ -114,7 +114,7 @@ import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
-import { expandToolGroups, normalizeToolName } from "../tool-policy.js";
+import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -171,7 +171,7 @@ type RunCliAgentPrepareParams = RunCliAgentParams & {
   systemAgentTool?: import("../tools/system-agent-tool.js").SystemAgentToolOptions;
 };
 
-const prepareDeps = {
+const defaultPrepareDeps = {
   isWorkspaceBootstrapPending: isWorkspaceBootstrapPendingImpl,
   makeBootstrapWarn: makeBootstrapWarnImpl,
   resolveBootstrapContextForRun: resolveBootstrapContextForRunImpl,
@@ -195,6 +195,7 @@ const prepareDeps = {
   readExternalCliBootstrapCredential,
   resolveApiKeyForProfile,
 };
+const prepareDeps = { ...defaultPrepareDeps };
 
 function resolveReusableCliSessionId(reusableCliSession: CliReusableSession): string | undefined {
   return reusableCliSession.mode === "reuse" || reusableCliSession.mode === "reuse-with-drift"
@@ -320,6 +321,11 @@ function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): vo
   Object.assign(prepareDeps, overrides);
 }
 
+/** Restores preparation dependencies after CLI runner tests. */
+function resetCliRunnerPrepareTestDeps(): void {
+  Object.assign(prepareDeps, defaultPrepareDeps);
+}
+
 /** Returns whether profile-owned prepared execution should skip local CLI epoch hashing. */
 function shouldSkipLocalCliCredentialEpoch(params: {
   authEpochMode?: CliBackendAuthEpochMode;
@@ -337,6 +343,7 @@ function shouldSkipLocalCliCredentialEpoch(params: {
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cliRunnerPrepareTestApi")] = {
+    resetCliRunnerPrepareTestDeps,
     setCliRunnerPrepareTestDeps: (overrides: Record<string, unknown>) => {
       setCliRunnerPrepareTestDeps(overrides as Partial<typeof prepareDeps>);
     },
@@ -479,13 +486,13 @@ export async function prepareCliRunContext(
         `CLI backend ${backendResolved.id} received conflicting runtime tool policies`,
       );
     }
-    if (params.toolsAllow.some((toolName) => normalizeToolName(toolName) === "*")) {
+    if (params.toolsAllow.some((toolName) => normalizeToolPolicyName(toolName) === "*")) {
       params = { ...params, toolsAllow: undefined };
     } else {
       runtimeToolsAllowPolicy = [...params.toolsAllow];
       const fallbackOpenClawTools = uniqueStrings(
         expandToolGroups(params.toolsAllow)
-          .map((toolName) => normalizeToolName(toolName))
+          .map((toolName) => normalizeToolPolicyName(toolName))
           .filter(Boolean),
       );
       if (
@@ -795,7 +802,7 @@ export async function prepareCliRunContext(
   );
   const promptBuildRestrictsTools =
     promptBuildToolsAllow !== undefined &&
-    !promptBuildToolsAllow.some((toolName) => normalizeToolName(toolName) === "*");
+    !promptBuildToolsAllow.some((toolName) => normalizeToolPolicyName(toolName) === "*");
   const isClaudeCli = isClaudeCliBackendId(params.provider);
   const requestedContextModelId = isClaudeCli ? resolveClaudeCliContextModelId(modelId) : modelId;
   const normalizedContextModelId = isClaudeCli
@@ -1055,7 +1062,7 @@ export async function prepareCliRunContext(
     : hookFilteredProjectedTools;
   const promptTools = bundleMcpEnabled ? projectedTools : [];
   const messageToolAvailable = promptTools.some(
-    (tool) => normalizeToolName(tool.name) === "message",
+    (tool) => normalizeToolPolicyName(tool.name) === "message",
   );
   const resultContentSourceByToolName = new Map(
     promptTools.flatMap((tool) =>

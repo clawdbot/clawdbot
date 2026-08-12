@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isIncognitoSessionKey } from "../incognito-session.js";
@@ -122,7 +123,7 @@ function watchCodexNativeCompactionCompletion(params: {
         embeddedAgentLog.error("failed to retire unconfirmed codex app-server compaction", {
           threadId: params.threadId,
           turnId: compactionTurnId,
-          reason: formatCompactionError(error),
+          reason: coerceErrorMessage(error),
         });
         // Keep the lifecycle fence held when neither terminal state nor thread
         // retirement can be proven. Releasing would permit same-thread overlap.
@@ -159,7 +160,7 @@ function watchCodexNativeCompactionCompletion(params: {
         embeddedAgentLog.warn("codex app-server compaction interrupt request failed", {
           threadId: params.threadId,
           turnId: compactionTurnId,
-          reason: formatCompactionError(error),
+          reason: coerceErrorMessage(error),
         });
       });
   };
@@ -509,7 +510,7 @@ async function compactCodexNativeThread(
     return {
       ok: false,
       compacted: false,
-      reason: formatCompactionError(error),
+      reason: coerceErrorMessage(error),
     };
   }
   const { appServer, usesSupervisionConnection } = connection;
@@ -651,7 +652,7 @@ async function compactCodexNativeThread(
             // Transport errors after the write leave the server-side start
             // ambiguous. Retire or detach the thread before releasing its fence.
             await completionWatch.retireUnconfirmedRequest(
-              `codex app-server compaction start was unconfirmed: ${formatCompactionError(error)}`,
+              `codex app-server compaction start was unconfirmed: ${coerceErrorMessage(error)}`,
             );
           }
         };
@@ -753,7 +754,7 @@ async function compactCodexNativeThread(
           if (isCodexThreadNotFoundError(error)) {
             return failedCodexThreadBindingCompactionResult(params, {
               threadId: binding.threadId,
-              reason: formatCompactionError(error),
+              reason: coerceErrorMessage(error),
               recovery: "stale_thread_binding",
             });
           }
@@ -761,12 +762,12 @@ async function compactCodexNativeThread(
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
             threadId: binding.threadId,
-            reason: formatCompactionError(error),
+            reason: coerceErrorMessage(error),
           });
           return {
             ok: false,
             compacted: false,
-            reason: formatCompactionError(error),
+            reason: coerceErrorMessage(error),
           };
         } finally {
           completionWatch.cancel();
@@ -963,13 +964,7 @@ function isCodexThreadNotFoundError(error: unknown): boolean {
   // compaction.rs asserts message.contains("thread not found")). So the message
   // is the authoritative positive signal here, not the generic code. This is a
   // self-heal recovery gate, not user-facing classification.
-  return formatCompactionError(error).toLowerCase().includes("thread not found");
+  return coerceErrorMessage(error).toLowerCase().includes("thread not found");
 }
 
-function formatCompactionError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error);
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

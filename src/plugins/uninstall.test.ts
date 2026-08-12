@@ -14,6 +14,10 @@ import {
 import { removePluginFromConfig } from "./uninstall-config.js";
 import { pruneManagedNpmPeerDependenciesAfterUninstall } from "./uninstall-managed-npm.js";
 import {
+  prepareConfigForPendingPluginDirectoryRemovalSet,
+  recordPluginPackageUninstallPlan,
+} from "./uninstall-package-plan.js";
+import {
   applyPluginUninstallDirectoryRemoval,
   planPluginUninstall,
   resolveUninstallChannelConfigKeys,
@@ -28,8 +32,19 @@ vi.mock("../process/exec.js", () => ({
 type PluginConfig = NonNullable<OpenClawConfig["plugins"]>;
 type PluginInstallRecord = NonNullable<PluginConfig["installs"]>[string];
 
-async function uninstallPlugin(params: Parameters<typeof planPluginUninstall>[0]) {
-  const plan = planPluginUninstall(params);
+async function uninstallPlugin(
+  params: Parameters<typeof planPluginUninstall>[0] & {
+    runtimePluginIds?: readonly string[];
+    runtimeLoadPaths?: readonly string[];
+  },
+) {
+  const { runtimePluginIds, runtimeLoadPaths, ...planParams } = params;
+  const plan = planPluginUninstall(
+    recordPluginPackageUninstallPlan(planParams, {
+      runtimePluginIds: runtimePluginIds ?? [params.pluginId],
+      ...(runtimeLoadPaths ? { runtimeLoadPaths } : {}),
+    }),
+  );
   if (!plan.ok) {
     return plan;
   }
@@ -249,6 +264,26 @@ function createSingleNpmInstallConfig(installPath: string): OpenClawConfig {
   });
 }
 
+it("stages only runtime child entries while a package directory removal is pending", () => {
+  const staged = prepareConfigForPendingPluginDirectoryRemovalSet(
+    {
+      plugins: {
+        entries: {
+          "pack/one": { enabled: true },
+          "pack/two": { enabled: true },
+        },
+      },
+    },
+    ["pack/one", "pack/two"],
+  );
+
+  expect(staged.plugins?.entries).toEqual({
+    "pack/one": { enabled: false },
+    "pack/two": { enabled: false },
+  });
+  expect(staged.plugins?.entries).not.toHaveProperty("pack");
+});
+
 async function createPluginDirFixture(baseDir: string, pluginId = "my-plugin") {
   const pluginDir = path.join(baseDir, pluginId);
   await fs.mkdir(pluginDir, { recursive: true });
@@ -312,6 +347,53 @@ describe("resolveUninstallChannelConfigKeys", () => {
         channelIds: ["defaults", "discord", "discord", "modelByChannel", "slack"],
       }),
     ).toEqual(["discord", "slack"]);
+  });
+});
+
+describe("planPluginUninstall package ownership", () => {
+  it("removes every owned child policy while planning one owner install removal", () => {
+    const result = planPluginUninstall(
+      recordPluginPackageUninstallPlan(
+        {
+          config: {
+            plugins: {
+              allow: ["pack/one", "pack/two", "other"],
+              deny: ["pack/two"],
+              entries: {
+                "pack/one": { enabled: true },
+                "pack/two": { enabled: false },
+                other: { enabled: true },
+              },
+              installs: {
+                pack: { source: "path", installPath: "/managed/pack" },
+              },
+              slots: { memory: "pack/two" },
+            },
+          },
+          pluginId: "pack",
+          deleteFiles: false,
+        },
+        { runtimePluginIds: ["pack/one", "pack/two"] },
+      ),
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
+    expect(result.directoryRemoval).toBeNull();
+    expect(result.config.plugins).toEqual({
+      allow: ["other"],
+      entries: { other: { enabled: true } },
+      slots: { memory: "memory-core" },
+    });
+    expect(result.actions).toMatchObject({
+      entry: true,
+      install: true,
+      allowlist: true,
+      denylist: true,
+      memorySlot: true,
+    });
   });
 });
 
@@ -1068,12 +1150,12 @@ describe("uninstallPlugin", () => {
       baseDir: tempDir,
     });
 
-    const plan = planPluginUninstall({
-      config,
-      pluginId,
-      deleteFiles: true,
-      extensionsDir,
-    });
+    const plan = planPluginUninstall(
+      recordPluginPackageUninstallPlan(
+        { config, pluginId, deleteFiles: true, extensionsDir },
+        { runtimePluginIds: [pluginId] },
+      ),
+    );
 
     expect(plan.ok).toBe(true);
     if (!plan.ok) {
@@ -1113,21 +1195,26 @@ describe("uninstallPlugin", () => {
     await fs.writeFile(path.join(pluginDir, "package.json"), "{}");
     await fs.writeFile(path.join(hoistedDir, "package.json"), "{}");
 
-    const plan = planPluginUninstall({
-      config: createPluginConfig({
-        entries: createSinglePluginEntries("openclaw-kitchen-sink-fixture"),
-        installs: {
-          "openclaw-kitchen-sink-fixture": {
-            source: "npm",
-            spec: "@openclaw/kitchen-sink@1.0.0",
-            installPath: pluginDir,
-          },
+    const plan = planPluginUninstall(
+      recordPluginPackageUninstallPlan(
+        {
+          config: createPluginConfig({
+            entries: createSinglePluginEntries("openclaw-kitchen-sink-fixture"),
+            installs: {
+              "openclaw-kitchen-sink-fixture": {
+                source: "npm",
+                spec: "@openclaw/kitchen-sink@1.0.0",
+                installPath: pluginDir,
+              },
+            },
+          }),
+          pluginId: "openclaw-kitchen-sink-fixture",
+          deleteFiles: true,
+          extensionsDir,
         },
-      }),
-      pluginId: "openclaw-kitchen-sink-fixture",
-      deleteFiles: true,
-      extensionsDir,
-    });
+        { runtimePluginIds: ["openclaw-kitchen-sink-fixture"] },
+      ),
+    );
 
     expect(plan.ok).toBe(true);
     if (!plan.ok) {
@@ -1178,21 +1265,26 @@ describe("uninstallPlugin", () => {
     await fs.writeFile(path.join(pluginDir, "package.json"), "{}");
     await fs.writeFile(path.join(hoistedDir, "package.json"), "{}");
 
-    const plan = planPluginUninstall({
-      config: createPluginConfig({
-        entries: createSinglePluginEntries("openclaw-kitchen-sink-fixture"),
-        installs: {
-          "openclaw-kitchen-sink-fixture": {
-            source: "npm",
-            spec: "@openclaw/kitchen-sink@1.0.0",
-            installPath: pluginDir,
-          },
+    const plan = planPluginUninstall(
+      recordPluginPackageUninstallPlan(
+        {
+          config: createPluginConfig({
+            entries: createSinglePluginEntries("openclaw-kitchen-sink-fixture"),
+            installs: {
+              "openclaw-kitchen-sink-fixture": {
+                source: "npm",
+                spec: "@openclaw/kitchen-sink@1.0.0",
+                installPath: pluginDir,
+              },
+            },
+          }),
+          pluginId: "openclaw-kitchen-sink-fixture",
+          deleteFiles: true,
+          extensionsDir,
         },
-      }),
-      pluginId: "openclaw-kitchen-sink-fixture",
-      deleteFiles: true,
-      extensionsDir,
-    });
+        { runtimePluginIds: ["openclaw-kitchen-sink-fixture"] },
+      ),
+    );
 
     expect(plan.ok).toBe(true);
     if (!plan.ok) {

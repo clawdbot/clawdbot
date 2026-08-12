@@ -162,6 +162,11 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       exportName: "registerNodeCli",
     },
     {
+      commandNames: ["connect"],
+      loadModule: () => import("../connect-cli.js"),
+      exportName: "registerConnectCli",
+    },
+    {
       commandNames: ["worker"],
       loadModule: () => import("../worker-cli.js"),
       exportName: "registerWorkerCli",

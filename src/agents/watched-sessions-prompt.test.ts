@@ -1,6 +1,6 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
-import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { buildWatchedSessionsHarnessContext } from "../plugin-sdk/agent-harness-runtime.js";
 import { registerMainSessionGroupWatch } from "../sessions/session-state-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -37,7 +37,7 @@ describe("prepareWatchedSessionsPrompt", () => {
     stubStateDir();
     watchGroup("agent:main:telegram:group:beta");
     watchGroup("agent:main:telegram:group:alpha:topic:7");
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey: "agent:main:telegram:group:beta" },
       { sessionId: "session-beta", displayName: "Family group", updatedAt: 1 },
     );

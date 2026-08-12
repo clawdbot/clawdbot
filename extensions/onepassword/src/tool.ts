@@ -70,7 +70,7 @@ export function redactPersistedOnePasswordResult(
   if (!hasSecretValue) {
     return undefined;
   }
-  const safeDetails = isRecord(details) ? details : {};
+  const safeDetails = asNonArrayRecord(details);
   const persisted = {
     ok: true,
     redacted: true,
@@ -117,3 +117,4 @@ export function createOnePasswordTool(
     },
   };
 }
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";

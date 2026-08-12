@@ -30,7 +30,7 @@ import {
   resetActiveRecallStateForTests,
   setCachedResult,
   shouldCacheResult,
-  toSingleLineLogValue,
+  toSingleLineErrorMessage,
 } from "./recall-state.js";
 import { maybeResolveActiveRecall } from "./recall.js";
 import {
@@ -376,9 +376,7 @@ export default definePluginEntry({
                 runId: ctx.runId,
               }).catch((error: unknown) => {
                 api.logger.debug?.(
-                  `active-memory: lane-1 trigger recall failed: ${toSingleLineLogValue(
-                    error instanceof Error ? error.message : String(error),
-                  )}`,
+                  `active-memory: lane-1 trigger recall failed: ${toSingleLineErrorMessage(error)}`,
                 );
                 return { hasStrongHit: false, injectedCount: 0 };
               });
@@ -483,9 +481,7 @@ export default definePluginEntry({
             if (deadlineController.signal.aborted) {
               return undefined;
             }
-            const message = toSingleLineLogValue(
-              error instanceof Error ? error.message : String(error),
-            );
+            const message = toSingleLineErrorMessage(error);
             api.logger.warn?.(
               `active-memory: before_prompt_build failed, skipping memory lookup: ${message}`,
             );
@@ -547,9 +543,7 @@ export default definePluginEntry({
         runId: ctx.runId,
       }).catch((error: unknown) => {
         api.logger.debug?.(
-          `active-memory: lane-1 prewarm failed: ${toSingleLineLogValue(
-            error instanceof Error ? error.message : String(error),
-          )}`,
+          `active-memory: lane-1 prewarm failed: ${toSingleLineErrorMessage(error)}`,
         );
       });
     });
@@ -589,4 +583,4 @@ const testing = {
   getCircuitBreakerEntry,
 };
 
-export { testing, testing as __testing };
+export { testing };

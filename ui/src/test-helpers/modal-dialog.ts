@@ -70,6 +70,13 @@ export function answerConfirmDialog(actions: HTMLElement, choice: "confirm" | "c
   button.click();
 }
 
+/** Let each dialog owner release its module state before a test removes the DOM. */
+export function cancelOpenModalDialogs() {
+  for (const dialog of document.body.querySelectorAll("openclaw-modal-dialog")) {
+    dialog.dispatchEvent(new CustomEvent("modal-cancel"));
+  }
+}
+
 /** Await a dialog whose owner loads it behind a lazy import, then read it. */
 export async function waitForRenderedModalDialog(container: HTMLElement) {
   await vi.waitFor(() => {

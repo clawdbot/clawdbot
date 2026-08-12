@@ -31,6 +31,7 @@ type GatewayRequestContextParams = {
     "cronState" | "controlUiSessionPullRequests" | "sessionViewerPresence"
   >;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
+  gatewayTlsFingerprint?: GatewayRequestContext["gatewayTlsFingerprint"];
   sessionCompanion: SessionCompanionService;
   sessionObserver: SessionObserverService;
   getMcpAppSandboxPort?: GatewayRequestContext["getMcpAppSandboxPort"];
@@ -79,6 +80,7 @@ type GatewayRequestContextParams = {
   }) => void;
   nodeRegistry: GatewayRequestContext["nodeRegistry"];
   workerEnvironmentService?: GatewayRequestContext["workerEnvironmentService"];
+  hostDesktopService?: GatewayRequestContext["hostDesktopService"];
   workerSessionPlacementService?: GatewayRequestContext["workerSessionPlacementService"];
   workerPlacementDispatchService?: GatewayRequestContext["workerPlacementDispatchService"];
   validateAgentRuntimeApprovalAuthority: GatewayRequestContext["validateAgentRuntimeApprovalAuthority"];
@@ -173,6 +175,7 @@ export function createGatewayRequestContext(
       return params.runtimeState.cronState.storePath;
     },
     getRuntimeConfig: params.getRuntimeConfig,
+    gatewayTlsFingerprint: params.gatewayTlsFingerprint,
     controlUiSessionPullRequests: params.runtimeState.controlUiSessionPullRequests,
     sessionViewerPresence: params.runtimeState.sessionViewerPresence,
     sessionCompanion: params.sessionCompanion,
@@ -365,6 +368,7 @@ export function createGatewayRequestContext(
     ...(params.workerEnvironmentService
       ? { workerEnvironmentService: params.workerEnvironmentService }
       : {}),
+    ...(params.hostDesktopService ? { hostDesktopService: params.hostDesktopService } : {}),
     ...(params.workerSessionPlacementService
       ? { workerSessionPlacementService: params.workerSessionPlacementService }
       : {}),

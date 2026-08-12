@@ -1,18 +1,18 @@
 /**
  * Updates persisted session metadata after agent command runs.
  */
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   SESSION_TOTAL_TOKENS_VERSION,
   setSessionRuntimeModel,
   type SessionEntry,
 } from "../../config/sessions.js";
-import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { projectSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
 import {
   clearCliSession,
   getCliSessionBinding,
@@ -212,7 +212,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
       contextTokens,
       promptTokens,
     });
-    const runEstimatedCostUsd = resolveNonNegativeNumber(
+    const runEstimatedCostUsd = asNonNegativeFiniteNumber(
       estimateUsageCost({
         usage,
         cost: resolveModelCostConfig({
@@ -286,7 +286,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
       }
     : next;
   const maintenanceConfig = resolveMaintenanceConfigFromInput(cfg.session?.maintenance);
-  const persisted = await patchSessionEntry(
+  const persisted = await patchSessionEntryCore(
     {
       storePath,
       sessionKey,
@@ -338,7 +338,7 @@ export async function clearCliSessionInStore(params: {
   }
 
   let didClear = false;
-  const persisted = await patchSessionEntry(
+  const persisted = await patchSessionEntryCore(
     {
       storePath,
       sessionKey,
@@ -385,7 +385,7 @@ export async function consumeCliSessionForkInStore(params: {
   if (!entry || binding?.sessionId !== expectedCliSessionId || binding.forkNextResume !== true) {
     return undefined;
   }
-  const persisted = await patchSessionEntry(
+  const persisted = await patchSessionEntryCore(
     { storePath, sessionKey },
     (currentEntry) => {
       const currentBinding = currentEntry.cliSessionBindings?.[provider];
@@ -422,7 +422,7 @@ export async function restoreCliSessionForkInStore(params: {
   if (!entry || binding?.sessionId !== expectedCliSessionId || binding.forkNextResume === true) {
     return undefined;
   }
-  const persisted = await patchSessionEntry(
+  const persisted = await patchSessionEntryCore(
     { storePath, sessionKey },
     (currentEntry) => {
       const currentBinding = currentEntry.cliSessionBindings?.[provider];
@@ -465,7 +465,7 @@ export async function persistCliSessionForkSuccessorInStore(params: {
   if (!entry || successorCliSessionId === expectedCliSessionId) {
     return undefined;
   }
-  const persisted = await patchSessionEntry(
+  const persisted = await patchSessionEntryCore(
     { storePath, sessionKey },
     (currentEntry) => {
       const currentBinding = currentEntry.cliSessionBindings?.[provider];
@@ -521,7 +521,7 @@ export async function recordCliCompactionInStore(params: {
       new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, newSessionId]),
     );
   }
-  const tokensAfterCompaction = resolveNonNegativeNumber(params.tokensAfter);
+  const tokensAfterCompaction = asNonNegativeFiniteNumber(params.tokensAfter);
   next.contextBudgetStatus = undefined;
   if (tokensAfterCompaction !== undefined) {
     next.totalTokens = Math.floor(tokensAfterCompaction);
@@ -540,7 +540,7 @@ export async function recordCliCompactionInStore(params: {
     next.cacheWrite = undefined;
   }
 
-  const persisted = await patchSessionEntry(
+  const persisted = await patchSessionEntryCore(
     {
       storePath,
       sessionKey,

@@ -4,6 +4,7 @@ import {
   type Api,
   type ProviderReplayState,
 } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   FunctionTool,
   ResponseCreateParamsStreaming,
@@ -58,6 +59,59 @@ export class OpenAIResponsesWebSocketPostDispatchError extends Error {
   }
 }
 
+class OpenAIResponsesWebSocketServerError extends Error {
+  constructor(
+    readonly code: string,
+    readonly status: number | undefined,
+    readonly param: string | null,
+    message: string,
+    cause: unknown,
+  ) {
+    super(message, { cause });
+    this.name = "OpenAIResponsesWebSocketServerError";
+  }
+}
+
+export class OpenAIResponsesWebSocketSafeRetryError extends OpenAIResponsesWebSocketServerError {}
+
+function readWebSocketServerError(value: unknown) {
+  if (!isRecord(value) || value.type !== "error") {
+    return undefined;
+  }
+  const details = isRecord(value.error) ? value.error : value;
+  if (typeof details.code !== "string" || typeof details.message !== "string") {
+    return undefined;
+  }
+  const rawStatus = value.status ?? value.status_code;
+  return {
+    code: details.code,
+    message: details.message,
+    param: typeof details.param === "string" ? details.param : null,
+    status: typeof rawStatus === "number" ? rawStatus : undefined,
+  };
+}
+
+export function parseOpenAIResponsesWebSocketServerError(cause: unknown) {
+  if (!isRecord(cause)) {
+    return undefined;
+  }
+  let details = readWebSocketServerError(cause.error) ?? readWebSocketServerError(cause);
+  if (!details && typeof cause.message === "string") {
+    try {
+      details = readWebSocketServerError(JSON.parse(cause.message));
+    } catch {}
+  }
+  if (!details) {
+    return undefined;
+  }
+  const ErrorClass =
+    details.code === "previous_response_not_found" ||
+    details.code === "websocket_connection_limit_reached"
+      ? OpenAIResponsesWebSocketSafeRetryError
+      : OpenAIResponsesWebSocketServerError;
+  return new ErrorClass(details.code, details.status, details.param, details.message, cause);
+}
+
 export type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
 export type ReplayableResponseCompactionItem = Omit<ResponseCompactionItem, "id"> & { id?: string };
 export type OpenAIResponsesReasoningReplayMetadata = {
@@ -91,7 +145,11 @@ export type OpenAIResponsesOptions = BaseOpenAIStreamOptions & {
 const PROMPT_OBSERVER = Symbol("openaiResponsesPromptObserver");
 export type ResponsesPromptObservation = {
   egress: "responses-sdk" | "responses-websocket" | "native-codex-websocket" | "native-codex-sse";
-  payloadVariant: "initial" | "reasoning-stripped" | "compaction-stripped";
+  payloadVariant:
+    | "initial"
+    | "reasoning-stripped"
+    | "compaction-stripped"
+    | "continuation-rejected";
   promptSource: "instructions" | "input.developer" | "input.system" | "missing";
   expectedChars: number;
   observedChars: number;
@@ -131,6 +189,7 @@ export type OpenAIResponsesRequestParams = {
   prompt_cache_key?: string;
   prompt_cache_retention?: "24h";
   metadata?: Record<string, string>;
+  previous_response_id?: string;
   store?: boolean;
   max_output_tokens?: number;
   temperature?: number;

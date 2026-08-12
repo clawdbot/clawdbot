@@ -15,7 +15,7 @@ import type {
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   patchSessionEntryWithKey,
-  resolveStorePath,
+  resolveSessionStorePathCore,
   type SessionEntry,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -715,7 +715,7 @@ export function createSessionStatusTool(opts?: {
       let agentId = isExplicitAgentKey
         ? resolveAgentIdFromSessionKey(requestedKeyInput, configuredDefaultAgentId)
         : requesterAgentId;
-      let storePath = resolveStorePath(cfg.session?.store, { agentId });
+      let storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
       let storeScopedRequesterKey = resolveStoreScopedRequesterKey({
         requesterKey: effectiveRequesterKey,
         agentId,
@@ -767,7 +767,7 @@ export function createSessionStatusTool(opts?: {
           requestedKeyRaw = visibleSession.key;
           requestedKeyInput = requestedKeyRaw.trim();
           agentId = resolveAgentIdFromSessionKey(visibleSession.key, configuredDefaultAgentId);
-          storePath = resolveStorePath(cfg.session?.store, { agentId });
+          storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
           storeScopedRequesterKey = resolveStoreScopedRequesterKey({
             requesterKey: effectiveRequesterKey,
             agentId,

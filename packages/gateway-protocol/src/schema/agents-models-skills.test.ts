@@ -181,6 +181,7 @@ describe("ModelsListParamsSchema", () => {
       ModelsListParamsSchema,
       { view: "provider-config" },
       {
+        agentId: "writer",
         view: "all",
         includeProviderCapabilities: true,
       },
@@ -218,16 +219,40 @@ describe("ModelsListResultSchema", () => {
       name: "GPT Image",
       provider: "openai",
       agentRuntime: { id: "codex", fallback: "openclaw", source: "model" },
+      thinkingLevels: [
+        { id: "off", label: "Off" },
+        { id: "xhigh", label: "Extra high" },
+      ],
+      thinkingDefault: "xhigh",
       input: ["text", "image", "audio", "video", "document"],
     };
 
-    expectAccepted(ModelsListResultSchema, { models: [model] });
+    expectAccepted(
+      ModelsListResultSchema,
+      { models: [model] },
+      {
+        models: [],
+        providerOutcomes: [
+          {
+            provider: "openai",
+            profileId: "openai:chatgpt",
+            status: "auth-rejected",
+          },
+        ],
+      },
+    );
     expectRejected(
       ModelsListResultSchema,
       {
         models: [{ ...model, agentRuntime: { id: "codex", source: "unknown" } }],
       },
+      { models: [{ ...model, thinkingLevels: [{ id: "", label: "Off" }] }] },
       { models: [{ ...model, input: ["text", "binary"] }] },
+      { models: [], providerOutcomes: [{ provider: "openai", status: "unknown" }] },
+      {
+        models: [],
+        providerOutcomes: [{ provider: "openai", profileId: "", status: "auth-rejected" }],
+      },
     );
   });
 });

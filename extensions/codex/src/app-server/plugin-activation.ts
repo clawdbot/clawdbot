@@ -2,6 +2,7 @@
  * Activates curated Codex marketplace plugins and keeps require-active
  * marketplaces outside OpenClaw's install authority.
  */
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { CodexAppInventoryCache, CodexAppInventoryRequest } from "./app-inventory-cache.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -138,9 +139,7 @@ export async function ensureCodexPluginActivation(
       marketplace: resolved.marketplace,
       diagnostics: [
         {
-          message: `Codex plugin install failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          message: `Codex plugin install failed: ${coerceErrorMessage(error)}`,
         },
       ],
     };
@@ -163,9 +162,7 @@ export async function ensureCodexPluginActivation(
   } catch (error) {
     refreshFailed = true;
     refreshDiagnostics.push({
-      message: `Codex plugin runtime refresh failed after install: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      message: `Codex plugin runtime refresh failed after install: ${coerceErrorMessage(error)}`,
     });
   }
   const authRequired = installResponse.appsNeedingAuth.length > 0;
@@ -212,7 +209,7 @@ async function refreshCodexPluginRuntimeState(params: {
     } satisfies v2.HooksListParams) as Promise<v2.HooksListResponse>);
   } catch (error) {
     diagnostics.push({
-      message: `Codex hooks refresh skipped: ${error instanceof Error ? error.message : String(error)}`,
+      message: `Codex hooks refresh skipped: ${coerceErrorMessage(error)}`,
     });
   }
   await params.request("config/mcpServer/reload", undefined);
@@ -240,9 +237,7 @@ async function refreshCodexPluginRuntimeState(params: {
       });
     } catch (error) {
       diagnostics.push({
-        message: `Codex app inventory refresh skipped: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        message: `Codex app inventory refresh skipped: ${coerceErrorMessage(error)}`,
       });
     }
   }

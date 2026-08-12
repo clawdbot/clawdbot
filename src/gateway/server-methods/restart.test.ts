@@ -6,14 +6,14 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { restartHandlers } from "./restart.js";
 
-const requestSafeGatewayRestart = vi.hoisted(() => vi.fn());
+const scheduleSafeGatewayRestart = vi.hoisted(() => vi.fn());
 const createSafeGatewayRestartPreflight = vi.hoisted(() => vi.fn());
 const requestGatewayRestartWithSignalAdmission = vi.hoisted(() => vi.fn());
 const readActiveGatewayLockIdentity = vi.hoisted(() => vi.fn());
 
 vi.mock("../../infra/restart-coordinator.js", () => ({
   createSafeGatewayRestartPreflight: () => createSafeGatewayRestartPreflight(),
-  requestSafeGatewayRestart: (opts: unknown) => requestSafeGatewayRestart(opts),
+  scheduleSafeGatewayRestart: (opts: unknown) => scheduleSafeGatewayRestart(opts),
 }));
 
 vi.mock("../../infra/restart.js", () => ({
@@ -55,7 +55,7 @@ function invokeRestartPreflight() {
 }
 
 function mockScheduledRestart(preflight: { safe: boolean; summary: string }) {
-  requestSafeGatewayRestart.mockReturnValueOnce({
+  scheduleSafeGatewayRestart.mockReturnValueOnce({
     ok: true,
     status: "scheduled",
     preflight: { ...preflight, counts: {}, blockers: [] },
@@ -72,7 +72,7 @@ function mockScheduledRestart(preflight: { safe: boolean; summary: string }) {
 }
 
 function expectRestartRequest(skipDeferral: boolean) {
-  expect(requestSafeGatewayRestart).toHaveBeenCalledWith({
+  expect(scheduleSafeGatewayRestart).toHaveBeenCalledWith({
     reason: "operator",
     delayMs: 0,
     skipDeferral,
@@ -81,7 +81,7 @@ function expectRestartRequest(skipDeferral: boolean) {
 
 describe("gateway restart handlers", () => {
   beforeEach(() => {
-    requestSafeGatewayRestart.mockClear();
+    scheduleSafeGatewayRestart.mockClear();
     createSafeGatewayRestartPreflight.mockReset();
     requestGatewayRestartWithSignalAdmission.mockReset();
     requestGatewayRestartWithSignalAdmission.mockReturnValue({ status: "emitted" });
@@ -115,7 +115,7 @@ describe("gateway restart handlers", () => {
     const respond = await invokeRestartPreflight();
 
     expect(respond).toHaveBeenCalledWith(true, preflight);
-    expect(requestSafeGatewayRestart).not.toHaveBeenCalled();
+    expect(scheduleSafeGatewayRestart).not.toHaveBeenCalled();
     expect(requestGatewayRestartWithSignalAdmission).not.toHaveBeenCalled();
   });
 
@@ -162,7 +162,7 @@ describe("gateway restart handlers", () => {
       restartIntent: { waitMs: 30_000 },
     });
 
-    expect(requestSafeGatewayRestart).not.toHaveBeenCalled();
+    expect(scheduleSafeGatewayRestart).not.toHaveBeenCalled();
     expect(requestGatewayRestartWithSignalAdmission).toHaveBeenCalledWith("operator", {
       reason: "operator",
       waitMs: 30_000,
@@ -264,7 +264,7 @@ describe("gateway restart handlers", () => {
 
     await invokeRestartRequest({ reason: "x".repeat(199) + "🧠tail" });
 
-    expect(requestSafeGatewayRestart).toHaveBeenCalledWith({
+    expect(scheduleSafeGatewayRestart).toHaveBeenCalledWith({
       reason: "x".repeat(199),
       delayMs: 0,
       skipDeferral: false,
@@ -274,7 +274,7 @@ describe("gateway restart handlers", () => {
   it("rejects non-object params without scheduling a restart", async () => {
     const respond = await invokeRestartRequest("operator");
 
-    expect(requestSafeGatewayRestart).not.toHaveBeenCalled();
+    expect(scheduleSafeGatewayRestart).not.toHaveBeenCalled();
     expect(respond.mock.calls).toEqual([
       [
         false,
@@ -290,7 +290,7 @@ describe("gateway restart handlers", () => {
   it("rejects array params without scheduling a restart", async () => {
     const respond = await invokeRestartRequest([]);
 
-    expect(requestSafeGatewayRestart).not.toHaveBeenCalled();
+    expect(scheduleSafeGatewayRestart).not.toHaveBeenCalled();
     expect(respond.mock.calls).toEqual([
       [
         false,

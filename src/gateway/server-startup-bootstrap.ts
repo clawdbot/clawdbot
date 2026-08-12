@@ -41,7 +41,7 @@ import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { assertOpenClawStateWriteAllowed } from "../state/openclaw-state-ownership.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import { listCoreGatewayMethodNames } from "./methods/core-descriptors.js";
 import {
@@ -80,7 +80,7 @@ export async function prepareGatewayServerBootstrap(input: {
   const { port, opts, log, logSecrets, loadWorkerEnvironmentStartupModule } = input;
   const formatRuntimeGatewayAuthTokenWarning = input.formatRuntimeGatewayAuthTokenWarning;
   normalizeStateDirEnv(process.env);
-  assertOpenClawStateWriteAllowed({
+  await assertOpenClawStateWriteAllowedAtPath({
     databasePath: resolveOpenClawStateSqlitePath(process.env),
     env: process.env,
   });

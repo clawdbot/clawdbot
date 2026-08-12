@@ -1,3 +1,4 @@
+import "./chat-engine.mocks.test-support.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   fakeOverviewLoader,
@@ -34,17 +35,6 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
 });
 
 describe("SystemAgentChatEngine operations", () => {
-  it("signals the exact agent handoff without an inference turn", async () => {
-    const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
-    const reply = await engine.handle("talk to agent");
-    expect(reply.action).toBe("open-tui");
-    expect(reply.handoff?.kind).toBe("open-tui");
-  });
-
   it("handles the exact agent handoff without consulting a usable model", async () => {
     const runAgentTurn = vi.fn(async () => ({ text: "model reply without a directive" }));
     const engine = new SystemAgentChatEngine({

@@ -242,7 +242,7 @@ function createPluginManifestRecord(
 }
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: () => mockLoadPluginManifestRegistry(),
+  loadPluginManifestRegistryCore: () => mockLoadPluginManifestRegistry(),
   resolveManifestContractPluginIds: () => [],
 }));
 

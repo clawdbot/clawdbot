@@ -37,8 +37,6 @@ describe("createWorkerLiveRuntime", () => {
     for (const event of events) {
       runtime.handleSessionEvent(event);
     }
-    await runtime.flush();
-
     expect(JSON.stringify(emitted)).not.toContain("QUJDRA==");
     expect(JSON.stringify(emitted)).not.toMatch(/"[0-9]+":(?:[0-9]+|\{)/u);
     expect(emitted).toHaveLength(3);

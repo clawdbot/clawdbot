@@ -1,7 +1,10 @@
 // Gateway-first agent CLI implementation with explicit --local embedded execution.
 import fs from "node:fs/promises";
 import { TextDecoder } from "node:util";
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  parseStrictNonNegativeInteger,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_MODES,
@@ -36,7 +39,6 @@ import {
   type EmbeddedStateSignalProcess,
 } from "../infra/embedded-state-lock.js";
 import type { GatewayLockIdentity, GatewayLockOptions } from "../infra/gateway-lock.js";
-import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import {
   startOneShotDiagnosticsExporters,

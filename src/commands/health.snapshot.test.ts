@@ -2,12 +2,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { HealthSummary } from "../gateway/health/types.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createLegacyHealthSnapshotCollector,
@@ -63,8 +63,8 @@ async function loadFreshHealthModulesForTest() {
     loadConfig: () => testConfig,
   }));
   vi.doMock("../config/sessions.js", () => ({
-    resolveStorePath: () => "/tmp/sessions.json",
-    resolveSessionFilePath: vi.fn(() => "/tmp/sessions.json"),
+    resolveSessionStorePathCore: () => "/tmp/sessions.json",
+    resolveSessionFilePathCore: vi.fn(() => "/tmp/sessions.json"),
     loadSessionStore: () => testStore,
     saveSessionStore: vi.fn().mockResolvedValue(undefined),
     readSessionUpdatedAt: vi.fn(() => undefined),
@@ -72,7 +72,7 @@ async function loadFreshHealthModulesForTest() {
     updateLastRoute: vi.fn().mockResolvedValue(undefined),
   }));
   vi.doMock("../config/sessions/paths.js", () => ({
-    resolveStorePath: () => "/tmp/sessions.json",
+    resolveSessionStorePathCore: () => "/tmp/sessions.json",
   }));
   vi.doMock("../config/sessions/session-accessor.js", () => ({
     listSessionEntriesReadOnly: (scope?: { agentId?: string; storePath?: string }) => {

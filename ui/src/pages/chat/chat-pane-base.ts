@@ -57,7 +57,7 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
 import type { SessionRailCommand, SessionRailMode } from "./components/chat-session-rail.ts";
 import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
-import { ChatTranscriptController } from "./components/chat-thread.ts";
+import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 
@@ -160,6 +160,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @litState() protected headerRenameValue = "";
   @litState() protected headerPlatform: string | null = null;
   @litState() protected headerCopiedAction: ChatPaneHeaderAction | null = null;
+  @litState() protected headerPlacementReclaimingKey: string | null = null;
   @litState() protected presencePayload: PresencePayload | undefined;
   @litState() protected sessionSharingStates = new Map<string, ChatSessionSharingState>();
   protected readonly sessionParticipationTracker = new SessionParticipationTracker();
@@ -250,8 +251,9 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       this.sessionCompanionThreads.setDraft(sessionKey, question);
       return;
     }
+    const client = state.client;
     await this.sessionCompanionThreads.submit(sessionKey, question, (key, value) =>
-      requestSessionCompanionAnswer(state.client!, key, value),
+      requestSessionCompanionAnswer(client, key, value),
     );
   };
 

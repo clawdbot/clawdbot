@@ -14,7 +14,7 @@ import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { SessionCompanionAskError } from "./session-companion-ask.js";
 
 export const sessionCompanionHandlers: GatewayRequestHandlers = {
-  "sessions.companion.ask": async ({ params, respond, client, context }) => {
+  "sessions.companion.ask": async ({ params, respond, client, context, signal }) => {
     if (!validateSessionsCompanionAskParams(params)) {
       respond(
         false,
@@ -56,6 +56,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
         sessionKey,
         question,
         connId: client.connId,
+        ...(signal ? { signal } : {}),
       });
       respond(true, result);
     } catch (error) {
@@ -78,18 +79,18 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      const retryable = error.reason === "rate-limited" || error.reason === "context-unavailable";
       respond(
         false,
         undefined,
         errorShape(ErrorCodes.UNAVAILABLE, error.message, {
           details: { reason: error.reason },
-          retryable: error.reason === "rate-limited",
+          retryable,
           ...(error.retryAfterMs ? { retryAfterMs: error.retryAfterMs } : {}),
         }),
       );
     }
   },
-
   "sessions.companion.state": ({ params, respond, context }) => {
     if (!validateSessionsCompanionStateParams(params)) {
       respond(

@@ -2,6 +2,7 @@
 import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
 import { CLOUD_WORKER_FIELD_LABELS } from "./zod-schema.cloud-workers.js";
+import { DESKTOP_FIELD_LABELS } from "./zod-schema.desktop.js";
 
 export const FIELD_LABELS: Record<string, string> = {
   "channels.discord.activities": "Discord Activities",
@@ -102,11 +103,13 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.entries.*.agentRuntime.id": "Legacy Agent Runtime ID",
   cloudWorkers: "Cloud Workers",
   ...CLOUD_WORKER_FIELD_LABELS,
+  ...DESKTOP_FIELD_LABELS,
   gateway: "Gateway",
   "gateway.port": "Gateway Port",
   "gateway.mode": "Gateway Mode",
   "gateway.bind": "Gateway Bind Mode",
   "gateway.customBindHost": "Gateway Custom Bind Host",
+  "gateway.publicOrigin": "Gateway Public Origin",
   "gateway.controlUi": "Control UI",
   "gateway.controlUi.enabled": "Control UI Enabled",
   "gateway.cliAgents": "CLI Agents",
@@ -659,6 +662,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "mcp.servers.*.enabled": "MCP Server Enabled",
   "mcp.servers.*.auth": "MCP Server Auth",
   "mcp.servers.*.oauth": "MCP OAuth",
+  "mcp.servers.*.oauth.identity": "MCP OAuth Identity",
   "mcp.servers.*.oauth.authProfileId": "MCP OAuth Auth Profile",
   "mcp.servers.*.oauth.scope": "MCP OAuth Scope",
   "mcp.servers.*.oauth.redirectUrl": "MCP OAuth Redirect URL",

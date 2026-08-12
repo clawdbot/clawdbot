@@ -230,7 +230,7 @@ vi.mock("../config/sessions/transcript.js", () => ({
 
 vi.mock("../config/sessions.js", () => ({
   resolveMainSessionKeyFromConfig: mocks.resolveMainSessionKeyFromConfig,
-  resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+  resolveSessionStorePathCore: vi.fn(() => "/tmp/sessions.json"),
 }));
 
 vi.mock("../config/sessions/thread-info.js", () => ({
@@ -364,7 +364,7 @@ vi.mock("../infra/outbound/deliver-queue-admission.js", () => ({
 }));
 
 vi.mock("../channels/message/runtime.js", () => ({
-  sendDurableMessageBatch: vi.fn(async (params: Record<string, unknown>) => {
+  sendDurableMessageBatchCore: vi.fn(async (params: Record<string, unknown>) => {
     try {
       const results = await mocks.deliverOutboundPayloads(params);
       return { status: "sent", results };

@@ -7,6 +7,7 @@ import {
   hasBuildArtifactAffectingChange,
   hasPromptSnapshotAffectingChange,
   hasQaSmokeAffectingChange,
+  hasSqliteSessionLifecycleAffectingChange,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { hasImportGraphImpactOnTargets } from "../../scripts/test-projects.test-support.mts";
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
@@ -77,6 +78,11 @@ describe("CI changed Node test plan", () => {
     expect(hasBuildArtifactAffectingChange(["src/agents/foo.test.ts", "test/helpers/x.ts"])).toBe(
       false,
     );
+    expect(
+      hasBuildArtifactAffectingChange([
+        "src/gateway/server.auth.control-ui.trusted-proxy.suite.ts",
+      ]),
+    ).toBe(false);
     expect(hasBuildArtifactAffectingChange(["src/agents/foo.ts"])).toBe(true);
     // Build-input classification: only sources and the build pipeline can
     // change dist bytes; repo scripts, workflows, and qa scenarios cannot.
@@ -133,6 +139,48 @@ describe("CI changed Node test plan", () => {
     );
     // Deleted source files cannot be graphed; fail safe to running the check.
     expect(hasPromptSnapshotAffectingChange(["src/infra/definitely-deleted-module.ts"])).toBe(true);
+  });
+
+  it("classifies SQLite session lifecycle impact by owner and import graph", () => {
+    expect(
+      hasSqliteSessionLifecycleAffectingChange([
+        "src/agents/embedded-agent-runner/run/attempt-session-runtime-prepare.ts",
+      ]),
+    ).toBe(true);
+    expect(
+      hasSqliteSessionLifecycleAffectingChange(["src/gateway/server-methods/sessions.ts"]),
+    ).toBe(true);
+    expect(
+      hasSqliteSessionLifecycleAffectingChange(["src/sessions/session-lifecycle-admission.ts"]),
+    ).toBe(true);
+    expect(hasSqliteSessionLifecycleAffectingChange(["src/config/sessions.ts"])).toBe(true);
+    expect(
+      hasSqliteSessionLifecycleAffectingChange([
+        "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
+      ]),
+    ).toBe(true);
+    expect(
+      hasSqliteSessionLifecycleAffectingChange([
+        "packages/media-understanding-common/src/provider-id.ts",
+      ]),
+    ).toBe(false);
+    expect(hasSqliteSessionLifecycleAffectingChange(["src/agents/model-auth.ts"])).toBe(false);
+    expect(hasSqliteSessionLifecycleAffectingChange(["extensions/discord/src/index.ts"])).toBe(
+      false,
+    );
+    expect(
+      hasSqliteSessionLifecycleAffectingChange([
+        "src/config/sessions/session-registry-maintenance.test.ts",
+      ]),
+    ).toBe(false);
+    expect(
+      hasSqliteSessionLifecycleAffectingChange(["src/infra/definitely-deleted-module.ts"]),
+    ).toBe(false);
+    expect(
+      hasSqliteSessionLifecycleAffectingChange([
+        "src/agents/embedded-agent-runner/run/deleted-session-runtime.ts",
+      ]),
+    ).toBe(true);
   });
 
   it("fails safe to the full plan for broad changes", () => {

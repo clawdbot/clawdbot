@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionsFilesRevealResult,
   SystemInfoResult,
@@ -16,7 +17,6 @@ import { openEditor } from "../../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { ChatPaneContext } from "./chat-pane-context.ts";
 import { headerPlatformByClient } from "./chat-pane-shared.ts";
 import { patchChatSessionLabel } from "./chat-state-route.ts";
@@ -69,6 +69,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     }
     const session = {
       key: row.key,
+      sessionId: row.sessionId,
       label:
         normalizeOptionalString(row.label) ?? normalizeOptionalString(this.paneTitle) ?? row.key,
       pinned: row.pinned === true,

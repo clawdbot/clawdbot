@@ -1,4 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -8,7 +9,6 @@ import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { resolveMessageToolUseId, resolveToolBlockId } from "./chat-thread-items.ts";
 import {
   assistantGroupIsForwardedBoundary,

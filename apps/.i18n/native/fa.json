@@ -8274,6 +8274,41 @@
       "translated": "+${toolCalls.size - 4} مورد دیگر"
     },
     {
+      "id": "native.android.f2da5ffc1adaad58",
+      "source": "+${moreWorkingCount} more working",
+      "translated": "+${moreWorkingCount} مورد دیگر در حال کار"
+    },
+    {
+      "id": "native.android.db391c2712f7340b",
+      "source": "+${diff.added}",
+      "translated": "+${diff.added}"
+    },
+    {
+      "id": "native.android.babb72da2d6270a2",
+      "source": "−${diff.removed}",
+      "translated": "−${diff.removed}"
+    },
+    {
+      "id": "native.android.e58b3c8805c79bd0",
+      "source": "Subagent working",
+      "translated": "زیرعامل در حال کار"
+    },
+    {
+      "id": "native.android.bdfea93e16940c82",
+      "source": "Subagent failed",
+      "translated": "زیرعامل ناموفق بود"
+    },
+    {
+      "id": "native.android.9fde542e43b4e73b",
+      "source": "Subagent cancelled",
+      "translated": "زیرعامل لغو شد"
+    },
+    {
+      "id": "native.android.0bba48c12caa076a",
+      "source": "Subagent finished",
+      "translated": "زیرعامل تمام شد"
+    },
+    {
       "id": "native.android.22d747642a3887cd",
       "source": "$completedCount/${steps.size}",
       "translated": "$completedCount/${steps.size}"
@@ -8522,6 +8557,46 @@
       "id": "native.android.d7afc539a21261eb",
       "source": "$count more workers",
       "translated": "$count کارگر دیگر"
+    },
+    {
+      "id": "native.android.87d0e02f15fa721a",
+      "source": "Compacted history",
+      "translated": "تاریخچه فشرده‌شده"
+    },
+    {
+      "id": "native.android.9aa434a3c6f7be9e",
+      "source": "saved $count tokens",
+      "translated": "$count توکن ذخیره شد"
+    },
+    {
+      "id": "native.android.fda9fe610c7334a7",
+      "source": "Session reset",
+      "translated": "بازنشانی نشست"
+    },
+    {
+      "id": "native.android.34b623e6597690a1",
+      "source": "The earlier conversation was cleared.",
+      "translated": "گفتگوی قبلی پاک شد."
+    },
+    {
+      "id": "native.android.f22f983644b07db4",
+      "source": "System · restart recovery",
+      "translated": "سیستم · بازیابی پس از راه‌اندازی مجدد"
+    },
+    {
+      "id": "native.android.5ff88f5e4fb8dc90",
+      "source": "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.",
+      "translated": "دور مکالمه به دلیل راه‌اندازی مجدد Gateway قطع شد — از عامل خواسته شد ادامه دهد و پاسخ را کامل کند."
+    },
+    {
+      "id": "native.android.7cd27609193d4cbf",
+      "source": "System · gateway restarted",
+      "translated": "سیستم · Gateway مجدداً راه‌اندازی شد"
+    },
+    {
+      "id": "native.android.72b1f80d8de8404c",
+      "source": "System",
+      "translated": "سیستم"
     },
     {
       "id": "native.android.c32ff602fa622e4b",
@@ -21824,6 +21899,21 @@
       "translated": "بعدی"
     },
     {
+      "id": "native.apple.77671f1903c73f44",
+      "source": " (\\(command) pid \\(pid))",
+      "translated": " (\\(command) pid \\(pid))"
+    },
+    {
+      "id": "native.apple.69779351bd137b5b",
+      "source": "Existing gateway detected",
+      "translated": "gateway موجود شناسایی شد"
+    },
+    {
+      "id": "native.apple.ff1e86b4eb896434",
+      "source": "Port \\(port) already in use",
+      "translated": "پورت \\(port) از قبل در حال استفاده است"
+    },
+    {
       "id": "native.apple.3db546546fbaf38e",
       "source": "OpenClaw is preparing a local model.",
       "translated": "OpenClaw در حال آماده‌سازی یک مدل محلی است."
@@ -22272,21 +22362,6 @@
       "id": "native.apple.d54084b48f40aa0a",
       "source": "OK — OpenClaw won’t start anything yet. Pick Local or Remote later in Settings → General.",
       "translated": "باشه — OpenClaw هنوز چیزی را شروع نمی‌کند. بعداً در Settings → General گزینهٔ Local یا Remote را انتخاب کنید."
-    },
-    {
-      "id": "native.apple.8d9eb247d41a0ca7",
-      "source": "Existing gateway detected",
-      "translated": "gateway موجود شناسایی شد"
-    },
-    {
-      "id": "native.apple.335bb6b21095d15a",
-      "source": "Port \\(probe.port) already in use",
-      "translated": "پورت \\(probe.port) از قبل در حال استفاده است"
-    },
-    {
-      "id": "native.apple.de453cb637c46670",
-      "source": " (\\(probe.command) pid \\(probe.pid))",
-      "translated": " (\\(probe.command) pid \\(probe.pid))"
     },
     {
       "id": "native.apple.9ab228a4cb7d4403",
@@ -25979,6 +26054,11 @@
       "translated": "حذف"
     },
     {
+      "id": "native.apple.d5a544f5ba642c60",
+      "source": "+%1$lld more working",
+      "translated": "+%1$lld مورد دیگر در حال کار"
+    },
+    {
       "id": "native.apple.946b677d8dbf0f37",
       "source": "Hide talk transcript",
       "translated": "پنهان کردن رونوشت مکالمه"
@@ -26047,6 +26127,46 @@
       "id": "native.apple.0149100bb5c8b985",
       "source": "Message",
       "translated": "Message"
+    },
+    {
+      "id": "native.apple.041f2ed87f1797a0",
+      "source": "System · restart recovery",
+      "translated": "سیستم · بازیابی پس از راه‌اندازی مجدد"
+    },
+    {
+      "id": "native.apple.0eaa9e1136018332",
+      "source": "System · gateway restarted",
+      "translated": "سیستم · Gateway مجدداً راه‌اندازی شد"
+    },
+    {
+      "id": "native.apple.25ffcf5fcb1645d3",
+      "source": "System",
+      "translated": "سیستم"
+    },
+    {
+      "id": "native.apple.55c9f51c550018a9",
+      "source": "Compacted history",
+      "translated": "تاریخچه فشرده‌شده"
+    },
+    {
+      "id": "native.apple.28264f2dcf55651b",
+      "source": "Session reset",
+      "translated": "بازنشانی نشست"
+    },
+    {
+      "id": "native.apple.6410db19dcb02d59",
+      "source": "saved %@ tokens",
+      "translated": "%@ توکن ذخیره شد"
+    },
+    {
+      "id": "native.apple.0b97fe0abe7ea144",
+      "source": "The earlier conversation was cleared.",
+      "translated": "گفتگوی قبلی پاک شد."
+    },
+    {
+      "id": "native.apple.4efcef39bcaea3d1",
+      "source": "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.",
+      "translated": "دور مکالمه به دلیل راه‌اندازی مجدد Gateway قطع شد — از عامل خواسته شد ادامه دهد و پاسخ را کامل کند."
     },
     {
       "id": "native.apple.5824df4efbf6c977",

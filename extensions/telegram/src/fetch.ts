@@ -32,6 +32,7 @@ import {
   resolveTelegramDnsResultOrderDecision,
   TELEGRAM_DNS_RESULT_ORDER_ENV,
 } from "./network-config.js";
+import { TelegramRequestNotStartedError } from "./network-errors.js";
 import { getProxyUrlFromFetch, makeProxyFetch } from "./proxy.js";
 
 const log = createSubsystemLogger("telegram/network");
@@ -423,18 +424,7 @@ function formatErrorCodes(err: unknown): string {
   return codes.length > 0 ? codes.join(",") : "none";
 }
 
-class TelegramTransportAttemptUnhealthyError extends Error {
-  constructor(unhealthyUntilMs: number) {
-    const remainingMs = Math.max(0, unhealthyUntilMs - Date.now());
-    super(`telegram transport attempt temporarily unhealthy; retry after ${remainingMs}ms`);
-    this.name = "TelegramTransportAttemptUnhealthyError";
-  }
-}
-
 function shouldUseTelegramTransportFallback(err: unknown): boolean {
-  if (err instanceof TelegramTransportAttemptUnhealthyError) {
-    return true;
-  }
   const ctx: TelegramTransportFallbackContext = {
     message:
       err && typeof err === "object" && "message" in err
@@ -651,7 +641,10 @@ export function resolveTelegramTransport(
     if (!isFutureDateTimestampMs(health.unhealthyUntilMs)) {
       return null;
     }
-    return new TelegramTransportAttemptUnhealthyError(health.unhealthyUntilMs);
+    const remainingMs = Math.max(0, health.unhealthyUntilMs - Date.now());
+    return new TelegramRequestNotStartedError(
+      `Telegram transport attempts are cooling down; retry after ${remainingMs}ms`,
+    );
   };
 
   const recordAttemptFailure = (attemptIndex: number, err: unknown): void => {

@@ -7,14 +7,14 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
-import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import {
   getOwnedSessionTranscriptWriterFence,
   withOwnedSessionTranscriptWrites,
 } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { extractStoredAssistantText, sanitizeTextContent } from "./chat-history-text.js";
 
@@ -838,6 +838,31 @@ describe("sessions_send gating", () => {
     expect(requireGatewayRequest().method).toBe("sessions.resolve");
   });
 
+  it("conceals missing explicit keys denied by session visibility", async () => {
+    callGatewayMock.mockRejectedValueOnce(new Error("No session found: agent:main:missing"));
+    const tool = createSessionsSendTool({
+      agentSessionKey: MAIN_AGENT_SESSION_KEY,
+      callGateway: callGatewayMock,
+      config: {
+        session: { scope: "per-sender", mainKey: "main" },
+        tools: {
+          agentToAgent: { enabled: false },
+          sessions: { visibility: "self" },
+        },
+      } as never,
+    });
+
+    const result = await tool.execute("call-hidden-missing-key", {
+      sessionKey: "agent:main:missing",
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+
+    expect(requireDetails(result).status).toBe("forbidden");
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(requireGatewayRequest().method).toBe("sessions.resolve");
+  });
+
   it("prefers sessionKey over a redundant label", async () => {
     const tool = createMainSessionsSendTool();
 
@@ -868,13 +893,13 @@ describe("sessions_send gating", () => {
   });
 
   it("keeps an exact-incarnation send synchronous to its scoped lifecycle grant", async () => {
-    await withTempDir({ prefix: "openclaw-exact-session-send-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-exact-session-send-" }, async (dir) => {
       const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
       vi.mocked(runSessionsSendA2AFlow).mockClear();
       const storePath = path.join(dir, "sessions.json");
       const targetSessionKey = "agent:main:dashboard:child";
       const targetSessionId = "child-incarnation";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: targetSessionKey, storePath },
         {
           sessionId: targetSessionId,
@@ -989,8 +1014,9 @@ describe("sessions_send gating", () => {
       timeoutSeconds: 0,
     });
 
-    expect(callGatewayMock).toHaveBeenCalledTimes(1);
-    expect(requireGatewayRequest().method).toBe("sessions.list");
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+    expect(requireGatewayRequest().method).toBe("sessions.resolve");
+    expect(requireGatewayRequest(1).method).toBe("sessions.list");
     expect(requireDetails(result).status).toBe("forbidden");
   });
 
@@ -1017,7 +1043,8 @@ describe("sessions_send gating", () => {
     expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
       "cannot target a thread session",
     );
-    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(requireGatewayRequest().method).toBe("sessions.resolve");
   });
 
   it("rejects Telegram topic session targets before dispatching an agent run", async () => {
@@ -1056,7 +1083,8 @@ describe("sessions_send gating", () => {
     expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
       "cannot target a thread session",
     );
-    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(requireGatewayRequest().method).toBe("sessions.resolve");
   });
 
   it("rejects label targets that resolve to canonical thread sessions", async () => {
@@ -1083,8 +1111,9 @@ describe("sessions_send gating", () => {
     expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
       "cannot target a thread session",
     );
-    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
     expect(requireGatewayRequest().method).toBe("sessions.resolve");
+    expect(requireGatewayRequest(1).method).toBe("sessions.resolve");
   });
 
   it("does not disclose a resolved thread session key from a sessionId target", async () => {
@@ -1653,8 +1682,7 @@ describe("sessions_send agent-main materialization provenance", () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.resolve") {
-        // Unmaterialized agent main: the probe fails, forcing creation.
-        throw new Error("unknown session: agent:main:main");
+        return {};
       }
       if (request.method === "sessions.create") {
         throw new Error("plain sessions.create must not be used for trusted materialization");

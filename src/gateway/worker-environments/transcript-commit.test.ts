@@ -13,7 +13,7 @@ import {
   loadTranscriptEvents,
   resolveSessionTranscriptRuntimeTarget,
   updateSessionEntry,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -175,7 +175,7 @@ describe("worker transcript commit application", () => {
         store: path.join(root, "agents", "{agentId}", "sessions", "sessions.json"),
       },
     };
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey: SESSION_KEY, storePath },
       {
         lifecycleRevision: "worker-original-revision",

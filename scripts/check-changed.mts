@@ -20,7 +20,12 @@ import {
   listStagedChangedPaths,
 } from "./changed-lanes.mts";
 import type { ChangedLaneResult } from "./changed-lanes.mts";
-import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
+import {
+  booleanFlag,
+  isOpenEndedTruthyValue,
+  parseFlagArgs,
+  stringFlag,
+} from "./lib/arg-utils.mts";
 import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-facts.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
@@ -96,7 +101,7 @@ const DOCTOR_CONTRACT_OWNER_TEST_PATH_RE =
 const SQLITE_SESSION_SCHEMA_BASELINE_PATH_RE =
   /^(?:src\/state\/openclaw-agent-schema\.sql|scripts\/(?:generate-sqlite-session-schema-baseline\.ts|lib\/sqlite-session-schema-baseline\.ts)|test\/scripts\/sqlite-session-schema-baseline\.test\.ts|docs\/\.generated\/sqlite-session-transcript-schema-baseline\.sha256)$/u;
 const PLUGIN_SDK_API_BASELINE_PATH_RE =
-  /^(?:src\/|packages\/|extensions\/|pnpm-lock\.yaml$|tsconfig\.json$|scripts\/(?:generate-plugin-sdk-api-baseline\.ts|lib\/plugin-sdk-(?:doc-metadata\.ts|entries\.mts|entrypoints\.json|private-local-only-subpaths\.json))|docs\/\.generated\/plugin-sdk-api-baseline\.jsonl$)/u;
+  /^(?:src\/|packages\/|extensions\/|pnpm-lock\.yaml$|tsconfig\.json$|scripts\/(?:generate-plugin-sdk-api-baseline\.ts|lib\/plugin-sdk-(?:doc-metadata\.ts|entries\.mts|entrypoints\.json|private-local-only-subpaths\.json))|docs\/\.generated\/plugin-sdk-api-baseline\/[^/]+\.json$)/u;
 const PLUGIN_SDK_SURFACE_PATH_RE =
   /^(?:package\.json$|src\/plugin-sdk\/|packages\/plugin-sdk\/|scripts\/(?:plugin-sdk-surface-report\.mts|sync-plugin-sdk-exports\.mts|lib\/plugin-sdk-(?:declaration-budget\.mts|deprecated-barrel-subpaths\.json|deprecated-public-subpaths\.json|entries\.mts|entrypoints\.json|private-local-only-subpaths\.json)))/u;
 const DEPRECATION_HYGIENE_PATH_RE =
@@ -155,11 +160,6 @@ export function createChangedCheckChildEnv(baseEnv: NodeJS.ProcessEnv = process.
     OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
     OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
   };
-}
-
-function isTruthyEnvFlag(value: string | undefined) {
-  const normalized = (value ?? "").trim().toLowerCase();
-  return normalized !== "" && normalized !== "0" && normalized !== "false" && normalized !== "no";
 }
 
 function hasAndroidVersionSyncPath(paths: string[]) {
@@ -231,10 +231,10 @@ export function shouldDelegateChangedCheckToCrabbox(
   env: NodeJS.ProcessEnv = process.env,
   options: ChangedCheckDelegateOptions = {},
 ) {
-  if (isTruthyEnvFlag(env.OPENCLAW_CHECK_CHANGED_REMOTE_CHILD)) {
+  if (isOpenEndedTruthyValue(env.OPENCLAW_CHECK_CHANGED_REMOTE_CHILD)) {
     return false;
   }
-  if (isTruthyEnvFlag(env.CI) || isTruthyEnvFlag(env.GITHUB_ACTIONS)) {
+  if (isOpenEndedTruthyValue(env.CI) || isOpenEndedTruthyValue(env.GITHUB_ACTIONS)) {
     return false;
   }
   if (argv.includes("--dry-run")) {
@@ -247,7 +247,7 @@ export function shouldDelegateChangedCheckToCrabbox(
   if (result.paths.length === 0) {
     return false;
   }
-  if (isTruthyEnvFlag(env.OPENCLAW_TESTBOX)) {
+  if (isOpenEndedTruthyValue(env.OPENCLAW_TESTBOX)) {
     return true;
   }
   // Release metadata plans diff the supplied commits after classification. A missing
@@ -708,7 +708,7 @@ export function createChangedCheckPlan(
   add("package patch guard", ["deps:patches:check"]);
   if (
     hasDeadcodeScannedSource(result.paths) &&
-    !isTruthyEnvFlag(baseEnv.OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE)
+    !isOpenEndedTruthyValue(baseEnv.OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE)
   ) {
     addCommand(
       "dead export scan (skip with OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE=1)",
@@ -1066,7 +1066,7 @@ export function createPnpmManagedCommand<T extends ChangedCheckCommand>(
   env: NodeJS.ProcessEnv = process.env,
 ) {
   const commandEnv = command.env ?? resolveLocalHeavyCheckEnv(env);
-  if (isTruthyEnvFlag(commandEnv.CI) || isTruthyEnvFlag(commandEnv.GITHUB_ACTIONS)) {
+  if (isOpenEndedTruthyValue(commandEnv.CI) || isOpenEndedTruthyValue(commandEnv.GITHUB_ACTIONS)) {
     const shimmedEnv = prependCorepackPnpmShim(commandEnv);
     return {
       ...command,

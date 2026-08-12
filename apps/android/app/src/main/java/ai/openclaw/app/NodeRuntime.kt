@@ -5055,6 +5055,7 @@ class NodeRuntime private constructor(
   suspend fun patchChatSession(
     key: String,
     ownerAgentId: String? = null,
+    expectedSessionId: String? = null,
     label: String? = null,
     clearLabel: Boolean = false,
     category: String? = null,
@@ -5066,6 +5067,7 @@ class NodeRuntime private constructor(
     chat.patchSession(
       key = key,
       ownerAgentId = ownerAgentId,
+      expectedSessionId = expectedSessionId,
       label = label,
       clearLabel = clearLabel,
       category = category,
@@ -8528,6 +8530,7 @@ internal fun manualGatewayEndpoint(entry: GatewayRegistryEntry): GatewayEndpoint
     host = normalizedHost,
     port = normalizedPort,
     tlsEnabled = entry.tls,
+    contextPath = entry.contextPath,
   )
 }
 
@@ -8543,6 +8546,7 @@ internal fun gatewayRegistryEntry(
       host = endpoint.host,
       port = endpoint.port,
       tls = endpoint.tlsEnabled,
+      contextPath = endpoint.contextPath,
       lastConnectedAtMs = existing?.lastConnectedAtMs ?: 0L,
     )
   } else {

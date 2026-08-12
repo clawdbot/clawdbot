@@ -1,6 +1,7 @@
 // Defines user-facing config field help text for docs and UI surfaces.
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
 import { CLOUD_WORKER_FIELD_HELP } from "./zod-schema.cloud-workers.js";
+import { DESKTOP_FIELD_HELP } from "./zod-schema.desktop.js";
 
 export const CORE_FIELD_HELP: Record<string, string> = {
   "channels.discord.activities":
@@ -75,6 +76,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   cloudWorkers:
     "Opt-in cloud worker profiles for disposable remote environments. When this section is omitted or has no profiles, cloud worker creation remains unavailable and existing gateway/node status behavior is unchanged.",
   ...CLOUD_WORKER_FIELD_HELP,
+  ...DESKTOP_FIELD_HELP,
   gateway:
     "Gateway runtime surface for bind mode, auth, control UI, remote transport, and operational safety controls. Keep conservative defaults unless you intentionally expose the gateway beyond trusted local interfaces.",
   "gateway.port":

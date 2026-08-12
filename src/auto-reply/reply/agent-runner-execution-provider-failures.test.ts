@@ -20,6 +20,7 @@ import {
   NON_DIRECT_FAILURE_SURFACE_CASES,
   createNonDirectFailureSessionCtx,
   type EmbeddedAgentParams,
+  type FallbackRunnerParams,
   createTestFallbackSummaryError,
 } from "./agent-runner-execution.test-support.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
@@ -527,6 +528,51 @@ describe("executeAgentTurn: provider failures", () => {
       }
     },
   );
+
+  it("does not retry a CLI timeout whose recorded activity has no execution phase mark", async () => {
+    vi.useFakeTimers();
+    // FIXED(refactor-02b): the typed CLI activity fact blocks whole-turn replay without a phase mark.
+    const timeoutError = new FailoverError("CLI exceeded timeout (600s) and was terminated.", {
+      reason: "timeout",
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      code: "cli_overall_timeout",
+      cliTimeout: {
+        mode: "overall",
+        timeoutSeconds: 600,
+        observedActivity: true,
+        activeToolCount: 0,
+        backgroundTaskCount: 0,
+      },
+    });
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "claude-opus-4-8"),
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockRejectedValue(timeoutError);
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-opus-4-8";
+
+    const resultPromise = executeTestTurn({ followupRun });
+    await vi.advanceTimersByTimeAsync(2_500);
+    const result = await resultPromise;
+
+    expect(state.runCliAgentMock).toHaveBeenCalledTimes(1);
+    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(1);
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    const wholeTurnRetries = state.runCliAgentMock.mock.calls.length - 1;
+    expect(wholeTurnRetries).toBe(0);
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain("overall turn limit");
+      expect(result.payload.text).toMatch(/effects may be partial/i);
+      expect(result.payload.text).toContain("did not replay this turn automatically");
+    }
+  });
 
   it("warns about partial effects when an active CLI tool hits the no-output watchdog", async () => {
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {

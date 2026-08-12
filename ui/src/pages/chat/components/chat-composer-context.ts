@@ -1,3 +1,4 @@
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableObjectRecord as readCostRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../../../src/shared/transcript-only-openclaw-assistant.js";
@@ -39,8 +40,7 @@ function readCostValue(
   cost: Record<string, unknown> | null,
   key: "input" | "output" | "cacheRead" | "cacheWrite",
 ) {
-  const value = cost?.[key];
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+  return asNonNegativeFiniteNumber(cost?.[key]);
 }
 
 function latestProviderCostStats(messages: unknown[] | undefined): ProviderCostStats | null {

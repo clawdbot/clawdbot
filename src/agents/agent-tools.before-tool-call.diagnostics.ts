@@ -48,7 +48,7 @@ import { normalizeFileToolPathParam } from "./agent-tools.params.js";
 import { BEFORE_TOOL_CALL_SOURCE_TOOL } from "./before-tool-call-metadata.js";
 import { getChannelAgentToolMeta } from "./channel-tools.js";
 import { resolveAgentRunAbortLifecycleFields } from "./run-termination.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 import {
   resolveToolExecutionErrorKind,
   resolveToolResultFailureKind,
@@ -391,7 +391,7 @@ export function findSkillUsageMatch(params: {
 }): SkillUsageMatch | undefined {
   const command = params.ctx?.skillCommand;
   if (command) {
-    const commandToolName = normalizeToolName(command.toolName ?? params.toolName);
+    const commandToolName = normalizeToolPolicyName(command.toolName ?? params.toolName);
     if (!commandToolName || commandToolName === params.toolName) {
       const skillSource = resolveSkillTelemetrySourceValue(command.skillSource);
       const snapshotMatch = findResolvedSkillUsageMatch({

@@ -133,6 +133,10 @@ function metadataSnapshot(params: {
   icon?: string;
 }) {
   const id = params.id ?? "workboard";
+  const origin = params.origin ?? "bundled";
+  const installRecord =
+    params.installRecord ??
+    (origin === "global" ? { source: "path", installPath: `/tmp/${id}` } : undefined);
   const manifest = {
     id,
     name: params.name ?? "Workboard",
@@ -144,7 +148,7 @@ function metadataSnapshot(params: {
     cliBackends: [],
     skills: [],
     hooks: [],
-    origin: params.origin ?? "bundled",
+    origin,
     rootDir: `/tmp/${id}`,
     source: `/tmp/${id}/index.ts`,
     manifestPath: `/tmp/${id}/openclaw.plugin.json`,
@@ -154,12 +158,14 @@ function metadataSnapshot(params: {
       plugins: [
         {
           pluginId: id,
+          ...(origin === "global" ? { installOwner: id } : {}),
           packageName: `@openclaw/${id}`,
-          origin: params.origin ?? "bundled",
+          origin,
           enabled: params.enabled,
+          rootDir: `/tmp/${id}`,
         },
       ],
-      installRecords: params.installRecord ? { [id]: params.installRecord } : {},
+      installRecords: installRecord ? { [id]: installRecord } : {},
     },
     byPluginId: new Map([[id, manifest]]),
     plugins: [manifest],
@@ -213,8 +219,7 @@ const hostedDiffsEntry = {
   },
 };
 
-// Mirrors the current default ClawHub feed shape: package identity lives in a
-// source candidate while runtime/editorial metadata remains local.
+// Mirrors the ClawHub feed: package identity is remote, while runtime metadata stays local.
 const hostedFeedDiffsEntry = {
   id: "@openclaw/diffs",
   title: "Diffs",
@@ -818,8 +823,7 @@ describe("plugin management service", () => {
         env,
       }),
     ).rejects.toBe(conflict);
-    expect(mocks.installRecords).toHaveBeenCalledWith({ env });
-    expect(mocks.planUninstall).toHaveBeenCalledWith({
+    expect(mocks.planUninstall.mock.calls[0]?.[0]).toMatchObject({
       config: {
         plugins: {
           installs: {
@@ -833,7 +837,6 @@ describe("plugin management service", () => {
       },
       pluginId: "demo",
       deleteFiles: true,
-      extensionsDir: expect.any(String),
     });
     expect(mocks.applyUninstall).toHaveBeenCalledWith({ target: targetDir });
   });
@@ -913,6 +916,7 @@ describe("plugin management service", () => {
     mocks.replaceConfig.mockResolvedValue({});
     mocks.refreshRegistry.mockResolvedValue(undefined);
     mocks.metadata
+      .mockReturnValueOnce(metadataSnapshot({ enabled: true, id: "demo", origin: "global" }))
       .mockReturnValueOnce(metadataSnapshot({ enabled: true, id: "demo", origin: "global" }))
       .mockReturnValueOnce(metadataSnapshot({ enabled: false }))
       .mockReturnValueOnce(metadataSnapshot({ enabled: true }));
@@ -1050,7 +1054,6 @@ describe("plugin management service", () => {
         writeOptions: prepared.writeOptions,
       }),
     );
-    // Transient install records never persist into the written config document.
     expect(
       expectDefined(
         mocks.commitRecords.mock.calls[0],

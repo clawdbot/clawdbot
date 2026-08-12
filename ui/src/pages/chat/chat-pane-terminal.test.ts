@@ -5,8 +5,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
+  BROWSER_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
+  type BrowserPanelToggleDetail,
   type DesktopPanelToggleDetail,
   type TerminalPanelToggleDetail,
 } from "../../components/panel-toggle-contract.ts";
@@ -66,7 +68,71 @@ describe("chat pane terminal action", () => {
     }
   });
 
-  it("renders the desktop launcher only when available and opens the panel", () => {
+  it("renders desktop controls for local sessions when the source RPC is available", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const localSession = {
+      key: state.sessionKey,
+      kind: "direct",
+      updatedAt: 0,
+    } satisfies GatewaySessionRow;
+    const cloudSession = {
+      ...localSession,
+      placement: { state: "active" } as GatewaySessionRow["placement"],
+    } satisfies GatewaySessionRow;
+    const container = document.createElement("div");
+    const renderHeader = (session: GatewaySessionRow) => {
+      render(
+        pane.renderPaneHeader(
+          createSessionWorkspaceProps(state),
+          createBackgroundTasksProps(state),
+          session,
+          false,
+          undefined,
+          false,
+        ),
+        container,
+      );
+    };
+    const panelActionIds = () =>
+      container
+        .querySelector<HTMLElement & { panelActions: Array<{ id: string }> }>(
+          "openclaw-chat-header-session-menu",
+        )
+        ?.panelActions.map((action) => action.id) ?? [];
+    const snapshot = pane.context.gateway.snapshot;
+    snapshot.hello = desktopHello([], ["operator.admin"]);
+    renderHeader(cloudSession);
+    expect(container.querySelector('[aria-label="Toggle desktop panel"]')).toBeNull();
+
+    snapshot.hello = desktopHello(["desktop.observe"], ["operator.admin"]);
+    renderHeader(localSession);
+    expect(container.querySelector('[aria-label="Toggle desktop panel"]')).not.toBeNull();
+    expect(panelActionIds()).toContain("desktop");
+
+    const events: CustomEvent<DesktopPanelToggleDetail>[] = [];
+    const listener = (event: Event) => events.push(event as CustomEvent<DesktopPanelToggleDetail>);
+    window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, listener);
+    try {
+      renderHeader(localSession);
+      const button = container.querySelector<HTMLButtonElement>(
+        '[aria-label="Toggle desktop panel"]',
+      );
+      expect(button).not.toBeNull();
+      expect(panelActionIds()).toContain("desktop");
+      button?.click();
+      expect(events).toHaveLength(1);
+      expect(events[0]?.detail).toEqual({ open: true });
+
+      snapshot.hello = desktopHello(["desktop.observe"], ["operator.read"]);
+      renderHeader(cloudSession);
+      expect(container.querySelector('[aria-label="Toggle desktop panel"]')).toBeNull();
+    } finally {
+      window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, listener);
+    }
+  });
+
+  it("renders the browser control only when available and exposes it in the narrow menu", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
     const session = {
@@ -87,30 +153,35 @@ describe("chat pane terminal action", () => {
         ),
         container,
       );
-    const snapshot = pane.context.gateway.snapshot;
-    snapshot.hello = desktopHello([], ["operator.admin"]);
-    renderHeader();
-    expect(container.querySelector('[aria-label="Toggle desktop panel"]')).toBeNull();
+    const panelActionIds = () =>
+      container
+        .querySelector<HTMLElement & { panelActions: Array<{ id: string }> }>(
+          "openclaw-chat-header-session-menu",
+        )
+        ?.panelActions.map((action) => action.id) ?? [];
 
-    snapshot.hello = desktopHello(["worker.desktop.observe"], ["operator.admin"]);
-    const events: CustomEvent<DesktopPanelToggleDetail>[] = [];
-    const listener = (event: Event) => events.push(event as CustomEvent<DesktopPanelToggleDetail>);
-    window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, listener);
+    state.browserPanelAvailable = false;
+    renderHeader();
+    expect(container.querySelector(".chat-browser-panel-toggle")).toBeNull();
+    expect(panelActionIds()).not.toContain("browser");
+
+    const events: CustomEvent<BrowserPanelToggleDetail>[] = [];
+    const listener = (event: Event) => events.push(event as CustomEvent<BrowserPanelToggleDetail>);
+    window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, listener);
     try {
+      state.browserPanelAvailable = true;
       renderHeader();
-      const button = container.querySelector<HTMLButtonElement>(
-        '[aria-label="Toggle desktop panel"]',
-      );
+      const button = container.querySelector<HTMLButtonElement>(".chat-browser-panel-toggle");
       expect(button).not.toBeNull();
       button?.click();
       expect(events).toHaveLength(1);
-      expect(events[0]?.detail).toEqual({ open: true });
 
-      snapshot.hello = desktopHello(["worker.desktop.observe"], ["operator.read"]);
+      (pane as typeof pane & { narrow: boolean }).narrow = true;
       renderHeader();
-      expect(container.querySelector('[aria-label="Toggle desktop panel"]')).toBeNull();
+      expect(container.querySelector(".chat-browser-panel-toggle")).toBeNull();
+      expect(panelActionIds()).toContain("browser");
     } finally {
-      window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, listener);
+      window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, listener);
     }
   });
 });

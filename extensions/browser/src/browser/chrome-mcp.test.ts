@@ -6,6 +6,7 @@ import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildChromeMcpArgsFromOptions, normalizeChromeMcpOptions } from "./chrome-mcp-options.js";
 import {
   ChromeMcpDocumentUnavailableError,
   clickChromeMcpCoords,
@@ -33,6 +34,7 @@ import {
   uploadChromeMcpFile,
   withChromeMcpDocument,
 } from "./chrome-mcp.js";
+import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 
 type ToolCall = {
   name: string;
@@ -240,6 +242,26 @@ describe("chrome MCP page parsing", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
+  });
+
+  it("passes HTTP CDP endpoints to Chrome MCP as browserUrl discovery endpoints", () => {
+    const args = buildChromeMcpArgsFromOptions(
+      normalizeChromeMcpOptions({ cdpUrl: "http://127.0.0.1:9222" }),
+    );
+
+    expect(args).toContain("--browserUrl");
+    expect(args).toContain("http://127.0.0.1:9222");
+    expect(args).not.toContain("--wsEndpoint");
+  });
+
+  it("passes direct WebSocket CDP endpoints to Chrome MCP as wsEndpoint attachments", () => {
+    const args = buildChromeMcpArgsFromOptions(
+      normalizeChromeMcpOptions({ cdpUrl: "ws://127.0.0.1:9222/devtools/browser/abc" }),
+    );
+
+    expect(args).toContain("--wsEndpoint");
+    expect(args).toContain("ws://127.0.0.1:9222/devtools/browser/abc");
+    expect(args).not.toContain("--browserUrl");
   });
 
   it("keeps document-bound evaluations on one pinned target and raw snapshot uid", async () => {
@@ -971,6 +993,38 @@ describe("chrome MCP page parsing", () => {
       uid: secondRef ?? "",
     });
     expect(clickedUids).toEqual(["1_2", "1_2"]);
+  });
+
+  it("wraps deeply nested snapshot refs without recursive traversal", async () => {
+    let root: ChromeMcpSnapshotNode = { id: "leaf", role: "text", name: "leaf" };
+    for (let index = 0; index < 50_000; index += 1) {
+      root = {
+        id: `n${index}`,
+        role: "generic",
+        name: `n${index}`,
+        children: [root],
+      };
+    }
+    const session = createPageSession({
+      pid: 141,
+      pages: [{ id: 1, url: "https://a.example" }],
+      onTool: (call) =>
+        call.name === "take_snapshot" ? { structuredContent: { snapshot: root } } : undefined,
+    });
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    const [target] = await listChromeMcpTabs("chrome-live");
+    let node = await takeChromeMcpSnapshot({
+      profileName: "chrome-live",
+      targetId: target?.targetId ?? "",
+    });
+    let depth = 0;
+    while (node.children?.[0]) {
+      node = node.children[0];
+      depth += 1;
+    }
+    expect(depth).toBe(50_000);
+    expect(node.id).toMatch(/^mcp-ref:/);
   });
 
   it("unwraps current snapshot refs for every ref-scoped MCP adapter", async () => {
