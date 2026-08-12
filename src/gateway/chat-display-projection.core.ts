@@ -22,6 +22,7 @@ import {
   sanitizeChatHistoryMessages,
   shouldDropAssistantHistoryMessage,
 } from "./chat-display-projection.sanitize.js";
+import { mirrorSessionsYieldVisibleMessages } from "./chat-display-projection.sessions-yield.js";
 import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
 import type {
@@ -306,7 +307,7 @@ export function projectChatDisplayMessagesWithState(
   options?: ChatDisplayProjectionOptions,
 ): ChatDisplayProjectionResult {
   const source = options?.stripEnvelope === false ? messages : stripEnvelopeFromMessages(messages);
-  const mirrored = mirrorMessageToolVisibleReplies(source);
+  const mirrored = mirrorSessionsYieldVisibleMessages(mirrorMessageToolVisibleReplies(source));
   const repairedStreamErrors = projectRepairedStreamErrorFallbackMessages(
     toProjectedMessages(mirrored),
     options?.streamErrorFallbackPending,
