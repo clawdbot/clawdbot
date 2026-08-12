@@ -232,9 +232,19 @@ describe("channel turn pipeline", () => {
     expect(onDelivered).toHaveBeenCalledOnce();
   });
 
-  it("carries route system-event ownership privately into a thread dispatch", async () => {
-    const routeSessionKey = "agent:main:slack:channel:c1";
-    const dispatchSessionKey = `${routeSessionKey}:thread:123.456`;
+  it.each([
+    {
+      channel: "slack",
+      routeSessionKey: "agent:main:slack:channel:c1",
+      dispatchSessionKey: "agent:main:slack:channel:c1:thread:123.456",
+    },
+    {
+      channel: "discord",
+      routeSessionKey: "agent:main:discord:channel:c1",
+      dispatchSessionKey: "agent:main:discord:channel:c1:thread:t1",
+    },
+  ])("carries $channel route system-event ownership privately into dispatch", async (scenario) => {
+    const { channel, routeSessionKey, dispatchSessionKey } = scenario;
     const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (params) => {
       expect(params.ctx).not.toHaveProperty("SystemEventSessionKey");
       expect(getReplySystemEventSessionKey({ ...params.replyOptions })).toBe(routeSessionKey);
@@ -243,12 +253,12 @@ describe("channel turn pipeline", () => {
     }) as DispatchReplyWithBufferedBlockDispatcher;
 
     await dispatchTestAssembledTurn({
-      channel: "slack",
+      channel,
       routeSessionKey,
       ctxPayload: createCtx({
         SessionKey: dispatchSessionKey,
-        Surface: "slack",
-        Provider: "slack",
+        Surface: channel,
+        Provider: channel,
       }),
       recordInboundSession: createRecordInboundSession(),
       dispatchReplyWithBufferedBlockDispatcher,

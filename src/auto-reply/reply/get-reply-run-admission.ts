@@ -131,30 +131,31 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
   const drainedSystemEventBlocks: string[] = [];
-  const rebuildPromptBodies = async () => {
-    if (!useFastReplyRuntime) {
-      const routeSystemEventSessionKey = normalizeOptionalString(
-        getReplySystemEventSessionKey(opts),
-      );
-      const systemEventSessionKeys =
-        routeSystemEventSessionKey && routeSystemEventSessionKey !== sessionKey
-          ? [routeSystemEventSessionKey, sessionKey]
-          : [sessionKey];
-      for (const systemEventSessionKey of systemEventSessionKeys) {
-        const isCurrentSession = systemEventSessionKey === sessionKey;
-        const eventsBlock = await drainFormattedSystemEvents({
-          cfg,
-          agentId,
-          sessionKey: systemEventSessionKey,
-          isMainSession: isCurrentSession && isMainSession,
-          isNewSession: isCurrentSession && isNewSession,
-          suppressHeartbeatOwnedEvents: context.isHeartbeat,
-        });
-        if (eventsBlock) {
-          drainedSystemEventBlocks.push(eventsBlock);
-        }
+  const drainSystemEventBlocks = async () => {
+    if (useFastReplyRuntime) {
+      return;
+    }
+    const routeSystemEventSessionKey = normalizeOptionalString(getReplySystemEventSessionKey(opts));
+    const systemEventSessionKeys =
+      routeSystemEventSessionKey && routeSystemEventSessionKey !== sessionKey
+        ? [routeSystemEventSessionKey, sessionKey]
+        : [sessionKey];
+    for (const systemEventSessionKey of systemEventSessionKeys) {
+      const isCurrentSession = systemEventSessionKey === sessionKey;
+      const eventsBlock = await drainFormattedSystemEvents({
+        cfg,
+        agentId,
+        sessionKey: systemEventSessionKey,
+        isMainSession: isCurrentSession && isMainSession,
+        isNewSession: isCurrentSession && isNewSession,
+        suppressHeartbeatOwnedEvents: context.isHeartbeat,
+      });
+      if (eventsBlock) {
+        drainedSystemEventBlocks.push(eventsBlock);
       }
     }
+  };
+  const rebuildPromptBodies = () => {
     const { activeGoalContext, inboundUserContext } = context.getInboundContext();
     return buildReplyPromptEnvelope({
       ctx,
@@ -576,6 +577,17 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       typing.cleanup();
       return { kind: "reply", reply: queueState.reply } as const;
     }
+  }
+  if (activeRunQueueAction !== "drop") {
+    await traceRunPhase("reply.drain_system_events", () => drainSystemEventBlocks());
+    ({
+      prefixedCommandBody,
+      queuedBody,
+      transcriptBody,
+      transcriptCommandBody,
+      media: promptMedia,
+      currentInboundContext,
+    } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies()));
   }
 
   return {
