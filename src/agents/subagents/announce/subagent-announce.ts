@@ -322,9 +322,18 @@ export async function runSubagentAnnounceFlow(params: {
           dispatchGatewayMethodInProcess: subagentAnnounceDeps.dispatchGatewayMethodInProcess,
           getRuntimeConfig: subagentAnnounceDeps.getRuntimeConfig,
           replaceSubagentRunAfterSteer: subagentRegistryRuntime.replaceSubagentRunAfterSteer,
+          recordAcceptedRunTermination: subagentRegistryRuntime.recordAcceptedRunTermination,
+          markAcceptedRunTerminationPending:
+            subagentRegistryRuntime.markAcceptedRunTerminationPending,
+          completeAcceptedRunTermination: subagentRegistryRuntime.completeAcceptedRunTermination,
+          scheduleSubagentRegistrySweep: subagentRegistryRuntime.scheduleSubagentRegistrySweep,
         },
         signal: params.signal,
       });
+      if (woke === "termination-pending") {
+        shouldDeleteChildSession = false;
+        return "retryable";
+      }
       if (woke) {
         shouldDeleteChildSession = false;
         return "delivered";

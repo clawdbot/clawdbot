@@ -23,6 +23,9 @@ const hoisted = vi.hoisted(() => ({
   startQueuedSubagentRunMock: vi.fn(),
   settleFailedQueuedSubagentLaunchMock: vi.fn(),
   completeFailedLaunchCleanupMock: vi.fn(),
+  recordAcceptedRunTerminationMock: vi.fn(),
+  completeAcceptedRunTerminationMock: vi.fn(),
+  scheduleSubagentRegistrySweepMock: vi.fn(),
   emitSessionLifecycleEventMock: vi.fn(),
   dispatchGatewayMethodInProcessMock: vi.fn(),
   hasInProcessGatewayContextMock: vi.fn(),
@@ -166,6 +169,9 @@ describe("spawnSubagentDirect seam flow", () => {
       startQueuedSubagentRunMock: hoisted.startQueuedSubagentRunMock,
       settleFailedQueuedSubagentLaunchMock: hoisted.settleFailedQueuedSubagentLaunchMock,
       completeFailedLaunchCleanupMock: hoisted.completeFailedLaunchCleanupMock,
+      recordAcceptedRunTerminationMock: hoisted.recordAcceptedRunTerminationMock,
+      completeAcceptedRunTerminationMock: hoisted.completeAcceptedRunTerminationMock,
+      scheduleSubagentRegistrySweepMock: hoisted.scheduleSubagentRegistrySweepMock,
       emitSessionLifecycleEventMock: hoisted.emitSessionLifecycleEventMock,
       resolveAgentConfig: hoisted.resolveAgentConfigMock,
       resolveContextEngineMock: hoisted.resolveContextEngineMock,
@@ -188,6 +194,9 @@ describe("spawnSubagentDirect seam flow", () => {
     hoisted.startQueuedSubagentRunMock.mockReset().mockReturnValue(true);
     hoisted.settleFailedQueuedSubagentLaunchMock.mockReset().mockReturnValue(true);
     hoisted.completeFailedLaunchCleanupMock.mockReset();
+    hoisted.recordAcceptedRunTerminationMock.mockReset();
+    hoisted.completeAcceptedRunTerminationMock.mockReset();
+    hoisted.scheduleSubagentRegistrySweepMock.mockReset();
     hoisted.emitSessionLifecycleEventMock.mockReset();
     hoisted.dispatchGatewayMethodInProcessMock.mockReset();
     hoisted.hasInProcessGatewayContextMock.mockReset().mockReturnValue(false);
@@ -439,7 +448,11 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(agentParams.extraSystemPrompt).toContain("until one payload is accepted");
     expect(agentParams.extraSystemPrompt).toContain("at most one retry");
     await vi.waitFor(() =>
-      expect(hoisted.startQueuedSubagentRunMock).toHaveBeenCalledWith(result.runId, "run-1"),
+      expect(hoisted.startQueuedSubagentRunMock).toHaveBeenCalledWith(
+        result.runId,
+        result.runId,
+        expect.objectContaining({ gatewayRunId: result.runId }),
+      ),
     );
   });
 
@@ -523,14 +536,20 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(result.status).toBe("accepted");
     await vi.waitFor(() => expect(gatewayRequest("chat.abort")).toBeDefined());
     expect(gatewayRequest("chat.abort")).toMatchObject({
-      params: { sessionKey: result.childSessionKey, runId: "run-1" },
+      params: { sessionKey: result.childSessionKey, runId: result.runId },
     });
     await vi.waitFor(() =>
-      expect(hoisted.completeFailedLaunchCleanupMock).toHaveBeenCalledWith(result.runId),
+      expect(hoisted.settleFailedQueuedSubagentLaunchMock).toHaveBeenCalledWith(
+        result.runId,
+        expect.any(String),
+        expect.objectContaining({
+          expectedTermination: expect.objectContaining({ gatewayRunId: result.runId }),
+        }),
+      ),
     );
   });
 
-  it("holds the collector slot until an accepted run is confirmed stopped", async () => {
+  it("holds the collector slot while accepted-run termination remains pending", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     hoisted.configOverride = createConfigOverride({
       tools: { swarm: { enabled: true, maxConcurrent: 1 } },
@@ -574,14 +593,20 @@ describe("spawnSubagentDirect seam flow", () => {
     await vi.waitFor(() => expect(abortCalls).toBeGreaterThan(0));
     expect(agentCalls).toBe(1);
     stopAllowed = true;
-    await vi.waitFor(() => expect(agentCalls).toBe(2));
-    await vi.waitFor(() =>
-      expect(hoisted.startQueuedSubagentRunMock).toHaveBeenCalledWith(second.runId, "gateway-2"),
-    );
-    expect(hoisted.settleFailedQueuedSubagentLaunchMock).toHaveBeenCalledWith(
-      first.runId,
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(agentCalls).toBe(1);
+    expect(hoisted.startQueuedSubagentRunMock).not.toHaveBeenCalledWith(
+      second.runId,
       expect.any(String),
     );
+    expect(hoisted.settleFailedQueuedSubagentLaunchMock).not.toHaveBeenCalled();
+    expect(hoisted.recordAcceptedRunTerminationMock).toHaveBeenCalledWith(
+      first.runId,
+      expect.objectContaining({ gatewayRunId: first.runId, phase: "attempted" }),
+    );
+    expect(hoisted.scheduleSubagentRegistrySweepMock).toHaveBeenCalledWith({ delayMs: 0 });
   });
 
   it("holds the collector slot while an indeterminate launch session is deleted", async () => {
@@ -632,7 +657,7 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(hoisted.settleFailedQueuedSubagentLaunchMock).toHaveBeenCalledOnce();
   });
 
-  it("emits collector deletion after an asynchronous launch failure", async () => {
+  it("hands asynchronous collector launch cleanup to the durable sweeper", async () => {
     hoisted.configOverride = createConfigOverride({ tools: { swarm: true } });
     hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent") {
@@ -648,11 +673,10 @@ describe("spawnSubagentDirect seam flow", () => {
 
     expect(result.status).toBe("accepted");
     await vi.waitFor(() =>
-      expect(hoisted.emitSessionLifecycleEventMock).toHaveBeenCalledWith({
-        sessionKey: result.childSessionKey,
-        reason: "delete",
-        parentSessionKey: "agent:main:main",
-      }),
+      expect(hoisted.scheduleSubagentRegistrySweepMock).toHaveBeenCalledWith({ delayMs: 0 }),
+    );
+    expect(hoisted.emitSessionLifecycleEventMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: result.childSessionKey, reason: "delete" }),
     );
   });
 
@@ -877,7 +901,7 @@ describe("spawnSubagentDirect seam flow", () => {
       error: expect.stringContaining("gateway dispatch failed"),
     });
     expect(replacement).toMatchObject({ status: "accepted", runId: "replacement-run" });
-    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(2);
   });
 
   it("shares pending child capacity between native and visible spawn paths", async () => {
@@ -896,6 +920,9 @@ describe("spawnSubagentDirect seam flow", () => {
       releaseNativeDispatch = resolve;
     });
     let nativeDispatchStarted = false;
+    hoisted.countActiveRunsForSessionMock.mockImplementation(
+      () => hoisted.registerSubagentRunMock.mock.calls.length,
+    );
     hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent") {
         nativeDispatchStarted = true;
@@ -1103,16 +1130,18 @@ describe("spawnSubagentDirect seam flow", () => {
     const operations: string[] = [];
     let persistedStore: Record<string, Record<string, unknown>> | undefined;
 
-    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
-      operations.push(`gateway:${request.method ?? "unknown"}`);
-      if (request.method === "agent") {
-        return { runId: "run-1" };
-      }
-      if (request.method?.startsWith("sessions.")) {
-        return { ok: true };
-      }
-      return {};
-    });
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: unknown }) => {
+        operations.push(`gateway:${request.method ?? "unknown"}`);
+        if (request.method === "agent") {
+          return { runId: requireRecord(request.params).idempotencyKey };
+        }
+        if (request.method?.startsWith("sessions.")) {
+          return { ok: true };
+        }
+        return {};
+      },
+    );
     installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
       operations,
       onStore: (store) => {
@@ -1136,7 +1165,7 @@ describe("spawnSubagentDirect seam flow", () => {
     );
 
     expect(result.status).toBe("accepted");
-    expect(result.runId).toBe("run-1");
+    expect(result.runId).toMatch(/^[0-9a-f-]{36}$/u);
     expect(result.mode).toBe("run");
     expect(result.modelApplied).toBe(true);
     expect(result.childSessionKey).toMatch(/^agent:main:subagent:/);
@@ -1155,7 +1184,7 @@ describe("spawnSubagentDirect seam flow", () => {
     });
     const registerInput = firstRegisteredSubagentRun();
     const requesterOrigin = requireRecord(registerInput.requesterOrigin);
-    expect(registerInput.runId).toBe("run-1");
+    expect(registerInput.runId).toMatch(/^[0-9a-f-]{36}$/u);
     expect(registerInput.childSessionKey).toBe(childSessionKey);
     expect(registerInput.requesterSessionKey).toBe("agent:main:main");
     expect(registerInput.requesterDisplayKey).toBe("agent:main:main");
@@ -1169,6 +1198,11 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(registerInput.workspaceDir).toBe("/tmp/requester-workspace");
     expect(registerInput.expectsCompletionMessage).toBe(true);
     expect(registerInput.spawnMode).toBe("run");
+    expect(hoisted.startQueuedSubagentRunMock).toHaveBeenCalledWith(
+      registerInput.runId,
+      registerInput.runId,
+      expect.objectContaining({ gatewayRunId: registerInput.runId }),
+    );
     expect(hoisted.emitSessionLifecycleEventMock).toHaveBeenCalledWith({
       sessionKey: childSessionKey,
       reason: "create",

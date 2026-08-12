@@ -1194,6 +1194,35 @@ describe("subagent registry seam flow", () => {
     expect(mod.getSubagentRunByRunId("gateway-attachment-run")?.swarmRunId).toBeUndefined();
   });
 
+  it("hands a foreground dispatch owner to the durable termination sweeper", () => {
+    const runId = "dispatch-owner-handoff";
+    const owner = {
+      kind: "launch" as const,
+      phase: "attempted" as const,
+      gatewayRunId: runId,
+      lifecycleGeneration: "test-generation",
+      expectedSessionId: "launch-session",
+      expectedLifecycleRevision: "launch-revision",
+    };
+    mod.addSubagentRunForTests({
+      runId,
+      childSessionKey: "agent:main:subagent:dispatch-owner",
+      task: "own ambiguous launch",
+      createdAt: Date.now(),
+      execution: { status: "queued" },
+      launchCleanupPending: true,
+    });
+
+    mod.recordAcceptedRunTermination(runId, owner);
+    expect(mod.markAcceptedRunTerminationPending(runId, owner)).toBe(true);
+    expect(mod.getSubagentRunByRunId(runId)?.acceptedRunTermination).toMatchObject({
+      ...owner,
+      phase: "termination-pending",
+    });
+    expect(mod.completeAcceptedRunTermination(runId, owner)).toBe(true);
+    expect(mod.getSubagentRunByRunId(runId)?.acceptedRunTermination).toBeUndefined();
+  });
+
   it("terminalizes a failed provisional attachment owner for immediate sweep retry", () => {
     const runId = "attachment-owner-failed";
     mod.addSubagentRunForTests({
@@ -1573,11 +1602,18 @@ describe("subagent registry seam flow", () => {
       expectsCompletionMessage: false,
     });
 
+    const terminationOwner = {
+      kind: "launch" as const,
+      phase: "attempted" as const,
+      gatewayRunId: "run-retired-acceptance",
+      lifecycleGeneration: "retired-generation",
+    };
+    mod.recordAcceptedRunTermination("run-retired-acceptance", terminationOwner);
     expect(
       mod.startQueuedSubagentRun(
         "run-retired-acceptance",
         "gateway-retired-acceptance",
-        "retired-generation",
+        terminationOwner,
       ),
     ).toBe(false);
     expect(mod.getSubagentRunByRunId("run-retired-acceptance")).toMatchObject({
@@ -1679,8 +1715,12 @@ describe("subagent registry seam flow", () => {
       },
       "agent:main:subagent:run-restored-stop-two": { sessionId: "two", updatedAt: now },
     });
-    mocks.persistSubagentRunsToDiskOrThrow.mockImplementationOnce(() => {
-      throw new Error("sqlite unavailable after Gateway acceptance");
+    let durableWrites = 0;
+    mocks.persistSubagentRunsToDiskOrThrow.mockImplementation(() => {
+      durableWrites += 1;
+      if (durableWrites === 2) {
+        throw new Error("sqlite unavailable after Gateway acceptance");
+      }
     });
     let agentCalls = 0;
     let releaseAbort: (() => void) | undefined;
@@ -1723,9 +1763,7 @@ describe("subagent registry seam flow", () => {
       ),
     );
     deleteReleases[0]?.();
-    await waitForFast(() => expect(deleteReleases).toHaveLength(2));
-    expect(agentCalls).toBe(1);
-    deleteReleases[1]?.();
+    expect(deleteReleases).toHaveLength(1);
     await waitForFast(() => expect(agentCalls).toBe(2));
   });
 
@@ -1792,7 +1830,7 @@ describe("subagent registry seam flow", () => {
     await waitForFast(() => expect(agentCalls).toBe(2));
   });
 
-  it("releases restored FIFO ownership when lifecycle rotates during failure persistence", async () => {
+  it("releases restored FIFO ownership without dispatching past a failed next owner", async () => {
     vi.useRealTimers();
     const now = Date.now();
     mockSingleCollectorConcurrency();
@@ -1833,30 +1871,35 @@ describe("subagent registry seam flow", () => {
     let concurrentSweep: Promise<void> | undefined;
     mocks.persistSubagentRunsToDiskOrThrow.mockImplementation(() => {
       persistenceCalls += 1;
-      if (persistenceCalls === 1) {
+      if (persistenceCalls === 2) {
         throw new Error("sqlite unavailable after Gateway acceptance");
       }
-      if (persistenceCalls === 2) {
+      if (persistenceCalls === 4) {
         mocks.lifecycleGeneration = "rotated-generation";
         concurrentSweep = mod.testing.sweepOnceForTests();
         throw new Error("sqlite unavailable during failure settlement");
       }
     });
     let agentCalls = 0;
-    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "agent") {
-        agentCalls += 1;
-        return { runId: `gateway-restored-rotation-${agentCalls}` };
-      }
-      return request.method === "agent.wait" ? { status: "pending" } : {};
-    });
+    mocks.callGateway.mockImplementation(
+      async (request: { method?: string; params?: Record<string, unknown> }) => {
+        if (request.method === "agent") {
+          agentCalls += 1;
+          return { runId: request.params?.idempotencyKey };
+        }
+        if (request.method === "chat.abort") {
+          return { aborted: true, runIds: [request.params?.runId] };
+        }
+        return request.method === "agent.wait" ? { status: "pending" } : {};
+      },
+    );
 
     mod.initSubagentRegistry();
 
-    await waitForFast(() => expect(persistenceCalls).toBeGreaterThanOrEqual(3));
+    await waitForFast(() => expect(persistenceCalls).toBeGreaterThanOrEqual(4));
     await concurrentSweep;
-    await waitForFast(() => expect(agentCalls).toBe(2));
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    expect(agentCalls).toBe(1);
     expect(mod.getSubagentRunByRunId("run-restored-rotation-one")).toMatchObject({
       execution: {
         status: "terminal",
@@ -1865,8 +1908,13 @@ describe("subagent registry seam flow", () => {
       },
       collectorCompletion: { status: "failed" },
     });
-    expect(mod.getSubagentRunByRunId("gateway-restored-rotation-2")).toMatchObject({
-      execution: { status: "running", lifecycleGeneration: "rotated-generation" },
+    expect(mod.getSubagentRunByRunId("run-restored-rotation-two")).toMatchObject({
+      execution: {
+        status: "terminal",
+        suppressSessionEffects: true,
+        outcome: { status: "error", error: "sqlite unavailable during failure settlement" },
+      },
+      collectorCompletion: { status: "failed" },
     });
   });
 

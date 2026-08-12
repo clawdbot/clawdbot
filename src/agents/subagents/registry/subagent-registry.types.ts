@@ -286,10 +286,21 @@ export type SubagentRunRecord = {
     backendId: string;
     runtimeId: string;
     configLabel: string;
+    fsCleanupLocator?: unknown;
     workspaceMutationVisibility: "shared-host" | "runtime-local";
   };
   /** Exact container path used for bridge-owned attachment cleanup. */
   attachmentsSandboxDir?: string;
+  /** Accepted child that must be terminated before failed-launch resources retire. */
+  acceptedRunTermination?: {
+    kind: "launch" | "steer" | "descendant-wake";
+    /** Current-lifecycle attempts stay foreground-owned until explicitly handed off. */
+    phase: "attempted" | "termination-pending";
+    gatewayRunId: string;
+    lifecycleGeneration: string;
+    expectedSessionId?: string;
+    expectedLifecycleRevision?: string;
+  };
   retainAttachmentsOnKeep?: boolean;
   /** Collector-mode runs remain waitable and never announce to the requester. */
   collect?: boolean;
@@ -317,6 +328,8 @@ export type SubagentRunRecord = {
   launchCleanupPending?: boolean;
   /** Frozen child-session identity owned by a pre-activation cleanup claim. */
   launchCleanupSessionIdentity?: { sessionId: string; lifecycleRevision: string };
+  /** Durable result when accepted-run termination already cleaned the frozen session. */
+  launchCleanupSessionOutcome?: "deleted" | "changed";
   /** Set after failed-launch context-engine cleanup succeeds, preventing duplicate end hooks. */
   contextEngineCleanupCompletedAt?: number;
   collectorCompletion?: SwarmCollectorCompletion;

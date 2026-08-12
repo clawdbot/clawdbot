@@ -3,7 +3,7 @@ import { createSubagentRegistryRestorer } from "./subagent-registry-restore.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 describe("createSubagentRegistryRestorer", () => {
-  it("terminalizes and cleans a restored provisional attachment owner", async () => {
+  it("terminalizes a restored provisional owner and defers artifact cleanup", async () => {
     const run: SubagentRunRecord = {
       runId: "provisional-attachment-owner",
       childSessionKey: "agent:main:subagent:provisional-owner",
@@ -25,15 +25,11 @@ describe("createSubagentRegistryRestorer", () => {
     };
     const runs = new Map([[run.runId, run]]);
     const resumeRun = vi.fn();
-    const cleanupFailedLaunchResources = vi.fn(async () => true);
     const settleFailedQueuedSubagentLaunch = vi.fn(() => {
       run.execution = { status: "terminal", endedAt: 200, suppressSessionEffects: true };
       return true;
     });
-    const completeFailedLaunchCleanup = vi.fn(() => {
-      run.launchCleanupPending = undefined;
-    });
-    const callGateway = vi.fn(async () => ({ ok: true }));
+    const scheduleSweep = vi.fn();
     const restorer = createSubagentRegistryRestorer({
       runs,
       resumedRuns: new Set(),
@@ -41,46 +37,33 @@ describe("createSubagentRegistryRestorer", () => {
         ({
           restoreSubagentRunsFromDisk: () => 1,
           getRuntimeConfig: () => ({}),
-          callGateway,
         }) as never,
       persist: vi.fn(),
-      persistOrThrow: vi.fn(),
       settleRequesterTurn: vi.fn(),
       ensureListener: vi.fn(),
       startSweeper: vi.fn(),
       resumeRun,
       listSwarmRunsForGroup: vi.fn(() => []),
       startQueuedSubagentRun: vi.fn(() => false),
-      terminateAcceptedRestoredCollectorRun: vi.fn(async () => undefined),
-      cleanupFailedLaunchResources,
+      recordAcceptedRunTermination: vi.fn(),
+      markAcceptedRunTerminationPending: vi.fn(() => true),
+      terminateAcceptedRestoredCollectorRun: vi.fn(async () => false),
       settleFailedQueuedSubagentLaunch,
-      completeFailedLaunchCleanup,
-      scheduleSweep: vi.fn(),
+      scheduleSweep,
       warn: vi.fn(),
     });
 
     restorer.restoreOnce();
 
-    await vi.waitFor(() => expect(completeFailedLaunchCleanup).toHaveBeenCalledWith(run.runId));
+    await vi.waitFor(() => expect(settleFailedQueuedSubagentLaunch).toHaveBeenCalledOnce());
     expect(resumeRun).not.toHaveBeenCalled();
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "sessions.delete",
-        params: expect.objectContaining({
-          expectedSessionId: "original-session",
-          expectedLifecycleRevision: "original-revision",
-        }),
-      }),
-    );
     expect(settleFailedQueuedSubagentLaunch).toHaveBeenCalledWith(
       run.runId,
       "subagent launch was interrupted before activation",
+      { suppressSessionEffects: false },
     );
-    expect(cleanupFailedLaunchResources).toHaveBeenCalledWith(run, {
-      includeSessionEffects: true,
-      isCurrent: expect.any(Function),
-    });
-    expect(run.launchCleanupPending).toBeUndefined();
+    expect(scheduleSweep).toHaveBeenCalledWith({ delayMs: 0 });
+    expect(run.launchCleanupPending).toBe(true);
   });
 
   it("retains an orphan row that still owns deferred attachment cleanup", () => {
@@ -122,17 +105,16 @@ describe("createSubagentRegistryRestorer", () => {
           getRuntimeConfig: () => ({}),
         }) as never,
       persist,
-      persistOrThrow: vi.fn(),
       settleRequesterTurn: vi.fn(),
       ensureListener,
       startSweeper,
       resumeRun: vi.fn(),
       listSwarmRunsForGroup: vi.fn(() => []),
       startQueuedSubagentRun: vi.fn(() => false),
-      terminateAcceptedRestoredCollectorRun: vi.fn(async () => undefined),
-      cleanupFailedLaunchResources: vi.fn(async () => true),
+      recordAcceptedRunTermination: vi.fn(),
+      markAcceptedRunTerminationPending: vi.fn(() => true),
+      terminateAcceptedRestoredCollectorRun: vi.fn(async () => false),
       settleFailedQueuedSubagentLaunch: vi.fn(() => false),
-      completeFailedLaunchCleanup: vi.fn(),
       scheduleSweep: vi.fn(),
       warn: vi.fn(),
     });

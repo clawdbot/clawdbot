@@ -644,6 +644,10 @@ async function runSweepSample(childCount: number): Promise<Sample> {
       return {} as T;
     }) as typeof import("../src/gateway/call.js").callGateway,
     cleanupFailedLaunchResources: async () => true,
+    settleFailedQueuedSubagentLaunch: () => true,
+    terminateAcceptedRunObligation: async () => ({ terminated: true }),
+    completeAcceptedRunTermination: () => true,
+    clearSubagentRunSteerRestart: () => true,
     runContextEngineSubagentEnded: async () => {
       sessionEffects += 1;
     },

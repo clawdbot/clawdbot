@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupProvisionalSession,
   terminateAcceptedSubagentRun,
@@ -13,6 +13,8 @@ function sessionChangedError(): Error {
 }
 
 describe("subagent spawn cleanup identity", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   it("requires both frozen session identities before deletion", async () => {
     const callGateway = vi.fn();
 
@@ -37,7 +39,9 @@ describe("subagent spawn cleanup identity", () => {
       gatewayRunId: "gateway-run",
       expectedSessionId: "session-id",
       expectedLifecycleRevision: "session-revision",
+      allowSessionDelete: true,
       callGateway,
+      shouldRetry: () => false,
     });
 
     expect(callGateway).toHaveBeenNthCalledWith(2, {
@@ -65,7 +69,9 @@ describe("subagent spawn cleanup identity", () => {
       gatewayRunId: "gateway-run",
       expectedSessionId: "session-id",
       expectedLifecycleRevision: "session-revision",
+      allowSessionDelete: true,
       callGateway,
+      shouldRetry: () => false,
     });
 
     expect(callGateway).toHaveBeenCalledOnce();
@@ -83,7 +89,9 @@ describe("subagent spawn cleanup identity", () => {
         gatewayRunId: "gateway-run",
         expectedSessionId: "session-id",
         expectedLifecycleRevision: "session-revision",
+        allowSessionDelete: true,
         callGateway,
+        shouldRetry: () => false,
       }),
     ).resolves.toBe(true);
 

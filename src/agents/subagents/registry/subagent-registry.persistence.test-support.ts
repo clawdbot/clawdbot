@@ -55,6 +55,73 @@ export function canonicalSubagentRunFixtures(
   return new Map([...runs].map(([runId, run]) => [runId, createCanonicalSubagentRunFixture(run)]));
 }
 
+export function createFailedLaunchCleanupOwnerFixture(): SubagentRunRecord {
+  return {
+    runId: "run-failed-launch-owner",
+    childSessionKey: "agent:main:subagent:failed-launch-owner",
+    requesterSessionKey: "agent:main:main",
+    requesterDisplayKey: "main",
+    task: "persist exact cleanup ownership",
+    cleanup: "delete",
+    createdAt: 1,
+    execution: { status: "queued" },
+    launchCleanupPending: true,
+    launchCleanupSessionOutcome: "deleted",
+    acceptedRunTermination: {
+      kind: "launch",
+      phase: "termination-pending",
+      gatewayRunId: "gateway-failed-launch-owner",
+      lifecycleGeneration: "generation-1",
+      expectedSessionId: "session-1",
+      expectedLifecycleRevision: "revision-1",
+    },
+    attachmentsSandboxIdentity: {
+      backendId: "ssh",
+      runtimeId: "runtime-1",
+      configLabel: "host.example",
+      workspaceMutationVisibility: "runtime-local",
+      fsCleanupLocator: {
+        version: 1,
+        backend: "ssh",
+        settings: {
+          command: "ssh",
+          target: "host.example",
+          workspaceRoot: "/remote/openclaw",
+          strictHostKeyChecking: true,
+          updateHostKeys: false,
+        },
+        generation: "0123456789abcdef0123456789abcdef",
+        runtimeRootDir: "/remote/openclaw/runtime-1",
+      },
+    },
+  };
+}
+
+export function createPersistedEndedRunFixture(params: {
+  runId: string;
+  childSessionKey: string;
+  task: string;
+  cleanup: "keep" | "delete";
+}) {
+  const now = Date.now();
+  return {
+    version: 2,
+    runs: {
+      [params.runId]: {
+        runId: params.runId,
+        childSessionKey: params.childSessionKey,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: params.task,
+        cleanup: params.cleanup,
+        createdAt: now - 2,
+        startedAt: now - 1,
+        endedAt: now,
+      },
+    },
+  };
+}
+
 /** Reads test session entries through the active SQLite accessor. */
 export async function readSubagentSessionStore(storePath: string): Promise<SessionStore> {
   return Object.fromEntries(

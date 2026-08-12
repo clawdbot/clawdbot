@@ -208,6 +208,10 @@ vi.mock("../registry/subagent-registry-read.js", () => ({
 }));
 vi.mock("../registry/subagent-registry-runtime.js", () => ({
   replaceSubagentRunAfterSteer: () => true,
+  recordAcceptedRunTermination: async () => undefined,
+  markAcceptedRunTerminationPending: async () => true,
+  completeAcceptedRunTermination: async () => true,
+  scheduleSubagentRegistrySweep: async () => undefined,
 }));
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 type AnnounceFlowParams = Parameters<

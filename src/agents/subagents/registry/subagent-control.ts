@@ -42,7 +42,7 @@ import {
   resolveMainSessionAlias,
 } from "../../tools/sessions-helpers.js";
 import { resolveStoredSubagentCapabilities } from "../spawn/subagent-capabilities.js";
-import { terminateAcceptedSubagentRun } from "../spawn/subagent-spawn-cleanup.js";
+import { terminateClaimedAcceptedSubagentRun } from "../spawn/subagent-spawn-cleanup.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { resolveSessionEntryForKey } from "./subagent-list.js";
 import {
@@ -60,10 +60,14 @@ import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
   claimSubagentRunKill,
   clearSubagentRunSteerRestart,
+  completeAcceptedRunTermination,
+  markAcceptedRunTerminationPending,
   markSubagentRunTerminated,
   markSubagentRunForSteerRestart,
   releaseSubagentRunKillClaim,
+  recordAcceptedRunTermination,
   replaceSubagentRunAfterSteerCore,
+  scheduleSubagentRegistrySweep,
 } from "./subagent-registry.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -1156,8 +1160,17 @@ export async function steerControlledSubagentRun(params: {
       text: `${resolveSubagentLabel(params.entry)} is already finished.`,
     };
   }
+  const steerLifecycleGeneration = getAgentEventLifecycleGeneration();
+  const dispatchTerminationOwner = {
+    kind: "steer" as const,
+    phase: "attempted" as const,
+    gatewayRunId: idempotencyKey,
+    lifecycleGeneration: steerLifecycleGeneration,
+    expectedSessionId: restartSessionId,
+    expectedLifecycleRevision: targetSession.entry?.lifecycleRevision,
+  };
   try {
-    const steerLifecycleGeneration = getAgentEventLifecycleGeneration();
+    recordAcceptedRunTermination(params.entry.runId, dispatchTerminationOwner);
     const response = await subagentControlDeps.callGateway<{ runId: string }>({
       method: "agent",
       params: {
@@ -1175,30 +1188,24 @@ export async function steerControlledSubagentRun(params: {
     if (typeof response?.runId === "string" && response.runId) {
       runId = response.runId;
     }
-    let acceptedSessionEntry: SessionEntry | undefined;
-    try {
-      acceptedSessionEntry = loadSessionEntry({
-        storePath: targetSession.storePath,
-        sessionKey: params.entry.childSessionKey,
-        clone: false,
-        readConsistency: "latest",
-      });
-    } catch {
-      // chat.abort remains the primary cleanup; exact session deletion is only
-      // the fallback when the accepted session row can be resolved.
-    }
-    const terminateUnownedSteer = () =>
-      terminateAcceptedSubagentRun({
+    const terminateUnownedSteer = async () => {
+      return await terminateClaimedAcceptedSubagentRun({
         childSessionKey: params.entry.childSessionKey,
-        gatewayRunId: runId,
-        expectedSessionId: acceptedSessionEntry?.sessionId,
-        expectedLifecycleRevision: acceptedSessionEntry?.lifecycleRevision,
         callGateway: subagentControlDeps.callGateway,
         timeoutMs: 10_000,
+        claimed: dispatchTerminationOwner,
+        markPending: () =>
+          markAcceptedRunTerminationPending(params.entry.runId, dispatchTerminationOwner),
+        complete: () => {
+          completeAcceptedRunTermination(params.entry.runId, dispatchTerminationOwner);
+        },
+        schedule: () => scheduleSubagentRegistrySweep({ delayMs: 0 }),
       });
+    };
     if (!isAgentEventLifecycleGenerationCurrent(steerLifecycleGeneration)) {
-      await terminateUnownedSteer();
-      clearSubagentRunSteerRestart(params.entry.runId, currentEntry);
+      if (await terminateUnownedSteer()) {
+        clearSubagentRunSteerRestart(params.entry.runId, currentEntry);
+      }
       return {
         status: "error",
         runId,
@@ -1220,8 +1227,9 @@ export async function steerControlledSubagentRun(params: {
       task: params.message,
     });
     if (!replaced) {
-      await terminateUnownedSteer();
-      clearSubagentRunSteerRestart(params.entry.runId, currentEntry);
+      if (await terminateUnownedSteer()) {
+        clearSubagentRunSteerRestart(params.entry.runId, currentEntry);
+      }
       return {
         status: "error",
         runId,
@@ -1231,7 +1239,14 @@ export async function steerControlledSubagentRun(params: {
       };
     }
   } catch (err) {
-    clearSubagentRunSteerRestart(params.entry.runId, currentEntry);
+    const terminationPending = markAcceptedRunTerminationPending(
+      params.entry.runId,
+      dispatchTerminationOwner,
+    );
+    scheduleSubagentRegistrySweep({ delayMs: 0 });
+    if (!terminationPending) {
+      clearSubagentRunSteerRestart(params.entry.runId, currentEntry);
+    }
     const error = formatErrorMessage(err);
     return {
       status: "error",

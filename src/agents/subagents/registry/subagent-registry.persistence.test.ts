@@ -19,6 +19,8 @@ import { getLatestSubagentRunByChildSessionKey } from "./subagent-registry-read.
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
   canonicalSubagentRunFixtures,
+  createFailedLaunchCleanupOwnerFixture,
+  createPersistedEndedRunFixture as createPersistedEndedRun,
   createSubagentRegistryTestDeps,
   readSubagentSessionStore,
   removeSubagentSessionEntry,
@@ -147,31 +149,6 @@ describe("subagent registry persistence", () => {
     runs: Object.fromEntries(loadSubagentRegistryFromSqlite()),
   });
 
-  const createPersistedEndedRun = (params: {
-    runId: string;
-    childSessionKey: string;
-    task: string;
-    cleanup: "keep" | "delete";
-  }) => {
-    const now = Date.now();
-    return {
-      version: 2,
-      runs: {
-        [params.runId]: {
-          runId: params.runId,
-          childSessionKey: params.childSessionKey,
-          requesterSessionKey: "agent:main:main",
-          requesterDisplayKey: "main",
-          task: params.task,
-          cleanup: params.cleanup,
-          createdAt: now - 2,
-          startedAt: now - 1,
-          endedAt: now,
-        },
-      },
-    };
-  };
-
   const flushQueuedRegistryWork = async () => {
     await Promise.resolve();
     await Promise.resolve();
@@ -255,6 +232,21 @@ describe("subagent registry persistence", () => {
     expect(loadSubagentRegistryFromSqlite().get(record.runId)?.progressOrigin).toEqual(
       progressOrigin,
     );
+  });
+
+  it("round-trips failed-launch execution and filesystem cleanup ownership", async () => {
+    const record = createFailedLaunchCleanupOwnerFixture();
+
+    await writePersistedRegistry(
+      { runs: { [record.runId]: record } },
+      { seedChildSessions: false },
+    );
+
+    expect(loadSubagentRegistryFromSqlite().get(record.runId)).toMatchObject({
+      launchCleanupSessionOutcome: "deleted",
+      acceptedRunTermination: record.acceptedRunTermination,
+      attachmentsSandboxIdentity: record.attachmentsSandboxIdentity,
+    });
   });
 
   it("persists completed subagent timing into the child session entry", async () => {

@@ -3,7 +3,6 @@ import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-ru
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
-import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
@@ -14,7 +13,6 @@ import type {
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle.js";
 import { createInterruptedRecoveryCoordinator } from "./subagent-registry-restart-recovery-coordinator.js";
-import { isRestoredQueuedFailureSettlementClaimed } from "./subagent-registry-restore.js";
 import type { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import {
   discardSuspendedPendingFinalDelivery,
@@ -24,6 +22,10 @@ import {
   SUBAGENT_SUSPENDED_DELIVERY_WARNING_COUNT,
 } from "./subagent-registry-suspended-delivery.js";
 import { createSubagentSweepSessionLifecycle } from "./subagent-registry-sweep-session.js";
+import {
+  reconcileAcceptedRunTerminationForSweep,
+  reconcileFailedLaunchCleanupForSweep,
+} from "./subagent-registry-sweeper-failed-launch.js";
 export { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
 import {
   reconcileDurableSubagentKillIntent,
@@ -102,6 +104,28 @@ export function createSubagentRegistrySweeper(params: {
     entry: SubagentRunRecord,
     options?: { includeSessionEffects?: boolean },
   ) => Promise<boolean>;
+  settleFailedQueuedSubagentLaunch: (
+    runId: string,
+    error: string,
+    options?: {
+      expectedTermination?: NonNullable<SubagentRunRecord["acceptedRunTermination"]>;
+      sessionCleanupOutcome?: "deleted" | "changed";
+      suppressSessionEffects?: boolean;
+    },
+  ) => boolean;
+  terminateAcceptedRunObligation: (
+    entry: SubagentRunRecord,
+    termination: NonNullable<SubagentRunRecord["acceptedRunTermination"]>,
+  ) => Promise<{
+    terminated: boolean;
+    sessionCleanupOutcome?: "deleted" | "changed";
+  }>;
+  completeAcceptedRunTermination: (
+    runId: string,
+    termination: NonNullable<SubagentRunRecord["acceptedRunTermination"]>,
+    sessionCleanupOutcome?: "deleted" | "changed",
+  ) => boolean;
+  clearSubagentRunSteerRestart: (runId: string, expected: SubagentRunRecord) => boolean;
   runContextEngineSubagentEnded: (params: ContextEngineSubagentEndedParams) => Promise<void>;
   notifyContextEngineSubagentEnded: (params: ContextEngineSubagentEndedParams) => Promise<void>;
   retireSupersededRun: (runId: string, entry: SubagentRunRecord) => Promise<void>;
@@ -258,9 +282,22 @@ export function createSubagentRegistrySweeper(params: {
         if (runs.get(runId) !== entry) {
           continue;
         }
-        if (isRestoredQueuedFailureSettlementClaimed(entry)) {
-          // The restored FIFO callback owns this row until durable settlement.
-          continue;
+        const acceptedRunTermination = entry.acceptedRunTermination;
+        if (acceptedRunTermination) {
+          const result = await reconcileAcceptedRunTerminationForSweep({
+            runId,
+            entry,
+            runs,
+            termination: acceptedRunTermination,
+            terminate: params.terminateAcceptedRunObligation,
+            clearSteerRestart: params.clearSubagentRunSteerRestart,
+            settleFailedLaunch: params.settleFailedQueuedSubagentLaunch,
+            completeTermination: params.completeAcceptedRunTermination,
+            warn: params.warn,
+          });
+          if (result === "continue") {
+            continue;
+          }
         }
         if (entry.requesterSettleWake) {
           params.resumeRequesterSettleWake(runId, entry);
@@ -402,54 +439,21 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
 
-        if (entry.launchCleanupPending && entry.execution.status === "terminal") {
-          let includeSessionEffects = !shouldSuppressSubagentRecoverySessionEffects(entry);
-          let sessionDeleted = false;
-          if (includeSessionEffects) {
-            const sessionIdentity = entry.launchCleanupSessionIdentity;
-            if (!sessionIdentity) {
-              includeSessionEffects = false;
-              entry.execution = { ...entry.execution, suppressSessionEffects: true };
-            } else {
-              let deletion: "deleted" | "changed";
-              try {
-                deletion = await deleteSession(entry.childSessionKey, sessionIdentity);
-              } catch (error) {
-                params.warn("failed to retry launch cleanup", {
-                  runId,
-                  childSessionKey: entry.childSessionKey,
-                  error,
-                });
-                continue;
-              }
-              if (runs.get(runId) !== entry) {
-                continue;
-              }
-              sessionDeleted = deletion === "deleted";
-              if (!sessionDeleted) {
-                includeSessionEffects = false;
-                entry.execution = { ...entry.execution, suppressSessionEffects: true };
-              }
-            }
-          }
-          if (!(await params.cleanupFailedLaunchResources(entry, { includeSessionEffects }))) {
-            continue;
-          }
-          if (runs.get(runId) !== entry) {
-            continue;
-          }
-          if (sessionDeleted) {
-            emitSessionLifecycleEvent({
-              sessionKey: entry.childSessionKey,
-              reason: "delete",
-              parentSessionKey: entry.swarmRequesterSessionKey ?? entry.requesterSessionKey,
-            });
-          }
-          entry.launchCleanupPending = undefined;
-          entry.launchCleanupSessionIdentity = undefined;
-          entry.cleanupCompletedAt = now;
+        const failedLaunchCleanup = await reconcileFailedLaunchCleanupForSweep({
+          runId,
+          entry,
+          runs,
+          now,
+          deleteSession,
+          settleFailedLaunch: params.settleFailedQueuedSubagentLaunch,
+          cleanupResources: params.cleanupFailedLaunchResources,
+          warn: params.warn,
+        });
+        if (failedLaunchCleanup === "completed") {
           mutated = true;
           mutatedRunIds.add(runId);
+        } else if (failedLaunchCleanup === "pending") {
+          continue;
         }
 
         if (entry.collect && entry.collectorCompletion) {

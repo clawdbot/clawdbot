@@ -37,6 +37,10 @@ import {
 import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
 import { isSwarmRunQueued, removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import {
+  isSameAcceptedRunTermination,
+  type AcceptedRunTermination,
+} from "./subagent-accepted-run-termination.js";
+import {
   clearDeliveryState,
   ensureCompletionState,
   normalizeSubagentRunState,
@@ -824,6 +828,7 @@ export function createSubagentRunManager(params: {
       terminalOwner: undefined,
       killReconciliation: undefined,
       killIntent: undefined,
+      acceptedRunTermination: undefined,
       suppressCompletionDelivery: undefined,
       delivery: {
         status: source.expectsCompletionMessage === false ? "not_required" : "pending",
@@ -1332,14 +1337,17 @@ export function createSubagentRunManager(params: {
   const startQueuedSubagentRun = (
     runId: string,
     gatewayRunId?: string,
-    lifecycleGeneration?: string,
+    expectedTermination?: AcceptedRunTermination,
   ) => {
     const key = runId.trim();
     const entry = findRunByIdentity(key);
-    const acceptedLifecycleGeneration = lifecycleGeneration ?? getAgentEventLifecycleGeneration();
+    const acceptedLifecycleGeneration =
+      expectedTermination?.lifecycleGeneration ?? getAgentEventLifecycleGeneration();
     if (
-      lifecycleGeneration !== undefined &&
-      !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)
+      (expectedTermination &&
+        !isSameAcceptedRunTermination(entry?.acceptedRunTermination, expectedTermination)) ||
+      (expectedTermination !== undefined &&
+        !isAgentEventLifecycleGenerationCurrent(expectedTermination.lifecycleGeneration))
     ) {
       return false;
     }
@@ -1426,6 +1434,8 @@ export function createSubagentRunManager(params: {
     entry.queuedLaunch = undefined;
     entry.launchCleanupPending = undefined;
     entry.launchCleanupSessionIdentity = undefined;
+    entry.launchCleanupSessionOutcome = undefined;
+    entry.acceptedRunTermination = undefined;
     let persistedRunning = false;
     try {
       params.persistOrThrow(previousRunId, nextRunId);
@@ -1464,98 +1474,109 @@ export function createSubagentRunManager(params: {
     return true;
   };
 
-  const failQueuedSubagentRun = (runId: string, error: string) => {
-    const key = runId.trim();
-    const entry = findRunByIdentity(key);
-    if (!entry || entry.execution.status !== "queued") {
-      return false;
-    }
-    const snapshot = structuredClone(entry);
-    const endedAt = Date.now();
-    entry.endedReason = SUBAGENT_ENDED_REASON_ERROR;
-    entry.execution = {
-      ...entry.execution,
-      status: "terminal",
-      endedAt,
-      outcome: { status: "error", error, endedAt },
-    };
-    entry.queuedLaunch = undefined;
-    entry.completion = { required: false, resultText: error, capturedAt: endedAt };
-    entry.delivery = { status: "not_required" };
-    if (entry.collect) {
-      entry.launchCleanupPending = true;
-      updateSwarmCollectorCompletion(entry, params.getRuntimeConfig());
-    } else {
-      entry.archiveAtMs = endedAt;
-    }
-    try {
-      params.persistOrThrow(entry.runId);
-    } catch (persistError) {
-      restoreSubagentRunRecord(entry, snapshot);
-      throw persistError;
-    }
-    try {
-      finalizeTaskRunByRunId({
-        runId: entry.taskRunId ?? entry.runId,
-        runtime: "subagent",
-        sessionKey: entry.childSessionKey,
-        status: "failed",
-        endedAt,
-        lastEventAt: endedAt,
-        error,
-        suppressDelivery: true,
-      });
-    } catch (taskError) {
-      // Collector failure is already durable. Detached-task cleanup cannot
-      // turn it back into queued work or the scheduler could launch it twice.
-      log.warn("failed to finalize task after collector launch failure", {
-        runId: entry.runId,
-        error: taskError,
-      });
-    }
-    return true;
-  };
-
-  const settleFailedQueuedSubagentLaunch = (runId: string, error: string) => {
+  const settleFailedQueuedSubagentLaunch = (
+    runId: string,
+    error: string,
+    options?: {
+      expectedTermination?: NonNullable<SubagentRunRecord["acceptedRunTermination"]>;
+      sessionCleanupOutcome?: "deleted" | "changed";
+      suppressSessionEffects?: boolean;
+    },
+  ) => {
     const entry = findRunByIdentity(runId);
     if (!entry) {
       return false;
     }
-    if (typeof entry.execution.endedAt !== "number") {
-      return failQueuedSubagentRun(runId, error);
+    if (options?.expectedTermination) {
+      const expected = options.expectedTermination;
+      if (!isSameAcceptedRunTermination(entry.acceptedRunTermination, expected)) {
+        return false;
+      }
     }
-    if (entry.collectorCompletion) {
+    if (entry.collectorCompletion && !options) {
       return true;
     }
-    if (!entry.collect) {
+    if (typeof entry.execution.endedAt === "number" && !entry.collect && !options) {
       // A kill can win while Gateway acceptance is still in flight. The
       // terminal row already owns failed-launch cleanup; no second transition
       // is needed before the caller terminates the late accepted run.
       return entry.launchCleanupPending === true;
     }
     const snapshot = structuredClone(entry);
-    entry.swarmLaunchPending = false;
-    entry.launchCleanupPending = true;
-    entry.queuedLaunch = undefined;
-    entry.execution = {
-      ...entry.execution,
-      status: "terminal",
-      endedAt: entry.execution.endedAt,
-    };
-    entry.completion = {
-      required: false,
-      resultText:
-        entry.execution.outcome?.status === "error"
-          ? (entry.execution.outcome.error ?? error)
-          : error,
-      capturedAt: entry.execution.endedAt,
-    };
-    updateSwarmCollectorCompletion(entry, params.getRuntimeConfig());
+    if (options?.expectedTermination) {
+      entry.acceptedRunTermination = undefined;
+      if (options.sessionCleanupOutcome) {
+        entry.launchCleanupSessionOutcome = options.sessionCleanupOutcome;
+      }
+    }
+    if (options?.suppressSessionEffects) {
+      entry.execution = { ...entry.execution, suppressSessionEffects: true };
+    }
+    const wasQueued = entry.execution.status === "queued";
+    if (typeof entry.execution.endedAt !== "number") {
+      const endedAt = Date.now();
+      entry.endedReason = SUBAGENT_ENDED_REASON_ERROR;
+      entry.execution = {
+        ...entry.execution,
+        status: "terminal",
+        endedAt,
+        outcome: { status: "error", error, endedAt },
+      };
+      entry.queuedLaunch = undefined;
+      entry.completion = { required: false, resultText: error, capturedAt: endedAt };
+      entry.delivery = { status: "not_required" };
+      if (entry.collect) {
+        entry.launchCleanupPending = true;
+        updateSwarmCollectorCompletion(entry, params.getRuntimeConfig());
+      } else {
+        entry.archiveAtMs = endedAt;
+      }
+    } else if (entry.collect && !entry.collectorCompletion) {
+      entry.swarmLaunchPending = false;
+      entry.launchCleanupPending = true;
+      entry.queuedLaunch = undefined;
+      entry.execution = {
+        ...entry.execution,
+        status: "terminal",
+        endedAt: entry.execution.endedAt,
+      };
+      entry.completion = {
+        required: false,
+        resultText:
+          entry.execution.outcome?.status === "error"
+            ? (entry.execution.outcome.error ?? error)
+            : error,
+        capturedAt: entry.execution.endedAt,
+      };
+      updateSwarmCollectorCompletion(entry, params.getRuntimeConfig());
+    }
     try {
       params.persistOrThrow(entry.runId);
     } catch (persistError) {
       restoreSubagentRunRecord(entry, snapshot);
       throw persistError;
+    }
+    const terminalEndedAt = entry.execution.endedAt;
+    if (wasQueued && typeof terminalEndedAt === "number") {
+      try {
+        finalizeTaskRunByRunId({
+          runId: entry.taskRunId ?? entry.runId,
+          runtime: "subagent",
+          sessionKey: entry.childSessionKey,
+          status: "failed",
+          endedAt: terminalEndedAt,
+          lastEventAt: terminalEndedAt,
+          error,
+          suppressDelivery: true,
+        });
+      } catch (taskError) {
+        // Collector failure is already durable. Detached-task cleanup cannot
+        // turn it back into queued work or the scheduler could launch it twice.
+        log.warn("failed to finalize task after collector launch failure", {
+          runId: entry.runId,
+          error: taskError,
+        });
+      }
     }
     return true;
   };
@@ -1888,7 +1909,7 @@ export function createSubagentRunManager(params: {
     registerSubagentRun,
     releaseSubagentRunKillClaim,
     startQueuedSubagentRun,
-    failQueuedSubagentRun,
+    failQueuedSubagentRun: settleFailedQueuedSubagentLaunch,
     markSubagentRestartRecoveryLaunchAccepted,
     markSubagentRestartRecoveryLaunchConsumed,
     settleFailedQueuedSubagentLaunch,

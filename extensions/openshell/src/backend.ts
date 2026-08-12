@@ -48,6 +48,135 @@ type PendingExec = {
 };
 
 const MATERIALIZED_SKILLS_REMOTE_PARTS = [".openclaw", "sandbox-skills"] as const;
+type OpenShellFsCleanupLocator = {
+  version: 2;
+  backend: "openshell";
+  command: string;
+  gateway?: string;
+  gatewayEndpoint?: string;
+  workspace?: string;
+  objectId: string;
+  remoteWorkspaceDir: string;
+};
+
+function resolveOpenShellFsCleanupLocator(
+  config: ResolvedOpenShellPluginConfig,
+  objectId: string,
+  remoteWorkspaceDir: string,
+): OpenShellFsCleanupLocator {
+  return readOpenShellFsCleanupLocator({
+    version: 2,
+    backend: "openshell",
+    command: config.command,
+    gateway: config.gateway,
+    gatewayEndpoint: config.gatewayEndpoint,
+    workspace: config.workspace,
+    objectId,
+    remoteWorkspaceDir,
+  });
+}
+
+function readOpenShellFsCleanupLocator(value: unknown): OpenShellFsCleanupLocator {
+  const locator = value as Partial<OpenShellFsCleanupLocator> | undefined;
+  const objectId = locator?.objectId;
+  if (
+    locator?.version !== 2 ||
+    locator.backend !== "openshell" ||
+    !locator.command?.trim() ||
+    typeof objectId !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(objectId) ||
+    typeof locator.remoteWorkspaceDir !== "string" ||
+    !path.posix.isAbsolute(locator.remoteWorkspaceDir)
+  ) {
+    throw new Error("invalid OpenShell filesystem cleanup locator");
+  }
+  for (const optional of [locator.gateway, locator.gatewayEndpoint, locator.workspace]) {
+    if (optional !== undefined && typeof optional !== "string") {
+      throw new Error("invalid OpenShell filesystem cleanup locator");
+    }
+  }
+  return {
+    version: 2,
+    backend: "openshell",
+    command: locator.command.trim(),
+    ...(locator.gateway !== undefined ? { gateway: locator.gateway } : {}),
+    ...(locator.gatewayEndpoint !== undefined ? { gatewayEndpoint: locator.gatewayEndpoint } : {}),
+    ...(locator.workspace !== undefined ? { workspace: locator.workspace } : {}),
+    objectId,
+    remoteWorkspaceDir: normalizeRemotePath(locator.remoteWorkspaceDir),
+  };
+}
+
+async function runOpenShellCleanupRemoteShellScript(params: {
+  params: SandboxBackendCommandParams;
+  locator: OpenShellFsCleanupLocator;
+  sandboxName: string;
+  config: ResolvedOpenShellPluginConfig;
+}): Promise<SandboxBackendCommandResult> {
+  const session = await createOpenShellSshSession({
+    context: {
+      sandboxName: params.sandboxName,
+      config: {
+        ...params.config,
+        command: params.locator.command,
+        gateway: params.locator.gateway,
+        gatewayEndpoint: params.locator.gatewayEndpoint,
+        workspace: params.locator.workspace,
+      },
+    },
+  });
+  try {
+    return await runSshSandboxCommand({
+      session,
+      remoteCommand: buildRemoteCommand([
+        "/bin/sh",
+        "-c",
+        ["set -eu", '[ "${OPENSHELL_SANDBOX_ID:-}" = "$1" ]', "shift", params.params.script].join(
+          "\n",
+        ),
+        "openclaw-openshell-cleanup",
+        params.locator.objectId,
+        ...(params.params.args ?? []),
+      ]),
+      stdin: params.params.stdin,
+      allowFailure: params.params.allowFailure,
+      signal: params.params.signal,
+    });
+  } finally {
+    await disposeSshSandboxSession(session);
+  }
+}
+
+function createOpenShellCleanupFsBridge(params: {
+  runtimeId: string;
+  workspaceDir: string;
+  containerWorkspaceDir: string;
+  locator: OpenShellFsCleanupLocator;
+  config: ResolvedOpenShellPluginConfig;
+}) {
+  return createRemoteShellSandboxFsBridge({
+    sandbox: {
+      workspaceDir: params.workspaceDir,
+      agentWorkspaceDir: params.workspaceDir,
+      workspaceAccess: "rw",
+      containerName: params.runtimeId,
+      containerWorkdir: params.containerWorkspaceDir,
+      docker: { binds: [] },
+    },
+    runtime: {
+      remoteWorkspaceDir: params.containerWorkspaceDir,
+      remoteAgentWorkspaceDir: params.containerWorkspaceDir,
+      runRemoteShellScript: async (command) =>
+        await runOpenShellCleanupRemoteShellScript({
+          params: command,
+          locator: params.locator,
+          sandboxName: params.runtimeId,
+          config: params.config,
+        }),
+    },
+  });
+}
+
 function buildOpenShellDirectoryUploadArgs(params: {
   sandboxName: string;
   localPath: string;
@@ -223,6 +352,77 @@ export function createOpenShellSandboxBackendManager(params: {
   pluginConfig: ResolvedOpenShellPluginConfig;
 }): SandboxBackendManager {
   return {
+    async prepareFsCleanupLocator({ backend, runtimeId, config }) {
+      await backend.runShellCommand({ script: "true" });
+      const effectiveConfig = resolveOpenShellPluginConfigFromConfig(config, params.pluginConfig);
+      const identity = await resolveOpenShellSandboxIdentity({
+        config: effectiveConfig,
+        sandboxName: runtimeId,
+      });
+      if (!identity?.id) {
+        throw new Error("OpenShell did not report the sandbox object identity");
+      }
+      return resolveOpenShellFsCleanupLocator(effectiveConfig, identity.id, backend.workdir);
+    },
+    async prepareAttachmentIngress({ backend, runtimeId, workspaceDir, config }) {
+      await backend.runShellCommand({ script: "true" });
+      const effectiveConfig = resolveOpenShellPluginConfigFromConfig(config, params.pluginConfig);
+      const identity = await resolveOpenShellSandboxIdentity({
+        config: effectiveConfig,
+        sandboxName: runtimeId,
+      });
+      if (!identity?.id) {
+        throw new Error("OpenShell did not report the sandbox object identity");
+      }
+      const ingressRoot = path.posix.join(
+        path.posix.dirname(backend.workdir),
+        "attachment-ingress",
+      );
+      const locator = resolveOpenShellFsCleanupLocator(effectiveConfig, identity.id, ingressRoot);
+      const bridge = createOpenShellCleanupFsBridge({
+        runtimeId,
+        workspaceDir,
+        containerWorkspaceDir: ingressRoot,
+        locator,
+        config: effectiveConfig,
+      });
+      return {
+        workspaceDir,
+        sandboxAttachmentsRootDir: path.posix.join(ingressRoot, ".openclaw", "attachments"),
+        sandboxFsBridge: bridge,
+        cleanupLocator: locator,
+        cleanupContainerWorkspaceDir: ingressRoot,
+        workspaceMutationVisibility: "runtime-local" as const,
+      };
+    },
+    async createFsCleanupBridge({
+      runtimeId,
+      workspaceDir,
+      containerWorkspaceDir,
+      locator: rawLocator,
+    }) {
+      const locator = readOpenShellFsCleanupLocator(rawLocator);
+      if (
+        normalizeRemotePath(containerWorkspaceDir) !==
+        normalizeRemotePath(locator.remoteWorkspaceDir)
+      ) {
+        return null;
+      }
+      const frozenConfig = {
+        ...params.pluginConfig,
+        command: locator.command,
+        gateway: locator.gateway,
+        gatewayEndpoint: locator.gatewayEndpoint,
+        workspace: locator.workspace,
+      };
+      return createOpenShellCleanupFsBridge({
+        runtimeId,
+        workspaceDir,
+        containerWorkspaceDir,
+        locator,
+        config: frozenConfig,
+      });
+    },
     async describeRuntime({ entry, config }) {
       const execContext: OpenShellExecContext = {
         config: resolveOpenShellPluginConfigFromConfig(config, params.pluginConfig),
@@ -333,10 +533,7 @@ class OpenShellSandboxBackendImpl {
       runShellCommand: async (command) => await this.runRemoteShellScript(command),
       createFsBridge: ({ sandbox }) =>
         this.params.execContext.config.mode === "remote"
-          ? createRemoteShellSandboxFsBridge({
-              sandbox,
-              runtime: this.asHandle(),
-            })
+          ? createRemoteShellSandboxFsBridge({ sandbox, runtime: this.asHandle() })
           : createOpenShellFsBridge({
               sandbox,
               backend: this.asHandle(),
@@ -720,41 +917,19 @@ class OpenShellSandboxBackendImpl {
   }
 
   private async resolveLegacyRuntimePhase(): Promise<string | undefined> {
-    const pageSize = 100;
-    for (let offset = 0; ; offset += pageSize) {
-      const listResult = await runOpenShellCli({
-        context: this.params.execContext,
-        args: [
-          "sandbox",
-          "list",
-          "--limit",
-          String(pageSize),
-          "--offset",
-          String(offset),
-          "--output",
-          "json",
-        ],
-        cwd: this.params.createParams.workspaceDir,
-      });
-      if (listResult.code !== 0) {
-        throw this.buildLegacyRuntimeUnavailableError(listResult.stderr.trim());
-      }
-      const page = parseOpenShellSandboxPhasePage(
-        listResult.stdout,
-        this.params.execContext.sandboxName,
-      );
-      if (!page) {
-        throw this.buildLegacyRuntimeUnavailableError(
-          "OpenShell returned malformed sandbox lifecycle data.",
-        );
-      }
-      if (page.phase) {
-        return page.phase;
-      }
-      if (page.count < pageSize) {
-        return undefined;
-      }
+    const lookup = await lookupOpenShellSandbox({
+      context: this.params.execContext,
+      cwd: this.params.createParams.workspaceDir,
+    });
+    if (lookup.status === "error") {
+      throw this.buildLegacyRuntimeUnavailableError(lookup.detail);
     }
+    if (lookup.status === "malformed") {
+      throw this.buildLegacyRuntimeUnavailableError(
+        "OpenShell returned malformed sandbox lifecycle data.",
+      );
+    }
+    return lookup.status === "found" ? lookup.phase : undefined;
   }
 
   private buildLegacyRuntimeUnavailableError(detail: string): Error {
@@ -967,7 +1142,7 @@ function resolveOpenShellSandboxName(params: {
 function parseOpenShellSandboxPhasePage(
   stdout: string,
   sandboxName: string,
-): { count: number; phase?: string } | undefined {
+): { count: number; id?: string; phase?: string } | undefined {
   try {
     const parsed: unknown = JSON.parse(stdout);
     if (!Array.isArray(parsed)) {
@@ -978,13 +1153,68 @@ function parseOpenShellSandboxPhasePage(
         continue;
       }
       const record = entry as Record<string, unknown>;
-      if (record.name === sandboxName && typeof record.phase === "string") {
-        return { count: parsed.length, phase: record.phase };
+      if (record.name === sandboxName) {
+        return {
+          count: parsed.length,
+          id: typeof record.id === "string" ? record.id : undefined,
+          phase: typeof record.phase === "string" ? record.phase : undefined,
+        };
       }
     }
     return { count: parsed.length };
   } catch {
     return undefined;
+  }
+}
+
+async function resolveOpenShellSandboxIdentity(params: {
+  config: ResolvedOpenShellPluginConfig;
+  sandboxName: string;
+}): Promise<{ id?: string; phase?: string } | undefined> {
+  const lookup = await lookupOpenShellSandbox({
+    context: { config: params.config, sandboxName: params.sandboxName },
+  });
+  return lookup.status === "found" ? { id: lookup.id, phase: lookup.phase } : undefined;
+}
+
+type OpenShellSandboxLookup =
+  | { status: "found"; id?: string; phase?: string }
+  | { status: "missing" | "malformed" }
+  | { status: "error"; detail: string };
+
+async function lookupOpenShellSandbox(params: {
+  context: OpenShellExecContext;
+  cwd?: string;
+}): Promise<OpenShellSandboxLookup> {
+  const pageSize = 100;
+  for (let offset = 0; ; offset += pageSize) {
+    const result = await runOpenShellCli({
+      context: params.context,
+      args: [
+        "sandbox",
+        "list",
+        "--limit",
+        String(pageSize),
+        "--offset",
+        String(offset),
+        "--output",
+        "json",
+      ],
+      cwd: params.cwd,
+    });
+    if (result.code !== 0) {
+      return { status: "error", detail: result.stderr.trim() };
+    }
+    const page = parseOpenShellSandboxPhasePage(result.stdout, params.context.sandboxName);
+    if (!page) {
+      return { status: "malformed" };
+    }
+    if (page.id || page.phase) {
+      return { status: "found", id: page.id, phase: page.phase };
+    }
+    if (page.count < pageSize) {
+      return { status: "missing" };
+    }
   }
 }
 

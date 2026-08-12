@@ -5,6 +5,7 @@
  */
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import type { SubagentSpawnPreparation } from "../../../context-engine/types.js";
+import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import {
   GatewayDrainingError,
@@ -15,10 +16,12 @@ import {
   type SpawnBackendAdapter,
   summarizeSpawnError,
 } from "../../spawn-pipeline.js";
+import { runFailedLaunchRollback } from "../registry/subagent-failed-launch-rollback.js";
 import {
-  completeFailedLaunchCleanup,
+  recordAcceptedRunTermination,
   registerSubagentRun,
   releaseSubagentRun,
+  scheduleSubagentRegistrySweep,
   settleFailedQueuedSubagentLaunch,
   startQueuedSubagentRun,
 } from "../registry/subagent-registry.js";
@@ -37,8 +40,6 @@ import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
 import {
   cleanupFailedSpawnBeforeAgentStart,
   cleanupProvisionalSession,
-  retrySubagentCleanup,
-  terminateAcceptedSubagentRun,
 } from "./subagent-spawn-cleanup.js";
 import {
   prepareContextEngineSubagentSpawn,
@@ -57,6 +58,7 @@ import {
   createSubagentSpawnLifecycleEmitter,
   recordInitialSubagentSpawn,
 } from "./subagent-spawn-lifecycle.js";
+import { buildSubagentSpawnRegistration } from "./subagent-spawn-registration.js";
 import { resolveSubagentSpawnRequest } from "./subagent-spawn-request.js";
 import {
   createInitialSubagentSession,
@@ -73,6 +75,9 @@ import {
 } from "./subagent-spawn.runtime.js";
 
 export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
+
+class AcceptedRunTerminationPendingError extends Error {}
+class AcceptedRunTerminationSettledError extends Error {}
 
 export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
@@ -113,18 +118,10 @@ export async function spawnSubagentDirect(
       launchReplayKey: swarmLaunchReplayKey,
       reservationPending,
     },
-    admission: {
-      resolve: resolveAdmission,
-      initial: admission,
-      reservation: admissionReservation,
-      childDepth,
-      maxSpawnDepth,
-    },
+    admission: { initial: admission, reservation: admissionReservation, childDepth, maxSpawnDepth },
     childIdem,
   } = requestResolution.resolved;
-  let modelApplied = false;
-  let threadBindingReady = false;
-  let hasBoundThreadDeliveryOrigin = false;
+  let [modelApplied, threadBindingReady, hasBoundThreadDeliveryOrigin] = [false, false, false];
   let childRunId: string = childIdem;
   let swarmReservationPending = reservationPending;
   try {
@@ -336,7 +333,7 @@ export async function spawnSubagentDirect(
         swarmMaxConcurrent: swarmConfig.maxConcurrent,
       });
     let launchPlan: ReturnType<typeof buildSubagentLaunchRequest> | undefined;
-    let attachmentCleanupOwnerClaimed = false;
+    let launchCleanupOwnerClaimed = false;
     const applyAttachmentClaim = (claim: SubagentAttachmentCleanupClaim) => {
       retainOnSessionKeep = claim.retainOnSessionKeep;
       attachmentsReceipt = claim.receipt;
@@ -350,7 +347,7 @@ export async function spawnSubagentDirect(
       // Registry ownership replaces the anonymous concurrency reservation
       // before potentially slow bridge writes begin.
       admissionReservation?.release();
-      attachmentCleanupOwnerClaimed = true;
+      launchCleanupOwnerClaimed = true;
     };
 
     function buildRegistration(
@@ -359,70 +356,43 @@ export async function spawnSubagentDirect(
       queued: boolean,
       launchCleanupPending = false,
     ) {
-      if (params.collect) {
-        const latestAdmission = resolveAdmission();
-        if (!latestAdmission.ok) {
-          throw Object.assign(new Error(latestAdmission.error), {
-            spawnStatus: "forbidden" as const,
-          });
-        }
-      }
-      return {
+      return buildSubagentSpawnRegistration({
         runId,
+        request: params,
+        launch: launchRequest,
+        queued,
+        launchCleanupPending,
         requesterTurnRunId: ctx.requesterTurnRunId,
         childSessionKey,
         controllerSessionKey: ownership.controllerSessionKey,
         requesterSessionKey: ownership.completionRequesterSessionKey,
         requesterOrigin,
-        progressOrigin: launchRequest.progressOrigin,
         requesterDisplayKey: ownership.completionRequesterDisplayKey,
         task,
         taskName,
-        agentId: targetAgentId,
+        targetAgentId,
         requesterAgentId,
         cleanup,
         label: label || undefined,
-        model: resolvedModel,
-        agentDir: targetAgentDir,
-        workspaceDir: launchRequest.spawnedMetadata.workspaceDir,
+        resolvedModel,
+        targetAgentDir,
         runTimeoutSeconds,
-        expectsCompletionMessage: launchRequest.shouldAnnounceCompletion,
         spawnMode,
-        collect: params.collect === true,
-        swarmRequesterSessionKey: params.collect ? requesterInternalKey : undefined,
-        swarmLaunchIdempotencyKey: params.collect ? childIdem : undefined,
-        swarmLaunchReplayKey: params.collect ? swarmLaunchReplayKey : undefined,
-        swarmLaunchRequestFingerprint: params.collect
-          ? params.swarmLaunchRequestFingerprint
-          : undefined,
-        outputSchema: params.outputSchema,
-        groupId: swarmGroupId,
-        queuedLaunch: launchRequest.queuedLaunch,
-        queued,
-        launchCleanupPending,
-        launchCleanupSessionIdentity:
-          launchCleanupPending &&
-          provisionalSessionIdentity.expectedSessionId &&
-          provisionalSessionIdentity.expectedLifecycleRevision
-            ? {
-                sessionId: provisionalSessionIdentity.expectedSessionId,
-                lifecycleRevision: provisionalSessionIdentity.expectedLifecycleRevision,
-              }
-            : undefined,
-        attachmentsDir: attachmentAbsDir,
-        attachmentsRootDir: attachmentRootDir,
-        attachmentsSandboxSessionKey: attachmentBoundary.sandboxOwner?.sessionKey,
-        attachmentsSandboxAgentId: attachmentBoundary.sandboxOwner?.agentId,
-        attachmentsSandboxWorkspaceDir: attachmentBoundary.sandboxOwner?.workspaceDir,
-        attachmentsSandboxIdentity: attachmentBoundary.sandboxOwner?.identity,
-        attachmentsSandboxDir: attachmentBoundary.sandboxOwner ? attachmentSandboxDir : undefined,
+        swarmRequesterSessionKey: requesterInternalKey,
+        swarmGroupId,
+        swarmLaunchReplayKey,
+        attachmentBoundary,
+        attachmentAbsDir,
+        attachmentRootDir,
+        attachmentSandboxDir,
         retainAttachmentsOnKeep: retainOnSessionKeep,
-      };
+        ...provisionalSessionIdentity,
+      });
     }
 
     const cleanupFailedSpawn = (
-      waitForSessionDeletion?: boolean,
       emitLifecycleHooks = threadBindingReady,
+      priorSessionCleanup?: "deleted" | "changed",
     ) =>
       cleanupFailedSpawnBeforeAgentStart({
         childSessionKey,
@@ -432,10 +402,17 @@ export async function spawnSubagentDirect(
         attachmentSandboxDir,
         emitLifecycleHooks,
         deleteTranscript: true,
+        priorSessionCleanup,
         ...provisionalSessionIdentity,
-        waitForSessionDeletion,
       });
 
+    const settleFailedLaunchOwner = (runId: string, error: string) => {
+      try {
+        return settleFailedQueuedSubagentLaunch(runId, error);
+      } catch {
+        return false;
+      }
+    };
     const materializedAttachments = await materializeSubagentAttachments({
       config: cfg,
       targetAgentId,
@@ -448,12 +425,16 @@ export async function spawnSubagentDirect(
     });
     if (materializedAttachments && materializedAttachments.status !== "ok") {
       if (materializedAttachments.status === "error" && materializedAttachments.ownerClaimed) {
-        await retrySubagentCleanup(() =>
-          settleFailedQueuedSubagentLaunch(childIdem, materializedAttachments.error),
-        );
-        const cleanupResult = await cleanupFailedSpawn(true);
-        if (cleanupResult.attachmentsRemoved && cleanupResult.sessionDeleted) {
+        const ownerSettled = settleFailedLaunchOwner(childIdem, materializedAttachments.error);
+        const cleanupResult = await cleanupFailedSpawn();
+        if (
+          ownerSettled &&
+          cleanupResult.attachmentsRemoved &&
+          cleanupResult.sessionCleanupComplete
+        ) {
           await releaseSubagentRun(childIdem);
+        } else {
+          scheduleSubagentRegistrySweep({ delayMs: 0 });
         }
       } else {
         await cleanupCreatedSession(threadBindingReady);
@@ -464,7 +445,22 @@ export async function spawnSubagentDirect(
       };
     }
     const resolvedLaunchPlan = launchPlan ?? createLaunchPlan(childSystemPrompt);
+    if (!launchCleanupOwnerClaimed) {
+      registerSubagentRun(buildRegistration(childIdem, resolvedLaunchPlan, true, true));
+      admissionReservation?.release();
+      launchCleanupOwnerClaimed = true;
+    }
+    const createDispatchTerminationOwner = () => ({
+      kind: "launch" as const,
+      phase: "attempted" as const,
+      gatewayRunId: childIdem,
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      expectedSessionId: provisionalSessionIdentity.expectedSessionId,
+      expectedLifecycleRevision: provisionalSessionIdentity.expectedLifecycleRevision,
+    });
+    let dispatchTerminationOwner: ReturnType<typeof createDispatchTerminationOwner> | undefined;
     const { childLaunch, progressOrigin } = resolvedLaunchPlan;
+    let dispatchTerminationRecorded = false;
     recordInitialSubagentSpawn({
       childSessionKey,
       childRunId,
@@ -516,32 +512,39 @@ export async function spawnSubagentDirect(
         if (params.collect) {
           return { runId: childIdem };
         }
+        dispatchTerminationOwner = createDispatchTerminationOwner();
+        recordAcceptedRunTermination(childIdem, dispatchTerminationOwner);
+        dispatchTerminationRecorded = true;
         const response = await launchChildRun();
         return { runId: readGatewayRunId(response) ?? childIdem };
       },
-      async cleanupOnFailure({ phase, state, runId: acceptedRunId }) {
-        const acceptedRunTerminationFailed =
-          phase === "register" &&
-          attachmentCleanupOwnerClaimed &&
-          acceptedRunId &&
-          acceptedRunId !== childIdem &&
-          !(await terminateOrRetryFailedAcceptedSubagentLaunch({
+      async cleanupOnFailure({ phase, state }) {
+        let ownerSettled = false;
+        let priorSessionCleanup: "deleted" | "changed" | undefined;
+        const terminationOwner = dispatchTerminationOwner;
+        const terminationAttempted =
+          phase !== "initialize" && dispatchTerminationRecorded && terminationOwner !== undefined;
+        if (terminationAttempted && terminationOwner) {
+          ownerSettled = await terminateOrRetryFailedAcceptedSubagentLaunch({
             childSessionKey,
-            gatewayRunId: acceptedRunId,
-            ...provisionalSessionIdentity,
             cleanupOwnerRunId: childIdem,
+            terminationOwner,
             contextEnginePreparation: state?.contextEnginePreparation,
-          }));
-        if (attachmentCleanupOwnerClaimed) {
-          await retrySubagentCleanup(() =>
-            settleFailedQueuedSubagentLaunch(childIdem, `subagent ${phase} failed`),
-          );
+            failureError: `subagent ${phase} failed`,
+            onSessionCleanup: (outcome) => {
+              priorSessionCleanup = outcome;
+            },
+          });
+        } else if (launchCleanupOwnerClaimed) {
+          ownerSettled = settleFailedLaunchOwner(childIdem, `subagent ${phase} failed`);
         }
-        if (acceptedRunTerminationFailed) {
+        if (terminationAttempted && !ownerSettled) {
           return;
         }
         if (phase !== "initialize") {
-          await rollbackPreparedContextEngine(state?.contextEnginePreparation);
+          if ((await runFailedLaunchRollback(childIdem)) === undefined) {
+            await rollbackPreparedContextEngine(state?.contextEnginePreparation);
+          }
         }
         let emitLifecycleHooks = threadBindingReady;
         if (phase === "dispatch" && threadBindingReady) {
@@ -572,13 +575,13 @@ export async function spawnSubagentDirect(
           }
           emitLifecycleHooks = !endedHookEmitted;
         }
-        const cleanupResult = await cleanupFailedSpawn(
-          attachmentCleanupOwnerClaimed,
-          emitLifecycleHooks,
-        );
-        const cleanupComplete = cleanupResult.attachmentsRemoved && cleanupResult.sessionDeleted;
-        if (attachmentCleanupOwnerClaimed && cleanupComplete) {
+        const cleanupResult = await cleanupFailedSpawn(emitLifecycleHooks, priorSessionCleanup);
+        const cleanupComplete =
+          cleanupResult.attachmentsRemoved && cleanupResult.sessionCleanupComplete;
+        if (launchCleanupOwnerClaimed && ownerSettled && cleanupComplete) {
           await releaseSubagentRun(childIdem);
+        } else if (launchCleanupOwnerClaimed) {
+          scheduleSubagentRegistrySweep({ delayMs: 0 });
         }
       },
     };
@@ -589,13 +592,15 @@ export async function spawnSubagentDirect(
       progressSessionKey: requesterInternalKey,
       buildRegistration: (_state, runId) =>
         buildRegistration(runId, resolvedLaunchPlan, params.collect === true),
-      activateClaimedRegistration: attachmentCleanupOwnerClaimed
-        ? (_state, runId) => {
-            if (!params.collect && !startQueuedSubagentRun(childIdem, runId)) {
-              throw new Error("provisional subagent run could not transition to running");
-            }
-          }
-        : undefined,
+      activateClaimedRegistration: (_state, runId) => {
+        const terminationOwner = dispatchTerminationOwner;
+        if (
+          !params.collect &&
+          (!terminationOwner || !startQueuedSubagentRun(childIdem, runId, terminationOwner))
+        ) {
+          throw new Error("provisional subagent run could not transition to running");
+        }
+      },
     });
     if (!pipelineResult.ok) {
       const runId = pipelineResult.runId ?? childIdem;
@@ -616,63 +621,59 @@ export async function spawnSubagentDirect(
     childRunId = pipelineResult.runId;
     let collectorSessionKey: string | undefined;
     if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
-      let launchTerminationConfirmed = false;
       activateSwarmRun({
         groupId: swarmSchedulerGroupKey,
         runId: childRunId,
         start: async () => {
           await runWithGatewayIndependentRootWorkContinuation(async () => {
-            const response = await launchChildRun();
-            const gatewayRunId = readGatewayRunId(response) ?? childRunId;
+            const collectorTerminationOwner = createDispatchTerminationOwner();
+            recordAcceptedRunTermination(childRunId, collectorTerminationOwner);
             try {
-              if (!startQueuedSubagentRun(childRunId, gatewayRunId)) {
+              const response = await launchChildRun();
+              const gatewayRunId = readGatewayRunId(response) ?? childRunId;
+              if (!startQueuedSubagentRun(childRunId, gatewayRunId, collectorTerminationOwner)) {
                 throw new Error(
                   "collector registry row could not transition from queued to running",
                 );
               }
             } catch (error) {
-              await terminateAcceptedSubagentRun({
+              const terminated = await terminateOrRetryFailedAcceptedSubagentLaunch({
                 childSessionKey,
-                gatewayRunId,
-                ...provisionalSessionIdentity,
+                cleanupOwnerRunId: childRunId,
+                terminationOwner: collectorTerminationOwner,
+                contextEnginePreparation: pipelineResult.state.contextEnginePreparation,
+                failureError: summarizeSpawnError(error),
               });
-              launchTerminationConfirmed = true;
-              throw error;
+              if (!terminated) {
+                throw new AcceptedRunTerminationPendingError();
+              }
+              throw new AcceptedRunTerminationSettledError(
+                error instanceof Error ? error.message : String(error),
+              );
             }
-            await emitSpawnLifecycleHooks(gatewayRunId);
+            await emitSpawnLifecycleHooks(childRunId);
           });
         },
         onStartFailure: async (error) => {
           if (error instanceof GatewayDrainingError) {
             return false;
           }
-          const launchError = summarizeSpawnError(error);
-          const [contextRollback, sessionCleanup] = await Promise.allSettled([
-            rollbackPreparedContextEngine(pipelineResult.state.contextEnginePreparation),
-            cleanupFailedSpawn(
-              // A launch RPC can fail after acceptance. Keep the FIFO slot until
-              // deleting the child session proves no accepted run remains active.
-              !launchTerminationConfirmed,
-            ),
-          ]);
-          await retrySubagentCleanup(async () => {
-            settleFailedQueuedSubagentLaunch(childRunId, launchError);
-            return true;
-          });
-          const cleanupComplete =
-            contextRollback.status === "fulfilled" &&
-            contextRollback.value &&
-            sessionCleanup.status === "fulfilled" &&
-            sessionCleanup.value.attachmentsRemoved &&
-            sessionCleanup.value.sessionDeleted;
-          if (cleanupComplete) {
-            emitSessionLifecycleEvent({
-              sessionKey: childSessionKey,
-              reason: "delete",
-              parentSessionKey: requesterInternalKey,
-            });
-            completeFailedLaunchCleanup(childRunId);
+          if (error instanceof AcceptedRunTerminationPendingError) {
+            return "held";
           }
+          if (error instanceof AcceptedRunTerminationSettledError) {
+            scheduleSubagentRegistrySweep({ delayMs: 0 });
+            return true;
+          }
+          const launchError = summarizeSpawnError(error);
+          const ownerSettled = settleFailedLaunchOwner(childRunId, launchError);
+          if (!ownerSettled) {
+            scheduleSubagentRegistrySweep({ delayMs: 0 });
+            return "held";
+          }
+          // Execution authority is closed and the terminal outcome is durable.
+          // Artifact cleanup remains row-owned but must not monopolize FIFO capacity.
+          scheduleSubagentRegistrySweep({ delayMs: 0 });
           return true;
         },
       });

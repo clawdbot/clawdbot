@@ -3,6 +3,7 @@ import {
   leasePendingAgentSteeringItemsFromSubagentRuns,
   releaseLeasedAgentSteeringItemsFromSubagentRuns,
 } from "../../agent-steering-queue.js";
+import { isSameAcceptedRunTermination } from "./subagent-accepted-run-termination.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
 import {
@@ -98,11 +99,12 @@ export function createSubagentRegistryPublicApi(config: {
 
   function completeFailedLaunchCleanup(runId: string): void {
     const entry = findRunById(runs, runId.trim());
-    if (!entry?.launchCleanupPending) {
+    if (!entry?.launchCleanupPending || entry.acceptedRunTermination) {
       return;
     }
     entry.launchCleanupPending = undefined;
     entry.launchCleanupSessionIdentity = undefined;
+    entry.launchCleanupSessionOutcome = undefined;
     entry.cleanupCompletedAt = Date.now();
     entry.contextEngineCleanupCompletedAt ??= entry.cleanupCompletedAt;
     persist(entry.runId);
@@ -115,6 +117,75 @@ export function createSubagentRegistryPublicApi(config: {
     }
     entry.contextEngineCleanupCompletedAt ??= Date.now();
     persist(entry.runId);
+  }
+
+  function recordAcceptedRunTermination(
+    runId: string,
+    termination: NonNullable<SubagentRunRecord["acceptedRunTermination"]>,
+  ): void {
+    const entry = findRunById(runs, runId.trim());
+    if (!entry) {
+      throw new Error("accepted-run termination owner is unavailable");
+    }
+    const previous = entry.acceptedRunTermination;
+    if (previous) {
+      if (isSameAcceptedRunTermination(previous, termination) && previous.phase === "attempted") {
+        return;
+      }
+      throw new Error("accepted-run termination owner is already occupied");
+    }
+    entry.acceptedRunTermination = termination;
+    try {
+      persistOrThrow(entry.runId);
+    } catch (error) {
+      entry.acceptedRunTermination = previous;
+      throw error;
+    }
+  }
+
+  function completeAcceptedRunTermination(
+    runId: string,
+    expected: NonNullable<SubagentRunRecord["acceptedRunTermination"]>,
+    sessionCleanupOutcome?: "deleted" | "changed",
+  ): boolean {
+    const entry = findRunById(runs, runId.trim());
+    const current = entry?.acceptedRunTermination;
+    if (!entry || !isSameAcceptedRunTermination(current, expected)) {
+      return false;
+    }
+    const previousSessionCleanupOutcome = entry.launchCleanupSessionOutcome;
+    entry.acceptedRunTermination = undefined;
+    if (expected.kind === "launch" && sessionCleanupOutcome) {
+      entry.launchCleanupSessionOutcome = sessionCleanupOutcome;
+    }
+    try {
+      persistOrThrow(entry.runId);
+    } catch (error) {
+      entry.acceptedRunTermination = current;
+      entry.launchCleanupSessionOutcome = previousSessionCleanupOutcome;
+      throw error;
+    }
+    return true;
+  }
+
+  function markAcceptedRunTerminationPending(
+    runId: string,
+    expected: NonNullable<SubagentRunRecord["acceptedRunTermination"]>,
+  ): boolean {
+    const entry = findRunById(runs, runId.trim());
+    const current = entry?.acceptedRunTermination;
+    if (!entry || !isSameAcceptedRunTermination(current, expected)) {
+      return false;
+    }
+    if (current.phase === "termination-pending") {
+      return true;
+    }
+    entry.acceptedRunTermination = { ...current, phase: "termination-pending" };
+    // The prior durable `attempted` owner becomes stale after restart. Keeping
+    // the in-memory pending phase on a transient store failure lets this
+    // process hand cleanup to the sweeper immediately without losing closure.
+    persist(entry.runId);
+    return true;
   }
 
   function recordSwarmStructuredOutput(
@@ -206,6 +277,9 @@ export function createSubagentRegistryPublicApi(config: {
     getSubagentRunsByRunIds,
     completeFailedLaunchCleanup,
     completeFailedLaunchContextEngineCleanup,
+    recordAcceptedRunTermination,
+    markAcceptedRunTerminationPending,
+    completeAcceptedRunTermination,
     recordSwarmStructuredOutput,
     listSwarmRunsForGroup,
     getSwarmRunByLaunchReplayKey,

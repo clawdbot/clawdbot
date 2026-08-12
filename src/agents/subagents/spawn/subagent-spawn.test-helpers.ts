@@ -147,6 +147,9 @@ export async function loadSubagentSpawnModuleForTest(params: {
   settleFailedQueuedSubagentLaunchMock?: MockFn;
   completeFailedLaunchCleanupMock?: MockFn;
   completeFailedLaunchContextEngineCleanupMock?: MockFn;
+  recordAcceptedRunTerminationMock?: MockFn;
+  markAcceptedRunTerminationPendingMock?: MockFn;
+  completeAcceptedRunTerminationMock?: MockFn;
   scheduleSubagentRegistrySweepMock?: MockFn;
   emitSessionLifecycleEventMock?: MockFn;
   hookRunner?: HookRunner;
@@ -162,6 +165,8 @@ export async function loadSubagentSpawnModuleForTest(params: {
   }) => { sandboxed: boolean };
   resolveSandboxContext?: (...args: unknown[]) => Promise<unknown>;
   createSandboxWorkspaceIngressFsBridge?: (sandbox: unknown) => unknown;
+  getSandboxBackendManager?: (backendId: string) => unknown;
+  listResolvedSandboxContexts?: () => unknown[];
   getSessionBindingService?: () => {
     getCapabilities?: (params: { channel?: string; accountId?: string }) => {
       adapterAvailable: boolean;
@@ -216,6 +221,16 @@ export async function loadSubagentSpawnModuleForTest(params: {
   }
 
   const resetSubagentRegistryForTests = vi.fn();
+  let latestResolvedSandbox: { fsBridge?: unknown } | null = null;
+
+  vi.doMock("../../sandbox/backend.js", () => ({
+    getSandboxBackendManager:
+      params.getSandboxBackendManager ??
+      (() => ({
+        prepareFsCleanupLocator: async () => ({ version: 1, test: true }),
+        createFsCleanupBridge: async () => latestResolvedSandbox?.fsBridge ?? null,
+      })),
+  }));
 
   vi.doMock("../../provider-model-normalization.runtime.js", () => ({
     normalizeProviderModelIdWithRuntime: () => undefined,
@@ -386,7 +401,14 @@ export async function loadSubagentSpawnModuleForTest(params: {
           : "openai/gpt-4"),
     resolveSandboxRuntimeStatus:
       params.resolveSandboxRuntimeStatus ?? (() => ({ sandboxed: false })),
-    resolveSandboxContext: params.resolveSandboxContext ?? (async () => null),
+    resolveSandboxContext: async (...args: unknown[]) => {
+      const resolved = (await (params.resolveSandboxContext ?? (async () => null))(...args)) as {
+        fsBridge?: unknown;
+      } | null;
+      latestResolvedSandbox = resolved;
+      return resolved;
+    },
+    listResolvedSandboxContexts: params.listResolvedSandboxContexts ?? (() => []),
     createSandboxWorkspaceIngressFsBridge:
       params.createSandboxWorkspaceIngressFsBridge ??
       ((sandbox: { fsBridge?: unknown }) => sandbox.fsBridge),
@@ -401,6 +423,10 @@ export async function loadSubagentSpawnModuleForTest(params: {
     completeFailedLaunchContextEngineCleanup:
       params.completeFailedLaunchContextEngineCleanupMock ?? vi.fn(),
     completeFailedLaunchCleanup: params.completeFailedLaunchCleanupMock ?? vi.fn(),
+    recordAcceptedRunTermination: params.recordAcceptedRunTerminationMock ?? vi.fn(),
+    markAcceptedRunTerminationPending:
+      params.markAcceptedRunTerminationPendingMock ?? vi.fn(() => true),
+    completeAcceptedRunTermination: params.completeAcceptedRunTerminationMock ?? vi.fn(),
     countActiveRunsForSession: params.countActiveRunsForSession ?? (() => 0),
     listSwarmRunsForGroup: params.listSwarmRunsForGroup ?? vi.fn(() => []),
     registerSubagentRun:

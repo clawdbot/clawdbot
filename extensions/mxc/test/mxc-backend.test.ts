@@ -16,7 +16,11 @@ import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { resolveConfig, type MxcConfig } from "../src/config.js";
 import { createMxcSandboxBackendFactory } from "../src/mxc-backend-factory.js";
-import { createMxcSandboxBackendHandle, mxcSandboxBackendManager } from "../src/mxc-backend.js";
+import {
+  createMxcSandboxBackendHandle,
+  mxcSandboxBackendManager,
+  resolveMxcAttachmentIngressRoot,
+} from "../src/mxc-backend.js";
 
 const { spawnCommandMock, execFileSyncMock, mockedHomeDir } = vi.hoisted(() => ({
   spawnCommandMock: vi.fn(),
@@ -56,7 +60,34 @@ const baseParams = {
   config: baseConfig,
   runtimeId: "openclaw-mxc-test-abc12345",
   workdir: "/workspace",
+  attachmentIngressRoot: "/tmp/openclaw-mxc-attachments/test-session",
 };
+
+test("isolates attachment ingress roots by child session", async () => {
+  const firstSession = "agent:main:subagent:first";
+  const secondSession = "agent:main:subagent:second";
+  const prepared = await mxcSandboxBackendManager.prepareAttachmentIngress?.({
+    backend: {} as never,
+    runtimeId: "shared-runtime",
+    sessionKey: firstSession,
+    workspaceDir: "/workspace",
+    containerWorkspaceDir: "/workspace",
+    config: {},
+  });
+
+  expect(prepared).toMatchObject({
+    workspaceDir: resolveMxcAttachmentIngressRoot(firstSession),
+    sandboxAttachmentsRootDir: path.join(
+      resolveMxcAttachmentIngressRoot(firstSession),
+      ".openclaw",
+      "attachments",
+    ),
+    workspaceMutationVisibility: "shared-host",
+  });
+  expect(resolveMxcAttachmentIngressRoot(firstSession)).not.toBe(
+    resolveMxcAttachmentIngressRoot(secondSession),
+  );
+});
 
 const describeOnWindows = describe.runIf(process.platform === "win32");
 
@@ -235,6 +266,10 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
     testDirs.push(mockedHomeDir.value);
     baseParams.workdir = mkdtempSync(path.join(tmpdir(), "mxc-test-workspace-"));
     testDirs.push(baseParams.workdir);
+    baseParams.attachmentIngressRoot = mkdtempSync(
+      path.join(tmpdir(), "mxc-test-attachment-ingress-"),
+    );
+    testDirs.push(baseParams.attachmentIngressRoot);
   });
 
   afterEach(() => {
@@ -553,6 +588,8 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
     const readonly = stringArrayField(filesystem, "readonlyPaths");
     expect(readwrite).toContain(path.resolve(baseParams.workdir));
     expect(readonly).not.toContain(path.resolve(baseParams.workdir));
+    expect(readwrite).not.toContain(path.resolve(baseParams.attachmentIngressRoot));
+    expect(readonly).toContain(path.resolve(baseParams.attachmentIngressRoot));
   });
 
   test("workspace access policies honor distinct sandbox and agent workspace roots", async () => {

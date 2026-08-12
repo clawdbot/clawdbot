@@ -1,4 +1,5 @@
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
+import { getSandboxBackendManager } from "../../sandbox/backend.js";
 import {
   callGateway,
   createSandboxWorkspaceIngressFsBridge,
@@ -9,6 +10,7 @@ import {
   getRuntimeConfig,
   hasInProcessGatewayContext,
   loadPreparedModelCatalog,
+  listResolvedSandboxContexts,
   resolveContextEngine,
   resolveSandboxContext,
 } from "./subagent-spawn.runtime.js";
@@ -25,6 +27,8 @@ type SubagentSpawnDeps = {
   resolveContextEngine: typeof resolveContextEngine;
   createSandboxWorkspaceIngressFsBridge: typeof createSandboxWorkspaceIngressFsBridge;
   resolveSandboxContext: typeof resolveSandboxContext;
+  getSandboxBackendManager: typeof getSandboxBackendManager;
+  listResolvedSandboxContexts: typeof listResolvedSandboxContexts;
 };
 
 const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
@@ -39,6 +43,8 @@ const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
   resolveContextEngine,
   createSandboxWorkspaceIngressFsBridge,
   resolveSandboxContext,
+  getSandboxBackendManager,
+  listResolvedSandboxContexts,
 };
 
 let subagentSpawnDeps = defaultSubagentSpawnDeps;

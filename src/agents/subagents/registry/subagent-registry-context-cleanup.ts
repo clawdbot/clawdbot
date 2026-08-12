@@ -1,5 +1,6 @@
 import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
+import { runFailedLaunchRollback } from "./subagent-failed-launch-rollback.js";
 import {
   SUBAGENT_ENDED_OUTCOME_KILLED,
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -95,24 +96,33 @@ export function createSubagentRegistryContextCleanup(config: {
         });
       }
     }
-    const contextAlreadyEnded =
+    let contextAlreadyEnded =
       !includeSessionEffects || typeof entry.contextEngineCleanupCompletedAt === "number";
+    let preparedRollback: boolean | undefined;
+    if (!contextAlreadyEnded) {
+      preparedRollback = await runFailedLaunchRollback(entry.runId);
+      if (preparedRollback === true) {
+        contextAlreadyEnded = true;
+      }
+    }
     const attachmentsRemoved = await safeRemoveAttachmentsDir(entry);
     if (!isCurrent()) {
       return false;
     }
     const contextEnded = contextAlreadyEnded
       ? true
-      : await tryContextEngineSubagentEnded(
-          {
-            childSessionKey: entry.childSessionKey,
-            reason: "deleted",
-            agentDir: entry.agentDir,
-            workspaceDir: entry.workspaceDir,
-          },
-          "context-engine collector cleanup failed",
-          options,
-        );
+      : preparedRollback === false
+        ? false
+        : await tryContextEngineSubagentEnded(
+            {
+              childSessionKey: entry.childSessionKey,
+              reason: "deleted",
+              agentDir: entry.agentDir,
+              workspaceDir: entry.workspaceDir,
+            },
+            "context-engine collector cleanup failed",
+            options,
+          );
     if (!contextAlreadyEnded && contextEnded && isCurrent()) {
       entry.contextEngineCleanupCompletedAt = Date.now();
       persist(entry.runId);

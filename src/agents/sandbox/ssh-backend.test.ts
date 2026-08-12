@@ -483,6 +483,132 @@ describe("ssh sandbox backend", () => {
     expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalledTimes(2);
   });
 
+  it("cleans a frozen remote workspace without provisioning or uploading it", async () => {
+    sshMocks.runSshSandboxCommand.mockResolvedValue({
+      stdout: Buffer.from("0\n"),
+      stderr: Buffer.alloc(0),
+      code: 0,
+    });
+    const backend = await createSshSandboxBackend({
+      sessionKey: "agent:worker:task",
+      scopeKey: "agent:worker",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg: createBackendSandboxConfig({ target: "ssh.example.test" }),
+    });
+    const runtimeRootDir = `/old/${backend.runtimeId}`;
+    const remoteWorkspaceDir = `${runtimeRootDir}/workspace`;
+    const bridge = await sshSandboxBackendManager.createFsCleanupBridge?.({
+      runtimeId: backend.runtimeId,
+      workspaceDir: "/tmp/workspace",
+      containerWorkspaceDir: remoteWorkspaceDir,
+      locator: {
+        version: 1,
+        backend: "ssh",
+        settings: {
+          command: "ssh",
+          target: "ssh.example.test",
+          workspaceRoot: "/old",
+          strictHostKeyChecking: true,
+          updateHostKeys: false,
+        },
+        generation: "0123456789abcdef0123456789abcdef",
+        runtimeRootDir,
+      },
+      config: createConfig(),
+      agentId: "worker",
+    });
+    if (!bridge) {
+      throw new Error("Expected SSH cleanup bridge");
+    }
+
+    await bridge.remove({
+      filePath: `${remoteWorkspaceDir}/.openclaw/attachments/00000000-0000-4000-8000-000000000001`,
+      recursive: true,
+      force: true,
+    });
+
+    expect(sshMocks.uploadDirectoryToSshTarget).not.toHaveBeenCalled();
+    const cleanupCommand = requireSshRunCommandParams().remoteCommand;
+    expect(cleanupCommand).toContain(remoteWorkspaceDir);
+    expect(cleanupCommand).toContain(".openclaw-runtime-generation");
+    expect(cleanupCommand).toContain("0123456789abcdef0123456789abcdef");
+    expect(
+      requireMockRecordArg(sshMocks.createSshSandboxSessionFromSettings, 0, "cleanup SSH settings"),
+    ).toMatchObject({ target: "ssh.example.test", workspaceRoot: "/old" });
+  });
+
+  it("rejects cleanup when the frozen SSH generation marker is missing", async () => {
+    sshMocks.runSshSandboxCommand.mockRejectedValue(new Error("runtime generation mismatch"));
+    const runtimeId = "openclaw-ssh-agent-worker";
+    const runtimeRootDir = `/old/${runtimeId}`;
+    const remoteWorkspaceDir = `${runtimeRootDir}/workspace`;
+    const bridge = await sshSandboxBackendManager.createFsCleanupBridge?.({
+      runtimeId,
+      workspaceDir: "/tmp/workspace",
+      containerWorkspaceDir: remoteWorkspaceDir,
+      locator: {
+        version: 1,
+        backend: "ssh",
+        settings: {
+          command: "ssh",
+          target: "ssh.example.test",
+          workspaceRoot: "/old",
+          strictHostKeyChecking: true,
+          updateHostKeys: false,
+        },
+        generation: "0123456789abcdef0123456789abcdef",
+        runtimeRootDir,
+      },
+      config: createConfig(),
+      agentId: "worker",
+    });
+    if (!bridge) {
+      throw new Error("Expected SSH cleanup bridge");
+    }
+
+    await expect(
+      bridge.remove({
+        filePath: `${remoteWorkspaceDir}/.openclaw/attachments/00000000-0000-4000-8000-000000000001`,
+        recursive: true,
+        force: true,
+      }),
+    ).rejects.toThrow("runtime generation mismatch");
+  });
+
+  it("captures a bounded generation locator without persisting inline secrets", async () => {
+    const runtimeId = "openclaw-ssh-agent-worker";
+    const runShellCommand = vi.fn(async () => ({
+      stdout: Buffer.from("0123456789abcdef0123456789abcdef"),
+      stderr: Buffer.alloc(0),
+      code: 0,
+    }));
+    const config = createConfig();
+    config.agents!.defaults!.sandbox!.ssh!.identityData = "private-key-data";
+
+    const locator = await sshSandboxBackendManager.prepareFsCleanupLocator?.({
+      backend: {
+        runtimeId,
+        workdir: `/remote/openclaw/${runtimeId}/workspace`,
+        runShellCommand,
+      } as never,
+      runtimeId,
+      containerWorkspaceDir: `/remote/openclaw/${runtimeId}/workspace`,
+      config,
+      agentId: "worker",
+    });
+
+    expect(runShellCommand).toHaveBeenCalledOnce();
+    expect(JSON.stringify(locator)).not.toContain("private-key-data");
+    expect(locator).toEqual(
+      expect.objectContaining({
+        backend: "ssh",
+        generation: "0123456789abcdef0123456789abcdef",
+        runtimeRootDir: `/remote/openclaw/${runtimeId}`,
+      }),
+    );
+  });
+
   it("validates remote workdirs before exec accepts backend-owned cwd", async () => {
     sshMocks.runSshSandboxCommand
       .mockResolvedValueOnce({

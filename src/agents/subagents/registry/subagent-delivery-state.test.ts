@@ -79,6 +79,63 @@ describe("normalizeSubagentRunState", () => {
     expect(entry.killReconciliation).toBeUndefined();
   });
 
+  it("normalizes exact accepted-run termination ownership", () => {
+    const valid = normalizeSubagentRunState(
+      baseRun({
+        launchCleanupSessionOutcome: "changed",
+        acceptedRunTermination: {
+          kind: "launch",
+          phase: "termination-pending",
+          gatewayRunId: "  gateway-run  ",
+          lifecycleGeneration: "  generation-1  ",
+          expectedSessionId: "  session-1  ",
+          expectedLifecycleRevision: "  revision-1  ",
+        },
+      }),
+    );
+    const malformed = normalizeSubagentRunState({
+      ...baseRun(),
+      launchCleanupSessionOutcome: "unknown",
+      acceptedRunTermination: {
+        kind: "launch",
+        phase: "attempted",
+        gatewayRunId: "",
+        lifecycleGeneration: "generation-1",
+      },
+    } as unknown as SubagentRunRecord);
+    const partialIdentity = normalizeSubagentRunState(
+      baseRun({
+        acceptedRunTermination: {
+          kind: "launch",
+          phase: "termination-pending",
+          gatewayRunId: "gateway-run",
+          lifecycleGeneration: "generation-1",
+          expectedSessionId: "session-1",
+        },
+      }),
+    );
+
+    expect(valid.launchCleanupSessionOutcome).toBe("changed");
+    expect(valid.acceptedRunTermination).toEqual({
+      kind: "launch",
+      phase: "termination-pending",
+      gatewayRunId: "gateway-run",
+      lifecycleGeneration: "generation-1",
+      expectedSessionId: "session-1",
+      expectedLifecycleRevision: "revision-1",
+    });
+    expect(malformed.launchCleanupSessionOutcome).toBeUndefined();
+    expect(malformed.acceptedRunTermination).toBeUndefined();
+    expect(partialIdentity.acceptedRunTermination).toEqual({
+      kind: "launch",
+      phase: "termination-pending",
+      gatewayRunId: "gateway-run",
+      lifecycleGeneration: "generation-1",
+      expectedSessionId: undefined,
+      expectedLifecycleRevision: undefined,
+    });
+  });
+
   it("keeps only complete interrupted-recovery terminal ownership", () => {
     const terminal = {
       endedReason: "subagent-error" as const,

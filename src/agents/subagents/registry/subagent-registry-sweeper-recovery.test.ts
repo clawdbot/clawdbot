@@ -83,6 +83,7 @@ function createHarness(runtime: { current?: GatewayRecoveryRuntime }) {
   const emitSubagentEndedHookForRun = vi.fn();
   const notifyContextEngineSubagentEnded = vi.fn();
   const callGateway = vi.fn();
+  const terminateAcceptedRunObligation = vi.fn(async () => ({ terminated: true }));
   const warn = vi.fn();
   const sweeper = createSubagentRegistrySweeper({
     runs,
@@ -129,6 +130,16 @@ function createHarness(runtime: { current?: GatewayRecoveryRuntime }) {
     emitSubagentEndedHookForRun,
     callGateway,
     cleanupFailedLaunchResources: vi.fn(async () => true),
+    settleFailedQueuedSubagentLaunch: vi.fn((runId: string) => {
+      runs.get(runId)!.acceptedRunTermination = undefined;
+      return true;
+    }),
+    terminateAcceptedRunObligation,
+    completeAcceptedRunTermination: vi.fn((runId: string) => {
+      runs.get(runId)!.acceptedRunTermination = undefined;
+      return true;
+    }),
+    clearSubagentRunSteerRestart: vi.fn(() => true),
     runContextEngineSubagentEnded: vi.fn(),
     notifyContextEngineSubagentEnded,
     retireSupersededRun: vi.fn(),
@@ -146,6 +157,7 @@ function createHarness(runtime: { current?: GatewayRecoveryRuntime }) {
     finalizeInterruptedSubagentRun,
     notifyContextEngineSubagentEnded,
     sweeper,
+    terminateAcceptedRunObligation,
     warn,
   };
 }
@@ -176,6 +188,54 @@ describe("subagent registry recovery scheduling", () => {
   afterEach(() => {
     resetGatewayWorkAdmission();
     vi.useRealTimers();
+  });
+
+  it("retains and retries an accepted-run termination obligation", async () => {
+    const runtime = { current: undefined as GatewayRecoveryRuntime | undefined };
+    const { entry, sweeper, terminateAcceptedRunObligation } = createHarness(runtime);
+    entry.acceptedRunTermination = {
+      kind: "launch",
+      phase: "termination-pending",
+      gatewayRunId: "accepted-run",
+      lifecycleGeneration: "stale-generation",
+      expectedSessionId: "session-id",
+      expectedLifecycleRevision: "session-revision",
+    };
+    entry.execution = {
+      ...entry.execution,
+      status: "terminal",
+      endedAt: Date.now(),
+      outcome: { status: "error", error: "launch activation failed" },
+    };
+    terminateAcceptedRunObligation
+      .mockResolvedValueOnce({ terminated: false })
+      .mockResolvedValueOnce({ terminated: true });
+
+    await sweeper.sweepOnce();
+    expect(entry.acceptedRunTermination).toBeDefined();
+
+    await sweeper.sweepOnce();
+    expect(entry.acceptedRunTermination).toBeUndefined();
+    expect(terminateAcceptedRunObligation).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not race a current foreground dispatch owner", async () => {
+    const runtime = { current: undefined as GatewayRecoveryRuntime | undefined };
+    const { entry, sweeper, terminateAcceptedRunObligation } = createHarness(runtime);
+    entry.acceptedRunTermination = {
+      kind: "launch",
+      phase: "attempted",
+      gatewayRunId: "attempted-run",
+      lifecycleGeneration: "test-generation",
+      expectedSessionId: "session-id",
+      expectedLifecycleRevision: "session-revision",
+    };
+
+    sweeper.schedule({ delayMs: 0 });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(terminateAcceptedRunObligation).not.toHaveBeenCalled();
+    expect(entry.acceptedRunTermination?.phase).toBe("attempted");
   });
 
   it("makes four dispatch attempts and three separate terminal attempts", async () => {

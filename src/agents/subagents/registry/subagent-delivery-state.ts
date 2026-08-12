@@ -83,6 +83,40 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
       suppressTaskDelivery: killIntent.suppressTaskDelivery === true ? true : undefined,
     };
   }
+  const termination = entry.acceptedRunTermination;
+  if (!["deleted", "changed"].includes(entry.launchCleanupSessionOutcome ?? "")) {
+    delete entry.launchCleanupSessionOutcome;
+  }
+  if (
+    !termination ||
+    !["launch", "steer", "descendant-wake"].includes(termination.kind) ||
+    !["attempted", "termination-pending"].includes(termination.phase) ||
+    typeof termination.gatewayRunId !== "string" ||
+    !termination.gatewayRunId.trim() ||
+    typeof termination.lifecycleGeneration !== "string" ||
+    !termination.lifecycleGeneration.trim()
+  ) {
+    delete entry.acceptedRunTermination;
+  } else {
+    const expectedSessionId =
+      typeof termination.expectedSessionId === "string" && termination.expectedSessionId.trim()
+        ? termination.expectedSessionId.trim()
+        : undefined;
+    const expectedLifecycleRevision =
+      typeof termination.expectedLifecycleRevision === "string" &&
+      termination.expectedLifecycleRevision.trim()
+        ? termination.expectedLifecycleRevision.trim()
+        : undefined;
+    const hasExactSessionIdentity = Boolean(expectedSessionId && expectedLifecycleRevision);
+    entry.acceptedRunTermination = {
+      kind: termination.kind,
+      phase: termination.phase,
+      gatewayRunId: termination.gatewayRunId.trim(),
+      lifecycleGeneration: termination.lifecycleGeneration.trim(),
+      expectedSessionId: hasExactSessionIdentity ? expectedSessionId : undefined,
+      expectedLifecycleRevision: hasExactSessionIdentity ? expectedLifecycleRevision : undefined,
+    };
+  }
   // cleanupHandled is an in-process lock; after restart, unfinished cleanup must
   // retry unless durable cleanup completion was recorded.
   if (

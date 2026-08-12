@@ -19,9 +19,17 @@ function isMatchingAbortResponse(response: unknown, gatewayRunId: string): boole
   );
 }
 
+function isClosedAbortResponse(response: unknown): boolean {
+  if (!response || typeof response !== "object") {
+    return false;
+  }
+  const result = response as { aborted?: unknown; runIds?: unknown };
+  return result.aborted === false && Array.isArray(result.runIds);
+}
+
 export async function retrySubagentCleanup(
   attempt: () => boolean | Promise<boolean>,
-  options?: { shouldRetry?: () => boolean; onError?: (error: unknown) => void },
+  options: { shouldRetry: () => boolean; onError?: (error: unknown) => void },
 ): Promise<boolean> {
   for (;;) {
     try {
@@ -29,9 +37,9 @@ export async function retrySubagentCleanup(
         return true;
       }
     } catch (error) {
-      options?.onError?.(error);
+      options.onError?.(error);
     }
-    if (options?.shouldRetry?.() === false) {
+    if (!options.shouldRetry()) {
       return false;
     }
     await new Promise<void>((resolve) => {
@@ -48,6 +56,7 @@ type SessionCleanupOptions = {
   expectedLifecycleRevision?: string;
   callGateway?: GatewayCall;
   timeoutMs?: number;
+  allowSessionDelete?: boolean;
 };
 
 function requestProvisionalSessionCleanup(
@@ -70,19 +79,6 @@ export async function cleanupProvisionalSession(
   return (await requestProvisionalSessionCleanup(childSessionKey, options)) === "deleted";
 }
 
-async function waitForProvisionalSessionDeletion(
-  childSessionKey: string,
-  options?: SessionCleanupOptions,
-): Promise<boolean> {
-  let deleted = false;
-  await retrySubagentCleanup(async () => {
-    const outcome = await requestProvisionalSessionCleanup(childSessionKey, options);
-    deleted = outcome === "deleted";
-    return outcome !== "failed";
-  });
-  return deleted;
-}
-
 export async function cleanupFailedSpawnBeforeAgentStart(params: {
   childSessionKey: string;
   attachmentAbsDir?: string;
@@ -91,17 +87,21 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
   attachmentSandboxDir?: string;
   emitLifecycleHooks?: boolean;
   deleteTranscript?: boolean;
-  waitForSessionDeletion?: boolean;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
-}): Promise<{ attachmentsRemoved: boolean; sessionDeleted: boolean }> {
+  priorSessionCleanup?: "deleted" | "changed";
+}): Promise<{
+  attachmentsRemoved: boolean;
+  sessionCleanupComplete: boolean;
+  sessionDeleted: boolean;
+}> {
   const {
     childSessionKey,
     attachmentAbsDir,
     attachmentRootDir,
     attachmentSandboxFsBridge,
     attachmentSandboxDir,
-    waitForSessionDeletion,
+    priorSessionCleanup,
     ...sessionCleanupOptions
   } = params;
   let attachmentsRemoved = true;
@@ -113,11 +113,13 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
       sandboxDir: attachmentSandboxDir,
     });
   }
+  const sessionCleanup =
+    priorSessionCleanup ??
+    (await requestProvisionalSessionCleanup(childSessionKey, sessionCleanupOptions));
   return {
     attachmentsRemoved,
-    sessionDeleted: await (
-      waitForSessionDeletion ? waitForProvisionalSessionDeletion : cleanupProvisionalSession
-    )(childSessionKey, sessionCleanupOptions),
+    sessionCleanupComplete: sessionCleanup !== "failed",
+    sessionDeleted: sessionCleanup === "deleted",
   };
 }
 
@@ -126,9 +128,11 @@ export async function terminateAcceptedSubagentRun(params: {
   gatewayRunId: string;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
+  allowSessionDelete: boolean;
   callGateway?: GatewayCall;
   timeoutMs?: number;
-  shouldRetry?: () => boolean;
+  shouldRetry: () => boolean;
+  onSessionCleanup?: (outcome: "deleted" | "changed") => void;
 }): Promise<boolean> {
   const call = params.callGateway ?? callSubagentGateway;
   const timeoutMs = params.timeoutMs ?? SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS;
@@ -143,8 +147,14 @@ export async function terminateAcceptedSubagentRun(params: {
         if (isMatchingAbortResponse(response, params.gatewayRunId)) {
           return true;
         }
+        if (!params.allowSessionDelete && isClosedAbortResponse(response)) {
+          return true;
+        }
       } catch {
         // Fall through to exact-session deletion.
+      }
+      if (!params.allowSessionDelete) {
+        return false;
       }
       const cleanup = await requestProvisionalSessionCleanup(params.childSessionKey, {
         deleteTranscript: true,
@@ -154,8 +164,62 @@ export async function terminateAcceptedSubagentRun(params: {
         timeoutMs,
       });
       // A changed lifecycle proves the accepted run no longer owns this session.
+      if (cleanup !== "failed") {
+        params.onSessionCleanup?.(cleanup);
+      }
       return cleanup !== "failed";
     },
-    params.shouldRetry ? { shouldRetry: params.shouldRetry } : undefined,
+    { shouldRetry: params.shouldRetry },
   );
+}
+
+/** Terminate once under a durable owner and hand failures to its scheduler. */
+export async function terminateClaimedAcceptedSubagentRun(params: {
+  childSessionKey: string;
+  callGateway?: GatewayCall;
+  timeoutMs?: number;
+  claimed: {
+    kind: "launch" | "steer" | "descendant-wake";
+    phase: "attempted" | "termination-pending";
+    gatewayRunId: string;
+    lifecycleGeneration: string;
+    expectedSessionId?: string;
+    expectedLifecycleRevision?: string;
+  };
+  markPending: () => boolean | Promise<boolean>;
+  complete: (sessionCleanupOutcome?: "deleted" | "changed") => void | Promise<void>;
+  schedule: () => void | Promise<void>;
+}): Promise<boolean> {
+  if (!(await params.markPending())) {
+    await params.schedule();
+    return false;
+  }
+  let sessionCleanupOutcome: "deleted" | "changed" | undefined;
+  if (
+    await terminateAcceptedSubagentRun({
+      childSessionKey: params.childSessionKey,
+      gatewayRunId: params.claimed.gatewayRunId,
+      expectedSessionId: params.claimed.expectedSessionId,
+      expectedLifecycleRevision: params.claimed.expectedLifecycleRevision,
+      callGateway: params.callGateway,
+      timeoutMs: params.timeoutMs,
+      allowSessionDelete:
+        params.claimed.kind === "launch" &&
+        Boolean(params.claimed.expectedSessionId && params.claimed.expectedLifecycleRevision),
+      shouldRetry: () => false,
+      onSessionCleanup: (outcome) => {
+        sessionCleanupOutcome = outcome;
+      },
+    })
+  ) {
+    try {
+      await params.complete(sessionCleanupOutcome);
+      return true;
+    } catch {
+      await params.schedule();
+      return false;
+    }
+  }
+  await params.schedule();
+  return false;
 }

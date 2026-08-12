@@ -231,6 +231,26 @@ describe("reconcileOrphanedRestoredRuns", () => {
       expect(entry.execution.restartRecovery?.phase).toBe(phase);
     },
   );
+
+  it.each(["steer", "descendant-wake"] as const)(
+    "preserves an orphaned %s termination owner",
+    (kind) => {
+      const entry = createRunEntry({
+        acceptedRunTermination: {
+          kind,
+          phase: "termination-pending",
+          gatewayRunId: `pending-${kind}`,
+          lifecycleGeneration: "generation-1",
+        },
+      });
+      const runs = new Map([[entry.runId, entry]]);
+      const resumedRuns = new Set([entry.runId]);
+
+      expect(reconcileOrphanedRestoredRuns({ runs, resumedRuns })).toBe(false);
+      expect(runs.get(entry.runId)).toBe(entry);
+      expect(entry.acceptedRunTermination?.kind).toBe(kind);
+    },
+  );
 });
 
 describe("safeRemoveAttachmentsDir", () => {
@@ -285,48 +305,48 @@ describe("safeRemoveAttachmentsDir", () => {
       backendId: "ssh",
       runtimeId: "runtime-main",
       configLabel: "worker@example.test",
+      fsCleanupLocator: { version: 1, backend: "ssh" },
       workspaceMutationVisibility: "runtime-local" as const,
     };
-    const resolveSandbox = vi.fn(
-      async () =>
-        ({
-          ...sandboxIdentity,
-          backend: {
-            configLabel: sandboxIdentity.configLabel,
-            capabilities: { workspaceMutationVisibility: "runtime-local" },
-          },
-          fsBridge: { remove },
-        }) as never,
-    );
-    const createIngress = vi.fn((sandbox: { fsBridge: unknown }) => sandbox.fsBridge) as never;
+    const createRuntimeCleanupBridge = vi.fn(() => ({
+      remove,
+      resolvePath: ({ filePath }: { filePath: string }) => ({
+        hostPath: attachmentsDir,
+        relativePath: "",
+        containerPath: filePath,
+      }),
+    })) as never;
     try {
-      await expect(
-        safeRemoveAttachmentsDir(
-          createRunEntry({
-            attachmentsDir,
-            attachmentsRootDir: targetWorkspaceDir,
-            attachmentsSandboxSessionKey: "agent:main:main",
-            attachmentsSandboxAgentId: "main",
-            attachmentsSandboxWorkspaceDir: sandboxWorkspaceDir,
-            attachmentsSandboxIdentity: sandboxIdentity,
-            attachmentsSandboxDir: sandboxAttachmentsDir,
-          }),
-          {
-            config: {},
-            resolveSandbox,
-            createIngress,
-          },
-        ),
-      ).resolves.toBe(true);
-      expect(resolveSandbox).toHaveBeenCalledWith(
-        expect.objectContaining({ workspaceDir: sandboxWorkspaceDir }),
+      const cleanupResult = await safeRemoveAttachmentsDir(
+        createRunEntry({
+          attachmentsDir,
+          attachmentsRootDir: targetWorkspaceDir,
+          attachmentsSandboxSessionKey: "agent:main:main",
+          attachmentsSandboxAgentId: "main",
+          attachmentsSandboxWorkspaceDir: sandboxWorkspaceDir,
+          attachmentsSandboxIdentity: sandboxIdentity,
+          attachmentsSandboxDir: sandboxAttachmentsDir,
+        }),
+        {
+          config: {},
+          createRuntimeCleanupBridge: createRuntimeCleanupBridge as never,
+        },
       );
-      expect(createIngress).toHaveBeenCalledOnce();
+      expect(createRuntimeCleanupBridge).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backendId: "ssh",
+          runtimeId: "runtime-main",
+          workspaceDir: sandboxWorkspaceDir,
+          containerWorkspaceDir: "/workspace/worker",
+          locator: { version: 1, backend: "ssh" },
+        }),
+      );
       expect(remove).toHaveBeenCalledWith({
         filePath: sandboxAttachmentsDir,
         recursive: true,
         force: true,
       });
+      expect(cleanupResult).toBe(true);
     } finally {
       await fs.rm(sandboxWorkspaceDir, { recursive: true, force: true });
     }
@@ -348,7 +368,6 @@ describe("safeRemoveAttachmentsDir", () => {
       })),
       remove,
     };
-    const createIngress = vi.fn();
     try {
       await expect(
         safeRemoveAttachmentsDir(
@@ -377,14 +396,17 @@ describe("safeRemoveAttachmentsDir", () => {
                     configLabel: "openclaw-sandbox:latest",
                     capabilities: { workspaceMutationVisibility: "shared-host" },
                   },
+                  workspaceDir: rootDir,
+                  agentWorkspaceDir: rootDir,
+                  workspaceAccess: "rw",
+                  containerWorkdir: "/workspace",
+                  docker: { binds: [] },
                   fsBridge,
                 }) as never,
             ),
-            createIngress,
           },
         ),
       ).resolves.toBe(true);
-      expect(createIngress).not.toHaveBeenCalled();
       expect(remove).toHaveBeenCalledWith({
         filePath: sandboxDir,
         recursive: true,
@@ -395,12 +417,15 @@ describe("safeRemoveAttachmentsDir", () => {
     }
   });
 
-  it("retains shared-host cleanup ownership after a mount remap", async () => {
+  it("re-addresses shared-host cleanup through the current writable alias", async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachments-remap-"));
     const attachmentsDir = path.join(rootDir, ".openclaw", "attachments", ATTACHMENT_ID);
     const sandboxDir = `/workspace/.openclaw/attachments/${ATTACHMENT_ID}`;
     await fs.mkdir(attachmentsDir, { recursive: true });
-    const remove = vi.fn();
+    const currentSandboxDir = `/workspace/.openclaw/attachments/${ATTACHMENT_ID}`;
+    const remove = vi.fn(async () => {
+      await fs.rm(attachmentsDir, { recursive: true, force: true });
+    });
     try {
       await expect(
         safeRemoveAttachmentsDir(
@@ -429,11 +454,16 @@ describe("safeRemoveAttachmentsDir", () => {
                     configLabel: "openclaw-sandbox:latest",
                     capabilities: { workspaceMutationVisibility: "shared-host" },
                   },
+                  workspaceDir: rootDir,
+                  agentWorkspaceDir: rootDir,
+                  workspaceAccess: "rw",
+                  containerWorkdir: "/workspace",
+                  docker: { binds: [] },
                   fsBridge: {
-                    resolvePath: () => ({
-                      hostPath: path.join(rootDir, "remapped", ATTACHMENT_ID),
+                    resolvePath: ({ filePath }: { filePath: string }) => ({
+                      hostPath: path.join(rootDir, path.posix.relative("/workspace", filePath)),
                       relativePath: "",
-                      containerPath: sandboxDir,
+                      containerPath: filePath,
                     }),
                     remove,
                   },
@@ -441,15 +471,76 @@ describe("safeRemoveAttachmentsDir", () => {
             ),
           },
         ),
-      ).resolves.toBe(false);
-      expect(remove).not.toHaveBeenCalled();
-      await expect(fs.access(attachmentsDir)).resolves.toBeUndefined();
+      ).resolves.toBe(true);
+      expect(remove).toHaveBeenCalledWith({
+        filePath: currentSandboxDir,
+        recursive: true,
+        force: true,
+      });
+      await expect(fs.access(attachmentsDir)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await fs.rm(rootDir, { recursive: true, force: true });
     }
   });
 
-  it("retains cleanup ownership when the sandbox runtime identity changed", async () => {
+  it("reconstructs runtime-local cleanup from the frozen remote workspace", async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachments-remote-"));
+    const attachmentsDir = path.join(rootDir, ".openclaw", "attachments", ATTACHMENT_ID);
+    const sandboxDir = `/old/workspace/.openclaw/attachments/${ATTACHMENT_ID}`;
+    await fs.mkdir(attachmentsDir, { recursive: true });
+    const remove = vi.fn(async () => {
+      await fs.rm(attachmentsDir, { recursive: true, force: true });
+    });
+    const bridge = {
+      resolvePath: ({ filePath }: { filePath: string }) => ({
+        relativePath: "",
+        containerPath: filePath,
+      }),
+      remove,
+    };
+    const createRuntimeCleanupBridge = vi.fn(() => bridge);
+    try {
+      const cleanupResult = await safeRemoveAttachmentsDir(
+        createRunEntry({
+          attachmentsDir,
+          attachmentsRootDir: rootDir,
+          attachmentsSandboxSessionKey: "agent:main:main",
+          attachmentsSandboxAgentId: "main",
+          attachmentsSandboxWorkspaceDir: rootDir,
+          attachmentsSandboxIdentity: {
+            backendId: "ssh",
+            runtimeId: "runtime-main",
+            configLabel: "worker@example.test",
+            fsCleanupLocator: { version: 1, backend: "ssh" },
+            workspaceMutationVisibility: "runtime-local",
+          },
+          attachmentsSandboxDir: sandboxDir,
+        }),
+        {
+          config: {},
+          createRuntimeCleanupBridge: createRuntimeCleanupBridge as never,
+        },
+      );
+      expect(createRuntimeCleanupBridge).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backendId: "ssh",
+          runtimeId: "runtime-main",
+          containerWorkspaceDir: "/old/workspace",
+          locator: { version: 1, backend: "ssh" },
+        }),
+      );
+      expect(remove).toHaveBeenCalledWith({
+        filePath: sandboxDir,
+        recursive: true,
+        force: true,
+      });
+      expect(cleanupResult).toBe(true);
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("retains cleanup ownership when the frozen runtime cannot be reopened", async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachments-runtime-"));
     const attachmentsDir = path.join(rootDir, ".openclaw", "attachments", ATTACHMENT_ID);
     await fs.mkdir(attachmentsDir, { recursive: true });
@@ -466,26 +557,15 @@ describe("safeRemoveAttachmentsDir", () => {
             attachmentsSandboxIdentity: {
               backendId: "ssh",
               runtimeId: "runtime-main",
-              configLabel: "old-target@example.test",
+              configLabel: "worker@example.test",
+              fsCleanupLocator: { version: 1, backend: "ssh", target: "old" },
               workspaceMutationVisibility: "runtime-local",
             },
             attachmentsSandboxDir: `/workspace/.openclaw/attachments/${ATTACHMENT_ID}`,
           }),
           {
             config: {},
-            resolveSandbox: vi.fn(
-              async () =>
-                ({
-                  backendId: "ssh",
-                  runtimeId: "runtime-main",
-                  backend: {
-                    configLabel: "new-target@example.test",
-                    capabilities: { workspaceMutationVisibility: "runtime-local" },
-                  },
-                  fsBridge: { remove },
-                }) as never,
-            ),
-            createIngress: vi.fn((sandbox: { fsBridge: unknown }) => sandbox.fsBridge) as never,
+            createRuntimeCleanupBridge: vi.fn(async () => undefined),
           },
         ),
       ).resolves.toBe(false);
@@ -650,6 +730,30 @@ describe("reconcileOrphanedRun", () => {
     expect(entry.execution).toEqual({ status: "running", startedAt: 1_000 });
     expect(runs.has(entry.runId)).toBe(false);
     expect(resumedRuns.has(entry.runId)).toBe(false);
+  });
+
+  it("refuses orphan cleanup while accepted execution termination is pending", async () => {
+    const entry = createRunEntry({
+      acceptedRunTermination: {
+        kind: "steer",
+        phase: "termination-pending",
+        gatewayRunId: "pending-steer",
+        lifecycleGeneration: "generation-1",
+      },
+    });
+    const runs = new Map([[entry.runId, entry]]);
+
+    await expect(
+      reconcileOrphanedRun({
+        runId: entry.runId,
+        entry,
+        reason: "missing-session-id",
+        source: "resume",
+        runs,
+        resumedRuns: new Set(),
+      }),
+    ).resolves.toBe(false);
+    expect(runs.get(entry.runId)).toBe(entry);
   });
 
   it("keeps the orphan row until rooted attachment cleanup settles", async () => {

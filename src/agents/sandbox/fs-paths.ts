@@ -260,6 +260,75 @@ export function resolveSandboxFsPathWithMounts(params: {
   throw new Error(escapeMessage);
 }
 
+/** Resolve every effective writable container alias for a fixed path below one trusted host root. */
+export function resolveWritableSandboxHostPathAliases(params: {
+  hostRoot: string;
+  relativePath: string;
+  defaultContainerRoot: string;
+  mounts: SandboxFsMount[];
+}): SandboxResolvedFsPath[] {
+  const lexicalAuthorityRoot = path.resolve(params.hostRoot);
+  const relativePath = path.normalize(params.relativePath);
+  if (
+    relativePath === ".." ||
+    relativePath.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relativePath)
+  ) {
+    throw new Error("Sandbox host alias target escapes its authority root");
+  }
+  const lexicalTarget = path.resolve(lexicalAuthorityRoot, relativePath);
+  const canonicalAuthorityRoot = resolveSandboxHostPathViaExistingAncestor(lexicalAuthorityRoot);
+  // The suffix belongs to the trusted caller. Never canonicalize its
+  // sandbox-mutable descendants while deciding whether a writable alias exists.
+  const canonicalTarget = path.resolve(canonicalAuthorityRoot, relativePath);
+  const mountsByContainer = [...params.mounts].toSorted(compareSandboxFsMountsByContainerPath);
+  const resolved: SandboxResolvedFsPath[] = [];
+  const seen = new Set<string>();
+  for (const mount of params.mounts) {
+    const lexicalRoot = path.resolve(mount.hostRoot);
+    const canonicalRoot = resolveSandboxHostPathViaExistingAncestor(lexicalRoot);
+    const containedLexically = isHostPathWithinOrEqual(lexicalRoot, lexicalTarget);
+    const containedCanonically = isHostPathWithinOrEqual(canonicalRoot, canonicalTarget);
+    if (!containedLexically && !containedCanonically) {
+      continue;
+    }
+    // Descendants are sandbox-mutable. Keep the lexical mount authority even
+    // while an attacker swaps one of those descendants through a symlink.
+    const relative = containedLexically
+      ? path.relative(lexicalRoot, lexicalTarget)
+      : path.relative(canonicalRoot, canonicalTarget);
+    const containerPath = relative
+      ? path.posix.join(mount.containerRoot, ...relative.split(path.sep))
+      : mount.containerRoot;
+    const effectiveMount = findMountByContainerPath(mountsByContainer, containerPath);
+    if (!effectiveMount?.writable || seen.has(containerPath)) {
+      continue;
+    }
+    const effectiveRelative = path.posix.relative(effectiveMount.containerRoot, containerPath);
+    const effectiveCanonicalRoot = resolveSandboxHostPathViaExistingAncestor(
+      path.resolve(effectiveMount.hostRoot),
+    );
+    const effectiveCanonicalTarget = effectiveRelative
+      ? path.resolve(effectiveCanonicalRoot, ...toHostSegments(effectiveRelative))
+      : effectiveCanonicalRoot;
+    if (effectiveCanonicalTarget !== canonicalTarget) {
+      // This candidate is shadowed by a different effective container mount.
+      continue;
+    }
+    seen.add(containerPath);
+    resolved.push({
+      hostPath: lexicalTarget,
+      containerPath,
+      relativePath: toDisplayRelative({
+        containerPath,
+        defaultContainerRoot: params.defaultContainerRoot,
+      }),
+      writable: true,
+    });
+  }
+  return resolved;
+}
+
 function resolveMountedContainerPath(params: {
   mount: SandboxFsMount;
   containerPath: string;

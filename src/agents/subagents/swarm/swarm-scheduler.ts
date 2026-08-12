@@ -3,11 +3,15 @@ import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 type QueuedSwarmRun = {
   runId: string;
   start?: () => Promise<void>;
-  /** True once failure is durable or the row no longer owns queued work. */
-  onStartFailure?: (error: unknown) => boolean | Promise<boolean>;
+  /** Settled releases the slot; retry requeues; held leaves durable cleanup in control. */
+  onStartFailure?: (
+    error: unknown,
+  ) => SwarmStartFailureDisposition | Promise<SwarmStartFailureDisposition>;
   ready: boolean;
   retryReady: boolean;
 };
+
+export type SwarmStartFailureDisposition = boolean | "held";
 
 type SwarmGroupLane = {
   groupId: string;
@@ -33,9 +37,9 @@ function startQueuedRun(lane: SwarmGroupLane, item: QueuedSwarmRun) {
   runLocations.set(item.runId, { lane, state: "active", item });
   queueMicrotask(() => {
     void start().catch(async (error: unknown) => {
-      let failurePersisted = false;
+      let failureDisposition: SwarmStartFailureDisposition = false;
       try {
-        failurePersisted = await onStartFailure(error);
+        failureDisposition = await onStartFailure(error);
       } catch {
         // A durable queued row still owns this work; retry after a short backoff.
       }
@@ -48,7 +52,10 @@ function startQueuedRun(lane: SwarmGroupLane, item: QueuedSwarmRun) {
       ) {
         return;
       }
-      if (failurePersisted) {
+      if (failureDisposition === "held") {
+        return;
+      }
+      if (failureDisposition) {
         releaseSwarmRun(item.runId);
         return;
       }
@@ -128,12 +135,24 @@ export function reserveSwarmRun(params: {
   return true;
 }
 
+/** Restore a durable active owner without dispatching new launch work. */
+export function restoreActiveSwarmRun(params: {
+  groupId: string;
+  runId: string;
+  maxConcurrent: number;
+  activeRunIds: readonly string[];
+}): void {
+  ensureLane({ ...params, activeRunIds: [...params.activeRunIds, params.runId] });
+}
+
 /** Attach launch work to an existing FIFO reservation. */
 export function activateSwarmRun(params: {
   groupId: string;
   runId: string;
   start: () => Promise<void>;
-  onStartFailure: (error: unknown) => boolean | Promise<boolean>;
+  onStartFailure: (
+    error: unknown,
+  ) => SwarmStartFailureDisposition | Promise<SwarmStartFailureDisposition>;
 }): "started" | "queued" {
   const location = runLocations.get(params.runId);
   if (!location || location.state !== "queued" || location.lane.groupId !== params.groupId) {
@@ -153,7 +172,9 @@ export function enqueueSwarmRun(params: {
   maxConcurrent: number;
   activeRunIds: readonly string[];
   start: () => Promise<void>;
-  onStartFailure: (error: unknown) => boolean | Promise<boolean>;
+  onStartFailure: (
+    error: unknown,
+  ) => SwarmStartFailureDisposition | Promise<SwarmStartFailureDisposition>;
 }): "started" | "queued" {
   if (
     !reserveSwarmRun({

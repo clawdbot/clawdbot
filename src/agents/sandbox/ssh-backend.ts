@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 /**
  * SSH sandbox backend implementation.
  *
@@ -49,8 +50,207 @@ type ResolvedSshRuntimePaths = {
   remoteSkillsWorkspaceDir: string;
 };
 
+type SshFsCleanupLocator = {
+  version: 1;
+  backend: "ssh";
+  settings: {
+    command: string;
+    target: string;
+    workspaceRoot: string;
+    strictHostKeyChecking: boolean;
+    updateHostKeys: boolean;
+    identityFile?: string;
+    certificateFile?: string;
+    knownHostsFile?: string;
+  };
+  generation: string;
+  runtimeRootDir: string;
+};
+
+function resolveSshFsCleanupLocator(
+  cfg: CreateSandboxBackendParams["cfg"],
+  generation: string,
+  runtimeRootDir: string,
+): SshFsCleanupLocator {
+  const ssh = cfg.ssh;
+  if (!ssh.target?.trim()) {
+    throw new Error("SSH sandbox runtime is missing its target");
+  }
+  return readSshFsCleanupLocator({
+    version: 1,
+    backend: "ssh",
+    settings: {
+      command: ssh.command,
+      target: ssh.target.trim(),
+      workspaceRoot: ssh.workspaceRoot,
+      strictHostKeyChecking: ssh.strictHostKeyChecking,
+      updateHostKeys: ssh.updateHostKeys,
+      ...(ssh.identityFile !== undefined ? { identityFile: ssh.identityFile } : {}),
+      ...(ssh.certificateFile !== undefined ? { certificateFile: ssh.certificateFile } : {}),
+      ...(ssh.knownHostsFile !== undefined ? { knownHostsFile: ssh.knownHostsFile } : {}),
+    },
+    generation,
+    runtimeRootDir,
+  });
+}
+
+function readSshFsCleanupLocator(value: unknown): SshFsCleanupLocator {
+  const locator = value as Partial<SshFsCleanupLocator> | undefined;
+  const settings = locator?.settings;
+  if (
+    locator?.version !== 1 ||
+    locator.backend !== "ssh" ||
+    !settings ||
+    typeof settings.command !== "string" ||
+    !settings.command.trim() ||
+    typeof settings.target !== "string" ||
+    !settings.target.trim() ||
+    typeof settings.workspaceRoot !== "string" ||
+    !path.posix.isAbsolute(settings.workspaceRoot) ||
+    typeof settings.strictHostKeyChecking !== "boolean" ||
+    typeof settings.updateHostKeys !== "boolean" ||
+    typeof locator.generation !== "string" ||
+    !/^[0-9a-f]{32}$/u.test(locator.generation) ||
+    typeof locator.runtimeRootDir !== "string" ||
+    !path.posix.isAbsolute(locator.runtimeRootDir)
+  ) {
+    throw new Error("invalid SSH filesystem cleanup locator");
+  }
+  const optionalFiles = [settings.identityFile, settings.certificateFile, settings.knownHostsFile];
+  if (optionalFiles.some((entry) => entry !== undefined && typeof entry !== "string")) {
+    throw new Error("invalid SSH filesystem cleanup locator");
+  }
+  return {
+    version: 1,
+    backend: "ssh",
+    settings: {
+      command: settings.command.trim(),
+      target: settings.target.trim(),
+      workspaceRoot: path.posix.normalize(settings.workspaceRoot),
+      strictHostKeyChecking: settings.strictHostKeyChecking,
+      updateHostKeys: settings.updateHostKeys,
+      ...(settings.identityFile !== undefined ? { identityFile: settings.identityFile } : {}),
+      ...(settings.certificateFile !== undefined
+        ? { certificateFile: settings.certificateFile }
+        : {}),
+      ...(settings.knownHostsFile !== undefined ? { knownHostsFile: settings.knownHostsFile } : {}),
+    },
+    generation: locator.generation,
+    runtimeRootDir: path.posix.normalize(locator.runtimeRootDir),
+  };
+}
+
+async function runSshCleanupRemoteShellScript(
+  params: SandboxBackendCommandParams,
+  locator: SshFsCleanupLocator,
+  secrets: Pick<
+    CreateSandboxBackendParams["cfg"]["ssh"],
+    "identityData" | "certificateData" | "knownHostsData"
+  >,
+): Promise<SandboxBackendCommandResult> {
+  const session = await createSshSandboxSessionFromSettings({
+    ...locator.settings,
+    ...secrets,
+  });
+  try {
+    return await runSshSandboxCommand({
+      session,
+      remoteCommand: buildRemoteCommand([
+        "/bin/sh",
+        "-c",
+        [
+          "set -eu",
+          'marker="$1/.openclaw-runtime-generation"',
+          'expected="$2"',
+          "shift 2",
+          '[ -f "$marker" ] && [ ! -L "$marker" ]',
+          '[ "$(wc -c < "$marker")" -eq 33 ]',
+          'IFS= read -r actual < "$marker"',
+          '[ "$actual" = "$expected" ]',
+          params.script,
+        ].join("\n"),
+        "openclaw-sandbox-cleanup",
+        locator.runtimeRootDir,
+        locator.generation,
+        ...(params.args ?? []),
+      ]),
+      stdin: params.stdin,
+      allowFailure: params.allowFailure,
+      signal: params.signal,
+    });
+  } finally {
+    await disposeSshSandboxSession(session);
+  }
+}
+
 /** SSH backend lifecycle hooks for probing and removing remote sandbox copies. */
 export const sshSandboxBackendManager: SandboxBackendManager = {
+  async prepareFsCleanupLocator({ backend, config, agentId }) {
+    const cfg = resolveSandboxConfigForAgent(config, agentId);
+    const candidate = randomBytes(16).toString("hex");
+    const runtimeRootDir = path.posix.dirname(backend.workdir);
+    const result = await backend.runShellCommand({
+      script: [
+        "set -eu",
+        'marker="$1/.openclaw-runtime-generation"',
+        "umask 077",
+        'if [ ! -e "$marker" ]; then',
+        '  tmp="$marker.tmp.$$"',
+        '  printf "%s\\n" "$2" > "$tmp"',
+        '  ln "$tmp" "$marker" 2>/dev/null || true',
+        '  rm -f -- "$tmp"',
+        "fi",
+        '[ -f "$marker" ] && [ ! -L "$marker" ]',
+        '[ "$(wc -c < "$marker")" -eq 33 ]',
+        'IFS= read -r value < "$marker"',
+        'printf "%s" "$value"',
+      ].join("\n"),
+      args: [runtimeRootDir, candidate],
+    });
+    const generation = result.stdout.toString("utf8").trim();
+    if (!/^[0-9a-f]{32}$/u.test(generation)) {
+      throw new Error("SSH sandbox runtime returned an invalid generation marker");
+    }
+    return resolveSshFsCleanupLocator(cfg, generation, runtimeRootDir);
+  },
+  async createFsCleanupBridge({
+    runtimeId,
+    workspaceDir,
+    containerWorkspaceDir,
+    locator: rawLocator,
+    config,
+    agentId,
+  }) {
+    const locator = readSshFsCleanupLocator(rawLocator);
+    if (
+      locator.runtimeRootDir !== path.posix.join(locator.settings.workspaceRoot, runtimeId) ||
+      containerWorkspaceDir !== path.posix.join(locator.runtimeRootDir, "workspace")
+    ) {
+      return null;
+    }
+    const currentSsh = resolveSandboxConfigForAgent(config, agentId).ssh;
+    const secrets = {
+      identityData: currentSsh.identityData,
+      certificateData: currentSsh.certificateData,
+      knownHostsData: currentSsh.knownHostsData,
+    };
+    return createRemoteShellSandboxFsBridge({
+      sandbox: {
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        workspaceAccess: "rw",
+        containerName: runtimeId,
+        containerWorkdir: containerWorkspaceDir,
+        docker: { binds: [] },
+      },
+      runtime: {
+        remoteWorkspaceDir: containerWorkspaceDir,
+        remoteAgentWorkspaceDir: containerWorkspaceDir,
+        runRemoteShellScript: async (command) =>
+          await runSshCleanupRemoteShellScript(command, locator, secrets),
+      },
+    });
+  },
   async describeRuntime({ entry, config, agentId }) {
     const effectiveAgentId = agentId ?? resolveSandboxAgentId(entry.sessionKey);
     const cfg = resolveSandboxConfigForAgent(config, effectiveAgentId);
@@ -167,7 +367,9 @@ class SshSandboxBackendImpl {
       env: this.params.createParams.cfg.docker.env,
       configLabel: this.params.target,
       configLabelKind: "Target",
-      capabilities: { workspaceMutationVisibility: "runtime-local" },
+      capabilities: {
+        workspaceMutationVisibility: "runtime-local",
+      },
       workdirValidation: "backend",
       validateWorkdir: async (workdir) => await this.validateWorkdir(workdir),
       discardPreparedWorkdir: (workdir) => this.discardPreparedWorkdir(workdir),
@@ -213,10 +415,7 @@ class SshSandboxBackendImpl {
       },
       runShellCommand: async (command) => await this.runRemoteShellScript(command),
       createFsBridge: ({ sandbox }) =>
-        createRemoteShellSandboxFsBridge({
-          sandbox,
-          runtime: this.asHandle(),
-        }),
+        createRemoteShellSandboxFsBridge({ sandbox, runtime: this.asHandle() }),
       runRemoteShellScript: async (command) => await this.runRemoteShellScript(command),
     };
   }

@@ -320,9 +320,9 @@ export function resolveSpawnAdmission(params: {
         callerDepth,
         maxSpawnDepth,
         collect: true,
-        activeChildren: collector.liveChildren,
+        activeChildren: collector.liveChildren + (params.additionalActiveChildren ?? 0),
         maxActiveChildren: collector.maxChildrenPerGroup,
-        totalChildren: collector.totalChildren,
+        totalChildren: collector.totalChildren + (params.additionalActiveChildren ?? 0),
         maxTotalChildren: collector.maxTotalPerGroup,
       })
     : resolveChildAdmission({

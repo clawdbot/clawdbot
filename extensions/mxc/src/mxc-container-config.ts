@@ -103,6 +103,7 @@ export function buildMxcContainerConfig(params: {
   sandboxTempDir: string;
   workdir: string;
   workspace: MxcWorkspaceContext;
+  attachmentIngressRoot?: string;
   env: Record<string, string>;
 }): ContainerConfig {
   const networkAllowed = params.config.network === "default";
@@ -111,6 +112,7 @@ export function buildMxcContainerConfig(params: {
     context: params.baselineContext,
     sandboxTempDir: params.sandboxTempDir,
     workspace: params.workspace,
+    attachmentIngressRoot: params.attachmentIngressRoot,
   });
 
   const processEnv = normalizeWindowsProcessEnvRecord({
@@ -159,12 +161,16 @@ function buildFilesystemConfig(params: {
   context: BaselineApplicationContext;
   sandboxTempDir: string;
   workspace: MxcWorkspaceContext;
+  attachmentIngressRoot?: string;
 }): MxcFilesystemConfig {
   const readwritePathSpecs = resolveWorkspaceReadwritePathSpecs(params.workspace);
   const readonlyPathSpecs = [
     ...resolveWorkspaceReadonlyPathSpecs(params.workspace),
     ...resolveBaselineReadonlyPathSpecs(params.baseline, params.context),
     ...resolveProtectedSkillPolicyPathSpecs(params.workspace),
+    ...(params.attachmentIngressRoot
+      ? [requiredFilesystemPath(path.resolve(params.attachmentIngressRoot))]
+      : []),
   ];
 
   if (params.baseline.filesystem.restrictToProjectDir) {

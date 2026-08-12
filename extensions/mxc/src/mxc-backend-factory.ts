@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { CreateSandboxBackendParams, SandboxBackendHandle } from "openclaw/plugin-sdk/sandbox";
 import type { MxcConfig } from "./config.js";
-import { createMxcSandboxBackendHandle } from "./mxc-backend.js";
+import { createMxcSandboxBackendHandle, resolveMxcAttachmentIngressRoot } from "./mxc-backend.js";
 
 function sanitizeRuntimeId(value: string): string {
   if (/:workspace:[a-f0-9]{32}$/i.test(value.trim())) {
@@ -26,6 +26,7 @@ export function createMxcSandboxBackendFactory(config: MxcConfig) {
       throw new Error("MXC sandbox backend does not support sandbox.docker.binds.");
     }
     const runtimeId = sanitizeRuntimeId(params.scopeKey);
+    const attachmentIngressRoot = resolveMxcAttachmentIngressRoot(params.sessionKey);
     return createMxcSandboxBackendHandle({
       config,
       runtimeId,
@@ -33,6 +34,7 @@ export function createMxcSandboxBackendFactory(config: MxcConfig) {
       agentWorkspaceDir: params.agentWorkspaceDir,
       ...(params.skillsWorkspaceDir ? { skillsWorkspaceDir: params.skillsWorkspaceDir } : {}),
       workspaceAccess: params.cfg.workspaceAccess,
+      attachmentIngressRoot,
     });
   };
 }

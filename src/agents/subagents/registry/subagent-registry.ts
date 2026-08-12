@@ -8,6 +8,7 @@ import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gat
 import { prependAgentSteeringPrompt } from "../../agent-steering-queue.js";
 import { terminateAcceptedSubagentRun } from "../spawn/subagent-spawn-cleanup.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
+import { clearFailedLaunchRollbacks } from "./subagent-failed-launch-rollback.js";
 import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { emitSubagentProgressEndedHook } from "./subagent-registry-completion.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
@@ -359,34 +360,50 @@ const subagentRestorer = createSubagentRegistryRestorer({
   resumedRuns,
   deps: () => subagentRegistryDeps,
   persist: persistSubagentRuns,
-  persistOrThrow: persistSubagentRunsOrThrow,
   settleRequesterTurn: settleRequesterTurnAfterSessionSpawns,
   ensureListener: () => subagentListener.ensure(),
   startSweeper: () => subagentSweeper.start(),
   resumeRun: (runId) => resumeSubagentRun(runId),
   listSwarmRunsForGroup: (groupId, requesterSessionKey) =>
     listSwarmRunsForGroup(groupId, requesterSessionKey),
-  startQueuedSubagentRun: (runId, gatewayRunId, lifecycleGeneration) =>
-    subagentRunManager.startQueuedSubagentRun(runId, gatewayRunId, lifecycleGeneration),
-  terminateAcceptedRestoredCollectorRun: ({
-    entry,
-    gatewayRunId,
-    timeoutMs,
-    expectedSessionId,
-    expectedLifecycleRevision,
-  }) =>
-    terminateAcceptedSubagentRun({
+  startQueuedSubagentRun: (runId, gatewayRunId, expectedTermination) =>
+    subagentRunManager.startQueuedSubagentRun(runId, gatewayRunId, expectedTermination),
+  recordAcceptedRunTermination: (runId, termination) =>
+    publicApi.recordAcceptedRunTermination(runId, termination),
+  markAcceptedRunTerminationPending: (runId, termination) =>
+    publicApi.markAcceptedRunTerminationPending(runId, termination),
+  terminateAcceptedRestoredCollectorRun: ({ entry, ownerRunId, timeoutMs }) => {
+    const owner = entry.acceptedRunTermination;
+    if (!owner || entry.runId !== ownerRunId) {
+      return Promise.resolve(false);
+    }
+    let sessionCleanupOutcome: "deleted" | "changed" | undefined;
+    return terminateAcceptedSubagentRun({
       childSessionKey: entry.childSessionKey,
-      gatewayRunId,
-      expectedSessionId,
-      expectedLifecycleRevision,
+      gatewayRunId: owner.gatewayRunId,
+      expectedSessionId: owner.expectedSessionId,
+      expectedLifecycleRevision: owner.expectedLifecycleRevision,
+      allowSessionDelete: Boolean(owner.expectedSessionId && owner.expectedLifecycleRevision),
       timeoutMs,
       callGateway: subagentRegistryDeps.callGateway,
-    }).then(() => undefined),
-  cleanupFailedLaunchResources: contextCleanup.cleanupFailedLaunchResources,
-  settleFailedQueuedSubagentLaunch: (runId, error) =>
-    subagentRunManager.settleFailedQueuedSubagentLaunch(runId, error),
-  completeFailedLaunchCleanup: (runId) => publicApi.completeFailedLaunchCleanup(runId),
+      shouldRetry: () => false,
+      onSessionCleanup: (outcome) => {
+        sessionCleanupOutcome = outcome;
+      },
+    }).then((terminated) => {
+      if (terminated) {
+        return subagentRunManager.settleFailedQueuedSubagentLaunch(
+          ownerRunId,
+          "restored collector launch failed",
+          { expectedTermination: owner, sessionCleanupOutcome },
+        );
+      }
+      scheduleSubagentRegistrySweep({ delayMs: 0 });
+      return false;
+    });
+  },
+  settleFailedQueuedSubagentLaunch: (runId, error, options) =>
+    subagentRunManager.settleFailedQueuedSubagentLaunch(runId, error, options),
   scheduleSweep: scheduleSubagentRegistrySweep,
   warn: (message, meta) => log.warn(message, meta),
 });
@@ -443,6 +460,28 @@ const subagentSweeper = createSubagentRegistrySweeper({
   emitSubagentEndedHookForRun: contextCleanup.emitSubagentEndedHookForRun,
   callGateway: (request) => subagentRegistryDeps.callGateway(request),
   cleanupFailedLaunchResources: contextCleanup.cleanupFailedLaunchResources,
+  settleFailedQueuedSubagentLaunch: (runId, error, options) =>
+    subagentRunManager.settleFailedQueuedSubagentLaunch(runId, error, options),
+  terminateAcceptedRunObligation: async (entry, termination) => {
+    let sessionCleanupOutcome: "deleted" | "changed" | undefined;
+    const terminated = await terminateAcceptedSubagentRun({
+      childSessionKey: entry.childSessionKey,
+      ...termination,
+      allowSessionDelete:
+        termination.kind === "launch" &&
+        Boolean(termination.expectedSessionId && termination.expectedLifecycleRevision),
+      callGateway: subagentRegistryDeps.callGateway,
+      shouldRetry: () => false,
+      onSessionCleanup: (outcome) => {
+        sessionCleanupOutcome = outcome;
+      },
+    });
+    return { terminated, sessionCleanupOutcome };
+  },
+  completeAcceptedRunTermination: (runId, termination, sessionCleanupOutcome) =>
+    publicApi.completeAcceptedRunTermination(runId, termination, sessionCleanupOutcome),
+  clearSubagentRunSteerRestart: (runId, entry) =>
+    subagentRunManager.clearSubagentRunSteerRestart(runId, entry),
   runContextEngineSubagentEnded: contextCleanup.runContextEngineSubagentEnded,
   notifyContextEngineSubagentEnded: contextCleanup.notifyContextEngineSubagentEnded,
   retireSupersededRun: retireSupersededSubagentRun,
@@ -571,6 +610,7 @@ function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   subagentRuns.clear();
   resumedRuns.clear();
   orphanReconciliationClaims.clear();
+  clearFailedLaunchRollbacks();
   pendingLifecycle.clearAll();
   resetSubagentRegistryRuntimeLoadersForTests();
   contextCleanup.reset();
@@ -623,6 +663,9 @@ export const getSubagentRunsByRunIds = publicApi.getSubagentRunsByRunIds;
 export const completeFailedLaunchCleanup = publicApi.completeFailedLaunchCleanup;
 export const completeFailedLaunchContextEngineCleanup =
   publicApi.completeFailedLaunchContextEngineCleanup;
+export const recordAcceptedRunTermination = publicApi.recordAcceptedRunTermination;
+export const markAcceptedRunTerminationPending = publicApi.markAcceptedRunTerminationPending;
+export const completeAcceptedRunTermination = publicApi.completeAcceptedRunTermination;
 export const recordSwarmStructuredOutput = publicApi.recordSwarmStructuredOutput;
 export const listSwarmRunsForGroup = publicApi.listSwarmRunsForGroup;
 export const getSwarmRunByLaunchReplayKey = publicApi.getSwarmRunByLaunchReplayKey;

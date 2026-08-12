@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { ContainerConfig } from "@microsoft/mxc-sdk";
@@ -193,6 +193,7 @@ export function createMxcSandboxBackendHandle(params: {
   agentWorkspaceDir?: string;
   skillsWorkspaceDir?: string;
   workspaceAccess?: MxcWorkspaceAccess;
+  attachmentIngressRoot: string;
 }): SandboxBackendHandle {
   const baseline = loadSandboxBaselinePolicy({ policyPaths: params.config.mxcPolicyPaths });
 
@@ -235,6 +236,7 @@ export function createMxcSandboxBackendHandle(params: {
           sandboxTempDir,
           workdir: runtimeWorkdir,
           workspace,
+          attachmentIngressRoot: params.attachmentIngressRoot,
           env,
         });
 
@@ -305,6 +307,7 @@ export function createMxcSandboxBackendHandle(params: {
           sandboxTempDir,
           workdir: runtimeWorkdir,
           workspace,
+          attachmentIngressRoot: params.attachmentIngressRoot,
           env: {},
         });
 
@@ -356,6 +359,11 @@ export function createMxcSandboxBackendHandle(params: {
   };
 }
 
+export function resolveMxcAttachmentIngressRoot(sessionKey: string): string {
+  const sessionHash = createHash("sha256").update(sessionKey).digest("hex").slice(0, 32);
+  return path.join(resolvePreferredOpenClawTmpDir(), "openclaw-mxc-attachments", sessionHash);
+}
+
 function toBuffer(value: Buffer | string): Buffer {
   if (Buffer.isBuffer(value)) {
     return value;
@@ -365,6 +373,14 @@ function toBuffer(value: Buffer | string): Buffer {
 
 /** Manager for `openclaw sandbox list` and `openclaw sandbox remove`. */
 export const mxcSandboxBackendManager: SandboxBackendManager = {
+  async prepareAttachmentIngress({ sessionKey }) {
+    const attachmentIngressRoot = resolveMxcAttachmentIngressRoot(sessionKey);
+    return {
+      workspaceDir: attachmentIngressRoot,
+      sandboxAttachmentsRootDir: path.join(attachmentIngressRoot, ".openclaw", "attachments"),
+      workspaceMutationVisibility: "shared-host" as const,
+    };
+  },
   async describeRuntime() {
     return {
       running: false,

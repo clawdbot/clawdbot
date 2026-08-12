@@ -192,6 +192,10 @@ const { subagentRegistryMock } = vi.hoisted(() => ({
     replaceSubagentRunAfterSteer: vi.fn(
       (_params: { previousRunId: string; nextRunId: string; lifecycleGeneration?: string }) => true,
     ),
+    recordAcceptedRunTermination: vi.fn(async () => undefined),
+    markAcceptedRunTerminationPending: vi.fn(async () => true),
+    completeAcceptedRunTermination: vi.fn(async () => true),
+    scheduleSubagentRegistrySweep: vi.fn(async () => undefined),
     resolveRequesterForChildSession: vi.fn((_sessionKey: string): RequesterResolution => null),
   },
 }));

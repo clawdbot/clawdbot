@@ -52,7 +52,6 @@ type ResolvedSubagentSpawnRequest = {
     reservationPending: boolean;
   };
   admission: {
-    resolve: (pendingChildren?: number) => ReturnType<typeof resolveSpawnAdmission>;
     initial: ReturnType<typeof resolveSpawnAdmission> & { ok: true };
     reservation?: { release: () => void };
     childDepth: number;
@@ -239,25 +238,26 @@ export function resolveSubagentSpawnRequest(
       additionalActiveChildren: pendingChildren,
     });
   };
-  const admissionReservation = params.collect
-    ? undefined
-    : reserveChildAdmissionSlot({
-        controllerSessionKey: ownership.controllerSessionKey,
-        resolveAdmission,
-      });
-  const admission = admissionReservation ?? resolveAdmission();
+  if (params.collect && !swarmGroupId) {
+    return rejectSubagentSpawnRequest(
+      "error",
+      "sessions_spawn collect=true requires a requesting run id when groupId is omitted.",
+    );
+  }
+  const admissionReservation = reserveChildAdmissionSlot({
+    controllerSessionKey: params.collect
+      ? // Collector caps and reservations are requester+group scoped.
+        swarmSchedulerGroupKey!
+      : ownership.controllerSessionKey,
+    resolveAdmission,
+  });
+  const admission = admissionReservation;
   if (!admission.ok) {
     return rejectSubagentSpawnRequest(
       "forbidden",
       usingDefaultAgentId && !admission.governingCap?.startsWith("tools.swarm.")
         ? `tools.swarm.defaultAgentId is unavailable: ${admission.error}`
         : admission.error,
-    );
-  }
-  if (params.collect && !swarmGroupId) {
-    return rejectSubagentSpawnRequest(
-      "error",
-      "sessions_spawn collect=true requires a requesting run id when groupId is omitted.",
     );
   }
   const childDepth = admission.childSessionPatch?.spawnDepth ?? 1;
@@ -318,9 +318,8 @@ export function resolveSubagentSpawnRequest(
         reservationPending,
       },
       admission: {
-        resolve: resolveAdmission,
         initial: admission,
-        reservation: admissionReservation?.ok ? admissionReservation : undefined,
+        reservation: admissionReservation.ok ? admissionReservation : undefined,
         childDepth,
         maxSpawnDepth,
       },

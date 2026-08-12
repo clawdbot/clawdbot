@@ -48,6 +48,7 @@ const sandboxMocks = vi.hoisted(() => ({
   disposeSshSandboxSession: vi.fn(),
   remoteRoot: "",
   remoteAgentRoot: "",
+  sandboxId: "00000000-0000-4000-8000-000000000001",
 }));
 
 let createOpenShellSandboxBackendManager: typeof import("./backend.js").createOpenShellSandboxBackendManager;
@@ -84,6 +85,7 @@ function uninstallOpenShellBackendMocks() {
 
 function resetOpenShellBackendMocks() {
   vi.clearAllMocks();
+  sandboxMocks.sandboxId = "00000000-0000-4000-8000-000000000001";
   cliMocks.createOpenShellSshSession.mockResolvedValue({
     command: "ssh",
     configPath: "/tmp/openclaw-openshell-test-ssh-config",
@@ -96,6 +98,10 @@ function resetOpenShellBackendMocks() {
         .replaceAll("'/agent", `'${sandboxMocks.remoteAgentRoot}`);
       const result = spawnSync("sh", ["-c", remoteCommand], {
         input: params.stdin,
+        env: {
+          ...process.env,
+          OPENSHELL_SANDBOX_ID: sandboxMocks.sandboxId,
+        },
       });
       if (result.error) {
         throw result.error;
@@ -334,6 +340,126 @@ describe("openshell backend manager", () => {
     expect(cliMocks.runOpenShellCli).not.toHaveBeenCalledWith(
       expect.objectContaining({
         args: expect.arrayContaining(["create"]),
+      }),
+    );
+  });
+
+  it("cleans a frozen remote workspace without provisioning a sandbox", async () => {
+    const factory = createOpenShellSandboxBackendFactory({
+      pluginConfig: resolveOpenShellPluginConfig({ command: "openshell", mode: "remote" }),
+    });
+    const backend = await factory({
+      sessionKey: "agent:main:turn",
+      scopeKey: "agent:main",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg: createOpenShellBackendSandboxConfig(),
+    });
+    const manager = createOpenShellSandboxBackendManager({
+      pluginConfig: resolveOpenShellPluginConfig({ command: "replacement", mode: "remote" }),
+    });
+    const bridge = await manager.createFsCleanupBridge?.({
+      runtimeId: backend.runtimeId,
+      workspaceDir: "/tmp/workspace",
+      containerWorkspaceDir: "/old/workspace",
+      locator: {
+        version: 2,
+        backend: "openshell",
+        command: "openshell",
+        objectId: "00000000-0000-4000-8000-000000000001",
+        remoteWorkspaceDir: "/old/workspace",
+      },
+      config: {},
+    });
+    if (!bridge) {
+      throw new Error("Expected OpenShell cleanup bridge");
+    }
+
+    await bridge.remove({
+      filePath: "/old/workspace/.openclaw/attachments/00000000-0000-4000-8000-000000000001",
+      recursive: true,
+      force: true,
+    });
+
+    expect(cliMocks.runOpenShellCli).not.toHaveBeenCalled();
+    expect(sandboxMocks.runSshSandboxCommand).toHaveBeenCalled();
+    expect(sandboxMocks.runSshSandboxCommand.mock.calls.at(-1)?.[0]).toEqual(
+      expect.objectContaining({ remoteCommand: expect.stringContaining("OPENSHELL_SANDBOX_ID") }),
+    );
+  });
+
+  it("rejects cleanup when the frozen sandbox generation was replaced", async () => {
+    sandboxMocks.sandboxId = "00000000-0000-4000-8000-000000000002";
+    const manager = createOpenShellSandboxBackendManager({
+      pluginConfig: resolveOpenShellPluginConfig({ command: "replacement", mode: "remote" }),
+    });
+    const bridge = await manager.createFsCleanupBridge?.({
+      runtimeId: "oc-runtime",
+      workspaceDir: "/tmp/workspace",
+      containerWorkspaceDir: "/old/workspace",
+      locator: {
+        version: 2,
+        backend: "openshell",
+        command: "openshell",
+        objectId: "00000000-0000-4000-8000-000000000001",
+        remoteWorkspaceDir: "/old/workspace",
+      },
+      config: {},
+    });
+    if (!bridge) {
+      throw new Error("Expected OpenShell cleanup bridge");
+    }
+
+    await expect(
+      bridge.remove({
+        filePath: "/old/workspace/.openclaw/attachments/00000000-0000-4000-8000-000000000001",
+        recursive: true,
+        force: true,
+      }),
+    ).rejects.toThrow();
+    expect(cliMocks.createOpenShellSshSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          config: expect.objectContaining({ command: "openshell" }),
+        }),
+      }),
+    );
+  });
+
+  it("captures the stable sandbox object id before attachment mutation", async () => {
+    cliMocks.runOpenShellCli.mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify([
+        {
+          id: "00000000-0000-4000-8000-000000000001",
+          name: "oc-runtime",
+          phase: "Ready",
+        },
+      ]),
+      stderr: "",
+    });
+    const runShellCommand = vi.fn(async () => ({ stdout: "", stderr: "", code: 0 }));
+    const manager = createOpenShellSandboxBackendManager({
+      pluginConfig: resolveOpenShellPluginConfig({ command: "openshell", mode: "remote" }),
+    });
+
+    const locator = await manager.prepareFsCleanupLocator?.({
+      backend: {
+        runtimeId: "oc-runtime",
+        workdir: "/sandbox/workspace",
+        runShellCommand,
+      } as never,
+      runtimeId: "oc-runtime",
+      containerWorkspaceDir: "/sandbox/workspace",
+      config: {},
+    });
+
+    expect(runShellCommand).toHaveBeenCalledWith({ script: "true" });
+    expect(locator).toEqual(
+      expect.objectContaining({
+        backend: "openshell",
+        objectId: "00000000-0000-4000-8000-000000000001",
+        remoteWorkspaceDir: "/sandbox/workspace",
       }),
     );
   });

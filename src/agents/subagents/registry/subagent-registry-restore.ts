@@ -7,12 +7,15 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
   GatewayDrainingError,
 } from "../../../process/gateway-work-admission.js";
-import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { applySubagentLaunchAuthorization } from "../spawn/subagent-launch-authorization.js";
-import { retrySubagentCleanup } from "../spawn/subagent-spawn-cleanup.js";
 import { readGatewayRunId } from "../spawn/subagent-spawn-gateway.js";
 import { resolveSwarmConfig } from "../swarm/swarm-config.js";
-import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
+import {
+  enqueueSwarmRun,
+  restoreActiveSwarmRun,
+  type SwarmStartFailureDisposition,
+} from "../swarm/swarm-scheduler.js";
+import type { AcceptedRunTermination } from "./subagent-accepted-run-termination.js";
 import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
 import {
   reconcileOrphanedRestoredRuns,
@@ -20,39 +23,19 @@ import {
 } from "./subagent-registry-helpers.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import {
   loadSubagentSessionEntry,
   type SubagentSessionStoreCache,
 } from "./subagent-session-reconciliation.js";
 
-type RestoredQueuedFailureSettlementClaim = {
-  entry: SubagentRunRecord;
-  runId: string;
-  execution: SubagentRunRecord["execution"];
-  queuedLaunch: SubagentRunRecord["queuedLaunch"];
-  killIntent: SubagentRunRecord["killIntent"];
-  killReconciliation: SubagentRunRecord["killReconciliation"];
-};
-
-const restoredQueuedFailureSettlementClaims = new WeakMap<
-  SubagentRunRecord,
-  RestoredQueuedFailureSettlementClaim
->();
-
 const RESTORE_RETRY_DELAY_MS = 1_000;
 const RESTORE_RETRY_MAX_DELAY_MS = 30_000;
-
-export function isRestoredQueuedFailureSettlementClaimed(entry: SubagentRunRecord): boolean {
-  return restoredQueuedFailureSettlementClaims.has(entry);
-}
 
 export function createSubagentRegistryRestorer(config: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
   deps: () => SubagentRegistryDeps;
   persist: (...runIds: string[]) => void;
-  persistOrThrow: (...runIds: string[]) => void;
   settleRequesterTurn: SubagentLifecycleController["settleRequesterTurnAfterSessionSpawns"];
   ensureListener: () => void;
   startSweeper: () => void;
@@ -61,21 +44,26 @@ export function createSubagentRegistryRestorer(config: {
   startQueuedSubagentRun: (
     runId: string,
     gatewayRunId?: string,
-    lifecycleGeneration?: string,
+    expectedTermination?: AcceptedRunTermination,
+  ) => boolean;
+  recordAcceptedRunTermination: (
+    runId: string,
+    termination: NonNullable<SubagentRunRecord["acceptedRunTermination"]>,
+  ) => void;
+  markAcceptedRunTerminationPending: (
+    runId: string,
+    termination: NonNullable<SubagentRunRecord["acceptedRunTermination"]>,
   ) => boolean;
   terminateAcceptedRestoredCollectorRun: (params: {
     entry: SubagentRunRecord;
-    gatewayRunId: string;
+    ownerRunId: string;
     timeoutMs: number;
-    expectedSessionId?: string;
-    expectedLifecycleRevision?: string;
-  }) => Promise<void>;
-  cleanupFailedLaunchResources: (
-    entry: SubagentRunRecord,
-    options?: { isCurrent?: () => boolean; includeSessionEffects?: boolean },
-  ) => Promise<boolean>;
-  settleFailedQueuedSubagentLaunch: (runId: string, error: string) => boolean;
-  completeFailedLaunchCleanup: (runId: string) => void;
+  }) => Promise<boolean>;
+  settleFailedQueuedSubagentLaunch: (
+    runId: string,
+    error: string,
+    options?: { suppressSessionEffects?: boolean },
+  ) => boolean;
   scheduleSweep: (params?: { delayMs?: number }) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }) {
@@ -84,17 +72,16 @@ export function createSubagentRegistryRestorer(config: {
     resumedRuns,
     deps,
     persist,
-    persistOrThrow,
     settleRequesterTurn,
     ensureListener,
     startSweeper,
     resumeRun,
     listSwarmRunsForGroup,
     startQueuedSubagentRun,
+    recordAcceptedRunTermination,
+    markAcceptedRunTerminationPending,
     terminateAcceptedRestoredCollectorRun,
-    cleanupFailedLaunchResources,
     settleFailedQueuedSubagentLaunch,
-    completeFailedLaunchCleanup,
     scheduleSweep,
     warn,
   } = config;
@@ -217,10 +204,7 @@ export function createSubagentRegistryRestorer(config: {
             runId,
             entry,
             "subagent launch was interrupted before activation",
-            false,
             getAgentEventLifecycleGeneration(),
-            entry.launchCleanupSessionIdentity?.sessionId,
-            entry.launchCleanupSessionIdentity?.lifecycleRevision,
           );
           continue;
         }
@@ -242,10 +226,7 @@ export function createSubagentRegistryRestorer(config: {
               runId,
               entry,
               "queued collector launch state was unavailable after restart",
-              false,
               cleanupLifecycleGeneration,
-              cleanupSessionId,
-              cleanupSessionLifecycleRevision,
             );
             continue;
           }
@@ -257,7 +238,19 @@ export function createSubagentRegistryRestorer(config: {
             deps().getRuntimeConfig(),
             entry.requesterAgentId,
           );
+          if (entry.acceptedRunTermination) {
+            restoreActiveSwarmRun({
+              groupId: launch?.schedulerGroupKey ?? entry.groupId ?? runId,
+              runId: entry.schedulerSlotId ?? runId,
+              maxConcurrent: currentSwarmConfig.maxConcurrent,
+              activeRunIds: groupRuns
+                .filter((candidate) => candidate.execution.status === "running")
+                .map((candidate) => candidate.schedulerSlotId ?? candidate.runId),
+            });
+            continue;
+          }
           let launchTerminationConfirmed = false;
+          let launchTerminationPending = false;
           let launchLifecycleGeneration: string | undefined;
           enqueueSwarmRun({
             groupId: launch.schedulerGroupKey,
@@ -268,7 +261,8 @@ export function createSubagentRegistryRestorer(config: {
               .map((candidate) => candidate.schedulerSlotId ?? candidate.runId),
             start: async () => {
               await runWithGatewayIndependentRootWorkAdmission(async () => {
-                launchLifecycleGeneration = getAgentEventLifecycleGeneration();
+                const dispatchLifecycleGeneration = getAgentEventLifecycleGeneration();
+                launchLifecycleGeneration = dispatchLifecycleGeneration;
                 const request = {
                   method: "agent",
                   params: applySubagentLaunchAuthorization(launch.request, launch.authorization),
@@ -278,36 +272,51 @@ export function createSubagentRegistryRestorer(config: {
                   timeoutMs: launch.timeoutMs,
                 };
                 const gatewayRuntime = deps().getGatewayRecoveryRuntime();
-                const response = gatewayRuntime
-                  ? await gatewayRuntime.dispatchAgent(
-                      request.params as Parameters<typeof gatewayRuntime.dispatchAgent>[0],
-                      request.timeoutMs,
-                      launch.authorization
-                        ? { allowModelOverride: true, scopes: [ADMIN_SCOPE] }
-                        : undefined,
-                    )
-                  : await deps().callGateway(request);
-                const gatewayRunId = readGatewayRunId(response) ?? runId;
+                const terminationOwner = {
+                  kind: "launch" as const,
+                  phase: "attempted" as const,
+                  gatewayRunId: runId,
+                  lifecycleGeneration: dispatchLifecycleGeneration,
+                  expectedSessionId: cleanupSessionId,
+                  expectedLifecycleRevision: cleanupSessionLifecycleRevision,
+                };
+                recordAcceptedRunTermination(runId, terminationOwner);
                 try {
-                  if (!startQueuedSubagentRun(runId, gatewayRunId, launchLifecycleGeneration)) {
+                  const response = gatewayRuntime
+                    ? await gatewayRuntime.dispatchAgent(
+                        request.params as Parameters<typeof gatewayRuntime.dispatchAgent>[0],
+                        request.timeoutMs,
+                        launch.authorization
+                          ? { allowModelOverride: true, scopes: [ADMIN_SCOPE] }
+                          : undefined,
+                      )
+                    : await deps().callGateway(request);
+                  const gatewayRunId = readGatewayRunId(response) ?? runId;
+                  if (!startQueuedSubagentRun(runId, gatewayRunId, terminationOwner)) {
                     throw new Error(
                       "collector registry row could not transition from queued to running",
                     );
                   }
                 } catch (error) {
-                  await terminateAcceptedRestoredCollectorRun({
+                  markAcceptedRunTerminationPending(runId, terminationOwner);
+                  launchTerminationConfirmed = await terminateAcceptedRestoredCollectorRun({
                     entry,
-                    gatewayRunId,
+                    ownerRunId: runId,
                     timeoutMs: launch.timeoutMs,
-                    expectedSessionId: cleanupSessionId,
-                    expectedLifecycleRevision: cleanupSessionLifecycleRevision,
                   });
-                  launchTerminationConfirmed = true;
+                  launchTerminationPending = !launchTerminationConfirmed;
                   throw error;
                 }
               });
             },
             onStartFailure: (error) => {
+              if (launchTerminationPending) {
+                return "held";
+              }
+              if (launchTerminationConfirmed) {
+                scheduleSweep({ delayMs: 0 });
+                return true;
+              }
               if (error instanceof GatewayDrainingError) {
                 return false;
               }
@@ -315,10 +324,7 @@ export function createSubagentRegistryRestorer(config: {
                 runId,
                 entry,
                 error instanceof Error ? error.message : String(error),
-                launchTerminationConfirmed,
                 launchLifecycleGeneration ?? getAgentEventLifecycleGeneration(),
-                cleanupSessionId,
-                cleanupSessionLifecycleRevision,
               );
             },
           });
@@ -355,172 +361,31 @@ export function createSubagentRegistryRestorer(config: {
     runId: string,
     entry: SubagentRunRecord,
     error: string,
-    launchTerminationConfirmed: boolean,
     lifecycleGeneration: string,
-    expectedSessionId?: string,
-    expectedLifecycleRevision?: string,
-  ): Promise<boolean> {
+  ): Promise<SwarmStartFailureDisposition> {
     if (runs.get(runId) !== entry || entry.execution.status !== "queued") {
       return true;
     }
-    const claim: RestoredQueuedFailureSettlementClaim = {
-      entry,
-      runId,
-      execution: entry.execution,
-      queuedLaunch: entry.queuedLaunch,
-      killIntent: entry.killIntent,
-      killReconciliation: entry.killReconciliation,
-    };
-    restoredQueuedFailureSettlementClaims.set(entry, claim);
-    const refreshClaim = () => {
-      claim.execution = entry.execution;
-      claim.queuedLaunch = entry.queuedLaunch;
-      claim.killIntent = entry.killIntent;
-      claim.killReconciliation = entry.killReconciliation;
-    };
-    const ownsClaim = () =>
-      restoredQueuedFailureSettlementClaims.get(entry) === claim &&
-      runs.get(runId) === entry &&
-      entry.runId === runId &&
-      entry.execution === claim.execution &&
-      entry.queuedLaunch === claim.queuedLaunch &&
-      entry.killIntent === claim.killIntent &&
-      entry.killReconciliation === claim.killReconciliation;
-    const ownsCleanup = () =>
-      ownsClaim() && isAgentEventLifecycleGenerationCurrent(lifecycleGeneration);
-    let sessionOwnershipChanged = false;
-    let sessionDeleted = false;
     try {
-      const cleanupComplete = await runWithGatewayIndependentRootWorkAdmission(async () => {
-        if (!ownsCleanup()) {
-          return false;
-        }
-        if (!expectedSessionId || !expectedLifecycleRevision) {
-          sessionOwnershipChanged = true;
-          return true;
-        }
-        const cleanupSettled = await retrySubagentCleanup(
-          async () => {
-            if (!ownsCleanup()) {
-              return false;
-            }
-            const outcome = await deleteSubagentSessionForCleanup({
-              callGateway: deps().callGateway,
-              childSessionKey: entry.childSessionKey,
-              expectedSessionId,
-              expectedLifecycleRevision,
-              onError: (cleanupError) => {
-                throw cleanupError;
-              },
-            });
-            sessionDeleted = outcome === "deleted";
-            sessionOwnershipChanged = outcome === "changed";
-            return outcome !== "failed";
-          },
-          {
-            shouldRetry: () => !launchTerminationConfirmed && ownsCleanup(),
-            onError: (cleanupError) =>
-              warn("failed to delete restored collector session after launch failure", {
-                runId,
-                childSessionKey: entry.childSessionKey,
-                error: cleanupError,
-              }),
-          },
-        );
-        if (!cleanupSettled || !ownsCleanup()) {
-          return false;
-        }
-        return await cleanupFailedLaunchResources(entry, {
-          isCurrent: ownsCleanup,
-          includeSessionEffects: !sessionOwnershipChanged,
-        });
-      }).catch((cleanupError: unknown) => {
-        warn("failed to clean restored collector after launch failure", {
-          runId,
-          childSessionKey: entry.childSessionKey,
-          error: cleanupError,
-        });
-        return false;
-      });
-
-      if (!ownsClaim()) {
-        const current = runs.get(runId);
-        return current !== entry || current.execution.status !== "queued";
-      }
-      let failureSettled = false;
-      await retrySubagentCleanup(
-        async () => {
-          if (!ownsClaim()) {
-            const current = runs.get(runId);
-            return current !== entry || current.execution.status !== "queued";
-          }
-          if (!isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
-            // Lifecycle rotation retires external session effects, not the durable
-            // failure fact. Keep settling the exact row so the collector receives
-            // a visible terminal outcome before its FIFO slot is released.
-            entry.execution = {
-              ...entry.execution,
-              suppressSessionEffects: true,
-            };
-            refreshClaim();
-          }
-          try {
-            failureSettled = settleFailedQueuedSubagentLaunch(runId, error);
-            return failureSettled;
-          } catch (persistError) {
-            // The run manager restores the queued snapshot on a failed write.
-            // Refresh only after that synchronous rollback; other owners cannot
-            // mutate this claimed row through the sweeper/recovery lane.
-            refreshClaim();
-            throw persistError;
-          }
-        },
-        {
-          shouldRetry: ownsClaim,
-          onError: (persistError) =>
-            warn("failed to persist restored collector launch failure", {
-              runId,
-              childSessionKey: entry.childSessionKey,
-              error: persistError,
-            }),
-        },
-      );
-      if (!failureSettled) {
-        const current = runs.get(runId);
-        return current !== entry || current.execution.status !== "queued";
-      }
       if (
-        runs.get(runId) === entry &&
-        !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
-        entry.execution.suppressSessionEffects !== true
+        !settleFailedQueuedSubagentLaunch(runId, error, {
+          suppressSessionEffects: !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration),
+        })
       ) {
-        const previousExecution = entry.execution;
-        entry.execution = {
-          ...entry.execution,
-          suppressSessionEffects: true,
-        };
-        try {
-          persistOrThrow(runId);
-        } catch (persistError) {
-          entry.execution = previousExecution;
-          throw persistError;
-        }
+        return "held";
       }
-      if (cleanupComplete && runs.get(runId) === entry) {
-        if (sessionDeleted && !sessionOwnershipChanged) {
-          emitSessionLifecycleEvent({
-            sessionKey: entry.childSessionKey,
-            reason: "delete",
-            parentSessionKey: entry.swarmRequesterSessionKey ?? entry.requesterSessionKey,
-          });
-        }
-        completeFailedLaunchCleanup(runId);
-      }
+      // The FIFO owns execution ordering only. Durable launch cleanup remains
+      // row-owned and retries independently after the terminal fact commits.
+      scheduleSweep({ delayMs: 0 });
       return true;
-    } finally {
-      if (restoredQueuedFailureSettlementClaims.get(entry) === claim) {
-        restoredQueuedFailureSettlementClaims.delete(entry);
-      }
+    } catch (persistError) {
+      warn("failed to persist restored collector launch failure", {
+        runId,
+        childSessionKey: entry.childSessionKey,
+        error: persistError,
+      });
+      scheduleSweep({ delayMs: 0 });
+      return "held";
     }
   }
 

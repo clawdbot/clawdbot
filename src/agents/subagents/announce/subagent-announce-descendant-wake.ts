@@ -4,7 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../../utils/message-channel.js";
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
-import { terminateAcceptedSubagentRun } from "../spawn/subagent-spawn-cleanup.js";
+import { terminateClaimedAcceptedSubagentRun } from "../spawn/subagent-spawn-cleanup.js";
 import {
   loadSessionEntryByKey,
   runAnnounceDeliveryWithRetry,
@@ -21,6 +21,10 @@ type DescendantWakeDeps = {
   dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
   getRuntimeConfig: typeof getRuntimeConfig;
   replaceSubagentRunAfterSteer: typeof import("../registry/subagent-registry-runtime.js").replaceSubagentRunAfterSteer;
+  recordAcceptedRunTermination: typeof import("../registry/subagent-registry-runtime.js").recordAcceptedRunTermination;
+  markAcceptedRunTerminationPending: typeof import("../registry/subagent-registry-runtime.js").markAcceptedRunTerminationPending;
+  completeAcceptedRunTermination: typeof import("../registry/subagent-registry-runtime.js").completeAcceptedRunTermination;
+  scheduleSubagentRegistrySweep: typeof import("../registry/subagent-registry-runtime.js").scheduleSubagentRegistrySweep;
 };
 
 type UsableSessionEntryGuard = (entry: unknown) => entry is Record<string, unknown>;
@@ -65,7 +69,7 @@ export async function runDescendantWake(params: {
   hasUsableSessionEntry: UsableSessionEntryGuard;
   deps: DescendantWakeDeps;
   signal?: AbortSignal;
-}): Promise<boolean> {
+}): Promise<boolean | "termination-pending"> {
   if (
     params.signal?.aborted ||
     !params.isChildSessionEffectsAllowed() ||
@@ -82,13 +86,31 @@ export async function runDescendantWake(params: {
   const cfg = params.deps.getRuntimeConfig();
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const wakeLifecycleGeneration = getAgentEventLifecycleGeneration();
+  const wakeIdempotencyKey = buildAnnounceIdempotencyKey(`${params.announceId}:wake`);
+  const dispatchTerminationOwner = {
+    kind: "descendant-wake" as const,
+    phase: "attempted" as const,
+    gatewayRunId: wakeIdempotencyKey,
+    lifecycleGeneration: wakeLifecycleGeneration,
+    expectedSessionId:
+      typeof childEntry.sessionId === "string"
+        ? childEntry.sessionId.trim() || undefined
+        : undefined,
+    expectedLifecycleRevision:
+      typeof childEntry.lifecycleRevision === "string"
+        ? childEntry.lifecycleRevision.trim() || undefined
+        : undefined,
+  };
   const wakeMessage = buildDescendantWakeMessage({
     findings: params.findings,
     taskLabel: params.taskLabel,
   });
 
   let wakeRunId;
+  let terminationOwnerRecorded = false;
   try {
+    await params.deps.recordAcceptedRunTermination(params.runId, dispatchTerminationOwner);
+    terminationOwnerRecorded = true;
     const wakeResponse = await runAnnounceDeliveryWithRetry<{ runId?: string }>({
       operation: "descendant wake agent call",
       signal: params.signal,
@@ -106,7 +128,7 @@ export async function runDescendantWake(params: {
               sourceChannel: INTERNAL_MESSAGE_CHANNEL,
               sourceTool: "subagent_announce",
             },
-            idempotencyKey: buildAnnounceIdempotencyKey(`${params.announceId}:wake`),
+            idempotencyKey: wakeIdempotencyKey,
           },
           {
             timeoutMs: announceTimeoutMs,
@@ -116,35 +138,39 @@ export async function runDescendantWake(params: {
     });
     wakeRunId = normalizeOptionalString(wakeResponse?.runId) ?? "";
   } catch {
-    return false;
+    if (terminationOwnerRecorded) {
+      await params.deps.markAcceptedRunTerminationPending(params.runId, dispatchTerminationOwner);
+    }
+    await params.deps.scheduleSubagentRegistrySweep({ delayMs: 0 });
+    return terminationOwnerRecorded ? "termination-pending" : false;
   }
 
   if (!wakeRunId) {
-    return false;
+    await params.deps.markAcceptedRunTerminationPending(params.runId, dispatchTerminationOwner);
+    await params.deps.scheduleSubagentRegistrySweep({ delayMs: 0 });
+    return "termination-pending";
   }
 
   // An accepted wake that loses lifecycle ownership must be terminated before
   // it can mutate a replacement session owned by another run.
   const terminateUnownedWake = async () => {
-    await terminateAcceptedSubagentRun({
+    return await terminateClaimedAcceptedSubagentRun({
       childSessionKey: params.childSessionKey,
-      gatewayRunId: wakeRunId,
-      expectedSessionId:
-        typeof childEntry.sessionId === "string"
-          ? childEntry.sessionId.trim() || undefined
-          : undefined,
-      expectedLifecycleRevision:
-        typeof childEntry.lifecycleRevision === "string"
-          ? childEntry.lifecycleRevision.trim() || undefined
-          : undefined,
       timeoutMs: announceTimeoutMs,
       callGateway: params.deps.callGateway,
+      claimed: dispatchTerminationOwner,
+      markPending: () =>
+        params.deps.markAcceptedRunTerminationPending(params.runId, dispatchTerminationOwner),
+      complete: () =>
+        params.deps
+          .completeAcceptedRunTermination(params.runId, dispatchTerminationOwner)
+          .then(() => undefined),
+      schedule: () => params.deps.scheduleSubagentRegistrySweep({ delayMs: 0 }),
     });
   };
 
   if (!params.isChildSessionEffectsAllowed()) {
-    await terminateUnownedWake();
-    return false;
+    return (await terminateUnownedWake()) ? false : "termination-pending";
   }
   const replaced = await params.deps.replaceSubagentRunAfterSteer({
     previousRunId: params.runId,
@@ -156,7 +182,7 @@ export async function runDescendantWake(params: {
     task: wakeMessage,
   });
   if (!replaced) {
-    await terminateUnownedWake();
+    return (await terminateUnownedWake()) ? false : "termination-pending";
   }
-  return replaced;
+  return true;
 }

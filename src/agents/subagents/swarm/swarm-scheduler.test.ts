@@ -308,6 +308,37 @@ describe("swarm scheduler", () => {
     await vi.waitFor(() => expect(started).toEqual(["failed", "next"]));
   });
 
+  it("holds a durably owned failure without keeping cleanup work in flight", async () => {
+    const started: string[] = [];
+    enqueueSwarmRun({
+      groupId: "group",
+      runId: "failed",
+      maxConcurrent: 1,
+      activeRunIds: [],
+      start: async () => {
+        started.push("failed");
+        throw new Error("accepted run still needs termination");
+      },
+      onStartFailure: () => "held",
+    });
+    enqueueSwarmRun({
+      groupId: "group",
+      runId: "next",
+      maxConcurrent: 1,
+      activeRunIds: [],
+      start: async () => {
+        started.push("next");
+      },
+      onStartFailure: vi.fn(() => true),
+    });
+
+    await vi.waitFor(() => expect(started).toEqual(["failed"]));
+    expect(isSwarmRunQueued("failed")).toBe(false);
+    expect(isSwarmRunQueued("next")).toBe(true);
+    expect(releaseSwarmRun("failed")).toBe(true);
+    await vi.waitFor(() => expect(started).toEqual(["failed", "next"]));
+  });
+
   it("does not refill until active runs fall below a reduced limit", async () => {
     const started: string[] = [];
     const enqueue = (runId: string, maxConcurrent: number) =>

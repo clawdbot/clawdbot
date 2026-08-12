@@ -9,7 +9,11 @@ export function installAcceptedSubagentGatewayMock(mock: {
 }) {
   mock.mockImplementation(async ({ method, params }) => {
     if (method === "agent") {
-      return { runId: "run-1" };
+      const runId =
+        params && typeof params === "object"
+          ? (params as { idempotencyKey?: unknown }).idempotencyKey
+          : undefined;
+      return { runId: typeof runId === "string" ? runId : "run-1" };
     }
     if (method === "chat.abort") {
       const runId =

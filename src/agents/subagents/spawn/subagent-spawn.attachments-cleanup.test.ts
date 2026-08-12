@@ -14,6 +14,14 @@ import {
   loadSubagentSpawnModuleForTest,
 } from "./subagent-spawn.test-helpers.js";
 
+function readAgentRequestRunId(request: unknown): string {
+  const runId = (request as { params?: { idempotencyKey?: unknown } }).params?.idempotencyKey;
+  if (typeof runId !== "string" || !runId) {
+    throw new Error("agent request did not carry an idempotency key");
+  }
+  return runId;
+}
+
 describe("spawnSubagentDirect attachment cleanup ownership", () => {
   const updateSessionStoreMock = vi.fn();
   const ctx = {
@@ -49,11 +57,13 @@ describe("spawnSubagentDirect attachment cleanup ownership", () => {
   const runtimeLocalSandbox = (fsBridge: unknown) => ({
     backendId: "ssh",
     runtimeId: "runtime-main",
-    backend: { configLabel: "worker@example.test" },
+    backend: {
+      configLabel: "worker@example.test",
+    },
     fsBridge,
   });
 
-  it("retains the provisional owner when its frozen session was replaced", async () => {
+  it("retires the provisional owner without deleting a replacement session", async () => {
     configOverride = createSubagentSpawnTestConfig(workspaceDirOverride, {
       agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "rw" } } },
     });
@@ -123,20 +133,150 @@ describe("spawnSubagentDirect attachment cleanup ownership", () => {
     );
 
     expect(result).toMatchObject({ status: "error", error: "second write failed" });
-    expect(releaseSubagentRunMock).not.toHaveBeenCalled();
+    expect(releaseSubagentRunMock).toHaveBeenCalledOnce();
+  });
+
+  it("returns after one failed owner settlement and leaves cleanup to the sweeper", async () => {
+    let settleAllowed = false;
+    let acceptedRunId = "";
+    const settleFailedQueuedSubagentLaunchMock = vi.fn(() => settleAllowed);
+    const scheduleSweep = vi.fn();
+    const releaseSubagentRunMock = vi.fn(async () => undefined);
+    const module = await loadSubagentSpawnModuleForTest({
+      callGatewayMock: vi.fn(async (request: unknown) => {
+        if ((request as { method?: string }).method === "agent") {
+          acceptedRunId = readAgentRequestRunId(request);
+          return { runId: acceptedRunId };
+        }
+        if ((request as { method?: string }).method === "chat.abort") {
+          return { aborted: true, runIds: [acceptedRunId] };
+        }
+        return { ok: true };
+      }),
+      getRuntimeConfig: () => configOverride,
+      updateSessionStoreMock,
+      workspaceDir: workspaceDirOverride,
+      settleFailedQueuedSubagentLaunchMock,
+      releaseSubagentRunMock,
+      scheduleSubagentRegistrySweepMock: scheduleSweep,
+      startQueuedSubagentRunMock: vi.fn(() => {
+        throw new Error("activation persistence failed");
+      }),
+    });
+    const allowSettlement = setTimeout(() => {
+      settleAllowed = true;
+    }, 100);
+    try {
+      const result = await module.spawnSubagentDirect(
+        {
+          task: "test",
+          attachments: [{ name: "file.txt", content: validContent, encoding: "base64" }],
+        },
+        ctx,
+      );
+
+      expect(result.status).toBe("error");
+      expect(settleFailedQueuedSubagentLaunchMock).toHaveBeenCalledTimes(1);
+      expect(releaseSubagentRunMock).not.toHaveBeenCalled();
+      expect(scheduleSweep).toHaveBeenCalledWith({ delayMs: 0 });
+    } finally {
+      clearTimeout(allowSettlement);
+    }
+  });
+
+  it("returns after one failed provisional-session deletion", async () => {
+    let createCount = 0;
+    const bridge = {
+      resolvePath: ({ filePath }: { filePath: string }) => ({
+        relativePath: "",
+        containerPath: filePath,
+      }),
+      mkdirp: async ({ filePath }: { filePath: string }) => {
+        await fs.promises.mkdir(filePath, { recursive: true, mode: 0o700 });
+      },
+      createFileExclusive: async ({
+        filePath,
+        data,
+      }: {
+        filePath: string;
+        data: Buffer | string;
+      }) => {
+        createCount += 1;
+        if (createCount === 2) {
+          throw new Error("second write failed");
+        }
+        await fs.promises.writeFile(filePath, data, { flag: "wx", mode: 0o600 });
+        return "created" as const;
+      },
+      remove: async ({ filePath }: { filePath: string }) => {
+        await fs.promises.rm(filePath, { recursive: true, force: true });
+      },
+    };
+    let deletionAllowed = false;
+    const gateway = vi.fn(async (request: unknown) => {
+      if ((request as { method?: string }).method === "sessions.delete" && !deletionAllowed) {
+        throw new Error("delete unavailable");
+      }
+      return { ok: true };
+    });
+    const releaseSubagentRunMock = vi.fn(async () => undefined);
+    const scheduleSweep = vi.fn();
+    const module = await loadSubagentSpawnModuleForTest({
+      callGatewayMock: gateway,
+      getRuntimeConfig: () => configOverride,
+      updateSessionStoreMock,
+      workspaceDir: workspaceDirOverride,
+      resolveSandboxRuntimeStatus: () => ({ sandboxed: true, agentId: "main" }) as never,
+      resolveSandboxContext: async () => ({
+        ...runtimeLocalSandbox(bridge),
+        workspaceDir: workspaceDirOverride,
+        agentWorkspaceDir: workspaceDirOverride,
+      }),
+      settleFailedQueuedSubagentLaunchMock: vi.fn(() => true),
+      releaseSubagentRunMock,
+      scheduleSubagentRegistrySweepMock: scheduleSweep,
+    });
+    const allowDeletion = setTimeout(() => {
+      deletionAllowed = true;
+    }, 100);
+    try {
+      const result = await module.spawnSubagentDirect(
+        {
+          task: "test",
+          attachments: [
+            { name: "one.txt", content: validContent, encoding: "base64" },
+            { name: "two.txt", content: validContent, encoding: "base64" },
+          ],
+        },
+        ctx,
+      );
+
+      expect(result).toMatchObject({ status: "error", error: "second write failed" });
+      expect(
+        gateway.mock.calls.filter(
+          ([request]) => (request as { method?: string }).method === "sessions.delete",
+        ),
+      ).toHaveLength(1);
+      expect(releaseSubagentRunMock).not.toHaveBeenCalled();
+      expect(scheduleSweep).toHaveBeenCalledWith({ delayMs: 0 });
+    } finally {
+      clearTimeout(allowDeletion);
+    }
   });
 
   it("aborts an accepted child before cleaning a failed attachment-owner activation", async () => {
     const events: string[] = [];
+    let acceptedRunId = "";
     const gateway = vi.fn(async (request: unknown) => {
       const method = (request as { method?: string }).method;
       if (method === "agent") {
         events.push("accepted");
-        return { runId: "accepted-child-run" };
+        acceptedRunId = readAgentRequestRunId(request);
+        return { runId: acceptedRunId };
       }
       if (method === "chat.abort") {
         events.push("aborted");
-        return { aborted: true, runIds: ["accepted-child-run"] };
+        return { aborted: true, runIds: [acceptedRunId] };
       }
       return { ok: true };
     });
@@ -163,24 +303,26 @@ describe("spawnSubagentDirect attachment cleanup ownership", () => {
       ctx,
     );
 
-    expect(result).toMatchObject({ status: "error", runId: "accepted-child-run" });
+    expect(result).toMatchObject({ status: "error", runId: acceptedRunId });
     expect(events).toEqual(["accepted", "aborted", "terminalized"]);
   });
 
   it("terminalizes the owner when accepted-child termination needs a later retry", async () => {
     const events: string[] = [];
     let abortAttempts = 0;
+    let acceptedRunId = "";
     const gateway = vi.fn(async (request: unknown) => {
       const method = (request as { method?: string }).method;
       if (method === "agent") {
         events.push("accepted");
-        return { runId: "accepted-child-run" };
+        acceptedRunId = readAgentRequestRunId(request);
+        return { runId: acceptedRunId };
       }
       if (method === "chat.abort") {
         abortAttempts += 1;
         if (abortAttempts > 1) {
           events.push("aborted");
-          return { aborted: true, runIds: ["accepted-child-run"] };
+          return { aborted: true, runIds: [acceptedRunId] };
         }
         events.push("abort-failed");
         throw new Error("abort unavailable");
@@ -228,7 +370,7 @@ describe("spawnSubagentDirect attachment cleanup ownership", () => {
       ctx,
     );
 
-    expect(result).toMatchObject({ status: "error", runId: "accepted-child-run" });
+    expect(result).toMatchObject({ status: "error", runId: acceptedRunId });
     expect(releaseSubagentRunMock).not.toHaveBeenCalled();
     await vi.waitFor(() => {
       expect(events).toEqual(
@@ -248,9 +390,11 @@ describe("spawnSubagentDirect attachment cleanup ownership", () => {
   });
 
   it("releases detached root work after a bounded accepted-child cleanup retry", async () => {
+    let acceptedRunId = "";
     const gateway = vi.fn(async (request: unknown) => {
       if ((request as { method?: string }).method === "agent") {
-        return { runId: "accepted-child-run" };
+        acceptedRunId = readAgentRequestRunId(request);
+        return { runId: acceptedRunId };
       }
       throw new Error("gateway unavailable");
     });
@@ -279,7 +423,7 @@ describe("spawnSubagentDirect attachment cleanup ownership", () => {
       ctx,
     );
 
-    expect(result).toMatchObject({ status: "error", runId: "accepted-child-run" });
+    expect(result).toMatchObject({ status: "error", runId: acceptedRunId });
     await vi.waitFor(() => {
       expect(scheduleSweep).toHaveBeenCalledWith({ delayMs: 0 });
       expect(getActiveGatewayRootWorkCount()).toBe(0);

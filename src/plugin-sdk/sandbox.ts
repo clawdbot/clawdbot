@@ -1,5 +1,5 @@
 /**
- * Public SDK subpath for sandbox backends, SSH execution, and temp workspace helpers.
+ * Private-local SDK subpath for official sandbox backends and runtime helpers.
  */
 export type {
   CreateSandboxBackendParams,

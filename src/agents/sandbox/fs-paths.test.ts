@@ -11,6 +11,7 @@ import {
   hasSandboxBindReadonlyHostShadows,
   resolveSandboxFsPathWithMounts,
   resolveWritableSandboxBindHostRoots,
+  resolveWritableSandboxHostPathAliases,
 } from "./fs-paths.js";
 import { createSandboxTestContext } from "./test-fixtures.js";
 import type { SandboxContext } from "./types.js";
@@ -80,6 +81,80 @@ describe("sandbox bind mounts", () => {
 });
 
 describe("resolveSandboxFsPathWithMounts", () => {
+  it("finds a writable workspace alias hidden by a more-specific read-only bind", () => {
+    const workspaceDir = tempDirs.make("openclaw-sandbox-mount-alias-");
+    const attachmentsDir = path.join(workspaceDir, ".openclaw", "attachments");
+    const resolved = resolveWritableSandboxHostPathAliases({
+      hostRoot: workspaceDir,
+      relativePath: path.join(".openclaw", "attachments"),
+      defaultContainerRoot: "/workspace",
+      mounts: [
+        {
+          hostRoot: workspaceDir,
+          containerRoot: "/workspace",
+          writable: true,
+          source: "workspace",
+        },
+        {
+          hostRoot: attachmentsDir,
+          containerRoot: "/inspect",
+          writable: false,
+          source: "bind",
+        },
+      ],
+    });
+
+    expect(resolved).toEqual([
+      expect.objectContaining({
+        containerPath: "/workspace/.openclaw/attachments",
+        writable: true,
+      }),
+    ]);
+  });
+
+  it("rejects host-alias targets outside their authority root", () => {
+    expect(() =>
+      resolveWritableSandboxHostPathAliases({
+        hostRoot: "/workspace",
+        relativePath: path.join("..", "extensions"),
+        defaultContainerRoot: "/workspace",
+        mounts: [],
+      }),
+    ).toThrow("escapes its authority root");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "retains lexical writable authority through a mutable descendant symlink",
+    () => {
+      const workspaceDir = tempDirs.make("openclaw-sandbox-alias-");
+      const outsideDir = tempDirs.make("openclaw-sandbox-alias-outside-");
+      const attachmentsDir = path.join(workspaceDir, ".openclaw", "attachments");
+      fs.mkdirSync(path.dirname(attachmentsDir), { recursive: true });
+      fs.symlinkSync(outsideDir, attachmentsDir, "dir");
+
+      const resolved = resolveWritableSandboxHostPathAliases({
+        hostRoot: workspaceDir,
+        relativePath: path.join(".openclaw", "attachments"),
+        defaultContainerRoot: "/workspace",
+        mounts: [
+          {
+            hostRoot: workspaceDir,
+            containerRoot: "/workspace",
+            writable: true,
+            source: "workspace",
+          },
+        ],
+      });
+
+      expect(resolved).toEqual([
+        expect.objectContaining({
+          containerPath: "/workspace/.openclaw/attachments",
+          writable: true,
+        }),
+      ]);
+    },
+  );
+
   it("maps mounted container absolute paths to host paths", () => {
     const sandbox = createSandbox({
       docker: {

@@ -5,6 +5,7 @@
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SandboxBackendHandle } from "./backend-handle.types.js";
+import type { SandboxFsBridge } from "./fs-bridge.types.js";
 import type { SandboxRegistryEntry } from "./registry.js";
 import type { SandboxConfig } from "./types.js";
 
@@ -27,6 +28,40 @@ export type SandboxBackendManager = {
     config: OpenClawConfig;
     agentId?: string;
   }): Promise<void>;
+  /** Ensure the live runtime and freeze its exact JSON-safe cleanup identity. */
+  prepareFsCleanupLocator?(params: {
+    backend: SandboxBackendHandle;
+    runtimeId: string;
+    containerWorkspaceDir: string;
+    config: OpenClawConfig;
+    agentId?: string;
+  }): Promise<unknown>;
+  /** Select an attachment ingress that remains immutable to lower-trust peers. */
+  prepareAttachmentIngress?(params: {
+    backend: SandboxBackendHandle;
+    runtimeId: string;
+    sessionKey: string;
+    workspaceDir: string;
+    containerWorkspaceDir: string;
+    config: OpenClawConfig;
+    agentId?: string;
+  }): Promise<{
+    workspaceDir: string;
+    sandboxAttachmentsRootDir?: string;
+    sandboxFsBridge?: SandboxFsBridge;
+    cleanupLocator?: unknown;
+    cleanupContainerWorkspaceDir?: string;
+    workspaceMutationVisibility: "shared-host" | "runtime-local";
+  }>;
+  /** Reopen an existing runtime from its frozen address without provisioning it. */
+  createFsCleanupBridge?(params: {
+    runtimeId: string;
+    workspaceDir: string;
+    containerWorkspaceDir: string;
+    locator: unknown;
+    config: OpenClawConfig;
+    agentId?: string;
+  }): SandboxFsBridge | null | Promise<SandboxFsBridge | null>;
 };
 
 /** Inputs needed to create a sandbox backend handle for one session scope. */

@@ -3,6 +3,7 @@
  *
  * Handles frozen result caps, orphan detection, timing persistence, and announce retry logging.
  */
+import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES } from "../../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../../config/config.js";
@@ -15,12 +16,17 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { computeBackoff } from "../../../infra/backoff.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { truncateUtf8Prefix } from "../../../utils/utf8-truncate.js";
+import { getSandboxBackendManager } from "../../sandbox/backend.js";
+import { resolveSandboxContext } from "../../sandbox/context.js";
+import type { SandboxFsBridge } from "../../sandbox/fs-bridge.types.js";
 import {
-  createSandboxWorkspaceIngressFsBridge,
-  resolveSandboxContext,
-} from "../../sandbox/context.js";
-import { resolveSandboxHostPathViaExistingAncestor } from "../../sandbox/host-paths.js";
-import { removeSubagentAttachmentsDir } from "../spawn/subagent-attachments.js";
+  buildSandboxFsMounts,
+  resolveWritableSandboxHostPathAliases,
+} from "../../sandbox/fs-paths.js";
+import {
+  removeSubagentAttachmentsDir,
+  resolveSubagentAttachmentSandboxWorkspaceDir,
+} from "../spawn/subagent-attachments.js";
 import { getDeliveryAttemptCount, getDeliveryLastError } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -189,18 +195,33 @@ export async function persistSubagentSessionTiming(
 }
 
 /** Best-effort async removal for a subagent attachment directory. */
+async function createRegisteredSandboxCleanupBridge(params: {
+  backendId: string;
+  runtimeId: string;
+  workspaceDir: string;
+  containerWorkspaceDir: string;
+  locator: unknown;
+  config: OpenClawConfig;
+  agentId?: string;
+}): Promise<SandboxFsBridge | undefined> {
+  return (
+    (await getSandboxBackendManager(params.backendId)?.createFsCleanupBridge?.(params)) ?? undefined
+  );
+}
+
 export async function safeRemoveAttachmentsDir(
   entry: SubagentRunRecord,
   options?: {
     config?: OpenClawConfig;
     resolveSandbox?: typeof resolveSandboxContext;
-    createIngress?: typeof createSandboxWorkspaceIngressFsBridge;
+    createRuntimeCleanupBridge?: typeof createRegisteredSandboxCleanupBridge;
   },
 ): Promise<boolean> {
   if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
     return true;
   }
   let sandboxFsBridge;
+  let sandboxDir = entry.attachmentsSandboxDir;
   if (entry.attachmentsSandboxSessionKey) {
     if (
       !entry.attachmentsSandboxWorkspaceDir ||
@@ -209,46 +230,73 @@ export async function safeRemoveAttachmentsDir(
     ) {
       return false;
     }
+    const identity = entry.attachmentsSandboxIdentity;
+    const config = options?.config ?? getRuntimeConfig();
     try {
-      const sandbox = await (options?.resolveSandbox ?? resolveSandboxContext)({
-        config: options?.config ?? getRuntimeConfig(),
-        agentId: entry.attachmentsSandboxAgentId ?? entry.requesterAgentId,
-        sessionKey: entry.attachmentsSandboxSessionKey,
-        workspaceDir: entry.attachmentsSandboxWorkspaceDir,
-      });
-      const identity = entry.attachmentsSandboxIdentity;
-      if (
-        !sandbox ||
-        sandbox.backendId !== identity.backendId ||
-        sandbox.runtimeId !== identity.runtimeId ||
-        sandbox.backend?.configLabel?.trim() !== identity.configLabel ||
-        sandbox.backend?.capabilities?.workspaceMutationVisibility !==
-          identity.workspaceMutationVisibility
-      ) {
-        return false;
-      }
-      if (identity.workspaceMutationVisibility === "shared-host") {
-        if (sandbox.backend?.createFsBridge || !sandbox.fsBridge || !entry.attachmentsSandboxDir) {
+      if (identity.workspaceMutationVisibility === "runtime-local") {
+        if (identity.fsCleanupLocator === undefined) {
           return false;
         }
-        const resolved = sandbox.fsBridge.resolvePath({ filePath: entry.attachmentsSandboxDir });
+        const cleanupWorkspaceDir = resolveSubagentAttachmentSandboxWorkspaceDir(
+          entry.attachmentsSandboxDir,
+          path.basename(entry.attachmentsDir),
+        );
+        if (!cleanupWorkspaceDir) {
+          return false;
+        }
+        sandboxFsBridge = await (
+          options?.createRuntimeCleanupBridge ?? createRegisteredSandboxCleanupBridge
+        )({
+          backendId: identity.backendId,
+          runtimeId: identity.runtimeId,
+          workspaceDir: entry.attachmentsSandboxWorkspaceDir,
+          containerWorkspaceDir: cleanupWorkspaceDir,
+          locator: identity.fsCleanupLocator,
+          config,
+          agentId: entry.attachmentsSandboxAgentId ?? entry.requesterAgentId,
+        });
+        if (!sandboxFsBridge) {
+          return false;
+        }
+      } else {
+        const sandbox = await (options?.resolveSandbox ?? resolveSandboxContext)({
+          config,
+          agentId: entry.attachmentsSandboxAgentId ?? entry.requesterAgentId,
+          sessionKey: entry.attachmentsSandboxSessionKey,
+          workspaceDir: entry.attachmentsSandboxWorkspaceDir,
+          requireCurrentConfig: true,
+        });
         if (
-          !resolved.hostPath ||
-          resolveSandboxHostPathViaExistingAncestor(resolved.hostPath) !==
-            resolveSandboxHostPathViaExistingAncestor(entry.attachmentsDir)
+          !sandbox ||
+          sandbox.backendId !== identity.backendId ||
+          sandbox.runtimeId !== identity.runtimeId ||
+          sandbox.backend?.configLabel?.trim() !== identity.configLabel ||
+          sandbox.backend?.capabilities?.workspaceMutationVisibility !== "shared-host"
         ) {
           return false;
         }
-        sandboxFsBridge = sandbox.fsBridge;
-      } else {
-        sandboxFsBridge = (options?.createIngress ?? createSandboxWorkspaceIngressFsBridge)(
-          sandbox,
+        if (sandbox.backend?.createFsBridge) {
+          return false;
+        }
+        const attachmentsRelativePath = path.relative(
+          entry.attachmentsRootDir,
+          entry.attachmentsDir,
         );
+        const writableAliases = resolveWritableSandboxHostPathAliases({
+          hostRoot: entry.attachmentsRootDir,
+          relativePath: attachmentsRelativePath,
+          defaultContainerRoot: sandbox.containerWorkdir,
+          mounts: buildSandboxFsMounts(sandbox),
+        });
+        if (writableAliases.length > 0) {
+          if (!sandbox.fsBridge) {
+            return false;
+          }
+          sandboxFsBridge = sandbox.fsBridge;
+          sandboxDir = writableAliases[0]?.containerPath;
+        }
       }
     } catch {
-      return false;
-    }
-    if (!sandboxFsBridge) {
       return false;
     }
   }
@@ -256,7 +304,7 @@ export async function safeRemoveAttachmentsDir(
     rootDir: entry.attachmentsRootDir,
     absDir: entry.attachmentsDir,
     sandboxFsBridge,
-    sandboxDir: entry.attachmentsSandboxDir,
+    sandboxDir,
   });
 }
 
@@ -272,7 +320,7 @@ function removeOrphanedRun(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
 }): boolean {
-  if (params.runs.get(params.runId) !== params.entry) {
+  if (params.runs.get(params.runId) !== params.entry || params.entry.acceptedRunTermination) {
     return false;
   }
   params.runs.delete(params.runId);
@@ -292,7 +340,7 @@ export async function reconcileOrphanedRun(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
 }): Promise<boolean> {
-  if (params.runs.get(params.runId) !== params.entry) {
+  if (params.runs.get(params.runId) !== params.entry || params.entry.acceptedRunTermination) {
     return false;
   }
   if (shouldDeleteAttachments(params.entry) && !(await safeRemoveAttachmentsDir(params.entry))) {
@@ -325,6 +373,7 @@ export function reconcileOrphanedRestoredRuns(params: {
       entry.killReconciliation ||
       entry.killIntent ||
       entry.execution.restartRecovery ||
+      entry.acceptedRunTermination ||
       entry.launchCleanupPending ||
       entry.terminalOwner === "interrupted-recovery"
     ) {
