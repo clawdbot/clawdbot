@@ -19,6 +19,7 @@ import {
 } from "../../agent-settings.js";
 import { toToolDefinitions } from "../../agent-tool-definition-adapter.js";
 import { resolveUserTimezone } from "../../date-time.js";
+import { bootstrapHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
 import { relocateCurrentRuntimeContextCarrierToTail } from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
@@ -36,10 +37,7 @@ import { log } from "../logger.js";
 import { createEmbeddedAgentResourceLoader } from "../resource-loader.js";
 import { applySystemPromptToSession } from "../system-prompt.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
-import {
-  type AttemptContextEngine,
-  runAttemptContextEngineBootstrap,
-} from "./attempt-context-engine-helpers.js";
+import type { AttemptContextEngine } from "./attempt-context-engine-helpers.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt-history.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import {
@@ -484,7 +482,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
   input.onSessionManagerCreated(sessionManager);
 
   await input.withOwnedTranscriptWrite(async () => {
-    await runAttemptContextEngineBootstrap({
+    await bootstrapHarnessContextEngine({
       hadSessionFile: transcriptState.hasBootstrapTranscriptState,
       contextEngine: input.activeContextEngine,
       sessionId: attempt.sessionId,

@@ -24,6 +24,7 @@ import {
 import type { createPreparedEmbeddedAgentSettingsManager } from "../../agent-project-settings.js";
 import type { createCacheTrace } from "../../cache-trace.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
+import { assembleHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
@@ -32,10 +33,7 @@ import { resolveTranscriptPolicy, type TranscriptPolicy } from "../../transcript
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
-import {
-  assembleAttemptContextEngine,
-  type AttemptContextEngine,
-} from "./attempt-context-engine-helpers.js";
+import type { AttemptContextEngine } from "./attempt-context-engine-helpers.js";
 import type { resolveOrphanRepairPlan } from "./attempt-orphan-repair.js";
 import { prependSystemPromptAddition } from "./attempt-prompt-helpers.js";
 import { isRunnerToolCallBlockType } from "./attempt-tool-call-block-type.js";
@@ -575,7 +573,7 @@ export async function prepareEmbeddedAttemptHistory(input: {
       });
       const messageBudget = Math.max(1, promptBudget - renderedPromptTokens);
       const transcriptReadFence = attempt.userTurnTranscriptRecorder?.getAdmissionReceipt();
-      const assembled = await assembleAttemptContextEngine({
+      const assembled = await assembleHarnessContextEngine({
         contextEngine: input.activeContextEngine,
         sessionId: attempt.sessionId,
         sessionKey: attempt.sessionKey,

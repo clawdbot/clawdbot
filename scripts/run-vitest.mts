@@ -5,8 +5,10 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import { constants as osConstants } from "node:os";
 import path from "node:path";
-import type { Readable, Writable } from "node:stream";
-import { embeddedAgentVitestProjectOwners } from "../test/vitest/vitest.agents-paths.mjs";
+import {
+  agentVitestProjectOwners,
+  embeddedAgentVitestProjectOwners,
+} from "../test/vitest/vitest.agents-paths.mjs";
 import { toolingIsolatedTestFiles } from "../test/vitest/vitest.tooling-isolated-paths.mjs";
 import { isUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
 import { boundaryTestFiles } from "../test/vitest/vitest.unit-paths.mjs";
@@ -34,6 +36,15 @@ type VitestProcessHandle = Omit<ReturnType<typeof spawnWatchedVitestProcess>, "t
 type WatchdogStream = {
   on(event: string, listener: (...args: unknown[]) => void): unknown;
   off(event: string, listener: (...args: unknown[]) => void): unknown;
+};
+type NodeSignal = keyof typeof osConstants.signals;
+type VitestOutputStream = {
+  setEncoding(encoding: "utf8"): unknown;
+  on(event: "data", listener: (chunk: string) => void): unknown;
+  on(event: "end", listener: () => void): unknown;
+};
+type VitestOutputTarget = {
+  write(chunk: string): unknown;
 };
 
 const ANSI_CSI_PREFIX = `${String.fromCharCode(27)}[`;
@@ -117,7 +128,10 @@ const VITEST_OPTIONS_WITH_VALUE = new Set([
   "--retry",
   "--root",
   "-r",
-  "--sequence.shuffle.seed",
+  "--sequence",
+  "--sequence.hooks",
+  "--sequence.seed",
+  "--sequence.setupFiles",
   "--shard",
   "--silent",
   "--slowTestThreshold",
@@ -138,7 +152,6 @@ const VITEST_DOTTED_OPTIONS_WITH_VALUE_PREFIXES = [
   "--experimental.",
   "--outputFile.",
   "--retry.",
-  "--sequence.",
   "--typecheck.",
 ];
 const UNBOUNDED_CONFIG_ONLY_OPTIONS = [
@@ -178,16 +191,16 @@ function isErrorWithCode(error: unknown, code: string): error is NodeJS.ErrnoExc
   return error instanceof Error && "code" in error && error.code === code;
 }
 
-function isNodeSignal(signal: string): signal is NodeJS.Signals {
+function isNodeSignal(signal: string): signal is NodeSignal {
   return Object.hasOwn(osConstants.signals, signal);
 }
 
-function normalizeNodeSignal(signal: string | null): NodeJS.Signals | null {
+function normalizeNodeSignal(signal: string | null): NodeSignal | null {
   if (!signal) {
     return null;
   }
   if (!isNodeSignal(signal)) {
-    throw new Error(`child process exited with unknown signal: ${signal}`);
+    throw new Error(`child process exited with unknown signal: ${String(signal)}`);
   }
   return signal;
 }
@@ -667,6 +680,18 @@ function isDelegableBroadProjectRouterTarget(arg: string, cwd: string): boolean 
   );
 }
 
+function isPathAtOrUnder(value: string, root: string): boolean {
+  return value === root || value.startsWith(`${root}/`);
+}
+
+function isOwnedAgentDirectoryTarget(arg: string, cwd: string, fsImpl: VitestPathFs): boolean {
+  const relative = toRepoRelativeArg(arg, cwd).replace(/\/+$/u, "");
+  return (
+    isPathAtOrUnder(relative, agentVitestProjectOwners.all.root) &&
+    isExplicitDirectoryTargetArg(arg, cwd, fsImpl)
+  );
+}
+
 function isExplicitProjectRouterTargetArg(
   arg: string,
   cwd = process.cwd(),
@@ -683,7 +708,7 @@ function isExplicitProjectRouterTargetArg(
   }
   const filePath = path.isAbsolute(arg) ? arg : path.resolve(cwd, arg);
   return fsImpl.existsSync(filePath)
-    ? isDelegableBroadProjectRouterTarget(arg, cwd)
+    ? isDelegableBroadProjectRouterTarget(arg, cwd) || isOwnedAgentDirectoryTarget(arg, cwd, fsImpl)
     : path.extname(arg) === "" &&
         /^(?:src|test|extensions|ui|packages|apps)\//u.test(toRepoRelativeArg(arg, cwd));
 }
@@ -810,42 +835,36 @@ function hasExplicitDisabledRunFlag(argv: string[]): boolean {
   return false;
 }
 
-function hasSeparateVitestOptionValueArg(argv: string[]): boolean {
-  for (const arg of argv) {
-    if (arg === "--") {
-      return false;
-    }
-    if (optionConsumesNextArg(arg)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function stripRunSubcommand(argv: string[]): string[] {
-  const stripped: string[] = [];
+function resolveDelegatedVitestArgs(argv: string[]): string[] {
+  const positionalArgs: string[] = [];
+  const optionArgs: string[] = [];
   let canRemoveRunSubcommand = true;
+  let passthrough = false;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === undefined) {
       break;
     }
     if (arg === "--") {
-      stripped.push(arg);
+      passthrough = true;
       canRemoveRunSubcommand = false;
       continue;
     }
-    if (canRemoveRunSubcommand && optionConsumesNextArg(arg)) {
-      stripped.push(arg);
+    if (passthrough) {
+      optionArgs.push(arg);
+      continue;
+    }
+    if (optionConsumesNextArg(arg)) {
+      optionArgs.push(arg);
       const optionValue = argv[index + 1];
       if (optionValue !== undefined) {
+        optionArgs.push(optionValue);
         index += 1;
-        stripped.push(optionValue);
       }
       continue;
     }
-    if (canRemoveRunSubcommand && arg.startsWith("-")) {
-      stripped.push(arg);
+    if (arg.startsWith("-")) {
+      optionArgs.push(arg);
       continue;
     }
     if (canRemoveRunSubcommand && arg === "run") {
@@ -853,9 +872,9 @@ function stripRunSubcommand(argv: string[]): string[] {
       continue;
     }
     canRemoveRunSubcommand = false;
-    stripped.push(arg);
+    positionalArgs.push(arg);
   }
-  return stripped;
+  return optionArgs.length > 0 ? [...positionalArgs, "--", ...optionArgs] : positionalArgs;
 }
 
 function hasNonRunVitestSubcommand(argv: string[]): boolean {
@@ -893,12 +912,11 @@ export function resolveTestProjectsDelegationArgs(
     resolveExplicitVitestMode(argv) === "watch" ||
     hasNonRunVitestSubcommand(argv) ||
     hasExplicitDisabledRunFlag(argv) ||
-    hasSeparateVitestOptionValueArg(argv) ||
     collectExplicitProjectRouterTargetArgs(argv, cwd).length === 0
   ) {
     return null;
   }
-  return stripRunSubcommand(argv);
+  return resolveDelegatedVitestArgs(argv);
 }
 
 /**
@@ -1138,8 +1156,8 @@ export function installVitestNoOutputWatchdog(params: {
  * Forwards child output while optionally suppressing complete stderr lines.
  */
 function forwardVitestOutput(
-  stream: Readable | null,
-  target: Writable,
+  stream: VitestOutputStream | null,
+  target: VitestOutputTarget,
   shouldSuppressLine: (line: string) => boolean = () => false,
 ): void {
   if (!stream) {
@@ -1185,7 +1203,7 @@ export function spawnWatchedVitestProcess({
   label?: string;
   onNoOutputTimeout?: () => void;
 }) {
-  let forwardedSignal: NodeJS.Signals | null = null;
+  let forwardedSignal: NodeSignal | null = null;
   const child = spawnVitestProcess({
     pnpmArgs,
     spawnParams,

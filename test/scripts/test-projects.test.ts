@@ -1048,21 +1048,29 @@ describe("scripts/test-projects changed-target routing", () => {
     ["src/agents/runtime-plan", "test/vitest/vitest.agents-support.config.ts"],
     ["src/agents/tools", "test/vitest/vitest.agents-tools.config.ts"],
   ])("routes focused agent directory %s to its owning shard", (directory, config) => {
-    const plans = buildVitestRunPlans([directory]);
+    expect(buildVitestRunPlans([directory])).toEqual([
+      {
+        config,
+        forwardedArgs: [directory],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
+  });
 
-    expect(plans).toEqual(
-      expect.arrayContaining([
-        {
-          config,
-          forwardedArgs: [],
-          includePatterns: [`${directory}/**/*.test.ts`],
-          watchMode: false,
-        },
-      ]),
-    );
-    expect(plans.map((plan) => plan.config)).not.toContain(
-      "test/vitest/vitest.agents-core.config.ts",
-    );
+  it("keeps shuffle options on the single owning embedded-run shard", () => {
+    const directory = "src/agents/embedded-agent-runner/run";
+
+    expect(
+      buildVitestRunPlans([directory, "--", "--sequence.shuffle", "--sequence.seed", "3"]),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.agents-embedded-agent-run.config.ts",
+        forwardedArgs: ["--sequence.shuffle", "--sequence.seed", "3", directory],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
   });
 
   it("splits the embedded-agent parent directory across every isolated harness", () => {

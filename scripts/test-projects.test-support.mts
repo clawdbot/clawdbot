@@ -1233,6 +1233,9 @@ function resolveExactSourceDirectoryTestTargets(targetArg: string, cwd: string) 
   if (!isExactSourceDirectoryTarget(relative)) {
     return null;
   }
+  if (isCanonicalAgentOwnerDirectoryTarget(targetArg, cwd)) {
+    return [targetArg];
+  }
   const prefix = `${relative}/`;
   const lightTargets = uniqueOrdered([
     ...getUnitFastTestFiles(),
@@ -1240,6 +1243,20 @@ function resolveExactSourceDirectoryTestTargets(targetArg: string, cwd: string) 
     ...commandsLightTestFiles,
   ]).filter((file) => file.startsWith(prefix));
   return lightTargets.length > 0 ? [...lightTargets, targetArg] : null;
+}
+
+function isCanonicalAgentOwnerDirectoryTarget(targetArg: string, cwd: string) {
+  if (!isExistingDirectoryTarget(targetArg, cwd)) {
+    return false;
+  }
+  const kind = classifyTarget(targetArg, cwd);
+  if (kind === agentVitestProjectOwners.all.kind) {
+    return false;
+  }
+  const relative = toRepoRelativeTarget(targetArg, cwd).replace(/\/+$/u, "");
+  return Object.values(agentVitestProjectOwners).some(
+    (owner) => owner.kind === kind && isPathAtOrUnder(relative, owner.root),
+  );
 }
 
 /**
@@ -3650,6 +3667,7 @@ export function buildVitestRunPlans(
     const useCliTargetArgs =
       kind === "e2e" ||
       kind === "packageDocker" ||
+      grouped.every((targetArg) => isCanonicalAgentOwnerDirectoryTarget(targetArg, cwd)) ||
       (kind === "default" &&
         grouped.every((targetArg) => isFileLikeTarget(toRepoRelativeTarget(targetArg, cwd))));
     const useWholeConfigTarget = grouped.some((targetArg) =>
