@@ -62,6 +62,86 @@ describe("OpenClawSchema talk validation", () => {
   });
 
   it.each([
+    ["an inferred default", {}],
+    ["an explicit Codex provider", { provider: "codex" }],
+    ["a single Codex provider entry", { providers: { codex: {} } }],
+  ])("accepts the codex-realtime brain with %s", (_label, providerConfig) => {
+    expect(
+      OpenClawSchema.safeParse({
+        talk: { realtime: { brain: "codex-realtime", ...providerConfig } },
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects the codex-realtime brain with a different provider", () => {
+    const result = OpenClawSchema.safeParse({
+      talk: { realtime: { brain: "codex-realtime", provider: "openai" } },
+    });
+    expect(result.success).toBe(false);
+    if (result.success) {
+      throw new Error("Expected codex-realtime provider validation to fail");
+    }
+    expect(result.error.issues[0]?.message).toContain(
+      'requires talk.realtime.provider="codex" or unset',
+    );
+  });
+
+  it("rejects the codex-realtime brain with a different single provider entry", () => {
+    const result = OpenClawSchema.safeParse({
+      talk: { realtime: { brain: "codex-realtime", providers: { openai: {} } } },
+    });
+    expect(result.success).toBe(false);
+    if (result.success) {
+      throw new Error("Expected inferred codex-realtime provider validation to fail");
+    }
+    expect(result.error.issues[0]?.message).toContain(
+      'requires talk.realtime.provider="codex" or unset',
+    );
+  });
+
+  it.each([undefined, "agent-consult"])("rejects the codex provider with brain %s", (brain) => {
+    const result = OpenClawSchema.safeParse({
+      talk: { realtime: { provider: "codex", ...(brain ? { brain } : {}) } },
+    });
+    expect(result.success).toBe(false);
+    if (result.success) {
+      throw new Error("Expected Codex provider brain validation to fail");
+    }
+    expect(result.error.issues[0]?.message).toContain(
+      'requires talk.realtime.brain="codex-realtime"',
+    );
+  });
+
+  it("rejects a single Codex provider entry without the Codex brain", () => {
+    const result = OpenClawSchema.safeParse({
+      talk: { realtime: { providers: { codex: {} } } },
+    });
+    expect(result.success).toBe(false);
+    if (result.success) {
+      throw new Error("Expected inferred Codex provider brain validation to fail");
+    }
+    expect(result.error.issues[0]?.message).toContain(
+      'requires talk.realtime.brain="codex-realtime"',
+    );
+  });
+
+  it.each(["webrtc", "provider-websocket", "managed-room"])(
+    "rejects the codex-realtime brain with %s transport",
+    (transport) => {
+      const result = OpenClawSchema.safeParse({
+        talk: { realtime: { brain: "codex-realtime", transport } },
+      });
+      expect(result.success).toBe(false);
+      if (result.success) {
+        throw new Error("Expected codex-realtime transport validation to fail");
+      }
+      expect(result.error.issues[0]?.message).toContain(
+        'requires talk.realtime.transport="gateway-relay" or unset',
+      );
+    },
+  );
+
+  it.each([
     ["VAD below zero", { vadThreshold: -0.1 }],
     ["VAD above one", { vadThreshold: 1.1 }],
     ["zero silence duration", { silenceDurationMs: 0 }],

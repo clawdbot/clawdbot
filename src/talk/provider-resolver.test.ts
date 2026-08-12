@@ -76,6 +76,49 @@ describe("realtime voice provider resolver", () => {
     });
   });
 
+  it("skips auto-selected providers that do not support the selected brain", () => {
+    const codex: RealtimeVoiceProviderPlugin = {
+      id: "codex",
+      label: "Codex",
+      autoSelectOrder: 1,
+      capabilities: {
+        transports: ["gateway-relay" as const],
+        brains: ["codex-realtime" as const],
+        inputAudioFormats: [],
+        outputAudioFormats: [],
+      },
+      resolveConfig: ({ rawConfig }) => rawConfig,
+      isConfigured: ({ providerConfig }) => providerConfig.enabled === true,
+      createBridge: () => {
+        throw new Error("unused");
+      },
+    };
+    const consult: RealtimeVoiceProviderPlugin = {
+      id: "consult",
+      label: "Consult",
+      autoSelectOrder: 2,
+      capabilities: {
+        transports: ["gateway-relay" as const],
+        brains: ["agent-consult" as const],
+        inputAudioFormats: [],
+        outputAudioFormats: [],
+      },
+      resolveConfig: ({ rawConfig }) => rawConfig,
+      isConfigured: ({ providerConfig }) => providerConfig.enabled === true,
+      createBridge: () => {
+        throw new Error("unused");
+      },
+    };
+
+    expect(
+      resolveConfiguredRealtimeVoiceProvider({
+        brain: "agent-consult",
+        providers: [codex, consult],
+        providerConfigs: { codex: { enabled: true }, consult: { enabled: true } },
+      }).provider.id,
+    ).toBe("consult");
+  });
+
   it("keeps browser-only providers out of bridge auto-selection", () => {
     const isBrowserSessionConfigured = vi.fn(
       ({ agentId }: { agentId?: string }) => agentId === "voice-agent",

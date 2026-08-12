@@ -186,12 +186,14 @@ const TalkRealtimeSchema = z
     silenceDurationMs: z.number().int().positive().optional(),
     prefixPaddingMs: z.number().int().nonnegative().optional(),
     reasoningEffort: z.string().min(1).optional(),
-    brain: z.enum(["agent-consult", "direct-tools", "none"]).optional(),
+    brain: z.enum(["agent-consult", "codex-realtime", "direct-tools", "none"]).optional(),
     consultRouting: z.enum(["provider-direct", "force-agent-consult"]).optional(),
   })
   .superRefine((realtime, ctx) => {
     const provider = normalizeLowercaseStringOrEmpty(realtime.provider ?? "");
     const providers = realtime.providers ? Object.keys(realtime.providers) : [];
+    const selectedProvider =
+      provider || (providers.length === 1 ? normalizeLowercaseStringOrEmpty(providers[0]) : "");
 
     if (provider && providers.length > 0 && !Object.hasOwn(realtime.providers!, provider)) {
       ctx.addIssue({
@@ -207,6 +209,36 @@ const TalkRealtimeSchema = z
         path: ["provider"],
         message:
           "talk.realtime.provider is required when talk.realtime.providers defines multiple providers",
+      });
+    }
+
+    if (realtime.brain === "codex-realtime" && selectedProvider && selectedProvider !== "codex") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["provider"],
+        message:
+          'talk.realtime.brain="codex-realtime" requires talk.realtime.provider="codex" or unset',
+      });
+    }
+
+    if (selectedProvider === "codex" && realtime.brain !== "codex-realtime") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["brain"],
+        message: 'talk.realtime.provider="codex" requires talk.realtime.brain="codex-realtime"',
+      });
+    }
+
+    if (
+      realtime.brain === "codex-realtime" &&
+      realtime.transport !== undefined &&
+      realtime.transport !== "gateway-relay"
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["transport"],
+        message:
+          'talk.realtime.brain="codex-realtime" requires talk.realtime.transport="gateway-relay" or unset',
       });
     }
   });

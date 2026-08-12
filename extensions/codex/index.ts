@@ -14,6 +14,7 @@ import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state
 import { registerCodexCliMetadata } from "./cli-metadata.js";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import { buildCodexRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 import { readCodexPluginConfig } from "./src/app-server/config.js";
 import { createCodexAppServerConnectionHealthService } from "./src/app-server/connection-health.js";
 import {
@@ -176,6 +177,7 @@ export default definePluginEntry({
         runtime: api.runtime,
       }),
     );
+    api.registerRealtimeVoiceProvider(buildCodexRealtimeVoiceProvider({ runtime: api.runtime }));
     api.registerMediaUnderstandingProvider(
       buildCodexMediaUnderstandingProvider({ pluginConfig: api.pluginConfig }),
     );

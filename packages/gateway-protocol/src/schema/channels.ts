@@ -67,6 +67,7 @@ const TalkTransportSchema = Type.Union([
 /** How a Talk session delegates reasoning/tool use to the agent runtime. */
 const TalkBrainSchema = Type.Union([
   Type.Literal("agent-consult"),
+  Type.Literal("codex-realtime"),
   Type.Literal("direct-tools"),
   Type.Literal("none"),
 ]);

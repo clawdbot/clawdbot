@@ -10,12 +10,18 @@ import {
   type MeetingRealtimeToolCallParams,
 } from "./realtime-engine.js";
 
+const ensureRealtimeVoiceAgentSessionEntry = vi.hoisted(() => vi.fn(async () => ({})));
+
+vi.mock("../talk/agent-consult-runtime.js", () => ({ ensureRealtimeVoiceAgentSessionEntry }));
+
 type PendingWrite = {
   resolve: () => void;
 };
 
 async function createEngineFixture(options?: {
   handleToolCall?: (params: MeetingRealtimeToolCallParams) => Promise<void>;
+  handlesAgentTurns?: boolean;
+  strategy?: "agent" | "bidi";
 }) {
   let callbacks: RealtimeVoiceBridgeCreateRequest | undefined;
   let onHumanBargeIn: ((audio: Buffer) => boolean) | undefined;
@@ -34,6 +40,12 @@ async function createEngineFixture(options?: {
   const provider: RealtimeVoiceProviderPlugin = {
     id: "test",
     label: "Test",
+    capabilities: options?.handlesAgentTurns
+      ? ({
+          brains: ["codex-realtime"],
+          handlesAgentTurns: true,
+        } as RealtimeVoiceProviderPlugin["capabilities"])
+      : undefined,
     isConfigured: () => true,
     createBridge: (request) => {
       callbacks = request;
@@ -61,16 +73,18 @@ async function createEngineFixture(options?: {
     stop: vi.fn(async () => {}),
     writeOutput,
   };
+  const consultAgent = vi.fn(async () => ({ text: "unused" }));
   const handle = await startMeetingRealtimeEngine({
     config: {
       chrome: { audioFormat: "pcm16-24khz" },
       realtime: {
-        strategy: "bidi",
+        strategy: options?.strategy ?? "bidi",
+        agentId: "meetings",
         provider: "test",
         providers: { test: {} },
       },
     },
-    consultAgent: vi.fn(async () => ({ text: "unused" })),
+    consultAgent,
     fullConfig: {} as never,
     handleToolCall: options?.handleToolCall ?? vi.fn(async () => {}),
     logger: {
@@ -80,13 +94,16 @@ async function createEngineFixture(options?: {
       warn: vi.fn(),
     },
     meetingSessionId: "meeting-1",
+    requesterSessionKey: "agent:meetings:meeting:meeting-1",
     platform: {
       displayName: "Test Meeting",
       logScope: "[meeting-test]",
       sessionIdPrefix: "meeting-test",
     },
     providers: [provider],
-    runtime: {} as never,
+    runtime: {
+      agent: { session: { resolveStorePath: vi.fn(() => "/tmp/meeting-sessions.sqlite") } },
+    } as never,
     tools: [],
     transport,
   });
@@ -98,6 +115,7 @@ async function createEngineFixture(options?: {
     beginOutput,
     callbacks: bridgeCallbacks,
     clearOutput,
+    consultAgent,
     handle,
     handleBargeIn,
     submitToolResult,
@@ -200,9 +218,35 @@ describe("meeting realtime engine output ownership", () => {
     }
   });
 
+  it("forwards existing meeting scope and enables native audio turns for native-agent providers", async () => {
+    const fixture = await createEngineFixture({ handlesAgentTurns: true, strategy: "agent" });
+    try {
+      expect(ensureRealtimeVoiceAgentSessionEntry).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "meetings",
+          contextMode: "fork",
+          sessionKey: "agent:meetings:subagent:meeting-test:meeting-1",
+          spawnedBy: "agent:meetings:meeting:meeting-1",
+        }),
+      );
+      expect(fixture.callbacks).toMatchObject({
+        agentId: "meetings",
+        sessionKey: "agent:meetings:subagent:meeting-test:meeting-1",
+        toolsAllow: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
+        autoRespondToAudio: true,
+        tools: [],
+      });
+      fixture.callbacks.onTranscript?.("user", "Handle this natively", true);
+      expect(fixture.consultAgent).not.toHaveBeenCalled();
+    } finally {
+      await fixture.handle.stop();
+    }
+  });
+
   it("rearms continuity reset when the provider creates a fresh session before ready", async () => {
     const fixture = await createEngineFixture();
     try {
+      expect(fixture.callbacks.sessionKey).toBe("agent:meetings:meeting:meeting-1");
       fixture.callbacks.onEvent?.({
         direction: "client",
         type: "session.continuity.reset",

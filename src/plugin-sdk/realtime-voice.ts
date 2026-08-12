@@ -139,6 +139,7 @@ export {
 export {
   assertRealtimeVoiceAgentConsultModelSelectionUnlocked,
   consultRealtimeVoiceAgent,
+  ensureRealtimeVoiceAgentSessionEntry,
   REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION,
   type RealtimeVoiceAgentConsultResult,
   type RealtimeVoiceAgentConsultRuntime,
@@ -225,3 +226,12 @@ export {
   resamplePcm,
   resamplePcmTo8k,
 } from "../talk/audio-codec.js";
+export {
+  RealtimeWebRtcPendingAudio,
+  REALTIME_WEBRTC_RELAY_FRAME_BYTES,
+} from "../talk/webrtc-audio-buffer.js";
+export {
+  RealtimeWebRtcAudioPeer,
+  type RealtimeWebRtcAudioPeerCallbacks,
+  type RealtimeWebRtcAudioPeerContract,
+} from "../talk/webrtc-audio-peer.runtime.js";

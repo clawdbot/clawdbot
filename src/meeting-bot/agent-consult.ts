@@ -1,9 +1,6 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import { consultRealtimeVoiceAgent } from "../talk/agent-consult-runtime.js";
 import {
   buildRealtimeVoiceAgentConsultWorkingResponse,
@@ -19,6 +16,7 @@ import type {
   MeetingAgentConsultSurface,
   MeetingPlatformRuntimeMetadata,
 } from "./platform-adapter-contract.js";
+import { resolveMeetingAgentSessionContext } from "./realtime-engine-support.js";
 import type {
   MeetingAgentConsultParams,
   MeetingRealtimeToolCallParams,
@@ -123,12 +121,13 @@ async function consultMeetingAgent(params: {
   transcript: Array<{ role: "user" | "assistant"; text: string }>;
   abortSignal?: AbortSignal;
 }): Promise<{ text: string }> {
-  const agentId = params.agentId
-    ? normalizeAgentId(params.agentId)
-    : resolveDefaultAgentId(params.config);
-  const requesterSessionKey =
-    normalizeOptionalString(params.requesterSessionKey) ?? `agent:${agentId}:main`;
-  const sessionKey = `agent:${agentId}:subagent:${params.surface.id}:${params.meetingSessionId}`;
+  const { agentId, sessionKey, spawnedBy } = resolveMeetingAgentSessionContext({
+    fullConfig: params.config,
+    configuredAgentId: params.agentId,
+    surfaceId: params.surface.id,
+    meetingSessionId: params.meetingSessionId,
+    requesterSessionKey: params.requesterSessionKey,
+  });
   return await consultRealtimeVoiceAgent({
     cfg: params.config,
     agentRuntime: params.runtime.agent,
@@ -138,7 +137,7 @@ async function consultMeetingAgent(params: {
     messageProvider: params.surface.provider,
     lane: params.surface.lane,
     runIdPrefix: `${params.surface.id}:${params.meetingSessionId}`,
-    spawnedBy: requesterSessionKey,
+    spawnedBy,
     contextMode: "fork",
     args: params.args,
     transcript: params.transcript,

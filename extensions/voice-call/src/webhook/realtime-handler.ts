@@ -16,6 +16,7 @@ import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   readRealtimeVoiceConsultQuestion,
   readSpeakableRealtimeVoiceToolResult,
+  resolveRealtimeVoiceAgentConsultToolsAllow,
   type RealtimeVoiceForcedConsultHandle,
   type RealtimeVoiceBridgeSession,
   type RealtimeVoiceProviderConfig,
@@ -258,6 +259,7 @@ type CallRegistration = {
   callId: string;
   instructions: string;
   initialGreetingInstructions?: string;
+  providerInitialGreetingInstructions?: string;
 };
 
 type ActiveRealtimeVoiceBridge = RealtimeVoiceBridgeSession;
@@ -654,14 +656,21 @@ export class RealtimeCallHandler {
       return null;
     }
 
-    const { callId, instructions, initialGreetingInstructions } = registration;
+    const {
+      callId,
+      instructions,
+      initialGreetingInstructions,
+      providerInitialGreetingInstructions,
+    } = registration;
     const callRecord = this.manager.getCallByProviderCallId(callSid);
+    const providerHandlesAgentTurns =
+      this.realtimeProvider.capabilities?.handlesAgentTurns === true;
     const harness = createRealtimeVoiceSessionHarness({
       talk: {
         sessionId: `voice-call:${callId}:realtime`,
         mode: "realtime",
         transport: "gateway-relay",
-        brain: "agent-consult",
+        brain: this.realtimeProvider.capabilities?.brains?.[0] ?? "agent-consult",
         provider: this.realtimeProvider.id,
       },
       talkPayloads: {
@@ -793,11 +802,21 @@ export class RealtimeCallHandler {
       provider: this.realtimeProvider,
       cfg: this.coreConfig,
       providerConfig: this.providerConfig,
+      agentId: callRecord?.agentId,
+      sessionKey: callRecord?.sessionKey,
+      senderId: callRecord?.from,
+      toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(this.config.toolPolicy),
       interruptResponseOnInputAudio,
-      instructions,
-      tools: this.config.tools,
-      initialGreetingInstructions,
-      triggerGreetingOnReady: Boolean(initialGreetingInstructions),
+      instructions: providerHandlesAgentTurns ? this.config.instructions : instructions,
+      tools: providerHandlesAgentTurns ? [] : this.config.tools,
+      initialGreetingInstructions: providerHandlesAgentTurns
+        ? providerInitialGreetingInstructions
+        : initialGreetingInstructions,
+      triggerGreetingOnReady: Boolean(
+        providerHandlesAgentTurns
+          ? providerInitialGreetingInstructions
+          : initialGreetingInstructions,
+      ),
       audioSink: {
         isOpen: () => ws.readyState === WebSocket.OPEN,
         sendAudio: (muLaw) => {
@@ -890,6 +909,9 @@ export class RealtimeCallHandler {
             isFinal: true,
           };
           this.manager.processEvent(event);
+          if (providerHandlesAgentTurns) {
+            return;
+          }
           this.scheduleForcedAgentConsult({
             harness,
             session,
@@ -1597,6 +1619,7 @@ export class RealtimeCallHandler {
       callId: callRecord.callId,
       instructions,
       initialGreetingInstructions: buildGreetingInstructions(instructions, initialGreeting),
+      providerInitialGreetingInstructions: buildGreetingInstructions(undefined, initialGreeting),
     };
   }
 

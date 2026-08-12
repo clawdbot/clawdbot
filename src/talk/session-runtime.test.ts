@@ -235,6 +235,8 @@ describe("realtime voice bridge session runtime", () => {
     const session = createRealtimeVoiceBridgeSession({
       provider,
       providerConfig: {},
+      agentId: "voice-agent",
+      sessionKey: "agent:voice-agent:discord:voice:123",
       audioSink: { sendAudio: vi.fn() },
       initialGreetingInstructions: "Say hello",
       triggerGreetingOnReady: true,
@@ -248,8 +250,14 @@ describe("realtime voice bridge session runtime", () => {
     };
 
     callbacks?.onReady?.();
+    callbacks?.onReady?.();
     callbacks?.onToolCall?.(event);
 
+    expect(expectBridgeRequest(callbacks)).toMatchObject({
+      agentId: "voice-agent",
+      sessionKey: "agent:voice-agent:discord:voice:123",
+    });
+    expect(bridge["triggerGreeting"]).toHaveBeenCalledOnce();
     expect(bridge["triggerGreeting"]).toHaveBeenCalledWith("Say hello");
     expect(onToolCall).toHaveBeenCalledWith(event, session);
   });

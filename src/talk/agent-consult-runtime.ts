@@ -162,7 +162,8 @@ function resolveRealtimeVoiceAgentDeliveryContext(params: {
   return undefined;
 }
 
-async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
+/** Materialize the canonical session selected by a provider-owned realtime voice surface. */
+export async function ensureRealtimeVoiceAgentSessionEntry(params: {
   agentId: string;
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -358,7 +359,7 @@ export async function consultRealtimeVoiceAgent(params: {
         sessionKey: params.sessionKey,
         spawnedBy: params.spawnedBy,
       });
-      const sessionEntry = await resolveRealtimeVoiceAgentConsultSessionEntry({
+      const sessionEntry = await ensureRealtimeVoiceAgentSessionEntry({
         agentId,
         cfg: params.cfg,
         sessionKey: params.sessionKey,

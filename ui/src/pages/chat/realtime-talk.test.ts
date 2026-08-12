@@ -373,7 +373,6 @@ describe("RealtimeTalkSession", () => {
         provider: "xai",
         transport: "gateway-relay",
         mode: "realtime",
-        brain: "agent-consult",
       },
       requestTimeoutOptions,
     );
@@ -438,7 +437,6 @@ describe("RealtimeTalkSession", () => {
         provider: "openai",
         transport: "gateway-relay",
         mode: "realtime",
-        brain: "agent-consult",
       },
       requestTimeoutOptions,
     );
@@ -737,7 +735,6 @@ describe("RealtimeTalkSession", () => {
         sessionKey: "main",
         mode: "realtime",
         transport: "gateway-relay",
-        brain: "agent-consult",
       },
       requestTimeoutOptions,
     );
@@ -779,7 +776,6 @@ describe("RealtimeTalkSession", () => {
         sessionKey: "main",
         mode: "realtime",
         transport: "gateway-relay",
-        brain: "agent-consult",
       },
       requestTimeoutOptions,
     );

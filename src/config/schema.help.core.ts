@@ -200,7 +200,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Additional system instructions appended to OpenClaw's built-in realtime Talk prompt. Use this for voice style, tone, and other provider-facing realtime behavior while keeping agent-consult guidance intact.",
   "talk.realtime.mode": "Talk execution mode: realtime, stt-tts, or transcription.",
   "talk.realtime.transport":
-    "Talk byte/session transport: webrtc, provider-websocket, gateway-relay, or managed-room.",
+    "Talk byte/session transport: webrtc, provider-websocket, gateway-relay, or managed-room. codex-realtime requires gateway-relay.",
   "talk.realtime.vadThreshold":
     "Realtime voice activity detection threshold from 0 (most sensitive) to 1 (least sensitive).",
   "talk.realtime.silenceDurationMs":
@@ -210,7 +210,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "talk.realtime.reasoningEffort":
     "Provider-specific reasoning effort for realtime Talk sessions, such as minimal, low, medium, or high.",
   "talk.realtime.brain":
-    "Talk reasoning strategy: agent-consult for Gateway-mediated agent help, direct-tools for local tool calls, or none.",
+    "Talk reasoning strategy: agent-consult for Gateway-mediated agent help, codex-realtime for Codex-native turns through the Codex app-server, direct-tools for local tool calls, or none.",
   "talk.realtime.consultRouting":
     "Gateway relay fallback for final user transcripts when the realtime provider skips openclaw_agent_consult. provider-direct preserves provider replies; force-agent-consult routes through OpenClaw.",
   "talk.consultThinkingLevel":

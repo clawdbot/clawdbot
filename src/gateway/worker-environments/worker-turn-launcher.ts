@@ -623,6 +623,9 @@ export function createWorkerSessionTurnPlacementProvider(
       if (!current || current.state === "local") {
         return await executeLocalTurn({ claim, placements: options.placements, runLocal });
       }
+      if (turn.realtimeVoice) {
+        throw new Error("Realtime voice requires a local session placement");
+      }
       let routablePlacement = current;
       if (routablePlacement.state === "reclaimed") {
         if (!options.redispatchReclaimed) {

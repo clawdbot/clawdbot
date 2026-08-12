@@ -321,6 +321,36 @@ export function resolveCodexAppServerRuntimeOptions(
   };
 }
 
+/** Enables Codex's native realtime conversation RPC on the supported local control transport. */
+export function enableCodexRealtimeConversation(
+  appServer: CodexAppServerRuntimeOptions,
+): CodexAppServerRuntimeOptions {
+  if (appServer.start.transport !== "stdio") {
+    throw new Error("Codex realtime requires appServer.transport=stdio");
+  }
+  const args = appServer.start.args;
+  const enabled = args.some(
+    (arg, index) => arg === "--enable" && args[index + 1] === "realtime_conversation",
+  );
+  const clearEnv = [...(appServer.start.clearEnv ?? [])];
+  for (const name of ["CODEX_API_KEY", "OPENAI_API_KEY"]) {
+    if (!clearEnv.includes(name)) {
+      clearEnv.push(name);
+    }
+  }
+  if (enabled && clearEnv.length === appServer.start.clearEnv?.length) {
+    return appServer;
+  }
+  return {
+    ...appServer,
+    start: {
+      ...appServer.start,
+      args: enabled ? args : [...args, "--enable", "realtime_conversation"],
+      clearEnv,
+    },
+  };
+}
+
 /**
  * Rechecks Codex-owned plugin state at the final spawn boundary, where the
  * effective agent home is known, so Computer Use keeps the desktop app's TCC ownership.

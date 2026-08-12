@@ -2,7 +2,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { TalkTransport } from "./talk-events.js";
+import type { TalkBrain, TalkTransport } from "./talk-events.js";
 
 export type RealtimeVoiceProviderId = string;
 
@@ -163,6 +163,8 @@ export type RealtimeVoiceProviderConfig = Record<string, unknown>;
 
 export type RealtimeVoiceProviderCapabilities = {
   transports: TalkTransport[];
+  /** Brain strategies this provider exposes to catalog-driven Talk clients. */
+  brains?: TalkBrain[];
   inputAudioFormats: RealtimeVoiceAudioFormat[];
   outputAudioFormats: RealtimeVoiceAudioFormat[];
   supportsBrowserSession?: boolean;
@@ -174,6 +176,8 @@ export type RealtimeVoiceProviderCapabilities = {
   supportsActivationNameGating?: boolean;
   supportsVideoFrames?: boolean;
   supportsSessionResumption?: boolean;
+  /** Provider runs the bound OpenClaw agent directly instead of delegating through consult tools. */
+  handlesAgentTurns?: boolean;
 };
 
 export type RealtimeVoiceProviderResolveConfigContext = {
@@ -195,6 +199,14 @@ export type RealtimeVoiceBridgeCreateRequest = RealtimeVoiceBridgeCallbacks & {
   cfg?: OpenClawConfig;
   /** Host-selected agent scope for provider auth and agent-owned bridge state. */
   agentId?: string;
+  /** Existing OpenClaw session that a provider-owned agent brain must continue. */
+  sessionKey?: string;
+  /** Ingress-authenticated sender identity for provider-owned agent runs. */
+  senderId?: string;
+  /** Session-level owner decision made by the admitting voice surface. */
+  senderIsOwner?: boolean;
+  /** Existing surface tool policy projected onto a provider-owned agent run. */
+  toolsAllow?: string[];
   providerConfig: RealtimeVoiceProviderConfig;
   audioFormat?: RealtimeVoiceAudioFormat;
   instructions?: string;

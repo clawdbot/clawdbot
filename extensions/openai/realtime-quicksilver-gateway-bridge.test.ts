@@ -1,9 +1,7 @@
 import { spawnSync } from "node:child_process";
+import { REALTIME_WEBRTC_RELAY_FRAME_BYTES as OPENAI_QUICKSILVER_RELAY_FRAME_BYTES } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it, vi } from "vitest";
-import {
-  OpenAIQuicksilverPendingAudio,
-  OPENAI_QUICKSILVER_RELAY_FRAME_BYTES,
-} from "./realtime-quicksilver-audio-buffer.js";
+import { OpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import {
   OpenAIQuicksilverAudioPeer,

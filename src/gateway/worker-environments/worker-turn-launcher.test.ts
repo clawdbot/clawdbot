@@ -609,6 +609,31 @@ describe("worker turn launcher", () => {
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
   });
 
+  it("rejects realtime media for a remotely placed session", async () => {
+    seedActivePlacement();
+    const environments = unusedEnvironments();
+    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+    const runId = "run-local-realtime-bridge";
+    const realtimeTurn = {
+      ...turn(runId),
+      workspaceDir: path.join(root, "stale-caller-workspace"),
+      realtimeVoice: { request: {} as never, onBridgeReady: vi.fn() },
+    };
+    const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+
+    await expect(
+      provider.executeTurn(
+        { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId },
+        realtimeTurn,
+        runLocal,
+      ),
+    ).rejects.toThrow("Realtime voice requires a local session placement");
+
+    expect(runLocal).not.toHaveBeenCalled();
+    expect(environments.get).not.toHaveBeenCalled();
+    expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
+  });
+
   it.each([
     ["CLI", "claude-cli"],
     ["plugin", "test-harness"],

@@ -10,6 +10,7 @@ defineDiscordVoiceTests(
     ChannelType,
     createAudioResourceMock,
     resolveAgentRouteMock,
+    resolveConfiguredRealtimeVoiceProviderMock,
     agentCommandMock,
     resolveRealtimeBootstrapContextInstructionsMock,
     realtimeSessionMock,
@@ -611,6 +612,26 @@ defineDiscordVoiceTests(
         "memory_search",
         "memory_get",
       ]);
+    });
+
+    it("passes the existing Discord session to providers that handle agent turns", async () => {
+      resolveConfiguredRealtimeVoiceProviderMock.mockReturnValueOnce({
+        provider: { id: "codex", capabilities: { handlesAgentTurns: true } },
+        providerConfig: { version: "v3", voice: "arbor" },
+      } as never);
+      const { bridgeParams } = await createJoinedAgentProxyFixture({
+        config: { voice: { realtime: { provider: "codex" } } },
+      });
+
+      expect(bridgeParams).toMatchObject({
+        agentId: "agent-1",
+        sessionKey: "discord:g1:c1",
+        autoRespondToAudio: true,
+        tools: [],
+      });
+      bridgeParams.onEvent?.({ direction: "server", type: "session.created" });
+      bridgeParams.onTranscript?.("user", "Run this in Codex", true);
+      expect(agentCommandMock).not.toHaveBeenCalled();
     });
 
     it("adds default bootstrap profile context to realtime voice instructions", async () => {

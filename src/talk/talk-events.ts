@@ -50,7 +50,7 @@ export type TalkTransport = "webrtc" | "provider-websocket" | "gateway-relay" | 
 /**
  * Brain mode that explains whether Talk output is agent-mediated, tool-only, or passive.
  */
-export type TalkBrain = "agent-consult" | "direct-tools" | "none";
+export type TalkBrain = "agent-consult" | "codex-realtime" | "direct-tools" | "none";
 
 /**
  * Session-level correlation fields copied onto every Talk event.

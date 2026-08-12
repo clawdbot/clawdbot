@@ -156,6 +156,7 @@ function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig | undef
   }
   if (
     source.brain === "agent-consult" ||
+    source.brain === "codex-realtime" ||
     source.brain === "direct-tools" ||
     source.brain === "none"
   ) {

@@ -76,7 +76,7 @@ export type TalkRealtimeConfig = {
   /** Provider-specific realtime reasoning effort. */
   reasoningEffort?: string;
   /** Tool/agent strategy for realtime sessions. */
-  brain?: "agent-consult" | "direct-tools" | "none";
+  brain?: "agent-consult" | "codex-realtime" | "direct-tools" | "none";
   /** How Gateway relay handles final user transcripts when the provider skips a consult. */
   consultRouting?: "provider-direct" | "force-agent-consult";
 };

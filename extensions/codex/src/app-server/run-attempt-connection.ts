@@ -25,6 +25,7 @@ import {
 } from "./auth-bridge.js";
 import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
 import {
+  enableCodexRealtimeConversation,
   isCodexAppServerApprovalPolicyAllowedByRequirements,
   readCodexPluginConfig,
   resolveCodexAppServerHomeScope,
@@ -191,8 +192,11 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       "Codex supervision is disabled; refusing to open a native user-home supervised session",
     );
   }
-  const resolveRuntimeOptionsForBinding = (selection: { modelProvider?: string; model?: string }) =>
-    applyStoredBindingPermissions({
+  const resolveRuntimeOptionsForBinding = (selection: {
+    modelProvider?: string;
+    model?: string;
+  }) => {
+    const resolved = applyStoredBindingPermissions({
       appServer: resolveCodexBindingAppServerConnection({
         binding: startupBinding,
         pluginConfig,
@@ -206,11 +210,16 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       binding: startupBinding,
       execPolicyTouched: execPolicy.touched,
     });
+    return params.realtimeVoice ? enableCodexRealtimeConversation(resolved) : resolved;
+  };
   const initialStartupBindingHadInactiveThreadBootstrap =
     isInactiveThreadBootstrapBinding(startupBinding);
   const preparedAuthRoute = usesSupervisionConnection
     ? undefined
     : params.runtimePlan?.auth.modelRoute;
+  const startupAuthRequirement = params.realtimeVoice
+    ? "subscription"
+    : preparedAuthRoute?.authRequirement;
   const startupAuthProfileCandidate = usesSupervisionConnection
     ? undefined
     : preparedAuthRoute
@@ -236,7 +245,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const authHandoff = usesSupervisionConnection
     ? { authProfileId: undefined, nativeAuthProfile: true, preparedAuth: undefined }
     : await resolveCodexAppServerPreparedAuthHandoff({
-        authRequirement: preparedAuthRoute?.authRequirement,
+        authRequirement: startupAuthRequirement,
         resolvedApiKey: params.resolvedApiKey,
         authProfileId: resolvedStartupAuthProfileId,
         authProfileStore: params.authProfileStore,
@@ -408,8 +417,8 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const resolveRuntimeOptionsForCurrentBinding = (selection: {
     modelProvider?: string;
     model?: string;
-  }) =>
-    applyStoredBindingPermissions({
+  }) => {
+    const resolved = applyStoredBindingPermissions({
       appServer: resolveCodexBindingAppServerConnection({
         binding: mutable.startupBinding,
         pluginConfig,
@@ -423,6 +432,8 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       binding: mutable.startupBinding,
       execPolicyTouched: execPolicy.touched,
     });
+    return params.realtimeVoice ? enableCodexRealtimeConversation(resolved) : resolved;
+  };
   return {
     params,
     options,
@@ -450,7 +461,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     isInactiveThreadBootstrapBinding,
     usesSupervisionConnection,
     startupAuthProfileId,
-    startupAuthRequirement: preparedAuthRoute?.authRequirement,
+    startupAuthRequirement,
     startupPreparedAuth,
     startupClientAuthProfileId,
     effectiveWorkspace,

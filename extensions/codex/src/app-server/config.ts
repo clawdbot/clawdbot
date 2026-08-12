@@ -37,6 +37,7 @@ export { isCodexAppServerApprovalPolicyAllowedByRequirements } from "./config-re
 export {
   codexAppServerStartOptionsKey,
   codexSandboxPolicyForTurn,
+  enableCodexRealtimeConversation,
   resolveCodexAppServerHomeScope,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexAppServerStartOptionsForAgent,

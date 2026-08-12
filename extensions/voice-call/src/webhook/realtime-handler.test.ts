@@ -527,6 +527,7 @@ describe("RealtimeCallHandler path routing", () => {
       manager: {
         processEvent,
         getCall,
+        getCallByProviderCallId: getCall,
       },
       provider: {
         name: "telnyx",
@@ -572,6 +573,18 @@ describe("RealtimeCallHandler path routing", () => {
           }),
         );
         expect(createBridge.mock.calls[0]?.[0].instructions).toBe("instructions:support");
+        expect(createBridge.mock.calls[0]?.[0]).toMatchObject({
+          agentId: "support",
+          senderId: "+15550001234",
+          toolsAllow: [
+            "read",
+            "web_search",
+            "web_fetch",
+            "x_search",
+            "memory_search",
+            "memory_get",
+          ],
+        });
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();

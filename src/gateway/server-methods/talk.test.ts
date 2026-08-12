@@ -433,7 +433,7 @@ describe("talk.catalog handler", () => {
       {
         modes: ["realtime", "stt-tts", "transcription"],
         transports: ["webrtc", "provider-websocket", "gateway-relay", "managed-room"],
-        brains: ["agent-consult", "direct-tools", "none"],
+        brains: ["agent-consult", "codex-realtime", "direct-tools", "none"],
         speech: {
           activeProvider: "elevenlabs",
           providers: [
@@ -520,6 +520,12 @@ describe("talk.catalog handler", () => {
       defaultModel: "gpt-realtime-2.1",
       models: ["gpt-realtime-2.1", "gpt-live-1-codex"],
       voices: ["alloy", "marin"],
+      capabilities: {
+        transports: ["gateway-relay"],
+        brains: ["codex-realtime"],
+        inputAudioFormats: [{ encoding: "pcm16", sampleRateHz: 24000, channels: 1 }],
+        outputAudioFormats: [{ encoding: "pcm16", sampleRateHz: 24000, channels: 1 }],
+      },
       resolveConfig: vi.fn(({ rawConfig }: { rawConfig: Record<string, unknown> }) => rawConfig),
       isConfigured: vi.fn(() => false),
       createBridge: vi.fn(),
@@ -556,6 +562,7 @@ describe("talk.catalog handler", () => {
     expect(catalog.realtime.providers[0]).toMatchObject({
       models: ["gpt-realtime-2.1", "gpt-live-1-codex"],
       voices: ["alloy", "marin"],
+      brains: ["codex-realtime"],
     });
     // Catalog readiness must mirror talk.client.create: top-level
     // talk.realtime.model overrides the provider-level model and the resolved
@@ -1653,6 +1660,11 @@ describe("talk.session unified handlers", () => {
         language: "de",
       },
       respond: createRespond,
+      client: {
+        connId: "conn-1",
+        authenticatedUserId: "user-1",
+        connect: { scopes: [] },
+      },
       context: {
         getRuntimeConfig: () =>
           ({
@@ -1687,7 +1699,13 @@ describe("talk.session unified handlers", () => {
       string,
       unknown
     >;
-    expectRecordFields(relayCreateInput, { connId: "conn-1", provider, language: "de" });
+    expectRecordFields(relayCreateInput, {
+      connId: "conn-1",
+      provider,
+      language: "de",
+      senderId: "user-1",
+      senderIsOwner: false,
+    });
     expectRecordFields(relayCreateInput.providerConfig, {
       apiKey: "openai-key",
       model: "gpt-realtime",
@@ -1901,6 +1919,110 @@ describe("talk.session unified handlers", () => {
       sessionKey: "incident-42",
     });
     expectRespondOk(respond, { relaySessionId: "relay-talk-owner" });
+  });
+
+  it("creates a Codex-native relay without consult proxy instructions or tools", async () => {
+    const provider = {
+      id: "codex",
+      label: "Codex Realtime",
+      capabilities: { handlesAgentTurns: true },
+      isConfigured: () => true,
+      createBridge: vi.fn(),
+    };
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { version: "v3", voice: "arbor" },
+    });
+    mocks.createTalkRealtimeRelaySession.mockReturnValue({
+      provider: "codex",
+      transport: "gateway-relay",
+      relaySessionId: "relay-codex-1",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 24000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24000,
+      },
+      expiresAt: 1_797_986_400,
+    });
+
+    const respond = vi.fn();
+    await callTalkHandler("talk.session.create", {
+      params: {
+        sessionKey: "agent:main:main",
+        mode: "realtime",
+        transport: "gateway-relay",
+      },
+      respond,
+      client: {
+        connId: "conn-1",
+        authenticatedUserProfile: { profileId: "profile-1", displayName: "Owner" },
+        connect: { scopes: ["operator.admin"] },
+      },
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            talk: {
+              realtime: {
+                brain: "codex-realtime",
+                instructions: "Speak concisely.",
+                providers: { codex: { voice: "arbor" } },
+              },
+            },
+          }) as OpenClawConfig,
+      },
+    });
+
+    expect(mockCallArg(mocks.resolveConfiguredRealtimeVoiceProvider)).toMatchObject({
+      configuredProviderId: "codex",
+      surface: "gateway-relay",
+    });
+    expect(mockCallArg(mocks.createTalkRealtimeRelaySession)).toMatchObject({
+      brain: "codex-realtime",
+      instructions: "Speak concisely.",
+      provider,
+      providerConfig: { version: "v3", voice: "arbor" },
+      sessionKey: "agent:main:main",
+      senderId: "profile-1",
+      senderIsOwner: true,
+      tools: [],
+      forceAgentConsultOnFinalTranscript: false,
+    });
+    expectRespondOk(respond, {
+      relaySessionId: "relay-codex-1",
+      brain: "codex-realtime",
+    });
+  });
+
+  it("rejects a configured Codex provider with the agent-consult brain", async () => {
+    const respond = vi.fn();
+    await callTalkHandler("talk.session.create", {
+      params: {
+        sessionKey: "agent:main:main",
+        mode: "realtime",
+        transport: "gateway-relay",
+      },
+      respond,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            talk: {
+              realtime: {
+                provider: "codex",
+                brain: "agent-consult",
+                providers: { codex: { voice: "arbor" } },
+              },
+            },
+          }) as OpenClawConfig,
+      },
+    });
+
+    expectRespondError(respond, {
+      code: ErrorCodes.INVALID_REQUEST,
+      message: 'provider="codex" requires brain="codex-realtime"',
+    });
+    expect(mocks.resolveConfiguredRealtimeVoiceProvider).not.toHaveBeenCalled();
+    expect(mocks.createTalkRealtimeRelaySession).not.toHaveBeenCalled();
   });
 
   it.each([

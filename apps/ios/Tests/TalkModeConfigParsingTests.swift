@@ -256,6 +256,16 @@ struct TalkModeManagerTests {
         #expect(parsed.realtimeVoiceId == nil)
     }
 
+    @Test func `routes codex realtime through gateway relay`() {
+        let parsed = Self.parseRealtime(
+            provider: "codex",
+            mode: "realtime",
+            transport: "gateway-relay",
+            brain: "codex-realtime")
+
+        #expect(parsed.executionMode == .realtimeRelay)
+    }
+
     @Test func `resolves realtime voice picker overrides`() {
         #expect(TalkModeRealtimeVoiceSelection.resolvedOverride(nil) == nil)
         #expect(TalkModeRealtimeVoiceSelection.resolvedOverride("") == nil)

@@ -24,7 +24,9 @@ import {
   formatMeetingTranscriptSummaryLog,
   formatMeetingRealtimeVoiceModelLog,
   meetingOutputBytesPerMs,
+  prepareMeetingRealtimeAgentSession as prepareAgentSession,
   resolveMeetingRealtimeProvider,
+  resolveMeetingRealtimeTalkBrain,
 } from "./realtime-engine-support.js";
 import { createMeetingRealtimeOutputOwner } from "./realtime-output-owner.js";
 import { createMeetingRealtimeToolContinuity } from "./realtime-tool-continuity.js";
@@ -48,6 +50,7 @@ export type MeetingRealtimeEngineConfig = {
   chrome: { audioFormat: MeetingRealtimeAudioFormat };
   realtime: {
     strategy: string;
+    agentId?: string;
     provider?: string;
     transcriptionProvider?: string;
     voiceProvider?: string;
@@ -389,6 +392,8 @@ export async function startMeetingRealtimeEngine(params: {
     providers: params.providers,
   });
   const strategy = params.config.realtime.strategy;
+  const providerHandlesAgentTurns = resolved.provider.capabilities?.handlesAgentTurns === true;
+  const agentSession = await prepareAgentSession(params, providerHandlesAgentTurns);
   params.logger.info(
     formatMeetingRealtimeVoiceModelLog({
       logScope: params.platform.logScope,
@@ -407,8 +412,6 @@ export async function startMeetingRealtimeEngine(params: {
     : { meetingSessionId: params.meetingSessionId };
   const reasonTalkPayload = (reason: string) =>
     params.talkContext ? { bridgeId: params.talkContext.bridgeId, reason } : { reason };
-  // The closures above only run after harness creation; they capture this later `const`.
-  // Annotated because the consult closure references harness inside its own initializer.
   const harness: RealtimeVoiceSessionHarness = createRealtimeVoiceSessionHarness({
     talk: {
       sessionId:
@@ -416,7 +419,7 @@ export async function startMeetingRealtimeEngine(params: {
         `${params.platform.sessionIdPrefix}:${params.meetingSessionId}:command-realtime`,
       mode: "realtime",
       transport: "gateway-relay",
-      brain: strategy === "bidi" ? "direct-tools" : "agent-consult",
+      brain: resolveMeetingRealtimeTalkBrain(resolved.provider, strategy),
       provider: resolved.provider.id,
     },
     talkPayloads: {
@@ -445,9 +448,7 @@ export async function startMeetingRealtimeEngine(params: {
           args: { question, responseStyle },
           transcript: harness.transcript,
         }),
-      deliver: (text) => {
-        bridge?.sendUserMessage(buildMeetingSpeakExactUserMessage(text));
-      },
+      deliver: (text) => bridge?.sendUserMessage(buildMeetingSpeakExactUserMessage(text)),
     },
   });
   harness.emit({
@@ -456,11 +457,7 @@ export async function startMeetingRealtimeEngine(params: {
       ? { ...meetingTalkPayload, nodeId: params.talkContext.nodeId }
       : meetingTalkPayload,
   });
-  params.transport.onFatal(() => {
-    stopAfterFailure("audio transport");
-  });
-  // onFatal replays a pre-registration failure synchronously; abort before creating a
-  // voice bridge that the already-completed stop() could never close.
+  params.transport.onFatal(() => stopAfterFailure("audio transport"));
   if (stopped) {
     throw new Error(
       `${params.platform.displayName} audio transport failed before realtime provider setup`,
@@ -486,13 +483,14 @@ export async function startMeetingRealtimeEngine(params: {
       provider: resolved.provider,
       cfg: params.fullConfig,
       providerConfig: resolved.providerConfig,
+      ...agentSession,
       audioFormat: resolveMeetingRealtimeAudioFormat(params.config.chrome.audioFormat),
       instructions: params.config.realtime.instructions,
       initialGreetingInstructions: params.config.realtime.introMessage,
-      autoRespondToAudio: strategy === "bidi",
+      autoRespondToAudio: providerHandlesAgentTurns || strategy === "bidi",
       triggerGreetingOnReady: false,
       markStrategy: "ack-immediately",
-      tools: strategy === "bidi" ? params.tools : [],
+      tools: !providerHandlesAgentTurns && strategy === "bidi" ? params.tools : [],
       audioSink: {
         isOpen: () => !stopped,
         sendAudio: (audio) => {
@@ -548,7 +546,7 @@ export async function startMeetingRealtimeEngine(params: {
               text,
             ),
           );
-          if (role === "user" && strategy === "agent") {
+          if (role === "user" && strategy === "agent" && !providerHandlesAgentTurns) {
             if (harness.isLikelyAssistantEchoTranscript(text)) {
               params.logger.info(
                 formatMeetingTranscriptSummaryLog(
@@ -560,7 +558,7 @@ export async function startMeetingRealtimeEngine(params: {
               return;
             }
           }
-          if (role === "user" && strategy === "agent") {
+          if (role === "user" && strategy === "agent" && !providerHandlesAgentTurns) {
             harness.talkback?.enqueue(text);
           }
         }

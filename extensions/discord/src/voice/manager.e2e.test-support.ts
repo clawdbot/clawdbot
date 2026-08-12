@@ -44,6 +44,7 @@ export type TestRealtimeSessionEntry = {
 };
 
 export type TestRealtimeBridgeParams = {
+  agentId?: string;
   audioSink: { sendAudio: (audio: Buffer) => void };
   autoRespondToAudio?: boolean;
   cfg?: unknown;
@@ -57,7 +58,10 @@ export type TestRealtimeBridgeParams = {
     session: unknown,
   ) => Promise<void> | void;
   onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+  senderIsOwner?: boolean;
+  sessionKey?: string;
   tools?: Array<{ name: string }>;
+  toolsAllow?: string[];
 };
 
 export function requireRecord(value: unknown, label: string): Record<string, unknown> {

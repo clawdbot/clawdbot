@@ -19,6 +19,7 @@
   "contracts": {
     "mediaUnderstandingProviders": ["codex"],
     "migrationProviders": ["codex"],
+    "realtimeVoiceProviders": ["codex"],
     "tools": [
       "codex_threads",
       "codex_plugins",

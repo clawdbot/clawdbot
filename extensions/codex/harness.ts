@@ -230,6 +230,15 @@ export function createCodexAppServerAgentHarness(options: {
     runAttempt: async (params) => {
       // Keep app-server runtime code behind lazy imports so plugin discovery and
       // cold provider catalog reads do not pull in the whole Codex runtime.
+      if (params.realtimeVoice) {
+        const { runCodexAppServerRealtimeVoiceSession } =
+          await import("./src/app-server/realtime-voice-attempt.js");
+        return runCodexAppServerRealtimeVoiceSession(params, {
+          bindingStore: options.bindingStore,
+          pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+          nativeHookRelay: { enabled: true },
+        });
+      }
       const { runCodexAppServerAttempt } = await import("./src/app-server/run-attempt.js");
       return runCodexAppServerAttempt(params, {
         bindingStore: options.bindingStore,

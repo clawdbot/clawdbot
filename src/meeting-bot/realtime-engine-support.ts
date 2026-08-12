@@ -1,6 +1,7 @@
 import { normalizeOptionalString as readLogString } from "@openclaw/normalization-core/string-coerce";
+import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { RuntimeLogger } from "../plugins/runtime/types.js";
+import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 import type {
   RealtimeTranscriptionProviderPlugin,
   RealtimeVoiceProviderPlugin,
@@ -10,6 +11,12 @@ import {
   listRealtimeTranscriptionProviders,
 } from "../realtime-transcription/provider-registry.js";
 import type { RealtimeTranscriptionProviderConfig } from "../realtime-transcription/provider-types.js";
+import { normalizeAgentId } from "../routing/session-key.js";
+import { ensureRealtimeVoiceAgentSessionEntry } from "../talk/agent-consult-runtime.js";
+import {
+  resolveRealtimeVoiceAgentConsultToolsAllow,
+  type RealtimeVoiceAgentConsultToolPolicy,
+} from "../talk/agent-consult-tool.js";
 import { resolveConfiguredRealtimeVoiceProvider } from "../talk/provider-resolver.js";
 import type {
   RealtimeVoiceBridgeEvent,
@@ -17,6 +24,7 @@ import type {
   RealtimeVoiceResponseOutcome,
 } from "../talk/provider-types.js";
 import type { RealtimeVoiceSessionHarness } from "../talk/realtime-session-harness.js";
+import type { TalkBrain } from "../talk/talk-events.js";
 import { truncateUtf16Safe } from "../utils.js";
 import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
 import type { createMeetingRealtimeOutputOwner } from "./realtime-output-owner.js";
@@ -58,6 +66,85 @@ type ResolvedRealtimeTranscriptionProvider = {
   provider: RealtimeTranscriptionProviderPlugin;
   providerConfig: RealtimeTranscriptionProviderConfig;
 };
+
+export function resolveMeetingAgentSessionContext(params: {
+  fullConfig: OpenClawConfig;
+  configuredAgentId?: string;
+  surfaceId: string;
+  meetingSessionId: string;
+  requesterSessionKey?: string;
+}): { agentId: string; sessionKey: string; spawnedBy: string } {
+  const agentId = params.configuredAgentId
+    ? normalizeAgentId(params.configuredAgentId)
+    : resolveDefaultAgentId(params.fullConfig);
+  return {
+    agentId,
+    sessionKey: `agent:${agentId}:subagent:${params.surfaceId}:${params.meetingSessionId}`,
+    spawnedBy: readLogString(params.requesterSessionKey) ?? `agent:${agentId}:main`,
+  };
+}
+
+export async function prepareMeetingRealtimeAgentSession(
+  params: {
+    fullConfig: OpenClawConfig;
+    config: {
+      realtime: { agentId?: string; toolPolicy?: RealtimeVoiceAgentConsultToolPolicy };
+    };
+    runtime: PluginRuntime;
+    logger: RuntimeLogger;
+    platform: { sessionIdPrefix: string };
+    meetingSessionId: string;
+    requesterSessionKey?: string;
+  },
+  enabled: boolean,
+): Promise<{
+  agentId?: string;
+  sessionKey?: string;
+  toolsAllow?: string[];
+}> {
+  const toolPolicy = params.config.realtime.toolPolicy ?? "safe-read-only";
+  const authorization = {
+    toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(toolPolicy),
+  };
+  if (!enabled) {
+    return {
+      agentId: params.config.realtime.agentId,
+      sessionKey: params.requesterSessionKey,
+      ...authorization,
+    };
+  }
+  const context = resolveMeetingAgentSessionContext({
+    fullConfig: params.fullConfig,
+    configuredAgentId: params.config.realtime.agentId,
+    surfaceId: params.platform.sessionIdPrefix,
+    meetingSessionId: params.meetingSessionId,
+    requesterSessionKey: params.requesterSessionKey,
+  });
+  const storePath = params.runtime.agent.session.resolveStorePath(
+    params.fullConfig.session?.store,
+    {
+      agentId: context.agentId,
+    },
+  );
+  await ensureRealtimeVoiceAgentSessionEntry({
+    cfg: params.fullConfig,
+    agentRuntime: params.runtime.agent,
+    logger: params.logger,
+    ...context,
+    contextMode: "fork",
+    storePath,
+  });
+  return { agentId: context.agentId, sessionKey: context.sessionKey, ...authorization };
+}
+
+export function resolveMeetingRealtimeTalkBrain(
+  provider: RealtimeVoiceProviderPlugin,
+  strategy: string,
+): TalkBrain {
+  return (
+    provider.capabilities?.brains?.[0] ?? (strategy === "bidi" ? "direct-tools" : "agent-consult")
+  );
+}
 
 export function meetingOutputBytesPerMs(audioFormat: MeetingRealtimeAudioFormat): number {
   return audioFormat === "g711-ulaw-8khz" ? 8 : 48;

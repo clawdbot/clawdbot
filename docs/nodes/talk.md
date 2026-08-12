@@ -154,6 +154,14 @@ relay clients. Backend WebSocket paths keep the Platform key on the Gateway;
 OpenClaw converts telephony G.711 u-law audio to and from GPT-Live's 24 kHz PCM
 contract.
 
+For Codex-native realtime voice, use `realtime.brain: "codex-realtime"`,
+`realtime.provider: "codex"`, and `realtime.transport: "gateway-relay"`. This continues the
+bound OpenClaw session inside Codex realtime V3 instead of proxying turns through
+`openclaw_agent_consult`; selecting provider `codex` with another or unset brain is rejected.
+Subscription OAuth requires
+`plugins.entries.codex.config.appServer.transport: "stdio"`; Codex app-server negotiates the
+WebRTC media transport internally. See the [Codex plugin guide](/plugins/codex-harness).
+
 For GA `gpt-realtime-2.1`, `gpt-realtime-2.1-mini`, and `gpt-realtime-2`
 browser sessions, Platform credentials remain preferred in this order: the
 configured realtime API key, an `openai` API-key profile, then
@@ -186,12 +194,12 @@ to waitlist-enabled Platform access.
 | `providers.<id>.outputFormat`            | `pcm_44100` macOS/iOS, `pcm_24000` Android | Set `mp3_*` to force MP3 streaming.                                                                                                                                                                                                                                                     |
 | `consultThinkingLevel`                   | unset                                      | Thinking level override for the agent run behind realtime `openclaw_agent_consult` calls.                                                                                                                                                                                               |
 | `consultFastMode`                        | unset                                      | Fast-mode override for realtime `openclaw_agent_consult` calls.                                                                                                                                                                                                                         |
-| `realtime.provider`                      | -                                          | `openai` for WebRTC, `google` for provider WebSocket, or a bridge-only provider through Gateway relay.                                                                                                                                                                                  |
+| `realtime.provider`                      | -                                          | `openai` for WebRTC, `google` for provider WebSocket, `codex` for the native Codex realtime brain (and therefore requires `realtime.brain: "codex-realtime"`), or another bridge-only provider through Gateway relay.                                                                   |
 | `realtime.providers.<id>`                | -                                          | Provider-owned realtime config. Browsers receive only ephemeral/constrained session credentials, never a standard API key.                                                                                                                                                              |
 | `realtime.providers.openai.speakerVoice` | `alloy` for GA; `marin` for GPT-Live       | Built-in OpenAI Realtime voice id (the older `voice` key still works but is deprecated). Current `gpt-realtime-2.1` and GPT-Live voices: `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `marin`, `sage`, `shimmer`, `verse`; `marin` and `cedar` are recommended for best quality. |
 | `realtime.model`                         | provider default                           | Realtime voice model. Overrides `realtime.providers.<id>.model` when both are set — the same precedence `talk.client.create` applies at session time.                                                                                                                                   |
 | `realtime.transport`                     | -                                          | `webrtc`: client-owned OpenAI WebRTC on iOS and in the browser. `provider-websocket`: browser-owned, stays on Gateway relay on iOS. `gateway-relay`: keeps provider audio on the Gateway; Android uses realtime only with this transport.                                               |
-| `realtime.brain`                         | -                                          | `agent-consult` routes realtime tool calls through Gateway policy; `direct-tools` is legacy direct-tool compatibility; `none` is for transcription/external orchestration.                                                                                                              |
+| `realtime.brain`                         | -                                          | `agent-consult` routes through the consult proxy; `codex-realtime` runs the bound session's Codex app-server brain natively and requires provider `codex` or unset; `direct-tools` is legacy direct-tool compatibility; `none` is for transcription/external orchestration.             |
 | `realtime.consultRouting`                | -                                          | `provider-direct` preserves the provider's direct reply when it skips `openclaw_agent_consult`; `force-agent-consult` routes finalized user transcripts through OpenClaw instead.                                                                                                       |
 | `realtime.instructions`                  | -                                          | Appends provider-facing system instructions to OpenClaw's built-in realtime prompt.                                                                                                                                                                                                     |
 

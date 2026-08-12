@@ -2,6 +2,45 @@
 
 Official OpenClaw plugin for OpenAI Codex app-server integration. It exposes the Codex-managed GPT model catalog, the Codex runtime surfaces used by OpenClaw agents, and opt-in supervision of native Codex sessions.
 
+## Native realtime voice
+
+The `codex` realtime voice provider runs the bound OpenClaw session through Codex's native
+realtime V3 loop, including Codex-native multi-turn tool use. Shared Talk selects it with
+`talk.realtime.brain: "codex-realtime"` and `talk.realtime.provider: "codex"` (the provider may
+be omitted when Codex is the selected default; selecting the `codex` provider requires this
+brain). Discord Voice, Voice Call, and the shared
+Google Meet, Zoom, and Teams meeting engines use the same provider capability automatically;
+they keep their existing admission and session-scope rules.
+
+Subscription OAuth requires the logged-in Codex app-server account and the local stdio control
+transport:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: { appServer: { transport: "stdio" } },
+      },
+    },
+  },
+  talk: {
+    realtime: {
+      brain: "codex-realtime",
+      provider: "codex",
+      providers: { codex: { voice: "arbor" } },
+      transport: "gateway-relay",
+    },
+  },
+}
+```
+
+OpenClaw starts `thread/realtime/start` with version V3; Codex app-server then negotiates the
+media WebRTC session internally. Other app-server control transports are not supported or
+tested for `codex-realtime`. API-key and V1/V2 realtime configurations are rejected rather than
+silently changing the subscription-backed path.
+
 Install from OpenClaw:
 
 ```bash

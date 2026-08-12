@@ -2071,6 +2071,7 @@
     "ipaddr.js": "2.4.0",
     "jscpd": "5.0.12",
     "jsdom": "29.1.1",
+    "libopus-wasm": "0.2.0",
     "lit": "3.3.3",
     "lit-analyzer": "2.0.3",
     "markdown-it": "14.3.0",
@@ -2090,7 +2091,8 @@
     "tsx": "4.23.1",
     "unrun": "0.3.1",
     "vite": "8.1.5",
-    "vitest": "4.1.10"
+    "vitest": "4.1.10",
+    "werift": "0.24.1"
   },
   "optionalDependencies": {
     "sqlite-vec": "0.1.9"

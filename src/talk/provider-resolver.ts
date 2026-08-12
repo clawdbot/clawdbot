@@ -16,6 +16,7 @@ import {
 } from "./provider-internal.js";
 import { getRealtimeVoiceProvider, listRealtimeVoiceProviders } from "./provider-registry.js";
 import type { RealtimeVoiceProviderConfig } from "./provider-types.js";
+import type { TalkBrain } from "./talk-events.js";
 
 /** Resolved realtime voice provider plus provider-normalized config. */
 export type ResolvedRealtimeVoiceProvider = {
@@ -26,6 +27,8 @@ export type ResolvedRealtimeVoiceProvider = {
 /** Inputs for resolving a configured or auto-selected realtime voice provider. */
 export type ResolveConfiguredRealtimeVoiceProviderParams = {
   configuredProviderId?: string;
+  /** Brain that an automatically selected provider must support. */
+  brain?: TalkBrain;
   providerConfigs?: Record<string, Record<string, unknown> | undefined>;
   /** Last-mile overrides from a session/client request. */
   providerConfigOverrides?: Record<string, unknown>;
@@ -121,14 +124,19 @@ export function resolveConfiguredRealtimeVoiceProvider(
         rawConfigWithOverrides
       );
     },
-    isProviderConfigured: ({ provider, cfg, providerConfig }) =>
-      isRealtimeVoiceProviderConfigured({
+    isProviderConfigured: ({ provider, cfg, providerConfig }) => {
+      const supportedBrains = provider.capabilities?.brains;
+      if (params.brain && supportedBrains && !supportedBrains.includes(params.brain)) {
+        return false;
+      }
+      return isRealtimeVoiceProviderConfigured({
         provider,
         cfg,
         providerConfig,
         agentId: params.agentId,
         surface: params.surface,
-      }),
+      });
+    },
   });
 
   if (!resolution.ok && resolution.code === "missing-configured-provider") {

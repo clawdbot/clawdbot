@@ -231,6 +231,10 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       noRegisteredProviderMessage: "No configured realtime voice provider registered",
     });
     this.realtimeProviderId = resolved.provider.id;
+    const providerHandlesAgentTurns = resolved.provider.capabilities?.handlesAgentTurns === true;
+    this.harness.talk.context.brain = providerHandlesAgentTurns
+      ? (resolved.provider.capabilities?.brains?.[0] ?? "agent-consult")
+      : "agent-consult";
     const isAgentProxy = isDiscordAgentProxyVoiceMode(this.params.mode);
     const sessionPolicy = resolveRealtimeVoiceSessionPolicy({
       isAgentProxy,
@@ -243,20 +247,16 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       cfg: this.params.cfg,
       agentId: this.params.entry.route.agentId,
     });
-    const {
-      toolPolicy,
-      consultToolsAllow,
-      consultPolicy,
-      wakeNamePolicy,
-      wakeNames,
-      autoRespondToAudio,
-    } = sessionPolicy;
+    const { toolPolicy, consultToolsAllow, consultPolicy, wakeNamePolicy, wakeNames } =
+      sessionPolicy;
     this.consultToolPolicy = toolPolicy;
     this.consultToolsAllow = consultToolsAllow;
     this.consultPolicy = consultPolicy;
     this.wakeNamePolicy = wakeNamePolicy;
     this.wakeNames = wakeNames;
-    const usesRealtimeAgentHandoff = this.params.mode === "bidi" || toolPolicy !== "none";
+    const usesRealtimeAgentHandoff =
+      !providerHandlesAgentTurns && (this.params.mode === "bidi" || toolPolicy !== "none");
+    const autoRespondToAudio = providerHandlesAgentTurns || sessionPolicy.autoRespondToAudio;
     const providerInterruptResponseOnInputAudio =
       this.realtimeConfig?.providers?.[resolved.provider.id]?.interruptResponseOnInputAudio;
     const interruptResponseOnInputAudio =
@@ -269,21 +269,28 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     const minBargeInAudioEndMs = resolveRealtimeVoiceMinBargeInAudioEndMs(
       this.realtimeConfig?.minBargeInAudioEndMs,
     );
-    const instructions = buildRealtimeVoiceSessionInstructions({
-      base:
-        this.realtimeConfig?.instructions ??
-        [
-          "You are OpenClaw's Discord voice interface.",
-          "Keep spoken replies concise, natural, and suitable for a live Discord voice channel.",
-        ].join("\n"),
-      isAgentProxy,
-      bootstrapContextInstructions: this.params.bootstrapContextInstructions,
-      toolPolicy,
-      consultPolicy,
-    });
+    const instructions = providerHandlesAgentTurns
+      ? [this.realtimeConfig?.instructions, this.params.bootstrapContextInstructions]
+          .filter((value): value is string => Boolean(value?.trim()))
+          .join("\n\n")
+      : buildRealtimeVoiceSessionInstructions({
+          base:
+            this.realtimeConfig?.instructions ??
+            [
+              "You are OpenClaw's Discord voice interface.",
+              "Keep spoken replies concise, natural, and suitable for a live Discord voice channel.",
+            ].join("\n"),
+          isAgentProxy,
+          bootstrapContextInstructions: this.params.bootstrapContextInstructions,
+          toolPolicy,
+          consultPolicy,
+        });
     this.bridge = this.harness.createBridge({
       provider: resolved.provider,
       cfg: this.params.cfg,
+      agentId: this.params.entry.route.agentId,
+      sessionKey: this.params.entry.route.sessionKey,
+      toolsAllow: this.consultToolsAllow,
       providerConfig: resolved.providerConfig,
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
       instructions,
@@ -310,6 +317,9 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
           logger.info(
             `discord voice: realtime ${role} transcript (${text.length} chars): ${formatVoiceLogPreview(text)}`,
           );
+        }
+        if (providerHandlesAgentTurns) {
+          return;
         }
         if (isFinal && role === "assistant") {
           this.playback.suppressDuplicateControlSpeech(text);

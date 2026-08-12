@@ -57,6 +57,11 @@ export type RealtimeVoiceBridgeSession = {
 export type RealtimeVoiceBridgeSessionParams = {
   provider: RealtimeVoiceProviderPlugin;
   cfg?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+  senderId?: string;
+  senderIsOwner?: boolean;
+  toolsAllow?: string[];
   providerConfig: RealtimeVoiceProviderConfig;
   audioFormat?: RealtimeVoiceAudioFormat;
   audioSink: RealtimeVoiceAudioSink;
@@ -94,6 +99,7 @@ export function createRealtimeVoiceBridgeSession(
   let phase: RealtimeVoiceSessionPhase = "admitting";
   let terminalBeforeBridgeAdoption = false;
   let closeReported = false;
+  let greetingTriggered = false;
   const isAdmitting = () => phase === "admitting";
   const requireBridge = () => {
     if (!bridgeRef.current) {
@@ -164,6 +170,11 @@ export function createRealtimeVoiceBridgeSession(
   };
   const bridge = params.provider.createBridge({
     cfg: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    senderId: params.senderId,
+    senderIsOwner: params.senderIsOwner,
+    toolsAllow: params.toolsAllow,
     providerConfig: params.providerConfig,
     audioFormat: params.audioFormat,
     instructions: params.instructions,
@@ -215,7 +226,8 @@ export function createRealtimeVoiceBridgeSession(
       if (!bridgeRef.current || !isAdmitting()) {
         return;
       }
-      if (params.triggerGreetingOnReady) {
+      if (params.triggerGreetingOnReady && !greetingTriggered) {
+        greetingTriggered = true;
         bridgeRef.current.triggerGreeting?.(params.initialGreetingInstructions);
       }
       params.onReady?.(session);

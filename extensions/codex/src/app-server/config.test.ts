@@ -9,6 +9,7 @@ import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexAppServerStartOptionsKey,
   codexSandboxPolicyForTurn,
+  enableCodexRealtimeConversation,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexAppServerStartOptionsForAgent,
@@ -21,6 +22,7 @@ import {
   shouldAutoApproveCodexAppServerApprovals,
   withMcpElicitationsApprovalPolicy,
 } from "./config.js";
+import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
 type RuntimeOptionsParams = NonNullable<Parameters<typeof resolveCodexAppServerRuntimeOptions>[0]>;
 
@@ -72,6 +74,41 @@ function expectRuntimePolicy(
 }
 
 describe("Codex app-server config", () => {
+  it("enables subscription realtime once on an isolated stdio spawn", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: { appServer: { clearEnv: ["KEEP_CLEAR"] } },
+    });
+    const enabled = enableCodexRealtimeConversation(runtime);
+
+    expect(enabled.start.args).toEqual([
+      ...runtime.start.args,
+      "--enable",
+      "realtime_conversation",
+    ]);
+    expect(enabled.start.clearEnv).toEqual(["KEEP_CLEAR", "CODEX_API_KEY", "OPENAI_API_KEY"]);
+    const spawnEnv = resolveCodexAppServerSpawnEnv(enabled.start, {
+      KEEP: "1",
+      CODEX_API_KEY: "ambient-codex",
+      OPENAI_API_KEY: "ambient-openai",
+    });
+    expect(spawnEnv).toMatchObject({ KEEP: "1" });
+    expect(spawnEnv).not.toHaveProperty("CODEX_API_KEY");
+    expect(spawnEnv).not.toHaveProperty("OPENAI_API_KEY");
+    expect(resolveCodexAppServerSpawnEnv(enabled.start)).not.toHaveProperty("CODEX_API_KEY");
+    expect(resolveCodexAppServerSpawnEnv(enabled.start)).not.toHaveProperty("OPENAI_API_KEY");
+    expect(enableCodexRealtimeConversation(enabled)).toBe(enabled);
+  });
+
+  it("rejects realtime on non-stdio app-server control transports", () => {
+    expect(() =>
+      enableCodexRealtimeConversation(
+        resolveRuntimeForTest({
+          pluginConfig: { appServer: { transport: "websocket", url: "ws://127.0.0.1:1234" } },
+        }),
+      ),
+    ).toThrow("Codex realtime requires appServer.transport=stdio");
+  });
+
   it("only auto-approves app-server approvals for full yolo runtime policy", () => {
     expect(
       shouldAutoApproveCodexAppServerApprovals({

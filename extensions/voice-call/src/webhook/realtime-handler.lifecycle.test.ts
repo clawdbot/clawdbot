@@ -57,6 +57,7 @@ function createBridge(
 
 function createCarrierLifecycleHarness(
   createBridgeForCall: RealtimeVoiceProviderPlugin["createBridge"],
+  options: { handlesAgentTurns?: boolean; initialMessage?: string } = {},
 ) {
   const call: CallRecord = {
     callId: "call-startup",
@@ -66,9 +67,13 @@ function createCarrierLifecycleHarness(
     state: "ringing",
     from: "+15550001111",
     to: "+15550002222",
+    ...(options.handlesAgentTurns
+      ? { agentId: "calls", sessionKey: "agent:calls:voice:inbound:+15550001111" }
+      : {}),
     startedAt: Date.now(),
     transcript: [],
     processedEventIds: [],
+    ...(options.initialMessage ? { metadata: { initialMessage: options.initialMessage } } : {}),
   };
   const processEvent = vi.fn();
   const hangupCall = vi.fn(async () => {});
@@ -82,11 +87,19 @@ function createCarrierLifecycleHarness(
     {
       id: "openai",
       label: "OpenAI",
+      capabilities: options.handlesAgentTurns
+        ? ({
+            brains: ["codex-realtime"],
+            handlesAgentTurns: true,
+          } as RealtimeVoiceProviderPlugin["capabilities"])
+        : undefined,
       isConfigured: () => true,
       createBridge: createBridgeForCall,
     },
     { apiKey: "test-key" },
     "/voice/webhook",
+    undefined,
+    () => "Call openclaw_agent_consult before answering.",
   );
   return { call, handler, hangupCall, processEvent };
 }
@@ -103,6 +116,46 @@ async function connectCarrierStream(handler: RealtimeCallHandler) {
 }
 
 describe("RealtimeCallHandler lifecycle", () => {
+  it("forwards an admitted call's existing agent and session to native agent-turn providers", async () => {
+    const triggerGreeting = vi.fn();
+    const createBridgeForCall = vi.fn<RealtimeVoiceProviderPlugin["createBridge"]>((request) =>
+      createBridge(vi.fn(), {
+        connect: async () => request.onReady?.(),
+        triggerGreeting,
+      }),
+    );
+    const { call, handler } = createCarrierLifecycleHarness(createBridgeForCall, {
+      handlesAgentTurns: true,
+      initialMessage: "Hello there",
+    });
+    const { server, ws } = await connectCarrierStream(handler);
+
+    try {
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          start: { streamSid: "MZ-native", callSid: call.providerCallId },
+        }),
+      );
+      await vi.waitFor(() => expect(createBridgeForCall).toHaveBeenCalledOnce());
+      expect(createBridgeForCall.mock.calls[0]?.[0]).toMatchObject({
+        agentId: "calls",
+        sessionKey: "agent:calls:voice:inbound:+15550001111",
+        instructions: "Be helpful.",
+        tools: [],
+      });
+      expect(triggerGreeting).toHaveBeenCalledWith(
+        'Start the call by greeting the caller naturally. Include this greeting in your first spoken reply: "Hello there"',
+      );
+    } finally {
+      if (ws.readyState !== WebSocket.CLOSED) {
+        ws.terminate();
+      }
+      await handler.close();
+      await server.close();
+    }
+  });
+
   it.each([
     { closeOutcome: undefined, closeReason: "Failed to connect" },
     { closeOutcome: "completed" as const, closeReason: "Failed to connect" },
