@@ -168,13 +168,7 @@ function sourceObservationResult(
 }
 
 function sourceObservationEvidence(evidence: WorkboardLink) {
-  const fallback = {
-    ...(evidence.consecutiveSuccessfulFullScanMisses === undefined
-      ? {}
-      : { consecutiveSuccessfulFullScanMisses: evidence.consecutiveSuccessfulFullScanMisses }),
-    ...(evidence.staleAt === undefined ? {} : { staleAt: evidence.staleAt }),
-    ...(evidence.staleState === undefined ? {} : { staleState: evidence.staleState }),
-  };
+  const fallback = rawSourceObservationEvidence(evidence);
   if (!evidence.lastSourceObservationEvidenceJson) return fallback;
   try {
     const value = JSON.parse(evidence.lastSourceObservationEvidenceJson) as Record<string, unknown>;
@@ -188,6 +182,16 @@ function sourceObservationEvidence(evidence: WorkboardLink) {
   } catch {
     return fallback;
   }
+}
+
+function rawSourceObservationEvidence(evidence: WorkboardLink) {
+  return {
+    ...(evidence.consecutiveSuccessfulFullScanMisses === undefined
+      ? {}
+      : { consecutiveSuccessfulFullScanMisses: evidence.consecutiveSuccessfulFullScanMisses }),
+    ...(evidence.staleAt === undefined ? {} : { staleAt: evidence.staleAt }),
+    ...(evidence.staleState === undefined ? {} : { staleState: evidence.staleState }),
+  };
 }
 
 // Capability layers split review boundaries only; the core still owns persistence and mutation order.
@@ -387,7 +391,9 @@ export class WorkboardStore extends WorkboardNotificationStore {
         lastSourceObservationId: observation.observationId,
         lastSourceObservationRequestJson: requestJson,
         lastSourceObservationRevision: acknowledgementRevision,
-        lastSourceObservationEvidenceJson: JSON.stringify(sourceObservationEvidence(nextEvidence)),
+        lastSourceObservationEvidenceJson: JSON.stringify(
+          rawSourceObservationEvidence(nextEvidence),
+        ),
       };
       const nextLinks = [...links];
       nextLinks[index] = next;

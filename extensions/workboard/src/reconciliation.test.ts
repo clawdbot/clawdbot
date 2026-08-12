@@ -277,6 +277,77 @@ describe("WorkboardReconciler", () => {
     ).rejects.toThrow("observationId conflicts");
   });
 
+  it("acknowledges each new evidence state instead of carrying a prior acknowledgement snapshot", async () => {
+    const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
+    const created = await reconciler.apply({
+      sourceUrl: "https://example.test/runs/evidence",
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      idempotencyKey: "evidence",
+      sourceUpdatedAt: 1,
+      card: { title: "Fresh evidence" },
+    });
+    const base = {
+      cardId: created.card.id,
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      sourceUrl: "https://example.test/runs/evidence",
+      idempotencyKey: "evidence",
+      staleAfterMisses: 2,
+    };
+    const missingOne = await reconciler.observeSource({
+      ...base,
+      observationId: "evidence-1",
+      sourceState: "missing-after-successful-full-scan",
+      observedAt: 2,
+    });
+    const missingTwo = await reconciler.observeSource({
+      ...base,
+      observationId: "evidence-2",
+      sourceState: "missing-after-successful-full-scan",
+      observedAt: 3,
+      expectedRevision: missingOne.revision,
+    });
+    const present = await reconciler.observeSource({
+      ...base,
+      observationId: "evidence-3",
+      sourceState: "present",
+      observedAt: 4,
+      expectedRevision: missingTwo.revision,
+    });
+    expect(missingOne.evidence).toEqual({
+      consecutiveSuccessfulFullScanMisses: 1,
+      lastSourceObservationId: "evidence-1",
+    });
+    expect(missingTwo.evidence).toEqual({
+      consecutiveSuccessfulFullScanMisses: 2,
+      staleAt: 3,
+      staleState: "stale",
+      lastSourceObservationId: "evidence-2",
+    });
+    expect(present.evidence).toEqual({
+      consecutiveSuccessfulFullScanMisses: 0,
+      lastSourceObservationId: "evidence-3",
+    });
+    const persisted = present.card.metadata?.links?.find((link) => link.id.startsWith("external:"));
+    expect(persisted).toMatchObject({
+      consecutiveSuccessfulFullScanMisses: 0,
+      lastSourceObservationId: "evidence-3",
+    });
+    expect(JSON.parse(persisted?.lastSourceObservationEvidenceJson ?? "{}")).toEqual({
+      consecutiveSuccessfulFullScanMisses: 0,
+    });
+    expect(
+      await reconciler.observeSource({
+        ...base,
+        observationId: "evidence-3",
+        sourceState: "present",
+        observedAt: 4,
+        expectedRevision: missingTwo.revision,
+      }),
+    ).toMatchObject({ evidence: present.evidence });
+  });
+
   it("replays the original acknowledgement after an intervening card mutation", async () => {
     const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
     const created = await reconciler.apply({
