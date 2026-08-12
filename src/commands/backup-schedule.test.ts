@@ -123,20 +123,44 @@ describe("scheduled backups", () => {
     await expect(backupDisableCommand(runtime, {})).resolves.toEqual({ removed: false });
   });
 
-  it("warns about credential material before provisioning a pushed schedule", async () => {
+  it("redacts pushed schedules by default and warns only on explicit full fidelity", async () => {
     const runtime = createTestRuntime();
-    callGatewayFromCli.mockImplementation(async (method: string) => {
-      expect(method).toBe("cron.add");
-      expect(runtime.error).toHaveBeenCalledWith(GIT_BACKUP_PUSH_CREDENTIAL_WARNING);
-      return { created: true, job: { id: "backup-job" } };
-    });
+    callGatewayFromCli.mockResolvedValue({ created: true, job: { id: "backup-job" } });
 
+    // Default pushed schedule: redacted, no credential warning.
     await backupEnableCommand(runtime, {
       repository: await pushReadyRepository(),
       push: true,
     });
+    expect(callGatewayFromCli).toHaveBeenLastCalledWith(
+      "cron.add",
+      expect.anything(),
+      expect.objectContaining({
+        payload: expect.objectContaining({ argv: expect.arrayContaining(["--exclude-secrets"]) }),
+      }),
+    );
+    expect(runtime.error).not.toHaveBeenCalled();
 
-    expect(callGatewayFromCli).toHaveBeenCalledOnce();
+    // Explicit --include-secrets keeps full fidelity and warns.
+    await backupEnableCommand(runtime, {
+      repository: await pushReadyRepository(),
+      push: true,
+      includeSecrets: true,
+    });
+    const lastSpec = callGatewayFromCli.mock.calls.at(-1)?.[2] as {
+      payload: { argv: string[] };
+    };
+    expect(lastSpec.payload.argv).not.toContain("--exclude-secrets");
+    expect(runtime.error).toHaveBeenCalledWith(GIT_BACKUP_PUSH_CREDENTIAL_WARNING);
+
+    await expect(
+      backupEnableCommand(runtime, {
+        repository: await pushReadyRepository(),
+        push: true,
+        includeSecrets: true,
+        excludeSecrets: true,
+      }),
+    ).rejects.toThrow(/not both/);
   });
 
   it("refuses a pushed schedule when the repository has no origin remote", async () => {

@@ -125,6 +125,11 @@ function registerBackupScheduleCommands(backup: Command): void {
       .option("--every <duration>", "Backup interval", "24h")
       .option("--push", "Push the current branch to origin after each backup", false)
       .option("--exclude-secrets", "Omit credential-bearing database tables", false)
+      .option(
+        "--include-secrets",
+        "Keep credential-bearing tables in pushed scheduled backups",
+        false,
+      )
       .option("--global-only", "Back up only the shared state database", false)
       .option("--agent <id>", "Back up only one agent database")
       .action(async (opts) => {

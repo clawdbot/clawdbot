@@ -185,7 +185,7 @@ Provision one Gateway-owned automation with a fixed name:
 openclaw backup enable --repository ~/Backups/openclaw-git --every 24h --push
 ```
 
-The default scope is every database. Use `--global-only` or `--agent <id>` to narrow it, and add `--exclude-secrets` for a redacted history. Re-running `backup enable` updates the existing automation instead of creating a duplicate. `openclaw backup disable` removes it; disabling an already-missing job is a successful no-op. The Gateway must be reachable because OpenClaw does not install a local fallback scheduler.
+The default scope is every database. Use `--global-only` or `--agent <id>` to narrow it, and add `--exclude-secrets` for a redacted history. Pushed schedules (`--push`) redact credential-bearing tables by default because an unattended recurring push retains them durably in remote history; pass `--include-secrets` for explicit full-fidelity remote backups (restores from redacted history need device re-pairing and provider re-authentication). `--push` also requires the repository to already have an `origin` remote. Re-running `backup enable` updates the existing automation instead of creating a duplicate. `openclaw backup disable` removes it; disabling an already-missing job is a successful no-op. The Gateway must be reachable because OpenClaw does not install a local fallback scheduler.
 
 ## Recorded runs and freshness
 

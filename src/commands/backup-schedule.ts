@@ -15,9 +15,26 @@ type BackupScheduleOptions = GatewayRpcOpts & {
   every?: string;
   push?: boolean;
   excludeSecrets?: boolean;
+  includeSecrets?: boolean;
   globalOnly?: boolean;
   agent?: string;
 };
+
+/**
+ * Unattended pushed schedules make credential retention durable in remote
+ * history, so they redact by default; --include-secrets is the explicit
+ * full-fidelity override. Local (non-push) schedules keep full fidelity for
+ * complete restores.
+ */
+function resolveScheduledRedaction(options: BackupScheduleOptions): boolean {
+  if (options.excludeSecrets && options.includeSecrets) {
+    throw new Error("Use either --exclude-secrets or --include-secrets, not both.");
+  }
+  if (!options.push) {
+    return options.excludeSecrets === true;
+  }
+  return options.includeSecrets !== true;
+}
 
 function resolveRepository(value: string | undefined): string {
   const trimmed = value?.trim();
@@ -27,7 +44,11 @@ function resolveRepository(value: string | undefined): string {
   return path.resolve(resolveUserPath(trimmed));
 }
 
-function buildScheduledArgv(options: BackupScheduleOptions, repositoryPath: string): string[] {
+function buildScheduledArgv(
+  options: BackupScheduleOptions,
+  repositoryPath: string,
+  redactSecrets: boolean,
+): string[] {
   const agent = options.agent?.trim();
   if (options.globalOnly && agent) {
     throw new Error("Use either --global-only or --agent <id>, not both.");
@@ -45,7 +66,7 @@ function buildScheduledArgv(options: BackupScheduleOptions, repositoryPath: stri
         ? ["--agent", normalizeAgentId(agent)]
         : ["--all"]),
     ...(options.push ? ["--push"] : []),
-    ...(options.excludeSecrets ? ["--exclude-secrets"] : []),
+    ...(redactSecrets ? ["--exclude-secrets"] : []),
   ];
 }
 
@@ -69,6 +90,7 @@ export async function backupEnableCommand(
   if (!Number.isSafeInteger(everyMs) || everyMs <= 0) {
     throw new Error("--every must be a positive duration such as 6h or 24h.");
   }
+  const redactSecrets = resolveScheduledRedaction(options);
   const spec = {
     declarationKey: BACKUP_CRON_JOB_NAME,
     name: BACKUP_CRON_JOB_NAME,
@@ -76,7 +98,10 @@ export async function backupEnableCommand(
     schedule: { kind: "every" as const, everyMs },
     sessionTarget: "isolated" as const,
     wakeMode: "now" as const,
-    payload: { kind: "command" as const, argv: buildScheduledArgv(options, repositoryPath) },
+    payload: {
+      kind: "command" as const,
+      argv: buildScheduledArgv(options, repositoryPath, redactSecrets),
+    },
     delivery: { mode: "none" as const },
   };
   if (options.push) {
@@ -88,7 +113,7 @@ export async function backupEnableCommand(
         `--push requires an origin remote. Run: openclaw backup git init --repository ${shortenHomePath(repositoryPath)} --remote <url>`,
       );
     }
-    if (!options.excludeSecrets) {
+    if (!redactSecrets) {
       runtime.error(GIT_BACKUP_PUSH_CREDENTIAL_WARNING);
     }
   }

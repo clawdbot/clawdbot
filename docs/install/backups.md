@@ -90,6 +90,14 @@ openclaw backup enable --repository ~/Backups/openclaw-git --every 24h --push
 configured, so a fresh install cannot silently create a schedule whose pushes
 always fail.
 
+Pushed schedules redact credential-bearing tables by default: an unattended
+recurring push would otherwise retain credentials durably in remote Git
+history. Pass `--include-secrets` to schedule full-fidelity remote backups
+when you accept that tradeoff and the remote is private; restores from
+redacted history require re-pairing devices and re-authenticating providers
+afterward. Local (non-push) schedules keep full fidelity so restores are
+complete.
+
 Use `--global-only` or `--agent <id>` to narrow the scope. Add
 `--exclude-secrets` for a redacted Git history. Re-running the command updates
 the fixed scheduled job instead of creating another one. Disable it with:
