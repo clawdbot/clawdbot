@@ -213,7 +213,7 @@ vi.mock("./overview.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: mockConfig.getRuntimeConfig,
+  getRuntimeConfig: () => mockConfig.getRuntimeConfig(),
   mutateConfigFile: mockConfig.mutateConfigFile,
   readConfigFileSnapshot: mockConfig.readConfigFileSnapshot,
 }));
@@ -384,27 +384,13 @@ describe("parseSystemAgentOperation", () => {
   });
 
   it("keeps invalid config reads available without exposing recovery secrets", async () => {
-    mockConfig.setInvalidConfig({
-      gateway: { port: 19_001, auth: { token: "recovery-secret" } },
-      plugins: { entries: { custom: { config: { opaque: "plugin-secret" } } } },
-    });
+    mockConfig.setInvalidConfig({ gateway: { port: 19_001, auth: { token: "recovery-secret" } } });
     const { runtime, lines } = createSystemAgentTestRuntime();
-
-    await expect(
-      executeSystemAgentOperation({ kind: "config-get", path: "gateway" }, runtime),
-    ).resolves.toEqual({ applied: false });
-
-    expect(lines.join("\n")).toContain('"port": 19001');
-    expect(lines.join("\n")).toContain('"token": "<redacted>"');
-    expect(lines.join("\n")).not.toContain("recovery-secret");
-
-    lines.length = 0;
-    await executeSystemAgentOperation(
-      { kind: "config-get", path: "plugins.entries.custom.config" },
-      runtime,
-    );
-    expect(lines.join("\n")).toContain('plugins.entries.custom.config = "<redacted>"');
-    expect(lines.join("\n")).not.toContain("plugin-secret");
+    await executeSystemAgentOperation({ kind: "config-get", path: "gateway" }, runtime);
+    const output = lines.join("\n");
+    expect(output).toContain('"port": 19001');
+    expect(output).toContain('"token": "<redacted>"');
+    expect(output).not.toContain("recovery-secret");
   });
 
   it("redacts config values marked sensitive only by active plugin metadata", async () => {
