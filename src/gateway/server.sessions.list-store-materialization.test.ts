@@ -95,7 +95,7 @@ test("sessions.list discovers store targets at most once per agent", async () =>
   }
 });
 
-test("startup prewarm fills session snapshot and title caches before the first list", async () => {
+test("startup prewarm fills the session snapshot while titles remain request-driven", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:warm-cache";
   const sessionId = "warm-cache";
@@ -145,7 +145,7 @@ test("startup prewarm fills session snapshot and title caches before the first l
     await vi.advanceTimersToNextTimerAsync();
     await sessionPrewarm;
     sidecar.stop();
-    expect(titleBatchSpy).toHaveBeenCalled();
+    expect(titleBatchSpy).not.toHaveBeenCalled();
     expect(titlePageSpy).not.toHaveBeenCalled();
     titleBatchSpy.mockClear();
     titlePageSpy.mockClear();
@@ -163,7 +163,7 @@ test("startup prewarm fills session snapshot and title caches before the first l
     });
 
     expect(result.ok).toBe(true);
-    expect(titleBatchSpy).not.toHaveBeenCalled();
+    expect(titleBatchSpy).toHaveBeenCalled();
     expect(titlePageSpy).not.toHaveBeenCalled();
     const afterListEntries = sessionAccessor.listSessionEntriesReadOnly({
       agentId: "main",
