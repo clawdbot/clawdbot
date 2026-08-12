@@ -15,24 +15,26 @@ import type {
   EmbeddedRunFailureSignal,
   TraceAttempt,
 } from "../types.js";
+import { hasAttemptTerminalState } from "./attempt-terminal-evidence.js";
 import {
   markEmbeddedRunAuthProfileSuccess,
   reportEmbeddedRunSuccessfulAuthBinding,
 } from "./auth-profile-success.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import {
-  hasAttemptTerminalState,
-  hasYieldContinuationEvidence,
   resolveEmptyResponseRetryInstruction,
-  resolveIncompleteTurnPayloadText,
   resolveReasoningOnlyRetryInstruction,
+  resolveSettledToolTerminalContinuationInstruction,
+  shouldTreatEmptyAssistantReplyAsSilent,
+} from "./incomplete-turn-recovery.js";
+import {
+  hasYieldContinuationEvidence,
+  resolveIncompleteTurnPayloadText,
   resolveRunLivenessState,
   resolveSilentToolResultReplyPayload,
-  resolveSettledToolTerminalContinuationInstruction,
   shouldRetryMissingAssistantTurn,
-  shouldTreatEmptyAssistantReplyAsSilent,
   YIELD_DIAGNOSTIC_TEXT,
-} from "./incomplete-turn.js";
+} from "./incomplete-turn-resolution.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import {
   isEmbeddedRunTerminalAbort,
@@ -60,6 +62,14 @@ type TerminalRunParams = RunEmbeddedAgentParams & {
 type TerminalResolution =
   | { action: "retry" }
   | { action: "complete"; result: EmbeddedAgentRunResult };
+
+function requiresVisibleTerminalReply(runParams: TerminalRunParams): boolean {
+  return (
+    runParams.terminalReplyExpectation === "required" ||
+    (runParams.terminalReplyExpectation == null &&
+      (runParams.trigger == null || runParams.trigger === "user" || runParams.trigger === "manual"))
+  );
+}
 
 export function resolveSettledTurnFinalizationRequest(input: {
   runParams: TerminalRunParams;
@@ -129,12 +139,7 @@ export function resolveSettledTurnFinalizationRequest(input: {
     modelId: input.activeErrorContext.model,
     modelApi: input.modelApi,
     executionContract: input.executionContract,
-    allowEmptyStopContinuation:
-      input.runParams.terminalReplyExpectation === "required" ||
-      (input.runParams.terminalReplyExpectation == null &&
-        (input.runParams.trigger == null ||
-          input.runParams.trigger === "user" ||
-          input.runParams.trigger === "manual")),
+    allowEmptyStopContinuation: requiresVisibleTerminalReply(input.runParams),
     payloadCount,
     hasTerminalToolPresentation: input.hasTerminalToolPresentation,
     aborted: terminalAborted,
@@ -309,8 +314,10 @@ export async function resolveEmbeddedRunTerminal(input: {
     );
     return { action: "retry" };
   }
+  const completedEmptyFinalization = input.settledTurnFinalizationOutcome === "completed-empty";
   const incompleteTurnText =
-    emptyAssistantReplyIsSilent || input.settledTurnFinalizationOutcome === "completed-empty"
+    emptyAssistantReplyIsSilent ||
+    (completedEmptyFinalization && !requiresVisibleTerminalReply(runParams))
       ? null
       : resolveIncompleteTurnPayloadText({
           payloadCount,
@@ -334,7 +341,8 @@ export async function resolveEmbeddedRunTerminal(input: {
   if (
     !emptyAssistantReplyIsSilent &&
     !settledTurnFinalizationAttempted &&
-    input.attemptCompactionCount > 0 &&
+    (input.attemptCompactionCount > 0 ||
+      attempt.currentAttemptAssistant?.providerReplay?.type === "openai-responses-compaction") &&
     payloadCount === 0 &&
     !terminalInterrupted &&
     !promptError &&
@@ -646,6 +654,7 @@ function completeEmbeddedRun(
 export function copyAttemptDeliveryState(attempt: EmbeddedRunAttemptResult) {
   return {
     latestMcpAppChannelView: attempt.latestMcpAppChannelView,
+    latestMcpConnectAction: attempt.latestMcpConnectAction,
     didSendViaMessagingTool: attempt.didSendViaMessagingTool,
     didDeliverSourceReplyViaMessageTool: attempt.didDeliverSourceReplyViaMessageTool === true,
     didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,

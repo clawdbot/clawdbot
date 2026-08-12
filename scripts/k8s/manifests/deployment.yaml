@@ -29,9 +29,12 @@ spec:
             - sh
             - -c
             - |
-              cp /config/openclaw.json /home/node/.openclaw/openclaw.json
+              # Seed-if-missing: the PVC copy owns config after first boot so edits made
+              # through OpenClaw (onboard, channels add, doctor --fix, Control UI) survive
+              # restarts. ConfigMap edits need an explicit reseed (see docs/install/kubernetes.md).
+              [ -f /home/node/.openclaw/openclaw.json ] || cp /config/openclaw.json /home/node/.openclaw/openclaw.json
               mkdir -p /home/node/.openclaw/workspace
-              cp /config/AGENTS.md /home/node/.openclaw/workspace/AGENTS.md
+              [ -f /home/node/.openclaw/workspace/AGENTS.md ] || cp /config/AGENTS.md /home/node/.openclaw/workspace/AGENTS.md
           securityContext:
             runAsUser: 1000
             runAsGroup: 1000
@@ -49,7 +52,8 @@ spec:
               mountPath: /config
       containers:
         - name: gateway
-          image: ghcr.io/openclaw/openclaw:slim
+          # Bump this immutable versioned tag when upgrading OpenClaw.
+          image: ghcr.io/openclaw/openclaw:2026.7.1-2-slim
           imagePullPolicy: IfNotPresent
           command:
             - node
@@ -103,6 +107,15 @@ spec:
             limits:
               memory: 2Gi
               cpu: "1"
+          startupProbe:
+            exec:
+              command:
+                - node
+                - -e
+                - "require('http').get('http://127.0.0.1:18789/startupz', r => process.exit(r.statusCode < 400 ? 0 : 1)).on('error', () => process.exit(1))"
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
           livenessProbe:
             exec:
               command:
@@ -117,7 +130,7 @@ spec:
               command:
                 - node
                 - -e
-                - "require('http').get('http://127.0.0.1:18789/readyz', r => process.exit(r.statusCode < 400 ? 0 : 1)).on('error', () => process.exit(1))"
+                - "require('http').get('http://127.0.0.1:18789/startupz', r => process.exit(r.statusCode < 400 ? 0 : 1)).on('error', () => process.exit(1))"
             initialDelaySeconds: 15
             periodSeconds: 10
             timeoutSeconds: 5

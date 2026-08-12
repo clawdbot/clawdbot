@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { stableStringify } from "../packages/normalization-core/src/stable-stringify.ts";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-facts.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
@@ -448,8 +449,8 @@ export function isLiveDockerPackageScriptOnlyChange(before: string, after: strin
   const afterStripped = stripLiveDockerPackageScripts(afterPackage);
 
   return (
-    stableJson(beforeStripped) === stableJson(afterStripped) &&
-    stableJson(beforeAllowed) !== stableJson(afterAllowed)
+    stableStringify(beforeStripped) === stableStringify(afterStripped) &&
+    stableStringify(beforeAllowed) !== stableStringify(afterAllowed)
   );
 }
 
@@ -469,8 +470,8 @@ export function isPackageScriptOnlyChange(before: string, after: string): boolea
   const afterStripped = stripPackageScripts(afterPackage);
 
   return (
-    stableJson(beforeStripped) === stableJson(afterStripped) &&
-    stableJson(beforeScripts) !== stableJson(afterScripts)
+    stableStringify(beforeStripped) === stableStringify(afterStripped) &&
+    stableStringify(beforeScripts) !== stableStringify(afterScripts)
   );
 }
 
@@ -540,19 +541,6 @@ function stripPackageScripts(packageJson: Record<string, unknown>) {
   const clone = structuredClone(packageJson);
   delete clone.scripts;
   return clone;
-}
-
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(stableJson).join(",")}]`;
-  }
-  if (isRecord(value)) {
-    return `{${Object.keys(value)
-      .toSorted((left, right) => left.localeCompare(right))
-      .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "undefined";
 }
 
 /**

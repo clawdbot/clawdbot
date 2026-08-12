@@ -216,14 +216,18 @@ export { isMessagingTool, isMessagingToolSendAction } from "../agents/embedded-a
 export {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
-  extractToolErrorMessage,
+} from "../agents/embedded-agent-messaging-extraction.js";
+export {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
-  isToolResultError,
+} from "../agents/embedded-agent-tool-media.js";
+export {
+  extractToolErrorMessage,
   sanitizeToolResult,
-} from "../agents/embedded-agent-subscribe.tools.js";
+} from "../agents/embedded-agent-tool-results.js";
 export {
   formatToolExecutionErrorMessage,
+  isToolResultError,
   resolveToolExecutionErrorKind,
   resolveToolResultFailureKind,
   type ToolResultFailureKind,

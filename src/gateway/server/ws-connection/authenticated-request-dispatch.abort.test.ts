@@ -1,4 +1,4 @@
-/** Verifies transport disconnect cancels only its own paired-node invocation. */
+/** Verifies transport disconnect cancellation stays scoped to request-owned work. */
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
@@ -104,7 +104,7 @@ function createDispatcher(
   return { client, dispatcher };
 }
 
-describe("paired-node WebSocket request cancellation", () => {
+describe("authenticated WebSocket request cancellation", () => {
   it("forwards CLI socket closure to the actual first-party node cancel event", async () => {
     const socket = new EventEmitter();
     const { registry, frames } = createPairedNode();
@@ -169,6 +169,38 @@ describe("paired-node WebSocket request cancellation", () => {
     await vi.waitFor(() => expect(handleGatewayRequest).toHaveBeenCalledOnce());
 
     expect(handleGatewayRequest.mock.calls[0]?.[0]).not.toHaveProperty("signal");
+    expect(socket.listenerCount("close")).toBe(0);
+  });
+
+  it("cancels a session companion ask when its authenticated socket closes", async () => {
+    const socket = new EventEmitter();
+    const { client, dispatcher } = createDispatcher(socket, {
+      id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+      mode: GATEWAY_CLIENT_MODES.UI,
+    });
+    let observedSignal: AbortSignal | undefined;
+    handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
+      observedSignal = options.signal;
+      await new Promise<void>((resolve) => {
+        options.signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+
+    const request = dispatcher.dispatch(
+      {
+        type: "req",
+        id: "session-companion",
+        method: "sessions.companion.ask",
+        params: { sessionKey: "agent:main:main", question: "What changed?" },
+      },
+      client,
+    );
+    await vi.waitFor(() => expect(socket.listenerCount("close")).toBe(1));
+
+    socket.emit("close", 1000, Buffer.alloc(0));
+
+    await request;
+    expect(observedSignal?.aborted).toBe(true);
     expect(socket.listenerCount("close")).toBe(0);
   });
 

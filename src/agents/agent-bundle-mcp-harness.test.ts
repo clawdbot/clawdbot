@@ -6,6 +6,8 @@ import { getMcpAppViewLease } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
 
 const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
+const startAuthorization = vi.hoisted(() => vi.fn());
+const readCredentialsStatus = vi.hoisted(() => vi.fn());
 
 const mocks = vi.hoisted(() => {
   type Runtime = SessionMcpRuntime;
@@ -73,10 +75,20 @@ vi.mock("./agent-bundle-mcp-runtime.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./mcp-oauth.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./mcp-oauth.js")>();
+  return {
+    ...actual,
+    readMcpOAuthCredentialsStatus: readCredentialsStatus,
+    startMcpOAuthAuthorization: startAuthorization,
+  };
+});
+
 import {
   materializeRequesterScopedMcpToolsForHarnessRunCore,
   materializeStaticMcpToolsForScheduledHarnessRunCore,
 } from "./agent-bundle-mcp-harness.js";
+import { createRequesterMcpConnect } from "./agent-bundle-mcp-requester-connect.js";
 
 function makeRuntime(params: { sessionId: string; requesterSenderId: string }): SessionMcpRuntime {
   const serverName = "user-mail";
@@ -144,12 +156,44 @@ function makeRuntime(params: { sessionId: string; requesterSenderId: string }): 
   };
 }
 
+async function makeConnectRuntime(params: {
+  sessionId: string;
+  requesterSenderId: string;
+  publicOrigin?: string;
+}): Promise<SessionMcpRuntime> {
+  const runtime = makeRuntime(params);
+  const catalog = { version: 1, generatedAt: 0, servers: {}, tools: [] };
+  runtime.peekCatalog = () => catalog;
+  runtime.getCatalog = async () => catalog;
+  runtime.requesterConnect = await createRequesterMcpConnect({
+    serverNames: new Set(["calendar"]),
+    mcpServers: {
+      calendar: {
+        url: "https://mcp.example/rpc",
+        auth: "oauth",
+        oauth: { identity: "per-requester" },
+      },
+    },
+    safeServerNamesByServer: new Map([["calendar", "calendar"]]),
+    requesterScope: {
+      requesterSenderId: params.requesterSenderId,
+      messageChannel: "telegram",
+      agentAccountId: "bot",
+    },
+    cfg: params.publicOrigin ? { gateway: { publicOrigin: params.publicOrigin } } : undefined,
+    configFingerprint: "connect-fingerprint",
+  });
+  return runtime;
+}
+
 beforeEach(() => {
   mocks.reset();
   mocks.getOrCreateRequesterScopedMcpRuntime.mockClear();
   mocks.getOrCreateSessionMcpRuntime.mockReset();
   mocks.rememberAdvertisedScopedMcpCatalog.mockClear();
   mocks.getAdvertisedScopedMcpCatalog.mockClear();
+  readCredentialsStatus.mockReset().mockResolvedValue({ state: "unauthenticated" });
+  startAuthorization.mockReset();
 });
 
 describe("materializeStaticMcpToolsForScheduledHarnessRunCore", () => {
@@ -528,6 +572,91 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
     });
     expect(result).toBeUndefined();
     expect(mocks.rememberAdvertisedScopedMcpCatalog).not.toHaveBeenCalled();
+  });
+
+  it("bootstraps a requester connect tool without starting OAuth during materialization", async () => {
+    mocks.setResolveImpl(async (params) =>
+      makeConnectRuntime({
+        sessionId: params.sessionId,
+        requesterSenderId: params.requesterSenderId ?? "alice",
+        publicOrigin: "https://gateway.example",
+      }),
+    );
+    startAuthorization.mockResolvedValue({
+      status: "redirect",
+      authorizationUrl: "https://auth.example/authorize?state=opaque",
+      redirectUrl: "https://gateway.example/oauth/mcp/callback",
+      state: "opaque",
+    });
+    const result = await materializeRequesterScopedMcpToolsForHarnessRunCore({
+      sessionId: "session-connect",
+      workspaceDir: "/workspace",
+      requesterSenderId: "alice",
+      messageChannel: "telegram",
+      agentAccountId: "bot",
+      cfg: {
+        gateway: { publicOrigin: "https://gateway.example" },
+        mcp: {
+          servers: {
+            calendar: {
+              url: "https://mcp.example/rpc",
+              auth: "oauth",
+              oauth: { identity: "per-requester" },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result?.tools.map((tool) => tool.name)).toEqual(["calendar__connect"]);
+    expect(startAuthorization).not.toHaveBeenCalled();
+    const connect = await result!.tools[0]!.execute("connect", {});
+    expect(connect).toMatchObject({
+      details: {
+        mcpConnect: {
+          serverName: "calendar",
+          authorizationUrl: "https://auth.example/authorize?state=opaque",
+        },
+      },
+    });
+    expect(startAuthorization).toHaveBeenCalledWith(
+      expect.objectContaining({ principal: "requester", serverName: "calendar" }),
+      expect.objectContaining({ url: "https://mcp.example/rpc" }),
+      { redirectUrl: "https://gateway.example/oauth/mcp/callback" },
+    );
+    expect(mocks.rememberAdvertisedScopedMcpCatalog).not.toHaveBeenCalled();
+    await result!.dispose();
+  });
+
+  it("returns a bounded operator fix when the public origin is missing", async () => {
+    mocks.setResolveImpl(async (params) =>
+      makeConnectRuntime({
+        sessionId: params.sessionId,
+        requesterSenderId: params.requesterSenderId ?? "alice",
+      }),
+    );
+    const result = await materializeRequesterScopedMcpToolsForHarnessRunCore({
+      sessionId: "session-no-origin",
+      workspaceDir: "/workspace",
+      requesterSenderId: "alice",
+      cfg: {
+        mcp: {
+          servers: {
+            calendar: {
+              url: "https://mcp.example/rpc",
+              auth: "oauth",
+              oauth: { identity: "per-requester" },
+            },
+          },
+        },
+      },
+    });
+
+    const connect = await result!.tools[0]!.execute("connect", {});
+    expect(connect.details).toMatchObject({ status: "error" });
+    expect(connect.content[0]).toMatchObject({ text: expect.stringContaining("publicOrigin") });
+    expect(startAuthorization).not.toHaveBeenCalled();
+    await result!.dispose();
   });
 
   it("releases the live runtime when pre-return catalog publication fails", async () => {

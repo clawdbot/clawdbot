@@ -2,12 +2,114 @@
 import { describe, expect, it } from "vitest";
 import {
   booleanFlag,
+  classifyBoundedUnsignedDecimal,
   intFlag,
+  isOpenEndedTruthyValue,
+  isStrictAffirmativeValue,
   parseFlagArgs,
+  parsePermissiveBooleanToken,
+  parseStrictBooleanArg,
   readFlagValue,
   stringFlag,
   stringListFlag,
 } from "../../scripts/lib/arg-utils.runtime.mjs";
+
+describe("scripts/lib/arg-utils strict scalar grammars", () => {
+  it.each([
+    { input: "true", expected: true },
+    { input: "false", expected: false },
+    { input: "", error: "--enabled must be true or false." },
+    { input: " ", error: "--enabled must be true or false." },
+    { input: " true", error: "--enabled must be true or false." },
+    { input: "false ", error: "--enabled must be true or false." },
+    { input: "TRUE", error: "--enabled must be true or false." },
+    { input: "False", error: "--enabled must be true or false." },
+    { input: "1", error: "--enabled must be true or false." },
+    { input: "0", error: "--enabled must be true or false." },
+    { input: "yes", error: "--enabled must be true or false." },
+    { input: true, error: "--enabled must be true or false." },
+    { input: 1, error: "--enabled must be true or false." },
+  ])("parses strict Boolean token %#", ({ input, expected, error }) => {
+    if (error) {
+      expect(() => parseStrictBooleanArg(input, "--enabled")).toThrow(error);
+      return;
+    }
+    expect(parseStrictBooleanArg(input, "--enabled")).toBe(expected);
+  });
+
+  it.each([
+    { input: "0", min: 0, max: 10, expected: { kind: "value", value: 0 } },
+    { input: "001", min: 1, max: 10, expected: { kind: "value", value: 1 } },
+    { input: "10", min: 0, max: 10, expected: { kind: "value", value: 10 } },
+    { input: "0", min: 1, max: 10, expected: { kind: "below" } },
+    { input: "11", min: 0, max: 10, expected: { kind: "above" } },
+    { input: "9".repeat(400), min: 0, max: 10, expected: { kind: "above" } },
+    { input: "", min: 0, max: 10, expected: { kind: "syntax" } },
+    { input: " ", min: 0, max: 10, expected: { kind: "syntax" } },
+    { input: " 1", min: 0, max: 10, expected: { kind: "syntax" } },
+    { input: "1 ", min: 0, max: 10, expected: { kind: "syntax" } },
+    { input: "+1", min: 0, max: 10, expected: { kind: "syntax" } },
+    { input: "-1", min: 0, max: 10, expected: { kind: "syntax" } },
+    { input: "1.0", min: 0, max: 10, expected: { kind: "syntax" } },
+    { input: "1e1", min: 0, max: 10, expected: { kind: "syntax" } },
+    { input: "0x10", min: 0, max: 10, expected: { kind: "syntax" } },
+    { input: "0b10", min: 0, max: 10, expected: { kind: "syntax" } },
+    { input: "1ms", min: 0, max: 10, expected: { kind: "syntax" } },
+  ])("classifies bounded unsigned decimal %#", ({ input, min, max, expected }) => {
+    expect(classifyBoundedUnsignedDecimal(input, min, max)).toEqual(expected);
+  });
+});
+
+describe("scripts/lib/arg-utils permissive Boolean tokens", () => {
+  it.each([
+    { input: "true", expected: true },
+    { input: "1", expected: true },
+    { input: "yes", expected: true },
+    { input: "on", expected: true },
+    { input: "false", expected: false },
+    { input: "0", expected: false },
+    { input: "no", expected: false },
+    { input: "off", expected: false },
+    { input: " TRUE ", expected: true },
+    { input: " Off ", expected: false },
+    { input: "", expected: undefined },
+    { input: " ", expected: undefined },
+    { input: "enabled", expected: undefined },
+    { input: true, expected: undefined },
+    { input: 1, expected: undefined },
+  ])("parses $input as $expected", ({ input, expected }) => {
+    expect(parsePermissiveBooleanToken(input)).toBe(expected);
+  });
+});
+
+describe("scripts/lib/arg-utils environment Boolean policies", () => {
+  it.each([
+    { input: undefined, expected: false },
+    { input: "", expected: false },
+    { input: "  ", expected: false },
+    { input: "0", expected: false },
+    { input: " FALSE ", expected: false },
+    { input: "no", expected: false },
+    { input: "off", expected: true },
+    { input: "enabled", expected: true },
+    { input: "1", expected: true },
+  ])("applies open-ended truthiness to $input", ({ input, expected }) => {
+    expect(isOpenEndedTruthyValue(input)).toBe(expected);
+  });
+
+  it.each([
+    { input: undefined, expected: false },
+    { input: "", expected: false },
+    { input: "0", expected: false },
+    { input: "on", expected: false },
+    { input: "enabled", expected: false },
+    { input: "1", expected: true },
+    { input: " TRUE ", expected: true },
+    { input: "Yes", expected: true },
+  ])("applies strict affirmative truthiness to $input", ({ input, expected }) => {
+    expect(isStrictAffirmativeValue(input)).toBe(expected);
+  });
+});
 
 describe("scripts/lib/arg-utils parseFlagArgs", () => {
   it("uses the last value when a flag is repeated", () => {
@@ -88,24 +190,6 @@ describe("scripts/lib/arg-utils parseFlagArgs", () => {
     expect(() =>
       parseFlagArgs(["--json", "--json"], { json: false }, [booleanFlag("--json", "json")]),
     ).toThrow("--json was provided more than once");
-  });
-
-  it("requires custom specs to declare consumed flags", () => {
-    expect(() =>
-      parseFlagArgs(["--custom"], {}, [
-        {
-          consume(argv, index) {
-            if (argv[index] !== "--custom") {
-              return null;
-            }
-            return {
-              nextIndex: index,
-              apply() {},
-            };
-          },
-        },
-      ]),
-    ).toThrow("parseFlagArgs specs must declare a flag for consumed options");
   });
 
   it("rejects missing string flag values before consuming the next option", () => {

@@ -23,7 +23,7 @@ import {
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../../sessions/session-id-resolution.js";
 import { resolveDefaultAgentId } from "../../agent-scope.js";
 import {
-  resolveSessionKeyForRequest,
+  resolveSessionKeyForRequestCore,
   resolveStoredSessionKeyForSessionId,
 } from "../../command/session.js";
 import {
@@ -196,7 +196,7 @@ export function backfillSessionKey(params: {
           sessionId: params.sessionId,
           agentId: params.agentId,
         })
-      : resolveSessionKeyForRequest({
+      : resolveSessionKeyForRequestCore({
           cfg: params.config,
           sessionId: params.sessionId,
           clone: false,

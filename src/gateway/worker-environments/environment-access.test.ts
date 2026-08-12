@@ -23,7 +23,8 @@ describe("worker environment service", () => {
         return {
           environmentId: request.environmentId,
           ownerEpoch: request.ownerEpoch,
-          remoteSocketPath: "/tmp/worker/gateway.sock",
+          connectionEndpoint: { kind: "unix", socketPath: "/tmp/worker/gateway.sock" },
+          launchTurn: vi.fn(),
           runWorkspaceCommand: vi.fn(),
           syncWorkspace: vi.fn(),
           stop: async () => {},
@@ -86,7 +87,8 @@ describe("worker environment service", () => {
       start: vi.fn(async (request: Parameters<WorkerTunnelManager["start"]>[0]) => ({
         environmentId: request.environmentId,
         ownerEpoch: request.ownerEpoch,
-        remoteSocketPath: "/tmp/worker/gateway.sock",
+        connectionEndpoint: { kind: "unix", socketPath: "/tmp/worker/gateway.sock" },
+        launchTurn: vi.fn(),
         runWorkspaceCommand: vi.fn(),
         syncWorkspace: vi.fn(),
         stop: async () => {},
@@ -241,7 +243,7 @@ describe("worker environment service", () => {
     const record = support.seedReadyDesktop("worker-desktop-observe");
     const desktopPassword = ["desktop", String.fromCharCode(45), "secret"].join("");
     const acquire = vi.fn(async () => ({
-      localSocketPath: "/tmp/worker-desktop.sock",
+      attachment: { kind: "unix-socket" as const, socketPath: "/tmp/worker-desktop.sock" },
       vncPassword: desktopPassword,
     }));
     const tunnelManager = {
@@ -262,7 +264,7 @@ describe("worker environment service", () => {
       workerService.observeDesktop({ environmentId: record.environmentId, control: true }),
     ).resolves.toMatchObject({
       transport: "rfb",
-      wsPath: expect.stringMatching(/^\/worker-desktop\/observe\?token=[a-f0-9]{48}$/u),
+      wsPath: expect.stringMatching(/^\/desktop\/observe\?token=[a-f0-9]{48}$/u),
       expiresAtMs: support.testState.nowMs + 60_000,
       control: true,
       vncPassword: desktopPassword,

@@ -24,11 +24,7 @@ export function applyOpenAIProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
     (next, modelRef) => ensureModelAllowlistEntry({ cfg: next, modelRef }),
     cfg,
   );
-  const next = ensureModelAllowlistEntry({
-    cfg: withConfiguredRefs,
-    modelRef: OPENAI_DEFAULT_MODEL,
-  });
-  const models = { ...next.agents?.defaults?.models };
+  const models = { ...withConfiguredRefs.agents?.defaults?.models };
   const gptAliasClaimed = Object.entries(models).some(
     ([modelRef, model]) =>
       modelRef !== OPENAI_DEFAULT_MODEL && model?.alias?.trim().toLowerCase() === "gpt",
@@ -41,11 +37,11 @@ export function applyOpenAIProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   };
 
   return {
-    ...next,
+    ...withConfiguredRefs,
     agents: {
-      ...next.agents,
+      ...withConfiguredRefs.agents,
       defaults: {
-        ...next.agents?.defaults,
+        ...withConfiguredRefs.agents?.defaults,
         models,
       },
     },

@@ -743,7 +743,7 @@ describe("worker turn launcher", () => {
     const tunnel: WorkerTunnelHandle = {
       environmentId: ENVIRONMENT_ID,
       ownerEpoch: OWNER_EPOCH,
-      remoteSocketPath: "/worker/gateway.sock",
+      connectionEndpoint: { kind: "unix" as const, socketPath: "/worker/gateway.sock" },
       quiesceWorkspace: vi.fn(async () => ({
         assertActive: vi.fn(async () => {}),
         resume: vi.fn(async () => {
@@ -754,14 +754,15 @@ describe("worker turn launcher", () => {
           expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
         }),
       })),
-      runWorkspaceCommand: vi.fn(async (command): Promise<SpawnResult> => {
+      runWorkspaceCommand: vi.fn(),
+      launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
         expect(placements.get(SESSION_ID)?.turnClaim).toMatchObject({
           owner: "worker",
           runId: "run-worker-turn",
           ownerEpoch: OWNER_EPOCH,
         });
-        descriptor = parseWorkerLaunchDescriptor(JSON.parse(command.input ?? ""));
-        expect(command.transportRetry).toBe("never");
+        descriptor = parseWorkerLaunchDescriptor(structuredClone(request.descriptor));
+        expect(request.timeoutMs).toBe(5_000);
         const activeRuntimeIdentity = await verifyAgentRuntimeIdentityToken(
           descriptor.assignment.agentRuntimeIdentityToken,
         );
@@ -770,14 +771,10 @@ describe("worker turn launcher", () => {
           activeRuntimeIdentity &&
             createAgentRuntimeApprovalAuthorityValidator(placements)(activeRuntimeIdentity),
         ).toBe(true);
-        expect(command.argv).toEqual([
-          "sh",
-          "-c",
-          'exec node "$HOME/.openclaw-worker/$1/openclaw.mjs" worker',
-          "openclaw-worker",
-          BUNDLE_HASH,
-        ]);
-        expect(command.argv.join(" ")).not.toContain(credential().credential);
+        expect(descriptor.connectionEndpoint).toEqual({
+          kind: "unix",
+          socketPath: "/worker/gateway.sock",
+        });
         await Promise.resolve();
         expect(acknowledgeCredentialDelivery).toHaveBeenCalledOnce();
         const completed = openSessionManager();
@@ -793,7 +790,7 @@ describe("worker turn launcher", () => {
           ownerEpoch: OWNER_EPOCH,
           runId: "run-worker-turn",
           transcriptSeq: 2,
-          workspaceResultPending: true,
+          liveSeq: 1,
         });
         return {
           stdout: JSON.stringify({
@@ -885,7 +882,7 @@ describe("worker turn launcher", () => {
     expect(descriptor?.assignment.prompt).toBe("Inspect this workspace");
     expect(descriptor?.assignment.suppressPromptTranscript).toBe(true);
     expect(descriptor?.assignment.agentId).toBe(sessionTarget.agentId);
-    expect(descriptor?.version).toBe(2);
+    expect(descriptor?.version).toBe(3);
     const verifiedRuntimeIdentity = await verifyAgentRuntimeIdentityToken(
       descriptor?.assignment.agentRuntimeIdentityToken,
     );
@@ -1007,13 +1004,14 @@ describe("worker turn launcher", () => {
     const tunnel: WorkerTunnelHandle = {
       environmentId: ENVIRONMENT_ID,
       ownerEpoch: OWNER_EPOCH,
-      remoteSocketPath: "/worker/gateway.sock",
+      connectionEndpoint: { kind: "unix" as const, socketPath: "/worker/gateway.sock" },
       quiesceWorkspace: vi.fn(async () => ({
         assertActive: vi.fn(async () => {}),
         resume: vi.fn(async () => {}),
       })),
-      runWorkspaceCommand: vi.fn(async (command): Promise<SpawnResult> => {
-        descriptor = parseWorkerLaunchDescriptor(JSON.parse(command.input ?? ""));
+      runWorkspaceCommand: vi.fn(),
+      launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
+        descriptor = parseWorkerLaunchDescriptor(structuredClone(request.descriptor));
         const completed = openSessionManager();
         const leafId = completed.appendMessage(
           makeAgentAssistantMessage({
@@ -1027,7 +1025,7 @@ describe("worker turn launcher", () => {
           ownerEpoch: OWNER_EPOCH,
           runId: "run-persisted-user",
           transcriptSeq: 2,
-          workspaceResultPending: true,
+          liveSeq: 1,
         });
         return {
           stdout: JSON.stringify({
@@ -1142,12 +1140,13 @@ describe("worker turn launcher", () => {
     const tunnel: WorkerTunnelHandle = {
       environmentId: ENVIRONMENT_ID,
       ownerEpoch: OWNER_EPOCH,
-      remoteSocketPath: "/worker/gateway.sock",
+      connectionEndpoint: { kind: "unix" as const, socketPath: "/worker/gateway.sock" },
       quiesceWorkspace: vi.fn(async () => ({
         assertActive: vi.fn(async () => {}),
         resume: vi.fn(async () => {}),
       })),
-      runWorkspaceCommand: vi.fn(async (): Promise<SpawnResult> => {
+      runWorkspaceCommand: vi.fn(),
+      launchTurn: vi.fn(async (): Promise<SpawnResult> => {
         const completed = openSessionManager();
         const leafId = completed.appendMessage(
           makeAgentAssistantMessage({
@@ -1161,7 +1160,7 @@ describe("worker turn launcher", () => {
           ownerEpoch: OWNER_EPOCH,
           runId: "run-reconcile-tunnel-loss",
           transcriptSeq: 2,
-          workspaceResultPending: true,
+          liveSeq: 1,
         });
         return {
           stdout: JSON.stringify({
@@ -1227,12 +1226,13 @@ describe("worker turn launcher", () => {
       startTunnel: vi.fn(async () => ({
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
-        remoteSocketPath: "/worker/gateway.sock",
+        connectionEndpoint: { kind: "unix" as const, socketPath: "/worker/gateway.sock" },
         quiesceWorkspace: vi.fn(async () => ({
           assertActive: vi.fn(async () => {}),
           resume: vi.fn(async () => {}),
         })),
-        runWorkspaceCommand: vi.fn(async (): Promise<SpawnResult> => {
+        runWorkspaceCommand: vi.fn(),
+        launchTurn: vi.fn(async (): Promise<SpawnResult> => {
           const completed = openSessionManager();
           completed.appendMessage(
             makeAgentAssistantMessage({
@@ -1286,7 +1286,7 @@ describe("worker turn launcher", () => {
             ownerEpoch: OWNER_EPOCH,
             runId: "run-worker-usage",
             transcriptSeq: 2,
-            workspaceResultPending: true,
+            liveSeq: 1,
           });
           return {
             stdout: JSON.stringify({
@@ -1426,7 +1426,7 @@ describe("worker turn launcher", () => {
       isError: false,
       timestamp: 2,
     });
-    const runWorkspaceCommand = vi.fn(async (): Promise<SpawnResult> => {
+    const launchTurn = vi.fn(async (): Promise<SpawnResult> => {
       throw new Error("unexpected worker handoff");
     });
     const acknowledgeCredentialDelivery = vi.fn(() => true);
@@ -1434,9 +1434,10 @@ describe("worker turn launcher", () => {
       async (): Promise<WorkerTunnelHandle> => ({
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
-        remoteSocketPath: "/worker/gateway.sock",
+        connectionEndpoint: { kind: "unix" as const, socketPath: "/worker/gateway.sock" },
         quiesceWorkspace: vi.fn(),
-        runWorkspaceCommand,
+        runWorkspaceCommand: vi.fn(),
+        launchTurn,
         syncWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(),
         stop: vi.fn(async () => {}),
@@ -1469,7 +1470,7 @@ describe("worker turn launcher", () => {
     ).rejects.toThrow(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
 
     expect(startTunnel).toHaveBeenCalledOnce();
-    expect(runWorkspaceCommand).not.toHaveBeenCalled();
+    expect(launchTurn).not.toHaveBeenCalled();
     expect(runLocal).not.toHaveBeenCalled();
     expect(acknowledgeCredentialDelivery).not.toHaveBeenCalled();
     expect(stopTunnel).not.toHaveBeenCalled();
@@ -1480,14 +1481,13 @@ describe("worker turn launcher", () => {
   it("preserves a terminal workspace result when the worker child later exits nonzero", async () => {
     seedActivePlacement();
     const destroy = vi.fn(async () => attachedEnvironment());
-    const runWorkspaceCommand = vi.fn(async (): Promise<SpawnResult> => {
+    const launchTurn = vi.fn(async (): Promise<SpawnResult> => {
       createWorkerSessionPlacementGate(placements).updateAckCursors({
         sessionId: SESSION_ID,
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
         runId: "run-terminal-child-failure",
         liveSeq: 1,
-        workspaceResultPending: true,
       });
       return {
         stdout: "",
@@ -1505,9 +1505,10 @@ describe("worker turn launcher", () => {
       startTunnel: vi.fn(async () => ({
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
-        remoteSocketPath: "/worker/gateway.sock",
+        connectionEndpoint: { kind: "unix" as const, socketPath: "/worker/gateway.sock" },
         quiesceWorkspace: vi.fn(),
-        runWorkspaceCommand,
+        runWorkspaceCommand: vi.fn(),
+        launchTurn,
         syncWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(),
         stop: vi.fn(async () => {}),
@@ -1530,7 +1531,7 @@ describe("worker turn launcher", () => {
       ),
     ).rejects.toThrow("child cleanup failed");
 
-    expect(runWorkspaceCommand).toHaveBeenCalledOnce();
+    expect(launchTurn).toHaveBeenCalledOnce();
     expect(destroy).not.toHaveBeenCalled();
     expect(placements.listPendingWorkspaceResults()).toMatchObject([
       {
@@ -1657,12 +1658,13 @@ describe("worker turn launcher", () => {
       startTunnel: vi.fn(async () => ({
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
-        remoteSocketPath: "/worker/gateway.sock",
+        connectionEndpoint: { kind: "unix" as const, socketPath: "/worker/gateway.sock" },
         quiesceWorkspace: vi.fn(async () => ({
           assertActive: vi.fn(async () => {}),
           resume: vi.fn(async () => {}),
         })),
-        runWorkspaceCommand: vi.fn(async () => {
+        runWorkspaceCommand: vi.fn(),
+        launchTurn: vi.fn(async () => {
           throw new Error("remote launch failed");
         }),
         syncWorkspace: vi.fn(async () => {
@@ -1733,8 +1735,9 @@ describe("worker turn launcher", () => {
       startTunnel: vi.fn(async () => ({
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
-        remoteSocketPath: "/worker/gateway.sock",
-        runWorkspaceCommand: vi.fn(
+        connectionEndpoint: { kind: "unix" as const, socketPath: "/worker/gateway.sock" },
+        runWorkspaceCommand: vi.fn(),
+        launchTurn: vi.fn(
           async (): Promise<SpawnResult> => ({
             stdout: "",
             stderr,
@@ -1945,7 +1948,7 @@ describe("worker turn launcher", () => {
       killed: false;
       termination: "exit";
     }>();
-    const runWorkspaceCommand = vi.fn(() => {
+    const launchTurn = vi.fn(() => {
       commandStarted.resolve();
       return commandFinished.promise;
     });
@@ -1956,12 +1959,13 @@ describe("worker turn launcher", () => {
       startTunnel: vi.fn(async () => ({
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
-        remoteSocketPath: "/worker/gateway.sock",
+        connectionEndpoint: { kind: "unix" as const, socketPath: "/worker/gateway.sock" },
         quiesceWorkspace: vi.fn(async () => ({
           assertActive: vi.fn(async () => {}),
           resume: vi.fn(async () => {}),
         })),
-        runWorkspaceCommand,
+        runWorkspaceCommand: vi.fn(),
+        launchTurn,
         syncWorkspace: vi.fn(async () => {
           throw new Error("unexpected workspace sync");
         }),
@@ -1996,7 +2000,7 @@ describe("worker turn launcher", () => {
         meta: { durationMs: 1 },
       })),
     ).rejects.toThrow("already has an active turn claim");
-    expect(runWorkspaceCommand).toHaveBeenCalledOnce();
+    expect(launchTurn).toHaveBeenCalledOnce();
 
     const completed = openSessionManager();
     const leafId = completed.appendMessage(
@@ -2011,7 +2015,7 @@ describe("worker turn launcher", () => {
       ownerEpoch: OWNER_EPOCH,
       runId: "run-overlap",
       transcriptSeq: 2,
-      workspaceResultPending: true,
+      liveSeq: 1,
     });
     const active = placements.get(SESSION_ID);
     if (active?.state !== "active") {
@@ -2064,14 +2068,15 @@ describe("worker turn launcher", () => {
       startTunnel: vi.fn(async () => ({
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
-        remoteSocketPath: "/worker/gateway.sock",
+        connectionEndpoint: { kind: "unix" as const, socketPath: "/worker/gateway.sock" },
         quiesceWorkspace: vi.fn(async () => ({
           assertActive: vi.fn(async () => {}),
           resume: vi.fn(async () => {}),
         })),
-        runWorkspaceCommand: vi.fn(async (command): Promise<SpawnResult> => {
+        runWorkspaceCommand: vi.fn(),
+        launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
           launchCount += 1;
-          const descriptor = parseWorkerLaunchDescriptor(JSON.parse(command.input ?? ""));
+          const descriptor = parseWorkerLaunchDescriptor(structuredClone(request.descriptor));
           turnIds.push(descriptor.assignment.turnId);
           if (launchCount === 1) {
             const completed = openSessionManager();
@@ -2089,7 +2094,7 @@ describe("worker turn launcher", () => {
               ownerEpoch: OWNER_EPOCH,
               runId: "run-model-failed",
               transcriptSeq: 2,
-              workspaceResultPending: true,
+              liveSeq: 1,
             });
             return {
               stdout: JSON.stringify({
@@ -2118,7 +2123,7 @@ describe("worker turn launcher", () => {
             ownerEpoch: OWNER_EPOCH,
             runId: "run-model-recovered",
             transcriptSeq: 2,
-            workspaceResultPending: true,
+            liveSeq: 1,
           });
           return {
             stdout: JSON.stringify({
@@ -2220,7 +2225,7 @@ describe("worker turn launcher", () => {
       }
       return active;
     };
-    const runWorkspaceCommand = vi.fn(async (): Promise<SpawnResult> => {
+    const launchTurn = vi.fn(async (): Promise<SpawnResult> => {
       workerStarted.resolve();
       await resumeWorker.promise;
       expect(placements.get(SESSION_ID)).toMatchObject({
@@ -2240,7 +2245,7 @@ describe("worker turn launcher", () => {
         ownerEpoch: OWNER_EPOCH,
         runId,
         transcriptSeq: 2,
-        workspaceResultPending: true,
+        liveSeq: 1,
       });
       return {
         stdout: JSON.stringify({
@@ -2262,12 +2267,13 @@ describe("worker turn launcher", () => {
       startTunnel: vi.fn(async () => ({
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
-        remoteSocketPath: "/worker/gateway.sock",
+        connectionEndpoint: { kind: "unix" as const, socketPath: "/worker/gateway.sock" },
         quiesceWorkspace: vi.fn(async () => ({
           assertActive: vi.fn(async () => {}),
           resume: vi.fn(async () => {}),
         })),
-        runWorkspaceCommand,
+        runWorkspaceCommand: vi.fn(),
+        launchTurn,
         syncWorkspace: vi.fn(async () => {
           throw new Error("unexpected workspace sync");
         }),
@@ -2350,7 +2356,7 @@ describe("worker turn launcher", () => {
     );
     expect(result.payloads).toEqual([{ text: "Redispatched worker reply" }]);
     expect(redispatchCalls).toBe(1);
-    expect(runWorkspaceCommand).toHaveBeenCalledOnce();
+    expect(launchTurn).toHaveBeenCalledOnce();
     expect(runLocal).not.toHaveBeenCalled();
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
   });

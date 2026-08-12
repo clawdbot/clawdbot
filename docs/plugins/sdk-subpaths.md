@@ -16,14 +16,11 @@ private-local entries explicitly. Three files define the boundary:
   excluded from the typed, documented SDK. Production entries remain available
   as JavaScript-only host runtime exports for separately published official
   plugins; test-only entries stay unexported.
-- `src/plugin-sdk/entrypoints.ts`: classification metadata for deprecated
-  subpaths, reserved bundled helpers, supported bundled facades, and
-  plugin-owned public surfaces.
+- `scripts/lib/plugin-sdk-entries.mts`: derived public/private export metadata,
+  supported bundled facades, and plugin-owned public surfaces.
 
 Maintainers audit the public export count with `pnpm plugin-sdk:surface` and
-active reserved helper subpaths with `pnpm plugins:boundary-report:summary`;
-unused reserved helper exports fail the CI report instead of staying in the
-public SDK as dormant compatibility debt.
+the compatibility queue with `pnpm plugins:boundary-report:summary`.
 
 For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview).
 
@@ -64,10 +61,10 @@ longer package exports: `agent-runtime-test-contracts`,
 
 ### Bundled plugin helper subpaths
 
-Bundled-only helper modules are private-local after the July 2026 sweep. Cross-owner imports are blocked by package contract guardrails. `src/plugin-sdk/entrypoints.ts` separately tracks the supported bundled facades that remain public, SDK
-entrypoints backed by their bundled plugin until generic contracts replace
-`plugin-sdk/qa-runner-runtime`, `plugin-sdk/telegram-account`,
-deprecated for new code; see the per-row notes below.
+Bundled-only helper modules are private-local after the July 2026 sweep.
+Package contract guardrails classify the supported bundled facades that remain
+public until generic contracts replace them. Those facades are deprecated for
+new code; see the per-row notes below.
 
 <AccordionGroup>
   <Accordion title="Channel subpaths">
@@ -223,7 +220,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/browser-config` | Private-local after July 2026; Supported browser config facade for normalized profile/defaults, CDP URL parsing, and browser-control auth helpers |
     | `plugin-sdk/agent-harness-task-runtime` | Private-local after July 2026; Generic task lifecycle and completion delivery helpers for harness-backed agents using a host-issued task scope |
     | `plugin-sdk/agent-harness-runtime` | Agent-harness runtime helpers. `acquireSessionWriteLock`, `resolveSessionWriteLockAcquireTimeoutMs`, `resolveSessionWriteLockOptions`, and `SessionWriteLockAcquireTimeoutConfig` are deprecated no-op compatibility exports scheduled for removal in the 2026.10 release train. They no longer block or create lock sidecars; harnesses should rely on OpenClaw's per-session lane plus the durable writer claim and in-transaction fence. |
-    | `plugin-sdk/codex-mcp-projection` | Private-local after July 2026; Reserved bundled Codex helper for projecting user MCP server config into Codex thread config; not for third-party plugins |
+    | `plugin-sdk/codex-mcp-projection` | Private-local after July 2026; Bundled Codex helper for projecting user MCP server config into Codex thread config; not for third-party plugins |
     | `plugin-sdk/codex-session-transcript-runtime` | Private-local bundled Codex helper for serializing transcript-mirror writes; not for third-party plugins |
     | `plugin-sdk/channel-runtime-context` | Generic channel runtime-context registration and lookup helpers |
     | `plugin-sdk/matrix` | Deprecated Matrix compatibility facade for older third-party channel packages; new plugins should import `plugin-sdk/run-command` directly |
@@ -240,7 +237,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/tts-runtime` | Private-local after July 2026; Supported facade for text-to-speech config schemas and runtime helpers |
     | `plugin-sdk/gateway-method-runtime` | Reserved Gateway method dispatch helper for plugin HTTP routes that declare `contracts.gatewayMethodDispatch: ["authenticated-request"]` |
     | `plugin-sdk/gateway-runtime` | Gateway client, event-loop-ready client start helper, gateway CLI RPC, gateway protocol errors, advertised LAN host resolution, and channel-status patch helpers |
-    | `plugin-sdk/config-contracts` | Focused type-only config surface for plugin config shapes such as `OpenClawConfig` and channel/provider config types |
+    | `plugin-sdk/config-contracts` | Focused config surface for plugin config shapes such as `OpenClawConfig` and channel/provider config types, plus the dependency-light runtime helper `resolveGatewayPublicOrigin(cfg)` which returns the normalized `gateway.publicOrigin` (bare http(s) origin, optional reverse-proxy path, no query/hash) or `undefined` when unset, for building links back to the Gateway |
     | `plugin-sdk/plugin-config-runtime` | Deprecated compatibility facade for runtime plugin-config helpers; new plugins use `api.pluginConfig` plus focused config contracts, snapshots, and mutation helpers |
     | `plugin-sdk/config-mutation` | Transactional config mutation helpers such as `mutateConfigFile`, `replaceConfigFile`, and `logConfigUpdated` |
     | `plugin-sdk/message-tool-delivery-hints` | Private-local after July 2026; Shared message-tool delivery metadata hint strings |
@@ -403,8 +400,8 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
 
     | Subpath | Owner and purpose |
     | --- | --- |
-    | `plugin-sdk/codex-mcp-projection` | Private-local after July 2026; Bundled Codex plugin helper for projecting user MCP server config into Codex app-server thread config (reserved package export) |
-    | `plugin-sdk/codex-session-transcript-runtime` | Private-local bundled Codex plugin helper for serializing transcript-mirror writes (reserved package export) |
+    | `plugin-sdk/codex-mcp-projection` | Private-local after July 2026; Bundled Codex plugin helper for projecting user MCP server config into Codex app-server thread config (default-only package export) |
+    | `plugin-sdk/codex-session-transcript-runtime` | Private-local bundled Codex plugin helper for serializing transcript-mirror writes (default-only package export) |
 
   </Accordion>
 </AccordionGroup>

@@ -53,7 +53,7 @@ import {
   requireApiKey,
   resolveUsableCustomProviderApiKey,
 } from "./model-auth.js";
-import { shouldSuppressBuiltInModel } from "./model-suppression.js";
+import { shouldSuppressBuiltInModelCore } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import type { StreamFn } from "./runtime/index.js";
 import { appendPrioritizedDynamicLiveModels } from "./test-helpers/live-model-dynamic-candidates.js";
@@ -1833,7 +1833,7 @@ describeLive("live models (profile keys)", () => {
       }> = [];
 
       for (const model of models) {
-        if (shouldSuppressBuiltInModel({ provider: model.provider, id: model.id })) {
+        if (shouldSuppressBuiltInModelCore({ provider: model.provider, id: model.id })) {
           continue;
         }
         if (!targetMatcher.matchesProvider(model.provider)) {

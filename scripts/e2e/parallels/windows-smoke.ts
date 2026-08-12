@@ -2,6 +2,7 @@
 // Windows Smoke script supports OpenClaw repository automation.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { stripLeadingPackageManagerSeparator } from "../../lib/arg-utils.mts";
 import { windowsAgentWorkspaceScript } from "./agent-workspace.ts";
 import {
   die,
@@ -244,10 +245,6 @@ export function parseArgs(argv: string[]): WindowsOptions {
     die(`unknown arg: ${arg}`);
   }
   return options;
-}
-
-function stripLeadingPackageManagerSeparator(argv: string[]): string[] {
-  return argv[0] === "--" ? argv.slice(1) : argv;
 }
 
 class WindowsSmoke extends SmokeRunController<WindowsOptions> {

@@ -755,7 +755,8 @@ Use message hooks for channel-level routing and delivery policy:
 
 - `message_received`: observe inbound content, sender, `threadId`,
   `messageId`, `senderId`, optional run/session correlation, ordered `media`,
-  and metadata.
+  normalized `location`, stable `providerUpdate` identity when supplied by the
+  channel, and metadata.
 - `message_sending`: rewrite `content` or return `{ cancel: true }`.
 - `reply_payload_sending`: rewrite normalized `ReplyPayload` objects
   (including `presentation`, `delivery`, media refs, and text) or return

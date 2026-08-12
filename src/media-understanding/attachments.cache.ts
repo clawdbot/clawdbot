@@ -38,6 +38,8 @@ type MediaBufferResult = {
   mime?: string;
   fileName: string;
   size: number;
+  /** Set only when bytes came from an approved local read under the root policy. */
+  localPath?: string;
 };
 
 type MediaPathResult = {
@@ -287,6 +289,9 @@ export class MediaAttachmentCache {
       mime: classification.mime,
       fileName: path.basename(filePath) || `media-${params.attachmentIndex + 1}`,
       size: buffer.length,
+      // Root-checked resolution the agent may be pointed at; remote-fetched
+      // buffers never carry one so a blocked path cannot reach the prompt.
+      localPath: filePath,
     };
     return entry.bufferResult;
   }

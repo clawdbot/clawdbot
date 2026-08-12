@@ -185,6 +185,7 @@ export type NormalizedMessage = {
   senderLabel?: string | null;
   sender?: SenderIdentity;
   audioAsVoice?: boolean;
+  replyPreview?: { text: string; senderLabel?: string | null };
   replyTarget?:
     | {
         kind: "current";

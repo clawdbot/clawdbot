@@ -90,6 +90,12 @@ const SessionsToolSchema = Type.Object(
   {
     action: stringEnum(ACTIONS, { description: "Action" }),
     sessionKey: Type.Optional(Type.String({ description: "Target session. Default: current" })),
+    expectedSessionId: Type.Optional(
+      Type.String({
+        description:
+          "Durable identity returned by sessions_list; required for archive, restore, or delete of another session.",
+      }),
+    ),
     deleteTranscript: Type.Optional(
       Type.Boolean({ description: "Archive the deleted session transcript. Default: true." }),
     ),
@@ -131,6 +137,7 @@ const SessionsToolSchema = Type.Object(
 
 type SessionsToolOptions = {
   agentSessionKey?: string;
+  agentSessionId?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: AgentToolGatewayRequestCaller;
@@ -276,11 +283,21 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         }
         // Archive returns the exact row generation. Carry it into the locked
         // delete so a concurrent reset cannot delete a replacement session.
+        const expectedSessionId = normalizeOptionalString(
+          readToolStringParam(params, "expectedSessionId"),
+        );
+        if (!expectedSessionId) {
+          throw new ToolInputError("Session lifecycle action requires a durable session identity");
+        }
         const archived = await callGateway<{
           entry?: { sessionId?: string; lifecycleRevision?: string };
-        }>("sessions.patch", { key, archived: true });
-        const expectedSessionId = normalizeOptionalString(archived.entry?.sessionId);
-        if (!expectedSessionId) {
+        }>("sessions.patch", {
+          key,
+          expectedSessionId,
+          archived: true,
+        });
+        const archivedSessionId = normalizeOptionalString(archived.entry?.sessionId);
+        if (!archivedSessionId) {
           throw new ToolInputError("Session archive did not return its session identity");
         }
         const expectedLifecycleRevision = normalizeOptionalString(
@@ -290,7 +307,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
           await callGateway("sessions.delete", {
             key,
             archivedOnly: true,
-            expectedSessionId,
+            expectedSessionId: archivedSessionId,
             ...(expectedLifecycleRevision ? { expectedLifecycleRevision } : {}),
             deleteTranscript: readBooleanParam(params, "deleteTranscript") ?? true,
           }),
@@ -328,8 +345,23 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         normalizeOptionalString(readToolStringParam(params, "sessionKey")),
         gatewayRequest,
       );
+      const archived =
+        params.archived !== undefined ? readBooleanParam(params, "archived") : undefined;
+      let lifecycleIdentity:
+        | { expectedSessionId: string; expectedLifecycleRevision?: string }
+        | undefined;
+      if (typeof archived === "boolean") {
+        const expectedSessionId =
+          normalizeOptionalString(readToolStringParam(params, "expectedSessionId")) ??
+          (key === requesterKey ? normalizeOptionalString(opts.agentSessionId) : undefined);
+        if (!expectedSessionId) {
+          throw new ToolInputError("Session lifecycle action requires a durable session identity");
+        }
+        lifecycleIdentity = { expectedSessionId };
+      }
       const patch = {
         key,
+        ...lifecycleIdentity,
         ...(params.label !== undefined ? { label: readClearableString(params, "label") } : {}),
         ...(params.statusNote !== undefined
           ? { statusNote: readClearableString(params, "statusNote") }
@@ -346,9 +378,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
           ? { ttlMinutes: readInteger(params, "ttlMinutes") }
           : {}),
         ...(params.pinned !== undefined ? { pinned: readBooleanParam(params, "pinned") } : {}),
-        ...(params.archived !== undefined
-          ? { archived: readBooleanParam(params, "archived") }
-          : {}),
+        ...(archived !== undefined ? { archived } : {}),
         ...(params.model !== undefined
           ? { model: readToolStringParam(params, "model", { required: true }) }
           : {}),
@@ -386,14 +416,18 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
             identities: [key, currentEntry?.sessionId],
           });
 
-          if (currentEntry && released) {
-            const expectedSessionIdentity = {
-              expectedSessionId: currentEntry.sessionId,
-              ...(currentEntry.lifecycleRevision
-                ? { expectedLifecycleRevision: currentEntry.lifecycleRevision }
-                : {}),
-            };
-            const { archived: _archived, ...immediatePatch } = patch;
+          if (
+            currentEntry?.sessionId === lifecycleIdentity?.expectedSessionId &&
+            released &&
+            lifecycleIdentity
+          ) {
+            const expectedSessionIdentity = lifecycleIdentity;
+            const {
+              archived: _archived,
+              expectedSessionId: _expectedSessionId,
+              expectedLifecycleRevision: _expectedLifecycleRevision,
+              ...immediatePatch
+            } = patch;
             let immediateResult: SessionsPatchResult | undefined;
             if (Object.keys(immediatePatch).length > 1) {
               immediateResult = await callSessionPatch({
@@ -407,7 +441,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
             // keeps a reset replacement from being archived between checks.
             void released
               .then(async () => {
-                const archiveIdentities = [key, currentEntry.sessionId];
+                const archiveIdentities = [key, expectedSessionIdentity.expectedSessionId];
                 const archivePatch = {
                   key,
                   archived: true,
@@ -418,7 +452,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                 while (true) {
                   const latestEntry = loadSessionEntry({ agentId, sessionKey: key, storePath });
                   if (
-                    latestEntry?.sessionId !== currentEntry.sessionId ||
+                    latestEntry?.sessionId !== expectedSessionIdentity.expectedSessionId ||
                     (expectedSessionIdentity.expectedLifecycleRevision !== undefined &&
                       latestEntry.lifecycleRevision !==
                         expectedSessionIdentity.expectedLifecycleRevision)

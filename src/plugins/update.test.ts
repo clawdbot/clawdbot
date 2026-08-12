@@ -4937,6 +4937,57 @@ describe("syncPluginsForUpdateChannel", () => {
     });
   });
 
+  it("installs an externalized bundled plugin under its renamed package id", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "openclaw-qqbot",
+        targetDir: "/tmp/openclaw-plugins/openclaw-qqbot",
+        version: "2.0.1",
+      }),
+    );
+
+    const result = await syncPluginsForUpdateChannel({
+      channel: "stable",
+      externalizedBundledPluginBridges: [
+        {
+          bundledPluginId: "qqbot",
+          pluginId: "openclaw-qqbot",
+          npmSpec: "@tencent-connect/openclaw-qqbot@2.0.1",
+          expectedIntegrity: "sha512-qqbot-catalog-pin",
+          channelIds: ["qqbot"],
+        },
+      ],
+      config: {
+        channels: { qqbot: { enabled: true } },
+        plugins: {
+          entries: { qqbot: { enabled: true } },
+          load: { paths: [appBundledPluginRoot("qqbot")] },
+          installs: {
+            qqbot: {
+              source: "path",
+              sourcePath: appBundledPluginRoot("qqbot"),
+              installPath: appBundledPluginRoot("qqbot"),
+            },
+          },
+        },
+      },
+    });
+
+    expect(npmInstallCall()?.expectedPluginId).toBe("openclaw-qqbot");
+    expect(npmInstallCall()?.expectedIntegrity).toBe("sha512-qqbot-catalog-pin");
+    expect(result.summary.switchedToNpm).toEqual(["openclaw-qqbot"]);
+    expect(result.config.plugins?.entries?.qqbot).toBeUndefined();
+    expect(result.config.plugins?.entries?.["openclaw-qqbot"]).toEqual({ enabled: true });
+    expect(result.config.plugins?.installs?.qqbot).toBeUndefined();
+    expectRecordFields(result.config.plugins?.installs?.["openclaw-qqbot"], {
+      source: "npm",
+      spec: "@tencent-connect/openclaw-qqbot@2.0.1",
+      installPath: "/tmp/openclaw-plugins/openclaw-qqbot",
+      version: "2.0.1",
+    });
+  });
+
   it("marks official externalized bundled npm installs as trusted", async () => {
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
     installPluginFromNpmSpecMock.mockResolvedValue(

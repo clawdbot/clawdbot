@@ -8559,6 +8559,46 @@
       "translated": "Mais $count workers"
     },
     {
+      "id": "native.android.87d0e02f15fa721a",
+      "source": "Compacted history",
+      "translated": "Histórico compactado"
+    },
+    {
+      "id": "native.android.9aa434a3c6f7be9e",
+      "source": "saved $count tokens",
+      "translated": "$count tokens economizados"
+    },
+    {
+      "id": "native.android.fda9fe610c7334a7",
+      "source": "Session reset",
+      "translated": "Sessão redefinida"
+    },
+    {
+      "id": "native.android.34b623e6597690a1",
+      "source": "The earlier conversation was cleared.",
+      "translated": "A conversa anterior foi apagada."
+    },
+    {
+      "id": "native.android.f22f983644b07db4",
+      "source": "System · restart recovery",
+      "translated": "Sistema · recuperação de reinicialização"
+    },
+    {
+      "id": "native.android.5ff88f5e4fb8dc90",
+      "source": "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.",
+      "translated": "Turno interrompido por uma reinicialização do gateway — solicitou ao agente que retomasse e concluísse a resposta."
+    },
+    {
+      "id": "native.android.7cd27609193d4cbf",
+      "source": "System · gateway restarted",
+      "translated": "Sistema · gateway reiniciado"
+    },
+    {
+      "id": "native.android.72b1f80d8de8404c",
+      "source": "System",
+      "translated": "Sistema"
+    },
+    {
       "id": "native.android.c32ff602fa622e4b",
       "source": "Done in $duration",
       "translated": "Concluído em $duration"
@@ -26087,6 +26127,46 @@
       "id": "native.apple.0149100bb5c8b985",
       "source": "Message",
       "translated": "Message"
+    },
+    {
+      "id": "native.apple.041f2ed87f1797a0",
+      "source": "System · restart recovery",
+      "translated": "Sistema · recuperação de reinicialização"
+    },
+    {
+      "id": "native.apple.0eaa9e1136018332",
+      "source": "System · gateway restarted",
+      "translated": "Sistema · gateway reiniciado"
+    },
+    {
+      "id": "native.apple.25ffcf5fcb1645d3",
+      "source": "System",
+      "translated": "Sistema"
+    },
+    {
+      "id": "native.apple.55c9f51c550018a9",
+      "source": "Compacted history",
+      "translated": "Histórico compactado"
+    },
+    {
+      "id": "native.apple.28264f2dcf55651b",
+      "source": "Session reset",
+      "translated": "Sessão redefinida"
+    },
+    {
+      "id": "native.apple.6410db19dcb02d59",
+      "source": "saved %@ tokens",
+      "translated": "%@ tokens economizados"
+    },
+    {
+      "id": "native.apple.0b97fe0abe7ea144",
+      "source": "The earlier conversation was cleared.",
+      "translated": "A conversa anterior foi apagada."
+    },
+    {
+      "id": "native.apple.4efcef39bcaea3d1",
+      "source": "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.",
+      "translated": "Turno interrompido por uma reinicialização do gateway — solicitou ao agente que retomasse e concluísse a resposta."
     },
     {
       "id": "native.apple.5824df4efbf6c977",

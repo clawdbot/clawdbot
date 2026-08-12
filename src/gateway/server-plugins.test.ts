@@ -1522,6 +1522,29 @@ describe("loadGatewayPlugins", () => {
     expect(getRequiredLastDispatchedParams()).not.toHaveProperty("disableTools");
   });
 
+  test("lets model-only subagent policy take precedence over additive tools", async () => {
+    const runtime = await createSubagentRuntime(serverPluginsModule);
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("disable-tools-tools-also-allow"));
+    registerActivePluginToolOwnership("workboard", ["workboard_complete"]);
+    registerActivePluginToolOwnership("other-plugin", ["other_plugin_tool"]);
+
+    await gatewayRequestScopeModule.withPluginRuntimePluginScope(
+      { pluginId: "workboard", pluginOrigin: "bundled" },
+      () =>
+        runtime.run({
+          sessionKey: "s-disable-tools-tools-also-allow",
+          message: "plan without tools",
+          disableTools: true,
+          toolsAlsoAllow: ["other_plugin_tool"],
+        }),
+    );
+
+    expect(getLastDispatchedClientInternal().pluginSubagentDisableTools).toBe(true);
+    expect(getLastDispatchedClientInternal().runtimePluginToolGrant).toBeUndefined();
+    expect(getRequiredLastDispatchedParams()).not.toHaveProperty("disableTools");
+    expect(getRequiredLastDispatchedParams()).not.toHaveProperty("toolsAlsoAllow");
+  });
+
   test("rejects additive subagent tools not registered by the calling plugin", async () => {
     const runtime = await createSubagentRuntime(serverPluginsModule);
     serverPluginsModule.setFallbackGatewayContext(createTestContext("foreign-tools-also-allow"));

@@ -53,6 +53,10 @@ function prepare(root) {
   fs.rmSync(aiRuntimeTarget, { force: true, recursive: true });
   fs.mkdirSync(path.dirname(aiRuntimeTarget), { recursive: true });
   fs.renameSync(aiRuntimeSource, aiRuntimeTarget);
+  const relocatedAiRuntimePackageJson = path.join(aiRuntimeTarget, "package.json");
+  const relocatedAiRuntimePackage = readJson(relocatedAiRuntimePackageJson);
+  delete relocatedAiRuntimePackage.devDependencies;
+  writeJson(relocatedAiRuntimePackageJson, relocatedAiRuntimePackage);
 
   packageJson.dependencies ??= {};
   packageJson.dependencies["@openclaw/ai"] = "file:.openclaw-fixture/packages/ai";

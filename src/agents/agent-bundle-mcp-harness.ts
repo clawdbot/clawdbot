@@ -7,6 +7,7 @@ import {
   buildBundleMcpToolsFromCatalog,
   materializeBundleMcpToolsForRun,
 } from "./agent-bundle-mcp-materialize.js";
+import { mergeMcpConnectCatalog } from "./agent-bundle-mcp-requester-connect.js";
 import {
   getAdvertisedScopedMcpCatalog,
   getOrCreateRequesterScopedMcpRuntime,
@@ -14,7 +15,7 @@ import {
   rememberAdvertisedScopedMcpCatalog,
   retireSessionMcpRuntime,
 } from "./agent-bundle-mcp-runtime.js";
-import type { McpToolCatalog } from "./agent-bundle-mcp-types.js";
+import type { McpToolCatalog, RequesterMcpConnect } from "./agent-bundle-mcp-types.js";
 import {
   resolveConversationCapabilityProfile,
   type ConversationCapabilityProfileParams,
@@ -91,6 +92,7 @@ type MaterializeRequesterScopedMcpToolsForHarnessRunParams = {
   agentDir?: string;
   cfg?: OpenClawConfig;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
   requesterSenderId?: string | null;
   agentAccountId?: string | null;
   messageChannel?: string | null;
@@ -148,11 +150,17 @@ function applyHarnessToolPolicy(
 function buildCatalogTools(
   catalog: McpToolCatalog,
   params: MaterializeRequesterScopedMcpToolsForHarnessRunParams,
+  requesterConnect?: RequesterMcpConnect,
 ): AnyAgentTool[] {
   return buildBundleMcpToolsFromCatalog({
     catalog,
     reservedToolNames: params.reservedToolNames ? Array.from(params.reservedToolNames) : undefined,
-    createExecute: (tool) => async () => notConnectedToolResult(tool.serverName, tool.toolName),
+    createExecute: (tool) => {
+      return (
+        requesterConnect?.createExecute(tool.serverName) ??
+        (async () => notConnectedToolResult(tool.serverName, tool.toolName))
+      );
+    },
   });
 }
 
@@ -262,23 +270,31 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     agentDir: params.agentDir,
     cfg: params.cfg,
     manifestRegistry: params.manifestRegistry,
+    toolOverrides: params.toolOverrides,
     requesterSenderId: params.requesterSenderId,
     agentAccountId: params.agentAccountId,
     messageChannel: params.messageChannel,
   });
 
   let liveRuntime: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
+  let liveCatalog: McpToolCatalog | undefined;
   try {
     if (scopedRuntime) {
       liveRuntime = await materializeBundleMcpToolsForRun({
         runtime: scopedRuntime,
         reservedToolNames: params.reservedToolNames,
       });
-      const catalog = scopedRuntime.peekCatalog() ?? (await scopedRuntime.getCatalog());
-      rememberAdvertisedScopedMcpCatalog(params.sessionId, catalog);
+      liveCatalog = scopedRuntime.peekCatalog() ?? (await scopedRuntime.getCatalog());
+      if (liveCatalog.tools.length > 0) {
+        rememberAdvertisedScopedMcpCatalog(params.sessionId, liveCatalog);
+      }
     }
 
-    const advertisedCatalog = getAdvertisedScopedMcpCatalog(params.sessionId);
+    const advertisedCatalog =
+      getAdvertisedScopedMcpCatalog(params.sessionId) ??
+      (liveCatalog
+        ? mergeMcpConnectCatalog(liveCatalog, scopedRuntime?.requesterConnect)
+        : undefined);
     if (!advertisedCatalog || advertisedCatalog.tools.length === 0) {
       await liveRuntime?.dispose();
       return undefined;
@@ -287,10 +303,11 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     const reservedToolNames = params.reservedToolNames
       ? Array.from(params.reservedToolNames)
       : undefined;
-    const advertisedTools = buildCatalogTools(advertisedCatalog, {
-      ...params,
-      reservedToolNames,
-    });
+    const advertisedTools = buildCatalogTools(
+      advertisedCatalog,
+      { ...params, reservedToolNames },
+      scopedRuntime?.requesterConnect,
+    );
     const liveByName = new Map((liveRuntime?.tools ?? []).map((tool) => [tool.name, tool]));
     // Live tools supply execution; advertised catalog supplies the stable name/schema surface.
     const tools = advertisedTools.map((tool) => liveByName.get(tool.name) ?? tool);

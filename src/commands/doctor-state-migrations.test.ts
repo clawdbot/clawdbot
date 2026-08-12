@@ -796,6 +796,33 @@ async function runAutoMigrateLegacyStateWithLog(params: {
   return { result, log };
 }
 
+function getProfileWorkspaceMigrationPaths(root: string, profile = "work") {
+  return {
+    legacyDir: path.join(root, ".openclaw", `workspace-${profile}`),
+    targetDir: path.join(root, `.openclaw-${profile}`, "workspace"),
+    stateDir: path.join(root, `.openclaw-${profile}`),
+  };
+}
+
+async function runProfileWorkspaceDoctorMigration(root: string, profile = "work") {
+  const paths = getProfileWorkspaceMigrationPaths(root, profile);
+  fs.mkdirSync(paths.stateDir, { recursive: true });
+  const log = { info: vi.fn(), warn: vi.fn() };
+  const result = await autoMigrateLegacyState({
+    cfg: {},
+    env: {
+      HOME: root,
+      OPENCLAW_HOME: root,
+      OPENCLAW_PROFILE: profile,
+      OPENCLAW_STATE_DIR: paths.stateDir,
+    } as NodeJS.ProcessEnv,
+    homedir: () => root,
+    log,
+    doctorOnlyStateMigrations: true,
+  });
+  return { log, paths, result };
+}
+
 function expectTargetAlreadyExistsWarning(result: StateDirMigrationResult, targetDir: string) {
   expect(result.migrated).toBe(false);
   expect(result.warnings).toEqual([
@@ -4154,6 +4181,51 @@ describe("doctor legacy state migrations", () => {
     expect(log.info).toHaveBeenCalled();
     expect(store["main"]).toBeUndefined();
     expect(store["agent:main:main"]?.sessionId).toBe("legacy");
+  });
+
+  it("moves the active profile's legacy workspace into its state root", async () => {
+    const root = makeDoctorStateDir();
+    const paths = getProfileWorkspaceMigrationPaths(root);
+    fs.mkdirSync(paths.legacyDir, { recursive: true });
+    fs.writeFileSync(path.join(paths.legacyDir, "AGENTS.md"), "profile workspace", "utf8");
+
+    const { log, result } = await runProfileWorkspaceDoctorMigration(root);
+
+    expect(fs.existsSync(paths.legacyDir)).toBe(false);
+    expect(fs.readFileSync(path.join(paths.targetDir, "AGENTS.md"), "utf8")).toBe(
+      "profile workspace",
+    );
+    expect(result.changes).toContain(`Profile workspace: ${paths.legacyDir} → ${paths.targetDir}`);
+    expect(log.info).toHaveBeenCalledWith(expect.stringContaining(paths.targetDir));
+  });
+
+  it("keeps both profile workspaces when the canonical target already exists", async () => {
+    const root = makeDoctorStateDir();
+    const paths = getProfileWorkspaceMigrationPaths(root);
+    fs.mkdirSync(paths.legacyDir, { recursive: true });
+    fs.mkdirSync(paths.targetDir, { recursive: true });
+    fs.writeFileSync(path.join(paths.legacyDir, "legacy.txt"), "legacy", "utf8");
+    fs.writeFileSync(path.join(paths.targetDir, "current.txt"), "current", "utf8");
+
+    const { log, result } = await runProfileWorkspaceDoctorMigration(root);
+
+    const warning = `Profile workspace migration skipped: target already exists (${paths.targetDir}). Kept legacy workspace at ${paths.legacyDir}; merge manually.`;
+    expect(result.warnings).toContain(warning);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(warning));
+    expect(fs.readFileSync(path.join(paths.legacyDir, "legacy.txt"), "utf8")).toBe("legacy");
+    expect(fs.readFileSync(path.join(paths.targetDir, "current.txt"), "utf8")).toBe("current");
+  });
+
+  it("does nothing when the active profile has no legacy workspace", async () => {
+    const root = makeDoctorStateDir();
+
+    const { log, paths, result } = await runProfileWorkspaceDoctorMigration(root);
+
+    expect(fs.existsSync(paths.legacyDir)).toBe(false);
+    expect(fs.existsSync(paths.targetDir)).toBe(false);
+    expect(result.changes.some((entry) => entry.startsWith("Profile workspace:"))).toBe(false);
+    expect(result.warnings.some((entry) => entry.includes("Profile workspace"))).toBe(false);
+    expect(log.warn).not.toHaveBeenCalledWith(expect.stringContaining("Profile workspace"));
   });
 
   it("does nothing when no legacy state dir exists", async () => {

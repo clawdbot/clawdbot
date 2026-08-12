@@ -20,7 +20,7 @@ import {
   normalizeModelSelection,
   publishedModelCatalogOwnerMatchesAgent,
   resolveAgentConfig,
-  resolveAllowedModelRef,
+  resolveAllowedModelRefCore,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
   resolveSubagentModelConfigSelectionResult,
@@ -228,7 +228,7 @@ export async function resolveCronModelSelection(
   if (subagentModelRaw) {
     // Subagent/agent model config is advisory here: invalid refs fall back to
     // defaults so an agent config typo does not prevent unrelated cron runs.
-    const resolvedSubagent = resolveAllowedModelRef({
+    const resolvedSubagent = resolveAllowedModelRefCore({
       cfg: owner.config,
       catalog,
       raw: subagentModelRaw,
@@ -274,7 +274,7 @@ export async function resolveCronModelSelection(
   if (modelOverride !== undefined && modelOverride.length > 0) {
     // Payload model overrides are explicit cron config, so reject disallowed
     // refs instead of silently falling back to defaults.
-    const resolvedOverride = resolveAllowedModelRef({
+    const resolvedOverride = resolveAllowedModelRefCore({
       cfg: owner.config,
       catalog,
       raw: modelOverride,
@@ -305,7 +305,7 @@ export async function resolveCronModelSelection(
       // and hook-specific models can intentionally move a run away from history.
       const sessionProviderOverride =
         params.sessionEntry.providerOverride?.trim() || resolvedDefault.provider;
-      const resolvedSessionOverride = resolveAllowedModelRef({
+      const resolvedSessionOverride = resolveAllowedModelRefCore({
         cfg: owner.config,
         catalog,
         raw: `${sessionProviderOverride}/${sessionModelOverride}`,

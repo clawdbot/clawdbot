@@ -62,6 +62,43 @@ type TaskRefreshEventBuffer = {
   events: TaskRefreshEvent[];
 };
 
+async function loadActiveTaskPages(params: {
+  client: GatewayBrowserClient;
+  agentId: string | undefined;
+  signal: AbortSignal;
+}): Promise<TaskSummary[]> {
+  let tasks: TaskSummary[] = [];
+  let cursor: string | undefined;
+  const seenCursors = new Set<string>();
+  while (true) {
+    const payload = await params.client.request(
+      "tasks.list",
+      {
+        status: ["queued", "running"],
+        limit: 500,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        ...(cursor !== undefined ? { cursor } : {}),
+      },
+      { signal: params.signal },
+    );
+    const page = normalizeTasksListResult(payload);
+    if (!page) {
+      throw new Error(t("tasksPage.invalidResponse"));
+    }
+    tasks = mergeTaskLists(tasks, page.tasks);
+    if (page.nextCursor === undefined) {
+      return tasks;
+    }
+    // Cursors are opaque, so revisiting any prior token is the only safe
+    // client-side definition of a non-advancing page sequence.
+    if (!page.nextCursor || seenCursors.has(page.nextCursor)) {
+      throw new Error(t("tasksPage.invalidResponse"));
+    }
+    seenCursors.add(page.nextCursor);
+    cursor = page.nextCursor;
+  }
+}
+
 class TasksPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
@@ -115,24 +152,15 @@ class TasksPage extends OpenClawLightDomElement {
       };
       this.taskRefreshEvents = buffer;
       const agentId = scopeId ?? undefined;
-      const [activePayload, recentPayload] = await Promise.all([
-        client.request(
-          "tasks.list",
-          {
-            status: ["queued", "running"],
-            limit: 500,
-            ...(agentId ? { agentId } : {}),
-          },
-          { signal },
-        ),
+      const [active, recentPayload] = await Promise.all([
+        loadActiveTaskPages({ client, agentId, signal }),
         client.request("tasks.list", { limit: 200, ...(agentId ? { agentId } : {}) }, { signal }),
       ]);
-      const active = normalizeTasksListResult(activePayload);
       const recent = normalizeTasksListResult(recentPayload);
-      if (!active || !recent) {
+      if (!recent) {
         throw new Error(t("tasksPage.invalidResponse"));
       }
-      return { active, recent, buffer };
+      return { active, recent: recent.tasks, buffer };
     },
     onComplete: ({ active, recent, buffer }) => {
       // The active query is issued first; a same-millisecond recent page

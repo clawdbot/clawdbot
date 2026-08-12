@@ -3,6 +3,7 @@
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { stripLeadingPackageManagerSeparator } from "../../lib/arg-utils.mts";
 import { posixAgentWorkspaceScript } from "./agent-workspace.ts";
 import {
   die,
@@ -266,10 +267,6 @@ export function parseArgs(argv: string[]): MacosOptions {
     }
   }
   return options;
-}
-
-function stripLeadingPackageManagerSeparator(argv: string[]): string[] {
-  return argv[0] === "--" ? argv.slice(1) : argv;
 }
 
 class MacosSmoke {

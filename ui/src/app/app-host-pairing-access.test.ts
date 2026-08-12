@@ -3,6 +3,7 @@
 import { render, type TemplateResult } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { OpenClawDevicePairSetup } from "../pages/devices/view-pairing.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
 import "./app-host.ts";
@@ -23,7 +24,12 @@ function createPairingShell(params: {
   auth: PairingAuth | null;
   connected?: boolean;
   setupCode?: string;
+  expiresAtMs?: number;
+  approvalNowMs?: number;
 }) {
+  if (!customElements.get("openclaw-device-pair-setup")) {
+    customElements.define("openclaw-device-pair-setup", OpenClawDevicePairSetup);
+  }
   const snapshot: ApplicationGatewaySnapshot = {
     client: { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient,
     phase: params.connected === false ? "stopped" : "connected",
@@ -36,6 +42,30 @@ function createPairingShell(params: {
     lastErrorCode: null,
   };
   const openDevicePairSetup = vi.fn(async () => undefined);
+  const overlaySnapshot = {
+    approvalQueue: [],
+    approvalErrors: new Map(),
+    approvalNowMs: params.approvalNowMs ?? 0,
+    approvalBusy: false,
+    devicePairSetupOpen: Boolean(params.setupCode),
+    devicePairSetupLoading: false,
+    devicePairSetupError: null,
+    devicePairSetup: params.setupCode
+      ? {
+          setupCode: params.setupCode,
+          gatewayUrl: "wss://gateway.example.test",
+          auth: "token",
+          urlSource: "test",
+          ...(params.expiresAtMs === undefined ? {} : { expiresAtMs: params.expiresAtMs }),
+        }
+      : null,
+    devicePairSetupAccess: "full",
+    devicePairPendingCount: 0,
+    updateAvailable: null,
+    updateRunning: false,
+    updateStatusBanner: null,
+    controlUiRefreshRequired: false,
+  };
   const context = {
     basePath: "",
     gateway: {
@@ -46,29 +76,7 @@ function createPairingShell(params: {
       snapshot: { navCollapsed: false, navWidth: 258, sidebarEntries: [], pinnedAgentIds: [] },
     },
     overlays: {
-      snapshot: {
-        approvalQueue: [],
-        approvalErrors: new Map(),
-        approvalNowMs: 0,
-        approvalBusy: false,
-        devicePairSetupOpen: Boolean(params.setupCode),
-        devicePairSetupLoading: false,
-        devicePairSetupError: null,
-        devicePairSetup: params.setupCode
-          ? {
-              setupCode: params.setupCode,
-              gatewayUrl: "wss://gateway.example.test",
-              auth: "token",
-              urlSource: "test",
-            }
-          : null,
-        devicePairSetupAccess: "full",
-        devicePairPendingCount: 0,
-        updateAvailable: null,
-        updateRunning: false,
-        updateStatusBanner: null,
-        controlUiRefreshRequired: false,
-      },
+      snapshot: overlaySnapshot,
       openDevicePairSetup,
     },
     config: { current: {} },
@@ -81,7 +89,13 @@ function createPairingShell(params: {
     theme: { mode: "system" },
   } as unknown as ApplicationContext;
   const shell = document.createElement("openclaw-app-shell") as PairingShell;
-  shell.runtime = { context, router: {} } as ApplicationRuntime;
+  shell.runtime = {
+    context,
+    router: {
+      getState: () => ({ status: "idle", matches: [], pendingMatches: [] }),
+      subscribeSelector: () => () => undefined,
+    },
+  } as unknown as ApplicationRuntime;
   const container = document.createElement("div");
 
   const renderSidebar = () => {
@@ -93,11 +107,13 @@ function createPairingShell(params: {
     return sidebar;
   };
 
-  return { snapshot, openDevicePairSetup, renderSidebar, container };
+  return { snapshot, overlaySnapshot, openDevicePairSetup, renderSidebar, container };
 }
 
-afterEach(() => {
+afterEach(async () => {
+  vi.useRealTimers();
   document.body.replaceChildren();
+  await Promise.resolve();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   Reflect.deleteProperty(document, "execCommand");
@@ -161,12 +177,12 @@ describe("application shell pairing access", () => {
       auth: { role: "operator", scopes: ["operator.pairing"] },
       setupCode: "pair-mobile-secret",
     });
+    document.body.append(container);
     renderSidebar();
-    const pairing = container.querySelector<HTMLElement>(".device-pair-setup");
-    if (!pairing) {
-      throw new Error("Expected the application shell to render its mobile pairing dialog");
-    }
-    document.body.append(pairing);
+    await vi.waitFor(() =>
+      expect(container.querySelector<HTMLElement>(".device-pair-setup")).not.toBeNull(),
+    );
+    const pairing = container.querySelector<HTMLElement>(".device-pair-setup")!;
     const button = pairing.querySelector<HTMLButtonElement>(".device-pair-setup__actions button");
 
     button?.click();
@@ -185,5 +201,32 @@ describe("application shell pairing access", () => {
 
     expect(button?.textContent?.trim()).toBe("Copy setup code");
     expect(button?.getAttribute("aria-label")).toBe("Copy setup code");
+  });
+
+  it("expires a node setup link from the pairing clock, independently of approvals", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(4_000);
+    const { overlaySnapshot, container, renderSidebar } = createPairingShell({
+      auth: { role: "operator", scopes: ["operator.pairing"] },
+      setupCode: "pair-node-secret",
+      expiresAtMs: 5_000,
+      approvalNowMs: 50_000,
+    });
+    document.body.append(container);
+    overlaySnapshot.devicePairSetupAccess = "node";
+
+    renderSidebar();
+    await vi.waitFor(() =>
+      expect(container.querySelector('[role="timer"]')?.textContent).toContain("0:01"),
+    );
+    expect(container.querySelector(".device-pair-setup__command code")).not.toBeNull();
+
+    now.mockReturnValue(5_000);
+    renderSidebar();
+    await vi.waitFor(() =>
+      expect(container.querySelector('[role="timer"]')?.textContent?.toLowerCase()).toContain(
+        "expired",
+      ),
+    );
+    expect(container.querySelector(".device-pair-setup__command code")).toBeNull();
   });
 });

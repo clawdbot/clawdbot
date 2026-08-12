@@ -36,6 +36,17 @@ type IMessageRpcClientOptions = {
   onNotification?: (msg: IMessageRpcNotification) => void;
 };
 
+export class IMessageRpcRequestError extends Error {
+  constructor(
+    message: string,
+    readonly code?: number,
+    readonly data?: unknown,
+  ) {
+    super(message);
+    this.name = "IMessageRpcRequestError";
+  }
+}
+
 type PendingRequest = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
@@ -374,7 +385,9 @@ export class IMessageRpcClient {
           }
         }
         const msg = suffixes.length > 0 ? `${baseMessage}: ${suffixes.join(" ")}` : baseMessage;
-        pending.reject(new Error(msg));
+        pending.reject(
+          new IMessageRpcRequestError(msg, typeof code === "number" ? code : undefined, details),
+        );
         return;
       }
       pending.resolve(parsed.result);

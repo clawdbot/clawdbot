@@ -10,7 +10,7 @@ import { withSecureTestNodeExecPath } from "./test-node-command.test-support.js"
 
 const mocks = vi.hoisted(() => ({
   getCurrentPluginMetadataSnapshot: vi.fn(),
-  loadPluginManifestRegistry: vi.fn(() => {
+  loadPluginManifestRegistryCore: vi.fn(() => {
     throw new Error("unexpected manifest registry rediscovery");
   }),
 }));
@@ -20,7 +20,7 @@ vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
 }));
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: mocks.loadPluginManifestRegistry,
+  loadPluginManifestRegistryCore: mocks.loadPluginManifestRegistryCore,
 }));
 
 function createPluginManagedSecretProviderFixture(): {
@@ -87,7 +87,7 @@ function createPluginManagedSecretProviderFixture(): {
 describe("resolveSecretRefString manifest registry reuse", () => {
   afterEach(() => {
     mocks.getCurrentPluginMetadataSnapshot.mockReset();
-    mocks.loadPluginManifestRegistry.mockClear();
+    mocks.loadPluginManifestRegistryCore.mockClear();
   });
 
   it("uses an explicit manifest registry without rediscovering plugin manifests", async () => {
@@ -105,7 +105,7 @@ describe("resolveSecretRefString manifest registry reuse", () => {
         ).resolves.toBe("value:providers/openrouter/apiKey");
       });
       expect(mocks.getCurrentPluginMetadataSnapshot).not.toHaveBeenCalled();
-      expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
+      expect(mocks.loadPluginManifestRegistryCore).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(rootDir, { recursive: true, force: true });
     }
@@ -132,7 +132,7 @@ describe("resolveSecretRefString manifest registry reuse", () => {
         env,
         allowWorkspaceScopedSnapshot: true,
       });
-      expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
+      expect(mocks.loadPluginManifestRegistryCore).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(rootDir, { recursive: true, force: true });
     }

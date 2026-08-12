@@ -1115,6 +1115,85 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
+  it("caps a nested session trail at half the header while ellipsizing both titles", async () => {
+    const page = await openBrowserPage(720, 180);
+    try {
+      const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}\n${splitViewCss}</style></head><body>
+          <div class="chat-split-view__cell" style="width: 640px;">
+            <div class="chat-pane__header">
+              <div class="chat-pane__crumbs">
+                <wa-dropdown class="chat-pane__workspace-menu">
+                  <button class="chat-pane__workspace-chip" type="button">
+                    ${iconSvg()}<span>openclaw</span>
+                  </button>
+                </wa-dropdown>
+                <span class="chat-pane__crumb-sep" aria-hidden="true">/</span>
+                <button class="chat-pane__parent-session" type="button">
+                  <span class="chat-pane__parent-session-text">Release preparation with a long parent name</span>
+                </button>
+                <span class="chat-pane__crumb-sep" aria-hidden="true">/</span>
+                <button class="chat-pane__session-title chat-pane__session-title-button" type="button">
+                  <span class="chat-pane__session-title-text">Implementation details with a long child name</span>
+                </button>
+              </div>
+              <div class="chat-pane__actions">
+                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close-pane" type="button">X</button>
+              </div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+
+      const readState = () =>
+        page.locator(".chat-pane__header").evaluate((header) => {
+          const separators = [...header.querySelectorAll<HTMLElement>(".chat-pane__crumb-sep")];
+          const parentText = header.querySelector<HTMLElement>(".chat-pane__parent-session-text")!;
+          const childText = header.querySelector<HTMLElement>(".chat-pane__session-title-text")!;
+          const parent = header.querySelector<HTMLElement>(".chat-pane__parent-session")!;
+          const child = header.querySelector<HTMLElement>(".chat-pane__session-title")!;
+          const headerRect = header.getBoundingClientRect();
+          const parentRect = parent.getBoundingClientRect();
+          const childRect = child.getBoundingClientRect();
+          return {
+            firstSeparator: getComputedStyle(separators[0]!).display,
+            secondSeparator: getComputedStyle(separators[1]!).display,
+            parentEllipses: parentText.scrollWidth > parentText.clientWidth,
+            childEllipses: childText.scrollWidth > childText.clientWidth,
+            headerWidth: headerRect.width,
+            nestedTrailWidth: childRect.right - parentRect.left,
+            overflow: (header as HTMLElement).scrollWidth - (header as HTMLElement).clientWidth,
+          };
+        });
+
+      const normal = await readState();
+      expect(normal).toMatchObject({
+        firstSeparator: "block",
+        secondSeparator: "block",
+        parentEllipses: true,
+        childEllipses: true,
+        overflow: 0,
+      });
+      expect(normal.nestedTrailWidth).toBeLessThanOrEqual(normal.headerWidth / 2 + 1);
+
+      await page.locator(".chat-split-view__cell").evaluate((cell) => {
+        (cell as HTMLElement).style.width = "320px";
+      });
+      const narrow = await readState();
+      expect(narrow).toMatchObject({
+        firstSeparator: "none",
+        secondSeparator: "block",
+        parentEllipses: true,
+        childEllipses: true,
+        overflow: 0,
+      });
+      expect(narrow.nestedTrailWidth).toBeLessThanOrEqual(narrow.headerWidth / 2 + 1);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it("keeps a Done status disjoint from a long compact session headline", async () => {
     const page = await openBrowserPage(320, 240);
     try {
@@ -2009,6 +2088,101 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await closeBrowserPage(page);
     }
   });
+
+  it.each(["dark", "light"] as const)(
+    "keeps punctuation attached to inline code in %s mode",
+    async (themeMode) => {
+      const page = await openBrowserPage(800, 400);
+      try {
+        await page.setContent(
+          `<!doctype html><html data-theme-mode="${themeMode}"><head><style>${readUiCss()}</style></head><body>
+            <div class="chat-text"><p>Use <code>status</code>; then <code>restart</code>.</p></div>
+          </body></html>`,
+        );
+
+        const spacing = await page.locator(".chat-text code").evaluateAll((nodes) =>
+          nodes.map((node) => {
+            const punctuation = node.nextSibling;
+            if (!(punctuation instanceof Text)) {
+              throw new Error("Expected punctuation text after inline code");
+            }
+            const range = document.createRange();
+            range.selectNodeContents(node);
+            const textRect = range.getBoundingClientRect();
+            range.setStart(punctuation, 0);
+            range.setEnd(punctuation, 1);
+            const punctuationRect = range.getBoundingClientRect();
+            range.detach();
+            const chipRect = (node as HTMLElement).getBoundingClientRect();
+            const paragraph = (node as HTMLElement).parentElement;
+            if (!paragraph) {
+              throw new Error("Expected inline code inside a paragraph");
+            }
+            return {
+              horizontalGap: punctuationRect.left - textRect.right,
+              chipHeight: chipRect.height,
+              lineHeight: Number.parseFloat(getComputedStyle(paragraph).lineHeight),
+            };
+          }),
+        );
+
+        expect(spacing).toHaveLength(2);
+        for (const { horizontalGap, chipHeight, lineHeight } of spacing) {
+          // The gap is the chip's em-derived inset plus its border, so a quarter of
+          // the 14px prose size holds on every platform.
+          expect(horizontalGap).toBeLessThanOrEqual(3.75);
+          // Measure the chip against the paragraph's CSS line box rather than a text
+          // rect: the chip's content height follows the monospace font's default line
+          // spacing, which differs by several px between macOS and Linux.
+          expect(lineHeight).toBeGreaterThan(0);
+          expect(chipHeight).toBeLessThanOrEqual(lineHeight + 1);
+        }
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
+
+  it.each(["dark", "light"] as const)(
+    "fits short table cards to their columns in %s mode",
+    async (themeMode) => {
+      const page = await openBrowserPage(800, 400);
+      try {
+        await page.setContent(
+          `<!doctype html><html data-theme-mode="${themeMode}"><head><style>${readUiCss()}</style></head><body>
+            <div class="chat-text">
+              <div data-table-lane style="width: 680px">
+                <table data-short-table><thead><tr><th>Name</th><th>Status</th></tr></thead><tbody><tr><td>Gateway</td><td>Ready</td></tr></tbody></table>
+              </div>
+              <div data-narrow-table-lane style="width: 160px">
+                <table data-narrow-table><thead><tr><th>Name</th><th>Status</th></tr></thead><tbody><tr><td>Gateway</td><td>Ready</td></tr></tbody></table>
+              </div>
+            </div>
+          </body></html>`,
+        );
+
+        const geometry = await page.evaluate(() => {
+          const rectFor = (selector: string) =>
+            document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+          const shortTable = rectFor("[data-short-table]");
+          const lastCell = rectFor("[data-short-table] tbody td:last-child");
+          return {
+            laneWidth: rectFor("[data-table-lane]").width,
+            narrowLaneWidth: rectFor("[data-narrow-table-lane]").width,
+            narrowTableWidth: rectFor("[data-narrow-table]").width,
+            shortTableWidth: shortTable.width,
+            trailingGap: shortTable.right - lastCell.right,
+          };
+        });
+
+        expect(geometry.shortTableWidth).toBeLessThan(geometry.laneWidth);
+        expect(geometry.trailingGap).toBeLessThanOrEqual(1);
+        expect(geometry.narrowTableWidth).toBeCloseTo(geometry.narrowLaneWidth, 0);
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
 
   it.each(["dark", "light"] as const)(
     "keeps mobile controls inside the viewport with touch targets in %s mode",
@@ -2992,20 +3166,20 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
     it("scrolls the keyboard-active slash option into view in short landscape", async () => {
       const initiallyHidden = await page.evaluate(() => {
-        const menu = document.querySelector<HTMLElement>(".slash-menu");
+        const scrollRegion = document.querySelector<HTMLElement>(".slash-menu__scroll");
         const options = Array.from(
           document.querySelectorAll<HTMLElement>(".slash-menu-item[role='option']"),
         );
         const hiddenOption = options.find((option) => {
-          const menuRect = menu?.getBoundingClientRect();
+          const menuRect = scrollRegion?.getBoundingClientRect();
           const optionRect = option.getBoundingClientRect();
           return Boolean(menuRect && optionRect.bottom > menuRect.bottom + 1);
         });
-        if (!menu || !hiddenOption) {
+        if (!scrollRegion || !hiddenOption) {
           throw new Error("Expected an initially hidden slash option");
         }
-        menu.scrollTop = 0;
-        const menuRect = menu.getBoundingClientRect();
+        scrollRegion.scrollTop = 0;
+        const menuRect = scrollRegion.getBoundingClientRect();
         const itemRect = hiddenOption.getBoundingClientRect();
         return {
           id: hiddenOption.id,
@@ -3026,11 +3200,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       }, initiallyHidden.id);
       await page.waitForFunction((expectedId) => {
         const active = document.getElementById(expectedId);
-        const menu = active?.closest<HTMLElement>(".slash-menu");
-        if (!active || !menu) {
+        const scrollRegion = active?.closest<HTMLElement>(".slash-menu__scroll");
+        if (!active || !scrollRegion) {
           return false;
         }
-        const menuRect = menu.getBoundingClientRect();
+        const menuRect = scrollRegion.getBoundingClientRect();
         const activeRect = active.getBoundingClientRect();
         return activeRect.top >= menuRect.top - 1 && activeRect.bottom <= menuRect.bottom + 1;
       }, initiallyHidden.id);
@@ -3039,17 +3213,17 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const input = document.querySelector<HTMLTextAreaElement>(
           ".agent-chat__composer-combobox > textarea",
         );
-        const menu = document.querySelector<HTMLElement>(".slash-menu");
+        const scrollRegion = document.querySelector<HTMLElement>(".slash-menu__scroll");
         const active = document.querySelector<HTMLElement>(".slash-menu-item--active");
-        if (!input || !menu || !active) {
+        if (!input || !scrollRegion || !active) {
           throw new Error("Expected active slash option after keyboard navigation");
         }
-        const menuRect = menu.getBoundingClientRect();
+        const menuRect = scrollRegion.getBoundingClientRect();
         const activeRect = active.getBoundingClientRect();
         return {
           activeDescendant: input.getAttribute("aria-activedescendant"),
           focusedTag: document.activeElement?.tagName,
-          scrollTop: menu.scrollTop,
+          scrollTop: scrollRegion.scrollTop,
           visible: activeRect.top >= menuRect.top - 1 && activeRect.bottom <= menuRect.bottom + 1,
         };
       });
@@ -3059,6 +3233,52 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(result.scrollTop).toBeGreaterThan(0);
       expect(result.visible).toBe(true);
     });
+  });
+
+  it("keeps overflowing skill suggestions on the nested scroll viewport", async () => {
+    const page = await openBrowserPage(568, 320);
+    try {
+      const items = Array.from({ length: 16 }, (_, index) => {
+        const active = index === 15 ? " slash-menu-item--active" : "";
+        return `<div class="slash-menu-item${active}" role="option">
+          <span class="slash-menu-leading">
+            <span class="slash-menu-icon">${iconSvg()}</span>
+            <span class="slash-menu-name">$skill_${index + 1}</span>
+          </span>
+        </div>`;
+      }).join("");
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+        <div class="slash-menu skill-menu" role="listbox">
+          <div class="slash-menu__scroll">${items}</div>
+        </div>
+      </body></html>`);
+
+      const result = await page.evaluate(() => {
+        const active = document.querySelector<HTMLElement>(".slash-menu-item--active");
+        const scrollRegion = active?.closest<HTMLElement>(".slash-menu__scroll");
+        if (!active || !scrollRegion) {
+          throw new Error("Expected an active skill inside the nested viewport");
+        }
+        const viewport = scrollRegion.getBoundingClientRect();
+        const option = active.getBoundingClientRect();
+        scrollRegion.scrollTop += option.bottom - viewport.bottom;
+        const settledOption = active.getBoundingClientRect();
+        const settledViewport = scrollRegion.getBoundingClientRect();
+        return {
+          outerScrollTop: active.closest<HTMLElement>(".skill-menu")?.scrollTop,
+          scrollTop: scrollRegion.scrollTop,
+          visible:
+            settledOption.top >= settledViewport.top - 1 &&
+            settledOption.bottom <= settledViewport.bottom + 1,
+        };
+      });
+
+      expect(result.outerScrollTop).toBe(0);
+      expect(result.scrollTop).toBeGreaterThan(0);
+      expect(result.visible).toBe(true);
+    } finally {
+      await closeBrowserPage(page);
+    }
   });
 
   it("uses the compact mobile grid when the agent filter is not rendered", async () => {
@@ -3249,6 +3469,55 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(geometry.bottomGap).toBe(0);
       expect(geometry.rightGap).toBe(0);
       expect(geometry.borderRadius).toBe("0px");
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("matches the reading prototype's transcript letter spacing without changing shared text", async () => {
+    const page = await openBrowserPage(1366, 900);
+    try {
+      await page.setContent(`<!doctype html><html data-theme-mode="dark"><head><style>${readUiCss()}</style></head><body>
+        <div class="chat-thread chat-thread--direct" role="log">
+          <div class="chat-thread-inner">
+            <div class="chat-group assistant">
+              <div class="chat-group-messages">
+                <div class="chat-bubble">
+                  <div class="chat-text">
+                    <p>Aa Bb Cc — Smooth reading depends on the shape, spacing, and contrast of every glyph in a transcript.</p>
+                    <p>Keep this fixture about text rendering; width and block rhythm are intentionally not asserted here.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <section class="custodian-surface">
+          <div class="chat-bubble"><div class="chat-text">Custodian output</div></div>
+        </section>
+        <div class="chat-notice"><div class="chat-text chat-notice__body">Compact notice</div></div>
+        <div class="cron-run-entry__body chat-text">Cron output</div>
+      </body></html>`);
+
+      const transcriptLetterSpacing = await page
+        .locator(".chat-thread .chat-bubble .chat-text")
+        .evaluate((element) => getComputedStyle(element).letterSpacing);
+      const custodianLetterSpacing = await page
+        .locator(".custodian-surface .chat-bubble .chat-text")
+        .evaluate((element) => getComputedStyle(element).letterSpacing);
+      const noticeLetterSpacing = await page
+        .locator(".chat-notice .chat-text")
+        .evaluate((element) => getComputedStyle(element).letterSpacing);
+      const cronLetterSpacing = await page
+        .locator(".cron-run-entry__body.chat-text")
+        .evaluate((element) => getComputedStyle(element).letterSpacing);
+      const bodyLetterSpacing = await page
+        .locator("body")
+        .evaluate((element) => getComputedStyle(element).letterSpacing);
+      expect(transcriptLetterSpacing).toBe("normal");
+      expect(custodianLetterSpacing).toBe(bodyLetterSpacing);
+      expect(noticeLetterSpacing).toBe(bodyLetterSpacing);
+      expect(cronLetterSpacing).toBe(bodyLetterSpacing);
     } finally {
       await closeBrowserPage(page);
     }

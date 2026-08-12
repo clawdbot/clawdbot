@@ -13,7 +13,7 @@ import {
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: () => ({ plugins: [] }),
+  loadPluginManifestRegistryCore: () => ({ plugins: [] }),
 }));
 
 vi.mock("./model-auth-env-vars.js", () => ({

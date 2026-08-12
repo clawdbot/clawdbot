@@ -170,7 +170,7 @@ export async function readBoundedResponseText(response, label, maxBytes, options
   return new TextDecoder().decode(bytes);
 }
 
-function toLintErrorObject(value, fallbackMessage) {
+export function toLintErrorObject(value, fallbackMessage) {
   if (value instanceof Error) {
     return value;
   }

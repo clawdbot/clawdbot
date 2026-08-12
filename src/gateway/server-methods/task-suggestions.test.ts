@@ -23,11 +23,13 @@ vi.mock("../session-utils.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../session-utils.js")>();
   return {
     ...actual,
-    loadSessionEntryReadOnly: (...args: Parameters<typeof actual.loadSessionEntryReadOnly>) => {
+    loadGatewaySessionEntryReadOnly: (
+      ...args: Parameters<typeof actual.loadGatewaySessionEntryReadOnly>
+    ) => {
       if (sessionReadState.mode === "throw") {
         throw new Error("session inspection unavailable");
       }
-      const loaded = actual.loadSessionEntryReadOnly(...args);
+      const loaded = actual.loadGatewaySessionEntryReadOnly(...args);
       return sessionReadState.mode === "present"
         ? { ...loaded, entry: { sessionId: "surviving-session", updatedAt: 1 } }
         : loaded;

@@ -1,11 +1,11 @@
 // Control UI chat domain owns pure slash command rules.
 
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CommandEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { buildBuiltinChatCommands } from "../../../../src/auto-reply/commands-registry.shared.js";
 import { t } from "../../i18n/index.ts";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";
 
@@ -529,11 +529,6 @@ export function getSkillCommandCompletions(filter: string): SlashCommandDef[] {
         normalizeLowercaseStringOrEmpty(getSlashCommandDescription(command)).includes(lower),
     )
     .toSorted((left, right) => left.name.localeCompare(right.name));
-}
-
-/** Count of commands hidden by tier filtering (for "Show N more" UI). */
-export function getHiddenCommandCount(): number {
-  return SLASH_COMMANDS.filter((cmd) => (cmd.tier ?? "standard") === "power").length;
 }
 
 type ParsedSlashCommand = {

@@ -17,7 +17,7 @@ import {
   readSessionMessageByIdAsync,
   readSessionMessagesAsync,
 } from "../session-transcript-readers.js";
-import { loadSessionEntryReadOnly } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { readChatHistoryMessageId } from "./chat-history-pages.js";
 import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-origin-routing.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
@@ -74,7 +74,10 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       agentId: agentIdOverride,
     });
     const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
-    const { cfg, storePath, entry } = loadSessionEntryReadOnly(sessionKey, sessionLoadOptions);
+    const { cfg, storePath, entry } = loadGatewaySessionEntryReadOnly(
+      sessionKey,
+      sessionLoadOptions,
+    );
     const selectedAgent = validateChatSelectedAgent({
       cfg,
       requestedSessionKey: sessionKey,

@@ -760,7 +760,7 @@ async function deliverCompletionDirect(params: {
     if (params.isSourceSessionEffectsAllowed?.() === false) {
       return sourceOwnerChangedResult();
     }
-    await subagentAnnounceDeliveryDeps.sendMessage({
+    const sendResult = await subagentAnnounceDeliveryDeps.sendMessage({
       cfg: params.cfg,
       channel: params.deliveryTarget.channel,
       to: params.deliveryTarget.to,
@@ -786,7 +786,23 @@ async function deliverCompletionDirect(params: {
         idempotencyKey,
       },
     });
-    return committedDelivery ?? { delivered: true, path: "direct" };
+    if (committedDelivery) {
+      return committedDelivery;
+    }
+    if (sendResult.deliveryStatus === "suppressed") {
+      const ambiguous = sendResult.suppressionReason === "adapter_returned_no_identity";
+      return {
+        delivered: false,
+        path: "direct",
+        error: ambiguous
+          ? "text completion direct delivery could not be confirmed: adapter returned no identity"
+          : `text completion direct delivery was suppressed: ${sendResult.suppressionReason ?? "unknown reason"}`,
+        ...(ambiguous
+          ? { disposition: "ambiguous" as const }
+          : { disposition: "intentional_non_delivery" as const, terminal: true }),
+      };
+    }
+    return { delivered: true, path: "direct" };
   } catch (err) {
     if (committedDelivery) {
       // Post-send bookkeeping must never turn an identified delivery into a

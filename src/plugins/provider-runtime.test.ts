@@ -20,7 +20,7 @@ import type {
   ProviderValidateReplayTurnsContext,
 } from "./types.js";
 
-type ResolvePluginProviders = typeof import("./providers.runtime.js").resolvePluginProviders;
+type ResolvePluginProviders = typeof import("./providers.runtime.js").resolvePluginProvidersCore;
 type IsPluginProvidersLoadInFlight =
   typeof import("./providers.runtime.js").isPluginProvidersLoadInFlight;
 type ResolveCatalogHookProviderPluginIds =
@@ -292,7 +292,7 @@ describe("provider-runtime", () => {
       },
     }));
     vi.doMock("./providers.runtime.js", () => ({
-      resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
+      resolvePluginProvidersCore: (params: unknown) => resolvePluginProvidersMock(params as never),
       isPluginProvidersLoadInFlight: (params: unknown) =>
         isPluginProvidersLoadInFlightMock(params as never),
     }));
@@ -1441,27 +1441,6 @@ describe("provider-runtime", () => {
     expect(contribution?.sectionOverrides?.interaction_style).toContain(
       "Heartbeat = useful proactive progress",
     );
-  });
-
-  it("respects the shared GPT-5 prompt overlay personality config", () => {
-    const contribution = resolveProviderSystemPromptContribution({
-      provider: "openai",
-      config: {
-        plugins: {
-          entries: {
-            openai: { config: { personality: "off" } },
-          },
-        },
-      },
-      context: {
-        provider: "openai",
-        modelId: "gpt-5.4",
-        promptMode: "full",
-      } as never,
-    });
-
-    expect(contribution?.stablePrefix).toContain("<persona_latch>");
-    expect(contribution?.sectionOverrides).toStrictEqual({});
   });
 
   it("lets provider-owned prompt overlays compose after the built-in GPT-5 overlay", () => {

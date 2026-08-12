@@ -102,6 +102,16 @@ describe("resolveAuthProfileFailureReason", () => {
     ).toBeNull();
   });
 
+  it("does not persist provider-scoped overload as auth-profile health", () => {
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "overloaded",
+        providerStarted: true,
+        policy: "shared",
+      }),
+    ).toBeNull();
+  });
+
   it("does not persist empty responses as auth-profile health", () => {
     expect(
       resolveAuthProfileFailureReason({

@@ -1,10 +1,6 @@
 // Chat-owned model, reasoning, and fast-mode picker orchestration.
 import { html } from "lit";
-import type {
-  GatewaySessionRow,
-  ModelCatalogEntry,
-  SessionsListResult,
-} from "../../../api/types.ts";
+import type { ModelCatalogEntry, SessionsListResult } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
 import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
 import {
@@ -12,7 +8,10 @@ import {
   resolveChatModelSelectState,
   type ChatFastModeSelectValue,
 } from "../../../lib/chat/model-select-state.ts";
-import { resolveChatThinkingSelectState } from "../../../lib/chat/thinking.ts";
+import {
+  resolveChatThinkingSelectState,
+  type ChatThinkingTarget,
+} from "../../../lib/chat/thinking.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import { renderChatEffortPicker } from "./chat-effort-picker.ts";
 import {
@@ -46,7 +45,7 @@ type ChatModelControlsProps = {
   sessionsResult: SessionsListResult | null;
   stream: string | null;
   thinkingDefaults?: SessionsListResult["defaults"];
-  thinkingSession?: GatewaySessionRow;
+  thinkingSession?: ChatThinkingTarget;
   onFastModeSelect?: (value: ChatFastModeSelectValue, sessionKey: string) => unknown;
   onModelSelect?: (value: string, sessionKey: string) => unknown;
   onModelPickerTargetSelect?: (groupId: string, value: string) => unknown;
@@ -140,10 +139,6 @@ function resolveChatModelPickerLabel(
 function formatPickerModelLabel(label: string): string {
   const match = /^Default \((.+)\)$/u.exec(label);
   return match?.[1] ?? label;
-}
-
-function formatPickerThinkingLabel(label: string): string {
-  return label.replace(/^Inherited:\s*/u, "");
 }
 
 export function renderChatModelControls(props: ChatModelControlsProps) {
@@ -245,11 +240,6 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
           currentOverride || pickerDefaultLabel,
           props.modelCatalog,
         ));
-  const committedThinkingLabel =
-    thinking.currentOverride === ""
-      ? thinking.defaultLabel
-      : (thinking.options.find((entry) => entry.value === thinking.currentOverride)?.label ??
-        thinking.currentOverride);
   const managedCatalog = props.modelCatalogState ?? {
     hasSnapshot: !props.modelsLoading,
     status: props.modelsLoading ? ("loading" as const) : ("ready" as const),
@@ -281,7 +271,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     commonDisabled ||
     effortMutationDisabled ||
     !managedCatalog.hasSnapshot ||
-    (thinking.options.length === 0 && thinking.currentOverride === "");
+    (thinking.options.length === 0 && thinking.selection.source === "default");
   const showFastMode = props.showFastMode !== false;
   const effortDisabled =
     commonDisabled ||
@@ -313,13 +303,10 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
           ...fastMode,
           disabled: fastMode.disabled || commonDisabled || effortMutationDisabled,
         },
-        selectedThinkingValue: thinking.currentOverride,
         sessionKey: props.sessionKey,
         showFastMode,
-        thinkingDefaultValue: thinking.defaultValue,
         thinkingDisabled,
-        thinkingOptions: [{ value: "", label: thinking.defaultLabel }, ...thinking.options],
-        triggerThinkingLabel: formatPickerThinkingLabel(committedThinkingLabel),
+        thinking,
         onFastModeSelect: async (next, targetSessionKey) =>
           props.onFastModeSelect?.(next, targetSessionKey),
         onRequestUpdate: props.onRequestUpdate,

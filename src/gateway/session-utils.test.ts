@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, onTestFinished, test, vi } from "vitest";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -26,25 +26,26 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
 import { registerSessionAutomationSource } from "./session-automation-index.js";
 import { buildGatewaySessionEventFields } from "./session-event-payload.js";
-import { capArrayByJsonBytes } from "./session-transcript-readers.js";
-import { buildSingleRowStoreChildSessionsByKey } from "./session-utils-projection.js";
+import { resolveSessionStoreKey } from "./session-store-key.js";
+import { deriveSessionTitle } from "./session-utils-core.js";
+import { listSessionsFromStore, listSessionsFromStoreAsync } from "./session-utils-list.js";
+import { getSessionDefaults, resolveGatewayModelSupportsImages } from "./session-utils-model.js";
 import {
-  buildGatewaySessionRow,
-  deriveSessionTitle,
-  getSessionDefaults,
-  listAgentsForGateway,
-  listSessionsFromStore,
-  listSessionsFromStoreAsync,
-  loadSessionEntry,
-  loadSessionEntryReadOnly,
-  resolveCanonicalGatewaySessionStoreKey,
-  resolveDeletedAgentIdFromSessionKey,
-  resolveGatewayModelSupportsImages,
+  buildSessionListRowContext,
+  buildSingleRowStoreChildSessionsByKey,
+} from "./session-utils-projection.js";
+import { buildGatewaySessionRow as buildGatewaySessionRowOwner } from "./session-utils-row.js";
+import {
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
-  resolveSessionModelRef,
-  resolveSessionStoreKey,
-} from "./session-utils.js";
+} from "./session-utils-store-lookup.js";
+import {
+  listAgentsForGateway,
+  loadGatewaySessionEntryReadOnly,
+  loadGatewaySessionEntry as loadSessionEntry,
+  resolveCanonicalGatewaySessionStoreKey,
+  resolveDeletedAgentIdFromSessionKey,
+} from "./session-utils-store.js";
 
 const providerArtifactMocks = vi.hoisted(() => ({
   resolveBundledProviderPolicySurface: vi.fn<
@@ -163,6 +164,32 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
   }
 }
 
+function buildGatewaySessionRow(
+  params: Parameters<typeof buildGatewaySessionRowOwner>[0],
+): ReturnType<typeof buildGatewaySessionRowOwner> {
+  const entry = params.entry ?? ({} as SessionEntry);
+  const rowContext = buildSessionListRowContext({
+    store: params.store,
+    now: params.now ?? Date.now(),
+  });
+  // Row projection tests do not own ACP persistence. Mark the supplied fixture
+  // as already checked so each assertion does not open the ambient state DB.
+  rowContext.acpSessionMetaByEntry.set(entry, undefined);
+  return buildGatewaySessionRowOwner({
+    ...params,
+    entry,
+    rowContext,
+    lightweightListRow: params.lightweightListRow ?? true,
+  });
+}
+
+function setTestActivePluginRegistry(
+  registry: Parameters<typeof setActivePluginRegistry>[0],
+): void {
+  setActivePluginRegistry(registry);
+  onTestFinished(resetPluginRuntimeStateForTest);
+}
+
 describe("gateway session utils", () => {
   beforeEach(() => {
     // Real artifact loading belongs to its owner tests; session projections only need the contract.
@@ -170,16 +197,7 @@ describe("gateway session utils", () => {
     providerArtifactMocks.resolveBundledProviderPolicySurface.mockReturnValue(null);
   });
 
-  afterEach(() => {
-    resetConfigRuntimeState();
-    resetPluginRuntimeStateForTest();
-    closeSessionSqliteDatabasesForTest();
-  });
-
-  test("capArrayByJsonBytes trims from the front", () => {
-    const res = capArrayByJsonBytes(["a", "b", "c"], 10);
-    expect(res.items).toEqual(["b", "c"]);
-  });
+  afterAll(closeSessionSqliteDatabasesForTest);
 
   test.each([
     { name: "never read", entry: {}, expected: false },
@@ -577,7 +595,7 @@ describe("gateway session utils", () => {
         }),
       },
     });
-    setActivePluginRegistry(registry);
+    setTestActivePluginRegistry(registry);
 
     const defaults = getSessionDefaults(createModelDefaultsConfig({ primary: "openai/gpt-5.5" }));
 
@@ -617,7 +635,7 @@ describe("gateway session utils", () => {
         }),
       },
     });
-    setActivePluginRegistry(registry);
+    setTestActivePluginRegistry(registry);
 
     const cfg = createModelDefaultsConfig({ primary: "ollama/qwen3:0.6b" });
     const catalog = [
@@ -784,7 +802,7 @@ describe("gateway session utils", () => {
         resolveThinkingProfile,
       },
     });
-    setActivePluginRegistry(registry);
+    setTestActivePluginRegistry(registry);
 
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.5" });
     const store = Object.fromEntries(
@@ -2210,7 +2228,7 @@ describe("gateway session utils", () => {
     }
   });
 
-  test("loadSessionEntryReadOnly does not materialize a missing configured agent", async () => {
+  test("loadGatewaySessionEntryReadOnly does not materialize a missing configured agent", async () => {
     resetConfigRuntimeState();
     try {
       await withStateDirEnv("session-utils-load-entry-read-only-", async ({ stateDir }) => {
@@ -2223,7 +2241,7 @@ describe("gateway session utils", () => {
         } as OpenClawConfig;
         setRuntimeConfigSnapshot(cfg, cfg);
 
-        const loaded = loadSessionEntryReadOnly("agent:missing:main");
+        const loaded = loadGatewaySessionEntryReadOnly("agent:missing:main");
 
         expect(loaded.entry).toBeUndefined();
         expect(fs.existsSync(path.join(stateDir, "agents", "missing"))).toBe(false);
@@ -2233,7 +2251,7 @@ describe("gateway session utils", () => {
     }
   });
 
-  test("loadSessionEntryReadOnly clones only the selected row and direct children", async () => {
+  test("loadGatewaySessionEntryReadOnly clones only the selected row and direct children", async () => {
     resetConfigRuntimeState();
     try {
       await withStateDirEnv("session-utils-exact-read-only-", async ({ stateDir }) => {
@@ -2261,7 +2279,7 @@ describe("gateway session utils", () => {
         ).toContain(childKey);
         const cloneSpy = vi.spyOn(globalThis, "structuredClone");
         try {
-          expect(loadSessionEntryReadOnly(childKey, { clone: false }).entry).toMatchObject({
+          expect(loadGatewaySessionEntryReadOnly(childKey, { clone: false }).entry).toMatchObject({
             sessionId: "child",
             spawnedBy: parentKey,
           });
@@ -2273,7 +2291,7 @@ describe("gateway session utils", () => {
               storePath,
             }).map((item) => item.sessionKey),
           ).toEqual([childKey]);
-          const loaded = loadSessionEntryReadOnly("main", {
+          const loaded = loadGatewaySessionEntryReadOnly("main", {
             includeStoreChildEntries: true,
           });
 
@@ -2322,7 +2340,7 @@ describe("gateway session utils", () => {
     expect(spawnedByReads).toBe(1);
   });
 
-  test("loadSessionEntryReadOnly rejects a persisted main alias", async () => {
+  test("loadGatewaySessionEntryReadOnly rejects a persisted main alias", async () => {
     resetConfigRuntimeState();
     try {
       await withStateDirEnv("session-utils-exact-alias-children-", async ({ stateDir }) => {
@@ -2345,7 +2363,7 @@ describe("gateway session utils", () => {
         setRuntimeConfigSnapshot(cfg, cfg);
 
         expect(() =>
-          loadSessionEntryReadOnly("main", {
+          loadGatewaySessionEntryReadOnly("main", {
             clone: false,
             includeStoreChildEntries: true,
           }),
@@ -2860,7 +2878,7 @@ describe("gateway session utils", () => {
         },
       },
     );
-    setActivePluginRegistry(registry);
+    setTestActivePluginRegistry(registry);
 
     const cfg = {
       session: { mainKey: "main" },
@@ -2915,140 +2933,6 @@ describe("gateway session utils", () => {
 
     expect(agent?.thinkingDefault).toBe("medium");
     expect(agent?.thinkingLevels?.map((level) => level.id)).toContain("medium");
-  });
-});
-
-describe("resolveSessionModelRef", () => {
-  test("prefers explicit session overrides ahead of runtime model fields", () => {
-    const cfg = createModelDefaultsConfig({
-      primary: "anthropic/claude-opus-4-6",
-    });
-
-    const resolved = resolveSessionModelRef(cfg, {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      modelProvider: "openai",
-      model: "gpt-5.4",
-      modelOverride: "claude-opus-4-6",
-      providerOverride: "anthropic",
-    });
-
-    expect(resolved).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
-  });
-
-  test("preserves openrouter provider when model contains vendor prefix", () => {
-    const cfg = createModelDefaultsConfig({
-      primary: "openrouter/minimax/minimax-m2.7",
-    });
-
-    const resolved = resolveSessionModelRef(cfg, {
-      sessionId: "s-or",
-      updatedAt: Date.now(),
-      modelProvider: "openrouter",
-      model: "anthropic/claude-haiku-4.5",
-    });
-
-    expect(resolved).toEqual({
-      provider: "openrouter",
-      model: "anthropic/claude-haiku-4.5",
-    });
-  });
-
-  test("falls back to override when runtime model is not recorded yet", () => {
-    const cfg = createModelDefaultsConfig({
-      primary: "anthropic/claude-opus-4-6",
-    });
-
-    const resolved = resolveSessionModelRef(cfg, {
-      sessionId: "s2",
-      updatedAt: Date.now(),
-      modelOverride: "openai/gpt-5.4",
-    });
-
-    expect(resolved).toEqual({ provider: "openai", model: "gpt-5.4" });
-  });
-
-  test("keeps nested model ids under the stored provider override", () => {
-    const cfg = createModelDefaultsConfig({
-      primary: "anthropic/claude-opus-4-6",
-    });
-
-    const resolved = resolveSessionModelRef(cfg, {
-      sessionId: "s-nested",
-      updatedAt: Date.now(),
-      providerOverride: "nvidia",
-      modelOverride: "moonshotai/kimi-k2.5",
-    });
-
-    expect(resolved).toEqual({ provider: "nvidia", model: "moonshotai/kimi-k2.5" });
-  });
-
-  test("preserves explicit wrapper providers for vendor-prefixed override models", () => {
-    const cfg = createModelDefaultsConfig({
-      primary: "anthropic/claude-opus-4-6",
-    });
-
-    const resolved = resolveSessionModelRef(cfg, {
-      sessionId: "s-openrouter-override",
-      updatedAt: Date.now(),
-      providerOverride: "openrouter",
-      modelOverride: "anthropic/claude-haiku-4.5",
-      modelProvider: "openrouter",
-      model: "openrouter/free",
-    });
-
-    expect(resolved).toEqual({
-      provider: "openrouter",
-      model: "anthropic/claude-haiku-4.5",
-    });
-  });
-
-  test("strips a duplicated provider prefix from stored overrides", () => {
-    const cfg = createModelDefaultsConfig({
-      primary: "anthropic/claude-opus-4-6",
-    });
-
-    const resolved = resolveSessionModelRef(cfg, {
-      sessionId: "s-qualified-override",
-      updatedAt: Date.now(),
-      providerOverride: "openai",
-      modelOverride: "openai/gpt-5.4",
-    });
-
-    expect(resolved).toEqual({ provider: "openai", model: "gpt-5.4" });
-  });
-
-  test("falls back to resolved provider for unprefixed legacy runtime model", () => {
-    const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3.1-pro-preview",
-    });
-
-    const resolved = resolveSessionModelRef(cfg, {
-      sessionId: "legacy-session",
-      updatedAt: Date.now(),
-      model: "claude-sonnet-4-6",
-      modelProvider: undefined,
-    });
-
-    expect(resolved).toEqual({
-      provider: "google-gemini-cli",
-      model: "claude-sonnet-4-6",
-    });
-  });
-
-  test("preserves provider from slash-prefixed model when modelProvider is missing", () => {
-    const cfg = createModelDefaultsConfig({
-      primary: "google-gemini-cli/gemini-3.1-pro-preview",
-    });
-
-    const resolved = resolveSessionModelRef(cfg, {
-      sessionId: "slash-model",
-      updatedAt: Date.now(),
-      model: "anthropic/claude-sonnet-4-6",
-      modelProvider: undefined,
-    });
-
-    expect(resolved).toEqual({ provider: "anthropic", model: "claude-sonnet-4-6" });
   });
 });
 

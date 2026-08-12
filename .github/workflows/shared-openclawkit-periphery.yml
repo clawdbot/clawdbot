@@ -152,14 +152,17 @@ jobs:
             cp "$output_dir/periphery.stdout.json" "$output_dir/periphery.json"
           fi
 
+      # Failed-job reruns retain successful producer artifacts from the original attempt.
+      # Keep artifact slots run-scoped; rerun producers overwrite their slot.
       - name: Upload iOS consumer report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: shared-periphery-ios-${{ github.run_id }}-${{ github.run_attempt }}
+          name: shared-periphery-ios-${{ github.run_id }}
           path: ${{ runner.temp }}/shared-periphery-ios
           if-no-files-found: error
           retention-days: 14
+          overwrite: true
 
   scan-macos:
     name: Scan shared kit from macOS
@@ -225,10 +228,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: shared-periphery-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          name: shared-periphery-macos-${{ github.run_id }}
           path: ${{ runner.temp }}/shared-periphery-macos
           if-no-files-found: error
           retention-days: 14
+          overwrite: true
 
   intersect:
     name: Intersect shared OpenClawKit dead code
@@ -247,13 +251,13 @@ jobs:
       - name: Download iOS consumer report
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: shared-periphery-ios-${{ github.run_id }}-${{ github.run_attempt }}
+          name: shared-periphery-ios-${{ github.run_id }}
           path: ${{ runner.temp }}/shared-periphery-ios
 
       - name: Download macOS consumer report
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: shared-periphery-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          name: shared-periphery-macos-${{ github.run_id }}
           path: ${{ runner.temp }}/shared-periphery-macos
 
       - name: Intersect exact Swift identities
@@ -269,7 +273,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: shared-periphery-intersection-${{ github.run_id }}-${{ github.run_attempt }}
+          name: shared-periphery-intersection-${{ github.run_id }}
           path: ${{ runner.temp }}/shared-periphery-intersection
           if-no-files-found: warn
           retention-days: 14
+          overwrite: true

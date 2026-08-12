@@ -637,6 +637,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
 
     func patchSession(
         key: String,
+        expectedSessionID: String? = nil,
         label: String??,
         category: String??,
         pinned: Bool?,
@@ -647,6 +648,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         let request = OpenClawChatGatewayRequests.patchSession(
             sessionKey: target.sessionKey,
             agentID: target.agentID,
+            expectedSessionID: expectedSessionID,
             label: label,
             category: category,
             pinned: pinned,

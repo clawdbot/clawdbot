@@ -8,6 +8,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "./lib/bundled-plugin-build-entries.mjs";
+import { toErrorObject } from "./lib/error-format.mts";
 import { terminateManagedChild } from "./lib/managed-child-process.mts";
 import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
 import { isRecord } from "./lib/record-shared.mjs";
@@ -28,19 +29,6 @@ const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const AI_RUNTIME_PACKAGE = "@openclaw/ai";
 const AI_RUNTIME_BACKUP_DIR = ".openclaw-ai-package-backup";
 
-function coercePackageError(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
 type KillChild = (signal: NodeJS.Signals) => void;
 type RunOptions = {
   captureStdout?: boolean;
@@ -178,7 +166,10 @@ function numericTimerValueMs(valueMs: unknown) {
   return Number.isFinite(value) ? Math.floor(value) : undefined;
 }
 
-function resolveTimerTimeoutMs(valueMs: unknown, fallbackMs: unknown = MAX_TIMER_TIMEOUT_MS) {
+function resolvePackageBuildTimeoutMs(
+  valueMs: unknown,
+  fallbackMs: unknown = MAX_TIMER_TIMEOUT_MS,
+) {
   const value = numericTimerValueMs(valueMs) ?? numericTimerValueMs(fallbackMs);
   return Math.min(Math.max(value ?? MAX_TIMER_TIMEOUT_MS, 1), MAX_TIMER_TIMEOUT_MS);
 }
@@ -187,7 +178,7 @@ function resolveOptionalTimerTimeoutMs(valueMs: unknown) {
   if (valueMs === undefined) {
     return undefined;
   }
-  return resolveTimerTimeoutMs(valueMs, 1);
+  return resolvePackageBuildTimeoutMs(valueMs, 1);
 }
 
 function readOptionValue(argv: string[], index: number, optionName: string) {
@@ -316,7 +307,7 @@ export function parseArgs(argv: string[]) {
 function run(command: string, args: string[], cwd: string, options: RunOptions = {}) {
   return new Promise<string>((resolve, reject) => {
     const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(options.timeoutMs);
-    const resolvedKillAfterMs = resolveTimerTimeoutMs(
+    const resolvedKillAfterMs = resolvePackageBuildTimeoutMs(
       options.killAfterMs,
       DEFAULT_TIMEOUT_KILL_AFTER_MS,
     );
@@ -370,7 +361,7 @@ function run(command: string, args: string[], cwd: string, options: RunOptions =
         process.exit(forwardedSignalExitCode);
       }
       if (error) {
-        reject(coercePackageError(error, "Non-Error rejection"));
+        reject(toErrorObject(error, "Non-Error rejection"));
         return;
       }
       resolve(value);
@@ -725,7 +716,7 @@ export async function prepareBundledAiRuntimePackage(
     originalAiRuntimeMoved = false;
     packedAiTarballs = [];
     if (cleanupError) {
-      throw coercePackageError(cleanupError, "Package cleanup failed.");
+      throw toErrorObject(cleanupError, "Package cleanup failed.");
     }
   };
 

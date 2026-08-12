@@ -296,23 +296,6 @@ describe("Claw package removal", () => {
     expect(decisions).toMatchObject([{ action: "retain", reason: expect.any(String) }]);
   });
 
-  it("does not inspect global plugin artifact state during removal planning", async () => {
-    const ref = packageRef();
-    const decisions = await planClawPackageRemovals(install, [ref], {
-      deps: {
-        readPackageRefs: vi.fn().mockReturnValue([ref]),
-        resolvePlugin: vi.fn(),
-      },
-    });
-    expect(decisions).toMatchObject([
-      {
-        action: "retain",
-        reason:
-          "Claw add introduced this shared requirement; removal releases its dependency edge and retains the artifact. Use its canonical owner separately to uninstall it.",
-      },
-    ]);
-  });
-
   it("retains a same-version plugin whose installed integrity drifted", async () => {
     const ref = packageRef();
     const decisions = await planClawPackageRemovals(install, [ref], {

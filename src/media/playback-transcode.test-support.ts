@@ -11,6 +11,7 @@ type PlaybackPolicyEntry = {
 type PlaybackTranscodeTestApi = {
   PLAYBACK_TRANSCODE_POLICY: Record<PlaybackMediaKind, PlaybackPolicyEntry>;
   resolvePlaybackMode(mimeType: string, policy: PlaybackPolicyEntry): PlaybackMode | undefined;
+  getPlaybackTranscodeJobs(): Promise<void>[];
 };
 
 function getTestApi(): PlaybackTranscodeTestApi {
@@ -33,4 +34,13 @@ export function resolvePlaybackModeForTest(
 ): PlaybackMode | undefined {
   const api = getTestApi();
   return api.resolvePlaybackMode(mimeType, api.PLAYBACK_TRANSCODE_POLICY[kind]);
+}
+
+export async function waitForPlaybackTranscodeJobsForTest(mode: "next" | "all"): Promise<number> {
+  const jobs = getTestApi().getPlaybackTranscodeJobs();
+  if (jobs.length === 0) {
+    throw new Error("No active playback transcode jobs");
+  }
+  await (mode === "next" ? Promise.race(jobs) : Promise.all(jobs));
+  return jobs.length;
 }

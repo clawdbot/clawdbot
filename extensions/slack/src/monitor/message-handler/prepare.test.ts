@@ -574,6 +574,58 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
   });
 
+  it("applies workspace-qualified channel users during message ingress", async () => {
+    const channelsConfig = {
+      "team:T123ENTERPRISE:channel:C123CHANNEL": {
+        enabled: true,
+        requireMention: false,
+        users: ["team:T123ENTERPRISE:user:U123"],
+      },
+      "team:T456ENTERPRISE:channel:C123CHANNEL": {
+        enabled: true,
+        requireMention: false,
+        users: ["team:T456ENTERPRISE:user:U456"],
+      },
+    };
+    const ctx = createInboundSlackCtx({
+      cfg: { channels: { slack: { enabled: true, groupPolicy: "allowlist" } } },
+      channelsConfig,
+      defaultRequireMention: false,
+      groupPolicy: "allowlist",
+    });
+    ctx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+    ctx.resolveUserName = async () => ({ name: "Alice" });
+    const account = createSlackAccount({ groupPolicy: "allowlist", channels: channelsConfig });
+    const message = createSlackMessage({
+      channel: "C123CHANNEL",
+      channel_type: "channel",
+      user: "U123",
+      text: "hello",
+    });
+
+    const allowed = await prepareSlackMessage({
+      ctx,
+      account,
+      message,
+      opts: {
+        source: "message",
+        eventScope: { teamId: "T123ENTERPRISE", client: ctx.app.client },
+      },
+    });
+    const blocked = await prepareSlackMessage({
+      ctx,
+      account,
+      message,
+      opts: {
+        source: "message",
+        eventScope: { teamId: "T456ENTERPRISE", client: ctx.app.client },
+      },
+    });
+
+    assertPrepared(allowed, "workspace-qualified channel user");
+    expect(blocked).toBeNull();
+  });
+
   it("applies workspace-qualified Enterprise mention pattern policy", async () => {
     const cfg = {
       messages: { groupChat: { mentionPatterns: ["\\bbill\\b"] } },
@@ -3895,6 +3947,8 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(root.ctxPayload.SessionKey).toBe(expectedSessionKey);
     expect(followUp.ctxPayload.SessionKey).toBe(expectedSessionKey);
     expect(new Set([root.ctxPayload.SessionKey, followUp.ctxPayload.SessionKey]).size).toBe(1);
+    expect(root.ctxPayload).not.toHaveProperty("SystemEventSessionKey");
+    expect(followUp.ctxPayload).not.toHaveProperty("SystemEventSessionKey");
     if (expectedAgentId) {
       expect(root.route.agentId).toBe(expectedAgentId);
     }

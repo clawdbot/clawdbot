@@ -1,5 +1,6 @@
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
+  readAgentRunTerminalOutcome,
   runChannelInboundEvent,
   type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -313,6 +314,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
       return false;
     }
     turn.queuedFinal ||= turnResult.dispatchResult.queuedFinal;
+    turn.agentRunFailed = readAgentRunTerminalOutcome(turnResult.dispatchResult) === "failed";
     turn.noVisibleReplyFallbackEligible =
       turnResult.dispatchResult.noVisibleReplyFallbackEligible === true;
     if ((turnResult.dispatchResult.counts?.final ?? 0) > 0) {

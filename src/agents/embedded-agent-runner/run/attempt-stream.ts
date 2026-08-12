@@ -26,20 +26,20 @@ import {
   isSessionsYieldAbortReason,
 } from "./attempt-sessions-yield.js";
 import { wrapStreamFnHandleSensitiveStopReason } from "./attempt-stop-reason-recovery.js";
+import {
+  sanitizeOpenAIResponsesReplayForStream,
+  sanitizeReplayToolCallIdsForStream,
+  shouldApplyReplayToolCallIdSanitizer,
+  wrapStreamFnSanitizeMalformedToolCalls,
+} from "./attempt-tool-call-replay-sanitization.js";
+import { wrapStreamFnTrimToolCallNames } from "./attempt-tool-call-stream-normalization.js";
+import { wrapStreamFnPromoteStandaloneTextToolCalls } from "./attempt-tool-call-text-promotion.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 import {
   shouldRepairMalformedToolCallArguments,
   wrapStreamFnDecodeXaiToolCallArguments,
   wrapStreamFnRepairMalformedToolCallArguments,
 } from "./attempt.tool-call-argument-repair.js";
-import {
-  sanitizeOpenAIResponsesReplayForStream,
-  sanitizeReplayToolCallIdsForStream,
-  shouldApplyReplayToolCallIdSanitizer,
-  wrapStreamFnPromoteStandaloneTextToolCalls,
-  wrapStreamFnSanitizeMalformedToolCalls,
-  wrapStreamFnTrimToolCallNames,
-} from "./attempt.tool-call-normalization.js";
 import {
   resolveLlmFirstEventTimeoutMs,
   resolveLlmIdleTimeoutMs,

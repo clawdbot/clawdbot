@@ -3,7 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
+import { resolveSessionStoreEntryCore } from "../config/sessions/store-entry.js";
 import { mergeSessionEntry, type SessionEntry } from "../config/sessions/types.js";
 import {
   clearInternalHooks,
@@ -129,7 +129,7 @@ function createSessionsModuleMock() {
       const storePath =
         scope.storePath ?? resolveMockStorePath(undefined, { agentId: scope.agentId });
       const store = loadSessionStoreMock(storePath) as Record<string, SessionEntry>;
-      const resolved = resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey });
+      const resolved = resolveSessionStoreEntryCore({ store, sessionKey: scope.sessionKey });
       const existing = resolved.existing ?? options?.fallbackEntry;
       if (!existing) {
         return null;
@@ -160,7 +160,7 @@ function createSessionsModuleMock() {
         if (!candidateKey) {
           continue;
         }
-        const resolved = resolveSessionStoreEntry({ store, sessionKey: candidateKey });
+        const resolved = resolveSessionStoreEntryCore({ store, sessionKey: candidateKey });
         if (!resolved.existing) {
           continue;
         }
@@ -346,7 +346,7 @@ vi.mock("../plugins/provider-thinking.js", () => ({
 // session_status surface only needs model selection semantics here, not real
 // bundled provider registration.
 vi.mock("../plugins/providers.runtime.js", () => ({
-  resolvePluginProviders: () => [],
+  resolvePluginProvidersCore: () => [],
 }));
 vi.mock("../agents/auth-profiles.js", createAuthProfilesModuleMock);
 vi.mock("../agents/model-auth.js", createModelAuthModuleMock);

@@ -2,6 +2,7 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   dispatchChannelInboundTurn,
+  readAgentRunTerminalOutcome,
   type InboundReplyRecordOptions,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { hasVisibleInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
@@ -108,6 +109,24 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         if (!payload.isError && hadProgressDraft && delivery.streamSession) {
           progress.pendingNativeProgressReceipt = progress.progressReceipt.buildSummaryLine();
         }
+        return;
+      }
+      if (progress.useDraftProgressCard) {
+        await delivery.deliverNormally({
+          payload,
+          kind: info.kind,
+          forcedThreadTs: delivery.usedReplyThreadTs,
+        });
+        const finalized = await progress.finalizeDraftProgressCard(
+          payload.isError === true ? "error" : "success",
+        );
+        // The final reply already landed separately. A card that could not be
+        // terminalized would linger in its Working state and misrepresent an
+        // in-progress turn, so drop it (mirrors the pre-card preview cleanup).
+        if (!finalized) {
+          await draftStream?.clear();
+        }
+        progress.progressDraft.markFinalReplyDelivered();
         return;
       }
     }
@@ -354,6 +373,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   };
   let dispatchError: unknown;
+  let agentRunFailed = false;
   let queuedFinal = false;
   let counts: Partial<Record<ReplyDispatchKind, number>> = {};
   try {
@@ -490,12 +510,15 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       const result = turnResult.dispatchResult;
       queuedFinal = result.queuedFinal;
       counts = result.counts;
+      agentRunFailed = readAgentRunTerminalOutcome(result) === "failed";
     }
   } catch (err) {
     dispatchError = err;
   } finally {
     progress.progressDraft.cancel();
-    await draftStream?.discardPending();
+    if (!progress.useDraftProgressCard) {
+      await draftStream?.discardPending();
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -508,7 +531,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       const completionChunks =
         progress.useNativeProgressStreaming && !progress.nativeProgressCompletionSent
           ? progress.buildNativeProgressCompletionChunks(
-              dispatchError ? "error" : progress.nativeProgressTerminalStatus,
+              dispatchError || agentRunFailed ? "error" : progress.nativeProgressTerminalStatus,
             )
           : undefined;
       if (completionChunks?.length) {
@@ -566,9 +589,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     },
   );
 
+  if (dispatchError || agentRunFailed) {
+    await progress.finalizeDraftProgressCard("error");
+  }
+
   if (statusReactionsEnabled) {
-    if (dispatchError) {
+    if (dispatchError || agentRunFailed) {
       await statusReactions.setError();
+      void statusReactions.restoreInitial();
     } else if (anyReplyDelivered) {
       await statusReactions.setDone();
       void statusReactions.restoreInitial();
@@ -592,7 +620,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   if (dispatchError) {
     throw toErrorObject(dispatchError, "Slack dispatch failed");
   }
-  if (!anyReplyDelivered && !draftPreviewCommitted.value) {
+  if (
+    !anyReplyDelivered &&
+    !draftPreviewCommitted.value &&
+    !(agentRunFailed && progress.useDraftProgressCard)
+  ) {
     await draftStream?.clear();
     return;
   }

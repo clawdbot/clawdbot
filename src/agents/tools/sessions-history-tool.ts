@@ -3,6 +3,7 @@
  *
  * Reads bounded, redacted session transcript history after session visibility filtering.
  */
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -32,6 +33,7 @@ import {
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
   createSessionVisibilityGuard,
+  createSessionVisibilityRowChecker,
   createAgentToAgentPolicy,
   resolveEffectiveSessionToolsVisibility,
   resolveSessionReference,
@@ -216,7 +218,7 @@ function readHistoryMessageSeq(message: unknown): number | undefined {
     return undefined;
   }
   const seq = (meta as Record<string, unknown>).seq;
-  return typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0 ? seq : undefined;
+  return asPositiveSafeInteger(seq);
 }
 
 function readHistoryMessageId(message: unknown): string | undefined {
@@ -397,12 +399,25 @@ export function createSessionsHistoryTool(opts?: {
       if (!resolvedSession.ok) {
         return jsonResult({ status: resolvedSession.status, error: resolvedSession.error });
       }
+      const a2aPolicy = createAgentToAgentPolicy(cfg);
+      const visibility = resolveEffectiveSessionToolsVisibility({
+        cfg,
+        sandboxed: opts?.sandboxed === true,
+      });
+      const resolutionAccess = createSessionVisibilityRowChecker({
+        action: "history",
+        defaultAgentId: resolveDefaultAgentId(cfg),
+        requesterSessionKey: effectiveRequesterKey,
+        visibility,
+        a2aPolicy,
+      }).check({ key: resolvedSession.key });
       const visibleSession = await resolveVisibleSessionReference({
         action: "history",
         resolvedSession,
         requesterSessionKey: effectiveRequesterKey,
         restrictToSpawned,
         visibilitySessionKey: sessionKeyParam,
+        concealResolutionError: resolutionAccess.allowed ? undefined : resolutionAccess.error,
         callGateway: gatewayCall,
       });
       if (!visibleSession.ok) {
@@ -415,11 +430,6 @@ export function createSessionsHistoryTool(opts?: {
       const resolvedKey = visibleSession.key;
       const displayKey = visibleSession.displayKey;
 
-      const a2aPolicy = createAgentToAgentPolicy(cfg);
-      const visibility = resolveEffectiveSessionToolsVisibility({
-        cfg,
-        sandboxed: opts?.sandboxed === true,
-      });
       const visibilityGuard = await createSessionVisibilityGuard({
         action: "history",
         defaultAgentId: resolveDefaultAgentId(cfg),

@@ -1,5 +1,5 @@
 // Shared session-store helpers for command handlers that mutate sessions.
-import { resolveSessionStoreEntry, type SessionEntry } from "../../config/sessions.js";
+import { resolveSessionStoreEntryCore, type SessionEntry } from "../../config/sessions.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { sessionSnapshotChangesApplied } from "../../config/sessions/session-snapshot-merge.js";
 import { applyAbortCutoffToSessionEntry, type AbortCutoff } from "./abort-cutoff.js";
@@ -25,7 +25,7 @@ export function resolveCommandSessionEntryForKey(
   if (!store || !sessionKey) {
     return {};
   }
-  const resolved = resolveSessionStoreEntry({ store, sessionKey });
+  const resolved = resolveSessionStoreEntryCore({ store, sessionKey });
   if (!resolved.existing) {
     return {};
   }

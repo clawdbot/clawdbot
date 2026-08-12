@@ -184,17 +184,17 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     };
 
     const executeRequest = async () => {
-      // One-shot CLI clients cancel by closing their authenticated socket;
-      // leave long-lived SDK/UI invocations independent of connection teardown.
-      const nodeInvocationController =
-        req.method === "node.invoke" &&
-        client.connect.client.id === GATEWAY_CLIENT_IDS.CLI &&
-        client.connect.client.mode === GATEWAY_CLIENT_MODES.CLI
-          ? new AbortController()
-          : undefined;
-      const cancelNodeInvocation = () => nodeInvocationController?.abort();
-      if (nodeInvocationController) {
-        client.socket.once("close", cancelNodeInvocation);
+      // Most UI/SDK RPCs outlive a reconnect. Companion asks are the exception:
+      // without their requester there is no safe recipient for a late answer.
+      const cancelOnDisconnect =
+        req.method === "sessions.companion.ask" ||
+        (req.method === "node.invoke" &&
+          client.connect.client.id === GATEWAY_CLIENT_IDS.CLI &&
+          client.connect.client.mode === GATEWAY_CLIENT_MODES.CLI);
+      const requestController = cancelOnDisconnect ? new AbortController() : undefined;
+      const cancelRequest = () => requestController?.abort();
+      if (requestController) {
+        client.socket.once("close", cancelRequest);
       }
       try {
         const { handleGatewayRequest } = await loadGatewayServerMethods();
@@ -206,7 +206,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           extraHandlers,
           methodRegistry: getMethodRegistry?.(),
           context,
-          ...(nodeInvocationController ? { signal: nodeInvocationController.signal } : {}),
+          ...(requestController ? { signal: requestController.signal } : {}),
         });
       } catch (err) {
         // Failure diagnostics and responses belong to the same request trace as the handler.
@@ -217,8 +217,8 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
         );
       } finally {
-        if (nodeInvocationController) {
-          client.socket.off("close", cancelNodeInvocation);
+        if (requestController) {
+          client.socket.off("close", cancelRequest);
         }
       }
     };

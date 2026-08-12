@@ -137,6 +137,34 @@ struct IOSGatewayChatTransportTests {
         }
     }
 
+    @Test func `archive and restore carry the observed session identity`() async throws {
+        let recorder = RequestRecorder()
+        let transport = IOSGatewayChatTransport(
+            gateway: GatewayNodeSession(),
+            globalAgentId: " Reviewer ",
+            sessionMutationRequest: { request in
+                await recorder.record(request)
+            })
+
+        try await transport.patchSession(
+            key: "global",
+            expectedSessionID: " session-a ",
+            archived: true)
+        try await transport.patchSession(
+            key: "global",
+            expectedSessionID: "session-a",
+            archived: false)
+
+        let requests = await recorder.all()
+        #expect(requests.map(\.method) == ["sessions.patch", "sessions.patch"])
+        #expect(requests.map(\.timeoutMs) == [600_000, 15_000])
+        #expect(requests.allSatisfy { $0.params["key"]?.value as? String == "global" })
+        #expect(requests.allSatisfy { $0.params["agentId"]?.value as? String == "reviewer" })
+        #expect(requests.allSatisfy { $0.params["expectedSessionId"]?.value as? String == "session-a" })
+        #expect(requests[0].params["archived"]?.value as? Bool == true)
+        #expect(requests[1].params["archived"]?.value as? Bool == false)
+    }
+
     @Test func `thinking changes dispatch through selected agent session target`() async throws {
         let recorder = RequestRecorder()
         let transport = IOSGatewayChatTransport(

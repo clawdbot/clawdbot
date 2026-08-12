@@ -24,6 +24,7 @@ export type WorkerEnvironmentServiceRecord = {
   environmentId: string;
   providerId: string;
   leaseId: string | null;
+  sharedHost: boolean | null;
   state: WorkerEnvironmentState;
   ownerEpoch: number;
   createdAtMs: number;

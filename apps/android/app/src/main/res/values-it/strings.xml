@@ -188,6 +188,7 @@
     <string name="native_1afff5a07eab0e88" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ondeggiando"</string>
     <string name="native_1b9e1aa135771a2f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Chiudi anteprima immagine"</string>
     <string name="native_1bbd174404efbce9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"eval"</string>
+    <string name="native_1c066091aa0c37ad" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cronologia compattata"</string>
     <string name="native_1c1174c05c1e6582" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ultimo comando: %1$s"</string>
     <string name="native_1c14dd24ad063de3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tieni aperto un terminale sul dispositivo che esegue OpenClaw."</string>
     <string name="native_1c57b89e11e96ec1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nessun elemento mancante"</string>
@@ -226,6 +227,7 @@
     <string name="native_214d4932fc767e8f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">" · Conversazione: sta parlando"</string>
     <string name="native_216bcd2049f2251a" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"−%1$s"</string>
     <string name="native_217119a61e20f1f2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Override opzionale"</string>
+    <string name="native_21748bd84cdcf644" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"risparmiati %1$s token"</string>
     <string name="native_21b111cbfe6e8fca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Predefinito"</string>
     <string name="native_21bddf13c6a8d4b3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Approvazione comando"</string>
     <string name="native_21c71243e8cba796" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"L\'app e il Gateway utilizzano versioni del protocollo incompatibili. Aggiorna OpenClaw su entrambi, quindi riprova."</string>
@@ -251,6 +253,7 @@
     <string name="native_24c55f66c5795fc5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Una risposta precedente ha già consentito questo comando una volta."</string>
     <string name="native_24cacf5004bf68ae" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"generate"</string>
     <string name="native_24e1028cd7aef320" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Utilizza solo su una rete privata attendibile."</string>
+    <string name="native_255abb4f46dc183c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sistema · gateway riavviato"</string>
     <string name="native_255b076dd8285543" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cerca nelle impostazioni"</string>
     <string name="native_255e7e69c14a57f0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Talk è attivo"</string>
     <string name="native_25872d47f3f6a397" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"L\'autenticazione del Gateway non è configurata. Modifica questa connessione e riprova."</string>
@@ -665,6 +668,7 @@
     <string name="native_64f24041b18e3654" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Alcuni controlli dello stato dei canali non sono stati completati."</string>
     <string name="native_64f46a7526a186d2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"pin"</string>
     <string name="native_6516c565123b19ad" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Copia %1$s"</string>
+    <string name="native_6519ceb24c85232e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sistema · ripristino dopo riavvio"</string>
     <string name="native_651db8587b40535e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Associato"</string>
     <string name="native_6571f3b12432693a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Impossibile salvare le parole di attivazione"</string>
     <string name="native_65b001ea12846d0c" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Verrà messa in quarantena \"%1$s\" e lo stato di Skill Workshop verrà aggiornato dal gateway."</string>
@@ -703,6 +707,7 @@
     <string name="native_698ef855b198408f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"delete group"</string>
     <string name="native_69909e834a13b2a8" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Segui Android · %1$s"</string>
     <string name="native_69e36568cd8b4659" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"channel"</string>
+    <string name="native_69f976b55fd9b912" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Turno interrotto da un riavvio del gateway — è stato chiesto all\'agente di riprendere e completare la risposta."</string>
     <string name="native_6a58d83c8b7683d3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"This skill is blocked by the gateway allowlist. Allowlist changes stay on desktop or CLI."</string>
     <string name="native_6a5cd8f31a7a8b25" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Connetti il Gateway per caricare gli agenti."</string>
     <string name="native_6aadac2f2b7a6b8e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Torna indietro"</string>
@@ -1304,7 +1309,9 @@
     <string name="native_c9e9b24ded599d1b" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Scegli un provider %1$s supportato sul Gateway"</string>
     <string name="native_ca184496974204a0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Non disponibile"</string>
     <string name="native_ca1fd4548524cb2e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cartella vuota"</string>
+    <string name="native_ca216c1caa19a4f9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"La conversazione precedente è stata cancellata."</string>
     <string name="native_ca381c1e76e681b6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Apri impostazioni"</string>
+    <string name="native_ca3b452dac88bc89" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sessione reimpostata"</string>
     <string name="native_ca7981b46ecf2c17" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Disattivato"</string>
     <string name="native_cab94aba84f97f7f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tipografia"</string>
     <string name="native_cae7d57bc067a514" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Interrompi"</string>

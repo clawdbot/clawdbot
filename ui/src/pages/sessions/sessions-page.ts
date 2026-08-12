@@ -1,5 +1,6 @@
 import { consume } from "@lit/context";
 import { initialState, Task, TaskStatus } from "@lit/task";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -20,8 +21,8 @@ import {
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
-import type { SessionMenuAction, SessionMenuWork } from "../../components/session-menu.ts";
 import "../../components/session-menu.ts";
+import type { SessionMenuAction, SessionMenuWork } from "../../components/session-menu.ts";
 import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
 import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
@@ -58,7 +59,6 @@ import {
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { showToast } from "../../lib/toast.ts";
 import { isActiveWorkboardCard } from "../../lib/workboard/card-state.ts";
 import { captureSessionToWorkboard } from "../../lib/workboard/index.ts";
@@ -1138,9 +1138,14 @@ class SessionsPage extends OpenClawLightDomElement {
     key: string,
     patch: Parameters<SessionsProps["onPatch"]>[1],
     scope: SessionsPageRequestScope | null = this.captureRequestScope(),
+    expectedSessionId?: string,
   ): Promise<SessionsPageMutationResult> {
     if (!scope) {
       return "stale";
+    }
+    if (typeof patch.archived === "boolean" && !expectedSessionId?.trim()) {
+      this.error = "Session lifecycle action requires a durable session identity.";
+      return "failed";
     }
     const agentId = this.sessionAgentId(key, scope.context);
     if (
@@ -1154,6 +1159,7 @@ class SessionsPage extends OpenClawLightDomElement {
     try {
       const patched = await scope.sessions.patch(key, patch, {
         agentId,
+        ...(typeof patch.archived === "boolean" ? { expectedSessionId } : {}),
       });
       if (!this.isRequestScopeCurrent(scope)) {
         return "stale";
@@ -1180,7 +1186,7 @@ class SessionsPage extends OpenClawLightDomElement {
     if (!scope) {
       return;
     }
-    const result = await this.patchSession(row.key, { archived: true }, scope);
+    const result = await this.patchSession(row.key, { archived: true }, scope, row.sessionId);
     if (result !== "completed" || !this.isRequestScopeCurrent(scope)) {
       return;
     }
@@ -1196,6 +1202,7 @@ class SessionsPage extends OpenClawLightDomElement {
             row.key,
             { archived: false, ...(row.pinned === true ? { pinned: true } : {}) },
             scope,
+            row.sessionId,
           );
         })();
       },
@@ -1521,7 +1528,7 @@ class SessionsPage extends OpenClawLightDomElement {
               break;
             case "toggle-archived":
               if (row.archived === true) {
-                void this.patchSession(row.key, { archived: false });
+                void this.patchSession(row.key, { archived: false }, undefined, row.sessionId);
               } else {
                 void this.archiveSessionWithUndo(row);
               }

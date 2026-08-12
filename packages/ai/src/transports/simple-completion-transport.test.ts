@@ -15,7 +15,6 @@ const createOpenClawTransportStreamFnForModel = vi.fn();
 const createTransportAwareStreamFnForModel = vi.fn();
 const prepareTransportAwareSimpleModel = vi.fn();
 const resolveTransportAwareSimpleApi = vi.fn();
-const prepareGoogleSimpleCompletionModel = vi.fn((_registry: unknown, model: unknown) => model);
 const inheritManagedTransport = vi.fn((_source: Model, target: Model) => target);
 const pluginStreamFn = vi.fn(() => createAssistantMessageEventStream());
 const TEST_SECRET = "ollama-provider-secret";
@@ -90,7 +89,6 @@ describe("prepareModelForSimpleCompletion", () => {
     createTransportAwareStreamFnForModel.mockReset();
     prepareTransportAwareSimpleModel.mockReset();
     resolveTransportAwareSimpleApi.mockReset();
-    prepareGoogleSimpleCompletionModel.mockReset();
     inheritManagedTransport.mockClear();
     createAnthropicVertexStreamFnForModel.mockReturnValue("vertex-stream");
     resolveProviderStreamFn.mockReturnValue(pluginStreamFn);
@@ -100,7 +98,6 @@ describe("prepareModelForSimpleCompletion", () => {
     createTransportAwareStreamFnForModel.mockReturnValue(undefined);
     prepareTransportAwareSimpleModel.mockImplementation((model) => model);
     resolveTransportAwareSimpleApi.mockReturnValue(undefined);
-    prepareGoogleSimpleCompletionModel.mockImplementation((_registry, model) => model);
     configureAiTransportHost({
       plugin: {
         resolveProviderStream: resolveProviderStreamFn,
@@ -110,10 +107,6 @@ describe("prepareModelForSimpleCompletion", () => {
       },
       registerCustomApi: ensureCustomApiRegistered,
       inheritManagedTransport,
-      prepareGoogleSimpleCompletionModel: prepareGoogleSimpleCompletionModel as (
-        registry: ApiRegistry,
-        model: Model,
-      ) => Model,
       resolveSecretSentinel: (value) => value.replaceAll(TEST_SECRET_SENTINEL, TEST_SECRET),
     });
   });
@@ -438,7 +431,7 @@ describe("prepareModelForSimpleCompletion", () => {
     });
   });
 
-  it("keeps registered Google models on the sanitizer path when the provider owns a stream", () => {
+  it("routes registered Google simple completions through the provider plugin stream", () => {
     const model: Model<"google-generative-ai"> = {
       id: "gemma-4-26b-a4b-it",
       name: "Gemma 4 26B",
@@ -461,24 +454,38 @@ describe("prepareModelForSimpleCompletion", () => {
       },
       SIMPLE_COMPLETION_SOURCE_ID,
     );
-    prepareGoogleSimpleCompletionModel.mockImplementationOnce((_registry: unknown, m: unknown) => ({
-      ...(m as Model<"google-generative-ai">),
-      api: "openclaw-google-generative-ai-simple",
-    }));
-
     const result = prepareModelForSimpleCompletion({ model });
 
-    expect(resolveProviderStreamFn).not.toHaveBeenCalled();
-    expect(prepareTransportAwareSimpleModel).toHaveBeenCalledWith(model, { cfg: undefined });
-    expect(prepareGoogleSimpleCompletionModel).toHaveBeenCalledWith(apiRegistry, model);
+    expect(resolveProviderStreamFn).toHaveBeenCalledOnce();
+    expect(prepareTransportAwareSimpleModel).not.toHaveBeenCalled();
     expect(buildTransportAwareSimpleStreamFn).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      ...model,
-      api: "openclaw-google-generative-ai-simple",
-    });
+    expect(result.api).toMatch(/^openclaw-provider-stream:/);
+    const registeredStream = ensureCustomApiRegistered.mock.calls.find(
+      (call) => call[1] === result.api,
+    )?.[2] as StreamFn | undefined;
+    void registeredStream?.(
+      result,
+      { messages: [] },
+      {
+        reasoning: "high",
+        apiKey: "google-key",
+        headers: { "x-test": "value" },
+        signal: new AbortController().signal,
+      },
+    );
+    expect(pluginStreamFn).toHaveBeenCalledWith(
+      expect.objectContaining({ id: model.id }),
+      { messages: [] },
+      expect.objectContaining({
+        reasoning: "high",
+        apiKey: "google-key",
+        headers: { "x-test": "value" },
+        signal: expect.any(AbortSignal),
+      }),
+    );
   });
 
-  it("keeps Google transport-aware models on the transport alias", () => {
+  it("prefers the Google provider plugin over the duplicate transport-aware path", () => {
     const model: Model<"google-generative-ai"> = {
       id: "gemini-flash-latest",
       name: "Gemini Flash Latest",
@@ -493,24 +500,17 @@ describe("prepareModelForSimpleCompletion", () => {
       headers: {},
     };
 
-    const transportModel = {
-      ...model,
-      api: "openclaw-google-generative-ai-transport",
-    };
-    buildTransportAwareSimpleStreamFn.mockReturnValueOnce("google-transport-stream");
-    prepareTransportAwareSimpleModel.mockReturnValueOnce(transportModel);
-
     const result = prepareModelForSimpleCompletion({ model });
 
-    expect(resolveProviderStreamFn).not.toHaveBeenCalled();
-    expect(buildTransportAwareSimpleStreamFn).toHaveBeenCalledWith(model, { cfg: undefined });
+    expect(resolveProviderStreamFn).toHaveBeenCalledOnce();
+    expect(buildTransportAwareSimpleStreamFn).not.toHaveBeenCalled();
+    expect(prepareTransportAwareSimpleModel).not.toHaveBeenCalled();
+    expect(result.api).toBe("google-generative-ai");
     expect(ensureCustomApiRegistered).toHaveBeenCalledWith(
       apiRegistry,
-      "openclaw-google-generative-ai-transport",
-      "google-transport-stream",
+      "google-generative-ai",
+      expect.any(Function),
     );
-    expect(prepareGoogleSimpleCompletionModel).not.toHaveBeenCalled();
-    expect(result).toBe(transportModel);
   });
 
   it.each([

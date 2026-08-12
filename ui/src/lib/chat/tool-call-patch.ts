@@ -9,6 +9,11 @@ import {
 
 type PatchOperation = "add" | "delete" | "update";
 
+export type PatchFileOperation = {
+  operation: PatchOperation;
+  path: string;
+};
+
 type PatchSection = {
   operation: PatchOperation;
   sourcePath: string;
@@ -32,6 +37,7 @@ type HunkState = {
 
 type PatchViewData = {
   paths: string[];
+  fileOperations: PatchFileOperation[];
   lines: DiffLine[];
   stat: DiffStat;
   move?: { from: string; to: string };
@@ -156,6 +162,7 @@ function finish(collector: PatchCollector): PatchViewData | null {
     return null;
   }
   const paths = [...new Set(collector.sections.map((section) => section.path).filter(Boolean))];
+  const fileOperations = collector.sections.map(({ operation, path }) => ({ operation, path }));
   const stat = collector.sections.reduce(
     (sum, section) => ({
       added: sum.added + section.stat.added,
@@ -191,7 +198,7 @@ function finish(collector: PatchCollector): PatchViewData | null {
     only && only.operation === "update" && only.sourcePath !== only.path
       ? { from: only.sourcePath, to: only.path }
       : undefined;
-  return { paths, lines, stat, ...(move ? { move } : {}) };
+  return { paths, fileOperations, lines, stat, ...(move ? { move } : {}) };
 }
 
 function parseCodexPatch(text: string): PatchViewData | null {

@@ -468,9 +468,11 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - Slack detects Enterprise Grid org-wide installations automatically from the
   bot token with `auth.test`; no installation-mode setting is required.
   Enterprise DMs support `disabled`, `open`, `allowlist`, and workspace-scoped
-  `pairing`. Channel and user policies must use stable Slack IDs; mutable names
-  and unsupported channel prefixes fail startup. Mention-pattern channel
-  scopes and static route-binding peers use workspace-qualified Slack targets.
+  `pairing`. Channel and user policies must use
+  `team:<team-id>:channel:<channel-id>` or `team:<team-id>:user:<user-id>`;
+  bare IDs, mutable names, and unsupported channel prefixes fail startup.
+  Mention-pattern channel scopes and static route-binding peers use
+  workspace-qualified Slack targets.
   Direct Socket Mode or HTTP messages, mentions, workspace-qualified actions,
   deferred delivery, proactive sends, supported event listeners and
   interactions, static route bindings, and Slack-native approvals from

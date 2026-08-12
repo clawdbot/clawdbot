@@ -116,6 +116,7 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const targets = Array.from({ length: 30 }, (_, index) => ({
       key: `agent:main:archive-perf-${index}`,
+      expectedSessionId: `session-archive-perf-${index}`,
     }));
     const transcriptRoots = new Map<string, string>();
     const transcriptTails = new Map<string, string>();

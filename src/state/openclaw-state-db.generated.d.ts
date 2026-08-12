@@ -581,6 +581,13 @@ export interface DeviceIdentities {
   updated_at_ms: number;
 }
 
+export interface DevicePairingJoinCodes {
+  created_at_ms: number | null;
+  expires_at_ms: number | null;
+  payload_json: string | null;
+  shortcode: string | null;
+}
+
 export interface DevicePairingPaired {
   approved_at_ms: number;
   approved_scopes_json: string | null;
@@ -654,6 +661,23 @@ export interface ExecApprovalsConfig {
   raw_json: string;
   socket_path: string | null;
   updated_at_ms: number;
+}
+
+export interface ExecutionDecisionFacts {
+  action_family: string;
+  action_id: string | null;
+  context_id: string;
+  coverage_state: string;
+  decision_outcome: string;
+  execution_id: string;
+  occurred_at: number;
+  owner: string;
+  reason_code: string;
+  receipt_bytes: number;
+  receipt_id: string;
+  receipt_json: string;
+  run_id: string;
+  source_ref: string;
 }
 
 export interface ExecutionIdentityContexts {
@@ -808,6 +832,12 @@ export interface ManagedOutgoingImageRecords {
   retention_class: string | null;
   session_key: string;
   updated_at: string | null;
+}
+
+export interface McpOauthPendingAuthorizations {
+  create_time: number;
+  state: string;
+  store_key: string;
 }
 
 export interface McpOauthStores {
@@ -1390,6 +1420,13 @@ export interface UpdateCheckState {
   updated_at_ms: number;
 }
 
+export interface UserPreferences {
+  pref_key: string;
+  profile_id: string;
+  updated_at_ms: number;
+  value_json: string;
+}
+
 export interface VoicewakeRoutingConfig {
   config_key: string;
   default_target_agent_id: string | null;
@@ -1684,11 +1721,13 @@ export interface DB {
   device_auth_tokens: DeviceAuthTokens;
   device_bootstrap_tokens: DeviceBootstrapTokens;
   device_identities: DeviceIdentities;
+  device_pairing_join_codes: DevicePairingJoinCodes;
   device_pairing_paired: DevicePairingPaired;
   device_pairing_pending: DevicePairingPending;
   diagnostic_events: DiagnosticEvents;
   diagnostic_stability_bundles: DiagnosticStabilityBundles;
   exec_approvals_config: ExecApprovalsConfig;
+  execution_decision_facts: ExecutionDecisionFacts;
   execution_identity_contexts: ExecutionIdentityContexts;
   fleet_cells: FleetCells;
   flow_runs: FlowRuns;
@@ -1700,6 +1739,7 @@ export interface DB {
   installed_plugin_index: InstalledPluginIndex;
   macos_port_guardian_records: MacosPortGuardianRecords;
   managed_outgoing_image_records: ManagedOutgoingImageRecords;
+  mcp_oauth_pending_authorizations: McpOauthPendingAuthorizations;
   mcp_oauth_stores: McpOauthStores;
   media_blobs: MediaBlobs;
   meeting_transcript_sessions: MeetingTranscriptSessions;
@@ -1744,6 +1784,7 @@ export interface DB {
   task_runs: TaskRuns;
   tui_last_sessions: TuiLastSessions;
   update_check_state: UpdateCheckState;
+  user_preferences: UserPreferences;
   voicewake_routing_config: VoicewakeRoutingConfig;
   voicewake_routing_routes: VoicewakeRoutingRoutes;
   voicewake_triggers: VoicewakeTriggers;

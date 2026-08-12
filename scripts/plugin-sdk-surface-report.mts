@@ -270,7 +270,12 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: add the account-aware native approval request selector.
       // +3: add canonical coercion exports while retaining the shipped asString compatibility name.
       // +2: add high-use coercion primitives while retaining shipped object-record exports.
-      4868,
+      // +2: channel-neutral location and provider-update hook contracts.
+      // +1: QQBot 2.0.1 operator-approval Gateway client compatibility export.
+      // +2: narrow channel agent-run terminal reader and outcome contract.
+      // +5: narrow string, record, and error coercion helpers.
+      // +1: normalized Gateway public origin resolver for plugin-generated links.
+      4879,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -333,7 +338,11 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: add the account-aware native approval request selector.
       // +3: add canonical coercion exports while retaining the shipped asString compatibility name.
       // +2: add high-use callable coercion primitives while retaining shipped object-record exports.
-      2924,
+      // +1: QQBot 2.0.1 operator-approval Gateway client compatibility export.
+      // +1: narrow channel agent-run terminal reader.
+      // +5: narrow string, record, and error coercion helpers.
+      // +1: normalized Gateway public origin resolver for plugin-generated links.
+      2932,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -358,7 +367,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: infra-runtime now names its error exports explicitly.
       // -1: infra-runtime excludes the internal system-event receipt API.
       // -2: text-runtime names record and string coercion compatibility exports explicitly.
-      77,
+      // -1: infra-runtime re-exports number coercion directly from its canonical owner.
+      75,
       env,
     ),
   };

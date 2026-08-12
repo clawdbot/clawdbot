@@ -320,7 +320,13 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
   prompt: string;
   sandbox?: SandboxContext | null;
   skipPromptSubmission: boolean;
-}): Promise<PromptImageResult> {
+  pluginHarness?: boolean;
+}): Promise<
+  PromptImageResult & {
+    imageOrder?: PromptExecutionAttempt["imageOrder"];
+    media?: PromptExecutionAttempt["media"];
+  }
+> {
   if (input.skipPromptSubmission) {
     return emptyPromptImages();
   }
@@ -331,7 +337,7 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
     (await attempt.userTurnTranscriptRecorder?.resolveMessage());
   const persistedMedia = persistedMessage ? (readPersistedMediaFacts(persistedMessage) ?? []) : [];
 
-  return await detectAndLoadPromptImages({
+  const result = await detectAndLoadPromptImages({
     prompt: input.prompt,
     workspaceDir: input.effectiveWorkspace,
     model: attempt.model,
@@ -349,4 +355,17 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
         ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
         : undefined,
   });
+  if (!input.pluginHarness) {
+    return result;
+  }
+  if (result.failedMediaCount) {
+    throw new Error(
+      `failed to hydrate ${result.failedMediaCount} structured image attachment(s) for plugin harness input`,
+    );
+  }
+  return {
+    ...result,
+    imageOrder: result.images.length ? result.images.map(() => "inline" as const) : undefined,
+    media: undefined,
+  };
 }

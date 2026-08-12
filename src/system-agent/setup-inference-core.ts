@@ -17,7 +17,7 @@ import {
   resolveManifestProviderAuthChoice,
   resolveManifestProviderAuthChoices,
 } from "../plugins/provider-auth-choices.js";
-import { resolvePluginProviders } from "../plugins/providers.runtime.js";
+import { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
 import type { SetupRecommendedInstall } from "../plugins/recommended-tool-installs.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -249,7 +249,7 @@ export type ActivateSetupInferenceDeps = {
   transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
   refreshPluginRegistryAfterConfigMutation?: typeof import("../plugins/registry-refresh.js").refreshPluginRegistryAfterConfigMutation;
   ensurePluginRegistryLoaded?: typeof import("../plugins/runtime/runtime-registry-loader.js").ensurePluginRegistryLoaded;
-  resolvePluginProviders?: typeof resolvePluginProviders;
+  resolvePluginProviders?: typeof resolvePluginProvidersCore;
   resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
   enablePluginInConfig?: typeof enablePluginInConfig;
   updateAuthProfileStoreWithLock?: typeof updateAuthProfileStoreWithLock;
@@ -281,7 +281,7 @@ export type DetectSetupInferenceDeps = {
   detectInferenceBackends?: typeof detectInferenceBackends;
   probeLocalCommand?: typeof probeLocalCommand;
   resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
-  resolvePluginProviders?: typeof resolvePluginProviders;
+  resolvePluginProviders?: typeof resolvePluginProvidersCore;
   enablePluginInConfig?: typeof enablePluginInConfig;
 };
 

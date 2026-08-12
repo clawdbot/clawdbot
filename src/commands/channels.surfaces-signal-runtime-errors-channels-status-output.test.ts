@@ -111,6 +111,18 @@ describe("channels command", () => {
     expect(lines.join("\n")).toMatch(/eventLoopDelayMaxMs=62000/);
   });
 
+  it("surfaces top-level partial status warnings", () => {
+    const lines = formatGatewayChannelsStatusLines({
+      partial: true,
+      warnings: ["whatsapp:default status failed: snapshot failed"],
+      channelLabels: {},
+      channelAccounts: {},
+    });
+
+    expect(lines.join("\n")).toMatch(/Channel status is partial/);
+    expect(lines.join("\n")).toContain("whatsapp:default status failed: snapshot failed");
+  });
+
   it("surfaces transport liveness timestamps in channels status output", () => {
     const lines = formatGatewayChannelsStatusLines({
       channelLabels: {

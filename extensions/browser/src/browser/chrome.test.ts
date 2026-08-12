@@ -13,7 +13,7 @@ import {
   resolveGoogleChromeExecutableForPlatform,
 } from "./chrome.executables.js";
 import {
-  getChromeWebSocketUrl,
+  getChromeWebSocketEndpoint,
   isChromeCdpOwnedByPid,
   isChromeCdpReady,
   isChromeReachable,
@@ -50,6 +50,12 @@ function jsonResponse(payload: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json" },
   });
+}
+
+async function getChromeWebSocketUrl(
+  ...args: Parameters<typeof getChromeWebSocketEndpoint>
+): Promise<string | null> {
+  return (await getChromeWebSocketEndpoint(...args))?.url ?? null;
 }
 
 async function withMockChromeCdpServer(params: {
@@ -282,6 +288,45 @@ describe("browser chrome helpers", () => {
         { authorization, url: "/json/version" },
         { authorization, url: "/json/version/" },
       ]);
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+
+  it("keeps trailing-slash discovery inside the guarded fetch path for HTTP endpoints", async () => {
+    const requests: string[] = [];
+    const server = createServer((req, res) => {
+      requests.push(req.url ?? "");
+      if (req.url === "/json/version/") {
+        const addr = server.address() as AddressInfo;
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/devtools/browser/trailing`,
+          }),
+        );
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+      server.once("error", reject);
+    });
+
+    try {
+      const addr = server.address() as AddressInfo;
+      await expect(
+        getChromeWebSocketUrl(`http://127.0.0.1:${addr.port}`, 1000, {
+          dangerouslyAllowPrivateNetwork: false,
+          allowedHostnames: ["127.0.0.1"],
+        }),
+      ).resolves.toBe(`ws://127.0.0.1:${addr.port}/devtools/browser/trailing`);
+      expect(requests).toEqual(["/json/version", "/json/version/"]);
     } finally {
       await new Promise<void>((resolve) => {
         server.close(() => resolve());

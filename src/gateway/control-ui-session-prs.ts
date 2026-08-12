@@ -32,7 +32,7 @@ import {
   type SessionPullRequestGitContext,
   type SessionPullRequestLocalGitDeps,
 } from "./control-ui-session-prs-local-git.js";
-import { loadSessionEntryReadOnly } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 const SUCCESS_CACHE_MS = 60_000;
 // Back off refetches while GitHub reports quota exhaustion; the UI keeps
@@ -94,9 +94,12 @@ type LoadSessionPullRequestDeps = SessionPullRequestLocalGitDeps & {
 function resolveSessionPullRequestGitRoot(
   params: ControlUiSessionPullRequestsParams,
 ): string | null {
-  const { cfg, entry, storePath, canonicalKey } = loadSessionEntryReadOnly(params.sessionKey, {
-    agentId: params.agentId,
-  });
+  const { cfg, entry, storePath, canonicalKey } = loadGatewaySessionEntryReadOnly(
+    params.sessionKey,
+    {
+      agentId: params.agentId,
+    },
+  );
   // Same session/agent scoping as sessions.files.*: a missing entry means an
   // unknown or deleted session, which must not fall back to some agent
   // workspace and surface another checkout's PRs.

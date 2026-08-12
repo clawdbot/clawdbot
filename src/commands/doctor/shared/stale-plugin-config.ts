@@ -1,4 +1,5 @@
 // Doctor scanner and repair for plugin/channel config that references missing plugins.
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../../../agents/agent-scope.js";
 import { CHANNEL_IDS } from "../../../channels/ids.js";
@@ -12,7 +13,6 @@ import {
 } from "../../../plugins/official-external-plugin-catalog.js";
 import { defaultSlotIdForKey, type PluginSlotKey } from "../../../plugins/slots.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
-import { asObjectRecord } from "./object.js";
 import {
   filterRepairableStalePluginHits,
   type StalePluginSurface,
@@ -118,7 +118,7 @@ function scanStalePluginConfigWithState(
   cfg: OpenClawConfig,
   registryState: StalePluginRegistryState,
 ): StalePluginConfigHit[] {
-  const plugins = asObjectRecord(cfg.plugins);
+  const plugins = asNullableRecord(cfg.plugins);
   const { knownIds, officialIds } = registryState;
   const hits: StalePluginConfigHit[] = [];
   const staleEvidenceIds = new Set(registryState.missingInstalledIds);
@@ -143,7 +143,7 @@ function scanStalePluginConfigWithState(
     }
   }
 
-  const entries = asObjectRecord(plugins?.entries);
+  const entries = asNullableRecord(plugins?.entries);
   if (entries) {
     for (const rawPluginId of Object.keys(entries)) {
       const pluginId = normalizePluginId(rawPluginId);
@@ -164,7 +164,7 @@ function scanStalePluginConfigWithState(
     }
   }
 
-  const slots = asObjectRecord(plugins?.slots);
+  const slots = asNullableRecord(plugins?.slots);
   if (slots) {
     for (const slotKey of ["memory", "contextEngine"] as const satisfies readonly PluginSlotKey[]) {
       const rawPluginId = slots[slotKey];
@@ -214,7 +214,7 @@ function collectDanglingChannelIds(params: {
   registryState: StalePluginRegistryState;
   staleEvidenceIds: ReadonlySet<string>;
 }): string[] {
-  const channels = asObjectRecord(params.cfg.channels);
+  const channels = asNullableRecord(params.cfg.channels);
   if (!channels) {
     return [];
   }
@@ -257,7 +257,7 @@ function collectDependentChannelConfigHits(
     });
   }
   for (const { agent, path } of listMutableCodexRouteAgentEntries(cfg)) {
-    const heartbeat = asObjectRecord(agent.heartbeat);
+    const heartbeat = asNullableRecord(agent.heartbeat);
     const target = heartbeat?.target;
     if (typeof target !== "string" || !staleChannelIds.has(normalizePluginId(target))) {
       continue;
@@ -269,10 +269,10 @@ function collectDependentChannelConfigHits(
     });
   }
 
-  const modelByChannel = asObjectRecord(cfg.channels?.modelByChannel);
+  const modelByChannel = asNullableRecord(cfg.channels?.modelByChannel);
   if (modelByChannel) {
     for (const [providerId, channelMap] of Object.entries(modelByChannel)) {
-      const channels = asObjectRecord(channelMap);
+      const channels = asNullableRecord(channelMap);
       if (!channels) {
         continue;
       }
@@ -377,7 +377,7 @@ export function maybeRepairStalePluginConfig(
   }
 
   const next = structuredClone(cfg);
-  const nextPlugins = asObjectRecord(next.plugins);
+  const nextPlugins = asNullableRecord(next.plugins);
 
   const allowIds = hits.filter((hit) => hit.surface === "allow").map((hit) => hit.pluginId);
   if (allowIds.length > 0 && Array.isArray(nextPlugins?.allow)) {
@@ -397,7 +397,7 @@ export function maybeRepairStalePluginConfig(
 
   const entryIds = hits.filter((hit) => hit.surface === "entries").map((hit) => hit.pluginId);
   if (entryIds.length > 0) {
-    const entries = asObjectRecord(nextPlugins?.entries);
+    const entries = asNullableRecord(nextPlugins?.entries);
     if (entries) {
       const staleEntryIds = new Set(entryIds.map((pluginId) => normalizePluginId(pluginId)));
       for (const pluginId of Object.keys(entries)) {
@@ -413,7 +413,7 @@ export function maybeRepairStalePluginConfig(
       hit.surface === "slot" && hit.slotKey !== undefined,
   );
   if (slotHits.length > 0) {
-    const slots = asObjectRecord(nextPlugins?.slots);
+    const slots = asNullableRecord(nextPlugins?.slots);
     if (slots) {
       for (const hit of slotHits) {
         slots[hit.slotKey] = defaultSlotIdForKey(hit.slotKey);
@@ -476,7 +476,7 @@ export function maybeRepairStalePluginConfig(
 
 function removeDanglingChannelReferences(config: OpenClawConfig, channelIds: readonly string[]) {
   const staleChannelIds = new Set(channelIds.map((channelId) => normalizePluginId(channelId)));
-  const channels = asObjectRecord(config.channels);
+  const channels = asNullableRecord(config.channels);
   if (channels) {
     for (const channelId of Object.keys(channels)) {
       if (CHANNEL_CONFIG_META_KEYS.has(channelId)) {
@@ -487,10 +487,10 @@ function removeDanglingChannelReferences(config: OpenClawConfig, channelIds: rea
       }
     }
 
-    const modelByChannel = asObjectRecord(channels.modelByChannel);
+    const modelByChannel = asNullableRecord(channels.modelByChannel);
     if (modelByChannel) {
       for (const [providerId, channelMap] of Object.entries(modelByChannel)) {
-        const channelsForProvider = asObjectRecord(channelMap);
+        const channelsForProvider = asNullableRecord(channelMap);
         if (!channelsForProvider) {
           continue;
         }
@@ -518,7 +518,7 @@ function removeDanglingChannelReferences(config: OpenClawConfig, channelIds: rea
     delete defaultsHeartbeat.target;
   }
   for (const { agent } of listMutableCodexRouteAgentEntries(config)) {
-    const heartbeat = asObjectRecord(agent.heartbeat);
+    const heartbeat = asNullableRecord(agent.heartbeat);
     if (
       heartbeat &&
       typeof heartbeat.target === "string" &&

@@ -26,7 +26,11 @@ async function main(): Promise<void> {
     write: (frame) => {
       responseFrame = frame;
     },
-    buildPairing: async () => await buildBrowserExtensionPairing({ cfg: getRuntimeConfig() }),
+    buildPairing: async () =>
+      await buildBrowserExtensionPairing({
+        cfg: getRuntimeConfig(),
+        localTransport: "gateway",
+      }),
   });
   const response = responseFrame;
   if (!response) {

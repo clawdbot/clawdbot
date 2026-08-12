@@ -386,16 +386,10 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     // commits and the terminal mutation fence while this synchronous receiver runs.
     const result = options.liveEvents.apply({ identity, request });
     if (result.ok) {
-      const placement = placementBinding(identity);
       const processTurn = processTurnBinding(identity);
-      if (!placement || !processTurn) {
+      if (!processTurn) {
         return { ok: false, closeReason: "placement-mismatch" };
       }
-      options.placementStore?.updateAckCursors({
-        ...placement,
-        liveSeq: result.result.ackedSeq,
-        ...(isTerminalLiveEvent(request) ? { workspaceResultPending: true } : {}),
-      });
       recordAckCursor(processTurn, { liveSeq: result.result.ackedSeq });
     }
     return result;
@@ -430,6 +424,12 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
         matchesTurnBinding(terminal, processTurn) &&
         result.result.ackedSeq >= terminal.terminalLiveSeq
       ) {
+        // Only finishing authority crosses the durable boundary. Its live cursor
+        // and workspace-result recovery fence commit in one placement transaction.
+        options.placementStore?.updateAckCursors({
+          ...placement,
+          liveSeq: result.result.ackedSeq,
+        });
         // A gap fill can ACK a previously buffered terminal event. Fence from
         // the observed high-water marks, not only from the request carrying it.
         terminalTurnFences.set(

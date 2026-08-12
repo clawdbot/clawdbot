@@ -1,4 +1,5 @@
 // Status, health, sessions, and task/flow command registration.
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -6,7 +7,7 @@ import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatHelpExamples } from "../help-format.js";
-import { parsePositiveIntOrUndefined, parseStrictPositiveIntOrUndefined } from "./helpers.js";
+import { parsePositiveIntOrUndefined } from "./helpers.js";
 
 function resolveVerbose(opts: { verbose?: boolean; debug?: boolean }): boolean {
   return Boolean(opts.verbose || opts.debug);
@@ -178,7 +179,7 @@ function registerSessionsLifecycleCommand(
       ) {
         return;
       }
-      const timeoutMs = parseStrictPositiveIntOrUndefined(opts.timeout);
+      const timeoutMs = parseStrictPositiveInteger(opts.timeout);
       if (opts.timeout !== undefined && timeoutMs === undefined) {
         defaultRuntime.error("--timeout must be a positive integer (milliseconds).");
         defaultRuntime.exit(1);
@@ -218,7 +219,7 @@ function parseTimeoutMs(timeout: unknown): number | null | undefined {
 }
 
 function parseTasksAuditLimit(limit: unknown): number | null | undefined {
-  const parsed = parseStrictPositiveIntOrUndefined(limit);
+  const parsed = parseStrictPositiveInteger(limit);
   if (limit !== undefined && parsed === undefined) {
     defaultRuntime.error("--limit must be a positive integer, for example --limit 25.");
     defaultRuntime.exit(1);
@@ -555,13 +556,13 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       ) {
         return;
       }
-      const maxLines = parseStrictPositiveIntOrUndefined(opts.maxLines);
+      const maxLines = parseStrictPositiveInteger(opts.maxLines);
       if (opts.maxLines !== undefined && maxLines === undefined) {
         defaultRuntime.error("--max-lines must be a positive integer.");
         defaultRuntime.exit(1);
         return;
       }
-      const timeoutMs = parseStrictPositiveIntOrUndefined(opts.timeout);
+      const timeoutMs = parseStrictPositiveInteger(opts.timeout);
       if (opts.timeout !== undefined && timeoutMs === undefined) {
         defaultRuntime.error("--timeout must be a positive integer (milliseconds).");
         defaultRuntime.exit(1);

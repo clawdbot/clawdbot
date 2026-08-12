@@ -14,10 +14,12 @@ import {
   verifyControlUiGeneratedCatalogs,
   verifyRuntimeLocaleConfig,
 } from "./control-ui-i18n-verify.ts";
+import { isStrictAffirmativeValue } from "./lib/arg-utils.mts";
 import {
   hashControlUiTranslationText,
   loadControlUiTranslationMemory,
   materializeControlUiLocaleCatalog,
+  mergeControlUiTranslationMaps,
 } from "./lib/control-ui-i18n-catalog.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 import { syncControlUiRawCopyBaseline } from "./lib/control-ui-i18n-raw-copy.ts";
@@ -52,6 +54,7 @@ const ROOT = path.resolve(HERE, "..");
 const LOCALES_DIR = path.join(ROOT, "ui", "src", "i18n", "locales");
 const I18N_ASSETS_DIR = path.join(ROOT, "ui", "src", "i18n", ".i18n");
 const SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en.ts");
+const ACTIVITY_SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en-activity.ts");
 const SOURCE_LOCALE = "en";
 const MAX_BATCH_ITEMS = 20;
 const DEFAULT_BATCH_CHAR_BUDGET = 2_000;
@@ -291,6 +294,26 @@ async function loadLocaleMap(filePath: string, exportName: string): Promise<Tran
   return mod[exportName] ?? null;
 }
 
+async function loadSourceLocaleMap(): Promise<TranslationMap> {
+  const source = await loadLocaleMap(SOURCE_LOCALE_PATH, "en");
+  const activitySource = (
+    await importLocaleModule<{
+      registerActivityEnglish: { catalog: TranslationMap };
+    }>(ACTIVITY_SOURCE_LOCALE_PATH)
+  ).registerActivityEnglish.catalog;
+  if (!source || !activitySource) {
+    throw new Error("Control UI English source catalogs are incomplete");
+  }
+  return mergeControlUiTranslationMaps(source, activitySource);
+}
+
+async function readSourceLocaleRaw(): Promise<string> {
+  const sources = await Promise.all(
+    [SOURCE_LOCALE_PATH, ACTIVITY_SOURCE_LOCALE_PATH].map((filePath) => readFile(filePath, "utf8")),
+  );
+  return sources.join("\n");
+}
+
 type PlaceholderMismatch = {
   key: string;
   locale: string;
@@ -465,8 +488,7 @@ export function isProviderAuthError(error: Error): boolean {
 }
 
 function isProviderAuthOptional(): boolean {
-  const raw = process.env[ENV_AUTH_OPTIONAL]?.trim().toLowerCase();
-  return raw === "1" || raw === "true" || raw === "yes";
+  return isStrictAffirmativeValue(process.env[ENV_AUTH_OPTIONAL]);
 }
 
 function resolvePromptTimeoutMs(): number {
@@ -1089,9 +1111,9 @@ async function syncLocale(
 ) {
   const localeLabel = formatLocaleLabel(entry.locale, context);
   const localeStartedAt = Date.now();
-  const sourceRaw = await readFile(SOURCE_LOCALE_PATH, "utf8");
+  const sourceRaw = await readSourceLocaleRaw();
   const sourceHash = sha256(sourceRaw);
-  const sourceMap = (await loadLocaleMap(SOURCE_LOCALE_PATH, "en")) ?? {};
+  const sourceMap = await loadSourceLocaleMap();
   const sourceFlat = flattenTranslations(sourceMap);
   const tm = loadControlUiTranslationMemory(tmPath(entry));
   const existingMap = materializeControlUiLocaleCatalog(sourceFlat, tm);

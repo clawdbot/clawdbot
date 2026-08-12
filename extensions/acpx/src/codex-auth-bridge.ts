@@ -8,6 +8,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
+import { isRecord as isConfigRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   parse as parseToml,
   stringify as stringifyToml,
@@ -800,10 +801,6 @@ function extractConfiguredAdapterArgs(params: {
   }
 
   return undefined;
-}
-
-function isConfigRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function mergeConfigRecords(

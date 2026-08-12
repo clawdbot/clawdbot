@@ -8,6 +8,7 @@ import {
   SESSION_LIST_DEFAULTS,
   WORKSPACE,
   captureProjectUiProof,
+  captureUiProof,
   captureUiProofEnabled,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
@@ -22,6 +23,46 @@ import {
 const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
+  it("keeps the pre-creation draft on the composer surface", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Main" },
+              name: "Main",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "sessions.list": createdSessionListResult("agent:main:existing"),
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new?agent=main`);
+      await page.getByRole("heading", { name: "Main" }).waitFor();
+      await page.locator(".new-session-page__message").waitFor();
+      await expect.poll(() => page.locator(".sidebar-recent-session--draft").count()).toBe(0);
+      await captureUiProof(page, "draft-row-after-light.png");
+      await page.evaluate(() => document.documentElement.setAttribute("data-theme-mode", "dark"));
+      await captureUiProof(page, "draft-row-after-dark.png");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("drafts a session with a browsed folder and creates it on first message", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
@@ -481,32 +522,6 @@ suite.define(() => {
     }
   });
 
-  it("hides the destination axis when the Gateway is the only place", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      workspace: WORKSPACE,
-      workspaceGit: true,
-      methodResponses: {
-        "node.list": { nodes: [] },
-        "environments.list": { environments: [], profiles: [] },
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("node.list");
-      const trigger = page.locator("#new-session-place-trigger");
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("openclaw");
-      await trigger.click();
-      const place = page.locator("wa-popover.new-session-page__place-popover");
-      expect(await place.getByText("Places", { exact: true }).count()).toBe(0);
-      await place.getByText("Runs on Gateway · local", { exact: true }).waitFor();
-    } finally {
-      await context.close();
-    }
-  });
-
   it("uses advertised system info for Gateway place labels", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
@@ -884,7 +899,7 @@ suite.define(() => {
       const placeLabel = placeTrigger.locator(".new-session-page__trigger-label");
       const browserEntries = page.locator(".new-session-page__browser-list");
 
-      // Pick the node from Places.
+      // Pick the node from Your devices.
       await placeTrigger.click();
       await placeSelect.getByRole("button", { name: "MacBook" }).click();
       await pollLocatorText(placeLabel).toBe("Agent workspace · MacBook");
@@ -909,9 +924,9 @@ suite.define(() => {
           placeSelect.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
         )
         .toBe(true);
-      await placeSelect.getByText("Places", { exact: true }).waitFor();
+      await placeSelect.getByText("Your devices", { exact: true }).waitFor();
 
-      // Destination selection stays in Places; browsing is fixed to the current target.
+      // Destination selection stays in the destination sections; browsing is fixed to the target.
       await placeSelect.getByRole("button", { name: "Gateway · local" }).click();
       await pollLocatorText(placeLabel).toBe("openclaw · Gateway · local");
       await placeTrigger.click();

@@ -41,7 +41,28 @@ export {
   resolvePrimaryStringValue,
   type FastMode,
 } from "../../packages/normalization-core/src/string-coerce.js";
-export * from "../../packages/normalization-core/src/string-normalization.js";
+// Public compatibility: keep this legacy barrel's existing normalization surface
+// without promoting new normalization-core helpers into the Plugin SDK.
+export {
+  normalizeArrayBackedTrimmedStringList,
+  normalizeAtHashSlug,
+  normalizeCsvOrLooseStringList,
+  normalizeHyphenSlug,
+  normalizeOptionalTrimmedStringList,
+  normalizeSingleOrTrimmedStringList,
+  normalizeSortedUniqueStringEntries,
+  normalizeSortedUniqueTrimmedStringList,
+  normalizeStringEntries,
+  normalizeStringEntriesLower,
+  normalizeTrimmedStringList,
+  normalizeUniqueSingleOrTrimmedStringList,
+  normalizeUniqueStringEntries,
+  normalizeUniqueStringEntriesLower,
+  normalizeUniqueTrimmedStringList,
+  sortUniqueStrings,
+  uniqueStrings,
+  uniqueValues,
+} from "../../packages/normalization-core/src/string-normalization.js";
 export * from "../shared/string-sample.js";
 export * from "../shared/text/assistant-visible-text.js";
 export * from "../shared/text/auto-linked-file-ref.js";

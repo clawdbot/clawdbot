@@ -1,5 +1,8 @@
 import type { MessageOptions, SessionConfig, Tool as SdkTool } from "@github/copilot-sdk";
 import type { AgentMessage, SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { toStringifiedError as toCopilotError } from "openclaw/plugin-sdk/error-runtime";
+
+export { toCopilotError };
 import {
   detectAndLoadAgentHarnessPromptImages,
   getModelProviderRequestTransport,
@@ -438,9 +441,6 @@ export function resolvePoolAcquire(params: AttemptParamsLike): {
     auth,
     provider,
   };
-}
-export function toCopilotError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }
 export function isSdkSendAndWaitTimeoutError(error: unknown): boolean {
   if (error === null || typeof error !== "object") {

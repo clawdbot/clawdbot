@@ -3,7 +3,10 @@ import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { findBundledPluginMetadataById } from "./bundled-plugin-metadata.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
-import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
+import {
+  loadPluginManifestRegistryCore,
+  type PluginManifestRegistry,
+} from "./manifest-registry.js";
 import type { PluginManifestConfigContracts } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
@@ -49,7 +52,7 @@ export function resolvePluginConfigContractsById(params: {
         workspaceDir: params.workspaceDir,
         env: params.env,
       });
-    const registry = loadPluginManifestRegistry({
+    const registry = loadPluginManifestRegistryCore({
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,

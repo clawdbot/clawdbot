@@ -8559,6 +8559,46 @@
       "translated": "他$count件のワーカー"
     },
     {
+      "id": "native.android.87d0e02f15fa721a",
+      "source": "Compacted history",
+      "translated": "圧縮された履歴"
+    },
+    {
+      "id": "native.android.9aa434a3c6f7be9e",
+      "source": "saved $count tokens",
+      "translated": "$count トークンを節約しました"
+    },
+    {
+      "id": "native.android.fda9fe610c7334a7",
+      "source": "Session reset",
+      "translated": "セッションをリセットしました"
+    },
+    {
+      "id": "native.android.34b623e6597690a1",
+      "source": "The earlier conversation was cleared.",
+      "translated": "以前の会話はクリアされました。"
+    },
+    {
+      "id": "native.android.f22f983644b07db4",
+      "source": "System · restart recovery",
+      "translated": "システム · 再起動リカバリー"
+    },
+    {
+      "id": "native.android.5ff88f5e4fb8dc90",
+      "source": "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.",
+      "translated": "Gateway の再起動によりターンが中断されました — エージェントに再開して応答を完了するよう依頼しました。"
+    },
+    {
+      "id": "native.android.7cd27609193d4cbf",
+      "source": "System · gateway restarted",
+      "translated": "システム · Gateway を再起動しました"
+    },
+    {
+      "id": "native.android.72b1f80d8de8404c",
+      "source": "System",
+      "translated": "システム"
+    },
+    {
       "id": "native.android.c32ff602fa622e4b",
       "source": "Done in $duration",
       "translated": "$duration で完了"
@@ -26087,6 +26127,46 @@
       "id": "native.apple.0149100bb5c8b985",
       "source": "Message",
       "translated": "Message"
+    },
+    {
+      "id": "native.apple.041f2ed87f1797a0",
+      "source": "System · restart recovery",
+      "translated": "システム · 再起動リカバリー"
+    },
+    {
+      "id": "native.apple.0eaa9e1136018332",
+      "source": "System · gateway restarted",
+      "translated": "システム · Gateway を再起動しました"
+    },
+    {
+      "id": "native.apple.25ffcf5fcb1645d3",
+      "source": "System",
+      "translated": "システム"
+    },
+    {
+      "id": "native.apple.55c9f51c550018a9",
+      "source": "Compacted history",
+      "translated": "圧縮された履歴"
+    },
+    {
+      "id": "native.apple.28264f2dcf55651b",
+      "source": "Session reset",
+      "translated": "セッションをリセットしました"
+    },
+    {
+      "id": "native.apple.6410db19dcb02d59",
+      "source": "saved %@ tokens",
+      "translated": "%@ トークンを節約しました"
+    },
+    {
+      "id": "native.apple.0b97fe0abe7ea144",
+      "source": "The earlier conversation was cleared.",
+      "translated": "以前の会話はクリアされました。"
+    },
+    {
+      "id": "native.apple.4efcef39bcaea3d1",
+      "source": "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.",
+      "translated": "Gateway の再起動によりターンが中断されました — エージェントに再開して応答を完了するよう依頼しました。"
     },
     {
       "id": "native.apple.5824df4efbf6c977",

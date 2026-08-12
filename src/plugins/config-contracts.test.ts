@@ -23,7 +23,7 @@ vi.mock("./bundled-plugin-metadata.js", () => ({
 }));
 
 vi.mock("./manifest-registry.js", () => ({
-  loadPluginManifestRegistry: mocks.loadBundledManifestRegistry,
+  loadPluginManifestRegistryCore: mocks.loadBundledManifestRegistry,
 }));
 
 vi.mock("./manifest-registry-installed.js", () => ({

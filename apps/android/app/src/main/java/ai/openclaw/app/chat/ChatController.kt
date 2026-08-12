@@ -101,6 +101,8 @@ class ChatController internal constructor(
   private val scope: CoroutineScope,
   private val json: Json,
   private val requestGateway: suspend (method: String, paramsJson: String?) -> String,
+  private val requestGatewayWithTimeout: suspend (method: String, paramsJson: String?, timeoutMs: Long) -> String =
+    { method, paramsJson, _ -> requestGateway(method, paramsJson) },
   private val requestGatewayForGateway: suspend (gatewayId: String, method: String, paramsJson: String?) -> String =
     { _, method, paramsJson -> requestGateway(method, paramsJson) },
   private val captureSettingsRequestLease: (gatewayScope: ChatCacheScope?) -> GatewaySession.RequestLease? =
@@ -154,6 +156,9 @@ class ChatController internal constructor(
     scope = scope,
     json = json,
     requestGateway = { method, paramsJson -> session.request(method, paramsJson) },
+    requestGatewayWithTimeout = { method, paramsJson, timeoutMs ->
+      session.request(method, paramsJson, timeoutMs)
+    },
     requestGatewayForGateway = { gatewayId, method, paramsJson ->
       session.requestForEndpoint(gatewayId, method, paramsJson)
     },
@@ -917,6 +922,7 @@ class ChatController internal constructor(
   suspend fun patchSession(
     key: String,
     ownerAgentId: String? = null,
+    expectedSessionId: String? = null,
     label: String? = null,
     clearLabel: Boolean = false,
     category: String? = null,
@@ -932,11 +938,17 @@ class ChatController internal constructor(
         ?: if (sessionKey == _sessionKey.value) resolveAgentIdForSessionKey(sessionKey) else null
     val hasPatch = clearLabel || label != null || clearCategory || category != null || pinned != null || archived != null || unread != null
     if (!hasPatch) return false
+    val lifecycleSessionId = expectedSessionId?.trim()?.takeIf { it.isNotEmpty() }
+    if (archived != null && lifecycleSessionId == null) {
+      updateErrorText("Session lifecycle action requires a durable session identity.")
+      return false
+    }
     try {
       val params =
         buildJsonObject {
           put("key", JsonPrimitive(sessionKey))
           capturedOwnerAgentId?.let { put("agentId", JsonPrimitive(it)) }
+          lifecycleSessionId?.let { put("expectedSessionId", JsonPrimitive(it)) }
           if (clearLabel) {
             put("label", JsonNull)
           } else if (label != null) {
@@ -951,7 +963,11 @@ class ChatController internal constructor(
           if (archived != null) put("archived", JsonPrimitive(archived))
           if (unread != null) put("unread", JsonPrimitive(unread))
         }
-      requestGateway("sessions.patch", params.toString())
+      if (archived == true) {
+        requestGatewayWithTimeout("sessions.patch", params.toString(), 10 * 60_000L)
+      } else {
+        requestGateway("sessions.patch", params.toString())
+      }
       if (archived == true) {
         fallBackFromRetiredActiveSession(sessionKey)
       }
@@ -5904,17 +5920,17 @@ class ChatController internal constructor(
               ?: existing?.childSessionKey,
         )
       _subagentActivities.value = _subagentActivities.value + (taskId to activity)
-      subagentActivityExpiryJobs.remove(taskId)?.cancel()
-      if (!activity.isWorking) {
-        val expiresAt = (activity.endedAtMs ?: now) + SUBAGENT_ACTIVITY_RETENTION_MS
-        val expiryDelayMs = (expiresAt - now).coerceAtLeast(0L)
+      if (activity.isWorking) {
+        subagentActivityExpiryJobs.remove(taskId)?.cancel()
+      } else if (terminal && existing?.isWorking != false) {
+        // Local receipt starts retention; remote endedAt may be old.
+        // Duplicate terminal updates must not extend that retention window.
         subagentActivityExpiryJobs[taskId] =
           scope.launch {
-            delay(expiryDelayMs)
+            delay(SUBAGENT_ACTIVITY_RETENTION_MS)
             synchronized(subagentActivityLock) {
-              if (_subagentActivities.value[taskId] == activity) {
-                _subagentActivities.value = _subagentActivities.value - taskId
-              }
+              if (subagentActivityExpiryJobs[taskId] !== coroutineContext[Job]) return@synchronized
+              _subagentActivities.value = _subagentActivities.value - taskId
               subagentActivityExpiryJobs.remove(taskId)
             }
           }
@@ -6343,6 +6359,8 @@ class ChatController internal constructor(
           timestampMs = ts,
           idempotencyKey = obj["idempotencyKey"].asStringOrNull(),
           entryId = obj["__openclaw"].asObjectOrNull()?.get("id").asStringOrNull(),
+          provenance = parseChatMessageProvenance(obj["provenance"]),
+          transcriptMarker = parseChatTranscriptMarker(obj["__openclaw"]),
         )
       }
 
@@ -6353,6 +6371,26 @@ class ChatController internal constructor(
       messages = reconcileMessageIds(previous = previousMessages, incoming = messages),
       sessionInfo = sessionInfo,
       inFlightRun = parseInFlightRun(root),
+    )
+  }
+
+  private fun parseChatMessageProvenance(element: JsonElement?): ChatMessageProvenance? {
+    val obj = element.asObjectOrNull() ?: return null
+    val kind = obj["kind"].asJsonStringOrNull() ?: return null
+    return ChatMessageProvenance(
+      kind = kind,
+      sourceTool = obj["sourceTool"].asJsonStringOrNull(),
+    )
+  }
+
+  private fun parseChatTranscriptMarker(element: JsonElement?): ChatTranscriptMarker? {
+    val obj = element.asObjectOrNull() ?: return null
+    val kind = obj["kind"].asJsonStringOrNull() ?: return null
+    return ChatTranscriptMarker(
+      kind = kind,
+      id = obj["id"].asJsonStringOrNull(),
+      tokensBefore = obj["tokensBefore"].asJsonNumberOrNull(),
+      tokensAfter = obj["tokensAfter"].asJsonNumberOrNull(),
     )
   }
 
@@ -6420,6 +6458,7 @@ class ChatController internal constructor(
     if (key.isEmpty()) return null
     return ChatSessionEntry(
       key = key,
+      sessionId = obj["sessionId"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
       updatedAtMs = obj["updatedAt"].asLongOrNull(),
       ownerAgentId = obj["agentId"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
       classification = obj["classification"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
@@ -7292,6 +7331,17 @@ private fun JsonElement?.asStringOrNull(): String? =
     else -> null
   }
 
+private fun JsonElement?.asJsonStringOrNull(): String? =
+  (this as? JsonPrimitive)
+    ?.takeIf(JsonPrimitive::isString)
+    ?.content
+
+private fun JsonElement?.asJsonNumberOrNull(): Double? =
+  (this as? JsonPrimitive)
+    ?.takeUnless(JsonPrimitive::isString)
+    ?.content
+    ?.toDoubleOrNull()
+
 private fun JsonElement?.asLongOrNull(): Long? =
   when (this) {
     is JsonPrimitive -> content.toLongOrNull()
@@ -7363,6 +7413,9 @@ internal fun mergeChatSessionEntry(
       status = if (next.hasRunMetadata) next.status else existing.status,
     )
   return existing.copy(
+    // Partial events may omit identity; retain the last observed occurrence until
+    // an authoritative event supplies the replacement session ID.
+    sessionId = next.sessionId ?: existing.sessionId,
     updatedAtMs = next.updatedAtMs ?: existing.updatedAtMs,
     ownerAgentId = next.ownerAgentId ?: existing.ownerAgentId,
     classification = if (next.hasClassificationMetadata) next.classification else existing.classification,

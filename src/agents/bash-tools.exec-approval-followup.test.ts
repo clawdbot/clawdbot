@@ -758,6 +758,38 @@ describe("exec approval followup", () => {
     expect(callGatewayTool).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      suppressionReason: "cancelled_by_message_sending_hook",
+      expectedMessage: "delivery was suppressed",
+    },
+    {
+      suppressionReason: "adapter_returned_no_identity",
+      expectedMessage: "delivery could not be confirmed",
+    },
+  ] as const)(
+    "rejects direct followup after $suppressionReason",
+    async ({ suppressionReason, expectedMessage }) => {
+      vi.mocked(sendMessage).mockResolvedValueOnce({
+        channel: "discord",
+        to: "123",
+        via: "direct",
+        mediaUrl: null,
+        deliveryStatus: "suppressed",
+        suppressionReason,
+      });
+
+      await expect(
+        sendExecApprovalFollowup({
+          approvalId: `req-${suppressionReason}`,
+          turnSourceChannel: "discord",
+          turnSourceTo: "123",
+          resultText: "Exec finished (gateway id=req-suppressed, code 0)\nall good",
+        }),
+      ).rejects.toThrow(expectedMessage);
+    },
+  );
+
   it("redacts credentials before direct delivery", async () => {
     const secret = "sk-abcdefghijklmnopqrstuvwxyz123456";
 

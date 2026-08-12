@@ -33,6 +33,8 @@ describe("createChannelProgressDraftCompositor", () => {
     receipt.noteReasoning();
     now = 43_000;
 
+    expect(receipt.toolCalls).toBe(1);
+    expect(receipt.elapsedSeconds).toBe(42);
     expect(receipt.buildSummaryLine()).toBe("🧠 2 thoughts · 💬 1 note · 🛠️ 1 tool call · ⏱️ 42s");
 
     receipt.reset();
@@ -963,6 +965,30 @@ describe("createChannelProgressDraftCompositor", () => {
       expect.objectContaining({ id: "command-1", kind: "command-output", status: "completed" }),
       expect.objectContaining({ id: "patch-1", kind: "patch", toolName: "apply_patch" }),
     ]);
+    expect(progress.getSnapshot().diffStat).toBeUndefined();
+  });
+
+  it("wires successful mutation completions into the snapshot diff stat", async () => {
+    const progress = createTestProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Working" } } },
+      update: vi.fn(),
+      updateOnLineChange: true,
+    });
+
+    await progress.pushToolEvent({
+      toolCallId: "write-1",
+      name: "write",
+      phase: "start",
+      args: { path: "src/example.ts", content: "one\ntwo" },
+    });
+    expect(progress.getSnapshot().diffStat).toBeUndefined();
+    await progress.pushItemEvent({
+      toolCallId: "write-1",
+      kind: "tool",
+      phase: "end",
+      status: "completed",
+    });
+    expect(progress.getSnapshot().diffStat).toEqual({ files: 1, added: 2, removed: 0 });
   });
 
   it("ignores status updates once the final reply started and clears both per turn", async () => {
