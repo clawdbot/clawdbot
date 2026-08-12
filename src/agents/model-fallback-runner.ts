@@ -683,6 +683,9 @@ async function runWithModelFallbackInternal<T>(
     // there are remaining candidates.  Only abort/context-overflow errors
     // (handled above) are truly non-retryable.
     const isKnownFailover = isFailoverError(normalized);
+    if (isKnownFailover && normalized.reason === "sensitive_output") {
+      throw normalized;
+    }
     if (!isKnownFailover && !hasRemainingCandidate) {
       throw err;
     }

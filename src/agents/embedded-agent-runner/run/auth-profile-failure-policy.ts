@@ -39,7 +39,8 @@ export function resolveAuthProfileFailureReason(params: {
     params.failoverReason === "tls_certificate" ||
     params.failoverReason === "empty_response" ||
     params.failoverReason === "context_overflow" ||
-    params.failoverReason === "format"
+    params.failoverReason === "format" ||
+    params.failoverReason === "sensitive_output"
   ) {
     return null;
   }

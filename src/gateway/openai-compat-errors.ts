@@ -16,6 +16,7 @@ const ERROR_TYPE_BY_REASON = {
   auth: "authentication_error",
   auth_permanent: "permission_error",
   format: "invalid_request_error",
+  sensitive_output: "invalid_request_error",
   rate_limit: "rate_limit_error",
   overloaded: "api_error",
   billing: "insufficient_quota",

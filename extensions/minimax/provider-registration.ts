@@ -59,16 +59,16 @@ const MINIMAX_WIZARD_GROUP = {
 
 function classifyMiniMaxFailoverReason(
   context: ProviderFailoverErrorContext,
-): "format" | undefined {
+): "sensitive_output" | undefined {
   const normalized = `${context.code ?? ""}\n${context.errorMessage}`.toLowerCase();
   const sensitiveOutputRejected =
     /\b(?:output\s+)?new_sensitive\b/.test(normalized) ||
     (/\b1027\b/.test(normalized) && /\bsensitive\b/.test(normalized));
 
   // A MiniMax output-moderation rejection is terminal for this request. It must
-  // not reuse rate-limit recovery, which retries, rotates credentials, and can
-  // send the rejected content to another configured provider.
-  return sensitiveOutputRejected ? "format" : undefined;
+  // not retry, rotate credentials, or send the rejected content to another
+  // configured provider.
+  return sensitiveOutputRejected ? "sensitive_output" : undefined;
 }
 
 const HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({

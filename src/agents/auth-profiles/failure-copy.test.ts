@@ -24,6 +24,7 @@ const RECOVERY_BY_REASON = {
   auth: true,
   auth_permanent: true,
   format: false,
+  sensitive_output: false,
   rate_limit: false,
   overloaded: false,
   billing: true,

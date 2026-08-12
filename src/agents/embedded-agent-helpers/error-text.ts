@@ -211,11 +211,14 @@ export function formatAssistantErrorText(
   }
 
   const failoverReason = classifyFailoverReason(raw, {
-    provider: providerOwner,
+    provider: opts?.provider ?? msg.provider,
     providerPlugin: opts?.providerOwner,
   });
   if (failoverReason === "billing") {
     return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
+  }
+  if (failoverReason === "sensitive_output") {
+    return "LLM request failed: provider rejected sensitive output.";
   }
   const transientCopy =
     failoverReason === "rate_limit" || failoverReason === "overloaded"

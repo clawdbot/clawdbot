@@ -469,23 +469,26 @@ describe("minimax provider hooks", () => {
   it.each([
     'MiniMax request failed: {"base_resp":{"status_code":1027,"status_msg":"output new_sensitive"}}',
     "MiniMax API error 1027: sensitive output blocked",
-  ])("classifies MiniMax sensitive output as a terminal format failure", async (errorMessage) => {
-    const { providers } = await registerProviderPlugin({
-      plugin: minimaxProviderPlugin,
-      id: "minimax",
-      name: "MiniMax Provider",
-    });
+  ])(
+    "classifies MiniMax sensitive output as a terminal sensitive-output failure",
+    async (errorMessage) => {
+      const { providers } = await registerProviderPlugin({
+        plugin: minimaxProviderPlugin,
+        id: "minimax",
+        name: "MiniMax Provider",
+      });
 
-    for (const providerId of ["minimax", "minimax-portal"]) {
-      const provider = requireRegisteredProvider(providers, providerId);
-      expect(
-        provider.classifyFailoverReason?.({
-          provider: providerId,
-          errorMessage,
-        }),
-      ).toBe("format");
-    }
-  });
+      for (const providerId of ["minimax", "minimax-portal"]) {
+        const provider = requireRegisteredProvider(providers, providerId);
+        expect(
+          provider.classifyFailoverReason?.({
+            provider: providerId,
+            errorMessage,
+          }),
+        ).toBe("sensitive_output");
+      }
+    },
+  );
 
   it("leaves unrelated MiniMax policy errors unclassified", async () => {
     const { providers } = await registerProviderPlugin({
