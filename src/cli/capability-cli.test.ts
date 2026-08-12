@@ -2414,86 +2414,71 @@ describe("capability cli", () => {
     expect(firstImageGenerationCall()?.count).toBe(3);
   });
 
-  it("rejects unsupported image output format and background hints", async () => {
-    await expect(
-      runCapability(
-        "image",
-        "generate",
-        "--prompt",
-        "transparent sticker",
-        "--output-format",
-        "gif",
-        "--json",
-      ),
-    ).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      "--output-format must be one of png, jpeg, or webp",
-    );
+  // Both image subcommands share resolveImageGenerationOptions, so every advertised closed-union
+  // flag must be rejected before provider dispatch on both of them.
+  const rejectedImageEnumFlags = [
+    { flag: "--output-format", value: "gif", accepted: "png, jpeg, or webp" },
+    { flag: "--background", value: "clear", accepted: "transparent, opaque, or auto" },
+    { flag: "--openai-background", value: "clear", accepted: "transparent, opaque, or auto" },
+    { flag: "--openai-moderation", value: "none", accepted: "low or auto" },
+    { flag: "--quality", value: "expensive", accepted: "low, medium, high, or auto" },
+    // 720P/1080P are the sibling `video generate` values, so they are the natural typo here.
+    { flag: "--resolution", value: "1080p", accepted: "1K, 2K, or 4K" },
+    { flag: "--resolution", value: "hd", accepted: "1K, 2K, or 4K" },
+    // 8K was previously clamped to 4K by the geometry layer; it is advertised nowhere.
+    { flag: "--resolution", value: "8K", accepted: "1K, 2K, or 4K" },
+  ];
 
-    mocks.runtime.error.mockClear();
-    await expect(
-      runCapability(
-        "image",
-        "generate",
-        "--prompt",
-        "transparent sticker",
-        "--openai-background",
-        "clear",
-        "--json",
-      ),
-    ).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      "--openai-background must be one of transparent, opaque, or auto",
-    );
+  it.each(rejectedImageEnumFlags)(
+    "rejects $flag $value before image generate and image edit reach the provider",
+    async ({ flag, value, accepted }) => {
+      const expected = `${flag} must be one of ${accepted}`;
+      const editInput = path.join(tempDirs.make("openclaw-image-enum-reject-"), "input.png");
+      await fs.writeFile(editInput, Buffer.from(PNG_1X1_BASE64, "base64"));
 
-    mocks.runtime.error.mockClear();
-    await expect(
-      runCapability(
-        "image",
-        "generate",
-        "--prompt",
-        "transparent sticker",
-        "--background",
-        "clear",
-        "--json",
-      ),
-    ).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      "--background must be one of transparent, opaque, or auto",
-    );
+      await expect(
+        runCapability("image", "generate", "--prompt", "sticker", flag, value, "--json"),
+      ).rejects.toThrow("exit 1");
+      expect(mocks.runtime.error).toHaveBeenCalledWith(expected);
 
-    mocks.runtime.error.mockClear();
-    await expect(
-      runCapability(
-        "image",
-        "generate",
-        "--prompt",
-        "transparent sticker",
-        "--quality",
-        "expensive",
-        "--json",
-      ),
-    ).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      "--quality must be one of low, medium, high, or auto",
-    );
+      mocks.runtime.error.mockClear();
+      await expect(
+        runCapability(
+          "image",
+          "edit",
+          "--file",
+          editInput,
+          "--prompt",
+          "sticker",
+          flag,
+          value,
+          "--json",
+        ),
+      ).rejects.toThrow("exit 1");
+      expect(mocks.runtime.error).toHaveBeenCalledWith(expected);
 
-    mocks.runtime.error.mockClear();
-    await expect(
-      runCapability(
+      expect(mocks.generateImage).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["2k", " 2k "])(
+    "accepts case-insensitive image resolution %j and forwards the canonical value",
+    async (raw) => {
+      primeGeneratedImage("gpt-image-2", "resolution.png");
+
+      await runCapability(
         "image",
         "generate",
         "--prompt",
-        "transparent sticker",
-        "--openai-moderation",
-        "none",
+        "sticker",
+        "--resolution",
+        raw,
         "--json",
-      ),
-    ).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      "--openai-moderation must be one of low or auto",
-    );
-  });
+      );
+
+      expect(firstImageGenerationCall()?.resolution).toBe("2K");
+    },
+  );
 
   it("forwards size, aspect ratio, and resolution overrides for image edit", async () => {
     const pngBase64 =
@@ -2888,6 +2873,16 @@ describe("capability cli", () => {
     expect(videoCall?.audio).toBe(true);
     expect(videoCall?.watermark).toBe(true);
     expect(videoCall?.timeoutMs).toBe(300000);
+  });
+
+  it("rejects an unsupported video resolution before the provider is dispatched", async () => {
+    await expect(
+      runCapability("video", "generate", "--prompt", "lobster", "--resolution", "9000P", "--json"),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      "video resolution must be one of 360P, 480P, 540P, 720P, 768P, or 1080P",
+    );
+    expect(mocks.generateVideo).not.toHaveBeenCalled();
   });
 
   it("fails video generate when a provider returns an undeliverable asset", async () => {

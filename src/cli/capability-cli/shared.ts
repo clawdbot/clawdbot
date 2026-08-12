@@ -2,6 +2,7 @@ import {
   parseStrictFiniteNumber,
   parseStrictPositiveInteger,
 } from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import {
   resolveAgentOperationAgentId,
@@ -224,6 +225,27 @@ export function parseOptionalPositiveInteger(raw: unknown, label: string): numbe
     throw new Error(`${label} must be a positive integer`);
   }
   return value;
+}
+
+// Closed-union options are advertised in help text, so an unrecognized value is a user error the
+// parse boundary owns. Downstream capability layers treat an unknown value as "no override" and
+// silently drop it, which reports success for a request nobody honored.
+export function parseUnionOption<T extends string>(
+  raw: unknown,
+  allowed: readonly T[],
+  label: string,
+): T | undefined {
+  const normalized = normalizeLowercaseStringOrEmpty(raw);
+  if (!normalized) {
+    return undefined;
+  }
+  const match = allowed.find((value) => value.toLowerCase() === normalized);
+  if (match) {
+    return match;
+  }
+  const head = allowed.slice(0, -1).join(", ");
+  const list = head ? `${head}${allowed.length > 2 ? "," : ""} or ${allowed.at(-1)}` : allowed[0];
+  throw new Error(`${label} must be one of ${list}`);
 }
 
 export function parseOptionalTimeoutMs(raw: string | number | undefined): number | undefined {
