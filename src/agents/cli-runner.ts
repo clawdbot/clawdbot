@@ -696,5 +696,3 @@ export async function runPreparedCliAgent(
     failoverContext: cliFailoverContext,
   });
 }
-
-
