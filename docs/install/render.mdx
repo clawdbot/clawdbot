@@ -27,7 +27,7 @@ services:
     name: openclaw
     runtime: docker
     plan: starter
-    healthCheckPath: /health
+    healthCheckPath: /startupz
     envVars:
       - key: OPENCLAW_GATEWAY_PORT
         value: "8080"
@@ -43,12 +43,12 @@ services:
       sizeGB: 1
 ```
 
-| Feature               | Purpose                                                    |
-| --------------------- | ---------------------------------------------------------- |
-| `runtime: docker`     | Builds from the repo's Dockerfile                          |
-| `healthCheckPath`     | Render monitors `/health` and restarts unhealthy instances |
-| `generateValue: true` | Auto-generates a cryptographically secure value            |
-| `disk`                | Persistent storage that survives redeploys                 |
+| Feature               | Purpose                                                          |
+| --------------------- | ---------------------------------------------------------------- |
+| `runtime: docker`     | Builds from the repo's Dockerfile                                |
+| `healthCheckPath`     | Render admits traffic after `/startupz` reports startup complete |
+| `generateValue: true` | Auto-generates a cryptographically secure value                  |
+| `disk`                | Persistent storage that survives redeploys                       |
 
 ## Choosing a plan
 
@@ -123,7 +123,7 @@ Happens on the free tier (no persistent disk). Upgrade to a paid plan, or regula
 
 ### Health check failures
 
-If builds succeed but deploys fail, the service may be taking too long to start or `/health` may not be reachable. Check:
+If builds succeed but deploys fail, the service may be taking too long to start or `/startupz` may not be reachable. Check:
 
 - Build logs for errors
 - Whether the container runs locally with `docker build && docker run`
