@@ -49,7 +49,7 @@ vi.mock("../../auto-reply/reply/queue/cleanup.js", async () => {
 
 vi.mock("../session-utils.js", () => ({
   loadSessionEntry: (...args: unknown[]) => loadSessionEntryMock(...args),
-  loadSessionEntryReadOnly: (...args: unknown[]) => loadSessionEntryReadOnlyMock(...args),
+  loadGatewaySessionEntryReadOnly: (...args: unknown[]) => loadSessionEntryReadOnlyMock(...args),
   loadGatewaySessionRow: (...args: unknown[]) => loadGatewaySessionRowMock(...args),
   resolveDeletedAgentIdFromSessionKey: (...args: unknown[]) =>
     resolveDeletedAgentIdFromSessionKeyMock(...args),
