@@ -41,7 +41,7 @@ export type CodexPluginsConfigBlock = {
   plugins?: Record<string, CodexPluginConfigEntry>;
 };
 
-export type CodexPluginsManagementRuntime = {
+type CodexPluginsManagementRuntime = {
   workspaceDir: () => Promise<string>;
   list: CodexPluginMarketplaceListRequest;
   install: (params: v2.PluginInstallParams) => Promise<v2.PluginInstallResponse>;

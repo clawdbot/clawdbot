@@ -6,7 +6,7 @@ import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
 } from "./config.js";
-import { findOpenAiCuratedPluginSummary, readCodexPluginInventory } from "./plugin-inventory.js";
+import { findCodexMarketplacePluginSummary, readCodexPluginInventory } from "./plugin-inventory.js";
 import {
   appInfo,
   appSummary,
@@ -127,9 +127,10 @@ describe("Codex plugin inventory", () => {
         name: "GitHub",
       }),
     ]);
-    expect(findOpenAiCuratedPluginSummary(listed, "github")?.summary.id).toBe(
-      "openai-curated/github",
-    );
+    expect(
+      findCodexMarketplacePluginSummary(listed, CODEX_PLUGINS_MARKETPLACE_NAME, "github")?.summary
+        .id,
+    ).toBe("openai-curated/github");
 
     const inventory = await readCodexPluginInventory({
       pluginConfig: pluginConfig({ github: curatedPlugin("github") }),

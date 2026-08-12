@@ -1915,23 +1915,21 @@ describe("config plugin validation", () => {
     }
   });
 
-  it("surfaces invalid Codex native plugin marketplaces as config diagnostics", () => {
-    const res = validateConfigObjectWithPlugins(
-      {
-        agents: { list: [{ id: "openclaw" }] },
-        plugins: {
-          entries: {
-            codex: {
-              enabled: true,
-              config: {
-                codexPlugins: {
-                  enabled: true,
-                  plugins: {
-                    github: {
-                      enabled: true,
-                      marketplaceName: "not-openai-curated",
-                      pluginName: "github",
-                    },
+  it("accepts dynamic Codex marketplaces and surfaces unsafe identifiers as diagnostics", () => {
+    const config = {
+      agents: { list: [{ id: "openclaw" }] },
+      plugins: {
+        entries: {
+          codex: {
+            enabled: true,
+            config: {
+              codexPlugins: {
+                enabled: true,
+                plugins: {
+                  github: {
+                    enabled: true,
+                    marketplaceName: "openai-monorepo",
+                    pluginName: "github",
                   },
                 },
               },
@@ -1939,13 +1937,19 @@ describe("config plugin validation", () => {
           },
         },
       },
-      {
-        env: {
-          ...suiteEnv(),
-          OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "extensions"),
-        },
+    };
+    const options = {
+      env: {
+        ...suiteEnv(),
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "extensions"),
       },
-    );
+    };
+
+    expect(validateConfigObjectWithPlugins(config, options).ok).toBe(true);
+
+    config.plugins.entries.codex.config.codexPlugins.plugins.github.marketplaceName =
+      "../unsafe-marketplace";
+    const res = validateConfigObjectWithPlugins(config, options);
 
     expect(res.ok).toBe(false);
     if (!res.ok) {
@@ -1954,14 +1958,6 @@ describe("config plugin validation", () => {
         "plugins.entries.codex.config.codexPlugins.plugins.github.marketplaceName",
         "invalid config",
       );
-      expect(
-        res.issues.some(
-          (issue) =>
-            issue.path ===
-              "plugins.entries.codex.config.codexPlugins.plugins.github.marketplaceName" &&
-            issue.allowedValues?.includes("openai-curated"),
-        ),
-      ).toBe(true);
     }
   });
 

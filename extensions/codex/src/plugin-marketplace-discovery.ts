@@ -28,7 +28,7 @@ export type CodexAvailablePlugin = {
   summaryId: string;
 };
 
-export type CodexPluginDiscoveryResult = {
+type CodexPluginDiscoveryResult = {
   plugins: CodexAvailablePlugin[];
   warnings: string[];
 };

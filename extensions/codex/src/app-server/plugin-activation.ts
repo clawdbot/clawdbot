@@ -62,7 +62,7 @@ type EnsureCodexPluginActivationParams = {
 };
 
 /** Diagnostics from refreshing Codex runtime surfaces after plugin activation. */
-export type CodexPluginRuntimeRefreshResult = {
+type CodexPluginRuntimeRefreshResult = {
   diagnostics: CodexPluginActivationDiagnostic[];
 };
 

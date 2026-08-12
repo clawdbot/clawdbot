@@ -6,10 +6,12 @@ import {
   handleCodexPluginsSubcommand,
   type CodexPluginsConfigBlock,
   type CodexPluginsManagementIO,
-  type CodexPluginsManagementRuntime,
 } from "./command-plugins-management.js";
 
 type CodexPluginConfigEntry = NonNullable<CodexPluginsConfigBlock["plugins"]>[string];
+type CodexPluginsManagementRuntime = NonNullable<
+  Parameters<typeof handleCodexPluginsSubcommand>[3]
+>;
 
 function inMemoryIO(
   initial: Record<string, CodexPluginConfigEntry> = {},

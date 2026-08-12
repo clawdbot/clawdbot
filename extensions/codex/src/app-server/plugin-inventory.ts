@@ -261,20 +261,6 @@ export async function readCodexPluginInventory(
   return inventory;
 }
 
-/** Finds one plugin summary in the OpenAI curated marketplace response. */
-export function findOpenAiCuratedPluginSummary(
-  listed: CodexPluginMarketplaceResponse,
-  pluginName: string,
-): { marketplace: CodexPluginMarketplaceRef; summary: v2.PluginSummary } | undefined {
-  const resolved = findOpenAiCuratedMarketplacePlugin(listed, pluginName);
-  return resolved
-    ? {
-        marketplace: marketplaceRef(resolved.marketplace, CODEX_PLUGINS_MARKETPLACE_NAME),
-        summary: resolved.summary,
-      }
-    : undefined;
-}
-
 /** Finds a configured plugin only in its authorized marketplace identity. */
 export function findCodexMarketplacePluginSummary(
   listed: CodexPluginMarketplaceResponse,
@@ -592,22 +578,6 @@ function marketplaceMatchesConfiguredName(
   return isOpenAiCuratedMarketplaceName(configuredMarketplaceName)
     ? isOpenAiCuratedMarketplace(marketplace)
     : marketplace.name === configuredMarketplaceName;
-}
-
-function findOpenAiCuratedMarketplacePlugin(
-  listed: CodexPluginMarketplaceResponse,
-  pluginName: string,
-): { marketplace: v2.PluginMarketplaceEntry; summary: v2.PluginSummary } | undefined {
-  for (const marketplace of listed.marketplaces) {
-    if (!isOpenAiCuratedMarketplace(marketplace)) {
-      continue;
-    }
-    const summary = findPluginSummary(marketplace, pluginName);
-    if (summary) {
-      return { marketplace, summary };
-    }
-  }
-  return undefined;
 }
 
 function findWorkspaceMarketplacePlugin(
