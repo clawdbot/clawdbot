@@ -18,6 +18,7 @@ import {
 } from "./collection-reconcile.js";
 import { getArchivedSkillFiles } from "./curator.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
+import { inspectSkillProposal, listSkillProposals, proposeCreateSkill } from "./service.js";
 import { withSkillCollectionLock } from "./target-lock.js";
 
 type CopyDirectoryHook = (
@@ -631,6 +632,81 @@ describe("skill collection reconciliation", () => {
 
     expect(getArchivedSkillFiles({ env: testState.env })).toEqual(new Set([skillFile]));
     await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("# Original");
+  });
+
+  it("keeps proposal reads behind a failed collection create rollback", async () => {
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      env: testState.env,
+      name: "Collection Candidate",
+      description: "Remain pending if collection creation rolls back.",
+      content: "# Collection Candidate\n\nCreated by collection reconciliation.\n",
+    });
+    const receipt = await readCollectionReceipt();
+    const originalRename = fs.rename.bind(fs);
+    let releaseCommit: (() => void) | undefined;
+    let markCommitAttempted: (() => void) | undefined;
+    const commitAttempted = new Promise<void>((resolve) => {
+      markCommitAttempted = resolve;
+    });
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (oldPath, newPath) => {
+      if (String(oldPath).includes(`${path.sep}.pending-`)) {
+        markCommitAttempted?.();
+        await new Promise<void>((resolve) => {
+          releaseCommit = resolve;
+        });
+        throw new Error("forced backup commit failure");
+      }
+      await originalRename(oldPath, newPath);
+    });
+
+    const reconciliation = reconcileSkillCollection({
+      workspaceDir,
+      env: testState.env,
+      ...receipt,
+      plan: [
+        {
+          action: "write",
+          name: proposal.record.target.skillKey,
+          description: "Created during a collection mutation.",
+          content: "# Collection Candidate\n\nTransient collection content.\n",
+        },
+      ],
+    });
+    try {
+      await commitAttempted;
+      let listSettled = false;
+      let inspectSettled = false;
+      const listing = listSkillProposals({ workspaceDir, env: testState.env }).finally(() => {
+        listSettled = true;
+      });
+      const inspection = inspectSkillProposal(proposal.record.id, {
+        workspaceDir,
+        env: testState.env,
+      }).finally(() => {
+        inspectSettled = true;
+      });
+
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+      expect(listSettled).toBe(false);
+      expect(inspectSettled).toBe(false);
+
+      releaseCommit?.();
+      await expect(reconciliation).rejects.toThrow("forced backup commit failure");
+      await expect(listing).resolves.toMatchObject({
+        proposals: [expect.objectContaining({ id: proposal.record.id, status: "pending" })],
+      });
+      await expect(inspection).resolves.toMatchObject({
+        record: { id: proposal.record.id, status: "pending" },
+      });
+    } finally {
+      releaseCommit?.();
+      renameSpy.mockRestore();
+    }
+
+    await expect(fs.access(proposal.record.target.skillFile)).rejects.toThrow();
   });
 
   it("restores a staged drop when backup commit fails", async () => {

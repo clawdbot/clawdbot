@@ -16,7 +16,7 @@ import {
   readSkillProposalRecord,
   readSkillProposalRollback,
 } from "./store.js";
-import { withSkillProposalTargetLock } from "./target-lock.js";
+import { withSkillProposalCommitLock } from "./target-lock.js";
 import type { SkillProposalManifest, SkillProposalReadResult } from "./types.js";
 
 type SkillProposalScopeOptions = {
@@ -196,7 +196,8 @@ async function reconcilePendingCreateProposal(
       }
     | undefined;
   try {
-    reconciled = await withSkillProposalTargetLock(
+    reconciled = await withSkillProposalCommitLock(
+      workspaceDir,
       read.record,
       async () => {
         const current = await readSkillProposal(read.record.id, store, scope, { reconcile: false });
