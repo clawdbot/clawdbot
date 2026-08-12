@@ -298,16 +298,25 @@ describe("session list replacement options", () => {
       }
       listCallCount += 1;
       if (listCallCount === 1) {
-        return sessionsResult([{ key, kind: "direct", updatedAt: 10 }], listCallCount);
+        return sessionsResult(
+          [{ key, kind: "direct", sessionId: "archived-session", updatedAt: 10 }],
+          listCallCount,
+        );
       }
       if (listCallCount === 2) {
+        return sessionsResult(
+          [{ key, kind: "direct", updatedAt: 30, archived: false }],
+          listCallCount,
+        );
+      }
+      if (listCallCount === 3) {
         return sessionsResult(
           [
             {
               key,
               kind: "direct",
               sessionId: "replacement-session",
-              updatedAt: 30,
+              updatedAt: 40,
               archived: false,
             },
           ],
@@ -315,7 +324,7 @@ describe("session list replacement options", () => {
         );
       }
       return sessionsResult(
-        [{ key, kind: "direct", updatedAt: 40, archived: false }],
+        [{ key, kind: "direct", updatedAt: 50, archived: false }],
         listCallCount,
       );
     });
@@ -323,6 +332,12 @@ describe("session list replacement options", () => {
 
     await sessions.refresh({ agentId: "main", force: true });
     await sessions.patch(key, { archived: true }, { agentId: "main" });
+    expect(sessions.state.result?.sessions[0]).toMatchObject({
+      archived: false,
+    });
+    expect(sessions.state.result?.sessions[0]?.sessionId).toBeUndefined();
+
+    await sessions.refresh({ agentId: "main", force: true });
     expect(sessions.state.result?.sessions[0]).toMatchObject({
       sessionId: "replacement-session",
       archived: false,

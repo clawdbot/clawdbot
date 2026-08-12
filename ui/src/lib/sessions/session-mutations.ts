@@ -501,8 +501,12 @@ export function createSessionMutations(host: SessionMutationsHost) {
         if (!archive) {
           return row;
         }
-        if (archive.sessionId && row.sessionId && archive.sessionId !== row.sessionId) {
-          confirmedArchives.delete(row.key);
+        if (archive.sessionId && archive.sessionId !== row.sessionId) {
+          // An id-less row may be a same-key replacement whose identity has not arrived.
+          // Do not transfer archive state; retire it only after a different identity appears.
+          if (row.sessionId) {
+            confirmedArchives.delete(row.key);
+          }
           return row;
         }
         if (row.archived === true) {
