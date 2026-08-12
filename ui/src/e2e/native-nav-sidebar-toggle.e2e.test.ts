@@ -145,13 +145,18 @@ suite.define(() => {
   it("keeps the web expand/collapse controls in plain browsers", async () => {
     const page = await openPage({ nativeNav: false });
 
-    const toggle = page.locator(".shell-chrome-controls__nav-toggle");
-    await expect.poll(() => toggle.isVisible()).toBe(true);
-    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
-    await toggle.click();
-    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Expand sidebar");
-    await toggle.click();
-    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
+    const collapse = page.locator(".sidebar-brand__collapse");
+    await expect.poll(() => collapse.isVisible()).toBe(true);
+    await expect.poll(() => collapse.getAttribute("aria-label")).toBe("Collapse sidebar");
+    await collapse.click();
+    const expand = page.locator(".shell-chrome-controls__nav-toggle");
+    await expect.poll(() => expand.isVisible()).toBe(true);
+    await expect.poll(() => expand.getAttribute("aria-label")).toBe("Expand sidebar");
+    await expect
+      .poll(() => page.locator(".shell-chrome-controls__separator").isVisible())
+      .toBe(true);
+    await expand.click();
+    await expect.poll(() => collapse.isVisible()).toBe(true);
   });
 
   it("hides the web chrome cluster when the native titlebar toggle is present", async () => {
@@ -183,12 +188,10 @@ suite.define(() => {
     });
     expect(initialWidth).toBeGreaterThan(0);
 
-    // Expanded native-nav hosts keep the cluster's search (no native search
-    // control exists while the rail is open) but hide the duplicate nav toggle.
-    await expect.poll(() => page.locator(".shell-chrome-controls__search").isVisible()).toBe(true);
-    await expect
-      .poll(() => page.locator(".shell-chrome-controls__nav-toggle").isVisible())
-      .toBe(false);
+    // Expanded native-nav hosts keep search in the sidebar header (no native
+    // search control exists while the rail is open) and hide duplicate collapse.
+    await expect.poll(() => page.locator(".sidebar-brand__search").isVisible()).toBe(true);
+    await expect.poll(() => page.locator(".sidebar-brand__collapse").isVisible()).toBe(false);
 
     // Collapse through the native titlebar path; the whole web chrome cluster
     // hides (native titlebar provides search and new-thread while collapsed).
@@ -335,6 +338,8 @@ suite.define(() => {
     await expect
       .poll(() => header.getByRole("button", { name: "Open command palette" }).isVisible())
       .toBe(true);
+    await expect.poll(() => page.locator(".sidebar-brand__search").isVisible()).toBe(false);
+    await expect.poll(() => page.locator(".sidebar-brand__collapse").isVisible()).toBe(false);
   });
 
   it("keeps the mobile drawer modal, keyboard-contained, and focus-restoring", async () => {

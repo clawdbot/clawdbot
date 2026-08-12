@@ -691,22 +691,18 @@ suite.define(() => {
         await page.evaluate((key) => localStorage.getItem(key), hiddenSessionCatalogsStorageKey),
       ).toBe("[]");
 
-      // The shell chrome search button is the command palette entry point.
-      const searchButton = page.locator(".shell-chrome-controls__search");
+      // The sidebar header search button is the command palette entry point.
+      const searchButton = page.locator(".sidebar-brand__search");
       await searchButton.click();
       const paletteInput = page.locator("#cmd-palette-input");
       await expect.poll(() => paletteInput.isVisible()).toBe(true);
       await page.keyboard.press("Escape");
       await expect.poll(() => paletteInput.isVisible()).toBe(false);
 
-      // The shell chrome toggle stays visible while the desktop sidebar
-      // collapses and expands (there is no icon rail).
-      const collapseButton = page.getByRole("button", { name: "Collapse sidebar" });
-      await expect
-        .poll(() =>
-          collapseButton.evaluate((element) => Boolean(element.closest(".shell-chrome-controls"))),
-        )
-        .toBe(true);
+      // Expanded navigation owns collapse in its header; collapsed navigation
+      // leaves one recovery toggle in the pane header (there is no icon rail).
+      const collapseButton = page.locator(".sidebar-brand__collapse");
+      await expect.poll(() => collapseButton.isVisible()).toBe(true);
       await collapseButton.click();
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
@@ -722,6 +718,9 @@ suite.define(() => {
       await expect.poll(() => sidebar.isVisible()).toBe(false);
       const navExpand = page.locator(".shell-chrome-controls__nav-toggle");
       await expect.poll(() => navExpand.isVisible()).toBe(true);
+      await expect
+        .poll(() => page.locator(".shell-chrome-controls__separator").isVisible())
+        .toBe(true);
       await page.reload();
       await expect
         .poll(() => page.locator(".shell-chrome-controls__nav-toggle").isVisible())
@@ -765,7 +764,7 @@ suite.define(() => {
       // Widening with the drawer open must not leave its stale state blocking
       // the desktop collapse control.
       await page.setViewportSize({ height: 900, width: 1440 });
-      await page.locator(".shell-chrome-controls__nav-toggle").click();
+      await page.locator(".sidebar-brand__collapse").click();
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .toContain("shell--nav-collapsed");

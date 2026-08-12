@@ -270,8 +270,12 @@ describe("AppSidebar brand actions", () => {
       agentsList,
     );
     const onOpenNewSession = vi.fn();
+    const onOpenPalette = vi.fn();
+    const onToggleSidebar = vi.fn();
     sidebar.connected = false;
     sidebar.onOpenNewSession = onOpenNewSession;
+    sidebar.onOpenPalette = onOpenPalette;
+    sidebar.onToggleSidebar = onToggleSidebar;
     await sidebar.updateComplete;
 
     const actions = sidebar.querySelector(".sidebar-brand__actions");
@@ -281,9 +285,12 @@ describe("AppSidebar brand actions", () => {
     );
     expect(brandButton?.getAttribute("aria-label")).toBe("New session");
     expect(brandButton?.disabled).toBe(true);
-    expect(actions?.querySelectorAll("button")).toHaveLength(1);
+    expect(actions?.querySelectorAll("button")).toHaveLength(3);
     expect(sidebar.querySelector(".sidebar-search")).toBeNull();
-    expect(sidebar.querySelector(".sidebar-brand__collapse")).toBeNull();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-brand__search")?.click();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-brand__collapse")?.click();
+    expect(onOpenPalette).toHaveBeenCalledOnce();
+    expect(onToggleSidebar).toHaveBeenCalledOnce();
 
     sidebar.connected = true;
     await sidebar.updateComplete;

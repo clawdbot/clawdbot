@@ -10,15 +10,11 @@
   --shell-chrome-controls-inset: 10px;
   --shell-chrome-control-size: 32px;
   --shell-chrome-controls-gap: 4px;
-  --shell-chrome-controls-collapsed-width: calc(
-    var(--shell-chrome-control-size) + var(--shell-chrome-control-size) +
-      var(--shell-chrome-control-size) + var(--shell-chrome-controls-gap) +
-      var(--shell-chrome-controls-gap)
-  );
-  --shell-chrome-safe-area-left: calc(
-    var(--shell-chrome-controls-inset) + var(--shell-chrome-controls-collapsed-width) -
-      var(--shell-chrome-control-size) - var(--shell-chrome-controls-gap) + 8px
-  );
+  --shell-chrome-controls-collapsed-width: calc(var(--shell-chrome-control-size) + 10px);
+  /* Expanded navigation owns its controls inside the sidebar header, so nothing
+     floats over the content and there is no strip for banners to clear. The
+     collapsed shell restores the recovery toggle and reinstates the inset. */
+  --shell-chrome-safe-area-left: 0px;
   /* Desktop has no topbar row — the sidebar owns navigation. Narrow viewports
      (layout.mobile.css) and the chat split toolbar restore the row height. */
   --shell-topbar-height: 0px;
@@ -103,13 +99,10 @@
   width: var(--shell-chrome-control-size);
   height: var(--shell-chrome-control-size);
   padding: 0;
-  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border: none;
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  background: transparent;
   color: var(--muted);
-  box-shadow: var(--shadow-sm);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
 }
 
 .shell-chrome-controls__button:hover:not(:disabled) {
@@ -134,6 +127,13 @@
   stroke-width: 1.5px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.shell-chrome-controls__separator {
+  width: 1px;
+  height: 18px;
+  margin-left: 2px;
+  background: color-mix(in srgb, var(--border-strong) 58%, transparent);
 }
 
 .shell--mobile-nav .shell-chrome-controls {
@@ -164,10 +164,9 @@ html.openclaw-native-macos .shell-chrome-controls {
 /* Newer Mac apps host a native sidebar toggle in the titlebar next to
    back/forward and add openclaw-native-nav; the in-page nav toggles would
    duplicate it, so they disappear (⌘B and the accessible titlebar button
-   cover keyboard/screen-reader use). Search stays: native-nav-only hosts
-   provide native search/new-thread controls only while the rail is
-   collapsed, so the expanded cluster keeps the pointer path to the palette.
-   Older apps only add openclaw-native-macos and keep all web controls. */
+   cover keyboard/screen-reader use). Search stays in the sidebar header:
+   native-nav-only hosts provide native search only while the rail is closed.
+   Older apps only add openclaw-native-macos and keep the web controls. */
 html.openclaw-native-nav .shell-chrome-controls__nav-toggle,
 html.openclaw-native-nav .shell--nav-collapsed .shell-chrome-controls,
 html.openclaw-native-nav .topbar .topbar-nav-toggle {
@@ -1088,6 +1087,17 @@ openclaw-settings-save-indicator {
   height: 18px;
 }
 
+html.openclaw-native-nav .sidebar-brand__collapse,
+html.openclaw-native-web-chrome .sidebar-brand__collapse,
+html.openclaw-native-web-chrome .sidebar-brand__search {
+  display: none;
+}
+
+.shell--mobile-nav .sidebar-brand__collapse,
+.shell--mobile-nav .sidebar-brand__search {
+  display: none;
+}
+
 .sidebar-shell__body {
   min-height: 0;
   flex: 1;
@@ -1420,7 +1430,7 @@ openclaw-settings-save-indicator {
   gap: 5px;
 }
 
-/* Clear the collapsed three-button chrome cluster plus an 8px breathing gap. */
+/* Clear the collapsed recovery toggle and separator plus an 8px breathing gap. */
 .shell:not(.shell--mobile-nav) .sidebar-update-card--floating .sidebar-update-card {
   width: min(360px, calc(100% - var(--shell-chrome-safe-area-left) - 16px));
   margin-left: var(--shell-chrome-safe-area-left);
@@ -4447,20 +4457,13 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   max-height: 80px;
 }
 
-/* The fixed web chrome sits over the top-left of ordinary page headers too.
-   Settings, mobile drawers, and native hosts own different chrome. */
-html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
-  .shell:not(.shell--nav-collapsed):not(.shell--mobile-nav):not(.shell--settings)
-  .content:not(.content--chat)
-  .content-header {
-  padding-left: 88px;
-}
-
+/* Collapsed plain-web navigation keeps one recovery toggle over ordinary page
+   headers. Settings, mobile drawers, and native hosts own different chrome. */
 html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
   .shell--nav-collapsed:not(.shell--mobile-nav):not(.shell--settings)
   .content:not(.content--chat)
   .content-header {
-  padding-left: 124px;
+  padding-left: 60px;
 }
 
 .content-header--page + * {

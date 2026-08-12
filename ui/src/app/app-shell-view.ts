@@ -46,9 +46,6 @@ import type { UpdateProgress } from "./update-confirmation.ts";
 
 const EMPTY_OUTBOX_COUNT_FOR_SESSION = () => 0;
 const EMPTY_SESSION_HAS_DRAFT = () => false;
-const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
-  ? "⌘K"
-  : "Ctrl K";
 
 const SCOPE_UPGRADE_BANNER_ELEMENT = {
   tagName: "openclaw-device-scope-upgrade-banner",
@@ -394,6 +391,8 @@ export function renderApplicationShell(host: ShellViewHost) {
       onOpenApprovals: () => host.openApprovals(),
       onRetryConnect: () => context.gateway.connect(),
       onOpenNewSession: openNewSession,
+      onOpenPalette: () => host.openPalette(),
+      onToggleSidebar: () => host.toggleNavigationSurface(),
       onUpdateSidebarEntries: (entries: string[]) =>
         context.navigation.update({ sidebarEntries: entries }),
       onPairMobile: () => void context.overlays.openDevicePairSetup(),
@@ -500,7 +499,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         .onOpenPalette=${() => host.openPalette()}
         .onToggleDrawer=${(trigger: HTMLElement) => host.toggleNavigationSurface(trigger)}
       ></openclaw-app-topbar>
-      ${!onboarding && !settingsTakeover && !mobileNavLayout
+      ${navCollapsed && !onboarding && !settingsTakeover && !mobileNavLayout
         ? html`
             <div class="shell-chrome-controls">
               <openclaw-tooltip
@@ -513,36 +512,10 @@ export function renderApplicationShell(host: ShellViewHost) {
                   aria-expanded=${navCollapsed ? "false" : "true"}
                   @click=${() => host.toggleNavigationSurface()}
                 >
-                  ${navCollapsed ? icons.panelLeftOpen : icons.panelLeftClose}
+                  ${icons.panelLeftOpen}
                 </button>
               </openclaw-tooltip>
-              ${navCollapsed
-                ? html`<openclaw-tooltip
-                    .content=${newSessionAccess.allowed
-                      ? t("chat.runControls.newSession")
-                      : newSessionAccess.reason}
-                  >
-                    <button
-                      type="button"
-                      class="shell-chrome-controls__button shell-chrome-controls__new-thread"
-                      aria-label=${t("chat.runControls.newSession")}
-                      ?disabled=${!newSessionAccess.allowed}
-                      @click=${() => openNewSession(selectedAgentId)}
-                    >
-                      ${icons.plus}
-                    </button>
-                  </openclaw-tooltip>`
-                : nothing}
-              <openclaw-tooltip .content=${`${t("chat.openCommandPalette")} (${PALETTE_SHORTCUT})`}>
-                <button
-                  type="button"
-                  class="shell-chrome-controls__button shell-chrome-controls__search"
-                  aria-label=${t("chat.openCommandPalette")}
-                  @click=${() => host.openPalette()}
-                >
-                  ${icons.search}
-                </button>
-              </openclaw-tooltip>
+              <span class="shell-chrome-controls__separator" aria-hidden="true"></span>
             </div>
           `
         : nothing}

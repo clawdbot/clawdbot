@@ -796,24 +796,15 @@ openclaw-chat-pane {
   white-space: normal;
 }
 
-/* Plain web shell chrome overlays the first pane header. Expanded navigation
-   shows toggle + search; collapsed navigation adds new-thread between them. */
-html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
-  .shell:not(.shell--nav-collapsed):not(.shell--mobile-nav)
-  .chat-split-view__column:first-child
-  > .chat-split-view__cell:first-child
-  :is(.chat-main__conversation-column, .chat-pane-primary-column)
-  > .chat-pane__header {
-  padding-left: 88px;
-}
-
+/* Collapsed plain-web navigation keeps one recovery toggle over the first pane
+   header; expanded navigation owns its controls inside the sidebar. */
 html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
   .shell--nav-collapsed:not(.shell--mobile-nav)
   .chat-split-view__column:first-child
   > .chat-split-view__cell:first-child
   :is(.chat-main__conversation-column, .chat-pane-primary-column)
   > .chat-pane__header {
-  padding-left: 124px;
+  padding-left: 60px;
 }
 
 /* Native macOS desktop shells: the pane header is the window's top surface,
