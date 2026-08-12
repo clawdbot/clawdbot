@@ -834,7 +834,7 @@ describe("enforceSessionDiskBudget", () => {
   });
 
   it("stops at the default target when highWaterBytes resolves to zero", async () => {
-    await withTempDir({ prefix: "openclaw-zero-high-water-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-zero-high-water-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const store: Record<string, SessionEntry> = {};
       for (let index = 1; index <= 4; index += 1) {
