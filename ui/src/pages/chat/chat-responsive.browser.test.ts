@@ -137,6 +137,7 @@ type ChatFixtureOptions = {
   sessionRailDocked?: boolean;
   singleAgent?: boolean;
   slashMenu?: boolean;
+  typingIndicator?: boolean;
 };
 
 function expectFiniteRect(rect: Pick<ControlRect, "x" | "y" | "width" | "height">) {
@@ -424,6 +425,18 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                   </openclaw-chat-session-rail>`
                   : ""
               }
+              ${
+                opts.crowdedComposerFooter || opts.typingIndicator
+                  ? `<div class="agent-chat__typing-indicator agent-chat__typing-indicator--outside" role="status">
+                    <span class="agent-chat__typing-avatars" aria-hidden="true">
+                      <span class="chat-author-avatar">A</span>
+                      <span class="chat-author-avatar">B</span>
+                      <span class="chat-author-avatar">C</span>
+                    </span>
+                    <span class="agent-chat__typing-text">Alexandria, Bartholomew, and Cassandra are typing</span>
+                  </div>`
+                  : ""
+              }
               <div class="agent-chat__composer-shell">
                 <div class="agent-chat__input">
                   ${
@@ -482,18 +495,6 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                   </div>
                   <div class="agent-chat__composer-footer">
                     ${composerControlsHtml(opts.crowdedComposerFooter)}
-                    ${
-                      opts.crowdedComposerFooter
-                        ? `<div class="agent-chat__typing-indicator" role="status">
-                      <span class="agent-chat__typing-avatars" aria-hidden="true">
-                        <span class="chat-author-avatar">A</span>
-                        <span class="chat-author-avatar">B</span>
-                        <span class="chat-author-avatar">C</span>
-                      </span>
-                      <span class="agent-chat__typing-text">Alexandria, Bartholomew, and Cassandra are typing</span>
-                    </div>`
-                        : ""
-                    }
                     <div class="agent-chat__composer-meta">
                       <div class="context-usage">
                         <details>
@@ -2403,7 +2404,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           modelLabel: rectFor(".chat-controls__model-trigger .chat-controls__inline-select-label"),
           overrides: rectFor(".agent-chat__session-overrides-pill"),
           status: rectFor(".agent-chat__composer-run-status"),
-          typing: rectFor(".agent-chat__typing-indicator"),
+          typing: rectFor(".agent-chat__typing-indicator--outside"),
         };
       });
 
@@ -2429,13 +2430,26 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         [layout.status, layout.overrides],
         [layout.overrides, layout.model],
         [layout.model, layout.effort],
-        [layout.effort, layout.typing],
-        [layout.typing, layout.meta],
+        [layout.effort, layout.meta],
       ] as const) {
         expect(rectsOverlap(left, right)).toBe(false);
       }
+      expect(rectsOverlap(layout.typing, layout.footer)).toBe(false);
     } finally {
       await closeBrowserPage(page);
+    }
+  });
+
+  it("keeps the desktop model picker fixed when another user starts typing", async () => {
+    const idlePage = await openFixture(1366, 900);
+    const typingPage = await openFixture(1366, 900, { typingIndicator: true });
+    try {
+      const idleModel = await getBoundingBox(idlePage, ".chat-controls__model-trigger");
+      const typingModel = await getBoundingBox(typingPage, ".chat-controls__model-trigger");
+
+      expect(typingModel.x).toBeCloseTo(idleModel.x, 0);
+    } finally {
+      await Promise.all([closeBrowserPage(idlePage), closeBrowserPage(typingPage)]);
     }
   });
 
