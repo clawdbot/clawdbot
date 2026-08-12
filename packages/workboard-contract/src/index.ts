@@ -365,3 +365,50 @@ export type WorkboardListResult = {
   cards: WorkboardCard[];
   statuses: readonly WorkboardStatus[];
 };
+
+/** A durable link from a Workboard card to an externally observed execution. */
+export type WorkboardExternalExecutionLink = {
+  sourceUrl: string;
+  tenant: string;
+  idempotencyKey: string;
+  sourceUpdatedAt: number;
+  title?: string;
+};
+
+export type WorkboardReconciliationObservation = {
+  sourceUrl: string;
+  tenant: string;
+  idempotencyKey: string;
+  sourceUpdatedAt: number;
+  cardId?: string;
+  expectedRevision?: number;
+  card?: Partial<
+    Pick<
+      WorkboardCard,
+      | "title"
+      | "notes"
+      | "status"
+      | "priority"
+      | "labels"
+      | "agentId"
+      | "sessionKey"
+      | "runId"
+      | "taskId"
+      | "sourceUrl"
+      | "execution"
+      | "position"
+    >
+  > & { boardId?: string };
+  link?: Pick<WorkboardExternalExecutionLink, "title">;
+};
+
+export type WorkboardReconciliationPage = {
+  cards: WorkboardCard[];
+  cursor?: string;
+};
+
+export type WorkboardReconciliationApplyResult = {
+  card: WorkboardCard;
+  applied: boolean;
+  link: WorkboardExternalExecutionLink;
+};

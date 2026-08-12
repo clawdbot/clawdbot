@@ -1,3 +1,4 @@
+import type { WorkboardReconciliationObservation } from "@openclaw/workboard-contract";
 // Workboard plugin module implements gateway behavior.
 import type { OpenClawPluginApi } from "../api.js";
 import { redactClaimToken } from "./card-redaction.js";
@@ -14,6 +15,7 @@ import {
   registerWorkboardWorkspaceCardMethods,
   registerWorkboardWorkspaceWorkflowMethods,
 } from "./gateway-workspace-methods.js";
+import { WorkboardReconciler } from "./reconciliation.js";
 import { WorkboardStore } from "./store.js";
 
 const READ_SCOPE = "operator.read" as const;
@@ -35,6 +37,7 @@ export function registerWorkboardGatewayMethods(params: {
 }) {
   const { api } = params;
   const store = params.store ?? WorkboardStore.openSqlite();
+  const reconciler = new WorkboardReconciler(store);
   const dispatchCards = createWorkboardDispatchHandler({
     api,
     store,
@@ -51,6 +54,30 @@ export function registerWorkboardGatewayMethods(params: {
       }
     },
     { scope: READ_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "workboard.reconciliation.list",
+    async ({ params: requestParams, respond }) => {
+      try {
+        respond(true, await reconciler.list(requestParams));
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: READ_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "workboard.reconciliation.apply",
+    async ({ params: requestParams, respond }) => {
+      try {
+        respond(true, await reconciler.apply(requestParams as WorkboardReconciliationObservation));
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: WRITE_SCOPE },
   );
 
   registerWorkboardWorkspaceCardMethods({ api, store, redactCard: redactClaimToken });

@@ -4,7 +4,11 @@ export type {
   WorkboardCard,
   WorkboardClaim,
   WorkboardDiagnostic,
+  WorkboardExternalExecutionLink,
   WorkboardListResult,
   WorkboardPriority,
+  WorkboardReconciliationApplyResult,
+  WorkboardReconciliationObservation,
+  WorkboardReconciliationPage,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";

@@ -47,6 +47,8 @@ describe("workboard gateway methods", () => {
 
     expect([...methods.keys()]).toEqual([
       "workboard.cards.list",
+      "workboard.reconciliation.list",
+      "workboard.reconciliation.apply",
       "workboard.cards.create",
       "workboard.cards.update",
       "workboard.cards.move",
@@ -93,6 +95,10 @@ describe("workboard gateway methods", () => {
       "workboard.cards.export",
     ]);
     expect(methods.get("workboard.cards.list")?.opts).toEqual({ scope: "operator.read" });
+    expect(methods.get("workboard.reconciliation.list")?.opts).toEqual({ scope: "operator.read" });
+    expect(methods.get("workboard.reconciliation.apply")?.opts).toEqual({
+      scope: "operator.write",
+    });
     expect(methods.get("workboard.cards.diagnostics")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("workboard.cards.diagnostics.refresh")?.opts).toEqual({
       scope: "operator.write",
