@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -29,6 +30,17 @@ function requireString(params: Record<string, unknown>, key: string): string {
 function optionalCursor(params: Record<string, unknown>): { cursor?: string } | undefined {
   const cursor = params.cursor;
   return typeof cursor === "string" && cursor.trim() ? { cursor: cursor.trim() } : undefined;
+}
+
+function optionalArgumentsObject(params: Record<string, unknown>): Record<string, unknown> {
+  const value = params.arguments;
+  if (value === undefined) {
+    return {};
+  }
+  if (isRecord(value)) {
+    return value;
+  }
+  throw new Error("tool arguments must be an object");
 }
 
 async function runOperation(
@@ -141,7 +153,7 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
           method: "tools/call",
           params: {
             name: requireString(params, "toolName"),
-            arguments: (params.arguments ?? {}) as Record<string, unknown>,
+            arguments: optionalArgumentsObject(params),
           },
         }),
     );
