@@ -25,6 +25,7 @@ import {
   createMemoryWikiImportRunStateStore,
   readMemoryWikiImportRunRecord,
 } from "./src/import-runs-state.js";
+import { resolveUnsafeLocalPagePath } from "./src/source-path-shared.js";
 import {
   createMemoryWikiSourceSyncStateStore,
   readMemoryWikiSourceSyncState,
@@ -45,7 +46,12 @@ function resolveLegacyImportRunRecordPath(vaultRoot: string, runId: string): str
   return path.join(vaultRoot, ".openclaw-wiki", "import-runs", `${runId}.json`);
 }
 
-function migrationParams(params: { stateDir: string; vaultRoot: string; agentIds?: string[] }) {
+function migrationParams(params: {
+  stateDir: string;
+  vaultRoot: string;
+  agentIds?: string[];
+  unsafeLocalPaths?: string[];
+}) {
   const env = { ...process.env, HOME: params.stateDir, OPENCLAW_STATE_DIR: params.stateDir };
   return {
     config: {
@@ -58,6 +64,14 @@ function migrationParams(params: { stateDir: string; vaultRoot: string; agentIds
                 path: params.vaultRoot,
                 ...(params.agentIds ? { scope: "agent" as const } : {}),
               },
+              ...(params.unsafeLocalPaths
+                ? {
+                    unsafeLocal: {
+                      allowPrivateMemoryCoreAccess: true,
+                      paths: params.unsafeLocalPaths,
+                    },
+                  }
+                : {}),
             },
           },
         },
@@ -243,6 +257,99 @@ describe("memory-wiki doctor source sync migration", () => {
     await expect(fs.stat(`${legacyPath}.migrated`)).resolves.toBeDefined();
     await expect(fs.readFile(homeLegacyPath, "utf8")).resolves.toBe(homeSourceSync);
     await expect(fs.stat(`${homeLegacyPath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("converges legacy source-sync state in one doctor pass", async () => {
+    const stateDir = await tempDirs.createTempDir("memory-wiki-doctor-");
+    const vaultRoot = path.join(stateDir, "vault");
+    const sourceRoot = path.join(stateDir, "private");
+    const sourceFile = path.join(sourceRoot, "MEMORY.md");
+    await fs.mkdir(sourceRoot, { recursive: true });
+    await fs.writeFile(sourceFile, "# durable\n", "utf8");
+    // A stale unsafe-local entry whose recorded page still holds human Notes.
+    const stalePagePath = "sources/gone.md";
+    const stalePageAbs = path.join(vaultRoot, stalePagePath);
+    await fs.mkdir(path.dirname(stalePageAbs), { recursive: true });
+    await fs.writeFile(
+      stalePageAbs,
+      [
+        "# Unsafe Local Import: gone",
+        "",
+        "## Content",
+        "```",
+        "generated",
+        "```",
+        "",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        "keep me",
+        "<!-- openclaw:human:end -->",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const legacyPath = resolveMemoryWikiSourceSyncStatePath(vaultRoot);
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.writeFile(
+      legacyPath,
+      `${JSON.stringify({
+        version: 1,
+        entries: {
+          [sourceFile]: {
+            group: "unsafe-local",
+            pagePath: resolveUnsafeLocalPagePath({
+              configuredPath: sourceRoot,
+              absolutePath: sourceFile,
+            }).pagePath,
+            sourcePath: sourceFile,
+            sourceUpdatedAtMs: 100,
+            sourceSize: 200,
+            renderFingerprint: "matched",
+          },
+          "/tmp/gone.md": {
+            group: "unsafe-local",
+            pagePath: stalePagePath,
+            sourcePath: "/tmp/gone.md",
+            sourceUpdatedAtMs: 10,
+            sourceSize: 20,
+            renderFingerprint: "stale",
+          },
+        },
+      })}\n`,
+    );
+    const params = migrationParams({ stateDir, vaultRoot, unsafeLocalPaths: [sourceRoot] });
+
+    await expect(
+      requireStateMigration("memory-wiki-source-sync-json-to-plugin-state").migrateLegacyState(
+        params,
+      ),
+    ).resolves.toEqual({
+      changes: [
+        "Migrated Memory Wiki source sync -> plugin state (1 imported, 0 existing)",
+        "Pruned 1 stale Memory Wiki source sync entries via Notes salvage",
+        expect.stringContaining("Archived Memory Wiki source-sync legacy source ->"),
+      ],
+      warnings: [],
+    });
+
+    // The matched row lands already group-scoped; the stale row's page is
+    // salvaged and removed instead of entering the store unscoped.
+    const store = createMemoryWikiSourceSyncStateStore(params.context.openPluginStateKeyedStore);
+    const state = await readMemoryWikiSourceSyncState(vaultRoot, store);
+    expect(Object.keys(state.entries)).toEqual([
+      `unsafe-local:${path.resolve(sourceRoot)}\0${sourceFile}`,
+    ]);
+    await expect(fs.access(stalePageAbs)).rejects.toMatchObject({ code: "ENOENT" });
+    const salvageFiles = await fs.readdir(path.join(vaultRoot, ".salvage"));
+    expect(salvageFiles).toHaveLength(1);
+    await expect(
+      fs.readFile(path.join(vaultRoot, ".salvage", salvageFiles[0] ?? ""), "utf8"),
+    ).resolves.toContain("keep me");
+
+    // One pass converges: the scoped-key detector finds nothing left to do.
+    await expect(
+      requireStateMigration("memory-wiki-source-sync-group-scoped-keys").detectLegacyState(params),
+    ).resolves.toBeNull();
   });
 
   it("detects and migrates legacy import-run records into plugin state", async () => {

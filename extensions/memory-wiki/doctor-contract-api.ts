@@ -33,6 +33,7 @@ import {
   MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES,
   MEMORY_WIKI_SOURCE_SYNC_STATE_NAMESPACE,
   migrateLegacyImportedSourceSyncKeys,
+  pruneLegacyImportedSourceRows,
   readLegacyMemoryWikiSourceSyncState,
   resolveMemoryWikiSourceSyncStatePath,
   translateLegacyImportedSourceSyncKey,
@@ -249,19 +250,27 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         }
         const existingState = await store.read(vaultRoot);
         // Translate legacy unscoped keys into group-scoped keys on import.
-        // Entries whose unsafe-local root is no longer configured keep their
-        // legacy key and stay runtime-invisible until the group-scoped-keys
-        // migration prunes them through the canonical salvage path.
-        const translatedEntries = Object.fromEntries(
-          Object.entries(state.entries).map(([syncKey, entry]) => [
-            translateLegacyImportedSourceSyncKey({
-              entry,
-              syncKey,
-              unsafeLocalConfiguredRoots,
-            }) ?? syncKey,
+        // Entries whose recorded unsafe-local binding no longer matches a
+        // configured root never enter the store unscoped: prune them through
+        // the canonical salvage path here so one doctor pass converges (doctor
+        // detects all plugin migrations before executing any).
+        const translatedEntries: typeof state.entries = {};
+        const staleRows: Array<{
+          syncKey: string;
+          entry: (typeof state.entries)[string];
+        }> = [];
+        for (const [syncKey, entry] of Object.entries(state.entries)) {
+          const nextKey = translateLegacyImportedSourceSyncKey({
             entry,
-          ]),
-        );
+            syncKey,
+            unsafeLocalConfiguredRoots,
+          });
+          if (nextKey) {
+            translatedEntries[nextKey] = entry;
+          } else {
+            staleRows.push({ syncKey, entry });
+          }
+        }
         const mergedEntries = {
           ...translatedEntries,
           ...existingState.entries,
@@ -283,6 +292,18 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         changes.push(
           `Migrated Memory Wiki source sync -> plugin state (${importedCount} imported, ${existingCount} existing)`,
         );
+        if (staleRows.length > 0) {
+          const prunedCount = await pruneLegacyImportedSourceRows({
+            vaultRoot,
+            openKeyedStore: params.context.openPluginStateKeyedStore,
+            rows: staleRows,
+          });
+          if (prunedCount > 0) {
+            changes.push(
+              `Pruned ${prunedCount} stale Memory Wiki source sync entries via Notes salvage`,
+            );
+          }
+        }
         await archiveLegacyStateSource({
           filePath,
           label: "Memory Wiki source-sync",

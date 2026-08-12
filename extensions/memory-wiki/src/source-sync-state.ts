@@ -2,14 +2,16 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createWikiPageFilename, extractHumanNotesBlock } from "./markdown.js";
-import { isPathWithinOrEqual } from "./source-path-shared.js";
+import { resolveUnsafeLocalPagePath } from "./source-path-shared.js";
 
 export type MemoryWikiImportedSourceGroup = "bridge" | "unsafe-local";
 
@@ -68,6 +70,12 @@ export function scopeImportedSourceSyncKey(
 
 function isScopedImportedSourceSyncKey(syncKey: string): boolean {
   return syncKey.startsWith("bridge:") || syncKey.startsWith("unsafe-local:");
+}
+
+// The plugin SDK does not expose PluginStateStoreError; match the documented
+// reject-new capacity contract structurally instead of widening SDK surface.
+function isPluginStateLimitExceeded(error: unknown): boolean {
+  return isRecord(error) && error.code === "PLUGIN_STATE_LIMIT_EXCEEDED";
 }
 const MAX_MEMORY_WIKI_NOTES_RECOVERY_BYTES = 16 * 1024 * 1024;
 const MAX_MEMORY_WIKI_SOURCE_PAGE_HEADER_BYTES = 64 * 1024;
@@ -471,8 +479,20 @@ export async function pruneImportedSourceEntries(params: {
 }): Promise<number> {
   let removedCount = 0;
   let vault: Awaited<ReturnType<typeof fsRoot>> | undefined;
+  // Page paths shared with another live row must survive pruning: during key
+  // format transitions two rows can transiently own one page, and deleting it
+  // would destroy the page the surviving row still tracks.
+  const pageRefCounts = new Map<string, number>();
+  for (const entry of Object.values(params.state.entries)) {
+    pageRefCounts.set(entry.pagePath, (pageRefCounts.get(entry.pagePath) ?? 0) + 1);
+  }
   for (const [syncKey, entry] of Object.entries(params.state.entries)) {
     if (entry.group !== params.group || params.activeKeys.has(syncKey)) {
+      continue;
+    }
+    if ((pageRefCounts.get(entry.pagePath) ?? 0) > 1) {
+      removeImportedSourceStateEntry(params.state, syncKey);
+      removedCount += 1;
       continue;
     }
     try {
@@ -620,7 +640,7 @@ export async function countLegacyImportedSourceSyncRows(params: {
   return legacyRows.length;
 }
 
-export type LegacyImportedSourceSyncMigrationResult = {
+type LegacyImportedSourceSyncMigrationResult = {
   translatedCount: number;
   prunedCount: number;
   retainedKeys: string[];
@@ -634,12 +654,54 @@ export function translateLegacyImportedSourceSyncKey(params: {
   if (params.entry.group === "bridge") {
     return scopeImportedSourceSyncKey("bridge", params.syncKey);
   }
-  const root = params.unsafeLocalConfiguredRoots.find((candidate) =>
-    isPathWithinOrEqual(candidate, params.entry.sourcePath),
+  // The translated row must own the page the legacy row recorded: when nested
+  // roots both contain the source, only the root whose page identity matches
+  // the recorded page is the original binding. Anything else is a root move
+  // and must go through the stale salvage path instead.
+  const root = params.unsafeLocalConfiguredRoots.find(
+    (candidate) =>
+      isPathInside(candidate, params.entry.sourcePath) &&
+      resolveUnsafeLocalPagePath({
+        configuredPath: candidate,
+        absolutePath: params.entry.sourcePath,
+      }).pagePath === params.entry.pagePath,
   );
   return root
     ? scopeImportedSourceSyncKey("unsafe-local", `${root}\0${params.entry.sourcePath}`)
     : undefined;
+}
+
+export async function pruneLegacyImportedSourceRows(params: {
+  vaultRoot: string;
+  openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
+  rows: ReadonlyArray<{
+    syncKey: string;
+    entry: MemoryWikiImportedSourceStateEntry;
+  }>;
+}): Promise<number> {
+  if (params.rows.length === 0) {
+    return 0;
+  }
+  const store = createMemoryWikiSourceSyncStateStore(params.openKeyedStore);
+  const state = await readMemoryWikiSourceSyncState(params.vaultRoot, store);
+  for (const row of params.rows) {
+    state.entries[row.syncKey] = row.entry;
+  }
+  // Keep every live scoped row; only the injected stale legacy rows prune.
+  const activeKeys = new Set(
+    Object.keys(state.entries).filter((key) => isScopedImportedSourceSyncKey(key)),
+  );
+  let prunedCount = 0;
+  for (const group of new Set(params.rows.map((row) => row.entry.group))) {
+    prunedCount += await pruneImportedSourceEntries({
+      vaultRoot: params.vaultRoot,
+      group,
+      activeKeys,
+      state,
+    });
+  }
+  await writeMemoryWikiSourceSyncState(params.vaultRoot, state, store);
+  return prunedCount;
 }
 
 export async function migrateLegacyImportedSourceSyncKeys(params: {
@@ -667,42 +729,43 @@ export async function migrateLegacyImportedSourceSyncKeys(params: {
       unsafeLocalConfiguredRoots: configuredRoots,
     });
     if (!nextSyncKey) {
-      // The source is no longer under any configured unsafe-local root: prune
-      // through the canonical salvage path instead of dropping the row silently.
+      // The recorded binding no longer matches any configured unsafe-local
+      // root: prune through the canonical salvage path, never drop silently.
       staleRows.push(row);
       continue;
     }
     const nextStoreKey = resolveStateEntryKey(vaultRootKey, nextSyncKey);
-    // Register the scoped replacement before deleting the legacy row so a crash
-    // mid-migration never loses ownership; reruns are idempotent.
-    if (!(await raw.lookup(nextStoreKey))) {
+    if (await raw.lookup(nextStoreKey)) {
+      await raw.delete(row.storeKey);
+      translatedCount += 1;
+      continue;
+    }
+    try {
+      // Register the scoped replacement before deleting the legacy row so a
+      // crash mid-migration never loses ownership; reruns are idempotent.
       await raw.register(nextStoreKey, { ...row.entry, vaultRootKey, syncKey: nextSyncKey });
+    } catch (error) {
+      if (!isPluginStateLimitExceeded(error)) {
+        throw error;
+      }
+      // A full reject-new namespace cannot hold the temporary extra row: free
+      // the legacy slot first. A crash here loses one ownership row, which the
+      // next sync re-creates from the surviving page file (Notes live in the
+      // page, not the row).
+      await raw.delete(row.storeKey);
+      await raw.register(nextStoreKey, { ...row.entry, vaultRootKey, syncKey: nextSyncKey });
+      translatedCount += 1;
+      continue;
     }
     await raw.delete(row.storeKey);
     translatedCount += 1;
   }
 
-  let prunedCount = 0;
-  if (staleRows.length > 0) {
-    const store = createMemoryWikiSourceSyncStateStore(params.openKeyedStore);
-    const state = await readMemoryWikiSourceSyncState(params.vaultRoot, store);
-    for (const row of staleRows) {
-      state.entries[row.syncKey] = row.entry;
-    }
-    // Keep every live scoped row; only the injected stale legacy rows prune.
-    const activeKeys = new Set(
-      Object.keys(state.entries).filter((key) => isScopedImportedSourceSyncKey(key)),
-    );
-    for (const group of new Set(staleRows.map((row) => row.entry.group))) {
-      prunedCount += await pruneImportedSourceEntries({
-        vaultRoot: params.vaultRoot,
-        group,
-        activeKeys,
-        state,
-      });
-    }
-    await writeMemoryWikiSourceSyncState(params.vaultRoot, state, store);
-  }
+  const prunedCount = await pruneLegacyImportedSourceRows({
+    vaultRoot: params.vaultRoot,
+    openKeyedStore: params.openKeyedStore,
+    rows: staleRows,
+  });
 
   return { translatedCount, prunedCount, retainedKeys };
 }
