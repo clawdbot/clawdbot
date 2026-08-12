@@ -26,16 +26,22 @@ export function appendChannelPromptContext(base: string, channelPromptContext?: 
   // of strings floods the prompt prelude in full. Keep the head like
   // truncateContextJsonString does, and flag the drop.
   const kept: string[] = [];
-  let budgetRemaining = MAX_CONTEXT_JSON_BLOCK_CHARS;
+  const header = markInboundContextLabel("Context:");
+  // Charge the exact model-visible framing as well as entry content. The
+  // direct string path bypasses the inbound assembly budget, so delimiters
+  // must not create a second unbounded channel.
+  let budgetRemaining = MAX_CONTEXT_JSON_BLOCK_CHARS - header.length;
   let budgetExhausted = false;
   for (const entry of entries) {
-    if (entry.length <= budgetRemaining) {
-      budgetRemaining -= entry.length;
+    const renderedLength = entry.length + (kept.length > 0 ? 1 : 0);
+    if (renderedLength <= budgetRemaining) {
+      budgetRemaining -= renderedLength;
       kept.push(entry);
       continue;
     }
+    const markerLength = BUDGET_TRUNCATION_MARKER.length + 1;
     kept.push(
-      `${truncateUtf16Safe(entry, Math.max(0, budgetRemaining - 14)).trimEnd()}…[truncated]`,
+      `${truncateUtf16Safe(entry, Math.max(0, budgetRemaining - markerLength - 14)).trimEnd()}…[truncated]`,
     );
     budgetExhausted = true;
     break;
@@ -43,7 +49,6 @@ export function appendChannelPromptContext(base: string, channelPromptContext?: 
   if (budgetExhausted) {
     kept.push(BUDGET_TRUNCATION_MARKER);
   }
-  const header = markInboundContextLabel("Context:");
   const block = [header, ...kept].join("\n");
   return [base, block].filter(Boolean).join("\n\n");
 }

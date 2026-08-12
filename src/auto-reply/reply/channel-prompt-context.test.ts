@@ -264,6 +264,16 @@ describe("appendChannelPromptContext", () => {
     expect(rendered).not.toContain("entry-100");
   });
 
+  it("charges delimiters for many short string entries", () => {
+    const rendered = appendChannelPromptContext(
+      "hello",
+      Array.from({ length: 50_000 }, () => "x"),
+    );
+
+    expect(rendered).toContain("…[truncated: context budget exhausted]");
+    expect(rendered.length).toBeLessThan(51_000);
+  });
+
   it("truncates a single oversized string entry instead of appending it whole", () => {
     const rendered = appendChannelPromptContext("hello", ["x".repeat(500_000)]);
 
