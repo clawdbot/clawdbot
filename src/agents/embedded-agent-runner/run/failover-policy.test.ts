@@ -235,6 +235,22 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("surfaces sensitive-output failures instead of rotating or falling back", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        terminal: { kind: "ok" },
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "sensitive_output",
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: "sensitive_output",
+    });
+  });
+
   it("can still rotate explicitly retryable assistant format failures", () => {
     expect(
       resolveRunFailoverDecision({

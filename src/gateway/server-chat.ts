@@ -247,6 +247,7 @@ const CHAT_ERROR_KIND_BY_FAILOVER_REASON = {
   auth: undefined,
   auth_permanent: undefined,
   format: undefined,
+  sensitive_output: "refusal",
   rate_limit: "rate_limit",
   overloaded: "rate_limit",
   billing: undefined,

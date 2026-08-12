@@ -76,7 +76,11 @@ type RunFailoverDecisionParams =
 
 function shouldEscalateRetryLimit(reason: FailoverReason | null): boolean {
   return Boolean(
-    reason && reason !== "timeout" && reason !== "format" && reason !== "session_expired",
+    reason &&
+    reason !== "timeout" &&
+    reason !== "format" &&
+    reason !== "sensitive_output" &&
+    reason !== "session_expired",
   );
 }
 
@@ -86,7 +90,9 @@ function isTerminalFormatFailure(params: {
   failoverReason: FailoverReason | null;
 }): boolean {
   return (
-    params.failoverFailure && params.failoverReason === "format" && params.allowFormatRetry !== true
+    params.failoverFailure &&
+    (params.failoverReason === "format" || params.failoverReason === "sensitive_output") &&
+    params.allowFormatRetry !== true
   );
 }
 

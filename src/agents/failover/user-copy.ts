@@ -110,6 +110,7 @@ const FAILOVER_REASON_BASE_COPY = {
   auth: () => AUTH_INVALID_TOKEN_USER_TEXT,
   auth_permanent: () => AUTH_INVALID_TOKEN_USER_TEXT,
   format: () => "LLM request failed: provider rejected the request schema or tool payload.",
+  sensitive_output: () => "LLM request failed: provider rejected sensitive output.",
   rate_limit: renderRateLimitBaseCopy,
   overloaded: (context) =>
     MODEL_CAPACITY_ERROR_RE.test(context.raw ?? "")
@@ -303,7 +304,12 @@ export function renderSanitizedUserFacingText(
     return renderFailoverBaseCopy("context_overflow") ?? trimmed;
   }
   const reason = classifyFailoverReason(trimmed);
-  if (reason === "billing" || reason === "rate_limit" || reason === "overloaded") {
+  if (
+    reason === "billing" ||
+    reason === "rate_limit" ||
+    reason === "overloaded" ||
+    reason === "sensitive_output"
+  ) {
     return renderFailoverBaseCopy(reason, { raw: trimmed }) ?? trimmed;
   }
   if (isGenericProviderInternalError(trimmed)) {
@@ -624,6 +630,7 @@ const AUTH_PROFILE_COOLDOWN_COPY = {
     `Couldn't reach ${provider} with any of your saved logins right now.`,
   no_error_details: (provider: string) =>
     `Couldn't reach ${provider} with any of your saved logins right now.`,
+  sensitive_output: (provider: string) => `${provider} rejected sensitive output for this request.`,
   unclassified: (provider: string) =>
     `Couldn't reach ${provider} with any of your saved logins right now.`,
   unknown: (provider: string) =>
@@ -642,6 +649,7 @@ const AUTH_PROFILE_REASON_POLICY = {
     recovery: true,
   },
   format: { direct: undefined, recovery: false },
+  sensitive_output: { direct: undefined, recovery: false },
   rate_limit: { direct: undefined, recovery: false },
   overloaded: { direct: undefined, recovery: false },
   billing: { direct: AUTH_PROFILE_COOLDOWN_COPY.billing, recovery: true },

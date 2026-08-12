@@ -108,9 +108,12 @@ export async function handleEmbeddedAssistantFailure(input: {
   const authFailure = isAuthAssistantError(input.attemptAssistant);
   const rateLimitFailure = isRateLimitAssistantError(input.attemptAssistant);
   const billingFailure = isBillingAssistantError(input.attemptAssistant);
-  const failoverFailure = isFailoverAssistantError(input.attemptAssistant);
+  const providerScope = input.providerOwner?.id ?? input.provider;
+  const failoverFailure = isFailoverAssistantError(input.attemptAssistant, {
+    provider: providerScope,
+  });
   const assistantFailoverReason = classifyAssistantFailoverReason(input.attemptAssistant, {
-    provider: input.providerOwner?.id,
+    provider: providerScope,
   });
   const assistantProviderStarted =
     Boolean(input.currentAttemptAssistant?.provider) ||

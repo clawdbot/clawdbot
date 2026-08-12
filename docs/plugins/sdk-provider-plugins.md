@@ -698,7 +698,7 @@ catalog, API-key auth, and dynamic model resolution.
       | `refreshOAuth` | Custom OAuth refresh |
       | `buildAuthDoctorHint` | Auth repair guidance |
       | `matchesContextOverflowError` | Provider-owned overflow detection |
-      | `classifyFailoverReason` | Provider-owned rate-limit/overload classification |
+      | `classifyFailoverReason` | Provider-owned classification of raw provider errors into the shared failover vocabulary |
       | `isCacheTtlEligible` | Prompt cache TTL gating |
       | `buildMissingAuthMessage` | Custom missing-auth hint |
       | `augmentModelCatalog` | Synthetic forward-compat rows (deprecated - prefer `registerModelCatalogProvider`) |
@@ -718,6 +718,20 @@ catalog, API-key auth, and dynamic model resolution.
 
       Runtime fallback notes:
 
+      - `classifyFailoverReason(ctx)` maps a provider-specific raw error shape to
+        a public `FailoverReason`. Return `undefined` when the provider does not
+        recognize the error and core should continue generic classification.
+        The returned reason is consumed by auth recovery, retry, model fallback,
+        gateway errors, and Plugin SDK consumers, so it is a compatibility
+        contract rather than provider-local display text.
+      - `sensitive_output` is a terminal failover reason for a provider-owned
+        moderation or safety rejection of generated output. Return it only when
+        the owning provider can identify that rejection from its documented API
+        response. For example, [MiniMax Error Codes](https://platform.minimax.io/docs/api-reference/errorcode)
+        documents `1027` as `output new_sensitive`. Core surfaces safe error copy and does not retry the request,
+        rotate auth profiles, or send the rejected request to another configured
+        provider. Do not use `sensitive_output` for generic validation, malformed
+        request, or unknown 4xx responses.
       - `normalizeConfig` resolves one owning plugin per provider id (bundled providers first, then the matched runtime plugin) and calls only that hook - there is no scan across other providers. Google's own `normalizeConfig` hook is what normalizes `google` / `google-vertex` / `google-antigravity` config entries; it is not a separate core fallback.
       - `resolveConfigApiKey` uses the provider hook when exposed. Amazon Bedrock keeps AWS env-marker resolution in its provider plugin; runtime auth itself still uses the AWS SDK default chain when configured with `auth: "aws-sdk"`.
       - `resolveThinkingProfile(ctx)` receives the selected `provider`, `modelId`, optional merged `reasoning` catalog hint, and optional merged model `compat` facts. Use `compat` only to select the provider's thinking UI/profile.

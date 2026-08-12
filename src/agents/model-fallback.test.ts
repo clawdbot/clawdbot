@@ -2439,6 +2439,43 @@ describe("runWithModelFallback", () => {
     expect(error.attempts[0]?.error).not.toBe(rawError);
   });
 
+  it("does not send sensitive-output rejections to a fallback provider", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "minimax/MiniMax-M2.7",
+            fallbacks: ["openai/gpt-5.4"],
+          },
+        },
+      },
+    });
+    const sensitiveOutput = new FailoverError("MiniMax rejected sensitive output.", {
+      provider: "minimax",
+      model: "MiniMax-M2.7",
+      reason: "sensitive_output",
+      status: 400,
+      rawError: "400 output new_sensitive",
+    });
+    const run = vi.fn(async () => {
+      throw sensitiveOutput;
+    });
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "minimax",
+        model: "MiniMax-M2.7",
+        run,
+      }),
+    ).rejects.toBe(sensitiveOutput);
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith("minimax", "MiniMax-M2.7", {
+      isFinalFallbackAttempt: false,
+    });
+  });
+
   it("preserves structured timeout attribution after fallback exhaustion", async () => {
     const cfg = makeCfg({
       agents: {

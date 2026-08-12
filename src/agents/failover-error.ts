@@ -207,6 +207,7 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
     case "context_overflow":
       return 413;
     case "format":
+    case "sensitive_output":
       return 400;
     case "model_not_found":
       return 404;

@@ -142,6 +142,27 @@ describe("formatAssistantErrorText", () => {
     expect(result).toContain("Session history looks corrupted");
     expect(result).toContain("/new");
   });
+  it("renders MiniMax sensitive-output errors through safe copy", () => {
+    const msg = makeAssistantMessageFixture({
+      provider: "minimax",
+      errorMessage:
+        'MiniMax request failed: {"base_resp":{"status_code":1027,"status_msg":"output new_sensitive"}}',
+      content: [],
+    });
+
+    const minimaxOwner = {
+      id: "minimax",
+      classifyFailoverReason: ({ errorMessage }: { errorMessage: string }) =>
+        errorMessage.includes("new_sensitive") ? "sensitive_output" : undefined,
+    };
+
+    expect(formatAssistantErrorText(msg, { providerOwner: minimaxOwner })).toBe(
+      "LLM request failed: provider rejected sensitive output.",
+    );
+    expect(formatUserFacingAssistantErrorText(msg, { providerOwner: minimaxOwner })).toBe(
+      "LLM request failed: provider rejected sensitive output.",
+    );
+  });
   it("returns a recovery hint for replay-invalid connection mismatch errors", () => {
     const msg = makeAssistantError("401 input item ID does not belong to this connection");
     const result = formatAssistantErrorText(msg);

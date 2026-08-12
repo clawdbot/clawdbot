@@ -152,6 +152,7 @@ const PROBE_STATUS_BY_FAILOVER_REASON = {
   auth: "auth",
   auth_permanent: "auth",
   format: "format",
+  sensitive_output: "format",
   rate_limit: "rate_limit",
   overloaded: "rate_limit",
   billing: "billing",

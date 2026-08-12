@@ -37,6 +37,7 @@ type AgentRuntimeFailoverReason =
   | "auth"
   | "auth_permanent"
   | "format"
+  | "sensitive_output"
   | "rate_limit"
   | "overloaded"
   | "billing"

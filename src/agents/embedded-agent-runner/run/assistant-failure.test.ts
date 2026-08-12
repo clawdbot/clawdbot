@@ -188,6 +188,44 @@ describe("handleEmbeddedAssistantFailure", () => {
     ]);
   });
 
+  it("does not broad-scan provider hooks for a non-MiniMax new_sensitive assistant error", async () => {
+    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReset();
+    const fixture = makeExhaustedCredentialFailureInput();
+    const provider = "openai";
+    const modelId = "gpt-5";
+    const assistant = buildEmbeddedRunnerAssistant({
+      provider,
+      model: modelId,
+      stopReason: "error",
+      errorMessage: '400 {"error":"output new_sensitive"}',
+    });
+    fixture.input.attemptAssistant = assistant;
+    fixture.input.currentAttemptAssistant = assistant;
+    fixture.input.provider = provider;
+    fixture.input.modelId = modelId;
+    fixture.input.model = modelId;
+    fixture.input.activeErrorContext = { provider, model: modelId };
+    fixture.input.authProfileId = undefined;
+    fixture.input.fallbackConfigured = false;
+    fixture.input.emptyErrorRetries = 0;
+    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockImplementation(
+      ({ provider: classifiedProvider }) =>
+        classifiedProvider === undefined ? "sensitive_output" : undefined,
+    );
+
+    await expect(handleEmbeddedAssistantFailure(fixture.input)).rejects.toMatchObject({
+      provider,
+      model: modelId,
+      reason: "format",
+    });
+    expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).toHaveBeenCalled();
+    expect(
+      providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mock.calls
+        .slice(0, 2)
+        .map(([args]) => args.provider),
+    ).toEqual([provider, provider]);
+  });
+
   it("does not rotate profiles or models after an ambiguous post-dispatch failure", async () => {
     const fixture = makeExhaustedCredentialFailureInput();
     fixture.input.emptyErrorRetries = 0;

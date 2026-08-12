@@ -126,7 +126,7 @@ describe("resolveAuthProfileFailureReason", () => {
     ).toBeNull();
   });
 
-  it("does not persist request-shape (format) rejections as auth-profile health (#77228)", () => {
+  it("does not persist request-shape or sensitive-output rejections as auth-profile health (#77228)", () => {
     // Format rejections are transcript/request-shape problems, not shared
     // credential failures.
     expect(
@@ -137,6 +137,12 @@ describe("resolveAuthProfileFailureReason", () => {
     expect(
       resolveAuthProfileFailureReason({
         failoverReason: "format",
+        policy: "shared",
+      }),
+    ).toBeNull();
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "sensitive_output",
         policy: "shared",
       }),
     ).toBeNull();
