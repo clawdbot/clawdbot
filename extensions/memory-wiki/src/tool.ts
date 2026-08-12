@@ -184,11 +184,11 @@ function boundMemoryWikiOpenItem<
     ...(item.variants
       ? {
           variants: item.variants.slice(0, WIKI_OPEN_ITEM_VARIANTS_MAX_COUNT).map((variant) => ({
-            ...variant,
             text: truncateOpenItemText(variant.text),
             status: truncateOpenItemText(variant.status),
             pagePath: truncateOpenItemText(variant.pagePath),
             pageTitle: truncateOpenItemText(variant.pageTitle),
+            ...(typeof variant.confidence === "number" ? { confidence: variant.confidence } : {}),
           })),
         }
       : {}),
