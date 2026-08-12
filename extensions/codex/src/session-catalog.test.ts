@@ -1569,13 +1569,12 @@ describe("Codex supervision catalog", () => {
       }),
     });
 
-    await expect(
-      reconciliationProvider?.list({
-        hostId: CODEX_LOCAL_SESSION_HOST_ID,
-        archived: false,
-        limit: 1,
-      }),
-    ).resolves.toEqual({
+    const current = await reconciliationProvider?.list({
+      hostId: CODEX_LOCAL_SESSION_HOST_ID,
+      archived: false,
+      limit: 1,
+    });
+    expect(current).toMatchObject({
       hostId: CODEX_LOCAL_SESSION_HOST_ID,
       sessions: [
         {
@@ -1599,15 +1598,17 @@ describe("Codex supervision catalog", () => {
       ],
       complete: true,
     });
-    await expect(
-      reconciliationProvider?.list({
-        hostId: CODEX_LOCAL_SESSION_HOST_ID,
-        archived: true,
-        limit: 1,
-      }),
-    ).resolves.toMatchObject({
+    expect(current?.transcriptCapabilities).toEqual({ "current-thread": expect.any(String) });
+    expect(current?.transcriptCapabilities?.["current-thread"]).toHaveLength(36);
+    const archived = await reconciliationProvider?.list({
+      hostId: CODEX_LOCAL_SESSION_HOST_ID,
+      archived: true,
+      limit: 1,
+    });
+    expect(archived).toMatchObject({
       sessions: [{ threadId: "current-thread", archived: true, modelProvider: "openai" }],
     });
+    expect(archived?.transcriptCapabilities).toBeUndefined();
   });
 
   it("keeps reconciliation page metadata bounded and fails closed above the item limit", async () => {
