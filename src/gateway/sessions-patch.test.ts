@@ -891,6 +891,64 @@ describe("gateway sessions patch", () => {
     expect(store[MAIN_SESSION_KEY]).toEqual(before);
   });
 
+  test("rejects model patches for persisted-ACP sessions without the durable lock field", async () => {
+    const acpKey = "agent:main:acp:child";
+    const acpEntry = {
+      sessionId: "sess-acp-locked",
+      updatedAt: 1,
+      providerOverride: "openai",
+      modelOverride: OPENAI_GPT_ID,
+      acp: {
+        backend: "cursor",
+        agent: "main",
+        runtimeSessionName: acpKey,
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: 1,
+      },
+    } satisfies SessionEntry;
+    const store = { [acpKey]: acpEntry };
+    const before = { ...acpEntry };
+    const loadGatewayModelCatalog = vi.fn(loadCatalog(ANTHROPIC_SONNET_MODEL));
+
+    const result = await runPatch({
+      store,
+      storeKey: acpKey,
+      cfg: createAllowlistedAnthropicModelCfg(),
+      patch: { key: acpKey, model: ANTHROPIC_SONNET_MODEL },
+      loadGatewayModelCatalog,
+    });
+
+    expectPatchError(result, MODEL_SELECTION_LOCKED_MESSAGE);
+    expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
+    expect(store[acpKey]).toEqual(before);
+  });
+
+  test("allows model patches for ACP-shaped keys without persisted ACP metadata", async () => {
+    acpSessionMetaMocks.readAcpSessionMetaForEntry.mockReturnValue(undefined);
+    const acpKey = "agent:main:acp:child";
+    const store = {
+      [acpKey]: {
+        sessionId: "sess-acp-bridge",
+        updatedAt: 1,
+        providerOverride: "openai",
+        modelOverride: OPENAI_GPT_ID,
+      } satisfies SessionEntry,
+    };
+
+    const result = await runPatch({
+      store,
+      storeKey: acpKey,
+      cfg: createAllowlistedAnthropicModelCfg(),
+      patch: { key: acpKey, model: ANTHROPIC_SONNET_MODEL },
+      loadGatewayModelCatalog: loadCatalog(OPENAI_GPT_MODEL, ANTHROPIC_SONNET_MODEL),
+      providerAuthMetadataSnapshot: EMPTY_PROVIDER_AUTH_METADATA_SNAPSHOT,
+    });
+
+    const entry = expectPatchOk(result);
+    expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
+  });
+
   test("allows non-model metadata patches for model-locked sessions", async () => {
     const entry = expectPatchOk(
       await runPatch({

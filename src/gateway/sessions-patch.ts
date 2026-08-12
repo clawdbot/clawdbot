@@ -65,6 +65,7 @@ import {
   sessionAgentStatusExpiresAt,
   SESSION_AGENT_STATUS_MAX_TTL_MINUTES,
 } from "../sessions/session-agent-status.js";
+import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import { parseSessionLabel, SESSION_LABEL_MAX_LENGTH } from "../sessions/session-label.js";
 import {
   isAgentSessionModelPatchOrigin,
@@ -180,8 +181,20 @@ export async function projectSessionsPatchEntry(params: {
   if (harnessSessionError) {
     return invalid(harnessSessionError);
   }
-  if ("model" in patch && isModelSelectionLocked(params.existingEntry)) {
-    return invalid(MODEL_SELECTION_LOCKED_MESSAGE);
+  if ("model" in patch) {
+    // The row projection can lock model selection for persisted-ACP sessions
+    // without writing the durable modelSelectionLocked field (ACP metadata is
+    // persisted separately). Apply the same metadata-and-key gate here so a
+    // direct Gateway model patch cannot mutate a session the UI reports as
+    // locked: reject when the durable lock is set OR the session has
+    // persisted ACP metadata on an ACP-shaped key.
+    const acpMeta =
+      params.existingEntry?.acp ??
+      readAcpSessionMetaForEntry({ sessionKey: storeKey, entry: params.existingEntry });
+    const acpRuntime = acpMeta != null && isAcpSessionKey(storeKey);
+    if (isModelSelectionLocked(params.existingEntry) || acpRuntime) {
+      return invalid(MODEL_SELECTION_LOCKED_MESSAGE);
+    }
   }
   const now = Date.now();
   const parsedAgent = parseAgentSessionKey(storeKey);
