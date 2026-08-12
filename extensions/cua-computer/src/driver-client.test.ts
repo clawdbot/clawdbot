@@ -23,7 +23,7 @@ const sdk = {
   createTrustedSession: mocks.createTrustedSession,
 };
 
-import { createCuaDriver } from "./driver-client.js";
+import { ClickButton, createCuaDriver, ScrollDirection } from "./driver-client.js";
 
 const authorization = {
   allowedModes: ["unrestricted"],
@@ -45,6 +45,22 @@ describe("CUA Driver direct session", () => {
       endSession: mocks.endSession,
       getDesktopState: mocks.getDesktopState,
       startSession: mocks.startSession,
+    });
+  });
+
+  it("matches the installed CUA Driver desktop input enum contract", async () => {
+    const driverSdk = await import("@trycua/cua-driver");
+
+    expect(ClickButton).toEqual({
+      Left: driverSdk.ClickButton.Left,
+      Right: driverSdk.ClickButton.Right,
+      Middle: driverSdk.ClickButton.Middle,
+    });
+    expect(ScrollDirection).toEqual({
+      Up: driverSdk.ScrollDirection.Up,
+      Down: driverSdk.ScrollDirection.Down,
+      Left: driverSdk.ScrollDirection.Left,
+      Right: driverSdk.ScrollDirection.Right,
     });
   });
 
