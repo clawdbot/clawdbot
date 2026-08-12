@@ -509,11 +509,6 @@ export function buildChannelInboundEventContext(
     From: params.from,
     To: params.reply.to,
     SessionKey: params.route.dispatchSessionKey ?? params.route.routeSessionKey,
-    SystemEventSessionKey:
-      params.route.dispatchSessionKey &&
-      params.route.dispatchSessionKey !== params.route.routeSessionKey
-        ? params.route.routeSessionKey
-        : undefined,
     AgentId: params.route.agentId,
     DmScope: params.route.dmScope,
     AccountId: params.route.accountId ?? params.accountId,

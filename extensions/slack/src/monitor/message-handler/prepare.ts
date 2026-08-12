@@ -1716,6 +1716,7 @@ export async function prepareSlackMessage(params: {
       groupSystemPrompt,
     },
     extra: {
+      SystemEventSessionKey: route.sessionKey !== sessionKey ? route.sessionKey : undefined,
       GroupSubject: groupSessionSubject,
       ChannelPromptContext: channelMetadata ? [channelMetadata] : undefined,
       ChannelStructuredContext:
