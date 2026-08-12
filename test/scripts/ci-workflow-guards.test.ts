@@ -7352,10 +7352,20 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       );
     }
     expect(telegramProvenanceHelper).toContain(
-      'if [[ "$candidate_version" == "$release_version" ||',
+      'if [[ "$candidate_version" == "$release_version" ]]; then',
     );
     expect(telegramProvenanceHelper).toContain(
-      '"$candidate_version" =~ ^${release_version_pattern}-beta\\.[0-9]+$ ]]; then',
+      'elif [[ "$candidate_version" =~ ^${release_version_pattern}-beta\\.[0-9]+$ ]]; then',
+    );
+    expect(telegramProvenanceHelper).toContain(
+      'frozen_release_branch_pattern="^release/${candidate_version_pattern}-code-frozen(-r[1-9][0-9]*)?$"',
+    );
+    expect(telegramProvenanceHelper).toContain(
+      '"$TARGET_REF" =~ ^[a-f0-9]{40}$ && "$TARGET_REF" == "$candidate_sha"',
+    );
+    expect(telegramProvenanceHelper).toContain('trusted_reason="frozen-release-branch-head"');
+    expect(telegramProvenanceHelper).toContain(
+      '"$signature_status" != "valid" || "$signer" == "web-flow"',
     );
     expect(telegramProvenanceHelper).toContain('context_release_branch="$normalized_context_ref"');
     expect(telegramProvenanceHelper).toContain('context_release_tag="$normalized_context_ref"');
@@ -7378,8 +7388,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(telegramProvenanceHelper).toContain(
       'if [[ "$permission" != "admin" && "$role_name" != "maintain" ]]; then',
     );
-    expect(telegramProvenanceHelper).not.toContain("code-frozen");
-    expect(telegramProvenanceHelper).not.toContain("frozen-release-branch-head");
     expect(telegramProvenanceHelper).not.toContain(".baseRefName ==");
   });
 
