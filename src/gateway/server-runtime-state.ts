@@ -304,6 +304,7 @@ export async function createGatewayHttpTransport(params: {
       getResolvedAuth: params.getResolvedAuth,
       rateLimiter: params.rateLimiter,
       log: params.log,
+      workerIngressEnabled: params.workerIngressEnabled,
       desktopSessionRegistry: params.desktopSessionRegistry,
     });
     gatewayHttpServers.push(httpServer);

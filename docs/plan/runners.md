@@ -18,11 +18,12 @@ advances a milestone.
 | 0   | This plan (revision 2)                                     | landed      | #122454          |
 | 1a  | Naming: session copy revert                                | landed      | #120667          |
 | 1b  | Naming: devices consolidation                              | landed      | #120689          |
-| 1c  | Cleanup: node-pairing → device-pairing merge               | not started | —                |
+| 1c  | Cleanup: node-pairing → device-pairing merge               | landed      | #120726          |
 | 2   | `openclaw resume` + web Continue in terminal               | in progress | #120664          |
-| 3   | `openclaw connect` one-paste onboarding + `/j/` join route | in progress | #122499          |
+| 3   | `openclaw connect` one-paste onboarding + `/j/` join route | in progress | #120768, #122499 |
 | 4   | Picker: grouping, placement, liveness, enrichment          | in progress | #120804, #122531 |
-| 5   | Public worker ingress path                                 | not started | —                |
+| F   | Real-wire session boundary harness                         | landed      | #121212          |
+| 5   | Public worker ingress path                                 | in progress | —                |
 | 6   | Node worker provider (device runners)                      | not started | —                |
 | 7   | Bundle push consent + runner updates                       | not started | —                |
 | 8   | Stop-and-continue moves                                    | not started | —                |

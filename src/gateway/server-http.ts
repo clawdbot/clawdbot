@@ -9,6 +9,7 @@ import {
 import { createServer as createHttpsServer } from "node:https";
 import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
+import { WORKER_PUBLIC_INGRESS_PATH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { isCanvasDocumentHttpPath } from "../canvas/constants.js";
 import { resolveBundledChannelGatewayAuthBypassPaths } from "../channels/plugins/gateway-auth-bypass.js";
@@ -76,6 +77,7 @@ import type { ReadinessChecker, StartupChecker, StartupResult } from "./server/r
 import {
   GATEWAY_WS_CONNECTION_KIND_PROPERTY,
   GATEWAY_WS_PREAUTH_BUDGET_PROPERTY,
+  GATEWAY_WS_WORKER_INGRESS_PROPERTY,
   type GatewayIngressWebSocket,
   type GatewayWsClient,
 } from "./server/ws-types.js";
@@ -926,6 +928,7 @@ export function attachGatewayUpgradeHandler(opts: {
   rateLimiter?: AuthRateLimiter;
   /** Optional logger for error diagnostics. */
   log?: { warn: (msg: string) => void };
+  workerIngressEnabled?: boolean;
   desktopSessionRegistry?: DesktopSessionRegistry;
 }) {
   const {
@@ -958,6 +961,31 @@ export function attachGatewayUpgradeHandler(opts: {
       }
       const resolvedAuthLocal = getResolvedAuth();
       const requestPath = scopedNodeCapability.pathname;
+      if (requestPath === WORKER_PUBLIC_INGRESS_PATH) {
+        if (!opts.workerIngressEnabled) {
+          writeGatewayUpgradeServiceUnavailable(socket, "Worker websocket ingress unavailable");
+          socket.destroy();
+          return;
+        }
+        try {
+          handleBudgetedGatewayWebSocketUpgrade({
+            req,
+            socket,
+            head,
+            wss,
+            preauthConnectionBudget,
+            preauthBudgetKey: requestClientIp,
+            ingressName: "Worker",
+            prepareSocket: (workerSocket) => {
+              workerSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] = "worker";
+              workerSocket[GATEWAY_WS_WORKER_INGRESS_PROPERTY] = "public";
+            },
+          });
+        } catch {
+          throw new Error("public worker websocket upgrade failed");
+        }
+        return;
+      }
       const pathContext = resolvePluginRoutePathContext(requestPath);
       const nodeCapability = resolvePluginNodeCapabilityRoute?.(pathContext);
       if (nodeCapability) {
@@ -1090,6 +1118,7 @@ export function attachWorkerGatewayUpgradeHandler(params: {
         prepareSocket: (workerSocket) => {
           workerSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] = "worker";
           workerSocket[GATEWAY_WS_PREAUTH_BUDGET_PROPERTY] = params.preauthConnectionBudget;
+          workerSocket[GATEWAY_WS_WORKER_INGRESS_PROPERTY] = "loopback";
         },
       });
     } catch (error) {
