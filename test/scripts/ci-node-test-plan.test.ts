@@ -35,6 +35,7 @@ const PLUGIN_PRERELEASE_NPM_SPEC_TEST = "src/plugins/install.npm-spec.test.ts";
 const PLUGIN_NPM_INSTALL_SECURITY_SCAN_TEST =
   "src/plugins/npm-install-security-scan.release.test.ts";
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
+const BUNDLED_NODE_TEST_RUNNER = "blacksmith-4vcpu-ubuntu-2404";
 function listTestFiles(rootDir: string): string[] {
   const gitFiles = listGitTrackedFiles({ pathspecs: rootDir });
   expect(gitFiles).not.toBeNull();
@@ -323,10 +324,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         .find((group) => group.shard_name === "agentic-control-plane-startup-health-runtime")?.env,
     ).toEqual({ OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" });
     const largeJobs = compact.filter(
-      (shard) => shard.runner === DEFAULT_NODE_TEST_RUNNER && !shard.requiresDist,
+      (shard) => !shard.requiresDist && shard.checkName.startsWith("checks-node-compact-large-"),
     );
     const smallJobs = compact.filter(
-      (shard) => shard.runner !== DEFAULT_NODE_TEST_RUNNER && !shard.requiresDist,
+      (shard) => !shard.requiresDist && shard.checkName.startsWith("checks-node-compact-small-"),
     );
     const distJobs = compact.filter((shard) => shard.requiresDist);
     expect(largeJobs).toHaveLength(7);
@@ -336,6 +337,21 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       shard.groups.every((group) => !exclusiveGroupRe.test(group.shard_name)),
     );
     expect(regularSmallJobs).toHaveLength(10);
+    const routed8VcpuCheckNames = [
+      "checks-node-compact-small-2",
+      "checks-node-compact-small-5",
+      "checks-node-compact-small-8",
+    ];
+    expect(
+      regularSmallJobs
+        .filter((shard) => shard.runner === DEFAULT_NODE_TEST_RUNNER)
+        .map((shard) => shard.checkName),
+    ).toEqual(routed8VcpuCheckNames);
+    expect(
+      smallJobs
+        .filter((shard) => !routed8VcpuCheckNames.includes(shard.checkName))
+        .every((shard) => shard.runner === BUNDLED_NODE_TEST_RUNNER),
+    ).toBe(true);
     // The refreshed hosted medians give every regular bin one known tail
     // anchor. Stale hints paired two of these slow groups in each runner class.
     const largeTailAnchors = [
