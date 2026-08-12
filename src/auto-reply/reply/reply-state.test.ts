@@ -576,6 +576,41 @@ describe("incrementCompactionCount", () => {
     expect(requireStoredSession(stored, sessionKey).outputTokens).toBeUndefined();
   });
 
+  it("clears only the active CLI binding after compaction", async () => {
+    const entry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      cliSessionBindings: {
+        "claude-cli": { sessionId: "claude-session" },
+        "codex-cli": { sessionId: "codex-session" },
+      },
+      cliSessionIds: {
+        "claude-cli": "claude-session",
+        "codex-cli": "codex-session",
+      },
+      claudeCliSessionId: "claude-session",
+    } as SessionEntry;
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+
+    await incrementCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      cliProvider: "claude-cli",
+    });
+
+    const stored = requireStoredSession(
+      { [sessionKey]: await loadStoredEntry(storePath, sessionKey) },
+      sessionKey,
+    );
+    expect(stored.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(stored.cliSessionIds?.["claude-cli"]).toBeUndefined();
+    expect(stored.claudeCliSessionId).toBeUndefined();
+    expect(stored.cliSessionBindings?.["codex-cli"]).toEqual({ sessionId: "codex-session" });
+    expect(stored.cliSessionIds?.["codex-cli"]).toBe("codex-session");
+  });
+
   it("accepts zero tokensAfter as a fresh post-compaction total", async () => {
     const entry = {
       sessionId: "s1",

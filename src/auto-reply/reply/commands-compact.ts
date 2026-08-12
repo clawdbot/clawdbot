@@ -16,6 +16,10 @@ import {
 } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import {
+  isCliRuntimeAliasForProvider,
+  resolveCliRuntimeExecutionProvider,
+} from "../../agents/model-runtime-aliases.js";
+import {
   OPENAI_CODEX_PROVIDER_ID,
   OPENAI_PROVIDER_ID,
   resolveContextConfigProviderForRuntime,
@@ -328,6 +332,28 @@ export const handleCompactCommand: CommandHandler = async (params) => {
         : "Compaction skipped"
       : "Compaction failed";
   if (didCompact) {
+    const harnessRuntime = resolveAgentHarnessPolicy({
+      provider: params.provider,
+      modelId: params.model,
+      config: params.cfg,
+      agentId: sessionAgentId,
+      sessionKey: params.sessionKey,
+    }).runtime;
+    const cliProvider =
+      resolveCliRuntimeExecutionProvider({
+        provider: params.provider,
+        cfg: params.cfg,
+        agentId: sessionAgentId,
+        modelId: params.model,
+        authProfileId: targetSessionEntry.authProfileOverride,
+      }) ??
+      (isCliRuntimeAliasForProvider({
+        runtime: harnessRuntime,
+        provider: params.provider,
+        cfg: params.cfg,
+      })
+        ? harnessRuntime
+        : undefined);
     await runtime.incrementCompactionCount({
       agentId: sessionAgentId,
       cfg: params.cfg,
@@ -338,6 +364,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       // Update token counts after compaction
       tokensAfter: result.result?.tokensAfter,
       newSessionId: result.result?.sessionId,
+      cliProvider,
     });
   }
   // Use the post-compaction token count for context summary if available

@@ -1,6 +1,7 @@
 /** Session update helpers for skill snapshots, compaction, and lifecycle hooks. */
 import crypto from "node:crypto";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { clearCliSession } from "../../agents/cli-session.js";
 import {
   type ExecPolicyOverrides,
   resolveNodeExecEligibility,
@@ -325,6 +326,8 @@ export async function incrementCompactionCount(params: {
   tokensAfter?: number;
   /** Session id after compaction when a context engine changed identity. */
   newSessionId?: string;
+  /** CLI provider whose resume binding was invalidated by this compaction. */
+  cliProvider?: string;
 }): Promise<number | undefined> {
   const {
     agentId,
@@ -337,6 +340,7 @@ export async function incrementCompactionCount(params: {
     amount = 1,
     tokensAfter,
     newSessionId,
+    cliProvider,
   } = params;
   if (!sessionStore || !sessionKey) {
     return undefined;
@@ -352,6 +356,13 @@ export async function incrementCompactionCount(params: {
     compactionCount: nextCount,
     updatedAt: now,
   };
+  if (cliProvider) {
+    const nextWithoutCliBinding = { ...entry };
+    clearCliSession(nextWithoutCliBinding, cliProvider);
+    updates.cliSessionBindings = nextWithoutCliBinding.cliSessionBindings;
+    updates.cliSessionIds = nextWithoutCliBinding.cliSessionIds;
+    updates.claudeCliSessionId = nextWithoutCliBinding.claudeCliSessionId;
+  }
   const sessionIdChanged = Boolean(newSessionId && newSessionId !== entry.sessionId);
   if (sessionIdChanged && newSessionId) {
     updates.sessionId = newSessionId;

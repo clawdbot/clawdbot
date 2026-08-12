@@ -683,6 +683,38 @@ describe("handleCompactCommand", () => {
     expect(call.tokensAfter).toBe(321);
   });
 
+  it("invalidates the resolved CLI binding after manual compaction", async () => {
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: { summary: "compacted", tokensBefore: 999, tokensAfter: 321 },
+    });
+
+    await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          agents: {
+            defaults: {
+              models: {
+                "anthropic/claude-opus-4-6": {
+                  agentRuntime: { id: "claude-cli" },
+                },
+              },
+            },
+          },
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        sessionEntry: { sessionId: "session-1", updatedAt: Date.now() },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(requireIncrementCompactionCountCall().cliProvider).toBe("claude-cli");
+  });
+
   it("reports authoritative compaction no-ops without incrementing", async () => {
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
       ok: true,
