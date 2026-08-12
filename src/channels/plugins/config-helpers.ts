@@ -5,24 +5,37 @@
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import { isRecord } from "../../utils.js";
 import { normalizeChatChannelId } from "../ids.js";
 
 // Validation admits any declared spelling of a channel (case variant, built-in alias) against
 // the canonical identity; section reads and writes must resolve the AUTHORED key through the
 // same identity, or a plugin's declared section key silently ignores accepted settings and a
-// write splits the section across two spellings.
+// write splits the section across two spellings. The precedence is record-gated exactly like
+// activation's config-record resolver: a non-record exact entry never claims the section, or a
+// mutation lands on a key activation ignores.
 function resolveAuthoredSectionKey(
   channels: Record<string, unknown> | undefined,
   sectionKey: string,
 ): string {
-  if (!channels || Object.hasOwn(channels, sectionKey)) {
+  if (!channels || isRecord(channels[sectionKey])) {
     return sectionKey;
   }
   const canonical = normalizeChatChannelId(sectionKey) ?? sectionKey;
-  return (
-    Object.keys(channels).find((key) => (normalizeChatChannelId(key) ?? key) === canonical) ??
-    sectionKey
+  const authoredKey = Object.keys(channels).find(
+    (key) => (normalizeChatChannelId(key) ?? key) === canonical,
   );
+  return authoredKey !== undefined && isRecord(channels[authoredKey]) ? authoredKey : sectionKey;
+}
+
+// A non-record entry (only possible on the fallback key) holds no section fields; spreading a
+// string would merge its character indexes into the section.
+function sectionRecordAt(
+  channels: Record<string, unknown> | undefined,
+  sectionKey: string,
+): ChannelSection | undefined {
+  const entry = channels?.[sectionKey];
+  return isRecord(entry) ? (entry as ChannelSection) : undefined;
 }
 
 type ChannelSection = {
@@ -50,7 +63,7 @@ export function setAccountEnabledInConfigSection(params: {
   const accountKey = params.accountId || DEFAULT_ACCOUNT_ID;
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
   const sectionKey = resolveAuthoredSectionKey(channels, params.sectionKey);
-  const base = channels?.[sectionKey] as ChannelSection | undefined;
+  const base = sectionRecordAt(channels, sectionKey);
   const hasAccounts = Boolean(base?.accounts);
   if (params.allowTopLevel && accountKey === DEFAULT_ACCOUNT_ID && !hasAccounts) {
     // Legacy single-account sections store enabled at the channel root until accounts exist.
@@ -98,7 +111,7 @@ export function deleteAccountFromConfigSection(params: {
   const accountKey = params.accountId || DEFAULT_ACCOUNT_ID;
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
   const sectionKey = resolveAuthoredSectionKey(channels, params.sectionKey);
-  const base = channels?.[sectionKey] as ChannelSection | undefined;
+  const base = sectionRecordAt(channels, sectionKey);
   if (!base) {
     return params.cfg;
   }

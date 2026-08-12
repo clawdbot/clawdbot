@@ -132,4 +132,41 @@ describe("section keys resolve through canonical channel identity", () => {
     const section = channels.qqbot as { accounts: Record<string, { enabled?: boolean }> };
     expect(section.accounts.work?.enabled).toBe(false);
   });
+
+  it("skips a non-record exact section and writes the record-shaped authored variant", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        QQBot: { accounts: { work: { enabled: true } } },
+        qqbot: "stale-marker",
+      } as never,
+    } as OpenClawConfig;
+
+    const next = setAccountEnabledInConfigSection({
+      cfg,
+      sectionKey: "qqbot",
+      accountId: "work",
+      enabled: false,
+    });
+
+    const channels = next.channels as Record<string, unknown>;
+    expect(channels.qqbot).toBe("stale-marker");
+    const section = channels.QQBot as { accounts: Record<string, { enabled?: boolean }> };
+    expect(section.accounts.work?.enabled).toBe(false);
+  });
+
+  it("replaces a lone non-record exact section instead of spreading it", () => {
+    const cfg: OpenClawConfig = {
+      channels: { qqbot: "stale-marker" } as never,
+    } as OpenClawConfig;
+
+    const next = setAccountEnabledInConfigSection({
+      cfg,
+      sectionKey: "qqbot",
+      accountId: "work",
+      enabled: true,
+    });
+
+    const channels = next.channels as Record<string, unknown>;
+    expect(channels.qqbot).toEqual({ accounts: { work: { enabled: true } } });
+  });
 });
