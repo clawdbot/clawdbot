@@ -128,6 +128,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     };
     if (
       !explicitlyAddressed &&
+      prepared.ctxPayload.MentionSource !== "implicit_thread" &&
       !hasSlackThreadParticipation(
         notice.accountId,
         notice.channelId,

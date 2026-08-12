@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/approval-client-runtime";
 import {
   createNativeApprovalChannelRouteGates,
+  doesApprovalRequestMatchChannelAccount,
   doesApprovalRequestSelectChannelAccount,
   resolveApprovalRequestSessionConversation,
 } from "openclaw/plugin-sdk/approval-native-runtime";
@@ -454,6 +455,10 @@ export function shouldHandleSlackNativeApprovalRequest(params: {
     );
   }
   if (
+    !doesApprovalRequestMatchChannelAccount({
+      ...params,
+      channel: "slack",
+    }) ||
     !doesApprovalRequestSelectChannelAccount({
       ...params,
       channel: "slack",

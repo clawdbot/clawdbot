@@ -1,12 +1,16 @@
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getSlackTestState,
   resetSlackTestState,
   runSlackMessageOnce,
 } from "./monitor.test-helpers.js";
-import { clearSlackThreadParticipationCache } from "./sent-thread-cache.js";
+import { getSlackRuntime, setSlackRuntime } from "./runtime.js";
+import {
+  clearSlackThreadParticipationCache,
+  hasSlackThreadParticipation,
+} from "./sent-thread-cache.js";
 
 const { monitorSlackProvider } = await import("./monitor/provider.js");
 const slackTestState = getSlackTestState();
@@ -95,6 +99,36 @@ describe("Slack thread failure notices", () => {
 
     expect(slackTestState.sendMock).toHaveBeenCalledTimes(2);
     expect(slackTestState.sendMock.mock.calls[1]?.[1]).toBe(AUTH_FAILURE);
+  });
+
+  it("announces the first failure for participation restored after a restart", async () => {
+    const threadTs = "101.100000";
+    const persistedRecords = new Map([[`default:C1:${threadTs}`, { repliedAt: Date.now() }]]);
+    const register = vi.fn(async (key: string, value: { repliedAt: number }) => {
+      persistedRecords.set(key, value);
+    });
+    const lookup = vi.fn(async (key: string) => persistedRecords.get(key));
+    const entries = vi.fn(async () =>
+      Array.from(persistedRecords.keys(), (key) => ({ key, expiresAt: Date.now() + 60_000 })),
+    );
+    const runtime = getSlackRuntime();
+    setSlackRuntime({
+      ...runtime,
+      state: {
+        ...runtime.state,
+        openKeyedStore: vi.fn(() => ({ register, lookup, entries })),
+      },
+    } as Parameters<typeof setSlackRuntime>[0]);
+    expect(hasSlackThreadParticipation("default", "C1", threadTs)).toBe(false);
+    mockReplySequence({ text: AUTH_FAILURE, isError: true });
+
+    await dispatchEvent({ ts: "101.100001", thread_ts: threadTs, parent_user_id: "U1" });
+    await dispatchEvent({ ts: "101.100002", thread_ts: threadTs, parent_user_id: "U1" });
+
+    expect(lookup).toHaveBeenCalledWith(`default:C1:${threadTs}`);
+    expect(slackTestState.replyMock).toHaveBeenCalledTimes(2);
+    expect(slackTestState.sendMock).toHaveBeenCalledTimes(1);
+    expect(slackTestState.sendMock.mock.calls[0]?.[1]).toBe(AUTH_FAILURE);
   });
 
   it("announces a different failure after suppressing repeated copies of the first", async () => {
