@@ -111,7 +111,7 @@ describe("WorkboardReconciler", () => {
         candidateCardIds: ["candidate-owned"],
         evidence: [
           {
-            reference: "file:///workspace/evidence/owned",
+            reference: "file:///E:/OpenClaw/project/readme.md",
             sha256: "e".repeat(64),
           },
         ],
@@ -167,6 +167,25 @@ describe("WorkboardReconciler", () => {
         triage: { candidateCardIds: [], evidence: [], notes: "not allowed" },
       }),
     ).toThrow("triage.notes is not allowed.");
+    for (const reference of [
+      "file://server/share/readme.md",
+      "file:///E:/OpenClaw/../private.txt",
+      "file:///E:/OpenClaw/project/readme.md?token=private",
+    ]) {
+      expect(() =>
+        projectReconciliationObservation({
+          sourceUrl: "https://example.test/runs/unsafe-file-reference",
+          tenant: "acme",
+          idempotencyKey: "unsafe-file-reference",
+          sourceUpdatedAt: 100,
+          card: { title: "Unsafe file reference" },
+          triage: {
+            candidateCardIds: [],
+            evidence: [{ reference, sha256: "f".repeat(64) }],
+          },
+        }),
+      ).toThrow("triage evidence reference is unsupported.");
+    }
   });
 
   it("accepts all bounded triage entries but rejects a serialized payload over 16 KiB", async () => {

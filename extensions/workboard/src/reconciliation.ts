@@ -242,6 +242,7 @@ function projectReconciliationTriage(value: unknown): WorkboardReconciliationTri
 
 function isSafeTriageReference(reference: string): boolean {
   if (/\p{C}/u.test(reference)) return false;
+  if (/(?:^|\/)\.{1,2}(?:\/|$)/.test(reference)) return false;
   try {
     const url = new URL(reference);
     if (url.search || url.hash || url.username || url.password) return false;
@@ -251,7 +252,7 @@ function isSafeTriageReference(reference: string): boolean {
     if (url.protocol !== "git:" && url.protocol !== "file:") return false;
     if (url.protocol === "file:" && url.hostname) return false;
     if (url.protocol === "git:" && !/^[A-Za-z0-9._-]{1,120}$/.test(url.hostname)) return false;
-    return /^\/(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+$/.test(url.pathname);
+    return /^(?:\/[A-Za-z]:)?\/(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+$/.test(url.pathname);
   } catch {
     return false;
   }
