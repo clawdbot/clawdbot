@@ -1,4 +1,5 @@
 // Discord plugin module implements session behavior.
+import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { TranscriptUtterance } from "openclaw/plugin-sdk/transcripts";
@@ -26,6 +27,22 @@ export type VoiceOperationResult = {
   channelId?: string;
   guildId?: string;
 };
+
+export type DiscordVoiceMode = "stt-tts" | "agent-proxy" | "bidi";
+
+export function resolveDiscordVoiceMode(voice: DiscordAccountConfig["voice"]): DiscordVoiceMode {
+  const mode = voice?.mode;
+  if (mode === "stt-tts" || mode === "bidi") {
+    return mode;
+  }
+  return "agent-proxy";
+}
+
+export function isDiscordRealtimeVoiceMode(
+  mode: DiscordVoiceMode,
+): mode is Exclude<DiscordVoiceMode, "stt-tts"> {
+  return mode === "agent-proxy" || mode === "bidi";
+}
 
 export type VoiceRealtimeSpeakerContext = {
   extraSystemPrompt?: string;

@@ -1,6 +1,6 @@
 // Discord tests cover realtime.wake name followup plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DiscordRealtimeVoiceSession } from "./realtime.js";
+import { DiscordRealtimeVoiceSession } from "./realtime-session.runtime.js";
 
 type WakeNameFollowupTestSession = {
   armWakeNameFollowup: () => void;

@@ -373,7 +373,7 @@ vi.mock("../runtime.js", () => ({
   }),
 }));
 
-let managerModule: typeof import("./manager.js");
+let managerModule: typeof import("./voice-runtime.js");
 let segmentModule: typeof import("./segment.js");
 
 const { configureVoiceStateGateway, createClient, createClientWithMember } =
@@ -383,7 +383,7 @@ const createRuntime = createVoiceTestRuntime;
 describe("DiscordVoiceManager", () => {
   beforeAll(async () => {
     [managerModule, segmentModule] = await Promise.all([
-      import("./manager.js"),
+      import("./voice-runtime.js"),
       import("./segment.js"),
     ]);
   });
