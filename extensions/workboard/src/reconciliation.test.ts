@@ -1,7 +1,11 @@
 // Workboard reconciliation tests cover the external scanner facade.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
 import { WorkboardReconciler, projectReconciliationSourceObservation } from "./reconciliation.js";
+import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { WorkboardStore } from "./store.js";
 
 function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
@@ -182,12 +186,13 @@ describe("WorkboardReconciler", () => {
       objectiveKey: "deploy-api",
       sourceUrl: "https://example.test/runs/a",
       idempotencyKey: "a",
+      observationId: "scan-200",
       sourceState: "missing-after-successful-full-scan",
       staleAfterMisses: 2,
       observedAt: 200,
     });
-    const link = (card: typeof missingOnce) =>
-      card.metadata?.links?.find((entry) => entry.id.includes("external:"));
+    const link = (result: typeof missingOnce) =>
+      result.card.metadata?.links?.find((entry) => entry.id.includes("external:"));
     expect(link(missingOnce)?.consecutiveSuccessfulFullScanMisses).toBe(1);
     const stale = await reconciler.observeSource({
       cardId: created.card.id,
@@ -195,6 +200,7 @@ describe("WorkboardReconciler", () => {
       objectiveKey: "deploy-api",
       sourceUrl: "https://example.test/runs/a",
       idempotencyKey: "a",
+      observationId: "scan-300",
       sourceState: "missing-after-successful-full-scan",
       staleAfterMisses: 2,
       observedAt: 300,
@@ -206,6 +212,7 @@ describe("WorkboardReconciler", () => {
       objectiveKey: "deploy-api",
       sourceUrl: "https://example.test/runs/a",
       idempotencyKey: "a",
+      observationId: "scan-400",
       sourceState: "dependency-failed",
       staleAfterMisses: 2,
       observedAt: 400,
@@ -217,13 +224,148 @@ describe("WorkboardReconciler", () => {
       objectiveKey: "deploy-api",
       sourceUrl: "https://example.test/runs/a",
       idempotencyKey: "a",
+      observationId: "scan-500",
       sourceState: "present",
       staleAfterMisses: 2,
       observedAt: 500,
     });
     expect(link(present)?.consecutiveSuccessfulFullScanMisses).toBe(0);
     expect(link(present)?.staleAt).toBeUndefined();
-    expect(present.status).toBe("blocked");
+    expect(present.card.status).toBe("blocked");
+  });
+
+  it("acknowledges an exact replay without incrementing missing-source evidence again", async () => {
+    const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
+    const created = await reconciler.apply({
+      sourceUrl: "https://example.test/runs/replay",
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      idempotencyKey: "replay",
+      sourceUpdatedAt: 100,
+      card: { title: "Replay-safe" },
+    });
+    const observation = {
+      cardId: created.card.id,
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      sourceUrl: "https://example.test/runs/replay",
+      idempotencyKey: "replay",
+      observationId: "scan-42:replay:missing",
+      sourceState: "missing-after-successful-full-scan" as const,
+      staleAfterMisses: 2,
+      observedAt: 200,
+      expectedRevision: created.card.updatedAt,
+    };
+
+    const first = await reconciler.observeSource(observation);
+    const replay = await reconciler.observeSource(observation);
+
+    expect(first).toMatchObject({
+      observationId: "scan-42:replay:missing",
+      association: {
+        cardId: created.card.id,
+        tenant: "acme",
+        objectiveKey: "deploy-api",
+        sourceUrl: "https://example.test/runs/replay",
+        idempotencyKey: "replay",
+      },
+      evidence: { consecutiveSuccessfulFullScanMisses: 1 },
+    });
+    expect(replay).toEqual(first);
+    await expect(
+      reconciler.observeSource({ ...observation, sourceState: "present" }),
+    ).rejects.toThrow("observationId conflicts");
+  });
+
+  it("chains acknowledgement revisions across two external associations", async () => {
+    const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
+    const firstLink = await reconciler.apply({
+      sourceUrl: "https://example.test/runs/one",
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      idempotencyKey: "one",
+      sourceUpdatedAt: 100,
+      card: { title: "Chained observations" },
+    });
+    const secondLink = await reconciler.apply({
+      cardId: firstLink.card.id,
+      sourceUrl: "https://example.test/runs/two",
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      idempotencyKey: "two",
+      sourceUpdatedAt: 101,
+      expectedRevision: firstLink.card.updatedAt,
+    });
+    const first = await reconciler.observeSource({
+      cardId: secondLink.card.id,
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      sourceUrl: "https://example.test/runs/one",
+      idempotencyKey: "one",
+      observationId: "chain-one",
+      sourceState: "present",
+      staleAfterMisses: 2,
+      observedAt: 200,
+      expectedRevision: secondLink.card.updatedAt,
+    });
+    const second = await reconciler.observeSource({
+      cardId: secondLink.card.id,
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      sourceUrl: "https://example.test/runs/two",
+      idempotencyKey: "two",
+      observationId: "chain-two",
+      sourceState: "present",
+      staleAfterMisses: 2,
+      observedAt: 201,
+      expectedRevision: first.revision,
+    });
+    expect(second.revision).toBe(second.card.updatedAt);
+    expect(second.evidence.lastSourceObservationId).toBe("chain-two");
+  });
+
+  it("round-trips replay state through SQLite", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "workboard-observation-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const stores = createWorkboardSqliteStores({ dbPath });
+    try {
+      const first = new WorkboardReconciler(new WorkboardStore(stores.cards));
+      const created = await first.apply({
+        sourceUrl: "https://example.test/runs/sqlite",
+        tenant: "acme",
+        objectiveKey: "deploy-api",
+        idempotencyKey: "sqlite",
+        sourceUpdatedAt: 1,
+        card: { title: "Durable replay" },
+      });
+      const observation = {
+        cardId: created.card.id,
+        tenant: "acme",
+        objectiveKey: "deploy-api",
+        sourceUrl: "https://example.test/runs/sqlite",
+        idempotencyKey: "sqlite",
+        observationId: "sqlite-scan-1",
+        sourceState: "missing-after-successful-full-scan" as const,
+        staleAfterMisses: 2,
+        observedAt: 2,
+      };
+      await first.observeSource(observation);
+      stores.close();
+      const reopened = createWorkboardSqliteStores({ dbPath });
+      try {
+        const replay = await new WorkboardReconciler(
+          new WorkboardStore(reopened.cards),
+        ).observeSource(observation);
+        expect(replay.evidence).toMatchObject({
+          consecutiveSuccessfulFullScanMisses: 1,
+          lastSourceObservationId: "sqlite-scan-1",
+        });
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("rejects a mismatched source for every source-evidence mode and retains the threshold timestamp", async () => {
@@ -242,6 +384,7 @@ describe("WorkboardReconciler", () => {
       objectiveKey: "deploy",
       sourceUrl: "https://attacker.test/a",
       idempotencyKey: "a",
+      observationId: "wrong-source",
       staleAfterMisses: 1,
       observedAt: 2,
     } as const;
@@ -264,9 +407,10 @@ describe("WorkboardReconciler", () => {
       sourceUrl: "https://example.test/a",
       sourceState: "missing-after-successful-full-scan",
       observedAt: 3,
+      observationId: "later-source",
     });
-    const link = (card: typeof stale) =>
-      card.metadata?.links?.find((entry) => entry.id.startsWith("external:"));
+    const link = (result: typeof stale) =>
+      result.card.metadata?.links?.find((entry) => entry.id.startsWith("external:"));
     expect(link(stale)?.staleAt).toBe(2);
     expect(link(later)?.staleAt).toBe(2);
   });
@@ -279,6 +423,7 @@ describe("WorkboardReconciler", () => {
         objectiveKey: "deploy-api",
         sourceUrl: "https://example.test/a",
         idempotencyKey: "a",
+        observationId: "strict",
         sourceState: "present",
         staleAfterMisses: 2,
         observedAt: 1,

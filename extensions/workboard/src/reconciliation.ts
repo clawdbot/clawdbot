@@ -6,6 +6,7 @@ import type {
   WorkboardReconciliationObservation,
   WorkboardReconciliationPage,
   WorkboardReconciliationSourceObservation,
+  WorkboardReconciliationSourceObservationResult,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
 import { WorkboardStore } from "./store.js";
@@ -13,6 +14,7 @@ import { WorkboardStore } from "./store.js";
 const MAX_PAGE_SIZE = 100;
 const MAX_OBJECTIVE_KEY_LENGTH = 160;
 const MAX_STALE_AFTER_MISSES = 1000;
+const MAX_OBSERVATION_ID_LENGTH = 200;
 const DEFAULT_PAGE_SIZE = 50;
 const RECONCILIATION_PROTECTED_STATUSES = new Set<WorkboardStatus>(["blocked", "review", "done"]);
 
@@ -101,6 +103,7 @@ const OBSERVATION_FIELDS = new Set([
   "tenant",
   "objectiveKey",
   "idempotencyKey",
+  "observationId",
   "sourceUpdatedAt",
   "cardId",
   "expectedRevision",
@@ -113,6 +116,7 @@ const SOURCE_OBSERVATION_FIELDS = new Set([
   "objectiveKey",
   "sourceUrl",
   "idempotencyKey",
+  "observationId",
   "sourceState",
   "staleAfterMisses",
   "observedAt",
@@ -211,6 +215,11 @@ export function projectReconciliationSourceObservation(
     objectiveKey: readBoundedString(input.objectiveKey, "objectiveKey", MAX_OBJECTIVE_KEY_LENGTH),
     sourceUrl: readBoundedString(input.sourceUrl, "sourceUrl", 2000),
     idempotencyKey: readBoundedString(input.idempotencyKey, "idempotencyKey", 160),
+    observationId: readBoundedString(
+      input.observationId,
+      "observationId",
+      MAX_OBSERVATION_ID_LENGTH,
+    ),
     sourceState,
     staleAfterMisses: input.staleAfterMisses as number,
     observedAt: readTimestamp(input.observedAt, "observedAt"),
@@ -257,7 +266,9 @@ export class WorkboardReconciler {
     return await this.store.applyReconciliation(projected, link);
   }
 
-  async observeSource(value: WorkboardReconciliationSourceObservation) {
+  async observeSource(
+    value: WorkboardReconciliationSourceObservation,
+  ): Promise<WorkboardReconciliationSourceObservationResult> {
     return await this.store.applyReconciliationSourceObservation(
       projectReconciliationSourceObservation(value),
     );

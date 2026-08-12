@@ -382,7 +382,7 @@ function normalizeWorkspace(
   const sourcePath = normalizeBoundedString(
     record.sourcePath,
     fallback?.sourcePath,
-    2000,
+    4096,
     "workspace source path",
   );
   if (sourcePath && !isAbsoluteWorkspacePath(sourcePath)) {
@@ -681,6 +681,23 @@ function normalizeLink(value: unknown): WorkboardLink | null {
       ? normalizeTimestamp(record.staleAt, 0)
       : undefined;
   const staleState = record.staleState === "stale" ? "stale" : undefined;
+  const lastSourceObservationId = normalizeBoundedString(
+    record.lastSourceObservationId,
+    undefined,
+    200,
+    "source observation ID",
+  );
+  const lastSourceObservationRequestJson = normalizeBoundedString(
+    record.lastSourceObservationRequestJson,
+    undefined,
+    4096,
+    "source observation request",
+  );
+  const lastSourceObservationRevision =
+    typeof record.lastSourceObservationRevision === "number" &&
+    Number.isFinite(record.lastSourceObservationRevision)
+      ? normalizeTimestamp(record.lastSourceObservationRevision, 0)
+      : undefined;
   if (!targetCardId && !url) {
     return null;
   }
@@ -694,6 +711,9 @@ function normalizeLink(value: unknown): WorkboardLink | null {
       : {}),
     ...(staleAt !== undefined ? { staleAt } : {}),
     ...(staleState ? { staleState } : {}),
+    ...(lastSourceObservationId ? { lastSourceObservationId } : {}),
+    ...(lastSourceObservationRequestJson ? { lastSourceObservationRequestJson } : {}),
+    ...(lastSourceObservationRevision !== undefined ? { lastSourceObservationRevision } : {}),
     ...(targetCardId ? { targetCardId } : {}),
     ...(title ? { title } : {}),
     ...(url ? { url } : {}),

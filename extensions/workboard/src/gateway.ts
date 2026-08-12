@@ -89,10 +89,12 @@ export function registerWorkboardGatewayMethods(params: {
     "workboard.reconciliation.observeSource",
     async ({ params: requestParams, respond }) => {
       try {
+        const result = await reconciler.observeSource(
+          projectReconciliationSourceObservation(requestParams),
+        );
         respond(true, {
-          card: redactClaimToken(
-            await reconciler.observeSource(projectReconciliationSourceObservation(requestParams)),
-          ),
+          ...result,
+          card: redactClaimToken(result.card),
         });
       } catch (error) {
         respondError(respond, error);

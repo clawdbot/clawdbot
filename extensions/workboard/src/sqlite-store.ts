@@ -30,7 +30,7 @@ import type {
   WorkboardKeyedStore,
 } from "./persistence-types.js";
 const WORKBOARD_DB_RELATIVE_PATH = ["plugins", "workboard", "workboard.sqlite"] as const;
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 const WORKBOARD_SQLITE_BUSY_TIMEOUT_MS = 5000;
 const WORKBOARD_SQLITE_DIR_MODE = 0o700;
 const WORKBOARD_SQLITE_FILE_MODE = 0o600;
@@ -250,6 +250,9 @@ const WORKBOARD_SCHEMA_SQL = `
       consecutive_successful_full_scan_misses INTEGER,
       stale_at INTEGER,
       stale_state TEXT,
+      last_source_observation_id TEXT,
+      last_source_observation_request_json TEXT,
+      last_source_observation_revision INTEGER,
       created_at INTEGER NOT NULL
     ) STRICT;
 
@@ -372,6 +375,24 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
   );
   ensureColumn(db, "workboard_card_links", "stale_at", "stale_at INTEGER");
   ensureColumn(db, "workboard_card_links", "stale_state", "stale_state TEXT");
+  ensureColumn(
+    db,
+    "workboard_card_links",
+    "last_source_observation_id",
+    "last_source_observation_id TEXT",
+  );
+  ensureColumn(
+    db,
+    "workboard_card_links",
+    "last_source_observation_request_json",
+    "last_source_observation_request_json TEXT",
+  );
+  ensureColumn(
+    db,
+    "workboard_card_links",
+    "last_source_observation_revision",
+    "last_source_observation_revision INTEGER",
+  );
   const migrationId = `schema-${SCHEMA_VERSION}`;
   const current = db
     .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = ?")
@@ -671,6 +692,12 @@ function readMetadata(
     );
     const staleAt = numberValue(child, "stale_at");
     const staleState = stringValue(child, "stale_state");
+    const lastSourceObservationId = stringValue(child, "last_source_observation_id");
+    const lastSourceObservationRequestJson = stringValue(
+      child,
+      "last_source_observation_request_json",
+    );
+    const lastSourceObservationRevision = numberValue(child, "last_source_observation_revision");
     if (targetCardId) {
       entry.targetCardId = targetCardId;
     }
@@ -687,6 +714,11 @@ function readMetadata(
       entry.consecutiveSuccessfulFullScanMisses = consecutiveSuccessfulFullScanMisses;
     if (staleAt !== undefined) entry.staleAt = staleAt;
     if (staleState === "stale") entry.staleState = staleState;
+    if (lastSourceObservationId) entry.lastSourceObservationId = lastSourceObservationId;
+    if (lastSourceObservationRequestJson)
+      entry.lastSourceObservationRequestJson = lastSourceObservationRequestJson;
+    if (lastSourceObservationRevision !== undefined)
+      entry.lastSourceObservationRevision = lastSourceObservationRevision;
     return entry;
   });
   const proof = childRows(db, "workboard_card_proof", cardId, preloaded).map((child) => {
@@ -1062,8 +1094,8 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
     db.prepare(
       `
         INSERT INTO workboard_card_links
-          (id, card_id, ordinal, type, target_card_id, title, url, source_updated_at, consecutive_successful_full_scan_misses, stale_at, stale_state, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (id, card_id, ordinal, type, target_card_id, title, url, source_updated_at, consecutive_successful_full_scan_misses, stale_at, stale_state, last_source_observation_id, last_source_observation_request_json, last_source_observation_revision, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     ).run(
       entry.id,
@@ -1077,6 +1109,9 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
       bindNull(entry.consecutiveSuccessfulFullScanMisses),
       bindNull(entry.staleAt),
       bindNull(entry.staleState),
+      bindNull(entry.lastSourceObservationId),
+      bindNull(entry.lastSourceObservationRequestJson),
+      bindNull(entry.lastSourceObservationRevision),
       entry.createdAt,
     );
   });

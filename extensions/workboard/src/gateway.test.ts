@@ -159,6 +159,7 @@ describe("workboard gateway methods", () => {
         objectiveKey: "deploy",
         sourceUrl: "https://example.test/a",
         idempotencyKey: "a",
+        observationId: "gateway-present",
         sourceState: "present",
         staleAfterMisses: 2,
         observedAt: 2,
@@ -166,6 +167,18 @@ describe("workboard gateway methods", () => {
       respond: observed,
     } as never);
     expect(observed.mock.calls[0]?.[1]?.card.metadata?.claim?.token).toBe("[redacted]");
+    expect(observed.mock.calls[0]?.[1]).toMatchObject({
+      association: {
+        cardId: reconciledId,
+        tenant: "acme",
+        objectiveKey: "deploy",
+        sourceUrl: "https://example.test/a",
+        idempotencyKey: "a",
+      },
+      observationId: "gateway-present",
+      revision: expect.any(Number),
+      evidence: { lastSourceObservationId: "gateway-present" },
+    });
     expect(methods.get("workboard.boards.upsert")?.opts).toEqual({ scope: "operator.write" });
     expect(methods.get("workboard.notifications.list")?.opts).toEqual({
       scope: "operator.read",

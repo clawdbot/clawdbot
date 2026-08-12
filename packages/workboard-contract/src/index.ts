@@ -148,6 +148,10 @@ export type WorkboardLink = {
   consecutiveSuccessfulFullScanMisses?: number;
   staleAt?: number;
   staleState?: "stale";
+  /** Replay-safety state for the last source observation on this external association. */
+  lastSourceObservationId?: string;
+  lastSourceObservationRequestJson?: string;
+  lastSourceObservationRevision?: number;
   targetCardId?: string;
   title?: string;
   url?: string;
@@ -417,10 +421,25 @@ export type WorkboardReconciliationSourceObservation = {
   objectiveKey: string;
   sourceUrl: string;
   idempotencyKey: string;
+  observationId: string;
   sourceState: "present" | "missing-after-successful-full-scan" | "dependency-failed";
   staleAfterMisses: number;
   observedAt: number;
   expectedRevision?: number;
+};
+
+export type WorkboardReconciliationSourceObservationResult = {
+  card: WorkboardCard;
+  association: Pick<
+    WorkboardReconciliationSourceObservation,
+    "cardId" | "tenant" | "objectiveKey" | "sourceUrl" | "idempotencyKey"
+  >;
+  observationId: string;
+  revision: number;
+  evidence: Pick<
+    WorkboardLink,
+    "consecutiveSuccessfulFullScanMisses" | "staleAt" | "staleState" | "lastSourceObservationId"
+  >;
 };
 
 export type WorkboardReconciliationPage = {

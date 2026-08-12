@@ -7,6 +7,8 @@ import type {
   WorkboardReconciliationApplyResult,
   WorkboardReconciliationObservation,
   WorkboardReconciliationSourceObservation,
+  WorkboardReconciliationSourceObservationResult,
+  WorkboardLink,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
 import type {
@@ -120,6 +122,52 @@ function reconciliationResult(
   link: WorkboardExternalExecutionLink,
 ): WorkboardReconciliationApplyResult {
   return { card, applied, link };
+}
+
+function sourceObservationRequestJson(
+  observation: WorkboardReconciliationSourceObservation,
+): string {
+  return JSON.stringify({
+    cardId: observation.cardId,
+    tenant: observation.tenant,
+    objectiveKey: observation.objectiveKey,
+    sourceUrl: observation.sourceUrl,
+    idempotencyKey: observation.idempotencyKey,
+    observationId: observation.observationId,
+    sourceState: observation.sourceState,
+    staleAfterMisses: observation.staleAfterMisses,
+    observedAt: observation.observedAt,
+    expectedRevision: observation.expectedRevision ?? null,
+  });
+}
+
+function sourceObservationResult(
+  card: WorkboardCard,
+  observation: WorkboardReconciliationSourceObservation,
+  evidence: WorkboardLink,
+): WorkboardReconciliationSourceObservationResult {
+  return {
+    card,
+    association: {
+      cardId: observation.cardId,
+      tenant: observation.tenant,
+      objectiveKey: observation.objectiveKey,
+      sourceUrl: observation.sourceUrl,
+      idempotencyKey: observation.idempotencyKey,
+    },
+    observationId: observation.observationId,
+    revision: card.updatedAt,
+    evidence: {
+      ...(evidence.consecutiveSuccessfulFullScanMisses === undefined
+        ? {}
+        : { consecutiveSuccessfulFullScanMisses: evidence.consecutiveSuccessfulFullScanMisses }),
+      ...(evidence.staleAt === undefined ? {} : { staleAt: evidence.staleAt }),
+      ...(evidence.staleState === undefined ? {} : { staleState: evidence.staleState }),
+      ...(evidence.lastSourceObservationId === undefined
+        ? {}
+        : { lastSourceObservationId: evidence.lastSourceObservationId }),
+    },
+  };
 }
 
 // Capability layers split review boundaries only; the core still owns persistence and mutation order.
@@ -259,15 +307,13 @@ export class WorkboardStore extends WorkboardNotificationStore {
 
   async applyReconciliationSourceObservation(
     observation: WorkboardReconciliationSourceObservation,
-  ): Promise<WorkboardCard> {
+  ): Promise<WorkboardReconciliationSourceObservationResult> {
     return await this.enqueueMutation(async () => {
       const card = await this.get(observation.cardId);
       if (!card) throw new Error(`card not found: ${observation.cardId}`);
       if (
         card.metadata?.automation?.tenant !== observation.tenant ||
-        objectiveKeyFor(card) !== observation.objectiveKey ||
-        (observation.expectedRevision !== undefined &&
-          card.updatedAt !== observation.expectedRevision)
+        objectiveKeyFor(card) !== observation.objectiveKey
       ) {
         throw new Error("source observation does not match card.");
       }
@@ -285,25 +331,46 @@ export class WorkboardStore extends WorkboardNotificationStore {
       if (current.url !== observation.sourceUrl) {
         throw new Error("source observation does not match an external association.");
       }
-      if (observation.sourceState === "dependency-failed") return card;
+      const requestJson = sourceObservationRequestJson(observation);
+      if (current.lastSourceObservationId === observation.observationId) {
+        if (current.lastSourceObservationRequestJson !== requestJson) {
+          throw new Error("source observationId conflicts with a different request.");
+        }
+        return sourceObservationResult(card, observation, current);
+      }
+      if (
+        observation.expectedRevision !== undefined &&
+        card.updatedAt !== observation.expectedRevision
+      ) {
+        throw new Error("source observation does not match card.");
+      }
       const misses =
         observation.sourceState === "present"
           ? 0
-          : (current.consecutiveSuccessfulFullScanMisses ?? 0) + 1;
+          : observation.sourceState === "dependency-failed"
+            ? current.consecutiveSuccessfulFullScanMisses
+            : (current.consecutiveSuccessfulFullScanMisses ?? 0) + 1;
       const next = {
         ...current,
-        consecutiveSuccessfulFullScanMisses: misses,
-        ...(observation.sourceState === "present"
-          ? { staleAt: undefined, staleState: undefined }
-          : current.staleAt === undefined && misses >= observation.staleAfterMisses
-            ? { staleAt: observation.observedAt, staleState: "stale" as const }
-            : {}),
+        lastSourceObservationId: observation.observationId,
+        lastSourceObservationRequestJson: requestJson,
+        ...(misses === undefined ? {} : { consecutiveSuccessfulFullScanMisses: misses }),
+        ...(observation.sourceState === "dependency-failed"
+          ? {}
+          : observation.sourceState === "present"
+            ? { staleAt: undefined, staleState: undefined }
+            : current.staleAt === undefined && (misses ?? 0) >= observation.staleAfterMisses
+              ? { staleAt: observation.observedAt, staleState: "stale" as const }
+              : {}),
       };
       const nextLinks = [...links];
       nextLinks[index] = next;
-      return await this.updateCard(card.id, {
+      const updated = await this.updateCard(card.id, {
         metadata: { ...card.metadata, links: nextLinks },
       });
+      const evidence = updated.metadata?.links?.find((link) => link.id === linkId);
+      if (!evidence) throw new Error("source observation evidence was not persisted.");
+      return sourceObservationResult(updated, observation, evidence);
     });
   }
 
