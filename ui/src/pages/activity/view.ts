@@ -202,6 +202,7 @@ function renderEntry(props: ActivityProps, entry: ActivityEntry) {
 }
 
 export function renderActivity(props: ActivityProps) {
+  // The tool filter's .value commits before its mapped options exist, so options mark selection.
   const toolNames = resolveToolNames(props.entries);
   const filtered = filterEntries(props);
   const hasAnyFilters =
@@ -275,8 +276,15 @@ export function renderActivity(props: ActivityProps) {
               @change=${(event: Event) =>
                 props.onToolFilterChange((event.target as HTMLSelectElement).value)}
             >
-              <option value="">${t("activity.allTools")}</option>
-              ${toolNames.map((name) => html`<option value=${name}>${name}</option>`)}
+              <option value="" ?selected=${props.toolFilter === ""}>
+                ${t("activity.allTools")}
+              </option>
+              ${toolNames.map(
+                (name) =>
+                  html`<option value=${name} ?selected=${name === props.toolFilter}>
+                    ${name}
+                  </option>`,
+              )}
             </select>
           `,
         })}

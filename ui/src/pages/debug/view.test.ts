@@ -166,6 +166,24 @@ describe("renderDebug", () => {
     expect(container.textContent).toContain("gateway");
     expect(container.textContent).not.toContain("Invalid Date");
   });
+
+  it("reflects the selected Manual RPC method on first render", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderDebug(
+        createProps({
+          methods: ["status", "health"],
+          callMethod: "health",
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector<HTMLSelectElement>("select.settings-select")?.value).toBe(
+      "health",
+    );
+  });
 });
 
 describe("DebugPage", () => {

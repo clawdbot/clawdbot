@@ -118,6 +118,7 @@ export function renderDebug(props: DebugProps) {
     `,
   );
 
+  // The method's .value commits before its mapped options exist, so options mark selection.
   const rpcSection = renderSettingsSection(
     { title: t("debug.manualRpcTitle"), description: t("debug.manualRpcSubtitle") },
     html`
@@ -131,9 +132,13 @@ export function renderDebug(props: DebugProps) {
             @change=${(e: Event) => props.onCallMethodChange((e.target as HTMLSelectElement).value)}
           >
             ${!props.callMethod
-              ? html` <option value="" disabled>${t("debug.selectMethod")}</option> `
+              ? html` <option value="" disabled ?selected=${!props.callMethod}>
+                  ${t("debug.selectMethod")}
+                </option>`
               : nothing}
-            ${props.methods.map((m) => html`<option value=${m}>${m}</option>`)}
+            ${props.methods.map(
+              (m) => html`<option value=${m} ?selected=${m === props.callMethod}>${m}</option>`,
+            )}
           </select>
         `,
       })}

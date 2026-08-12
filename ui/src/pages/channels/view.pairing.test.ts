@@ -172,6 +172,23 @@ describe("channel DM access request views", () => {
     expect(container.querySelectorAll("select.settings-select")).toHaveLength(2);
   });
 
+  it("reflects both active pairing filters on first render", () => {
+    const container = renderInto(
+      renderChannelPairingQueue(
+        createProps({
+          pairingChannelFilter: "whatsapp",
+          pairingAccountFilter: "personal",
+        }),
+      ),
+    );
+
+    expect(
+      [...container.querySelectorAll<HTMLSelectElement>("select.settings-select")].map(
+        (select) => select.value,
+      ),
+    ).toEqual(["whatsapp", "personal"]);
+  });
+
   it("disables every request action while one mutation is active", () => {
     const secondRequest = {
       ...request,

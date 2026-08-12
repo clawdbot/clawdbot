@@ -54,6 +54,7 @@ function renderFilters(props: ChannelsProps) {
     new Map(accounts.map((account) => [account.channel, account.channelLabel])).entries(),
   ).toSorted((left, right) => left[1].localeCompare(right[1]));
   const accountsForChannel = filteredAccounts(props);
+  // Filter .value bindings commit before mapped options exist, so options mark selection.
   return html`
     <div class="channels-pairing-filters">
       <label>
@@ -63,8 +64,15 @@ function renderFilters(props: ChannelsProps) {
           .value=${props.pairingChannelFilter ?? ""}
           @change=${(event: Event) => props.onPairingFilterChange(selectValue(event), null)}
         >
-          <option value="">${t("channels.pairing.allChannels")}</option>
-          ${channels.map(([channel, label]) => html`<option value=${channel}>${label}</option>`)}
+          <option value="" ?selected=${!props.pairingChannelFilter}>
+            ${t("channels.pairing.allChannels")}
+          </option>
+          ${channels.map(
+            ([channel, label]) =>
+              html`<option value=${channel} ?selected=${channel === props.pairingChannelFilter}>
+                ${label}
+              </option>`,
+          )}
         </select>
       </label>
       <label>
@@ -76,9 +84,17 @@ function renderFilters(props: ChannelsProps) {
           @change=${(event: Event) =>
             props.onPairingFilterChange(props.pairingChannelFilter, selectValue(event))}
         >
-          <option value="">${t("channels.pairing.allAccounts")}</option>
+          <option value="" ?selected=${!props.pairingAccountFilter}>
+            ${t("channels.pairing.allAccounts")}
+          </option>
           ${accountsForChannel.map(
-            (account) => html`<option value=${account.accountId}>${accountName(account)}</option>`,
+            (account) =>
+              html`<option
+                value=${account.accountId}
+                ?selected=${account.accountId === props.pairingAccountFilter}
+              >
+                ${accountName(account)}
+              </option>`,
           )}
         </select>
       </label>

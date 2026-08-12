@@ -147,4 +147,24 @@ describe("renderActivity", () => {
     );
     expect(meta).toContain("2m");
   });
+
+  it("reflects the active tool filter on first render", async () => {
+    await i18n.setLocale("en");
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(
+      renderActivity(
+        createProps({
+          entries: [createEntry({ toolName: "browser" })],
+          toolFilter: "browser",
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector<HTMLSelectElement>("select.settings-select")?.value).toBe(
+      "browser",
+    );
+  });
 });
