@@ -22,7 +22,6 @@ import {
   getPreparedModelFullCatalogAuth,
   runPreparedModelCatalogWorker,
 } from "./prepared-model-catalog-worker.js";
-import { copyPreparedModelRuntimeAuthState } from "./prepared-model-runtime-auth.js";
 import { startSerializedSnapshotBuild } from "./prepared-model-runtime.build.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.facts.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
@@ -281,12 +280,21 @@ describe("prepared model catalog worker boundary", () => {
       config,
       modelCatalog: { entries: [route], routeVariants: [route] },
     });
-    copyPreparedModelRuntimeAuthState(fixture.snapshot, owner);
-    const project = async () =>
-      await loadGatewayModelCatalogSnapshot({
+    const project = async () => {
+      const fullCatalog = await fixture.snapshot.loadFullModelCatalog?.();
+      const fullAuth = fullCatalog && getPreparedModelFullCatalogAuth(fullCatalog);
+      if (!fullAuth) {
+        throw new Error("full catalog omitted prepared auth");
+      }
+      return await loadGatewayModelCatalogSnapshot({
         getConfig: () => config,
-        loadPublishedPreparedModelCatalogOwnerSnapshot: async () => owner,
+        loadPublishedPreparedModelCatalogOwnerSnapshot: async () => ({
+          ...owner,
+          authModes: fullAuth.authModes,
+          authStore: fullAuth.authStore,
+        }),
       });
+    };
     const projectModels = async () => {
       const projected = await project();
       const context = {
@@ -388,11 +396,19 @@ describe("prepared model catalog worker boundary", () => {
       config,
       modelCatalog: { entries: [route], routeVariants: [route] },
     });
-    copyPreparedModelRuntimeAuthState(fixture.snapshot, owner);
     const listModels = async () => {
+      const fullCatalog = await fixture.snapshot.loadFullModelCatalog?.();
+      const fullAuth = fullCatalog && getPreparedModelFullCatalogAuth(fullCatalog);
+      if (!fullAuth) {
+        throw new Error("full catalog omitted prepared auth");
+      }
       const projected = await loadGatewayModelCatalogSnapshot({
         getConfig: () => config,
-        loadPublishedPreparedModelCatalogOwnerSnapshot: async () => owner,
+        loadPublishedPreparedModelCatalogOwnerSnapshot: async () => ({
+          ...owner,
+          authModes: fullAuth.authModes,
+          authStore: fullAuth.authStore,
+        }),
       });
       const context = {
         getRuntimeConfig: () => config,

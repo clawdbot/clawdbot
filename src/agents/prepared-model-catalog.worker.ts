@@ -7,6 +7,7 @@ import {
 } from "./agent-auth-credentials.js";
 import { resolveAmbientAgentCredentialsForDiscovery } from "./agent-auth-discovery.js";
 import { overlayExternalAuthProfiles } from "./auth-profiles/external-auth.js";
+import { listExternalCliSyncProviderIds } from "./auth-profiles/external-cli-sync.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import {
   loadAuthProfileStoreWithoutExternalProfiles,
@@ -98,6 +99,7 @@ export async function runPreparedModelCatalogWorkerInput(
       authStore: value.authStore,
       config: value.input.config,
       env: value.input.env ?? process.env,
+      providerIds: listExternalCliSyncProviderIds(),
     });
     replaceRuntimeAuthProfileStoreSnapshots([{ agentDir: value.input.agentDir, store: authStore }]);
     const ambientCredentials = withPluginRuntimeRegistryScope(

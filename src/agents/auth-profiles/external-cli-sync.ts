@@ -132,6 +132,11 @@ function listExternalCliProviderIds(providerConfig: ExternalCliSyncProvider): st
   return [providerConfig.provider, ...(providerConfig.aliases ?? [])];
 }
 
+/** Provider ids whose external CLI credentials can be refreshed by this owner. */
+export function listExternalCliSyncProviderIds(): string[] {
+  return [...new Set(EXTERNAL_CLI_SYNC_PROVIDERS.flatMap(listExternalCliProviderIds))];
+}
+
 function normalizeExternalCliCredentialProvider(
   credential: OAuthCredential | null,
   provider: string,

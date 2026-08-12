@@ -7,7 +7,6 @@ import {
 } from "../../agents/agent-auth-credentials.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import { setPreparedModelFullCatalogAuth } from "../../agents/prepared-model-catalog-worker.js";
 import {
   getPreparedModelRuntimeAuthStore,
   setPreparedModelRuntimeAuthStore,
@@ -498,10 +497,6 @@ describe("gateway chat metadata runtime", () => {
       ...owner.modelCatalog,
       providerOutcomes: [{ provider: "openai", status: "auth-rejected" as const }],
     };
-    setPreparedModelFullCatalogAuth(fullCatalog, {
-      authStore: getPreparedModelRuntimeAuthStore(owner)!,
-      authModes: owner.authModes,
-    });
     const loadFullModelCatalog = vi.fn(async () => fullCatalog);
     harness.setOwner({
       ...owner,

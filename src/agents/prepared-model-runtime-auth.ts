@@ -48,15 +48,3 @@ export function getPreparedModelRuntimeAuthMaterializations(
 ): readonly RuntimeAuthMaterialization[] {
   return materializationsBySnapshot.get(snapshot) ?? [];
 }
-
-export function copyPreparedModelRuntimeAuthState(source: object, target: object): void {
-  const authStore = authStoreBySnapshot.get(source);
-  if (authStore) {
-    authStoreBySnapshot.set(target, authStore);
-  }
-  const authStoreLoader = authStoreLoaderBySnapshot.get(source);
-  if (authStoreLoader) {
-    authStoreLoaderBySnapshot.set(target, authStoreLoader);
-  }
-  materializationsBySnapshot.set(target, getPreparedModelRuntimeAuthMaterializations(source));
-}

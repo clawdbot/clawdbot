@@ -56,7 +56,7 @@ const authByFullCatalog = new WeakMap<
   Readonly<{ authStore: AuthProfileStore; authModes: PreparedAgentCredentialModes }>
 >();
 
-export function setPreparedModelFullCatalogAuth(
+function setPreparedModelFullCatalogAuth(
   modelCatalog: object,
   auth: Readonly<{ authStore: AuthProfileStore; authModes: PreparedAgentCredentialModes }>,
 ): void {
