@@ -112,13 +112,33 @@ export type CodexReconciliationTranscriptItem = {
   text?: string;
 };
 
+/** Bounded session metadata available to the in-process Codex reconciler. */
+export type CodexReconciliationSession = {
+  threadId: string;
+  sessionId?: string;
+  name?: string;
+  fallbackName?: string;
+  cwd?: string;
+  status: string;
+  activeFlags?: string[];
+  createdAt?: number;
+  updatedAt?: number;
+  recencyAt?: number | null;
+  source?: string;
+  modelProvider?: string;
+  cliVersion?: string;
+  gitBranch?: string;
+  sessionKey?: string;
+  archived: boolean;
+};
+
 export type CodexReconciliationProvider = {
   list(params: {
     hostId: string;
     archived: boolean;
     limit?: number;
     signal?: AbortSignal;
-  }): Promise<{ hostId: string; sessions: unknown[] }>;
+  }): Promise<{ hostId: string; sessions: CodexReconciliationSession[] }>;
   withTranscript(
     params: {
       hostId: string;

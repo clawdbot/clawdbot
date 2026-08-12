@@ -11,7 +11,10 @@ import {
   type JsonSchemaObject,
 } from "openclaw/plugin-sdk/json-schema-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import type {
+  CodexReconciliationProvider,
+  PluginRuntime,
+} from "openclaw/plugin-sdk/plugin-runtime";
 import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1511,6 +1514,138 @@ describe("Codex supervision catalog", () => {
     expect(invoke).not.toHaveBeenCalledWith(
       expect.objectContaining({ command: CODEX_APP_SERVER_THREADS_HISTORY_LIST_COMMAND }),
     );
+  });
+
+  it("projects reconciliation sessions to bounded metadata without raw session content", async () => {
+    const { runtime } = createRuntime();
+    let reconciliationProvider: CodexReconciliationProvider | undefined;
+    (
+      runtime as PluginRuntime & {
+        codexReconciliation: { register: (provider: CodexReconciliationProvider) => void };
+      }
+    ).codexReconciliation = {
+      register: (provider) => {
+        reconciliationProvider = provider;
+      },
+    };
+    const { api } = createGatewayApi(runtime);
+    if (!registerCodexSessionReconciliationRuntime) {
+      throw new Error("Codex reconciliation source is not registered");
+    }
+    registerCodexSessionReconciliationRuntime({
+      api,
+      control: createControl({
+        listHistoryPage: async ({ archived }) => ({
+          sessions: [
+            {
+              threadId: " current-thread ",
+              sessionId: " session-1 ",
+              name: " Current session ",
+              fallbackName: "ignored fallback",
+              cwd: " /workspace ",
+              status: " idle ",
+              activeFlags: [" running ", 42],
+              createdAt: 10,
+              updatedAt: 20,
+              recencyAt: 30,
+              source: " appServer ",
+              modelProvider: " openai ",
+              cliVersion: " 1.2.3 ",
+              gitBranch: " main ",
+              sessionKey: " agent:main ",
+              archived,
+              transcript: "private prompt",
+              turns: [{ text: "private reply" }],
+            },
+            {
+              threadId: "malformed-thread",
+              status: 42,
+              archived,
+              body: "must not leave the provider",
+            },
+          ],
+        }),
+      }),
+    });
+
+    await expect(
+      reconciliationProvider?.list({
+        hostId: CODEX_LOCAL_SESSION_HOST_ID,
+        archived: false,
+        limit: 1,
+      }),
+    ).resolves.toEqual({
+      hostId: CODEX_LOCAL_SESSION_HOST_ID,
+      sessions: [
+        {
+          threadId: "current-thread",
+          sessionId: "session-1",
+          name: "Current session",
+          fallbackName: "ignored fallback",
+          cwd: "/workspace",
+          status: "idle",
+          activeFlags: ["running"],
+          createdAt: 10,
+          updatedAt: 20,
+          recencyAt: 30,
+          source: "appServer",
+          modelProvider: "openai",
+          cliVersion: "1.2.3",
+          gitBranch: "main",
+          sessionKey: "agent:main",
+          archived: false,
+        },
+      ],
+    });
+    await expect(
+      reconciliationProvider?.list({
+        hostId: CODEX_LOCAL_SESSION_HOST_ID,
+        archived: true,
+        limit: 1,
+      }),
+    ).resolves.toMatchObject({
+      sessions: [{ threadId: "current-thread", archived: true, modelProvider: "openai" }],
+    });
+  });
+
+  it("bounds reconciliation session count, metadata bytes, and timestamps", async () => {
+    const { runtime } = createRuntime();
+    let reconciliationProvider: CodexReconciliationProvider | undefined;
+    (
+      runtime as PluginRuntime & {
+        codexReconciliation: { register: (provider: CodexReconciliationProvider) => void };
+      }
+    ).codexReconciliation = {
+      register: (provider) => {
+        reconciliationProvider = provider;
+      },
+    };
+    const { api } = createGatewayApi(runtime);
+    if (!registerCodexSessionReconciliationRuntime) {
+      throw new Error("Codex reconciliation source is not registered");
+    }
+    registerCodexSessionReconciliationRuntime({
+      api,
+      control: createControl({
+        listHistoryPage: async () => ({
+          sessions: Array.from({ length: 1001 }, (_, index) => ({
+            threadId: `thread-${index}`,
+            status: "idle",
+            archived: false,
+            ...(index === 0 ? { gitBranch: "😀".repeat(126), updatedAt: -1 } : {}),
+          })),
+        }),
+      }),
+    });
+
+    const result = await reconciliationProvider?.list({
+      hostId: CODEX_LOCAL_SESSION_HOST_ID,
+      archived: false,
+      limit: 1,
+    });
+    expect(result?.sessions).toHaveLength(1000);
+    expect(result?.sessions[0]).toEqual({ threadId: "thread-0", status: "idle", archived: false });
+    expect(result?.sessions.at(-1)).toMatchObject({ threadId: "thread-999" });
   });
 
   it("delivers projected reconciliation transcripts only to the explicit consumer", async () => {

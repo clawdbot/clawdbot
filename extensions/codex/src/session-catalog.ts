@@ -6,7 +6,7 @@ import type {
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import type { CodexReconciliationSession, PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   listSessionCatalogEntries,
   type SessionCatalogEntrySnapshot,
@@ -132,6 +132,8 @@ const CODEX_SUPERVISION_SESSION_KEY_PREFIX = "harness:codex:supervision:";
 const CODEX_SESSION_CATALOG_LIST_TTL_MS = 32_000;
 const CODEX_SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES = 32;
 const MAX_RECONCILIATION_TRANSCRIPT_ITEMS = 1000;
+const MAX_RECONCILIATION_SESSIONS = 1000;
+const MAX_RECONCILIATION_TIME_MS = 8_640_000_000_000_000;
 
 type CodexCatalogRequestOptions = {
   config: OpenClawConfig | undefined;
@@ -975,6 +977,83 @@ function rethrowReconciliationError(error: unknown, message: string): never {
   throw new Error(message);
 }
 
+function boundedReconciliationString(value: unknown, maxBytes: number): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim();
+  return normalized && Buffer.byteLength(normalized, "utf8") <= maxBytes ? normalized : undefined;
+}
+
+function boundedReconciliationTime(value: unknown): number | undefined {
+  return typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= MAX_RECONCILIATION_TIME_MS
+    ? value
+    : undefined;
+}
+
+function projectCodexReconciliationSessions(
+  sessions: readonly unknown[],
+  archived: boolean,
+): CodexReconciliationSession[] {
+  return sessions.slice(0, MAX_RECONCILIATION_SESSIONS).flatMap((session) => {
+    if (!isRecord(session) || session.archived !== archived) {
+      return [];
+    }
+    const threadId = boundedReconciliationString(session.threadId, MAX_SESSION_ID_LENGTH);
+    const status = boundedReconciliationString(session.status, 128);
+    if (!threadId || !status) {
+      return [];
+    }
+    const activeFlags = Array.isArray(session.activeFlags)
+      ? session.activeFlags
+          .flatMap((flag) => {
+            const value = boundedReconciliationString(flag, 128);
+            return value ? [value] : [];
+          })
+          .slice(0, 16)
+      : undefined;
+    const createdAt = boundedReconciliationTime(session.createdAt);
+    const updatedAt = boundedReconciliationTime(session.updatedAt);
+    const recencyAt = boundedReconciliationTime(session.recencyAt);
+    const name = boundedReconciliationString(session.name, 500);
+    const fallbackName = boundedReconciliationString(session.fallbackName, 500);
+    const cwd = boundedReconciliationString(session.cwd, 4096);
+    const sessionId = boundedReconciliationString(session.sessionId, MAX_SESSION_ID_LENGTH);
+    const source = boundedReconciliationString(session.source, 500);
+    const modelProvider = boundedReconciliationString(session.modelProvider, 500);
+    const cliVersion = boundedReconciliationString(session.cliVersion, 500);
+    const gitBranch = boundedReconciliationString(session.gitBranch, 500);
+    const sessionKey = boundedReconciliationString(session.sessionKey, 1024);
+    return [
+      {
+        threadId,
+        status,
+        archived,
+        ...(sessionId ? { sessionId } : {}),
+        ...(name ? { name } : {}),
+        ...(fallbackName ? { fallbackName } : {}),
+        ...(cwd ? { cwd } : {}),
+        ...(activeFlags?.length ? { activeFlags } : {}),
+        ...(createdAt !== undefined ? { createdAt } : {}),
+        ...(updatedAt !== undefined ? { updatedAt } : {}),
+        ...(recencyAt !== undefined
+          ? { recencyAt }
+          : session.recencyAt === null
+            ? { recencyAt: null }
+            : {}),
+        ...(source ? { source } : {}),
+        ...(modelProvider ? { modelProvider } : {}),
+        ...(cliVersion ? { cliVersion } : {}),
+        ...(gitBranch ? { gitBranch } : {}),
+        ...(sessionKey ? { sessionKey } : {}),
+      },
+    ];
+  });
+}
+
 async function readCodexReconciliationTranscript(params: {
   runtime: PluginRuntime;
   control: CodexSessionCatalogControl;
@@ -1068,7 +1147,10 @@ function registerCodexSessionReconciliation(params: {
                 signal: input.signal,
               });
         assertReconciliationNotAborted(input.signal);
-        return { hostId: request.hostId, sessions: page.sessions };
+        return {
+          hostId: request.hostId,
+          sessions: projectCodexReconciliationSessions(page.sessions, request.archived),
+        };
       } catch (error) {
         return rethrowReconciliationError(error, "Codex reconciliation catalog is unavailable");
       }
