@@ -170,6 +170,9 @@ describe("WorkboardReconciler", () => {
     for (const reference of [
       "file://server/share/readme.md",
       "file:///E:/OpenClaw/../private.txt",
+      "file:///E:/OpenClaw/%2e%2e/private.txt",
+      "file:///E:/OpenClaw/%2E%2E/private.txt",
+      "file:///E:/OpenClaw/%252e%252e/private.txt",
       "file:///E:/OpenClaw/project/readme.md?token=private",
     ]) {
       expect(() =>

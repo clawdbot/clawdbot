@@ -242,6 +242,7 @@ function projectReconciliationTriage(value: unknown): WorkboardReconciliationTri
 
 function isSafeTriageReference(reference: string): boolean {
   if (/\p{C}/u.test(reference)) return false;
+  if (reference.includes("%")) return false;
   if (/(?:^|\/)\.{1,2}(?:\/|$)/.test(reference)) return false;
   try {
     const url = new URL(reference);
