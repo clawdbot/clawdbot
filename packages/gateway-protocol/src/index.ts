@@ -48,6 +48,10 @@ export type {
   SecretsStoreMutationResult,
   SecretsStoreSetParams,
 } from "./schema/secrets.js";
+export { PortalChangedEventSchema, PortalSummarySchema } from "./schema/portals.js";
+export { PortalListParamsSchema, PortalListResultSchema } from "./schema/portals.js";
+export { PortalOpenParamsSchema, PortalOpenResultSchema } from "./schema/portals.js";
+export { PortalCloseParamsSchema, PortalCloseResultSchema } from "./schema/portals.js";
 // Explicit schema exports keep public protocol changes reviewable.
 export {
   isCloudWorkerPlacementState,
@@ -139,14 +143,6 @@ export {
   EnvironmentsListResultSchema,
   EnvironmentsStatusParamsSchema,
   EnvironmentsStatusResultSchema,
-  PortalSummarySchema,
-  PortalListParamsSchema,
-  PortalListResultSchema,
-  PortalOpenParamsSchema,
-  PortalOpenResultSchema,
-  PortalCloseParamsSchema,
-  PortalCloseResultSchema,
-  PortalChangedEventSchema,
   WorkerDesktopObserveParamsSchema,
   WorkerDesktopObserveResultSchema,
   WorkerDesktopLaunchParamsSchema,
