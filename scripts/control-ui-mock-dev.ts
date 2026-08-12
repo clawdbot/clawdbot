@@ -2442,6 +2442,10 @@ function createMockGatewayPlugin(scenario: ControlUiMockGatewayScenario): Plugin
         res.end(bootstrapBody);
       });
     },
+    // ui/vite.config.ts registers a placeholder bootstrap-config middleware and
+    // config-file plugins load first, so without "pre" its stub answers every
+    // request and the scenario's bootstrap fields never reach the app.
+    enforce: "pre",
     name: "openclaw-control-ui-mock-gateway",
     transformIndexHtml(html) {
       return html.replace(
