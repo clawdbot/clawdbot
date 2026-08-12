@@ -322,37 +322,25 @@ function countJsonlLines(filePath: string): number {
   }
 }
 
-function findOtherStateDirs(stateDir: string): string[] {
+export function findOtherStateDirs(
+  stateDir: string,
+  deps?: {
+    defaultStateDir?: string;
+    existsDir?: (dir: string) => boolean;
+  },
+): string[] {
   const resolvedState = path.resolve(stateDir);
-  const roots =
-    process.platform === "darwin" ? ["/Users"] : process.platform === "linux" ? ["/home"] : [];
-  const found: string[] = [];
-  for (const root of roots) {
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(root, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      if (entry.name.startsWith(".")) {
-        continue;
-      }
-      const candidates = [".openclaw"].map((dir) => path.resolve(root, entry.name, dir));
-      for (const candidate of candidates) {
-        if (candidate === resolvedState) {
-          continue;
-        }
-        if (existsDir(candidate)) {
-          found.push(candidate);
-        }
-      }
-    }
+  const defaultStateDir = path.resolve(
+    deps?.defaultStateDir ?? path.join(os.homedir(), ".openclaw"),
+  );
+  if (defaultStateDir === resolvedState) {
+    return [];
   }
-  return found;
+  const dirExists = deps?.existsDir ?? existsDir;
+  if (!dirExists(defaultStateDir)) {
+    return [];
+  }
+  return [defaultStateDir];
 }
 
 function isPathUnderRoot(targetPath: string, rootPath: string): boolean {
@@ -1260,12 +1248,7 @@ export async function noteStateIntegrity(
   }
 
   const extraStateDirs = new Set<string>();
-  if (path.resolve(stateDir) !== path.resolve(defaultStateDir)) {
-    if (existsDir(defaultStateDir)) {
-      extraStateDirs.add(defaultStateDir);
-    }
-  }
-  for (const other of findOtherStateDirs(stateDir)) {
+  for (const other of findOtherStateDirs(stateDir, { defaultStateDir })) {
     extraStateDirs.add(other);
   }
   if (extraStateDirs.size > 0) {

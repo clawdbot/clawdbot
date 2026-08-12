@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   detectLinuxSdBackedStateDir,
+  findOtherStateDirs,
   formatLinuxSdBackedStateDirWarning,
 } from "./doctor-state-integrity.js";
 
@@ -13,6 +14,34 @@ function encodeMountInfoPath(value: string): string {
     .replace(/\t/g, "\\011")
     .replace(/ /g, "\\040");
 }
+
+describe("findOtherStateDirs", () => {
+  it("only checks the current account default state dir", () => {
+    const probedDirs: string[] = [];
+
+    const result = findOtherStateDirs("/var/lib/openclaw", {
+      defaultStateDir: "/home/alice/.openclaw",
+      existsDir: (dir) => {
+        probedDirs.push(dir);
+        return true;
+      },
+    });
+
+    expect(result).toEqual(["/home/alice/.openclaw"]);
+    expect(probedDirs).toEqual(["/home/alice/.openclaw"]);
+  });
+
+  it("does not report the active default state dir as an extra state dir", () => {
+    const result = findOtherStateDirs("/home/alice/.openclaw", {
+      defaultStateDir: "/home/alice/.openclaw",
+      existsDir: () => {
+        throw new Error("default state dir should not be probed when it is active");
+      },
+    });
+
+    expect(result).toEqual([]);
+  });
+});
 
 describe("detectLinuxSdBackedStateDir", () => {
   it("detects state dir on mmc-backed mount", () => {
