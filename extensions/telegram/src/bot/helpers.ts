@@ -423,18 +423,18 @@ export function resolveTelegramMessageThreadSpec(
   message: Message,
   isForum?: boolean,
 ): TelegramThreadSpec {
-  if (message.chat.is_direct_messages === true) {
+  if (message.chat?.is_direct_messages === true) {
     const id = parseStrictPositiveInteger(message.direct_messages_topic?.topic_id);
     return id === undefined ? { scope: "none" } : { id, scope: "direct-messages" };
   }
-  const isGroup = message.chat.type === "group" || message.chat.type === "supergroup";
+  const isGroup = message.chat?.type === "group" || message.chat?.type === "supergroup";
   return resolveTelegramThreadSpec({
     isGroup,
     isForum:
       isForum ??
       resolveTelegramMessageForumFlagHint({
-        chatType: message.chat.type,
-        isForum: message.chat.is_forum,
+        chatType: message.chat?.type,
+        isForum: message.chat?.is_forum,
         isTopicMessage: message.is_topic_message,
       }),
     messageThreadId: message.message_thread_id,
