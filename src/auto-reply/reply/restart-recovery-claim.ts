@@ -229,9 +229,8 @@ export function createReplyRestartRecoveryClaimController(params: {
         throw new Error("restart recovery claim changed before agent adoption");
       }
       // Drift tolerance: retire stale exact claims (session drifted to
-      // non-running during a gateway event-loop stall) and unwind as
-      // duplicate-source. If retirement is declined (terminal-pending receipt
-      // preserved for provider reconciliation), throw to keep the claim visible.
+      // non-running during a gateway stall) and unwind as duplicate-source. If
+      // retirement is declined, throw to keep the claim visible for reconciliation.
       if (entry.status !== "running") {
         const retired = await retireTerminalRestartRecoverySourceClaim({
           sessionId,
