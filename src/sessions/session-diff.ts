@@ -396,9 +396,19 @@ export async function loadCheckoutDiff(params: CheckoutDiffParams): Promise<Sess
     ...(branchBase?.baseRef ? { baseRef: branchBase.baseRef } : {}),
     ...metadata,
   };
+  const unknownCommit = (): SessionsDiffResult => ({
+    ...repositoryFields,
+    files: [],
+    additions: 0,
+    deletions: 0,
+    unavailableReason: "unknown_commit",
+  });
   const scope = params.scope ?? "all";
   let revisions: readonly [string] | readonly [string, string] | undefined;
   if (scope === "commit") {
+    if (!head || !branchBase || branchBase.base === "HEAD" || branchBase.base === head) {
+      return unknownCommit();
+    }
     const commit = (
       await gitOut(root, [
         "rev-parse",
@@ -409,13 +419,16 @@ export async function loadCheckoutDiff(params: CheckoutDiffParams): Promise<Sess
       ])
     )?.trim();
     if (!commit) {
-      return {
-        ...repositoryFields,
-        files: [],
-        additions: 0,
-        deletions: 0,
-        unavailableReason: "unknown_commit",
-      };
+      return unknownCommit();
+    }
+    // Commit scope is fenced to the advertised merge-base..HEAD history so an
+    // operator.read client cannot read arbitrary commits from the object database.
+    const isCommitInHeadHistory =
+      (await gitOut(root, ["merge-base", "--is-ancestor", commit, "HEAD"], [0])) !== null;
+    const isCommitInBaseHistory =
+      (await gitOut(root, ["merge-base", "--is-ancestor", commit, branchBase.base], [0])) !== null;
+    if (!isCommitInHeadHistory || isCommitInBaseHistory) {
+      return unknownCommit();
     }
     const parent = (await gitOut(root, ["rev-parse", "--verify", "--quiet", `${commit}^`]))?.trim();
     const commitBase = parent ? { base: parent } : await resolveSessionDiffEmptyTree(root);

@@ -212,9 +212,8 @@ describe("loadSessionDiff", () => {
       scope: "commit",
       commit: rootCommit,
     });
-    expect(committed.files.map((file) => file.path)).toEqual(["a.txt"]);
-    expect(committed.files[0]?.patch).toContain("+one");
-    expect(committed.files[0]?.patch).not.toContain("+more");
+    expect(committed.unavailableReason).toBe("unknown_commit");
+    expect(committed.files).toEqual([]);
   });
 
   it("scopes branch, working-tree, and commit diffs with branch metadata", async () => {
@@ -223,6 +222,12 @@ describe("loadSessionDiff", () => {
     git(repoRoot, "add", ".");
     git(repoRoot, "commit", "-qm", "base");
     const mergeBase = git(repoRoot, "rev-parse", "HEAD").trim();
+    git(repoRoot, "checkout", "-qb", "sibling");
+    fs.writeFileSync(path.join(repoRoot, "sibling.txt"), "sibling commit\n");
+    git(repoRoot, "add", ".");
+    git(repoRoot, "commit", "-qm", "sibling change");
+    const siblingCommit = git(repoRoot, "rev-parse", "HEAD").trim();
+    git(repoRoot, "checkout", "-q", "main");
     git(repoRoot, "checkout", "-qb", "feature");
 
     fs.writeFileSync(path.join(repoRoot, "first.txt"), "first commit\n");
@@ -269,6 +274,16 @@ describe("loadSessionDiff", () => {
     expect(committed.files.map((file) => file.path)).toEqual(["first.txt"]);
     expect(committed.files[0]?.patch).toContain("+first commit");
     expect(committed.files[0]?.untracked).toBeUndefined();
+
+    for (const commit of [siblingCommit, mergeBase]) {
+      const outsideAdvertisedHistory = await loadSessionDiff({
+        sessionKey: "agent:main:s1",
+        scope: "commit",
+        commit,
+      });
+      expect(outsideAdvertisedHistory.unavailableReason).toBe("unknown_commit");
+      expect(outsideAdvertisedHistory.files).toEqual([]);
+    }
 
     const unknown = await loadSessionDiff({
       sessionKey: "agent:main:s1",
