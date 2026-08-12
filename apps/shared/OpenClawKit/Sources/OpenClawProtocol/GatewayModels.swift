@@ -19281,10 +19281,10 @@ public struct PortalSummary: Codable, Sendable {
 public struct PortalListParams: Codable, Sendable {}
 
 public struct PortalListResult: Codable, Sendable {
-    public let portals: [PortalOpenResult]
+    public let portals: [PortalSummary]
 
     public init(
-        portals: [PortalOpenResult])
+        portals: [PortalSummary])
     {
         self.portals = portals
     }
@@ -19325,8 +19325,8 @@ public struct PortalOpenResult: Codable, Sendable {
     public let title: String
     public let port: Int
     public let listenport: Int
-    public let tokenquery: String?
-    public let url: String?
+    public let tokenquery: String
+    public let url: String
     public let publicurl: String
     public let path: String?
     public let description: String?
@@ -19337,8 +19337,8 @@ public struct PortalOpenResult: Codable, Sendable {
         title: String,
         port: Int,
         listenport: Int,
-        tokenquery: String? = nil,
-        url: String? = nil,
+        tokenquery: String,
+        url: String,
         publicurl: String,
         path: String? = nil,
         description: String? = nil,
@@ -19399,10 +19399,10 @@ public struct PortalCloseResult: Codable, Sendable {
 }
 
 public struct PortalChangedEvent: Codable, Sendable {
-    public let portals: [PortalOpenResult]
+    public let portals: [PortalSummary]
 
     public init(
-        portals: [PortalOpenResult])
+        portals: [PortalSummary])
     {
         self.portals = portals
     }

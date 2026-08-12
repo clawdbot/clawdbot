@@ -1,12 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
-import type { PortalSummary } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  PortalOpenResult,
+  PortalSummary,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-descriptors.js";
 import type { GatewayPortalService } from "../portals/portal-service.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { portalHandlers } from "./portals.js";
 
-const portal: PortalSummary = {
+const portal = {
   id: "p3000",
   title: "App",
   port: 3000,
@@ -15,7 +18,7 @@ const portal: PortalSummary = {
   url: `http://127.0.0.1:43123/?openclaw_portal=${"a".repeat(64)}`,
   publicUrl: "http://127.0.0.1:43123/",
   createdAtMs: 1,
-};
+} satisfies PortalOpenResult;
 
 function harness(service?: GatewayPortalService, scopes = ["operator.write"]) {
   const broadcast = vi.fn();

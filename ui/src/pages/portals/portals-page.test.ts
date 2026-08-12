@@ -17,7 +17,7 @@ type PortalsPageTestElement = HTMLElement & {
   updateComplete: Promise<boolean>;
 };
 
-const portal: PortalSummary = {
+const portal = {
   id: "p3000",
   title: "Seeded app",
   port: 3000,
@@ -28,7 +28,7 @@ const portal: PortalSummary = {
   path: "/app",
   description: "Use the seeded test account.",
   createdAtMs: 1_000,
-};
+} satisfies PortalSummary;
 
 function createContext(
   methods: string[],

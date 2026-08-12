@@ -2,17 +2,25 @@ import { Type, type Static } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
-export const PortalSummarySchema = closedObject({
+const PortalSummaryIdentityFields = {
   id: NonEmptyString,
   title: NonEmptyString,
   port: Type.Integer({ minimum: 1, maximum: 65_535 }),
   listenPort: Type.Integer({ minimum: 1, maximum: 65_535 }),
-  tokenQuery: Type.Optional(NonEmptyString),
-  url: Type.Optional(NonEmptyString),
+};
+
+const PortalSummaryMetadataFields = {
   publicUrl: NonEmptyString,
   path: Type.Optional(Type.String({ pattern: "^/" })),
   description: Type.Optional(Type.String()),
   createdAtMs: Type.Integer({ minimum: 0 }),
+};
+
+export const PortalSummarySchema = closedObject({
+  ...PortalSummaryIdentityFields,
+  tokenQuery: Type.Optional(NonEmptyString),
+  url: Type.Optional(NonEmptyString),
+  ...PortalSummaryMetadataFields,
 });
 
 export const PortalListParamsSchema = closedObject({});
@@ -26,7 +34,12 @@ export const PortalOpenParamsSchema = closedObject({
   description: Type.Optional(Type.String()),
   path: Type.Optional(Type.String({ pattern: "^/" })),
 });
-export const PortalOpenResultSchema = PortalSummarySchema;
+export const PortalOpenResultSchema = closedObject({
+  ...PortalSummaryIdentityFields,
+  tokenQuery: NonEmptyString,
+  url: NonEmptyString,
+  ...PortalSummaryMetadataFields,
+});
 
 export const PortalCloseParamsSchema = closedObject({ id: NonEmptyString });
 export const PortalCloseResultSchema = closedObject({ closed: Type.Boolean() });

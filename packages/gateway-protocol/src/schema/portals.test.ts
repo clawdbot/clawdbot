@@ -45,6 +45,7 @@ describe("portal protocol schemas", () => {
     expect(Value.Check(PortalListResultSchema, { portals: [portal] })).toBe(true);
     const { tokenQuery: _tokenQuery, url: _url, ...redactedPortal } = portal;
     expect(Value.Check(PortalSummarySchema, redactedPortal)).toBe(true);
+    expect(Value.Check(PortalOpenResultSchema, redactedPortal)).toBe(false);
     expect(Value.Check(PortalCloseResultSchema, { closed: true })).toBe(true);
     expect(Value.Check(PortalChangedEventSchema, { portals: [portal] })).toBe(true);
     const { publicUrl: _publicUrl, ...missingPublicUrl } = portal;

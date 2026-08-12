@@ -4,7 +4,10 @@ import { createServer as createHttpsServer } from "node:https";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import type { TlsOptions } from "node:tls";
-import type { PortalSummary } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  PortalOpenResult,
+  PortalSummary,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { listenGatewayHttpServer } from "../server/http-listen.js";
 import { handlePortalProxyRequest, handlePortalProxyUpgrade } from "./portal-http-proxy.js";
 
@@ -33,7 +36,7 @@ type GatewayPortalOpenParams = {
 };
 
 export type GatewayPortalService = {
-  open: (params: GatewayPortalOpenParams) => Promise<PortalSummary>;
+  open: (params: GatewayPortalOpenParams) => Promise<PortalOpenResult>;
   list: () => PortalSummary[];
   close: (id: string) => Promise<void>;
   closeAll: () => Promise<void>;
@@ -79,7 +82,7 @@ export function createGatewayPortalService(params: {
   const operations = new Map<string, Promise<void>>();
   let closed = false;
 
-  const summarize = (portal: PortalEntry): PortalSummary => {
+  const summarize = (portal: PortalEntry): PortalOpenResult => {
     const host = params.httpBindHosts[0];
     if (!host) {
       throw new Error("Gateway listener must start before opening a portal");
