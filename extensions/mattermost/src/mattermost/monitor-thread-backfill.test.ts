@@ -287,6 +287,31 @@ describe("createMattermostThreadBackfill", () => {
     expect(harness.requests).toHaveLength(MAX_ATTEMPTS + 1);
   });
 
+  it("keeps the cooldown and the budget when the pending session materializes", async () => {
+    const harness = createHarness({
+      responses: Array.from({ length: 10 }, () => mattermostApiError(500, "Internal Server Error")),
+    });
+    harness.rotateSession(undefined);
+
+    await harness.turn();
+    expect(harness.requests).toHaveLength(1);
+
+    // The store settles the session id between turns. The failure recorded under
+    // the pending marker is still this thread's, so the marker rotating must not
+    // hand the next turn a fresh cooldown or a fresh budget.
+    harness.rotateSession("session-a");
+    harness.advance(COOLDOWN_MS - 1);
+    await harness.turn();
+    expect(harness.requests).toHaveLength(1);
+
+    for (let index = 0; index < 5; index += 1) {
+      harness.advance(COOLDOWN_MS);
+      await harness.turn();
+    }
+
+    expect(harness.requests).toHaveLength(MAX_ATTEMPTS);
+  });
+
   it("adopts the real session id after a pending recovery settles", async () => {
     const harness = createHarness({ responses: [threadResponse(2), threadResponse(2)] });
     harness.rotateSession(undefined);

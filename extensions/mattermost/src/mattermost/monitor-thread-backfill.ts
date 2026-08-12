@@ -261,6 +261,17 @@ export function createMattermostThreadBackfill(
     const marker = resolveRecoveryMarker({ historyKey, sessionId });
     const currentMarker = markers.get(historyKey);
 
+    // A failure recorded before the session entry had an id belongs to the same
+    // thread and the same streak, so the marker rotating from pending to the
+    // real session id must not hand it a fresh budget. Adopting the record keeps
+    // the cooldown and the attempt cap continuous across that one transition,
+    // and keeps `retryOwned` below true so the failed turn's own message cannot
+    // pass as history worth keeping.
+    const pendingRetry = retries.get(historyKey);
+    if (sessionId && pendingRetry?.marker === pendingMarker) {
+      boundedSet(retries, historyKey, { ...pendingRetry, marker });
+    }
+
     if (currentMarker === marker) {
       await settleInFlight(historyKey);
       return;

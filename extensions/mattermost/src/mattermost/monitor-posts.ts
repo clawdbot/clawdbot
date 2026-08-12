@@ -130,7 +130,11 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       agentId: route.agentId,
       sessionKey,
     });
-    const historyKey = resolveMattermostPendingHistoryKey({ kind, sessionKey });
+    const historyKey = resolveMattermostPendingHistoryKey({
+      kind,
+      sessionKey,
+      threadRootId: effectiveReplyToId,
+    });
     const fileIds = uniqueStrings(normalizeTrimmedStringList(post.file_ids ?? []));
     const nativeMedia = fileIds.map(() => ({}));
     const pendingBody = formatMattermostPendingMediaText({ body: rawText, media: nativeMedia });
