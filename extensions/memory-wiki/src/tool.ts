@@ -278,12 +278,24 @@ export function createWikiGetTool(
     parameters: WikiGetSchema,
     execute: async (_toolCallId, rawParams) => {
       const params = rawParams as {
-        lookup: string;
+        lookup?: string;
         fromLine?: number;
         lineCount?: number;
         backend?: ResolvedMemoryWikiConfig["search"]["backend"];
         corpus?: ResolvedMemoryWikiConfig["search"]["corpus"];
       };
+      const lookup = typeof params.lookup === "string" ? params.lookup.trim() : "";
+      if (!lookup) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "wiki_get requires a non-empty `lookup` path or id.",
+            },
+          ],
+          details: { found: false },
+        };
+      }
       await syncImportedSourcesIfNeeded(config, appConfig);
       const result = await getMemoryWikiPage({
         config,
@@ -292,7 +304,7 @@ export function createWikiGetTool(
         agentSessionKey: memoryContext.agentSessionKey,
         sandboxed: memoryContext.sandboxed,
         conversationRecall: memoryContext.conversationRecall,
-        lookup: params.lookup,
+        lookup,
         fromLine: params.fromLine,
         lineCount: params.lineCount,
         ...(params.backend ? { searchBackend: params.backend } : {}),
