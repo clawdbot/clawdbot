@@ -11,6 +11,7 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "./auth-profiles/runtime-snapshots.js";
+import { saveAuthProfileStore } from "./auth-profiles/store.js";
 import {
   encodePluginModelCatalogRelativePath,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
@@ -35,6 +36,7 @@ const REF_ONLY_API_PROVIDER_ID = `${PROVIDER_ID}-ref-api`;
 const REF_ONLY_API_ENV = "OPENCLAW_WORKER_REF_ONLY_API_KEY";
 const REF_ONLY_TOKEN_PROVIDER_ID = `${PROVIDER_ID}-ref-token`;
 const REF_ONLY_TOKEN_ENV = "OPENCLAW_WORKER_REF_ONLY_TOKEN";
+const DURABLE_AUTH_PROVIDER_ID = `${PROVIDER_ID}-durable-auth`;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
@@ -209,6 +211,111 @@ async function waitForMarker(marker: string): Promise<void> {
 }
 
 describe("prepared model catalog worker boundary", () => {
+  it("refreshes durable auth profiles added, updated, and removed after startup", async () => {
+    const fixture = await createStaticSnapshot(0);
+    const route = {
+      provider: DURABLE_AUTH_PROVIDER_ID,
+      id: "durable-model",
+      name: "Durable model",
+      api: "openai-completions" as const,
+      baseUrl: "https://durable-auth.invalid/v1",
+    };
+    const config = {
+      ...fixture.config,
+      agents: {
+        ...fixture.config.agents,
+        list: [
+          {
+            id: "main",
+            default: true,
+            agentDir: fixture.agentDir,
+            workspace: fixture.workspaceDir,
+          },
+        ],
+      },
+    } satisfies OpenClawConfig;
+    const owner = Object.freeze({
+      ...fixture.snapshot,
+      config,
+      modelCatalog: { entries: [route], routeVariants: [route] },
+    });
+    copyPreparedModelRuntimeAuthState(fixture.snapshot, owner);
+    const project = async () =>
+      await loadGatewayModelCatalogSnapshot({
+        getConfig: () => config,
+        loadPublishedPreparedModelCatalogOwnerSnapshot: async () => owner,
+      });
+    const projectModels = async () => {
+      const projected = await project();
+      const context = {
+        getRuntimeConfig: () => config,
+        loadGatewayModelCatalogSnapshot: async () => projected,
+        readPreparedGatewayModelCatalogSnapshot: async () => projected,
+        logGateway: { debug: () => undefined },
+      } as unknown as GatewayRequestContext;
+      return {
+        projected,
+        result: await buildModelsListResult({ context, params: { view: "all" } }),
+      };
+    };
+    const writeDurableProfile = (key?: string) =>
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: key
+            ? {
+                [`${DURABLE_AUTH_PROVIDER_ID}:default`]: {
+                  type: "api_key",
+                  provider: DURABLE_AUTH_PROVIDER_ID,
+                  key,
+                },
+              }
+            : {},
+        },
+        fixture.agentDir,
+      );
+
+    writeDurableProfile("first-key-not-real");
+    const added = await projectModels();
+    expect(added).toMatchObject({
+      result: {
+        models: [expect.objectContaining({ id: "durable-model", available: true })],
+      },
+      projected: {
+        authStore: {
+          profiles: {
+            [`${DURABLE_AUTH_PROVIDER_ID}:default`]: expect.objectContaining({
+              key: "first-key-not-real",
+            }),
+          },
+        },
+      },
+    });
+
+    writeDurableProfile("second-key-not-real");
+    const updated = await project();
+    expect(updated).toMatchObject({
+      authStore: {
+        profiles: {
+          [`${DURABLE_AUTH_PROVIDER_ID}:default`]: expect.objectContaining({
+            key: "second-key-not-real",
+          }),
+        },
+      },
+    });
+
+    writeDurableProfile();
+    const removed = await projectModels();
+    expect(removed).toMatchObject({
+      result: {
+        models: [expect.objectContaining({ id: "durable-model", available: false })],
+      },
+    });
+    expect(
+      removed.projected.authStore.profiles[`${DURABLE_AUTH_PROVIDER_ID}:default`],
+    ).toBeUndefined();
+  });
+
   it("makes a post-startup Codex login available to direct models.list", async () => {
     const codexHome = tempDirs.make("openclaw-models-list-codex-");
     const fixture = await createStaticSnapshot(0, { CODEX_HOME: codexHome });

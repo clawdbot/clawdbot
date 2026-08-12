@@ -2,7 +2,10 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { overlayExternalAuthProfiles } from "./auth-profiles/external-auth.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
-import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles/store.js";
+import {
+  loadAuthProfileStoreWithoutExternalProfiles,
+  preserveResolvedSecretBackedCredentials,
+} from "./auth-profiles/store.js";
 import {
   fingerprintPreparedModelCatalogGeneration,
   type PreparedModelAuthRefreshWorkerInput,
@@ -16,14 +19,15 @@ export async function runPreparedModelCatalogWorkerInput(
 ): Promise<PreparedModelWorkerResult> {
   try {
     if (value.kind === "auth-refresh") {
-      replaceRuntimeAuthProfileStoreSnapshots([
-        { agentDir: value.agentDir, store: value.authStore },
-      ]);
-      const authStore = ensureAuthProfileStoreWithoutExternalProfiles(value.agentDir, {
-        allowKeychainPrompt: false,
-        readOnly: true,
-        syncExternalCli: false,
-        ...(value.inheritedAuthDir ? { inheritedAuthDir: value.inheritedAuthDir } : {}),
+      // Durable profiles may be changed by another CLI process after this generation was built.
+      // Reload them before adding current external overlays, while retaining only literals whose
+      // unchanged SecretRefs were materialized by the owning generation.
+      const authStore = preserveResolvedSecretBackedCredentials({
+        next: loadAuthProfileStoreWithoutExternalProfiles(value.agentDir, {
+          allowKeychainPrompt: false,
+          ...(value.inheritedAuthDir ? { inheritedAuthDir: value.inheritedAuthDir } : {}),
+        }),
+        existing: value.authStore,
       });
       return {
         status: "ok",
