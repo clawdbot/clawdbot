@@ -14,8 +14,8 @@ import {
   OPENCLAW_DEFAULT_MODEL_ID,
   OPENCLAW_MODEL_ID,
   authorizeGatewayHttpRequestOrReply,
+  isOpenClawAgentModelId,
   type AuthorizedGatewayHttpRequest,
-  resolveAgentIdFromModel,
   resolveOpenAiCompatibleHttpOperatorScopes,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
@@ -126,7 +126,7 @@ export async function handleOpenAiModelsHttpRequest(
     return true;
   }
 
-  if (decodedId !== OPENCLAW_MODEL_ID && !resolveAgentIdFromModel(decodedId)) {
+  if (!isOpenClawAgentModelId(decodedId)) {
     sendInvalidRequest(res, "Invalid model id.");
     return true;
   }

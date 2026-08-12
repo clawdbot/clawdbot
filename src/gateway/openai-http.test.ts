@@ -168,6 +168,40 @@ function firstAgentCommandOptions() {
 }
 
 describe("OpenAI-compatible HTTP API (e2e)", () => {
+  it("returns a typed selection error unless an ownerless fleet request selects an agent", async () => {
+    try {
+      testState.agentsConfig = {
+        ownership: "explicit",
+        list: [{ id: "main" }, { id: "beta" }],
+      };
+      resetConfigRuntimeState();
+      agentCommandMock.mockClear();
+
+      const missing = await postChatCompletions(enabledPort, {
+        model: "openclaw",
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(missing.status).toBe(400);
+      const missingJson = (await missing.json()) as { error?: { message?: string; type?: string } };
+      expect(missingJson.error?.type).toBe("invalid_request_error");
+      expect(missingJson.error?.message).toContain("has no explicit owner");
+      expect(agentCommandMock).not.toHaveBeenCalled();
+
+      agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+      const selected = await postChatCompletions(
+        enabledPort,
+        { model: "openclaw/default", messages: [{ role: "user", content: "hi" }] },
+        { "x-openclaw-agent-id": "main" },
+      );
+      expect(selected.status).toBe(200);
+      expect(firstAgentCommandOptions()?.sessionKey ?? "").toMatch(/^agent:main:/);
+      await selected.text();
+    } finally {
+      testState.agentsConfig = undefined;
+      resetConfigRuntimeState();
+    }
+  });
+
   it("handles request validation and routing", async () => {
     const port = enabledPort;
     const mockAgentOnce = (payloads: Array<{ text: string }>) => {
@@ -225,7 +259,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     };
 
     try {
-      testState.agentsConfig = { list: [{ id: "main" }, { id: "beta" }] };
+      testState.agentsConfig = { list: [{ id: "main" }] };
       resetConfigRuntimeState();
 
       {
@@ -243,6 +277,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           method: "POST",
           headers: {
             "content-type": "application/json",
+            "x-openclaw-agent-id": "main",
           },
           body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }),
         });
@@ -252,6 +287,11 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         await res.text();
       }
 
+      testState.agentsConfig = {
+        ownership: "explicit",
+        list: [{ id: "main" }, { id: "beta" }],
+      };
+      resetConfigRuntimeState();
       await expectAgentSessionKeyMatch({
         body: { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
         headers: { "x-openclaw-agent-id": "beta" },
@@ -266,11 +306,15 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         matcher: /^agent:beta:/,
       });
 
+      testState.agentsConfig = { list: [{ id: "main" }] };
+      resetConfigRuntimeState();
+
       await expectAgentSessionKeyMatch({
         body: {
           model: "openclaw/default",
           messages: [{ role: "user", content: "hi" }],
         },
+        headers: { "x-openclaw-agent-id": "main" },
         matcher: /^agent:main:/,
       });
 
@@ -320,6 +364,11 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
+        testState.agentsConfig = {
+          ownership: "explicit",
+          list: [{ id: "main" }, { id: "beta" }],
+        };
+        resetConfigRuntimeState();
         mockAgentOnce([{ text: "hello" }]);
         const res = await postChatCompletions(
           port,
@@ -333,6 +382,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
         expect(firstAgentCommandOptions()?.sessionKey).toBe("agent:beta:openai:custom");
         await res.text();
+        testState.agentsConfig = { list: [{ id: "main" }] };
+        resetConfigRuntimeState();
       }
 
       {

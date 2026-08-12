@@ -31,7 +31,9 @@ function mergeRegistries(registries: readonly PluginManifestRegistry[]): PluginM
     });
     return [];
   });
-  return { plugins: plugins.toSorted((a, b) => a.id.localeCompare(b.id)), diagnostics };
+  // Registry order carries origin precedence for channel schema ownership.
+  // Preserve first discovery order while deduplicating repeated workspace views.
+  return { plugins, diagnostics };
 }
 
 export function resolveConfigWidePluginManifestRegistry(params: {

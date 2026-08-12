@@ -605,6 +605,7 @@ describe("config plugin validation", () => {
     it("warns when a listed agent can fall back from gpt-5.6 to Spark", () => {
       const res = validateWithMissingCodexPlugin({
         agents: {
+          ownership: "explicit",
           defaults: {
             model: { primary: "openai/gpt-5.6", fallbacks: [] },
           },
@@ -640,6 +641,7 @@ describe("config plugin validation", () => {
       {
         name: "listed-agent subagent",
         agents: {
+          ownership: "explicit" as const,
           defaults: {
             model: { primary: "openai/gpt-5.6", fallbacks: [] },
             subagents: { model: "openai/gpt-5.6" },
@@ -900,6 +902,7 @@ describe("config plugin validation", () => {
           },
         },
         agents: {
+          ownership: "explicit",
           defaults: {
             model: { primary: "openai/gpt-5.6", fallbacks: [] },
             models: {

@@ -45,7 +45,7 @@ describe("collectGatewayHealthSnapshot legacy owner projection", () => {
       getRuntimeConfig: () => testConfig,
     }));
     vi.doMock("../../config/sessions/paths.js", () => ({
-      resolveStorePath: () => "/tmp/sessions.json",
+      resolveSessionStorePathCore: () => "/tmp/sessions.json",
     }));
     vi.doMock("../../config/sessions/session-accessor.js", () => ({
       listSessionEntriesReadOnly: () => [],
