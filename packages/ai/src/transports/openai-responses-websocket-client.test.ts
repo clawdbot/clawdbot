@@ -5,9 +5,15 @@ import {
   type Context,
   type Model,
 } from "@openclaw/llm-core";
+import { WebSocketError } from "openai/resources/responses/internal-base.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { cleanupSessionResources } from "../session-resources.js";
+import {
+  OpenAIResponsesWebSocketSafeRetryError,
+  responsesPromptObserver,
+  type ResponsesPromptObservation,
+} from "./openai-responses-contracts.js";
 
 type StreamMessage =
   | { type: "open" }
@@ -111,7 +117,11 @@ vi.mock("openai/resources/responses/ws.js", () => ({
   },
 }));
 
-import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
+import {
+  createOpenAIResponsesClient,
+  createOpenAIResponsesTransportStreamFn,
+} from "./openai-responses-client.js";
+import { createOpenAIResponsesWebSocketStream } from "./openai-responses-websocket.js";
 
 const initialHost = getAiTransportHost();
 const model = {
@@ -179,6 +189,25 @@ function message(event: Record<string, unknown>): StreamMessage {
   return { type: "message", message: event };
 }
 
+function wrappedSdkServerError(params: {
+  code: string;
+  message: string;
+  param?: string;
+  status: number;
+}): WebSocketError {
+  const event = {
+    type: "error",
+    error: {
+      type: "invalid_request_error",
+      code: params.code,
+      message: params.message,
+      param: params.param ?? null,
+    },
+    status: params.status,
+  };
+  return new WebSocketError(JSON.stringify(event), event as never);
+}
+
 function toolCallResponse(responseId: string): StreamMessage[] {
   const functionCall = {
     type: "function_call",
@@ -233,16 +262,27 @@ async function run(
     sessionId?: string;
     timeoutMs?: number;
     headers?: Record<string, string>;
+    observations?: ResponsesPromptObservation[];
   } = {},
 ): Promise<AssistantMessage> {
-  const stream = await createOpenAIResponsesTransportStreamFn()(overrides.model ?? model, context, {
+  const options = {
     apiKey: "test-key",
     sessionId: overrides.sessionId ?? "session-1",
     transport: overrides.transport ?? "websocket-cached",
     reasoningEffort: "low",
     timeoutMs: overrides.timeoutMs,
     headers: overrides.headers,
-  } as never);
+  };
+  if (overrides.observations) {
+    responsesPromptObserver.set(options, (observation) =>
+      overrides.observations?.push(observation),
+    );
+  }
+  const stream = await createOpenAIResponsesTransportStreamFn()(
+    overrides.model ?? model,
+    context,
+    options as never,
+  );
   return stream.result();
 }
 
@@ -443,9 +483,118 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     expect(transportState.sdkRequests).toHaveLength(2);
   });
 
+  it.each(["previous_response_not_found", "websocket_connection_limit_reached"])(
+    "recovers a cached continuation rejected with %s over full-history SSE",
+    async (code) => {
+      transportState.responseBatches.push(
+        [message(completedEvent("resp_1", "first answer"))],
+        [
+          {
+            type: "error",
+            error: wrappedSdkServerError({
+              code,
+              message: `safe rejection: ${code}`,
+              param: code === "previous_response_not_found" ? "previous_response_id" : undefined,
+              status: 400,
+            }),
+          },
+        ],
+        [message(completedEvent("resp_3", "third answer"))],
+      );
+      transportState.sdkOutcomes.push(sdkCompletion("resp_sse"));
+      const firstUser = userMessage("first question", 1);
+      const first = await run({ messages: [firstUser], tools: [] });
+
+      const secondUser = userMessage("second question", 2);
+      const observations: ResponsesPromptObservation[] = [];
+      const second = await run(
+        { messages: [firstUser, first, secondUser], tools: [] },
+        { observations },
+      );
+
+      expect(second.stopReason).toBe("stop");
+      expect(transportState.websocketRequests[1]).toMatchObject({
+        previous_response_id: "resp_1",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "second question" }],
+          },
+        ],
+      });
+      expect(transportState.websocketCloseCount).toBe(1);
+      expect(transportState.sdkRequests).toHaveLength(1);
+      expect(transportState.sdkRequests[0]).not.toHaveProperty("previous_response_id");
+      expect(transportState.sdkRequests[0]?.input).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ role: "user" }),
+          expect.objectContaining({ role: "assistant" }),
+          expect.objectContaining({ role: "user" }),
+        ]),
+      );
+      expect(
+        observations.map(({ egress, payloadVariant }) => ({ egress, payloadVariant })),
+      ).toEqual([
+        { egress: "responses-websocket", payloadVariant: "initial" },
+        { egress: "responses-sdk", payloadVariant: "continuation-rejected" },
+      ]);
+
+      const third = await run({
+        messages: [firstUser, first, secondUser, second, userMessage("third question", 3)],
+        tools: [],
+      });
+      expect(third.stopReason).toBe("stop");
+      expect(transportState.websocketOptions).toHaveLength(2);
+      expect(transportState.sdkRequests).toHaveLength(1);
+    },
+  );
+
+  it("preserves the wrapped server error details and original SDK cause", async () => {
+    const cause = wrappedSdkServerError({
+      code: "previous_response_not_found",
+      message: "previous response missing",
+      param: "previous_response_id",
+      status: 400,
+    });
+    transportState.responseBatches.push([{ type: "error", error: cause }]);
+    const response = createOpenAIResponsesWebSocketStream({
+      client: createOpenAIResponsesClient(model, { messages: [], tools: [] }, "test-key"),
+      request: { model: model.id, input: [] },
+      mode: "websocket",
+    });
+
+    let error: unknown;
+    try {
+      for await (const event of response.stream) {
+        void event;
+      }
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(OpenAIResponsesWebSocketSafeRetryError);
+    expect(error).toMatchObject({
+      code: "previous_response_not_found",
+      message: "previous response missing",
+      param: "previous_response_id",
+      status: 400,
+    });
+    expect((error as Error).cause).toBe(cause);
+    expect(transportState.websocketCloseCount).toBe(1);
+  });
+
   it("does not replay over SSE after an ambiguous post-dispatch disconnect", async () => {
     transportState.responseBatches.push([
-      { type: "error", error: new Error("connection lost after send") },
+      {
+        type: "error",
+        error: wrappedSdkServerError({
+          code: "invalid_websocket_request",
+          message: "request may have been dispatched",
+          param: "input",
+          status: 400,
+        }),
+      },
     ]);
 
     const result = await run({ messages: [userMessage("hello", 1)], tools: [] });
