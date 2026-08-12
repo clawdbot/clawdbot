@@ -53,6 +53,7 @@ export type PendingFinalDeliveryPayload = {
   endedAt?: number;
   outcome?: SubagentRunOutcome;
   expectsCompletionMessage?: boolean;
+  completionTarget?: "parent";
   spawnMode?: SpawnSubagentMode;
   wakeOnDescendantSettle?: boolean;
   terminalReply?: AgentRunTerminalReplySnapshot;
@@ -260,6 +261,8 @@ export type SubagentRunRecord = {
   /** Durable requester-stop policy until silent completion cleanup finishes. */
   suppressCompletionDelivery?: boolean;
   expectsCompletionMessage?: boolean;
+  /** Explicit completion route; omitted preserves automatic requester delivery. */
+  completionTarget?: "parent";
   endedReason?: SubagentLifecycleEndedReason;
   pauseReason?: "sessions_yield";
   wakeOnDescendantSettle?: boolean;

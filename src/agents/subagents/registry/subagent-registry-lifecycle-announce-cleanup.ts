@@ -513,8 +513,13 @@ export const startSubagentAnnounceCleanupFlow = (
       await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
       return;
     }
+    // Parent-only completion requires a route-checkable external transport
+    // receipt. A requester transcript mirror can come from the private
+    // internal-ui sink, so it must not discharge that delivery obligation.
     const shouldCreditPriorDelivery =
-      announceOutcome !== "delivered" && (await hasPriorRequesterDeliveryMirror(params, entry));
+      pendingPayload.completionTarget !== "parent" &&
+      announceOutcome !== "delivered" &&
+      (await hasPriorRequesterDeliveryMirror(params, entry));
     if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
       await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
       return;
@@ -553,6 +558,7 @@ export const startSubagentAnnounceCleanupFlow = (
     outcome: pendingPayload.outcome,
     spawnMode: pendingPayload.spawnMode,
     expectsCompletionMessage: pendingPayload.expectsCompletionMessage,
+    completionTarget: pendingPayload.completionTarget,
     wakeOnDescendantSettle: pendingPayload.wakeOnDescendantSettle === true,
     suppressChildSessionEffects: suppressSessionEffects,
     isChildSessionEffectsAllowed: childSessionEffectsAllowed,

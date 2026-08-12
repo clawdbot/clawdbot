@@ -29,6 +29,8 @@ export type SpawnSubagentParams = {
   context?: SpawnSubagentContextMode;
   lightContext?: boolean;
   expectsCompletionMessage?: boolean;
+  /** Route completion through the requester session without automatic external delivery. */
+  completionTarget?: "parent";
   attachments?: Array<{
     name: string;
     content: string;

@@ -1134,6 +1134,7 @@ describe("spawnSubagentDirect seam flow", () => {
       {
         task: "inspect the spawn seam",
         model: "openai/gpt-5.4",
+        completionTarget: "parent",
       },
       {
         agentSessionKey: "agent:main:main",
@@ -1178,6 +1179,7 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(registerInput.model).toBe("openai/gpt-5.4");
     expect(registerInput.workspaceDir).toBe("/tmp/requester-workspace");
     expect(registerInput.expectsCompletionMessage).toBe(true);
+    expect(registerInput.completionTarget).toBe("parent");
     expect(registerInput.spawnMode).toBe("run");
     expect(hoisted.emitSessionLifecycleEventMock).toHaveBeenCalledWith({
       sessionKey: childSessionKey,

@@ -246,7 +246,8 @@ export function buildRestartRecoveryTerminalDeliveryEvidence(
         })
       : undefined;
   const messagingToolSentTargetsTruncated =
-    rawMessagingToolSentTargets && rawMessagingToolSentTargets.length > 64
+    result.messagingToolSentTargetsTruncated === true ||
+    (rawMessagingToolSentTargets?.length ?? 0) > 64
       ? (true as const)
       : undefined;
   const messagingToolAggregateEvidenceUnaccounted = hasUnaccountedMessagingToolAggregateEvidence(
@@ -255,8 +256,10 @@ export function buildRestartRecoveryTerminalDeliveryEvidence(
     ? (true as const)
     : undefined;
   const restartUnsafeSideEffectsDetected =
-    hasCommittedOutboundDeliveryEvidence(result) ||
-    result.didSendDeterministicApprovalPrompt === true
+    hasCommittedOutboundDeliveryEvidence({
+      acceptedSessionSpawns: result.acceptedSessionSpawns,
+      successfulCronAdds: result.successfulCronAdds,
+    }) || result.didSendDeterministicApprovalPrompt === true
       ? (true as const)
       : undefined;
   return {

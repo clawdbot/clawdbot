@@ -478,6 +478,7 @@ export const loadPendingFinalDeliveryPayload = (
     outcome: entry.delivery?.payload?.outcome ?? entry.execution.outcome,
     expectsCompletionMessage:
       entry.delivery?.payload?.expectsCompletionMessage ?? entry.expectsCompletionMessage,
+    completionTarget: entry.delivery?.payload?.completionTarget ?? entry.completionTarget,
     spawnMode: entry.delivery?.payload?.spawnMode ?? entry.spawnMode,
     wakeOnDescendantSettle:
       entry.delivery?.payload?.wakeOnDescendantSettle ?? entry.wakeOnDescendantSettle,

@@ -182,6 +182,11 @@
           "enum": ["delete", "keep"],
           "type": "string"
         },
+        "completionTarget": {
+          "description": "Native run completion route; \"parent\" wakes the requester and requires an explicit message-tool send for external delivery; unavailable with thread=true.",
+          "enum": ["parent"],
+          "type": "string"
+        },
         "context": {
           "description": "Native: omit/isolated clean; fork only needing requester transcript; visible fork requires same agent.",
           "enum": ["isolated", "fork"],

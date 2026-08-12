@@ -10,6 +10,7 @@ import { logWarn } from "../../../logger.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
 import {
   type DeliveryContext,
+  deliveryContextKey,
   normalizeDeliveryContext,
 } from "../../../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../../utils/message-channel.js";
@@ -288,6 +289,24 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
       currentSettledEntry,
     );
   }
+  // Delivery credit is route-specific. A single requester session can retain
+  // overlapping children from turns on different channels or targets, so a
+  // receipt for the scheduling row's route must never discharge another
+  // route's parent-only obligation. Each retained row schedules its own wake;
+  // partition this attempt to the current row's normalized route.
+  if (
+    settledBatch.some(
+      (entry) =>
+        entry.expectsCompletionMessage === true &&
+        entry.completionTarget === "parent" &&
+        entry.delivery?.status !== "delivered",
+    )
+  ) {
+    const currentRouteKey = deliveryContextKey(currentSettledEntry.requesterOrigin);
+    settledBatch = settledBatch.filter(
+      (entry) => deliveryContextKey(entry.requesterOrigin) === currentRouteKey,
+    );
+  }
   if (settledBatch.length === 0) {
     return false;
   }
@@ -307,6 +326,9 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   const requiredSettled = settledBatch.filter((entry) => entry.expectsCompletionMessage === true);
   const hasUndeliveredRequiredCompletion = requiredSettled.some(
     (entry) => entry.delivery?.status !== "delivered",
+  );
+  const requiresParentOnlyReceipt = requiredSettled.some(
+    (entry) => entry.completionTarget === "parent" && entry.delivery?.status !== "delivered",
   );
   // A yielded batch owns a rearm generation even when its child settles later.
   // Otherwise a delivered single child clears the batch before its requester wakes.
@@ -445,6 +467,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
         targetRequesterSessionKey: requesterSessionKey,
         requesterIsSubagent: false,
         expectsCompletionMessage: false,
+        ...(requiresParentOnlyReceipt ? { completionTarget: "parent" as const } : {}),
         requireDirectDelivery: true,
         ...(requesterYieldedAfterDelivery ? { requireVisibleReply: true } : {}),
         directIdempotencyKey: buildAnnounceIdempotencyKey(

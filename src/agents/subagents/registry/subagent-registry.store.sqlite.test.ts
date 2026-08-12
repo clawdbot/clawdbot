@@ -32,6 +32,7 @@ function createRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecor
     cleanup: "keep",
     createdAt: 100,
     expectsCompletionMessage: true,
+    completionTarget: "parent",
     execution: {
       status: "terminal",
       startedAt: 110,
@@ -60,6 +61,7 @@ function createRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecor
         endedAt: 250,
         outcome: { status: "ok" },
         expectsCompletionMessage: true,
+        completionTarget: "parent",
       },
     },
     ...overrides,
@@ -248,6 +250,8 @@ describe("subagent registry sqlite store", () => {
       closeOpenClawStateDatabaseForTest();
       const restored = loadSubagentRegistryFromSqlite().get(run.runId);
       expect(restored?.expectsCompletionMessage).toBe(true);
+      expect(restored?.completionTarget).toBe("parent");
+      expect(restored?.delivery?.payload?.completionTarget).toBe("parent");
       expect(restored?.completion?.resultText).toBe("done");
       expect(restored?.delivery).toMatchObject({ status: "pending", lastError: "retry later" });
       expect(restored?.requesterSettleWake).toEqual(run.requesterSettleWake);

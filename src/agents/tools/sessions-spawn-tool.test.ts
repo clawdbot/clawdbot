@@ -1241,6 +1241,61 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
+  it("forwards parent-only completion routing and rejects thread-bound delivery", async () => {
+    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
+
+    await tool.execute("parent-only", {
+      task: "build feature",
+      completionTarget: "parent",
+    });
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({ completionTarget: "parent" }),
+      expect.any(Object),
+    );
+
+    await expect(
+      tool.execute("parent-only-thread", {
+        task: "build feature",
+        thread: true,
+        completionTarget: "parent",
+      }),
+    ).rejects.toThrow('"completionTarget" is unavailable with thread=true');
+  });
+
+  it("rejects parent-only completion owned by a subagent session", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:subagent:orchestrator",
+      completionOwnerKey: "agent:main:subagent:orchestrator",
+    });
+
+    await expect(
+      tool.execute("parent-only-nested", {
+        task: "build feature",
+        completionTarget: "parent",
+      }),
+    ).rejects.toThrow(
+      '"completionTarget" is unavailable when completion is owned by a subagent session',
+    );
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("allows a subagent controller to proxy parent-only completion to a main owner", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:subagent:orchestrator",
+      completionOwnerKey: "agent:main:main",
+    });
+
+    await tool.execute("parent-only-proxy", {
+      task: "build feature",
+      completionTarget: "parent",
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({ completionTarget: "parent" }),
+      expect.objectContaining({ completionOwnerKey: "agent:main:main" }),
+    );
+  });
+
   it("passes inherited tool denies to subagent spawns", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",

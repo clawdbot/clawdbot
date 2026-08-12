@@ -3715,6 +3715,91 @@ describe("subagent registry lifecycle hardening", () => {
     expect(persist).toHaveBeenCalled();
   });
 
+  it("does not credit a private internal-ui mirror for parent-only completion", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+      completionTarget: "parent",
+      retainAttachmentsOnKeep: true,
+    });
+    gatewayMocks.callGateway.mockResolvedValueOnce({
+      messages: [
+        {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: "final completion reply",
+          timestamp: 12_345,
+          idempotencyKey: `${buildExpectedAnnounceIdempotencyKey(entry)}:message-tool:internal-source-reply:0`,
+        },
+      ],
+    });
+    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+      async (announceParams) => {
+        expect(announceParams.completionTarget).toBe("parent");
+        announceParams.onDeliveryResult?.({
+          delivered: false,
+          path: "direct",
+          reason: "message_tool_delivery_missing",
+          error: "completion agent did not use the message tool for message-tool-only delivery",
+        });
+        return "retryable" as const;
+      },
+    );
+    const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
+
+    await completeRun(controller, entry, { triggerCleanup: true });
+
+    expect(entry.delivery).toMatchObject({
+      status: "suspended",
+      suspendedReason: "expiry",
+      lastError:
+        "completion agent did not use the message tool for message-tool-only delivery; message_tool_delivery_missing",
+    });
+    expect(entry.delivery?.deliveredAt).toBeUndefined();
+    expect(entry.delivery?.announcedAt).toBeUndefined();
+    expect(entry.delivery?.discardedAt).toBeUndefined();
+    expect(entry.cleanupCompletedAt).toBeUndefined();
+    expect(hasDeliveredTaskStatusUpdate(entry.runId)).toBe(false);
+    expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("does not clear parent-only delivery after requester-run admission without a receipt", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+      completionTarget: "parent",
+      retainAttachmentsOnKeep: true,
+    });
+    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+      async (announceParams) => {
+        announceParams.onDeliveryResult?.({
+          delivered: false,
+          path: "direct",
+          reason: "message_tool_delivery_missing",
+          error:
+            "parent-only completion requester run is still pending without a source-matched external send receipt",
+        });
+        return "retryable" as const;
+      },
+    );
+    const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
+
+    await completeRun(controller, entry, { triggerCleanup: true });
+
+    expect(entry.delivery).toMatchObject({
+      status: "suspended",
+      suspendedReason: "expiry",
+      lastError:
+        "parent-only completion requester run is still pending without a source-matched external send receipt; message_tool_delivery_missing",
+    });
+    expect(entry.delivery?.deliveredAt).toBeUndefined();
+    expect(entry.delivery?.announcedAt).toBeUndefined();
+    expect(entry.delivery?.payload).toMatchObject({ completionTarget: "parent" });
+    expect(entry.cleanupCompletedAt).toBeUndefined();
+    expect(hasDeliveredTaskStatusUpdate(entry.runId)).toBe(false);
+  });
+
   it("credits only current-run requester delivery mirrors before retrying NO_REPLY", async () => {
     const entry = await runNoReplyMirrorScenario({ timestamp: 12_345 });
 

@@ -91,6 +91,7 @@ export async function sendSubagentAnnounceDirectly(params: {
   triggerMessage: string;
   internalEvents?: AgentInternalEvent[];
   expectsCompletionMessage: boolean;
+  completionTarget?: "parent";
   requireVisibleReply?: boolean;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
@@ -184,7 +185,9 @@ export async function sendSubagentAnnounceDirectly(params: {
       isSubagentCompletion &&
       deliveryTarget.deliver &&
       isDirectMessageDeliveryTarget(deliveryTarget, canonicalRequesterSessionKey);
+    const parentOnlyCompletion = params.completionTarget === "parent";
     const requiresMessageToolDelivery =
+      parentOnlyCompletion ||
       completionRouteRequiresMessageToolDelivery ||
       subagentDirectMessageCompletionRequiresMessageTool;
     const requesterActivity = resolveRequesterSessionActivity(
@@ -244,6 +247,14 @@ export async function sendSubagentAnnounceDirectly(params: {
       requesterActivity.sessionId &&
       requesterActivity.isActive
     ) {
+      if (parentOnlyCompletion) {
+        return {
+          delivered: false,
+          path: "none",
+          reason: "visible_reply_missing",
+          error: "parent-only completion is waiting for the requester session to become idle",
+        };
+      }
       const wakeOptions: EmbeddedAgentQueueMessageOptions = {
         deliveryTimeoutMs: announceTimeoutMs,
         steeringMode: "all",
@@ -383,6 +394,7 @@ export async function sendSubagentAnnounceDirectly(params: {
         throw err;
       }
       if (
+        !parentOnlyCompletion &&
         params.expectsCompletionMessage &&
         (shouldDeliverAgentFinal || subagentDirectMessageCompletionRequiresMessageTool) &&
         isSubagentCompletion &&
@@ -401,6 +413,15 @@ export async function sendSubagentAnnounceDirectly(params: {
 
     const directAnnounceStillPending = isGatewayAgentRunPending(directAnnounceResponse);
     if (directAnnounceStillPending) {
+      if (parentOnlyCompletion) {
+        return {
+          delivered: false,
+          path: "direct",
+          reason: "message_tool_delivery_missing",
+          error:
+            "parent-only completion requester run is still pending without a source-matched external send receipt",
+        };
+      }
       return {
         delivered: true,
         path: "direct",
@@ -424,8 +445,12 @@ export async function sendSubagentAnnounceDirectly(params: {
     }
     const hasMessagingToolDelivery = Boolean(
       directAnnounceResult &&
-      hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget),
+      hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget, {
+        requireSourceMatch: parentOnlyCompletion,
+      }),
     );
+    const hasTruncatedMessagingToolReceipts =
+      directAnnounceResult?.messagingToolSentTargetsTruncated === true;
     const completionPayloadVisibility = {
       includeErrorPayloads: false,
       includeReasoningPayloads: false,
@@ -485,13 +510,24 @@ export async function sendSubagentAnnounceDirectly(params: {
       };
     }
     if (
-      params.expectsCompletionMessage &&
+      (params.expectsCompletionMessage || parentOnlyCompletion) &&
       requiresMessageToolDelivery &&
       !hasMessagingToolDelivery &&
-      (!hasIntentionalSilentCompletionReply ||
+      (parentOnlyCompletion ||
+        !hasIntentionalSilentCompletionReply ||
         subagentDirectMessageCompletionRequiresMessageTool ||
         hasRequiredSubagentNoOutputCompletion)
     ) {
+      if (parentOnlyCompletion && hasTruncatedMessagingToolReceipts) {
+        return {
+          delivered: false,
+          path: "direct",
+          reason: "message_tool_delivery_missing",
+          error:
+            "parent-only completion message-tool receipts were truncated before source-route delivery could be verified",
+          disposition: "ambiguous",
+        };
+      }
       if (hasRequiredSubagentNoOutputCompletion) {
         return {
           delivered: false,
@@ -500,7 +536,7 @@ export async function sendSubagentAnnounceDirectly(params: {
           error: "completion agent did not produce a visible reply",
         };
       }
-      if (subagentDirectMessageCompletionRequiresMessageTool) {
+      if (!parentOnlyCompletion && subagentDirectMessageCompletionRequiresMessageTool) {
         const textDelivery = await tryTextCompletionDirectDelivery();
         if (textDelivery) {
           return textDelivery;
@@ -518,6 +554,7 @@ export async function sendSubagentAnnounceDirectly(params: {
       ((params.requireVisibleReply
         ? hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget, {
             requireFinalReply: true,
+            requireSourceMatch: parentOnlyCompletion,
           })
         : hasMessagingToolDelivery) ||
         (hasVisibleAgentPayload(

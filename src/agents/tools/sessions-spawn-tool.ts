@@ -12,7 +12,7 @@ import {
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { isSubagentSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
@@ -129,6 +129,7 @@ function resolveSessionsSpawnThreadAvailability(opts?: {
 
 function createSessionsSpawnToolSchema(params: {
   acpAvailable: boolean;
+  parentCompletionAvailable: boolean;
   threadAvailable: boolean;
   swarmEnabled: boolean;
 }) {
@@ -181,6 +182,14 @@ function createSessionsSpawnToolSchema(params: {
     cleanup: optionalStringEnum(["delete", "keep"] as const, {
       description: "Hidden session cleanup; visible=true always keeps the session.",
     }),
+    ...(params.parentCompletionAvailable
+      ? {
+          completionTarget: optionalStringEnum(["parent"] as const, {
+            description:
+              'Native run completion route; "parent" wakes the requester and requires an explicit message-tool send for external delivery; unavailable with thread=true.',
+          }),
+        }
+      : {}),
     sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES, {
       description: '"inherit" parent sandbox policy; "require" fails unless child is sandboxed.',
     }),
@@ -295,6 +304,10 @@ export function createSessionsSpawnTool(
   });
   const threadAvailability = resolveSessionsSpawnThreadAvailability(opts);
   const threadAvailable = hasAnyThreadAvailability(threadAvailability);
+  const completionOwnerSessionKey =
+    opts?.completionOwnerKey?.trim() || opts?.agentSessionKey?.trim();
+  const parentCompletionAvailable =
+    !completionOwnerSessionKey || !isSubagentSessionKey(completionOwnerSessionKey);
   const requesterAgentId =
     opts?.requesterAgentIdOverride ?? parseAgentSessionKey(opts?.agentSessionKey)?.agentId;
   const swarmConfig = resolveSwarmConfig(opts?.config, requesterAgentId);
@@ -323,6 +336,7 @@ export function createSessionsSpawnTool(
     }),
     parameters: createSessionsSpawnToolSchema({
       acpAvailable,
+      parentCompletionAvailable,
       threadAvailable,
       swarmEnabled: swarmConfig.enabled,
     }),
@@ -383,8 +397,34 @@ export function createSessionsSpawnTool(
       const taskName = taskNameResult.taskName;
       const label = readToolStringParam(params, "label") ?? "";
       const runtime = params.runtime === "acp" ? "acp" : "subagent";
+      const completionTarget = params.completionTarget === "parent" ? "parent" : undefined;
+      if (completionTarget && !parentCompletionAvailable) {
+        throw new ToolInputError(
+          'sessions_spawn "completionTarget" is unavailable when completion is owned by a subagent session.',
+        );
+      }
       if (collect && runtime === "acp") {
         throw new ToolInputError('sessions_spawn collect=true supports runtime="subagent" only.');
+      }
+      if (runtime === "acp" && completionTarget) {
+        throw new ToolInputError(
+          'sessions_spawn "completionTarget" is native-only; use ACP "streamTo" instead.',
+        );
+      }
+      if (collect && completionTarget) {
+        throw new ToolInputError(
+          'sessions_spawn "completionTarget" is unavailable with collect=true.',
+        );
+      }
+      if (params.visible === true && completionTarget) {
+        throw new ToolInputError(
+          'sessions_spawn "completionTarget" is unavailable with visible=true.',
+        );
+      }
+      if (params.thread === true && completionTarget) {
+        throw new ToolInputError(
+          'sessions_spawn "completionTarget" is unavailable with thread=true.',
+        );
       }
       const requestedAgentId = readToolStringParam(params, "agentId");
       const resumeSessionId = readToolStringParam(params, "resumeSessionId");
@@ -574,6 +614,7 @@ export function createSessionsSpawnTool(
           context,
           lightContext,
           expectsCompletionMessage,
+          completionTarget,
           attachments,
           attachMountPath:
             params.attachAs && typeof params.attachAs === "object"

@@ -94,6 +94,7 @@ export async function deliverSubagentAnnouncement(params: {
   targetRequesterSessionKey: string;
   requesterIsSubagent: boolean;
   expectsCompletionMessage: boolean;
+  completionTarget?: "parent";
   requireDirectDelivery?: boolean;
   requireVisibleReply?: boolean;
   bestEffortDeliver?: boolean;
@@ -135,21 +136,23 @@ export async function deliverSubagentAnnouncement(params: {
         params.targetRequesterSessionKey,
         params.requesterAgentId,
       ).entry;
-      // No external route exists for an internal-only handoff. Let the normal
-      // agent final enter the owning transcript instead of requiring a message tool target.
+      // Ordinary internal-only handoffs may enter the owning transcript. Parent-only
+      // completions stay message-tool-only so generated media cannot bypass the boundary.
       const sourceReplyDeliveryMode =
-        queuedRoute.route.channel === INTERNAL_MESSAGE_CHANNEL
-          ? "automatic"
-          : completionRequiresMessageToolDelivery({
-                cfg,
-                requesterSessionKey: params.requesterSessionKey,
-                targetRequesterSessionKey: canonicalSessionKey,
-                requesterEntry,
-                directOrigin: effectiveDirectOrigin,
-                requesterSessionOrigin,
-              })
-            ? "message_tool_only"
-            : "automatic";
+        params.completionTarget === "parent"
+          ? "message_tool_only"
+          : queuedRoute.route.channel === INTERNAL_MESSAGE_CHANNEL
+            ? "automatic"
+            : completionRequiresMessageToolDelivery({
+                  cfg,
+                  requesterSessionKey: params.requesterSessionKey,
+                  targetRequesterSessionKey: canonicalSessionKey,
+                  requesterEntry,
+                  directOrigin: effectiveDirectOrigin,
+                  requesterSessionOrigin,
+                })
+              ? "message_tool_only"
+              : "automatic";
       const queuePayload = {
         kind: "agentTurn",
         sessionKey: canonicalSessionKey,
@@ -164,6 +167,7 @@ export async function deliverSubagentAnnouncement(params: {
           sourceTool: params.sourceTool ?? "subagent_announce",
         },
         sourceReplyDeliveryMode,
+        ...(params.completionTarget ? { completionTarget: params.completionTarget } : {}),
         expectedMediaUrls: collectExpectedMediaFromInternalEvents(params.internalEvents),
         idempotencyKey: `${params.directIdempotencyKey}:agent-loop`,
       } as const;
@@ -219,7 +223,7 @@ export async function deliverSubagentAnnouncement(params: {
 
   return await runSubagentAnnounceDispatch({
     expectsCompletionMessage: params.expectsCompletionMessage,
-    requireDirectDelivery: params.requireDirectDelivery,
+    requireDirectDelivery: params.requireDirectDelivery || params.completionTarget === "parent",
     signal: params.signal,
     steer: async () => {
       if (sourceOwnerChanged()) {
@@ -255,6 +259,7 @@ export async function deliverSubagentAnnouncement(params: {
         isCompletionOwnedByRequesterYield: params.isCompletionOwnedByRequesterYield,
         requesterIsSubagent: params.requesterIsSubagent,
         expectsCompletionMessage: params.expectsCompletionMessage,
+        completionTarget: params.completionTarget,
         requireVisibleReply: params.requireVisibleReply,
         onDeliveryResult: params.onDeliveryResult,
         signal: params.signal,

@@ -2556,7 +2556,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
   it("records generated-media delivery runs as durable terminal sources", async () => {
     setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+    state.runAgentAttemptMock.mockResolvedValue({
+      ...makeSuccessResult("openai", "gpt-5.4"),
+      successfulCronAdds: 1,
+    });
     setupBareStoredSession();
     state.deliverAgentCommandResultMock.mockImplementation(async (params: unknown) => {
       const onDeliveryResult = (params as { onDeliveryResult?: (result: unknown) => void })
@@ -2782,11 +2785,29 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         sessionKey: "agent:main:main",
         internalDeliveryMediaUrls: ["/tmp/proof.png"],
       }),
-    ).rejects.toThrow(
-      "internal delivery media constraints require automatic delivery with restart-safe tools and no message tool",
-    );
+    ).rejects.toThrow("internal delivery media constraints require a scoped restart-safe policy");
 
     expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+  });
+
+  it("admits message-owned media constraints under restart-safe recovery", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+
+    await agentCommand({
+      message: "send generated media through the source message tool",
+      sessionKey: "agent:main:main",
+      channel: "discord",
+      to: "channel:123",
+      deliver: false,
+      sourceReplyDeliveryMode: "message_tool_only",
+      disableMessageTool: false,
+      forceRestartSafeTools: true,
+      internalDeliveryMediaUrls: ["/tmp/proof.png"],
+      runId: "image:task-parent:agent-loop",
+    });
+
+    expect(state.runAgentAttemptMock).toHaveBeenCalled();
   });
 
   it("retains and clears a preclaimed transcript-only recovery run", async () => {

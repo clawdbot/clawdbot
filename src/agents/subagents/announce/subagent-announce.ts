@@ -180,6 +180,7 @@ export async function runSubagentAnnounceFlow(params: {
   outcome?: SubagentRunOutcome;
   announceType?: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
+  completionTarget?: "parent";
   spawnMode?: SpawnSubagentMode;
   wakeOnDescendantSettle?: boolean;
   /** Deliver only frozen terminal facts; never inspect or mutate the child session. */
@@ -478,6 +479,10 @@ export async function runSubagentAnnounceFlow(params: {
         const parentSessionAlive = hasUsableSessionEntry(parentSessionEntry);
 
         if (!parentSessionAlive) {
+          if (params.completionTarget === "parent") {
+            shouldDeleteChildSession = false;
+            return "retryable";
+          }
           const fallback = resolveRequesterForChildSession(targetRequesterSessionKey);
           if (!fallback?.requesterSessionKey) {
             shouldDeleteChildSession = false;
@@ -585,6 +590,7 @@ export async function runSubagentAnnounceFlow(params: {
       targetRequesterSessionKey,
       requesterIsSubagent,
       expectsCompletionMessage,
+      completionTarget: params.completionTarget,
       bestEffortDeliver: params.bestEffortDeliver,
       directIdempotencyKey,
       onDeliveryResult: reportDeliveryResult,

@@ -6,6 +6,7 @@ import {
   getGatewayAgentResult,
   hasCommittedOutboundDeliveryEvidence,
   hasCompleteAutomaticMediaDeliveryOutcomeEvidence,
+  hasUnaccountedMessagingToolAggregateEvidence,
   hasVisibleAgentPayload,
   type AgentDeliveryEvidence,
 } from "../agents/embedded-agent-runner/delivery-evidence.js";
@@ -17,6 +18,7 @@ import {
 } from "../config/sessions/restart-recovery-state.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { sourceDeliveryTargetsMatch } from "../infra/outbound/source-delivery-plan.js";
 import {
   advanceSessionDeliveryAgentRun,
   deferSessionDelivery,
@@ -91,6 +93,110 @@ function hasUnexpectedRecoverySideEffects(result: AgentDeliveryEvidence): boolea
   );
 }
 
+function hasUnaccountedOrUnsafeParentOnlyDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
+  if (
+    result.restartUnsafeSideEffectsDetected === true ||
+    result.messagingToolAggregateEvidenceUnaccounted === true ||
+    result.messagingToolSentTargetsTruncated === true ||
+    result.didSendDeterministicApprovalPrompt === true ||
+    hasUnaccountedMessagingToolAggregateEvidence(result) ||
+    (Array.isArray(result.messagingToolSentTargets) && result.messagingToolSentTargets.length > 64)
+  ) {
+    return true;
+  }
+  const hasConcreteMessagingToolReceipt =
+    Array.isArray(result.messagingToolSentTargets) &&
+    result.messagingToolSentTargets.some(
+      (target) => target !== null && typeof target === "object" && !Array.isArray(target),
+    );
+  const hasCommittedNonMessagingEffect = hasCommittedOutboundDeliveryEvidence({
+    acceptedSessionSpawns: result.acceptedSessionSpawns,
+    successfulCronAdds: result.successfulCronAdds,
+  });
+  return (
+    hasCommittedNonMessagingEffect ||
+    (hasCommittedOutboundDeliveryEvidence(result) && !hasConcreteMessagingToolReceipt)
+  );
+}
+
+function collectParentOnlySourceRouteMedia(params: {
+  result: AgentDeliveryEvidence;
+  route: SessionDeliveryRoute;
+}): { matchedRoute: boolean; mediaUrls: Set<string> } {
+  if (params.route.channel === INTERNAL_MESSAGE_CHANNEL) {
+    return { matchedRoute: false, mediaUrls: new Set() };
+  }
+  const targets = Array.isArray(params.result.messagingToolSentTargets)
+    ? params.result.messagingToolSentTargets
+    : [];
+  let matchedRoute = false;
+  const mediaUrls = new Set<string>();
+  for (const target of targets) {
+    if (!target || typeof target !== "object" || Array.isArray(target)) {
+      continue;
+    }
+    if (!sourceDeliveryTargetsMatch(target, params.route)) {
+      continue;
+    }
+    matchedRoute = true;
+    const targetMediaUrls = (target as { mediaUrls?: unknown }).mediaUrls;
+    if (Array.isArray(targetMediaUrls)) {
+      for (const mediaUrl of targetMediaUrls) {
+        if (typeof mediaUrl === "string" && mediaUrl.trim()) {
+          mediaUrls.add(normalizeMediaReferenceForComparison(mediaUrl));
+        }
+      }
+    }
+  }
+  return { matchedRoute, mediaUrls };
+}
+
+async function rearmParentOnlyGeneratedMediaAgentRun(params: {
+  entry: QueuedAgentTurnSessionDelivery;
+  stateDir?: string;
+  reason?: string;
+  updates?: {
+    expectedMediaUrls?: string[];
+    message?: string;
+    suppressTextDelivery?: boolean;
+  };
+}): Promise<never> {
+  const reason =
+    params.reason ??
+    "queued parent-only generated-media agent turn completed without a matching source-route message-tool receipt";
+  const currentAgentRunAttempt = params.entry.agentRunAttempt ?? 0;
+  if (params.entry.lastChargedAgentRunAttempt !== currentAgentRunAttempt) {
+    await failSessionDelivery(
+      params.entry.id,
+      reason,
+      ...sessionDeliveryStateDirArgs(params.stateDir),
+    );
+  }
+  try {
+    if (params.stateDir !== undefined) {
+      await advanceSessionDeliveryAgentRun(params.entry.id, params.updates, params.stateDir);
+    } else if (params.updates) {
+      await advanceSessionDeliveryAgentRun(params.entry.id, params.updates);
+    } else {
+      await advanceSessionDeliveryAgentRun(params.entry.id);
+    }
+    await deferSessionDelivery(
+      params.entry.id,
+      AGENT_DELIVERY_OWNERSHIP_RETRY_MS,
+      ...sessionDeliveryStateDirArgs(params.stateDir),
+    );
+  } catch (error) {
+    log.warn("queued parent-only generated-media retry transition remains pending", {
+      queueId: params.entry.id,
+      error: String(error),
+    });
+    throw new SessionDeliveryRetryChargedError(
+      `${reason}; queue state transition failed after retry charge`,
+    );
+  }
+  throw new SessionDeliveryDeferredError(reason);
+}
+
 function resolveQueuedAgentRunId(entry: QueuedAgentTurnSessionDelivery) {
   const base = entry.idempotencyKey ?? entry.messageId;
   return entry.agentRunAttempt ? `${base}:attempt:${entry.agentRunAttempt}` : base;
@@ -163,6 +269,41 @@ async function evaluateQueuedGeneratedMediaAgentResult(params: {
   stateDir?: string;
   persistInternalMedia?: (mediaUrls: string[]) => Promise<void>;
 }) {
+  if (params.entry.completionTarget === "parent") {
+    if (hasUnaccountedOrUnsafeParentOnlyDeliveryEvidence(params.result)) {
+      log.warn("parent-only generated-media recovery has unaccounted or unsafe evidence", {
+        queueId: params.entry.id,
+      });
+      await deadLetterSessionDelivery(
+        params.entry,
+        "queued parent-only generated-media delivery dead-lettered after unaccounted or unsafe delivery evidence",
+        params.stateDir,
+      );
+    }
+    const sourceReceipt = collectParentOnlySourceRouteMedia(params);
+    const expectedMediaUrls = params.entry.expectedMediaUrls ?? [];
+    const missingMediaUrls = expectedMediaUrls.filter(
+      (mediaUrl) => !sourceReceipt.mediaUrls.has(normalizeMediaReferenceForComparison(mediaUrl)),
+    );
+    if (sourceReceipt.matchedRoute && missingMediaUrls.length === 0) {
+      return;
+    }
+    if (sourceReceipt.matchedRoute) {
+      const retryMessage = formatGeneratedMediaDeliveryRetryForPrompt(missingMediaUrls);
+      await rearmParentOnlyGeneratedMediaAgentRun({
+        entry: params.entry,
+        ...(params.stateDir !== undefined ? { stateDir: params.stateDir } : {}),
+        reason:
+          "queued parent-only generated-media agent turn completed without all expected media on the matching source route",
+        updates: {
+          expectedMediaUrls: missingMediaUrls,
+          ...(retryMessage ? { message: retryMessage } : {}),
+          suppressTextDelivery: true,
+        },
+      });
+    }
+    await rearmParentOnlyGeneratedMediaAgentRun(params);
+  }
   if (hasUnexpectedRecoverySideEffects(params.result)) {
     log.warn("queued generated-media recovery reported an unexpected committed side effect", {
       queueId: params.entry.id,
@@ -326,8 +467,13 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
   }
 
   const queuedRunId = resolveQueuedAgentRunId(entry);
+  const parentOnlyCompletion = entry.completionTarget === "parent";
   const deliveryMode = resolveDurableCompletionDeliveryMode(entry.sourceReplyDeliveryMode);
-  if (deliveryMode === "host_owned" && route.channel === INTERNAL_MESSAGE_CHANNEL) {
+  if (
+    !parentOnlyCompletion &&
+    deliveryMode === "host_owned" &&
+    route.channel === INTERNAL_MESSAGE_CHANNEL
+  ) {
     return await deadLetterSessionDelivery(
       entry,
       "queued host-owned generated-media delivery requires an external route",
@@ -412,10 +558,9 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
       params.stateDir,
     );
   }
-  // `host_owned` is the explicit-send equivalent of message-tool-only policy.
-  // The queue owner fixes route/media and disables the model-facing message tool,
-  // so only this one system completion can use the normal final-delivery transport.
-  const sourceReplyDeliveryMode = "automatic" as const;
+  // Ordinary host-owned media uses fixed automatic transport. Parent-only
+  // completions preserve message-tool ownership through the durable consumer.
+  const sourceReplyDeliveryMode = parentOnlyCompletion ? "message_tool_only" : "automatic";
   const cronLifecycleRevision = params.sessionEntry?.cronRunContinuation?.lifecycleRevision?.trim();
   const cronSessionId = cronLifecycleRevision ? params.sessionEntry?.sessionId?.trim() : undefined;
   // Fence before gateway admission. Recovery clears it only for an explicit
@@ -429,8 +574,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
       {
         sessionKey: params.canonicalKey,
         message: entry.message,
-        deliver:
-          sourceReplyDeliveryMode === "automatic" && route.channel !== INTERNAL_MESSAGE_CHANNEL,
+        deliver: !parentOnlyCompletion && route.channel !== INTERNAL_MESSAGE_CHANNEL,
         bestEffortDeliver: false,
         channel: route.channel,
         accountId: route.accountId,
@@ -439,7 +583,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
         ...(cronSessionId ? { sessionId: cronSessionId } : {}),
         inputProvenance: entry.inputProvenance,
         sourceReplyDeliveryMode,
-        disableMessageTool: true,
+        disableMessageTool: !parentOnlyCompletion,
         forceRestartSafeTools: true,
         idempotencyKey: queuedRunId,
       },

@@ -186,7 +186,7 @@ export function hasMessagingToolDeliveryToSource(
     messagingToolSourceReplyPayloads?: unknown;
   },
   deliveryTarget: Parameters<typeof sourceDeliveryTargetsMatch>[1],
-  options?: { requireFinalReply?: boolean },
+  options?: { requireFinalReply?: boolean; requireSourceMatch?: boolean },
 ): boolean {
   const targets = Array.isArray(result.messagingToolSentTargets)
     ? result.messagingToolSentTargets
@@ -202,17 +202,27 @@ export function hasMessagingToolDeliveryToSource(
       return false;
     }
     const record = target as Parameters<typeof sourceDeliveryTargetsMatch>[0];
-    // Older source receipts omit `to`; explicit off-target sends must never satisfy it.
+    // Older source receipts omit `to`; parent-only routing requires a route-checkable receipt.
     const sourceTarget =
       typeof record.to === "string" && record.to.trim()
         ? record
-        : { ...record, to: deliveryTarget.to };
+        : options?.requireSourceMatch
+          ? record
+          : { ...record, to: deliveryTarget.to };
     return sourceDeliveryTargetsMatch(sourceTarget, deliveryTarget);
   });
+  // Parent-only routing must prove an external send to the requester route.
+  // Aggregate/source-reply evidence can describe the private internal-ui sink,
+  // so it cannot discharge the external-delivery obligation by itself.
+  const hasStrictSourceDelivery = sourceTargets.length > 0;
+  if (options?.requireSourceMatch && !hasStrictSourceDelivery) {
+    return false;
+  }
   if (options?.requireFinalReply) {
-    const hasCommittedSourceDelivery =
-      hasCommittedSourceReplyDeliveryEvidence(result) ||
-      (hasMessagingToolDeliveryEvidence(result) && sourceTargets.length > 0);
+    const hasCommittedSourceDelivery = options.requireSourceMatch
+      ? hasStrictSourceDelivery
+      : hasCommittedSourceReplyDeliveryEvidence(result) ||
+        (hasMessagingToolDeliveryEvidence(result) && sourceTargets.length > 0);
     // Only current-source final markers count; another target's final cannot
     // turn a source progress update into the owed requester reply.
     return (
@@ -222,6 +232,9 @@ export function hasMessagingToolDeliveryToSource(
         messagingToolSourceReplyPayloads: result.messagingToolSourceReplyPayloads,
       }) !== false
     );
+  }
+  if (options?.requireSourceMatch) {
+    return true;
   }
   if (
     hasCommittedSourceReplyDeliveryEvidence(result) ||

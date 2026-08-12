@@ -1801,6 +1801,55 @@ describe("executePreparedCliRun supervisor output capture", () => {
     ]);
   });
 
+  it("keeps exactly 64 committed JSONL message receipts without truncation", async () => {
+    const starts = Array.from({ length: 64 }, (_, index) => ({
+      type: "mcp_tool_use",
+      id: `message-send-${index}`,
+      name: "mcp__openclaw__message",
+      input: {
+        action: "send",
+        channel: "telegram",
+        target: `chat${index}`,
+        message: "done",
+      },
+    }));
+    const results = starts.map((start) => ({
+      type: "mcp_tool_result",
+      tool_use_id: start.id,
+      content: [{ type: "text", text: JSON.stringify({ status: "sent" }) }],
+    }));
+    const chunks = [
+      `${JSON.stringify({
+        type: "assistant",
+        message: { role: "assistant", content: [...starts, ...results] },
+      })}\n`,
+      `${JSON.stringify({ type: "result", session_id: "session-jsonl", result: "done" })}\n`,
+    ];
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      for (const chunk of chunks) {
+        input.onStdout?.(chunk);
+      }
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    const result = await executePreparedCliRun(
+      buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" }),
+    );
+
+    expect(result.messagingToolSentTargets).toHaveLength(64);
+    expect(result.messagingToolSentTargetsTruncated).toBeUndefined();
+  });
+
   it("bounds pending and committed JSONL message delivery evidence", async () => {
     const starts = Array.from({ length: 65 }, (_, index) => ({
       type: "mcp_tool_use",
@@ -1849,6 +1898,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(result.messagingToolSentTargets).toHaveLength(64);
     expect(result.messagingToolSentTargets?.[0]?.to).toBe("chat1");
     expect(result.messagingToolSentTargets?.at(-1)?.to).toBe("chat64");
+    expect(result.messagingToolSentTargetsTruncated).toBe(true);
   });
 
   it("fails closed when an unresolved JSONL message send is evicted", async () => {

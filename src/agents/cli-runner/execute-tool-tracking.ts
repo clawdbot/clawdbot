@@ -84,6 +84,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   const messagingToolSentMediaUrlKeys = new Set<string>();
   const messagingToolSentTargets: MessagingToolSend[] = [];
   const messagingToolSentTargetKeys = new Set<string>();
+  let messagingToolSentTargetsTruncated = false;
   const messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[] = [];
   const matchesCliLoopbackCall = (
     toolName: string,
@@ -279,6 +280,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       return;
     }
     if (messagingToolSentTargets.length >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
+      messagingToolSentTargetsTruncated = true;
       const removed = messagingToolSentTargets.shift();
       if (removed) {
         messagingToolSentTargetKeys.delete(buildMessagingToolSendEvidenceKey(removed));
@@ -474,6 +476,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         // Once an unresolved send is evicted, its later result cannot be correlated.
         // Fail closed so a failed turn cannot duplicate it.
         didSendViaMessagingTool = true;
+        messagingToolSentTargetsTruncated = true;
       }
     }
     pendingMessagingCalls.set(event.toolCallId, {
@@ -590,6 +593,9 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     messagingToolSentTexts,
     messagingToolSentMediaUrls,
     messagingToolSentTargets,
+    ...(messagingToolSentTargetsTruncated
+      ? { messagingToolSentTargetsTruncated: true as const }
+      : {}),
     messagingToolSourceReplyPayloads,
   });
   return {
@@ -616,6 +622,9 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
           : {}),
         ...(current.messagingToolSentTargets.length > 0
           ? { messagingToolSentTargets: current.messagingToolSentTargets.slice() }
+          : {}),
+        ...(current.messagingToolSentTargetsTruncated
+          ? { messagingToolSentTargetsTruncated: true as const }
           : {}),
         ...(current.messagingToolSourceReplyPayloads.length > 0
           ? { messagingToolSourceReplyPayloads: current.messagingToolSourceReplyPayloads.slice() }

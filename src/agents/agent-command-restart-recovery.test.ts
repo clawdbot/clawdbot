@@ -219,6 +219,25 @@ describe("buildRestartRecoveryTerminalDeliveryEvidence", () => {
     expect(evidence?.messagingToolSentTargetsTruncated).toBe(true);
   });
 
+  it("preserves producer truncation for an exactly bounded target set", () => {
+    const messagingToolSentTargets = Array.from({ length: 64 }, (_, index) => ({
+      provider: "discord",
+      to: `channel:${index}`,
+      text: "sent",
+    }));
+
+    expect(
+      buildRestartRecoveryTerminalDeliveryEvidence({ messagingToolSentTargets })
+        .messagingToolSentTargetsTruncated,
+    ).toBeUndefined();
+    expect(
+      buildRestartRecoveryTerminalDeliveryEvidence({
+        messagingToolSentTargets,
+        messagingToolSentTargetsTruncated: true,
+      }).messagingToolSentTargetsTruncated,
+    ).toBe(true);
+  });
+
   it("does not mark reasoning payloads as visible terminal replies", () => {
     const evidence = buildRestartRecoveryTerminalDeliveryEvidence({
       payloads: [{ isReasoning: true, mediaUrls: ["/tmp/private.png"] }],
@@ -244,7 +263,30 @@ describe("buildRestartRecoveryTerminalDeliveryEvidence", () => {
     expect(evidence).toEqual({
       captured: true,
       messagingToolAggregateEvidenceUnaccounted: true,
-      restartUnsafeSideEffectsDetected: true,
+    });
+  });
+
+  it("does not classify granular messaging receipts as restart-unsafe side effects", () => {
+    const evidence = buildRestartRecoveryTerminalDeliveryEvidence({
+      messagingToolSentTargets: [
+        {
+          provider: "discord",
+          to: "channel:123",
+          mediaUrls: ["/tmp/proof.png"],
+        },
+      ],
+    });
+
+    expect(evidence).toEqual({
+      captured: true,
+      messagingToolSentTargets: [
+        {
+          provider: "discord",
+          to: "channel:123",
+          mediaUrls: ["/tmp/proof.png"],
+          visible: true,
+        },
+      ],
     });
   });
 

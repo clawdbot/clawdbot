@@ -46,6 +46,33 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type OpenClawCodingToolsOptions = NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>;
 type SkillUsagePaths = OpenClawCodingToolsOptions["skillUsagePaths"];
 
+/**
+ * Build the concrete tool surface for a restart-owned turn. A message-owned
+ * completion may retain only the unowned core message tool; plugin/channel
+ * shadows still require an explicit replay-safe declaration.
+ */
+function filterRestartSafeAgentTools<T extends { name?: string }>(
+  tools: T[],
+  options?: {
+    declaredReplaySafe?: (tool: T) => boolean | undefined;
+    preserveCoreMessageTool?: boolean;
+  },
+): T[] {
+  return tools.filter((tool) => {
+    const declaredReplaySafe = options?.declaredReplaySafe?.(tool);
+    if (
+      options?.preserveCoreMessageTool === true &&
+      declaredReplaySafe === undefined &&
+      tool.name?.trim().toLowerCase() === "message"
+    ) {
+      return true;
+    }
+    return isAgentToolRestartSafe(tool, {
+      declaredReplaySafe: () => declaredReplaySafe,
+    });
+  });
+}
+
 export function prepareEmbeddedAttemptToolBase(params: {
   agentDir: string;
   attempt: EmbeddedRunAttemptParams;
@@ -339,7 +366,10 @@ export function prepareEmbeddedAttemptToolBase(params: {
         return filteredTools;
       })();
   const toolsRaw = attempt.forceRestartSafeTools
-    ? constructedToolsRaw.filter((tool) => isAgentToolRestartSafe(tool, restartSafetyOptions))
+    ? filterRestartSafeAgentTools(constructedToolsRaw, {
+        ...restartSafetyOptions,
+        preserveCoreMessageTool: forceDirectMessageTool,
+      })
     : constructedToolsRaw;
   if (attempt.forceRestartSafeTools) {
     log.info(

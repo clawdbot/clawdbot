@@ -135,6 +135,15 @@ Starts a sub-agent run with `deliver: false` on the global `subagent` lane,
 then runs an announce step and posts the announce reply to the requester
 chat channel.
 
+Set `completionTarget: "parent"` on a native spawn to keep the completion in
+the requester session until the parent deliberately sends a reply with the
+`message` tool to the requester route. No automatic external fallback is sent:
+if the parent does not complete that explicit send, delivery remains pending for
+retry. This native-only route is unavailable with `runtime: "acp"`,
+`collect: true`, `visible: true`, or `thread: true`, and when completion is
+owned by a sub-agent session (sub-agents cannot use the external `message`
+tool). ACP spawns use their separate `streamTo` option.
+
 Availability depends on the caller's effective tool policy. The built-in
 `coding` and `messaging` profiles include `sessions_spawn`,
 `sessions_yield`, and `subagents`; `minimal` does not. `full` allows every
@@ -230,6 +239,15 @@ Per-agent override: `agents.entries.*.subagents.delegationMode`.
 </ParamField>
 <ParamField path="cleanup" type='"delete" | "keep"' default="keep">
   `"delete"` archives the session immediately after announce (still keeps the transcript via rename).
+</ParamField>
+<ParamField path="completionTarget" type='"parent"'>
+  Native sub-agents only. `"parent"` keeps completion delivery in the requester
+  session until the parent explicitly uses the `message` tool to send to the
+  requester route. OpenClaw does not automatically post the child result as a
+  fallback; without a matching external send receipt, delivery remains pending
+  for retry. Unavailable with `runtime: "acp"`, `collect: true`,
+  `visible: true`, or `thread: true`, and when completion is owned by a
+  sub-agent session.
 </ParamField>
 <ParamField path="sandbox" type='"inherit" | "require"' default="inherit">
   `require` rejects the spawn unless the target child runtime is sandboxed.

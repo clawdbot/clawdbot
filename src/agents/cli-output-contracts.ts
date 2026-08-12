@@ -53,6 +53,7 @@ export type CliOutput = {
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: MessagingToolSend[];
+  messagingToolSentTargetsTruncated?: true;
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
   yielded?: true;
 };

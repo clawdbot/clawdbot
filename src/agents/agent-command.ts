@@ -95,18 +95,25 @@ async function agentCommandInternal(
           forceRestartSafeTools: prepared.sessionEntry?.restartRecoveryForceSafeTools,
         }
       : prepared.opts;
+  const hasInternalDeliveryConstraints =
+    preparedOpts.internalDeliveryMediaUrls !== undefined ||
+    preparedOpts.internalDeliverySuppressText === true;
+  const hasHostOwnedRecoveryPolicy =
+    preparedOpts.forceRestartSafeTools === true &&
+    preparedOpts.disableMessageTool === true &&
+    preparedOpts.sourceReplyDeliveryMode === "automatic";
+  const hasMessageOwnedRecoveryPolicy =
+    preparedOpts.forceRestartSafeTools === true &&
+    preparedOpts.disableMessageTool === false &&
+    preparedOpts.sourceReplyDeliveryMode === "message_tool_only";
   if (
     (preparedOpts.internalDeliverySuppressText === true &&
       preparedOpts.internalDeliveryMediaUrls === undefined) ||
-    ((preparedOpts.internalDeliveryMediaUrls !== undefined ||
-      preparedOpts.internalDeliverySuppressText === true) &&
-      (preparedOpts.forceRestartSafeTools !== true ||
-        preparedOpts.disableMessageTool !== true ||
-        preparedOpts.sourceReplyDeliveryMode !== "automatic"))
+    (hasInternalDeliveryConstraints &&
+      !hasHostOwnedRecoveryPolicy &&
+      !hasMessageOwnedRecoveryPolicy)
   ) {
-    throw new Error(
-      "internal delivery media constraints require automatic delivery with restart-safe tools and no message tool",
-    );
+    throw new Error("internal delivery media constraints require a scoped restart-safe policy");
   }
   let opts: AgentCommandOpts = {
     ...preparedOpts,

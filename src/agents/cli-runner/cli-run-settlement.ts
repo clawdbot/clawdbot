@@ -413,6 +413,9 @@ export function buildCliDeliveredFailure(params: {
     ...(evidence.messagingToolSentTargets?.length
       ? { messagingToolSentTargets: evidence.messagingToolSentTargets }
       : {}),
+    ...(evidence.messagingToolSentTargetsTruncated
+      ? { messagingToolSentTargetsTruncated: true as const }
+      : {}),
     ...(evidence.messagingToolSourceReplyPayloads?.length
       ? { messagingToolSourceReplyPayloads: evidence.messagingToolSourceReplyPayloads }
       : {}),
@@ -610,6 +613,9 @@ export function buildCliRunResult(params: {
       : {}),
     ...(output.messagingToolSentTargets?.length
       ? { messagingToolSentTargets: output.messagingToolSentTargets }
+      : {}),
+    ...(output.messagingToolSentTargetsTruncated
+      ? { messagingToolSentTargetsTruncated: true as const }
       : {}),
     ...(output.messagingToolSourceReplyPayloads?.length
       ? { messagingToolSourceReplyPayloads: output.messagingToolSourceReplyPayloads }

@@ -1085,6 +1085,261 @@ describe("scheduleRestartSentinelWake", () => {
     );
   });
 
+  it("requires parent-only generated media to send through the matching source route", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        messagingToolSentTargets: [
+          {
+            provider: "discord",
+            to: "channel:123",
+            mediaUrls: ["/tmp/proof.png"],
+          },
+        ],
+      },
+    });
+
+    await deliverGeneratedMedia({
+      id: "session-delivery-media-parent",
+      messageId: "image:task-parent:agent-loop",
+      completionTarget: "parent",
+      sourceReplyDeliveryMode: "message_tool_only",
+      expectedMediaUrls: ["/tmp/proof.png"],
+    });
+
+    expect(mocks.dispatchGatewayMethodInProcess).toHaveBeenCalledWith(
+      "agent",
+      expect.objectContaining({
+        deliver: false,
+        sourceReplyDeliveryMode: "message_tool_only",
+        disableMessageTool: false,
+      }),
+      expect.any(Object),
+    );
+    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
+    expect(mocks.deferSessionDelivery).not.toHaveBeenCalled();
+    expect(mocks.markSessionDeliverySettlement).not.toHaveBeenCalled();
+  });
+
+  it("retries parent-only generated media without a matching source receipt", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: { payloads: [{ text: "ready", mediaUrls: ["/tmp/proof.png"] }] },
+    });
+
+    await expect(
+      deliverGeneratedMedia({
+        id: "session-delivery-media-parent-missing-receipt",
+        messageId: "image:task-parent-missing-receipt:agent-loop",
+        completionTarget: "parent",
+        sourceReplyDeliveryMode: "message_tool_only",
+        expectedMediaUrls: ["/tmp/proof.png"],
+      }),
+    ).rejects.toThrow("without a matching source-route message-tool receipt");
+
+    expect(mocks.advanceSessionDeliveryAgentRun).toHaveBeenCalledWith(
+      "session-delivery-media-parent-missing-receipt",
+    );
+    expect(mocks.deferSessionDelivery).toHaveBeenCalledWith(
+      "session-delivery-media-parent-missing-receipt",
+      1_000,
+    );
+    expect(mocks.markSessionDeliverySettlement).not.toHaveBeenCalled();
+  });
+
+  it("retries parent-only generated media after a concrete off-route receipt", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        messagingToolSentTargets: [
+          {
+            provider: "discord",
+            to: "channel:wrong",
+            mediaUrls: ["/tmp/proof.png"],
+          },
+        ],
+      },
+    });
+
+    await expect(
+      deliverGeneratedMedia({
+        id: "session-delivery-media-parent-off-route",
+        messageId: "image:task-parent-off-route:agent-loop",
+        completionTarget: "parent",
+        sourceReplyDeliveryMode: "message_tool_only",
+        expectedMediaUrls: ["/tmp/proof.png"],
+      }),
+    ).rejects.toThrow("without a matching source-route message-tool receipt");
+
+    expect(mocks.advanceSessionDeliveryAgentRun).toHaveBeenCalledWith(
+      "session-delivery-media-parent-off-route",
+    );
+    expect(mocks.deferSessionDelivery).toHaveBeenCalledWith(
+      "session-delivery-media-parent-off-route",
+      1_000,
+    );
+    expect(mocks.markSessionDeliverySettlement).not.toHaveBeenCalled();
+  });
+
+  it("retries parent-only generated media when a source-route receipt omits the media", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        messagingToolSentTargets: [
+          {
+            provider: "discord",
+            to: "channel:123",
+            text: "ready",
+          },
+        ],
+      },
+    });
+
+    await expect(
+      deliverGeneratedMedia({
+        id: "session-delivery-media-parent-missing-media",
+        messageId: "image:task-parent-missing-media:agent-loop",
+        completionTarget: "parent",
+        sourceReplyDeliveryMode: "message_tool_only",
+        expectedMediaUrls: ["/tmp/proof.png"],
+      }),
+    ).rejects.toThrow("without all expected media on the matching source route");
+
+    expect(mocks.advanceSessionDeliveryAgentRun).toHaveBeenCalledWith(
+      "session-delivery-media-parent-missing-media",
+      {
+        expectedMediaUrls: ["/tmp/proof.png"],
+        message: expect.stringContaining("/tmp/proof.png"),
+        suppressTextDelivery: true,
+      },
+    );
+    expect(mocks.deferSessionDelivery).toHaveBeenCalledWith(
+      "session-delivery-media-parent-missing-media",
+      1_000,
+    );
+    expect(mocks.markSessionDeliverySettlement).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when matching parent-only media evidence is truncated", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        messagingToolSentTargets: Array.from({ length: 64 }, (_, index) => ({
+          provider: "discord",
+          to: "channel:123",
+          mediaUrls: [`/tmp/${index}.png`],
+        })),
+        messagingToolSentTargetsTruncated: true,
+      },
+    });
+
+    await expect(
+      deliverGeneratedMedia({
+        id: "session-delivery-media-parent-truncated",
+        messageId: "image:task-parent-truncated:agent-loop",
+        completionTarget: "parent",
+        sourceReplyDeliveryMode: "message_tool_only",
+        expectedMediaUrls: ["/tmp/0.png", "/tmp/missing.png"],
+      }),
+    ).rejects.toThrow("dead-lettered after unaccounted or unsafe delivery evidence");
+
+    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
+    expect(mocks.deferSessionDelivery).not.toHaveBeenCalled();
+    expect(mocks.markSessionDeliverySettlement).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "session-delivery-media-parent-truncated" }),
+      "moved-to-failed",
+    );
+  });
+
+  it("fails closed on raw oversized parent-only message-tool target evidence", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        messagingToolSentTargets: Array.from({ length: 65 }, (_, index) => ({
+          provider: "discord",
+          to: "channel:123",
+          mediaUrls: [`/tmp/${index}.png`],
+        })),
+      },
+    });
+
+    await expect(
+      deliverGeneratedMedia({
+        id: "session-delivery-media-parent-raw-truncated",
+        messageId: "image:task-parent-raw-truncated:agent-loop",
+        completionTarget: "parent",
+        sourceReplyDeliveryMode: "message_tool_only",
+        expectedMediaUrls: ["/tmp/0.png"],
+      }),
+    ).rejects.toThrow("dead-lettered after unaccounted or unsafe delivery evidence");
+
+    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
+    expect(mocks.deferSessionDelivery).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on raw unaccounted parent-only aggregate message-tool evidence", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: {
+        didSendViaMessagingTool: true,
+        messagingToolSentMediaUrls: ["/tmp/one.png", "/tmp/unaccounted.png"],
+        messagingToolSentTargets: [
+          {
+            provider: "discord",
+            to: "channel:123",
+            mediaUrls: ["/tmp/one.png"],
+          },
+        ],
+      },
+    });
+
+    await expect(
+      deliverGeneratedMedia({
+        id: "session-delivery-media-parent-raw-unaccounted",
+        messageId: "image:task-parent-raw-unaccounted:agent-loop",
+        completionTarget: "parent",
+        sourceReplyDeliveryMode: "message_tool_only",
+        expectedMediaUrls: ["/tmp/one.png", "/tmp/two.png"],
+      }),
+    ).rejects.toThrow("dead-lettered after unaccounted or unsafe delivery evidence");
+
+    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
+    expect(mocks.deferSessionDelivery).not.toHaveBeenCalled();
+  });
+
+  it("keeps parent-only generated media retryable for a private internal route", async () => {
+    mocks.dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: { payloads: [{ text: "ready", mediaUrls: ["/tmp/proof.png"] }] },
+    });
+
+    await expect(
+      deliverGeneratedMedia({
+        id: "session-delivery-media-parent-internal",
+        messageId: "image:task-parent-internal:agent-loop",
+        completionTarget: "parent",
+        sourceReplyDeliveryMode: "message_tool_only",
+        route: { channel: "internal", to: "agent:main:main", chatType: "direct" },
+        expectedMediaUrls: ["/tmp/proof.png"],
+      }),
+    ).rejects.toThrow("without a matching source-route message-tool receipt");
+
+    expect(mocks.dispatchGatewayMethodInProcess).toHaveBeenCalledWith(
+      "agent",
+      expect.objectContaining({
+        deliver: false,
+        sourceReplyDeliveryMode: "message_tool_only",
+        disableMessageTool: false,
+      }),
+      expect.any(Object),
+    );
+    expect(mocks.deferSessionDelivery).toHaveBeenCalledWith(
+      "session-delivery-media-parent-internal",
+      1_000,
+    );
+    expect(mocks.markSessionDeliverySettlement).not.toHaveBeenCalled();
+  });
+
   it("fences an adopted generic turn in its explicit queue state directory", async () => {
     mocks.recordInboundSessionAndDispatchReply.mockImplementationOnce(async (params) => {
       await params.turnAdoptionLifecycle?.onAdopted();
@@ -1330,6 +1585,97 @@ describe("scheduleRestartSentinelWake", () => {
       1_000,
     );
     expect(mocks.dispatchGatewayMethodInProcess).not.toHaveBeenCalled();
+  });
+
+  it("accepts a persisted matching parent-only media receipt after restart", async () => {
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      entry: {
+        sessionId: "agent:main:main",
+        restartRecoveryTerminalRunIds: ["image:task-terminal-parent-match:agent-loop"],
+        restartRecoveryTerminalDeliveryEvidence: [
+          {
+            runId: "image:task-terminal-parent-match:agent-loop",
+            messagingToolSentTargets: [
+              {
+                provider: "discord",
+                to: "channel:123",
+                mediaUrls: ["/tmp/proof.png"],
+                visible: true,
+              },
+            ],
+          },
+        ],
+        updatedAt: 1,
+      },
+      store: {},
+      storePath: "/tmp/sessions.json",
+      canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
+      legacyKey: undefined,
+    });
+
+    await deliverGeneratedMedia({
+      id: "session-delivery-media-terminal-parent-match",
+      messageId: "image:task-terminal-parent-match:agent-loop",
+      completionTarget: "parent",
+      sourceReplyDeliveryMode: "message_tool_only",
+      expectedMediaUrls: ["/tmp/proof.png"],
+    });
+
+    expect(mocks.dispatchGatewayMethodInProcess).not.toHaveBeenCalled();
+    expect(mocks.advanceSessionDeliveryAgentRun).not.toHaveBeenCalled();
+    expect(mocks.deferSessionDelivery).not.toHaveBeenCalled();
+    expect(mocks.markSessionDeliverySettlement).not.toHaveBeenCalled();
+  });
+
+  it("retries a persisted off-route parent-only media receipt after restart", async () => {
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      entry: {
+        sessionId: "agent:main:main",
+        restartRecoveryTerminalRunIds: ["image:task-terminal-parent-off-route:agent-loop"],
+        restartRecoveryTerminalDeliveryEvidence: [
+          {
+            runId: "image:task-terminal-parent-off-route:agent-loop",
+            messagingToolSentTargets: [
+              {
+                provider: "discord",
+                to: "channel:wrong",
+                mediaUrls: ["/tmp/proof.png"],
+                visible: true,
+              },
+            ],
+          },
+        ],
+        updatedAt: 1,
+      },
+      store: {},
+      storePath: "/tmp/sessions.json",
+      canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
+      legacyKey: undefined,
+    });
+
+    await expect(
+      deliverGeneratedMedia({
+        id: "session-delivery-media-terminal-parent-off-route",
+        messageId: "image:task-terminal-parent-off-route:agent-loop",
+        completionTarget: "parent",
+        sourceReplyDeliveryMode: "message_tool_only",
+        expectedMediaUrls: ["/tmp/proof.png"],
+      }),
+    ).rejects.toThrow("without a matching source-route message-tool receipt");
+
+    expect(mocks.dispatchGatewayMethodInProcess).not.toHaveBeenCalled();
+    expect(mocks.advanceSessionDeliveryAgentRun).toHaveBeenCalledWith(
+      "session-delivery-media-terminal-parent-off-route",
+    );
+    expect(mocks.deferSessionDelivery).toHaveBeenCalledWith(
+      "session-delivery-media-terminal-parent-off-route",
+      1_000,
+    );
+    expect(mocks.markSessionDeliverySettlement).not.toHaveBeenCalled();
   });
 
   it("dead-letters an interrupted attempt without durable agent evidence", async () => {

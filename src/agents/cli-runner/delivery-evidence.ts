@@ -12,6 +12,7 @@ type CliMessagingDeliveryEvidence = Pick<
   | "messagingToolSentTexts"
   | "messagingToolSentMediaUrls"
   | "messagingToolSentTargets"
+  | "messagingToolSentTargetsTruncated"
   | "messagingToolSourceReplyPayloads"
 >;
 
@@ -34,6 +35,9 @@ function snapshotCliMessagingDeliveryEvidence(
       : {}),
     ...(output.messagingToolSentTargets?.length
       ? { messagingToolSentTargets: output.messagingToolSentTargets.slice() }
+      : {}),
+    ...(output.messagingToolSentTargetsTruncated
+      ? { messagingToolSentTargetsTruncated: true }
       : {}),
     ...(output.messagingToolSourceReplyPayloads?.length
       ? { messagingToolSourceReplyPayloads: output.messagingToolSourceReplyPayloads.slice() }
