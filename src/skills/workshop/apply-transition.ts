@@ -147,7 +147,10 @@ export async function applySkillProposalTransition(
 
   let evaluated: SkillProposalEvaluateResult;
   try {
-    evaluated = await dependencies.evaluateSkillProposal({
+    abortSignal?.throwIfAborted();
+    const evaluateInput: SkillProposalEvaluateInput & {
+      [skillProposalApplyAbortSignal]?: AbortSignal;
+    } = {
       workspaceDir: input.workspaceDir,
       ...(input.agentId ? { agentId: input.agentId } : {}),
       ...(input.eventActor ? { eventActor: input.eventActor } : {}),
@@ -156,7 +159,10 @@ export async function applySkillProposalTransition(
       expectedRevisionHash: initial.revisionHash,
       ...(input.correlationId ? { correlationId: input.correlationId } : {}),
       trigger: "apply",
-    });
+      ...(abortSignal ? { [skillProposalApplyAbortSignal]: abortSignal } : {}),
+    };
+    evaluated = await dependencies.evaluateSkillProposal(evaluateInput);
+    abortSignal?.throwIfAborted();
   } catch (error) {
     if (dependencies.isCreateTargetConflict(error)) {
       const staleTransition = withSkillProposalTargetLock(

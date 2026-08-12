@@ -7,6 +7,7 @@ import type {
   PluginHookSkillProposalEvaluationOutcome,
 } from "../../plugins/hook-types.js";
 import { readWorkspaceSkillFile } from "../lifecycle/workspace-skill-write.js";
+import { skillProposalApplyAbortSignal } from "./apply-transition.js";
 import {
   createSkillProposalEvent,
   dispatchSkillProposalChanged,
@@ -42,6 +43,12 @@ export class SkillProposalCreateTargetConflictError extends Error {}
 export async function evaluateSkillProposal(
   input: SkillProposalEvaluateInput,
 ): Promise<SkillProposalEvaluateResult> {
+  const abortSignal = (
+    input as SkillProposalEvaluateInput & {
+      [skillProposalApplyAbortSignal]?: AbortSignal;
+    }
+  )[skillProposalApplyAbortSignal];
+  abortSignal?.throwIfAborted();
   const correlationId = normalizeSkillProposalCorrelationId(input.correlationId);
   const shouldRunEvaluators = hasSkillProposalEvaluators();
   const initial = await readRequiredProposal(
@@ -123,6 +130,7 @@ export async function evaluateSkillProposal(
       )
     : [];
   const completedAt = new Date().toISOString();
+  abortSignal?.throwIfAborted();
   const evaluation = {
     id: randomUUID(),
     proposedVersion: read.record.proposedVersion,

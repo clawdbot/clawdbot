@@ -21,6 +21,7 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
   }),
 }));
 
+import { skillProposalApplyAbortSignal } from "./apply-transition.js";
 import { buildSkillProposalEvaluationBundles } from "./proposal-bundle.js";
 import {
   applySkillProposal,
@@ -58,6 +59,86 @@ afterAll(async () => {
 });
 
 describe("Skill Workshop proposal evaluation", () => {
+  it.each(["create", "update"] as const)(
+    "does not persist a held %s evaluation cancelled before apply",
+    async (kind) => {
+      const workspaceDir = await tempDirs.make(`openclaw-skill-evaluation-cancel-${kind}-`);
+      const skillName = `Cancelled ${kind}`;
+      if (kind === "update") {
+        const skillDir = path.join(workspaceDir, "skills", "cancelled-update");
+        await fs.mkdir(skillDir, { recursive: true });
+        await fs.writeFile(
+          path.join(skillDir, "SKILL.md"),
+          "---\nname: cancelled-update\ndescription: Existing skill\n---\n\n# Before\n",
+        );
+      }
+      const proposal =
+        kind === "create"
+          ? await proposeCreateSkill({
+              workspaceDir,
+              agentId: "main",
+              name: skillName,
+              description: "Keep evaluation cancellation atomic",
+              content: `# ${skillName}\n`,
+            })
+          : await proposeUpdateSkill({
+              workspaceDir,
+              agentId: "main",
+              skillName,
+              description: "Keep evaluation cancellation atomic",
+              content: "# After\n",
+            });
+      const beforeTarget = await fs
+        .readFile(proposal.record.target.skillFile, "utf8")
+        .catch(() => null);
+      let releaseEvaluator!: () => void;
+      const evaluatorReleased = new Promise<void>((resolve) => {
+        releaseEvaluator = resolve;
+      });
+      let markEvaluatorStarted!: () => void;
+      const evaluatorStarted = new Promise<void>((resolve) => {
+        markEvaluatorStarted = resolve;
+      });
+      hookMocks.evaluate.mockImplementation(async () => {
+        markEvaluatorStarted();
+        await evaluatorReleased;
+        return [];
+      });
+      const abortController = new AbortController();
+      const applyInput = {
+        workspaceDir,
+        agentId: "main",
+        proposalId: proposal.record.id,
+        expectedRevisionHash: proposal.revisionHash,
+        [skillProposalApplyAbortSignal]: abortController.signal,
+      } satisfies Parameters<typeof applySkillProposal>[0] & {
+        [skillProposalApplyAbortSignal]?: AbortSignal;
+      };
+      const applying = applySkillProposal(applyInput);
+
+      await evaluatorStarted;
+      abortController.abort(new Error("stopped during evaluation"));
+      releaseEvaluator();
+
+      await expect(applying).rejects.toThrow("stopped during evaluation");
+      const inspected = await inspectSkillProposal(proposal.record.id, { workspaceDir });
+      expect(inspected).not.toBeNull();
+      if (!inspected) {
+        throw new Error("proposal disappeared after evaluation cancellation");
+      }
+      expect(inspected.record.status).toBe("pending");
+      expect(inspected.record.evaluation).toBeUndefined();
+      expect(
+        listSkillProposalEvents({ workspaceDir, proposalId: proposal.record.id }).events.map(
+          (event) => event.type,
+        ),
+      ).toEqual(["created"]);
+      await expect(
+        fs.readFile(proposal.record.target.skillFile, "utf8").catch(() => null),
+      ).resolves.toBe(beforeTarget);
+    },
+  );
+
   it("persists attributed results and exposes durable lifecycle events", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-");
     const proposal = await proposeCreateSkill({
