@@ -5,12 +5,15 @@ import { anthropicOAuthProvider } from "./anthropic.js";
 
 const ANTHROPIC_REDIRECT_URI = "http://localhost:53692/callback";
 
-async function refreshThroughAnthropicProvider(refreshToken: string) {
-  return await anthropicOAuthProvider.refreshToken({
-    access: "expired-access-token",
-    refresh: refreshToken,
-    expires: 0,
-  });
+async function refreshThroughAnthropicProvider(refreshToken: string, signal?: AbortSignal) {
+  return await anthropicOAuthProvider.refreshToken(
+    {
+      access: "expired-access-token",
+      refresh: refreshToken,
+      expires: 0,
+    },
+    { signal },
+  );
 }
 
 afterEach(() => {
@@ -29,6 +32,20 @@ async function getLocalCallback(url: string): Promise<void> {
 }
 
 describe("Anthropic OAuth token responses", () => {
+  it("forwards refresh cancellation to provider I/O", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn(async () => {
+      throw controller.signal.reason;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    controller.abort(new Error("refresh cancelled"));
+
+    await expect(
+      refreshThroughAnthropicProvider("old-refresh-token", controller.signal),
+    ).rejects.toThrow("Login cancelled");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("cancels provider login before opening the OAuth flow", async () => {
     const controller = new AbortController();
     controller.abort();

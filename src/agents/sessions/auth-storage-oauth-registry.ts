@@ -5,14 +5,19 @@ import type {
   OAuthProviderId,
 } from "../../llm/utils/oauth/types.js";
 import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
-import {
-  loginProviderOAuthWithPlugin,
-  resolveProviderOAuthCredentialWithPlugin,
-} from "../../plugins/provider-runtime.runtime.js";
+import { loginProviderOAuthWithPlugin } from "../../plugins/provider-runtime.runtime.js";
+import { prepareOAuthCredentialResolver } from "../auth-profiles/oauth.js";
+import type { OAuthCredential as AuthProfileOAuthCredential } from "../auth-profiles/types.js";
 
 // Values belong to one AuthStorage object. The weak attachment keeps ModelRegistry
 // on the same registry without adding lifecycle methods to the public SDK class.
 const registries = new WeakMap<object, OAuthProviderRegistry>();
+
+type PreparedAuthStorageOAuthCredentialContext = { signal?: AbortSignal };
+type PreparedAuthStorageOAuthCredentialResolver = (
+  credential: OAuthCredentials,
+  context?: PreparedAuthStorageOAuthCredentialContext,
+) => Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null>;
 
 export function getAuthStorageOAuthProviderRegistry(authStorage: object): OAuthProviderRegistry {
   let registry = registries.get(authStorage);
@@ -42,20 +47,29 @@ export async function loginAuthStorageOAuthProvider(
   return resolved.credentials;
 }
 
-export async function resolveAuthStoragePluginOAuthCredential(
+export async function prepareAuthStorageOAuthCredentialResolver(
+  authStorage: object,
   providerId: OAuthProviderId,
   credential: OAuthCredentials,
-  refresh: boolean,
-): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
-  const resolved = await resolveProviderOAuthCredentialWithPlugin({
-    provider: providerId,
-    credential: { ...credential, type: "oauth", provider: providerId },
-    refresh,
-  });
-  if (resolved.status === "configured-unavailable") {
-    throw new OAuthProviderConfiguredUnavailableError(providerId);
+): Promise<PreparedAuthStorageOAuthCredentialResolver> {
+  const registered = getAuthStorageOAuthProviderRegistry(authStorage).prepareApiKey(providerId);
+  if (registered) {
+    return registered;
   }
-  return resolved.status === "available"
-    ? { apiKey: resolved.apiKey, newCredentials: resolved.credential }
-    : null;
+  const prepared = await prepareOAuthCredentialResolver({
+    ...credential,
+    type: "oauth",
+    provider: providerId,
+  });
+  return async (current, context = {}) => {
+    const resolved = await prepared(
+      {
+        ...current,
+        type: "oauth",
+        provider: providerId,
+      } satisfies AuthProfileOAuthCredential,
+      context,
+    );
+    return resolved ? { apiKey: resolved.apiKey, newCredentials: resolved.credential } : null;
+  };
 }

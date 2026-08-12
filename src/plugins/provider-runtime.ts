@@ -37,6 +37,7 @@ import {
   resolveProviderHookPlugin,
   resolveProviderPluginsForHooks,
   resolveProviderRuntimePlugin,
+  resolveProviderRuntimePluginHandle,
   wrapProviderSimpleCompletionStreamFn,
   type ProviderRuntimePluginHandle,
   wrapProviderStreamFn,
@@ -154,6 +155,7 @@ export {
   resolveProviderExtraParamsForTransport,
   resolveProviderFollowupFallbackRoute,
   resolveProviderRuntimePlugin,
+  resolveProviderRuntimePluginHandle,
   wrapProviderSimpleCompletionStreamFn,
   wrapProviderStreamFn,
 };
@@ -864,10 +866,12 @@ export async function resolveProviderOAuthCredentialWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   credential: OAuthCredential;
   refresh: boolean;
+  runtimeHandle?: ProviderRuntimePluginHandle;
+  signal?: AbortSignal;
 }) {
-  const ownership = resolveProviderRefOwnership(params);
-  const plugin = resolveProviderRuntimePlugin(params);
+  const plugin = ensureProviderRuntimePluginHandle(params).plugin;
   if (!plugin) {
+    const ownership = resolveProviderRefOwnership(params);
     return {
       status: ownership.status === "unowned" ? "unowned" : "configured-unavailable",
     } as const;
@@ -878,7 +882,7 @@ export async function resolveProviderOAuthCredentialWithPlugin(params: {
     if (!refreshOAuth) {
       return { status: "unhandled" } as const;
     }
-    credential = await refreshOAuth(params.credential);
+    credential = await refreshOAuth(params.credential, { signal: params.signal });
   }
   if (!credential) {
     return { status: "unhandled" } as const;
@@ -888,16 +892,6 @@ export async function resolveProviderOAuthCredentialWithPlugin(params: {
     return { status: "unhandled" } as const;
   }
   return { status: "available" as const, credential, apiKey };
-}
-
-export async function refreshProviderOAuthCredentialWithPlugin(params: {
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  context: OAuthCredential;
-}) {
-  return await resolveProviderRuntimePlugin(params)?.refreshOAuth?.(params.context);
 }
 
 export async function buildProviderAuthDoctorHintWithPlugin(params: {

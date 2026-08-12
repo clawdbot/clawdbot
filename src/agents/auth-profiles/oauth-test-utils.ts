@@ -106,11 +106,11 @@ type ReturnValueMock = ResettableMock & {
 
 /** Reset provider-runtime OAuth mocks to default no-op behavior. */
 export function resetOAuthProviderRuntimeMocks(mocks: {
-  refreshProviderOAuthCredentialWithPluginMock: ResolvedValueMock;
+  resolveProviderOAuthCredentialWithPluginMock: ResolvedValueMock;
   formatProviderAuthProfileApiKeyWithPluginMock: ReturnValueMock;
 }): void {
-  mocks.refreshProviderOAuthCredentialWithPluginMock.mockReset();
-  mocks.refreshProviderOAuthCredentialWithPluginMock.mockResolvedValue(undefined);
+  mocks.resolveProviderOAuthCredentialWithPluginMock.mockReset();
+  mocks.resolveProviderOAuthCredentialWithPluginMock.mockResolvedValue(undefined);
   mocks.formatProviderAuthProfileApiKeyWithPluginMock.mockReset();
   mocks.formatProviderAuthProfileApiKeyWithPluginMock.mockReturnValue(undefined);
 }

@@ -25,14 +25,23 @@ let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile
 let resolveApiKeyForProviderCore: typeof import("../model-auth.js").resolveApiKeyForProviderCore;
 let hasAvailableAuthForProvider: typeof import("../model-auth.js").hasAvailableAuthForProvider;
 let markAuthProfileSuccess: typeof import("./profiles.js").markAuthProfileSuccess;
-type GetOAuthApiKey = typeof import("../../llm/oauth.js").getOAuthApiKey;
+type ResolveOAuthApiKey = (
+  provider: string,
+  credential: OAuthCredential,
+) => Promise<{ newCredentials: OAuthCredential; apiKey: string } | null>;
 
-const { getOAuthApiKeyMock } = vi.hoisted(() => {
+const { getOAuthApiKeyMock, prepareOAuthApiKeyMock } = vi.hoisted(() => {
   vi.resetModules();
+  const oauthApiKeyMock = vi.fn<ResolveOAuthApiKey>(async () => {
+    throw new Error("Failed to extract accountId from token");
+  });
   return {
-    getOAuthApiKeyMock: vi.fn<GetOAuthApiKey>(async () => {
-      throw new Error("Failed to extract accountId from token");
-    }),
+    getOAuthApiKeyMock: oauthApiKeyMock,
+    prepareOAuthApiKeyMock: vi.fn(
+      (provider: Parameters<ResolveOAuthApiKey>[0]) =>
+        (credentials: Parameters<ResolveOAuthApiKey>[1]) =>
+          oauthApiKeyMock(provider, credentials),
+    ),
   };
 });
 
@@ -43,13 +52,18 @@ const { readCodexCliCredentialsCachedMock } = vi.hoisted(() => ({
 }));
 
 const {
-  refreshProviderOAuthCredentialWithPluginMock,
+  resolveProviderOAuthCredentialWithPluginMock,
+  providerRuntimeState,
   formatProviderAuthProfileApiKeyWithPluginMock,
   buildProviderAuthDoctorHintWithPluginMock,
 } = vi.hoisted(() => ({
-  refreshProviderOAuthCredentialWithPluginMock: vi.fn(
+  resolveProviderOAuthCredentialWithPluginMock: vi.fn(
     async (_params?: { context?: unknown }): Promise<OAuthCredential | undefined> => undefined,
   ),
+  providerRuntimeState: {
+    configuredUnavailable: false,
+    plugin: {} as { refreshOAuth?: () => Promise<OAuthCredential> } | undefined,
+  },
   formatProviderAuthProfileApiKeyWithPluginMock: vi.fn(() => undefined),
   buildProviderAuthDoctorHintWithPluginMock: vi.fn(async () => undefined),
 }));
@@ -62,16 +76,26 @@ vi.mock("../cli-credentials.js", () => ({
 }));
 
 vi.mock("../../llm/oauth.js", () => ({
-  getOAuthApiKey: getOAuthApiKeyMock,
   getOAuthProviders: () => [
     { id: "openai", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" }, // pragma: allowlist secret
     { id: "anthropic", envApiKey: "ANTHROPIC_API_KEY", oauthTokenEnv: "ANTHROPIC_OAUTH_TOKEN" }, // pragma: allowlist secret
   ],
+  prepareOAuthApiKey: prepareOAuthApiKeyMock,
 }));
 
 vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
-  resolveProviderOAuthCredentialWithPlugin: async (params: { credential: OAuthCredential }) => {
-    const credential = await refreshProviderOAuthCredentialWithPluginMock({
+  resolveProviderRuntimePluginHandle: async (params: object) => ({
+    ...params,
+    plugin: providerRuntimeState.plugin,
+  }),
+  resolveProviderOAuthCredentialWithPlugin: async (params: {
+    credential: OAuthCredential;
+    refresh: boolean;
+  }) => {
+    if (!params.refresh && providerRuntimeState.configuredUnavailable) {
+      return { status: "configured-unavailable" };
+    }
+    const credential = await resolveProviderOAuthCredentialWithPluginMock({
       context: params.credential,
     });
     return credential
@@ -102,7 +126,7 @@ async function readPersistedStore(agentDir: string): Promise<AuthProfileStore> {
 }
 
 function mockRotatedOpenAICodexRefresh() {
-  refreshProviderOAuthCredentialWithPluginMock.mockResolvedValueOnce({
+  resolveProviderOAuthCredentialWithPluginMock.mockResolvedValueOnce({
     type: "oauth",
     provider: "openai",
     access: "rotated-access-token",
@@ -170,10 +194,16 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     getOAuthApiKeyMock.mockImplementation(async () => {
       throw new Error("Failed to extract accountId from token");
     });
+    prepareOAuthApiKeyMock.mockReset();
+    prepareOAuthApiKeyMock.mockImplementation(
+      (provider) => (credentials) => getOAuthApiKeyMock(provider, credentials),
+    );
+    providerRuntimeState.configuredUnavailable = false;
+    providerRuntimeState.plugin = {};
     readCodexCliCredentialsCachedMock.mockReset();
     readCodexCliCredentialsCachedMock.mockReturnValue(null);
-    refreshProviderOAuthCredentialWithPluginMock.mockReset();
-    refreshProviderOAuthCredentialWithPluginMock.mockResolvedValue(undefined);
+    resolveProviderOAuthCredentialWithPluginMock.mockReset();
+    resolveProviderOAuthCredentialWithPluginMock.mockResolvedValue(undefined);
     formatProviderAuthProfileApiKeyWithPluginMock.mockReset();
     formatProviderAuthProfileApiKeyWithPluginMock.mockReturnValue(undefined);
     buildProviderAuthDoctorHintWithPluginMock.mockReset();
@@ -226,7 +256,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
         agentDir,
       }),
     ).rejects.toThrow(/OAuth token refresh failed for openai/);
-    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+    expect(resolveProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
   });
 
   it("fails closed when provider refresh returns an unchanged expired credential", async () => {
@@ -239,14 +269,14 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
       agentDir,
       { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
-    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async (params) =>
+    resolveProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async (params) =>
       requireOAuthContext(params?.context),
     );
 
     await expect(resolveOpenAICodexProfile({ profileId, agentDir })).rejects.toThrow(
       /OAuth token refresh failed for openai/,
     );
-    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+    expect(resolveProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
     expect(getOAuthApiKeyMock).not.toHaveBeenCalled();
   });
 
@@ -261,7 +291,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
       code: FILE_LOCK_TIMEOUT_ERROR_CODE,
       lockPath,
     });
-    refreshProviderOAuthCredentialWithPluginMock.mockRejectedValueOnce(
+    resolveProviderOAuthCredentialWithPluginMock.mockRejectedValueOnce(
       buildRefreshContentionError({ provider: "openai", profileId, cause: lockCause }),
     );
 
@@ -323,7 +353,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
 
     await expect(resolveOpenAICodexProfile({ profileId, agentDir })).resolves.toBeNull();
     expect(readCodexCliCredentialsCachedMock).not.toHaveBeenCalled();
-    expect(refreshProviderOAuthCredentialWithPluginMock).not.toHaveBeenCalled();
+    expect(resolveProviderOAuthCredentialWithPluginMock).not.toHaveBeenCalled();
   });
 
   it("refreshes near-expiry openai credentials before hard expiry", async () => {
@@ -352,7 +382,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
       provider: "openai",
       email: undefined,
     });
-    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+    expect(resolveProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
   });
 
   it("forces refresh for unexpired openai credentials through the exported resolver", async () => {
@@ -386,7 +416,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
       provider: "openai",
       email: undefined,
     });
-    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+    expect(resolveProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
   });
 
   it("persists plugin-refreshed openai credentials before returning", async () => {
@@ -445,7 +475,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
       expires: Date.now() - 30_000,
       accountId: "acct-cli",
     });
-    refreshProviderOAuthCredentialWithPluginMock.mockResolvedValueOnce({
+    resolveProviderOAuthCredentialWithPluginMock.mockResolvedValueOnce({
       type: "oauth",
       provider: "openai",
       access: "rotated-cli-access-token",
@@ -496,7 +526,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
       expires: Date.now() + 86_400_000,
       accountId: "acct-external",
     });
-    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
+    resolveProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
       async (params?: { context?: unknown }) => {
         const context = requireOAuthContext(params?.context);
         expect(context.access).toBe("expired-local-access-token");
@@ -563,7 +593,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
       expires: Date.now() - 30_000,
       accountId: "acct-cli",
     });
-    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
+    resolveProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
       async (params?: { context?: unknown }) => {
         const context = requireOAuthContext(params?.context);
         expect(context.access).toBe("expired-local-access-token");
@@ -626,7 +656,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
       expires: Date.now() + 86_400_000,
       accountId: "acct-shared",
     });
-    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async () => {
+    resolveProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async () => {
       throw new Error(
         '401 {"error":{"message":"Your refresh token is expired.","code":"refresh_token_expired"}}',
       );
@@ -677,7 +707,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
       expires: Date.now() + 86_400_000,
       accountId: "acct-shared",
     });
-    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async () => {
+    resolveProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async () => {
       throw new Error(
         '401 {"error":{"message":"Your refresh token is expired.","code":"refresh_token_expired"}}',
       );
@@ -728,7 +758,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
       expires: Date.now() + 86_400_000,
       accountId: "acct-shared",
     });
-    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async () => {
+    resolveProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async () => {
       throw new Error(
         '401 {"error":{"message":"Your refresh token is expired.","code":"refresh_token_expired"}}',
       );
@@ -770,7 +800,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
       expires: Date.now() + 86_400_000,
       accountId: "acct-shared",
     });
-    refreshProviderOAuthCredentialWithPluginMock.mockRejectedValueOnce(
+    resolveProviderOAuthCredentialWithPluginMock.mockRejectedValueOnce(
       new Error(
         '401 {"error":{"message":"Your refresh token is expired.","code":"refresh_token_expired"}}',
       ),
@@ -815,7 +845,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
         agentDir,
       }),
     ).rejects.toThrow('No API key found for provider "openai"');
-    expect(refreshProviderOAuthCredentialWithPluginMock).not.toHaveBeenCalled();
+    expect(resolveProviderOAuthCredentialWithPluginMock).not.toHaveBeenCalled();
   });
 
   it("rejects explicit managed OAuth before refreshing for direct OpenAI API-key models", async () => {
@@ -839,7 +869,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
         agentDir,
       }),
     ).rejects.toThrow(/requires an OpenAI API key profile/);
-    expect(refreshProviderOAuthCredentialWithPluginMock).not.toHaveBeenCalled();
+    expect(resolveProviderOAuthCredentialWithPluginMock).not.toHaveBeenCalled();
   });
 
   it("does not refresh managed OAuth while checking direct OpenAI auth availability", async () => {
@@ -861,7 +891,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
         agentDir,
       }),
     ).resolves.toBe(false);
-    expect(refreshProviderOAuthCredentialWithPluginMock).not.toHaveBeenCalled();
+    expect(resolveProviderOAuthCredentialWithPluginMock).not.toHaveBeenCalled();
   });
 
   it("rejects mismatched Codex CLI fallback after forced local refresh fails", async () => {
@@ -890,7 +920,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
       expires: Date.now() + 86_400_000,
       accountId: "acct-other",
     });
-    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async () => {
+    resolveProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async () => {
       throw new Error(
         '401 {"error":{"message":"Your refresh token is expired.","code":"refresh_token_expired"}}',
       );
@@ -931,7 +961,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
       expires: Date.now() + 86_400_000,
       accountId: "acct-cli",
     });
-    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async () => {
+    resolveProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async () => {
       throw new Error(
         '401 {"error":{"message":"Your refresh token is expired.","code":"refresh_token_expired"}}',
       );
@@ -967,7 +997,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
       agentDir,
     );
     readCodexCliCredentialsCachedMock.mockReturnValue({ ...credential });
-    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async () => {
+    resolveProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async () => {
       throw new Error(
         '401 {"error":{"message":"Your refresh token is expired.","code":"refresh_token_expired"}}',
       );
@@ -1142,8 +1172,8 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
       agentDir,
     );
     getOAuthApiKeyMock
-      .mockImplementationOnce(async (_provider, creds) => {
-        expect(creds["openai"]?.refresh).toBe("refresh-token");
+      .mockImplementationOnce(async (_provider, credential) => {
+        expect(credential.refresh).toBe("refresh-token");
         saveAuthProfileStore(
           {
             version: 1,
@@ -1163,11 +1193,13 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
           '401 {"error":{"message":"Your refresh token has already been used to generate a new access token.","code":"refresh_token_reused"}}',
         );
       })
-      .mockImplementationOnce(async (_provider, creds) => {
-        expect(creds["openai"]?.refresh).toBe("rotated-refresh-token");
+      .mockImplementationOnce(async (_provider, credential) => {
+        expect(credential.refresh).toBe("rotated-refresh-token");
         return {
           apiKey: "retried-access-token",
           newCredentials: {
+            type: "oauth",
+            provider: "openai",
             access: "retried-access-token",
             refresh: "retried-refresh-token",
             expires: Date.now() + 10 * 60_000,
@@ -1226,7 +1258,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
       }),
       agentDir,
     );
-    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async () => {
+    resolveProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async () => {
       throw new Error("invalid_grant");
     });
 

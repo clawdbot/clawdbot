@@ -3,13 +3,21 @@ import { loadActivatedBundledPluginPublicSurfaceModuleSync } from "../../../plug
 import type { RuntimeEnv } from "../../../runtime.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
 import { throwIfOAuthLoginAborted, withOAuthLoginAbort } from "./abort.js";
-import type { OAuthCredentials, OAuthLoginCallbacks, OAuthProviderInterface } from "./types.js";
+import type {
+  OAuthCredentials,
+  OAuthLoginCallbacks,
+  OAuthProviderInterface,
+  ProviderOAuthRefreshContext,
+} from "./types.js";
 
 // OAuth adapter for the bundled OpenAI/ChatGPT provider surface.
 const OPENAI_CODEX_PROVIDER_ID = "openai";
 
 type OpenAICodexOAuthFacade = {
-  refreshOpenAICodexToken: (refreshToken: string) => Promise<OAuthCredentials>;
+  refreshOpenAICodexToken: (
+    refreshToken: string,
+    options?: { signal?: AbortSignal },
+  ) => Promise<OAuthCredentials>;
 };
 
 type OpenAICodexLoginCallbacks = Omit<OAuthLoginCallbacks, "onAuth"> & {
@@ -61,29 +69,6 @@ function createLegacyPrompter(callbacks: OAuthLoginCallbacks): WizardPrompter {
   } as WizardPrompter;
 }
 
-async function refreshViaProviderRuntime(refreshToken: string): Promise<OAuthCredentials> {
-  const { refreshProviderOAuthCredentialWithPlugin } =
-    await import("../../../plugins/provider-runtime.runtime.js");
-  const refreshed = await refreshProviderOAuthCredentialWithPlugin({
-    provider: OPENAI_CODEX_PROVIDER_ID,
-    context: {
-      type: "oauth",
-      provider: OPENAI_CODEX_PROVIDER_ID,
-      access: "",
-      refresh: refreshToken,
-      expires: 0,
-    },
-  });
-  if (!refreshed) {
-    // Fallback keeps refresh working when the plugin runtime is unavailable but the facade is active.
-    return await loadOpenAICodexOAuthFacade().refreshOpenAICodexToken(refreshToken);
-  }
-  const credentials: Record<string, unknown> = { ...refreshed };
-  delete credentials.type;
-  delete credentials.provider;
-  return credentials as OAuthCredentials;
-}
-
 /** Runs the ChatGPT/Codex OAuth login flow and returns normalized credentials. */
 async function loginOpenAICodex(callbacks: OpenAICodexLoginCallbacks): Promise<OAuthCredentials> {
   throwIfOAuthLoginAborted(callbacks.signal);
@@ -113,9 +98,11 @@ async function loginOpenAICodex(callbacks: OpenAICodexLoginCallbacks): Promise<O
   return credentials;
 }
 
-/** Refreshes a ChatGPT/Codex OAuth token through the provider runtime or bundled facade. */
-async function refreshOpenAICodexToken(refreshToken: string): Promise<OAuthCredentials> {
-  return await refreshViaProviderRuntime(refreshToken);
+/** Captures the activated OpenAI facade before entering serialized refresh work. */
+function prepareOpenAICodexOAuthRefresh() {
+  const refresh = loadOpenAICodexOAuthFacade().refreshOpenAICodexToken;
+  return (credentials: OAuthCredentials, context?: ProviderOAuthRefreshContext) =>
+    refresh(credentials.refresh, { signal: context?.signal });
 }
 
 /** OAuth provider descriptor for ChatGPT subscription-backed OpenAI access. */
@@ -128,9 +115,13 @@ export const openaiCodexOAuthProvider: OAuthProviderInterface = {
     return await loginOpenAICodex(callbacks);
   },
 
-  async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
-    return await refreshOpenAICodexToken(credentials.refresh);
+  async refreshToken(
+    credentials: OAuthCredentials,
+    context?: ProviderOAuthRefreshContext,
+  ): Promise<OAuthCredentials> {
+    return await prepareOpenAICodexOAuthRefresh()(credentials, context);
   },
+  prepareRefreshToken: prepareOpenAICodexOAuthRefresh,
 
   getApiKey(credentials: OAuthCredentials): string {
     return credentials.access;

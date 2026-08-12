@@ -379,14 +379,18 @@ async function loginAnthropic(options: {
 /**
  * Refresh Anthropic OAuth token
  */
-async function refreshAnthropicToken(refreshToken: string): Promise<OAuthCredentials> {
+async function refreshAnthropicToken(refreshToken: string, signal?: AbortSignal) {
   let responseBody: string;
   try {
-    responseBody = await postJson(TOKEN_URL, {
-      grant_type: "refresh_token",
-      client_id: CLIENT_ID,
-      refresh_token: refreshToken,
-    });
+    responseBody = await postJson(
+      TOKEN_URL,
+      {
+        grant_type: "refresh_token",
+        client_id: CLIENT_ID,
+        refresh_token: refreshToken,
+      },
+      { signal },
+    );
   } catch (error) {
     throw new Error(
       `Anthropic token refresh request failed. url=${TOKEN_URL}; details=${formatErrorDetails(error)}`,
@@ -415,8 +419,8 @@ export const anthropicOAuthProvider: OAuthProviderInterface = {
     });
   },
 
-  async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
-    return refreshAnthropicToken(credentials.refresh);
+  async refreshToken(credentials, context) {
+    return refreshAnthropicToken(credentials.refresh, context?.signal);
   },
 
   getApiKey(credentials: OAuthCredentials): string {

@@ -136,6 +136,7 @@ export {
 } from "./oauth-utils.js";
 export {
   DEFAULT_OAUTH_REFRESH_MARGIN_MS,
+  hasOAuthTokenMaterialChanged,
   hasUsableOAuthCredential,
 } from "../agents/auth-profiles/credential-state.js";
 export {

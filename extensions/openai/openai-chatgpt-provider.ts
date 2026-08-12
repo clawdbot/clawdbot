@@ -15,6 +15,7 @@ import {
   normalizeProviderId,
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import type { ProviderOAuthRefreshContext } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   readStringValue,
@@ -437,10 +438,13 @@ function buildOpenAICodexAuthConfigPatch(): NonNullable<ProviderAuthResult["conf
   };
 }
 
-async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
+async function refreshOpenAICodexOAuthCredential(
+  cred: OAuthCredential,
+  context?: ProviderOAuthRefreshContext,
+) {
   try {
     const { refreshOpenAICodexToken } = await import("./openai-chatgpt-provider.runtime.js");
-    const refreshed = await refreshOpenAICodexToken(cred.refresh);
+    const refreshed = await refreshOpenAICodexToken(cred.refresh, context);
     const identity = resolveCodexAuthIdentity({
       accessToken: refreshed.access,
       email: cred.email,
@@ -679,7 +683,7 @@ export function buildOpenAICodexProviderHooks(): Pick<
     },
     resolveUsageAuth: resolveOpenAIUsageAuth,
     fetchUsageSnapshot: fetchOpenAIUsage,
-    refreshOAuth: async (cred) => await refreshOpenAICodexOAuthCredential(cred),
+    refreshOAuth: refreshOpenAICodexOAuthCredential,
     augmentModelCatalog: (ctx) => {
       const gpt54Template = findCatalogTemplate({
         entries: ctx.entries,

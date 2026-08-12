@@ -10,6 +10,7 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { testing as externalAuthTesting } from "./external-auth.test-support.js";
 import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
@@ -885,7 +886,7 @@ describe("createOAuthManager", () => {
       saveAuthProfileStore({ version: 1, profiles: { [profileId]: credential } }, agentDir, {
         filterExternalAuthProfiles: false,
       });
-      const stalled = Promise.withResolvers<OAuthCredentials>();
+      const stalled = createDeferredCore<OAuthCredentials>();
       const refreshCredential = vi.fn(async () => await stalled.promise);
       const manager = createOAuthManager({
         buildApiKey: async (_provider, value) => value.access,
@@ -929,7 +930,7 @@ describe("createOAuthManager", () => {
       saveAuthProfileStore({ version: 1, profiles: { [profileId]: credential } }, agentDir, {
         filterExternalAuthProfiles: false,
       });
-      const stalled = Promise.withResolvers<OAuthCredentials>();
+      const stalled = createDeferredCore<OAuthCredentials>();
       const refreshCredential = vi.fn(async () => await stalled.promise);
       const prepareRefreshCall = vi.fn(async () => refreshCredential);
       const manager = createOAuthManager({

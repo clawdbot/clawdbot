@@ -6,6 +6,7 @@
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { getOAuthProviderRuntimeMocks } from "./oauth-common-mocks.test-support.js";
 import "./oauth-external-auth-passthrough.test-support.js";
@@ -23,9 +24,10 @@ import { resolveApiKeyForProfile } from "./oauth.js";
 import { resetOAuthRefreshQueuesForTest } from "./oauth.test-support.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
+import type { OAuthCredential } from "./types.js";
 
 const {
-  refreshProviderOAuthCredentialWithPluginMock,
+  resolveProviderOAuthCredentialWithPluginMock,
   formatProviderAuthProfileApiKeyWithPluginMock,
 } = getOAuthProviderRuntimeMocks();
 
@@ -47,7 +49,7 @@ describe("OAuth refresh in-process queue", () => {
   beforeEach(async () => {
     resetFileLockStateForTest();
     resetOAuthProviderRuntimeMocks({
-      refreshProviderOAuthCredentialWithPluginMock,
+      resolveProviderOAuthCredentialWithPluginMock,
       formatProviderAuthProfileApiKeyWithPluginMock,
     });
     clearRuntimeAuthProfileStoreSnapshots();
@@ -73,7 +75,7 @@ describe("OAuth refresh in-process queue", () => {
     saveAuthProfileStore(createExpiredOauthStore({ profileId, provider }), agentDir);
 
     let callCount = 0;
-    refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
+    resolveProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
       callCount += 1;
       if (callCount === 1) {
         throw new Error("simulated upstream failure");
@@ -126,7 +128,7 @@ describe("OAuth refresh in-process queue", () => {
     let inFlight = 0;
     let maxInFlight = 0;
     let seq = 0;
-    refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
+    resolveProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
       const n = ++seq;
       startOrder.push(n);
       inFlight += 1;
@@ -165,5 +167,55 @@ describe("OAuth refresh in-process queue", () => {
     expect(startOrder).toEqual(endOrder);
     // At no point did two refresh calls run concurrently.
     expect(maxInFlight).toBe(1);
+  });
+
+  it("rejects a queued provider replacement before invoking the stale prepared provider", async () => {
+    const profileId = "shared:default";
+    const initialProvider = "provider-a";
+    saveAuthProfileStore(
+      createExpiredOauthStore({ profileId, provider: initialProvider }),
+      agentDir,
+    );
+    const firstRefresh = createDeferredCore<OAuthCredential>();
+    resolveProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
+      async () => await firstRefresh.promise,
+    );
+
+    const resolve = () =>
+      resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
+        store: ensureAuthProfileStore(agentDir),
+        profileId,
+        agentDir,
+      }).catch((error: unknown) => error);
+    const first = resolve();
+    await vi.waitFor(() =>
+      expect(resolveProviderOAuthCredentialWithPluginMock).toHaveBeenCalledOnce(),
+    );
+    const second = resolve();
+    await Promise.resolve();
+    saveAuthProfileStore(createExpiredOauthStore({ profileId, provider: "provider-b" }), agentDir);
+    firstRefresh.resolve({
+      type: "oauth",
+      provider: initialProvider,
+      access: "rotated-access",
+      refresh: "rotated-refresh",
+      expires: Date.now() + 60_000,
+    });
+
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    expect(firstResult).toBeInstanceOf(Error);
+    expect(secondResult).toMatchObject({
+      reason: "sign_in_again",
+      cause: expect.objectContaining({
+        cause: expect.objectContaining({
+          message: "OAuth provider changed while waiting to refresh; sign in again",
+        }),
+      }),
+    });
+    expect(resolveProviderOAuthCredentialWithPluginMock).toHaveBeenCalledOnce();
+    expect(ensureAuthProfileStore(agentDir).profiles[profileId]).toMatchObject({
+      type: "oauth",
+      provider: "provider-b",
+    });
   });
 });

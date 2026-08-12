@@ -233,7 +233,7 @@ async function exchangeChutesCodeForTokens(params: {
 /** Refreshes a stored Chutes OAuth credential through the provider token endpoint. */
 export async function refreshChutesOAuthCredential(
   credential: OAuthCredential,
-  options: { fetchFn?: typeof fetch; now?: number } = {},
+  options: { fetchFn?: typeof fetch; now?: number; signal?: AbortSignal } = {},
 ): Promise<OAuthCredential> {
   const refreshToken = normalizeOptionalString(credential.refresh);
   if (!refreshToken) {
@@ -259,6 +259,7 @@ export async function refreshChutesOAuthCredential(
     responseLabel: "Chutes token refresh",
     fetchFn: options.fetchFn,
     now: options.now,
+    ...(options.signal ? { signal: options.signal } : {}),
   });
 
   return {

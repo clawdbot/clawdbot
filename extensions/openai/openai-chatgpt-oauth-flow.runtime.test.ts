@@ -29,7 +29,7 @@ import {
   resolveOpenAICallbackHost,
   resolveOpenAIRedirectUri,
 } from "./openai-chatgpt-oauth-authorization.runtime.js";
-import { loginOpenAICodex } from "./openai-chatgpt-oauth-flow.runtime.js";
+import { loginOpenAICodex, refreshOpenAICodexToken } from "./openai-chatgpt-oauth-flow.runtime.js";
 import {
   exchangeOpenAIAuthorizationCode,
   refreshOpenAIAccessToken,
@@ -338,6 +338,16 @@ describe("OpenAI Codex OAuth flow", () => {
     });
   });
 
+  it("forwards caller cancellation through the refresh wrapper", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      refreshOpenAICodexToken("old-refresh-token", { signal: controller.signal }),
+    ).rejects.toThrow("Login cancelled");
+    expect(ssrfMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+  });
+
   it("rejects unsafe token exchange lifetimes", async () => {
     mockTokenResponseText(
       '{"access_token":"access-token","refresh_token":"refresh-token","expires_in":1e309}',
@@ -385,6 +395,42 @@ describe("OpenAI Codex OAuth flow", () => {
     expect(result).toEqual({
       type: "failed",
       message: "OpenAI Codex token refresh response missing fields: expires_in",
+    });
+  });
+
+  it("preserves the input refresh token when OpenAI omits a replacement", async () => {
+    mockTokenResponse({
+      access_token: "new-access-token",
+      expires_in: 3600,
+    });
+
+    await expect(refreshOpenAIAccessToken("old-refresh-token")).resolves.toMatchObject({
+      type: "success",
+      access: "new-access-token",
+      refresh: "old-refresh-token",
+    });
+  });
+
+  it("reports only fields still missing after refresh-token fallback", async () => {
+    mockTokenResponse({ expires_in: 3600 });
+
+    await expect(refreshOpenAIAccessToken("old-refresh-token")).resolves.toEqual({
+      type: "failed",
+      message: "OpenAI Codex token refresh response missing fields: access_token",
+    });
+  });
+
+  it("uses a rotated refresh token when OpenAI returns one", async () => {
+    mockTokenResponse({
+      access_token: "new-access-token",
+      refresh_token: "rotated-refresh-token",
+      expires_in: 3600,
+    });
+
+    await expect(refreshOpenAIAccessToken("old-refresh-token")).resolves.toMatchObject({
+      type: "success",
+      access: "new-access-token",
+      refresh: "rotated-refresh-token",
     });
   });
 });

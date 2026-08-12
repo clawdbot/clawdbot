@@ -46,10 +46,10 @@ import {
 } from "../auth-profiles/store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import { getAgentDir } from "../config.js";
+import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
 import {
-  getAuthStorageOAuthProviderRegistry,
   loginAuthStorageOAuthProvider,
-  resolveAuthStoragePluginOAuthCredential,
+  prepareAuthStorageOAuthCredentialResolver,
 } from "./auth-storage-oauth-registry.js";
 import { resolveConfigValue } from "./resolve-config-value.js";
 
@@ -650,22 +650,15 @@ export class AuthStorage {
     return runRetainedOAuthRefreshOperation({
       timeoutMs: OAUTH_REFRESH_CALL_TIMEOUT_MS,
       run: async (signal) => {
-        const provider = getAuthStorageOAuthProviderRegistry(this).get(providerId);
-        const resolveCredential = async (credential: OAuthCredentials, forceRefresh = false) => {
-          signal.throwIfAborted();
-          if (!provider) {
-            return await resolveAuthStoragePluginOAuthCredential(
-              providerId,
-              credential,
-              forceRefresh,
-            );
-          }
-          if (!forceRefresh) {
-            return { apiKey: provider.getApiKey(credential), newCredentials: credential };
-          }
-          const refreshed = await provider.refreshToken(credential);
-          return { apiKey: provider.getApiKey(refreshed), newCredentials: refreshed };
-        };
+        const initial = this.data[providerId];
+        if (initial?.type !== "oauth") {
+          return null;
+        }
+        const resolveCredential = await prepareAuthStorageOAuthCredentialResolver(
+          this,
+          providerId,
+          initial,
+        );
         signal.throwIfAborted();
         return await this.oauthRefreshQueue.enqueue(providerId, async () => {
           signal.throwIfAborted();
@@ -682,10 +675,10 @@ export class AuthStorage {
             }
             const credential = snapshot.credential;
             if (Date.now() < credential.expires) {
-              return await resolveCredential(credential);
+              return await resolveCredential(credential, { signal });
             }
 
-            const refreshed = await resolveCredential(credential, true);
+            const refreshed = await resolveCredential(credential, { signal });
             if (!refreshed) {
               return null;
             }
@@ -724,7 +717,7 @@ export class AuthStorage {
             }
             return persisted.credential === refreshedCredential
               ? { apiKey: refreshed.apiKey, newCredentials: persisted.credential }
-              : await resolveCredential(persisted.credential);
+              : await resolveCredential(persisted.credential, { signal });
           };
 
           return this.migrationOwnerAgentDir
@@ -782,8 +775,6 @@ export class AuthStorage {
     }
 
     if (cred?.type === "oauth") {
-      const provider = getAuthStorageOAuthProviderRegistry(this).get(providerId);
-
       // Check if token needs refresh
       const needsRefresh = Date.now() >= cred.expires;
 
@@ -813,11 +804,11 @@ export class AuthStorage {
 
           if (updatedCred?.type === "oauth" && Date.now() < updatedCred.expires) {
             // Another instance refreshed successfully, use those credentials
-            if (provider) {
-              return provider.getApiKey(updatedCred);
-            }
-            return (await resolveAuthStoragePluginOAuthCredential(providerId, updatedCred, false))
-              ?.apiKey;
+            return (
+              await (
+                await prepareAuthStorageOAuthCredentialResolver(this, providerId, updatedCred)
+              )(updatedCred)
+            )?.apiKey;
           }
 
           // Refresh truly failed - return undefined so model discovery skips this provider
@@ -825,10 +816,11 @@ export class AuthStorage {
           return undefined;
         }
       } else {
-        if (provider) {
-          return provider.getApiKey(cred);
-        }
-        return (await resolveAuthStoragePluginOAuthCredential(providerId, cred, false))?.apiKey;
+        return (
+          await (
+            await prepareAuthStorageOAuthCredentialResolver(this, providerId, cred)
+          )(cred)
+        )?.apiKey;
       }
     }
 

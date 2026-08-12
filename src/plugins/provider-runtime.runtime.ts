@@ -13,8 +13,6 @@ type LoginProviderOAuthWithPlugin = ProviderRuntimeModule["loginProviderOAuthWit
 type ResolveProviderOAuthCredentialWithPlugin =
   ProviderRuntimeModule["resolveProviderOAuthCredentialWithPlugin"];
 type PrepareProviderRuntimeAuth = ProviderRuntimeModule["prepareProviderRuntimeAuth"];
-type RefreshProviderOAuthCredentialWithPlugin =
-  ProviderRuntimeModule["refreshProviderOAuthCredentialWithPlugin"];
 
 const providerRuntimeLoader = createLazyImportLoader<ProviderRuntimeModule>(
   () => import("./provider-runtime.js"),
@@ -66,18 +64,16 @@ export async function resolveProviderOAuthCredentialWithPlugin(
   return runtime.resolveProviderOAuthCredentialWithPlugin(...args);
 }
 
+export async function resolveProviderRuntimePluginHandle(
+  ...args: Parameters<ProviderRuntimeModule["resolveProviderRuntimePluginHandle"]>
+) {
+  return (await loadProviderRuntime()).resolveProviderRuntimePluginHandle(...args);
+}
+
 /** Lazily prepares provider runtime auth for model execution. */
 export async function prepareProviderRuntimeAuth(
   ...args: Parameters<PrepareProviderRuntimeAuth>
 ): Promise<Awaited<ReturnType<PrepareProviderRuntimeAuth>>> {
   const runtime = await loadProviderRuntime();
   return runtime.prepareProviderRuntimeAuth(...args);
-}
-
-/** Lazily refreshes OAuth credentials through provider plugin runtime hooks. */
-export async function refreshProviderOAuthCredentialWithPlugin(
-  ...args: Parameters<RefreshProviderOAuthCredentialWithPlugin>
-): Promise<Awaited<ReturnType<RefreshProviderOAuthCredentialWithPlugin>>> {
-  const runtime = await loadProviderRuntime();
-  return runtime.refreshProviderOAuthCredentialWithPlugin(...args);
 }

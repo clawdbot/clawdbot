@@ -93,7 +93,6 @@ let listProviderUsagePluginDescriptors: typeof import("./provider-runtime.js").l
 let normalizeProviderResolvedModelWithPlugin: typeof import("./provider-runtime.js").normalizeProviderResolvedModelWithPlugin;
 let prepareProviderDynamicModel: typeof import("./provider-runtime.js").prepareProviderDynamicModel;
 let prepareProviderRuntimeAuth: typeof import("./provider-runtime.js").prepareProviderRuntimeAuth;
-let refreshProviderOAuthCredentialWithPlugin: typeof import("./provider-runtime.js").refreshProviderOAuthCredentialWithPlugin;
 let resolveProviderOAuthCredentialWithPlugin: typeof import("./provider-runtime.js").resolveProviderOAuthCredentialWithPlugin;
 let resolveProviderRuntimePlugin: typeof import("./provider-runtime.js").resolveProviderRuntimePlugin;
 let providerRuntimeTesting: typeof import("./provider-runtime.js").testing;
@@ -344,7 +343,6 @@ describe("provider-runtime", () => {
       normalizeProviderResolvedModelWithPlugin,
       prepareProviderDynamicModel,
       prepareProviderRuntimeAuth,
-      refreshProviderOAuthCredentialWithPlugin,
       resolveProviderOAuthCredentialWithPlugin,
       resolveProviderRuntimePlugin,
       testing: providerRuntimeTesting,
@@ -446,6 +444,43 @@ describe("provider-runtime", () => {
     });
     expect(loginOAuth).toHaveBeenCalledOnce();
     expect(refreshOAuth).toHaveBeenCalledOnce();
+  });
+
+  it("uses a prepared OAuth handle without repeating registry resolution", async () => {
+    const controller = new AbortController();
+    const refreshOAuth = vi.fn(async (credential) => ({
+      ...credential,
+      access: "prepared-access",
+    }));
+    const plugin = {
+      id: "plugin-oauth",
+      label: "Plugin OAuth",
+      auth: [],
+      refreshOAuth,
+    };
+    resolveOwningPluginIdsForProviderMock.mockClear();
+    resolvePluginProvidersMock.mockClear();
+
+    await expect(
+      resolveProviderOAuthCredentialWithPlugin({
+        provider: "plugin-oauth",
+        credential: {
+          type: "oauth",
+          provider: "plugin-oauth",
+          access: "old-access",
+          refresh: "refresh",
+          expires: 1,
+        },
+        refresh: true,
+        runtimeHandle: { provider: "plugin-oauth", plugin },
+        signal: controller.signal,
+      }),
+    ).resolves.toMatchObject({ status: "available", credential: { access: "prepared-access" } });
+    expect(resolveOwningPluginIdsForProviderMock).not.toHaveBeenCalled();
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+    expect(refreshOAuth).toHaveBeenCalledWith(expect.any(Object), {
+      signal: controller.signal,
+    });
   });
 
   it("distinguishes an owned but unavailable OAuth provider", async () => {
@@ -2414,21 +2449,6 @@ describe("provider-runtime", () => {
       },
       {
         actual: () =>
-          refreshProviderOAuthCredentialWithPlugin({
-            provider: DEMO_PROVIDER_ID,
-            context: createDemoProviderContext({
-              type: "oauth",
-              access: "oauth-access",
-              refresh: "oauth-refresh",
-              expires: Date.now() + 60_000,
-            }),
-          }),
-        expected: {
-          access: "refreshed-access-token",
-        },
-      },
-      {
-        actual: () =>
           resolveProviderUsageAuthWithPlugin({
             provider: DEMO_PROVIDER_ID,
             env: process.env,
@@ -2654,7 +2674,6 @@ describe("provider-runtime", () => {
       normalizeToolSchemas,
       inspectToolSchemas,
       resolveReasoningOutputMode,
-      refreshOAuth,
       resolveSyntheticAuth,
       shouldDeferSyntheticProfileAuth,
       buildUnknownModelHint,

@@ -7,6 +7,7 @@ import { afterAll, vi } from "vitest";
 
 const fileLockPassthroughMock = vi.hoisted(() => ({
   drainFileLockStateForTest: async () => undefined,
+  FILE_LOCK_TIMEOUT_ERROR_CODE: "file_lock_timeout",
   resetFileLockStateForTest: () => undefined,
   withFileLock: async <T>(_filePath: string, _options: unknown, run: () => Promise<T>) => run(),
 }));

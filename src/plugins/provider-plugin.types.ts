@@ -10,6 +10,7 @@ import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type {
   OAuthCredentials as SessionOAuthCredentials,
   OAuthLoginCallbacks,
+  ProviderOAuthRefreshContext,
 } from "../plugin-sdk/provider-oauth-runtime.js";
 import type { PluginTextTransforms } from "./cli-backend.types.js";
 import type {
@@ -574,7 +575,10 @@ export type ProviderPlugin = {
    * the provider needs custom refresh-failure behavior that should stay out of
    * core auth-profile code.
    */
-  refreshOAuth?: (cred: OAuthCredential) => Promise<OAuthCredential>;
+  refreshOAuth?: (
+    cred: OAuthCredential,
+    context?: ProviderOAuthRefreshContext,
+  ) => Promise<OAuthCredential>;
   /**
    * Provider-owned auth-doctor hint.
    *

@@ -9,17 +9,8 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  getOAuthApiKey,
-  getOAuthProviders,
-  type OAuthCredentials,
-  type OAuthProviderId,
-} from "../../llm/oauth.js";
+import { prepareOAuthApiKey } from "../../llm/oauth.js";
 import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
-import {
-  formatProviderAuthProfileApiKeyWithPlugin,
-  resolveProviderOAuthCredentialWithPlugin,
-} from "../../plugins/provider-runtime.runtime.js";
 import { secretRefKey } from "../../secrets/ref-contract.js";
 import { resolveAuthProfileSecretOwnerId } from "../../secrets/runtime-auth-profile-owner.js";
 import {
@@ -34,7 +25,11 @@ import {
 } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
 import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
-import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
+import {
+  createOAuthManager,
+  OAuthManagerRefreshError,
+  type PreparedOAuthRefresh,
+} from "./oauth-manager.js";
 import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { clearLastGoodProfileWithLock } from "./profiles.js";
@@ -49,34 +44,6 @@ import {
   resolvePersistedAuthProfileOwnerAgentDir,
 } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
-
-function listOAuthProviderIds(): string[] {
-  if (typeof getOAuthProviders !== "function") {
-    return [];
-  }
-  const providers = getOAuthProviders();
-  if (!Array.isArray(providers)) {
-    return [];
-  }
-  return providers
-    .map((provider) =>
-      provider &&
-      typeof provider === "object" &&
-      "id" in provider &&
-      typeof provider.id === "string"
-        ? provider.id
-        : undefined,
-    )
-    .filter((providerId): providerId is string => typeof providerId === "string");
-}
-
-const OAUTH_PROVIDER_IDS = new Set<string>(listOAuthProviderIds());
-
-const isOAuthProvider = (provider: string): provider is OAuthProviderId =>
-  OAUTH_PROVIDER_IDS.has(provider);
-
-const resolveOAuthProvider = (provider: string): OAuthProviderId | null =>
-  isOAuthProvider(provider) ? provider : null;
 
 /** Bearer-token auth modes that are interchangeable (oauth tokens and raw tokens). */
 const BEARER_AUTH_MODES = new Set(["oauth", "token"]);
@@ -109,11 +76,23 @@ function isProfileConfigCompatible(params: {
   return true;
 }
 
+type ProviderRuntimeModule = typeof import("../../plugins/provider-runtime.runtime.js");
+
+let providerRuntimeModulePromise: Promise<ProviderRuntimeModule> | undefined;
+
+function loadProviderRuntimeModule(): Promise<ProviderRuntimeModule> {
+  // Provider runtime metadata is process-stable. Sharing one lazy import keeps
+  // raw OAuth access cold while avoiding duplicate import work under bursts.
+  providerRuntimeModulePromise ??= import("../../plugins/provider-runtime.runtime.js");
+  return providerRuntimeModulePromise;
+}
+
 async function buildOAuthApiKey(
   provider: string,
   credentials: OAuthCredential,
   context: { cfg?: OpenClawConfig },
 ): Promise<string> {
+  const { formatProviderAuthProfileApiKeyWithPlugin } = await loadProviderRuntimeModule();
   const formatted = await formatProviderAuthProfileApiKeyWithPlugin({
     provider,
     config: context.cfg,
@@ -186,31 +165,91 @@ type ResolveApiKeyForProfileParams = {
 
 type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
 
-async function refreshOAuthCredential(
+type PreparedOAuthCredentialResolverContext = {
+  forceRefresh?: boolean;
+  signal?: AbortSignal;
+};
+
+type PreparedOAuthCredentialResolver = (
+  credential: OAuthCredential,
+  context?: PreparedOAuthCredentialResolverContext,
+) => Promise<{ credential: OAuthCredential; apiKey: string } | null>;
+
+export async function prepareOAuthCredentialResolver(
   credential: OAuthCredential,
   context: { cfg?: OpenClawConfig } = {},
-): Promise<OAuthCredentials | null> {
-  const pluginResult = await resolveProviderOAuthCredentialWithPlugin({
+): Promise<PreparedOAuthCredentialResolver> {
+  const { resolveProviderOAuthCredentialWithPlugin, resolveProviderRuntimePluginHandle } =
+    await loadProviderRuntimeModule();
+  const runtimeHandle = await resolveProviderRuntimePluginHandle({
     provider: credential.provider,
     config: context.cfg,
-    credential,
-    refresh: true,
   });
-  if (pluginResult.status === "available") {
-    return pluginResult.credential;
-  }
-  if (pluginResult.status === "configured-unavailable") {
-    throw new OAuthProviderConfiguredUnavailableError(credential.provider);
-  }
+  const configuredUnavailable =
+    !runtimeHandle.plugin &&
+    (
+      await resolveProviderOAuthCredentialWithPlugin({
+        provider: credential.provider,
+        config: context.cfg,
+        credential,
+        refresh: false,
+        runtimeHandle,
+      })
+    ).status === "configured-unavailable";
+  const fallback =
+    !configuredUnavailable && !runtimeHandle.plugin?.refreshOAuth
+      ? prepareOAuthApiKey(credential.provider)
+      : null;
+  return async (current, options = {}) => {
+    if (current.provider !== credential.provider) {
+      throw new Error("OAuth provider changed while waiting to refresh; sign in again");
+    }
+    const refresh = options.forceRefresh || Date.now() >= current.expires;
+    let resolved: { credential: OAuthCredential; apiKey: string } | null = null;
+    if (runtimeHandle.plugin) {
+      const result = await resolveProviderOAuthCredentialWithPlugin({
+        provider: current.provider,
+        config: context.cfg,
+        credential: current,
+        refresh,
+        runtimeHandle,
+        signal: options.signal,
+      });
+      if (result.status === "available") {
+        resolved = { credential: result.credential, apiKey: result.apiKey };
+      }
+    }
+    if (!resolved && configuredUnavailable) {
+      if (!refresh) {
+        return { credential: current, apiKey: current.access };
+      }
+      throw new OAuthProviderConfiguredUnavailableError(current.provider);
+    }
+    const fallbackResult = !resolved
+      ? await fallback?.(options.forceRefresh ? { ...current, expires: 0 } : current, {
+          signal: options.signal,
+        })
+      : null;
+    resolved ??= fallbackResult
+      ? {
+          credential: { ...current, ...fallbackResult.newCredentials, type: "oauth" },
+          apiKey: fallbackResult.apiKey,
+        }
+      : null;
+    if (refresh && resolved && Date.now() >= resolved.credential.expires) {
+      throw new Error("OAuth provider returned an expired credential");
+    }
+    return resolved;
+  };
+}
 
-  const oauthProvider = resolveOAuthProvider(credential.provider);
-  if (!oauthProvider || typeof getOAuthApiKey !== "function") {
-    return null;
-  }
-  const result = await getOAuthApiKey(oauthProvider, {
-    [credential.provider]: credential,
-  });
-  return result?.newCredentials ?? null;
+async function prepareOAuthRefresh(
+  credential: OAuthCredential,
+  context: { cfg?: OpenClawConfig } = {},
+): Promise<PreparedOAuthRefresh> {
+  const resolveCredential = await prepareOAuthCredentialResolver(credential, context);
+  return async (current, signal) =>
+    (await resolveCredential(current, { forceRefresh: true, signal }))?.credential ?? null;
 }
 
 /** Refresh one OAuth credential and merge provider-returned token fields. */
@@ -218,7 +257,8 @@ export async function refreshOAuthCredentialForRuntime(params: {
   credential: OAuthCredential;
   cfg?: OpenClawConfig;
 }): Promise<OAuthCredential | null> {
-  const refreshed = await refreshOAuthCredential(params.credential, { cfg: params.cfg });
+  const refresh = await prepareOAuthRefresh(params.credential, { cfg: params.cfg });
+  const refreshed = await refresh(params.credential, new AbortController().signal);
   return refreshed
     ? {
         ...params.credential,
@@ -230,10 +270,7 @@ export async function refreshOAuthCredentialForRuntime(params: {
 
 const oauthManager = createOAuthManager({
   buildApiKey: buildOAuthApiKey,
-  prepareRefresh: async (_credential, context) => async (credential, signal) => {
-    signal.throwIfAborted();
-    return await refreshOAuthCredential(credential, { cfg: context.cfg });
-  },
+  prepareRefresh: prepareOAuthRefresh,
   readBootstrapCredential: ({ store, profileId, credential }) =>
     readExternalCliBootstrapCredential({
       store,

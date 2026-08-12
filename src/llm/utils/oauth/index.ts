@@ -18,7 +18,12 @@ export * from "./types.js";
 
 import { anthropicOAuthProvider } from "./anthropic.js";
 import { openaiCodexOAuthProvider } from "./openai-chatgpt.js";
-import type { OAuthCredentials, OAuthProviderId, OAuthProviderInterface } from "./types.js";
+import type {
+  OAuthCredentials,
+  OAuthProviderId,
+  OAuthProviderInterface,
+  ProviderOAuthRefreshContext,
+} from "./types.js";
 
 const BUILT_IN_OAUTH_PROVIDERS: OAuthProviderInterface[] = [
   anthropicOAuthProvider,
@@ -26,25 +31,24 @@ const BUILT_IN_OAUTH_PROVIDERS: OAuthProviderInterface[] = [
 ];
 
 type OAuthApiKeyResult = { newCredentials: OAuthCredentials; apiKey: string } | null;
+type PreparedOAuthApiKey = (
+  credentials: OAuthCredentials,
+  context?: ProviderOAuthRefreshContext,
+) => Promise<OAuthApiKeyResult>;
 
-async function resolveOAuthApiKey(
-  provider: OAuthProviderInterface,
-  credentials: Record<string, OAuthCredentials>,
-): Promise<OAuthApiKeyResult> {
-  let creds = credentials[provider.id];
-  if (!creds) {
-    return null;
-  }
-
-  if (Date.now() >= creds.expires) {
-    try {
-      creds = await provider.refreshToken(creds);
-    } catch (error) {
-      throw new Error(`Failed to refresh OAuth token for ${provider.id}`, { cause: error });
+function prepareOAuthApiKeyForProvider(provider: OAuthProviderInterface): PreparedOAuthApiKey {
+  const refresh = provider.prepareRefreshToken?.() ?? provider.refreshToken.bind(provider);
+  return async (credentials, context) => {
+    let creds = credentials;
+    if (Date.now() >= creds.expires) {
+      try {
+        creds = await refresh(creds, context);
+      } catch (error) {
+        throw new Error(`Failed to refresh OAuth token for ${provider.id}`, { cause: error });
+      }
     }
-  }
-
-  return { newCredentials: creds, apiKey: provider.getApiKey(creds) };
+    return { newCredentials: creds, apiKey: provider.getApiKey(creds) };
+  };
 }
 
 /** Mutable OAuth provider registrations owned by one auth/session runtime. */
@@ -78,11 +82,17 @@ export class OAuthProviderRegistry {
     providerId: OAuthProviderId,
     credentials: Record<string, OAuthCredentials>,
   ): Promise<OAuthApiKeyResult> {
-    const provider = this.get(providerId);
-    if (!provider) {
+    const resolveApiKey = this.prepareApiKey(providerId);
+    if (!resolveApiKey) {
       throw new Error(`Unknown OAuth provider: ${providerId}`);
     }
-    return resolveOAuthApiKey(provider, credentials);
+    const credential = credentials[providerId];
+    return credential ? resolveApiKey(credential) : null;
+  }
+
+  prepareApiKey(providerId: OAuthProviderId): PreparedOAuthApiKey | null {
+    const provider = this.get(providerId);
+    return provider ? prepareOAuthApiKeyForProvider(provider) : null;
   }
 }
 
@@ -93,31 +103,7 @@ function getOAuthProvider(id: OAuthProviderId): OAuthProviderInterface | undefin
   return BUILT_IN_OAUTH_PROVIDERS.find((provider) => provider.id === id);
 }
 
-/**
- * Get all built-in OAuth providers.
- */
-export function getOAuthProviders(): OAuthProviderInterface[] {
-  return [...BUILT_IN_OAUTH_PROVIDERS];
-}
-
-// ============================================================================
-// High-level built-in provider API
-// ============================================================================
-
-/**
- * Get API key for a provider from OAuth credentials.
- * Automatically refreshes expired tokens.
- *
- * @returns API key string and updated credentials, or null if no credentials
- * @throws Error if refresh fails
- */
-export async function getOAuthApiKey(
-  providerId: OAuthProviderId,
-  credentials: Record<string, OAuthCredentials>,
-): Promise<{ newCredentials: OAuthCredentials; apiKey: string } | null> {
+export function prepareOAuthApiKey(providerId: OAuthProviderId): PreparedOAuthApiKey | null {
   const provider = getOAuthProvider(providerId);
-  if (!provider) {
-    throw new Error(`Unknown OAuth provider: ${providerId}`);
-  }
-  return resolveOAuthApiKey(provider, credentials);
+  return provider ? prepareOAuthApiKeyForProvider(provider) : null;
 }

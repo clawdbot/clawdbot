@@ -14,19 +14,23 @@ import { resolveApiKeyForProfile } from "./oauth.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
-import type { AuthProfileStore } from "./types.js";
+import type { AuthProfileStore, OAuthCredential } from "./types.js";
 const { getOAuthApiKeyMock } = vi.hoisted(() => {
   vi.resetModules();
   return {
-    getOAuthApiKeyMock: vi.fn(async () => {
-      throw new Error("invalid_grant");
-    }),
+    getOAuthApiKeyMock: vi.fn(
+      async (_provider: string, _credentials: Record<string, OAuthCredential>) => {
+        throw new Error("invalid_grant");
+      },
+    ),
   };
 });
 
 vi.mock("../../llm/oauth.js", () => ({
   getOAuthApiKey: getOAuthApiKeyMock,
   getOAuthProviders: () => [{ id: "anthropic" }, { id: "openai" }],
+  prepareOAuthApiKey: (provider: string) => (credential: OAuthCredential) =>
+    getOAuthApiKeyMock(provider, { [provider]: credential }),
 }));
 
 vi.mock("../cli-credentials.js", () => ({
@@ -41,6 +45,7 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
   formatProviderAuthProfileApiKeyWithPlugin: async (params: { context?: { access?: string } }) =>
     params.context?.access,
   resolveProviderOAuthCredentialWithPlugin: async () => ({ status: "unhandled" }),
+  resolveProviderRuntimePluginHandle: async (params: object) => ({ ...params, plugin: undefined }),
 }));
 
 vi.mock("../../plugins/provider-runtime.js", () => ({

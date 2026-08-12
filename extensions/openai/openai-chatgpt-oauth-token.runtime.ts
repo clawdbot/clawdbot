@@ -30,12 +30,15 @@ type TokenRequestOptions = {
   timeoutMs?: number;
 };
 
-function formatMissingTokenResponseFields(json: TokenResponseJson): string {
+function formatMissingTokenResponseFields(
+  json: TokenResponseJson,
+  fallbackRefreshToken?: string,
+): string {
   const missing: string[] = [];
   if (!json.access_token) {
     missing.push("access_token");
   }
-  if (!json.refresh_token) {
+  if (!json.refresh_token && !fallbackRefreshToken) {
     missing.push("refresh_token");
   }
   if (resolveOAuthTokenLifetimeMs(json.expires_in) === undefined) {
@@ -103,6 +106,7 @@ async function postTokenForm(
 async function readOpenAITokenResponse(
   response: Response,
   operation: "exchange" | "refresh",
+  fallbackRefreshToken?: string,
 ): Promise<TokenResult> {
   if (!response.ok) {
     const text = await response.text().catch(() => "");
@@ -120,16 +124,17 @@ async function readOpenAITokenResponse(
     };
   }
   const expires = resolveOAuthTokenExpiresAt(json.expires_in);
-  if (!json.access_token || !json.refresh_token || expires === undefined) {
+  const refresh = json.refresh_token || fallbackRefreshToken;
+  if (!json.access_token || !refresh || expires === undefined) {
     return {
       type: "failed",
-      message: `OpenAI Codex token ${operation} response missing fields: ${formatMissingTokenResponseFields(json)}`,
+      message: `OpenAI Codex token ${operation} response missing fields: ${formatMissingTokenResponseFields(json, fallbackRefreshToken)}`,
     };
   }
   return {
     type: "success",
     access: json.access_token,
-    refresh: json.refresh_token,
+    refresh,
     expires,
   };
 }
@@ -176,7 +181,7 @@ export async function refreshOpenAIAccessToken(
       }),
       { signal: options.signal, timeoutMs },
     );
-    return await readOpenAITokenResponse(response, "refresh");
+    return await readOpenAITokenResponse(response, "refresh", refreshToken);
   } catch (error) {
     return {
       type: "failed",

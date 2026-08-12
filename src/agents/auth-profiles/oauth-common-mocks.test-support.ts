@@ -9,7 +9,7 @@ import type { OAuthCredential } from "./types.js";
 const oauthProviderRuntimeMocks = vi.hoisted(() => {
   vi.resetModules();
   return {
-    refreshProviderOAuthCredentialWithPluginMock: vi.fn<
+    resolveProviderOAuthCredentialWithPluginMock: vi.fn<
       (_params?: { context?: unknown }) => Promise<OAuthCredential | undefined>
     >(async () => undefined),
     formatProviderAuthProfileApiKeyWithPluginMock: vi.fn(() => undefined),
@@ -29,11 +29,15 @@ vi.mock("../cli-credentials.js", () => ({
 }));
 
 vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
+  resolveProviderRuntimePluginHandle: async (params: object) => ({
+    ...params,
+    plugin: { refreshOAuth: () => undefined },
+  }),
   formatProviderAuthProfileApiKeyWithPlugin: (params: { context?: { access?: string } }) =>
     oauthProviderRuntimeMocks.formatProviderAuthProfileApiKeyWithPluginMock() ??
     params?.context?.access,
   resolveProviderOAuthCredentialWithPlugin: async (params: { credential: OAuthCredential }) => {
-    const credential = await oauthProviderRuntimeMocks.refreshProviderOAuthCredentialWithPluginMock(
+    const credential = await oauthProviderRuntimeMocks.resolveProviderOAuthCredentialWithPluginMock(
       { context: params.credential },
     );
     return credential

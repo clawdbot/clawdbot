@@ -23,7 +23,7 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
 
 const {
-  refreshProviderOAuthCredentialWithPluginMock,
+  resolveProviderOAuthCredentialWithPluginMock,
   formatProviderAuthProfileApiKeyWithPluginMock,
 } = getOAuthProviderRuntimeMocks();
 
@@ -56,7 +56,7 @@ async function runConcurrentRefreshCase(): Promise<ConcurrentRefreshResult> {
   try {
     resetFileLockStateForTest();
     resetOAuthProviderRuntimeMocks({
-      refreshProviderOAuthCredentialWithPluginMock,
+      resolveProviderOAuthCredentialWithPluginMock,
       formatProviderAuthProfileApiKeyWithPluginMock,
     });
     clearRuntimeAuthProfileStoreSnapshots();
@@ -86,7 +86,7 @@ async function runConcurrentRefreshCase(): Promise<ConcurrentRefreshResult> {
 
     // Count invocations, and keep one event-loop turn to widen the race window.
     let callCount = 0;
-    refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
+    resolveProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
       callCount += 1;
       await new Promise((resolve) => {
         setImmediate(resolve);

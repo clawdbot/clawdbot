@@ -716,6 +716,16 @@ catalog, API-key auth, and dynamic model resolution.
       | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
       | `onModelSelected` | Post-selection callback (e.g. telemetry) |
 
+      OAuth refresh ownership is prepared before OpenClaw enters refresh queues
+      and storage locks. `OAuthProviderInterface.prepareRefreshToken()` can bind
+      a process-stable provider handle once; its returned function and
+      `ProviderPlugin.refreshOAuth` receive
+      `ProviderOAuthRefreshContext.signal`. Forward that signal to token HTTP
+      I/O so caller cancellation can abort cooperative work while the serialized
+      owner retains any late completion long enough to persist rotated tokens.
+      `hasOAuthTokenMaterialChanged()` compares only `access`, `refresh`, and
+      `expires`; identity or other metadata changes do not count as token rotation.
+
       Runtime fallback notes:
 
       - `normalizeConfig` resolves one owning plugin per provider id (bundled providers first, then the matched runtime plugin) and calls only that hook - there is no scan across other providers. Google's own `normalizeConfig` hook is what normalizes `google` / `google-vertex` / `google-antigravity` config entries; it is not a separate core fallback.

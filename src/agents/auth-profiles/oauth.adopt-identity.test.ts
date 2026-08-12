@@ -30,7 +30,7 @@ import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
 
 const {
-  refreshProviderOAuthCredentialWithPluginMock,
+  resolveProviderOAuthCredentialWithPluginMock,
   formatProviderAuthProfileApiKeyWithPluginMock,
 } = getOAuthProviderRuntimeMocks();
 
@@ -68,7 +68,7 @@ describe("OAuth credential adoption is identity-gated", () => {
   beforeEach(async () => {
     resetFileLockStateForTest();
     resetOAuthProviderRuntimeMocks({
-      refreshProviderOAuthCredentialWithPluginMock,
+      resolveProviderOAuthCredentialWithPluginMock,
       formatProviderAuthProfileApiKeyWithPluginMock,
     });
     clearRuntimeAuthProfileStoreSnapshots();
@@ -188,7 +188,7 @@ describe("OAuth credential adoption is identity-gated", () => {
       mainAgentDir,
     );
 
-    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
+    resolveProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
       async () =>
         ({
           type: "oauth",
@@ -208,7 +208,7 @@ describe("OAuth credential adoption is identity-gated", () => {
 
     // Sub-agent performed its own refresh (mock fired once) and got its
     // own new token, not main's foreign one.
-    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+    expect(resolveProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
     expect(result?.apiKey).toBe("sub-refreshed-access");
 
     // Main must still hold its foreign cred, untouched (mirror would also
@@ -263,7 +263,7 @@ describe("OAuth credential adoption is identity-gated", () => {
       mainAgentDir,
     );
 
-    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async () => {
+    resolveProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async () => {
       // Simulate another process writing fresh creds to main for a
       // DIFFERENT account while our refresh is in flight, then our
       // refresh throws a generic upstream error.

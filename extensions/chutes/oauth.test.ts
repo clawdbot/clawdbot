@@ -410,6 +410,22 @@ describe("chutes plugin OAuth", () => {
     expect(timeoutSpy).toHaveBeenCalledOnce();
   });
 
+  it("combines caller cancellation with the refresh deadline", async () => {
+    const controller = new AbortController();
+    const fetchFn = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => await rejectWhenAborted(init),
+    );
+    const refresh = refreshChutesOAuthCredential(createStoredCredential(), {
+      fetchFn,
+      signal: controller.signal,
+    });
+    const reason = new Error("cancelled by refresh owner");
+    controller.abort(reason);
+
+    await expect(refresh).rejects.toBe(reason);
+    expect(fetchFn).toHaveBeenCalledOnce();
+  });
+
   it("falls back to CHUTES_CLIENT_ID when the credential has no client id", async () => {
     vi.stubEnv("CHUTES_CLIENT_ID", "cid_env");
     const fetchFn = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {

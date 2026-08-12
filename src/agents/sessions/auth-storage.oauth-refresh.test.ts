@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
 
 vi.mock("../auth-profiles/constants.js", async () => {
   const actual = await vi.importActual<typeof import("../auth-profiles/constants.js")>(
@@ -40,7 +41,7 @@ function createStorage(
 
 describe("AuthStorage OAuth refresh ownership", () => {
   it("persists late success and reuses it after the caller deadline", async () => {
-    const stalled = Promise.withResolvers<{
+    const stalled = createDeferredCore<{
       access: string;
       refresh: string;
       expires: number;
@@ -93,7 +94,7 @@ describe("AuthStorage OAuth refresh ownership", () => {
   });
 
   it("times out a queued follower without a second provider invocation", async () => {
-    const stalled = Promise.withResolvers<{
+    const stalled = createDeferredCore<{
       access: string;
       refresh: string;
       expires: number;

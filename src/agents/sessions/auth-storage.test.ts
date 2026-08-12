@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const providerOAuthMocks = vi.hoisted(() => ({
   login: vi.fn(),
   resolveCredential: vi.fn(),
+  resolveHandle: vi.fn(),
 }));
 
 vi.mock("../../plugins/provider-runtime.runtime.js", async () => {
@@ -17,6 +18,7 @@ vi.mock("../../plugins/provider-runtime.runtime.js", async () => {
     ...actual,
     loginProviderOAuthWithPlugin: providerOAuthMocks.login,
     resolveProviderOAuthCredentialWithPlugin: providerOAuthMocks.resolveCredential,
+    resolveProviderRuntimePluginHandle: providerOAuthMocks.resolveHandle,
   };
 });
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
@@ -47,6 +49,8 @@ describe("SQLite auth storage", () => {
     providerOAuthMocks.login.mockResolvedValue({ status: "unowned" });
     providerOAuthMocks.resolveCredential.mockReset();
     providerOAuthMocks.resolveCredential.mockResolvedValue({ status: "unowned" });
+    providerOAuthMocks.resolveHandle.mockReset();
+    providerOAuthMocks.resolveHandle.mockResolvedValue({ plugin: undefined });
   });
 
   afterEach(() => {
@@ -112,6 +116,41 @@ describe("SQLite auth storage", () => {
       providerId: "plugin-oauth",
     });
     await expect(login).rejects.toBeInstanceOf(OAuthProviderConfiguredUnavailableError);
+  });
+
+  it("keeps a valid stored OAuth credential when its configured plugin is unavailable", async () => {
+    const storage = AuthStorage.inMemory({
+      "plugin-oauth": {
+        type: "oauth",
+        access: "stored-access",
+        refresh: "stored-refresh",
+        expires: Date.now() + 60_000,
+      },
+    });
+    providerOAuthMocks.resolveCredential.mockResolvedValue({
+      status: "configured-unavailable",
+    });
+
+    await expect(storage.getApiKey("plugin-oauth")).resolves.toBe("stored-access");
+  });
+
+  it("fails closed when an expired stored OAuth credential needs an unavailable plugin", async () => {
+    const storage = AuthStorage.inMemory({
+      "plugin-oauth": {
+        type: "oauth",
+        access: "expired-access",
+        refresh: "stored-refresh",
+        expires: 1,
+      },
+    });
+    providerOAuthMocks.resolveCredential.mockResolvedValue({
+      status: "configured-unavailable",
+    });
+
+    await expect(storage.getApiKey("plugin-oauth")).rejects.toBeInstanceOf(
+      OAuthProviderConfiguredUnavailableError,
+    );
+    expect(storage.drainErrors()).toEqual([]);
   });
 
   it("persists provider defaults in the canonical agent database", async () => {
@@ -611,6 +650,56 @@ describe("SQLite auth storage", () => {
     ).resolves.toEqual(["fake-fresh-access", "fake-fresh-access"]);
     expect(refreshCalls).toBe(1);
     expect(maxActiveRefreshes).toBe(1);
+  });
+
+  it("prepares provider runtime ownership before storage locks", async () => {
+    let raw = JSON.stringify({
+      "plugin-oauth": {
+        type: "oauth",
+        access: "fake-expired-access",
+        refresh: "fake-refresh",
+        expires: 1,
+      },
+    });
+    let lockDepth = 0;
+    const backend: AuthStorageBackend = {
+      withLock: (fn) => {
+        lockDepth += 1;
+        try {
+          const update = fn(raw);
+          raw = update.next ?? raw;
+          return update.result;
+        } finally {
+          lockDepth -= 1;
+        }
+      },
+    };
+    const storage = AuthStorage.fromStorage(backend);
+    providerOAuthMocks.resolveHandle.mockImplementation(async () => {
+      expect(lockDepth).toBe(0);
+      return { plugin: { refreshOAuth: vi.fn() } };
+    });
+    providerOAuthMocks.resolveCredential.mockImplementation(async (params) => {
+      expect(lockDepth).toBe(0);
+      expect(params.runtimeHandle?.plugin).toBeDefined();
+      return {
+        status: "available",
+        apiKey: "fake-fresh-access",
+        credential: {
+          ...params.credential,
+          access: "fake-fresh-access",
+          refresh: "fake-fresh-refresh",
+          expires: Date.now() + 60_000,
+        },
+      };
+    });
+
+    await expect(storage.getApiKey("plugin-oauth")).resolves.toBe("fake-fresh-access");
+    expect(providerOAuthMocks.resolveHandle).toHaveBeenCalledOnce();
+    expect(JSON.parse(raw)["plugin-oauth"]).toMatchObject({
+      access: "fake-fresh-access",
+      refresh: "fake-fresh-refresh",
+    });
   });
 
   it("falls back to environment auth when a stored token is expired", async () => {

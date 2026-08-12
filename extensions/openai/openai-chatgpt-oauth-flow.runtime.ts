@@ -15,6 +15,7 @@ import {
   withOAuthLoginAbort,
   type OAuthCredentials,
   type OAuthPrompt,
+  type ProviderOAuthRefreshContext,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
 import {
@@ -301,6 +302,11 @@ export async function loginOpenAICodex(options: {
 /**
  * Refresh OpenAI Codex OAuth token
  */
-export async function refreshOpenAICodexToken(refreshToken: string): Promise<OAuthCredentials> {
-  return resolveOpenAICredentials(await refreshOpenAIAccessToken(refreshToken));
+export async function refreshOpenAICodexToken(
+  refreshToken: string,
+  context: ProviderOAuthRefreshContext = {},
+): Promise<OAuthCredentials> {
+  return resolveOpenAICredentials(
+    await refreshOpenAIAccessToken(refreshToken, { signal: context.signal }),
+  );
 }

@@ -3,10 +3,12 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const refreshOpenAICodexTokenMock = vi.hoisted(() => vi.fn());
 const loginOpenAICodexDeviceCodeMock = vi.hoisted(() => vi.fn());
+const refreshRuntimeLoadedMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./openai-chatgpt-provider.runtime.js", () => ({
-  refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
-}));
+vi.mock("./openai-chatgpt-provider.runtime.js", () => {
+  refreshRuntimeLoadedMock();
+  return { refreshOpenAICodexToken: refreshOpenAICodexTokenMock };
+});
 
 vi.mock("./openai-chatgpt-device-code.js", () => ({
   loginOpenAICodexDeviceCode: loginOpenAICodexDeviceCodeMock,
@@ -31,6 +33,7 @@ describe("OpenAI provider Codex transport hooks", () => {
   it("exposes ChatGPT OAuth on the canonical OpenAI provider", () => {
     const provider = buildOpenAIProvider();
 
+    expect(refreshRuntimeLoadedMock).not.toHaveBeenCalled();
     expect(provider.id).toBe("openai");
     expect(provider.aliases).toBeUndefined();
     expect(provider.hookAliases).toEqual(["azure-openai", "azure-openai-responses"]);
@@ -295,6 +298,7 @@ describe("OpenAI provider Codex transport hooks", () => {
 
   it("refreshes ChatGPT OAuth credentials under the OpenAI provider", async () => {
     const provider = buildOpenAIProvider();
+    const controller = new AbortController();
     refreshOpenAICodexTokenMock.mockResolvedValueOnce({
       access: "new-access",
       refresh: "new-refresh",
@@ -302,18 +306,25 @@ describe("OpenAI provider Codex transport hooks", () => {
     });
 
     await expect(
-      provider.refreshOAuth?.({
-        type: "oauth",
-        provider: "openai",
-        access: "old-access",
-        refresh: "old-refresh",
-        expires: Date.now() - 60_000,
-      }),
+      provider.refreshOAuth?.(
+        {
+          type: "oauth",
+          provider: "openai",
+          access: "old-access",
+          refresh: "old-refresh",
+          expires: Date.now() - 60_000,
+        },
+        { signal: controller.signal },
+      ),
     ).resolves.toMatchObject({
       type: "oauth",
       provider: "openai",
       access: "new-access",
       refresh: "new-refresh",
     });
+    expect(refreshOpenAICodexTokenMock).toHaveBeenCalledWith("old-refresh", {
+      signal: controller.signal,
+    });
+    expect(refreshRuntimeLoadedMock).toHaveBeenCalledOnce();
   });
 });

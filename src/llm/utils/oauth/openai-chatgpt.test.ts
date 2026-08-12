@@ -8,15 +8,10 @@ const mocks = vi.hoisted(() => ({
   loginOpenAICodexOAuth: vi.fn<LoginOpenAICodexOAuth>(),
   loadActivatedBundledPluginPublicSurfaceModuleSync: vi.fn(),
   refreshOpenAICodexToken: vi.fn(),
-  refreshProviderOAuthCredentialWithPlugin: vi.fn(),
 }));
 
 vi.mock("../../../plugins/provider-openai-chatgpt-oauth.js", () => ({
   loginOpenAICodexOAuth: mocks.loginOpenAICodexOAuth,
-}));
-
-vi.mock("../../../plugins/provider-runtime.runtime.js", () => ({
-  refreshProviderOAuthCredentialWithPlugin: mocks.refreshProviderOAuthCredentialWithPlugin,
 }));
 
 vi.mock("../../../plugin-sdk/facade-runtime.js", () => ({
@@ -189,37 +184,13 @@ describe("OpenAI Codex OAuth compatibility provider", () => {
     expect(onAuth).not.toHaveBeenCalled();
   });
 
-  it("refreshes through the provider runtime hook without returning auth-profile fields", async () => {
-    mocks.refreshProviderOAuthCredentialWithPlugin.mockResolvedValueOnce(createCredential());
-
-    await expect(refreshThroughOpenAIProvider("old-refresh-token")).resolves.toEqual({
-      access: "access-token",
-      refresh: "refresh-token",
-      expires: 1_700_000_000_000,
-      accountId: "acct_123",
-    });
-
-    expect(mocks.refreshProviderOAuthCredentialWithPlugin).toHaveBeenCalledWith({
-      provider: "openai",
-      context: {
-        type: "oauth",
-        provider: "openai",
-        access: "",
-        refresh: "old-refresh-token",
-        expires: 0,
-      },
-    });
-    expect(mocks.loadActivatedBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
-  });
-
-  it("falls back to the OpenAI plugin facade when provider runtime refresh is unavailable", async () => {
+  it("refreshes legacy direct callers through the activated OpenAI facade", async () => {
     const credential = {
       access: "facade-access-token",
       refresh: "facade-refresh-token",
       expires: 1_700_000_000_000,
       accountId: "acct_facade",
     };
-    mocks.refreshProviderOAuthCredentialWithPlugin.mockResolvedValueOnce(null);
     mocks.refreshOpenAICodexToken.mockResolvedValueOnce(credential);
 
     await expect(refreshThroughOpenAIProvider("old-refresh-token")).resolves.toEqual(credential);
@@ -228,11 +199,46 @@ describe("OpenAI Codex OAuth compatibility provider", () => {
       dirName: "openai",
       artifactBasename: "api.js",
     });
-    expect(mocks.refreshOpenAICodexToken).toHaveBeenCalledWith("old-refresh-token");
+    expect(mocks.refreshOpenAICodexToken).toHaveBeenCalledWith("old-refresh-token", {
+      signal: undefined,
+    });
   });
 
-  it("preserves activated-facade failures when refresh fallback is disabled", async () => {
-    mocks.refreshProviderOAuthCredentialWithPlugin.mockResolvedValueOnce(null);
+  it("captures one facade refresh callable and reuses it with rotated tokens and signals", async () => {
+    const controller = new AbortController();
+    const refresh = openaiCodexOAuthProvider.prepareRefreshToken?.();
+    expect(refresh).toBeTypeOf("function");
+    if (!refresh) {
+      throw new Error("expected prepared OpenAI OAuth refresh");
+    }
+    mocks.refreshOpenAICodexToken
+      .mockResolvedValueOnce({
+        access: "first-access",
+        refresh: "rotated-refresh",
+        expires: 1_700_000_000_000,
+      })
+      .mockResolvedValueOnce({
+        access: "second-access",
+        refresh: "final-refresh",
+        expires: 1_700_000_100_000,
+      });
+
+    await refresh(
+      { access: "old-access", refresh: "old-refresh", expires: 0 },
+      { signal: controller.signal },
+    );
+    await refresh({ access: "first-access", refresh: "rotated-refresh", expires: 0 });
+
+    expect(mocks.loadActivatedBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledOnce();
+    expect(mocks.refreshOpenAICodexToken).toHaveBeenNthCalledWith(1, "old-refresh", {
+      signal: controller.signal,
+    });
+    expect(mocks.refreshOpenAICodexToken).toHaveBeenNthCalledWith(2, "rotated-refresh", {
+      signal: undefined,
+    });
+  });
+
+  it("preserves activated-facade failures", async () => {
     mocks.loadActivatedBundledPluginPublicSurfaceModuleSync.mockImplementationOnce(() => {
       throw new Error("plugin runtime is not activated");
     });
