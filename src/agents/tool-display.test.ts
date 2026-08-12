@@ -705,6 +705,20 @@ describe("tool display details", () => {
     expect(splitTopLevelStages("echo done1; echo two")).toEqual(["echo done1", "echo two"]);
   });
 
+  it("does not let a body keyword in argument position open a block", () => {
+    expect(splitTopLevelStages("echo do if; npm test; echo c")).toEqual([
+      "echo do if",
+      "npm test",
+      "echo c",
+    ]);
+    expect(splitTopLevelStages("echo then if; npm test")).toEqual(["echo then if", "npm test"]);
+    expect(splitTopLevelStages("echo else case; ls; echo x")).toEqual([
+      "echo else case",
+      "ls",
+      "echo x",
+    ]);
+  });
+
   it("does not treat the overlapping end of a here-string as a heredoc", () => {
     const command = ["cat <<<true", "npm test && npm build", "true", "pnpm test"].join("\n");
 

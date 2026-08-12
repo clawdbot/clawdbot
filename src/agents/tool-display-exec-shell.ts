@@ -511,12 +511,18 @@ export function splitTopLevelStages(command: string): string[] {
     }
     const keyword = word;
     word = "";
-    if (atCommandPosition && COMPOUND_BLOCK_OPENERS.has(keyword)) {
+    const wasAtCommandPosition = atCommandPosition;
+    // A body keyword only re-opens command position when it is itself in command
+    // position: in `echo do if`, `do` is an argument, so `if` stays an argument too.
+    atCommandPosition = wasAtCommandPosition && COMPOUND_BLOCK_BODY_KEYWORDS.has(keyword);
+    if (!wasAtCommandPosition) {
+      return;
+    }
+    if (COMPOUND_BLOCK_OPENERS.has(keyword)) {
       blockDepth += 1;
-    } else if (atCommandPosition && COMPOUND_BLOCK_CLOSERS.has(keyword) && blockDepth > 0) {
+    } else if (COMPOUND_BLOCK_CLOSERS.has(keyword) && blockDepth > 0) {
       blockDepth -= 1;
     }
-    atCommandPosition = COMPOUND_BLOCK_BODY_KEYWORDS.has(keyword);
   };
 
   return splitTopLevel(command, (char, index) => {
