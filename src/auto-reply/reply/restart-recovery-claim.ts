@@ -17,6 +17,7 @@ import {
   sessionMatchesExpectedTranscriptTurn,
 } from "../../config/sessions/session-transcript-turn-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import { diagnosticLogger as diag } from "../../logging/diagnostic-runtime.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { createAgentRunStaleLifecycleError } from "../../infra/agent-lifecycle-error.js";
 import type {
@@ -76,6 +77,10 @@ export async function retireTerminalRestartRecoverySourceClaim(params: {
         return null;
       }
       didRetire = true;
+      diag.warn("retired stale terminal restart-recovery claim after gateway stall", {
+        sessionKey: params.sessionKey,
+        sourceTurnId: params.sourceTurnId,
+      });
       return {
         ...buildRestartRecoveryClaimCleanupPatch({
           entry: current,
