@@ -1309,7 +1309,7 @@ test("sessions.create preserves a committed worktree when initial-turn setup fai
   }
 });
 
-test("sessions.create does not wait for its managed-worktree title", async () => {
+test("sessions.create names its managed worktree without waiting for the model title", async () => {
   const openClawState = await createOpenClawTestState({
     layout: "state-only",
     prefix: "openclaw-session-worktree-title-",
@@ -1357,7 +1357,9 @@ test("sessions.create does not wait for its managed-worktree title", async () =>
 
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
     worktreeId = created.payload?.worktree.id;
-    expect(created.payload?.worktree.branch).not.toBe("openclaw/attachment-repair");
+    expect(created.payload?.worktree.branch).toBe(
+      "openclaw/review-this-rollout-pasted-deployment-plan-xxxxxxxxxxxxxxxxxxxxx",
+    );
     resolveTitle?.("Attachment Repair");
   } finally {
     resolveTitle?.("Attachment Repair");

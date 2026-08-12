@@ -27,6 +27,7 @@ import {
 } from "../../projects/project-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
+import { buildDashboardSessionTitleSource } from "../dashboard-session-title.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { buildDashboardSessionKey, createGatewaySession } from "../session-create-service.js";
 import type { PrepareGatewaySessionLifecycle } from "../session-lifecycle-preparation.js";
@@ -383,7 +384,13 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
               ownerKind: "session",
               ownerId: lifecycleTarget.key,
               name: requestedWorktreeName,
-              suggestedName: slugifyWorktreeTitle(normalizeOptionalString(p.label) ?? ""),
+              suggestedName: slugifyWorktreeTitle(
+                normalizeOptionalString(p.label) ??
+                  buildDashboardSessionTitleSource({
+                    message: initialMessage ?? "",
+                    attachments: initialAttachments,
+                  }),
+              ),
               baseRef: requestedWorktreeBaseRef,
               // Checkout hooks and .openclaw/worktree-setup.sh run repo code; keep them
               // admin-only so this write-scoped path cannot execute gated repo scripts.
