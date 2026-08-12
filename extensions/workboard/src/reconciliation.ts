@@ -65,13 +65,16 @@ function readBoundedUtf8String(value: unknown, name: string, maximum: number): s
 
 function readSourceUrl(value: unknown): string {
   const sourceUrl = readBoundedUtf8String(value, "sourceUrl", MAX_SOURCE_URL_LENGTH);
+  if (/\p{C}/u.test(sourceUrl)) {
+    throw new Error("sourceUrl must be an absolute URI.");
+  }
   try {
     const url = new URL(sourceUrl);
-    if (url.protocol !== "https:" || !url.hostname || url.username || url.password) {
+    if (!url.protocol || url.username || url.password) {
       throw new Error();
     }
   } catch {
-    throw new Error("sourceUrl must be an absolute https URL.");
+    throw new Error("sourceUrl must be an absolute URI.");
   }
   return sourceUrl;
 }
@@ -348,20 +351,16 @@ export function projectReconciliationSourceObservation(
     throw new Error("staleAfterMisses must be between 1 and 1000.");
   }
   return {
-    cardId: readBoundedUtf8String(input.cardId, "cardId", MAX_TRIAGE_CARD_ID_LENGTH),
-    tenant: readBoundedUtf8String(input.tenant, "tenant", MAX_TENANT_LENGTH),
-    objectiveKey: readBoundedUtf8String(
-      input.objectiveKey,
-      "objectiveKey",
-      MAX_OBJECTIVE_KEY_LENGTH,
-    ),
+    cardId: readBoundedString(input.cardId, "cardId", MAX_TRIAGE_CARD_ID_LENGTH),
+    tenant: readBoundedString(input.tenant, "tenant", MAX_TENANT_LENGTH),
+    objectiveKey: readBoundedString(input.objectiveKey, "objectiveKey", MAX_OBJECTIVE_KEY_LENGTH),
     sourceUrl: readSourceUrl(input.sourceUrl),
-    reconciliationAssociationKey: readBoundedUtf8String(
+    reconciliationAssociationKey: readBoundedString(
       input.reconciliationAssociationKey,
       "reconciliationAssociationKey",
       MAX_ASSOCIATION_KEY_LENGTH,
     ),
-    observationId: readBoundedUtf8String(
+    observationId: readBoundedString(
       input.observationId,
       "observationId",
       MAX_OBSERVATION_ID_LENGTH,

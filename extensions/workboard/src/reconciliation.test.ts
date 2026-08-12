@@ -33,6 +33,43 @@ function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T>
 }
 
 describe("WorkboardReconciler", () => {
+  it("accepts bounded absolute source URIs while rejecting malformed or credentialed values", async () => {
+    const base = {
+      tenant: "acme",
+      idempotencyKey: "source-uri",
+      sourceUpdatedAt: 1,
+      card: { title: "URI contract" },
+    };
+    for (const sourceUrl of [
+      "https://example.test/runs/uri",
+      "http://example.test/runs/uri",
+      "file:///E:/OpenClaw/runs/uri.json",
+      "codex://thread/uri-contract",
+    ]) {
+      expect(projectReconciliationObservation({ ...base, sourceUrl }).sourceUrl).toBe(sourceUrl);
+    }
+
+    const provider = createWorkboardReconciliationProvider(
+      new WorkboardReconciler(new WorkboardStore(createMemoryStore())),
+    );
+    await expect(
+      provider.apply({
+        ...base,
+        sourceUrl: "codex://thread/provider-contract",
+        observationId: "uri",
+      }),
+    ).resolves.toMatchObject({ outcome: "applied" });
+    for (const sourceUrl of [
+      "not a uri",
+      "https://user:secret@example.test/run",
+      "https://example.test/\u0000run",
+    ]) {
+      expect(() => projectReconciliationObservation({ ...base, sourceUrl })).toThrow(
+        "sourceUrl must be an absolute URI.",
+      );
+    }
+  });
+
   it("does not mutate a source-matched card without its exact revision", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const provider = createWorkboardReconciliationProvider(new WorkboardReconciler(store));
@@ -72,11 +109,8 @@ describe("WorkboardReconciler", () => {
     };
 
     await expect(provider.apply({ ...observation, sourceUrl: "not a uri" })).rejects.toThrow(
-      "sourceUrl must be an absolute https URL.",
+      "sourceUrl must be an absolute URI.",
     );
-    await expect(
-      provider.apply({ ...observation, sourceUrl: "file:///private/run" }),
-    ).rejects.toThrow("sourceUrl must be an absolute https URL.");
     await expect(
       provider.apply({ ...observation, sourceUrl: `https://example.test/${"é".repeat(1_000)}` }),
     ).rejects.toThrow("sourceUrl must be 2000 bytes or fewer.");
