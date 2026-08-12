@@ -515,12 +515,6 @@ export async function buildModelsListResult(
     preparedModelRuntimeConfigsMatch(params.preloadedCatalog.config, initialConfig)
       ? params.preloadedCatalog
       : undefined;
-  const preparedOwnerSnapshot =
-    preloadedCatalog && params.catalogProjector
-      ? undefined
-      : await params.context.readPreparedGatewayModelCatalogSnapshot?.({
-          agentId: initialAgentId,
-        });
   let loadedSnapshot:
     | Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>>
     | undefined;
@@ -605,7 +599,13 @@ export async function buildModelsListResult(
   ) {
     return { models: [] };
   }
-  const ownerSnapshot = loadedSnapshot ?? preparedOwnerSnapshot;
+  const ownerSnapshot =
+    loadedSnapshot ??
+    (preloadedCatalog && params.catalogProjector
+      ? undefined
+      : await params.context.readPreparedGatewayModelCatalogSnapshot?.({
+          agentId: initialAgentId,
+        }));
   const cfg = ownerSnapshot?.config ?? initialConfig;
   const agentId = ownerSnapshot?.agentId ?? initialAgentId;
   const workspaceDir =

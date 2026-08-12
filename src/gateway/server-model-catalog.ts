@@ -1,6 +1,9 @@
 import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-catalog-owner.js";
 import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
-import { getPreparedModelRuntimeAuthMaterializations } from "../agents/prepared-model-runtime-auth.js";
+import {
+  getPreparedModelRuntimeAuthMaterializations,
+  loadPreparedModelRuntimeAuthStore,
+} from "../agents/prepared-model-runtime-auth.js";
 // Gateway catalog reads use the atomic prepared runtime generation.
 import { getRuntimeConfig } from "../config/io.js";
 import type {
@@ -65,8 +68,14 @@ async function loadGatewayModelCatalogOwnerSnapshot(
     readOnly: params?.readOnly !== false,
     ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
+  const owner = resolvePublishedModelCatalogOwner(candidate);
   return {
-    ...resolvePublishedModelCatalogOwner(candidate),
+    ...owner,
+    authStore:
+      (await loadPreparedModelRuntimeAuthStore(
+        candidate,
+        owner.modelCatalog.entries.map((entry) => entry.provider),
+      )) ?? owner.authStore,
     authMaterializations: getPreparedModelRuntimeAuthMaterializations(candidate),
   };
 }
@@ -132,8 +141,14 @@ export async function readPreparedGatewayModelCatalogSnapshot(
   if (!candidate) {
     return undefined;
   }
+  const owner = resolvePublishedModelCatalogOwner(candidate);
   return projectGatewayModelCatalogSnapshot({
-    ...resolvePublishedModelCatalogOwner(candidate),
+    ...owner,
+    authStore:
+      (await loadPreparedModelRuntimeAuthStore(
+        candidate,
+        owner.modelCatalog.entries.map((entry) => entry.provider),
+      )) ?? owner.authStore,
     authMaterializations: getPreparedModelRuntimeAuthMaterializations(candidate),
   });
 }

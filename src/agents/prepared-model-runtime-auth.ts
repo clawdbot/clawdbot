@@ -4,6 +4,10 @@ import type { AuthProfileStore } from "./auth-profiles/types.js";
 /** Private auth facts owned by an immutable prepared model generation. */
 const authStoreBySnapshot = new WeakMap<object, AuthProfileStore>();
 const materializationsBySnapshot = new WeakMap<object, readonly RuntimeAuthMaterialization[]>();
+const authStoreLoaderBySnapshot = new WeakMap<
+  object,
+  (providerIds: readonly string[]) => Promise<AuthProfileStore>
+>();
 
 // Secret-bearing state stays lifecycle-owned without becoming part of the public snapshot shape.
 export function setPreparedModelRuntimeAuthStore(
@@ -15,6 +19,21 @@ export function setPreparedModelRuntimeAuthStore(
 
 export function getPreparedModelRuntimeAuthStore(snapshot: object): AuthProfileStore | undefined {
   return authStoreBySnapshot.get(snapshot);
+}
+
+export function setPreparedModelRuntimeAuthStoreLoader(
+  snapshot: object,
+  loader: (providerIds: readonly string[]) => Promise<AuthProfileStore>,
+): void {
+  authStoreLoaderBySnapshot.set(snapshot, loader);
+}
+
+export async function loadPreparedModelRuntimeAuthStore(
+  snapshot: object,
+  providerIds: readonly string[],
+): Promise<AuthProfileStore | undefined> {
+  const loader = authStoreLoaderBySnapshot.get(snapshot);
+  return loader ? await loader(providerIds) : authStoreBySnapshot.get(snapshot);
 }
 
 export function setPreparedModelRuntimeAuthMaterializations(
@@ -34,6 +53,10 @@ export function copyPreparedModelRuntimeAuthState(source: object, target: object
   const authStore = authStoreBySnapshot.get(source);
   if (authStore) {
     authStoreBySnapshot.set(target, authStore);
+  }
+  const authStoreLoader = authStoreLoaderBySnapshot.get(source);
+  if (authStoreLoader) {
+    authStoreLoaderBySnapshot.set(target, authStoreLoader);
   }
   materializationsBySnapshot.set(target, getPreparedModelRuntimeAuthMaterializations(source));
 }

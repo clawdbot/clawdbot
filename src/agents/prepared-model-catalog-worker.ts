@@ -16,6 +16,7 @@ import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.j
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 
 export type PreparedModelCatalogWorkerInput = Readonly<{
+  kind: "catalog";
   generationFingerprint: string;
   input: PreparedModelRuntimeInput;
   authStore: AuthProfileStore;
@@ -23,11 +24,29 @@ export type PreparedModelCatalogWorkerInput = Readonly<{
   providerIds: readonly string[];
 }>;
 
-export type PreparedModelCatalogWorkerResult =
+export type PreparedModelAuthRefreshWorkerInput = Readonly<{
+  kind: "auth-refresh";
+  generationFingerprint: string;
+  agentDir: string;
+  inheritedAuthDir?: string;
+  authStore: AuthProfileStore;
+  config: PreparedModelRuntimeInput["config"];
+  env: NodeJS.ProcessEnv;
+  providerIds: readonly string[];
+}>;
+
+export type PreparedModelWorkerResult =
   | Readonly<{
       status: "ok";
+      kind: "catalog";
       generationFingerprint: string;
       snapshot: ModelCatalogSnapshot;
+    }>
+  | Readonly<{
+      status: "ok";
+      kind: "auth-refresh";
+      generationFingerprint: string;
+      authStore: AuthProfileStore;
     }>
   | Readonly<{ status: "failed"; error: string }>;
 
@@ -106,6 +125,7 @@ export function createPreparedModelCatalogWorkerInput(params: {
   const credentials = { ...params.agentFacts.credentials };
   const providerIds = [...params.agentFacts.providerIds];
   return {
+    kind: "catalog",
     generationFingerprint: fingerprintPreparedModelCatalogGeneration({
       input,
       authStore,
@@ -116,6 +136,38 @@ export function createPreparedModelCatalogWorkerInput(params: {
     input,
     authStore,
     credentials,
+    providerIds,
+  };
+}
+
+export function createPreparedModelAuthRefreshWorkerInput(params: {
+  agentDir: string;
+  inheritedAuthDir?: string;
+  authStore: AuthProfileStore;
+  config: PreparedModelRuntimeInput["config"];
+  env: NodeJS.ProcessEnv;
+  providerIds: readonly string[];
+}): PreparedModelAuthRefreshWorkerInput {
+  const providerIds = [...new Set(params.providerIds)].toSorted((left, right) =>
+    left.localeCompare(right),
+  );
+  const authStore = projectWorkerAuthStore(params.authStore);
+  const env = { ...params.env };
+  return {
+    kind: "auth-refresh",
+    agentDir: params.agentDir,
+    ...(params.inheritedAuthDir ? { inheritedAuthDir: params.inheritedAuthDir } : {}),
+    generationFingerprint: fingerprintPreparedRuntimeFacts({
+      agentDir: params.agentDir,
+      inheritedAuthDir: params.inheritedAuthDir,
+      authStore,
+      config: params.config,
+      env,
+      providerIds,
+    }),
+    authStore,
+    config: params.config,
+    env,
     providerIds,
   };
 }
@@ -133,13 +185,16 @@ function resolvePreparedModelCatalogWorkerUrl(currentModuleUrl = import.meta.url
   return new URL(`./prepared-model-catalog.worker${extension}`, currentModuleUrl);
 }
 
-export function runPreparedModelCatalogWorker(params: {
-  input: PreparedModelCatalogWorkerInput;
+function runPreparedModelWorker<T>(params: {
+  input: PreparedModelCatalogWorkerInput | PreparedModelAuthRefreshWorkerInput;
   isCurrent: () => boolean;
-}): Promise<ModelCatalogSnapshot> {
+  project: (message: Extract<PreparedModelWorkerResult, { status: "ok" }>) => T;
+}): Promise<T> {
   const superseded = () =>
     new PreparedModelRuntimePublicationSupersededError(
-      `prepared model runtime catalog generation was superseded for ${params.input.input.agentDir}`,
+      `prepared model runtime catalog generation was superseded for ${
+        params.input.kind === "catalog" ? params.input.input.agentDir : params.input.agentDir
+      }`,
     );
   if (!params.isCurrent()) {
     return Promise.reject(superseded());
@@ -152,18 +207,19 @@ export function runPreparedModelCatalogWorker(params: {
       workerData: params.input,
       ...(workerUrl.pathname.endsWith(".ts") ? { execArgv: ["--import", "tsx"] } : {}),
       // Establish state/config environment before worker module initialization reads process.env.
-      env: { ...process.env, ...params.input.input.env },
+      env: {
+        ...process.env,
+        ...(params.input.kind === "catalog" ? params.input.input.env : params.input.env),
+      },
     });
   } catch (error) {
     return Promise.reject(error instanceof Error ? error : new Error(String(error)));
   }
   worker.unref();
 
-  return new Promise<ModelCatalogSnapshot>((resolve, reject) => {
+  return new Promise<T>((resolve, reject) => {
     let settled = false;
-    type Outcome =
-      | { status: "resolved"; snapshot: ModelCatalogSnapshot }
-      | { status: "rejected"; error: Error };
+    type Outcome = { status: "resolved"; value: T } | { status: "rejected"; error: Error };
     const settle = (outcome: Outcome, terminate = true) => {
       if (settled) {
         return;
@@ -174,7 +230,7 @@ export function runPreparedModelCatalogWorker(params: {
       worker.removeAllListeners();
       const finish = () => {
         if (outcome.status === "resolved") {
-          resolve(markPreparedModelCatalogFull(outcome.snapshot));
+          resolve(outcome.value);
         } else {
           reject(outcome.error);
         }
@@ -209,7 +265,7 @@ export function runPreparedModelCatalogWorker(params: {
     }, PREPARED_MODEL_CATALOG_WORKER_GENERATION_POLL_MS);
     generationPoll.unref();
 
-    worker.once("message", (message: PreparedModelCatalogWorkerResult) => {
+    worker.once("message", (message: PreparedModelWorkerResult) => {
       if (!params.isCurrent()) {
         fail(superseded());
       } else if (message.status === "failed") {
@@ -217,7 +273,11 @@ export function runPreparedModelCatalogWorker(params: {
       } else if (message.generationFingerprint !== params.input.generationFingerprint) {
         fail(new Error("prepared model catalog worker returned a stale generation"));
       } else {
-        settle({ status: "resolved", snapshot: message.snapshot });
+        try {
+          settle({ status: "resolved", value: params.project(message) });
+        } catch (error) {
+          fail(error instanceof Error ? error : new Error(String(error)));
+        }
       }
     });
     worker.once("error", (error) =>
@@ -231,5 +291,35 @@ export function runPreparedModelCatalogWorker(params: {
         false,
       ),
     );
+  });
+}
+
+export function runPreparedModelCatalogWorker(params: {
+  input: PreparedModelCatalogWorkerInput;
+  isCurrent: () => boolean;
+}): Promise<ModelCatalogSnapshot> {
+  return runPreparedModelWorker({
+    ...params,
+    project: (message) => {
+      if (message.kind !== "catalog") {
+        throw new Error("prepared model catalog worker returned an auth refresh result");
+      }
+      return markPreparedModelCatalogFull(message.snapshot);
+    },
+  });
+}
+
+export function runPreparedModelAuthRefreshWorker(params: {
+  input: PreparedModelAuthRefreshWorkerInput;
+  isCurrent: () => boolean;
+}): Promise<AuthProfileStore> {
+  return runPreparedModelWorker({
+    ...params,
+    project: (message) => {
+      if (message.kind !== "auth-refresh") {
+        throw new Error("prepared model auth refresh worker returned a catalog result");
+      }
+      return message.authStore;
+    },
   });
 }

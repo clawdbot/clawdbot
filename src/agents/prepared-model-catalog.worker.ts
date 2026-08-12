@@ -1,22 +1,44 @@
 /** Worker-thread entrypoint for complete model-catalog discovery. */
 import { parentPort, workerData } from "node:worker_threads";
+import { overlayExternalAuthProfiles } from "./auth-profiles/external-auth.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
+import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles/store.js";
 import {
   fingerprintPreparedModelCatalogGeneration,
+  type PreparedModelAuthRefreshWorkerInput,
   type PreparedModelCatalogWorkerInput,
-  type PreparedModelCatalogWorkerResult,
+  type PreparedModelWorkerResult,
 } from "./prepared-model-catalog-worker.js";
-import {
-  prepareAgentCatalogSource,
-  prepareFullCatalogFacts,
-  prepareWorkspaceBuildGroup,
-} from "./prepared-model-runtime.facts.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 
 export async function runPreparedModelCatalogWorkerInput(
-  value: PreparedModelCatalogWorkerInput,
-): Promise<PreparedModelCatalogWorkerResult> {
+  value: PreparedModelCatalogWorkerInput | PreparedModelAuthRefreshWorkerInput,
+): Promise<PreparedModelWorkerResult> {
   try {
+    if (value.kind === "auth-refresh") {
+      replaceRuntimeAuthProfileStoreSnapshots([
+        { agentDir: value.agentDir, store: value.authStore },
+      ]);
+      const authStore = ensureAuthProfileStoreWithoutExternalProfiles(value.agentDir, {
+        allowKeychainPrompt: false,
+        readOnly: true,
+        syncExternalCli: false,
+        ...(value.inheritedAuthDir ? { inheritedAuthDir: value.inheritedAuthDir } : {}),
+      });
+      return {
+        status: "ok",
+        kind: "auth-refresh",
+        generationFingerprint: value.generationFingerprint,
+        authStore: overlayExternalAuthProfiles(authStore, {
+          config: value.config,
+          env: value.env,
+          externalCliProviderIds: value.providerIds,
+          allowKeychainPrompt: false,
+        }),
+      };
+    }
+    const { prepareAgentCatalogSource, prepareFullCatalogFacts, prepareWorkspaceBuildGroup } =
+      await import("./prepared-model-runtime.facts.js");
     replaceRuntimeAuthProfileStoreSnapshots([
       { agentDir: value.input.agentDir, store: value.authStore },
     ]);
@@ -57,6 +79,7 @@ export async function runPreparedModelCatalogWorkerInput(
     );
     return {
       status: "ok",
+      kind: "catalog",
       generationFingerprint: value.generationFingerprint,
       snapshot: facts.modelCatalog,
     };
@@ -66,7 +89,11 @@ export async function runPreparedModelCatalogWorkerInput(
 }
 
 if (parentPort) {
-  const send: (message: PreparedModelCatalogWorkerResult) => void =
+  const send: (message: PreparedModelWorkerResult) => void =
     parentPort.postMessage.bind(parentPort);
-  send(await runPreparedModelCatalogWorkerInput(workerData as PreparedModelCatalogWorkerInput));
+  send(
+    await runPreparedModelCatalogWorkerInput(
+      workerData as PreparedModelCatalogWorkerInput | PreparedModelAuthRefreshWorkerInput,
+    ),
+  );
 }

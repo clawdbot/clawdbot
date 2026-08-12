@@ -3,6 +3,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
+import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
+import { loadGatewayModelCatalogSnapshot } from "../gateway/server-model-catalog.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -17,6 +20,7 @@ import {
   createPreparedModelCatalogWorkerInput,
   runPreparedModelCatalogWorker,
 } from "./prepared-model-catalog-worker.js";
+import { copyPreparedModelRuntimeAuthState } from "./prepared-model-runtime-auth.js";
 import { startSerializedSnapshotBuild } from "./prepared-model-runtime.build.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.facts.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
@@ -38,6 +42,11 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     cleanup();
   });
 });
+
+function createJwtWithExp(exp: number): string {
+  const payload = Buffer.from(JSON.stringify({ exp })).toString("base64url");
+  return `header.${payload}.signature`;
+}
 
 function writeFixturePlugin(params: { root: string; spinMs: number }): string {
   const pluginDir = path.join(params.root, "plugin");
@@ -110,7 +119,7 @@ module.exports = {
   return pluginFile;
 }
 
-async function createStaticSnapshot(spinMs: number) {
+async function createStaticSnapshot(spinMs: number, envOverride: NodeJS.ProcessEnv = {}) {
   const root = tempDirs.make("openclaw-model-catalog-worker-");
   const stateDir = path.join(root, "state");
   const agentDir = path.join(stateDir, "agents", "main", "agent");
@@ -124,6 +133,7 @@ async function createStaticSnapshot(spinMs: number) {
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_WORKER_CATALOG_MARKER: marker,
+    ...envOverride,
     [REF_ONLY_API_ENV]: "ref-only-api-secret-not-real",
     [REF_ONLY_TOKEN_ENV]: "ref-only-token-secret-not-real",
   };
@@ -199,6 +209,74 @@ async function waitForMarker(marker: string): Promise<void> {
 }
 
 describe("prepared model catalog worker boundary", () => {
+  it("makes a post-startup Codex login available to direct models.list", async () => {
+    const codexHome = tempDirs.make("openclaw-models-list-codex-");
+    const fixture = await createStaticSnapshot(0, { CODEX_HOME: codexHome });
+    const route = {
+      provider: "openai",
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-chatgpt-responses" as const,
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    };
+    const config = {
+      ...fixture.config,
+      agents: {
+        ...fixture.config.agents,
+        list: [
+          {
+            id: "main",
+            default: true,
+            agentDir: fixture.agentDir,
+            workspace: fixture.workspaceDir,
+          },
+        ],
+      },
+    } satisfies OpenClawConfig;
+    const owner = Object.freeze({
+      ...fixture.snapshot,
+      config,
+      modelCatalog: { entries: [route], routeVariants: [route] },
+    });
+    copyPreparedModelRuntimeAuthState(fixture.snapshot, owner);
+    const listModels = async () => {
+      const projected = await loadGatewayModelCatalogSnapshot({
+        getConfig: () => config,
+        loadPublishedPreparedModelCatalogOwnerSnapshot: async () => owner,
+      });
+      const context = {
+        getRuntimeConfig: () => config,
+        loadGatewayModelCatalogSnapshot: async () => projected,
+        readPreparedGatewayModelCatalogSnapshot: async () => projected,
+        logGateway: { debug: () => undefined },
+      } as unknown as GatewayRequestContext;
+      return await buildModelsListResult({ context, params: { view: "all" } });
+    };
+
+    await expect(listModels()).resolves.toMatchObject({
+      models: [expect.objectContaining({ id: "gpt-5.4", available: false })],
+    });
+    fs.writeFileSync(
+      path.join(codexHome, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: {
+          access_token: createJwtWithExp(Math.floor(Date.now() / 1000) + 3600),
+          refresh_token: "post-startup-refresh-not-real",
+        },
+      }),
+      "utf8",
+    );
+
+    await expect(listModels()).resolves.toMatchObject({
+      models: [expect.objectContaining({ id: "gpt-5.4", available: true })],
+    });
+    fs.rmSync(path.join(codexHome, "auth.json"));
+    await expect(listModels()).resolves.toMatchObject({
+      models: [expect.objectContaining({ id: "gpt-5.4", available: false })],
+    });
+  });
+
   it("shares in-flight discovery but reruns completed refreshes with prepared auth and SQLite facts", async () => {
     const fixture = await createStaticSnapshot(750);
     let settled = false;
