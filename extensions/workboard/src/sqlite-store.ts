@@ -30,7 +30,7 @@ import type {
   WorkboardKeyedStore,
 } from "./persistence-types.js";
 const WORKBOARD_DB_RELATIVE_PATH = ["plugins", "workboard", "workboard.sqlite"] as const;
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 const WORKBOARD_SQLITE_BUSY_TIMEOUT_MS = 5000;
 const WORKBOARD_SQLITE_DIR_MODE = 0o700;
 const WORKBOARD_SQLITE_FILE_MODE = 0o600;
@@ -247,6 +247,9 @@ const WORKBOARD_SCHEMA_SQL = `
       title TEXT,
       url TEXT,
       source_updated_at INTEGER,
+      consecutive_successful_full_scan_misses INTEGER,
+      stale_at INTEGER,
+      stale_state TEXT,
       created_at INTEGER NOT NULL
     ) STRICT;
 
@@ -361,6 +364,14 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
     "lifecycle_status_source_updated_at INTEGER",
   );
   ensureColumn(db, "workboard_card_links", "source_updated_at", "source_updated_at INTEGER");
+  ensureColumn(
+    db,
+    "workboard_card_links",
+    "consecutive_successful_full_scan_misses",
+    "consecutive_successful_full_scan_misses INTEGER",
+  );
+  ensureColumn(db, "workboard_card_links", "stale_at", "stale_at INTEGER");
+  ensureColumn(db, "workboard_card_links", "stale_state", "stale_state TEXT");
   const migrationId = `schema-${SCHEMA_VERSION}`;
   const current = db
     .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = ?")
@@ -654,6 +665,12 @@ function readMetadata(
     const title = stringValue(child, "title");
     const url = stringValue(child, "url");
     const sourceUpdatedAt = numberValue(child, "source_updated_at");
+    const consecutiveSuccessfulFullScanMisses = numberValue(
+      child,
+      "consecutive_successful_full_scan_misses",
+    );
+    const staleAt = numberValue(child, "stale_at");
+    const staleState = stringValue(child, "stale_state");
     if (targetCardId) {
       entry.targetCardId = targetCardId;
     }
@@ -666,6 +683,10 @@ function readMetadata(
     if (sourceUpdatedAt !== undefined) {
       entry.sourceUpdatedAt = sourceUpdatedAt;
     }
+    if (consecutiveSuccessfulFullScanMisses !== undefined)
+      entry.consecutiveSuccessfulFullScanMisses = consecutiveSuccessfulFullScanMisses;
+    if (staleAt !== undefined) entry.staleAt = staleAt;
+    if (staleState === "stale") entry.staleState = staleState;
     return entry;
   });
   const proof = childRows(db, "workboard_card_proof", cardId, preloaded).map((child) => {
@@ -1041,8 +1062,8 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
     db.prepare(
       `
         INSERT INTO workboard_card_links
-          (id, card_id, ordinal, type, target_card_id, title, url, source_updated_at, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (id, card_id, ordinal, type, target_card_id, title, url, source_updated_at, consecutive_successful_full_scan_misses, stale_at, stale_state, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     ).run(
       entry.id,
@@ -1053,6 +1074,9 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
       bindNull(entry.title),
       bindNull(entry.url),
       bindNull(entry.sourceUpdatedAt),
+      bindNull(entry.consecutiveSuccessfulFullScanMisses),
+      bindNull(entry.staleAt),
+      bindNull(entry.staleState),
       entry.createdAt,
     );
   });

@@ -144,6 +144,10 @@ export type WorkboardLink = {
   createdAt: number;
   /** Source timestamp for durable external-execution associations only. */
   sourceUpdatedAt?: number;
+  /** Reconciliation-only source evidence. These fields never change card workflow state. */
+  consecutiveSuccessfulFullScanMisses?: number;
+  staleAt?: number;
+  staleState?: "stale";
   targetCardId?: string;
   title?: string;
   url?: string;
@@ -257,6 +261,8 @@ export type WorkboardAutomation = {
   boardId?: string;
   createdByCardId?: string;
   idempotencyKey?: string;
+  /** Stable reconciliation identity, scoped to automation.tenant. */
+  objectiveKey?: string;
   skills?: string[];
   workspace?: WorkboardWorkspace;
   workspaceAccess?: WorkboardWorkspaceAccess;
@@ -380,6 +386,7 @@ export type WorkboardExternalExecutionLink = {
 export type WorkboardReconciliationObservation = {
   sourceUrl: string;
   tenant: string;
+  objectiveKey?: string;
   idempotencyKey: string;
   sourceUpdatedAt: number;
   cardId?: string;
@@ -402,6 +409,18 @@ export type WorkboardReconciliationObservation = {
     >
   > & { boardId?: string };
   link?: Pick<WorkboardExternalExecutionLink, "title">;
+};
+
+export type WorkboardReconciliationSourceObservation = {
+  cardId: string;
+  tenant: string;
+  objectiveKey: string;
+  sourceUrl: string;
+  idempotencyKey: string;
+  sourceState: "present" | "missing-after-successful-full-scan" | "dependency-failed";
+  staleAfterMisses: number;
+  observedAt: number;
+  expectedRevision?: number;
 };
 
 export type WorkboardReconciliationPage = {

@@ -5,11 +5,14 @@ import type {
   WorkboardReconciliationApplyResult,
   WorkboardReconciliationObservation,
   WorkboardReconciliationPage,
+  WorkboardReconciliationSourceObservation,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
 import { WorkboardStore } from "./store.js";
 
 const MAX_PAGE_SIZE = 100;
+const MAX_OBJECTIVE_KEY_LENGTH = 160;
+const MAX_STALE_AFTER_MISSES = 1000;
 const DEFAULT_PAGE_SIZE = 50;
 const RECONCILIATION_PROTECTED_STATUSES = new Set<WorkboardStatus>(["blocked", "review", "done"]);
 
@@ -26,6 +29,14 @@ function readRequiredString(value: unknown, name: string): string {
     throw new Error(`${name} is required.`);
   }
   return value.trim();
+}
+
+function readBoundedString(value: unknown, name: string, maximum: number): string {
+  const result = readRequiredString(value, name);
+  if (result.length > maximum) {
+    throw new Error(`${name} must be ${maximum} characters or fewer.`);
+  }
+  return result;
 }
 
 function readTimestamp(value: unknown, name: string): number {
@@ -88,12 +99,24 @@ function linkFor(observation: WorkboardReconciliationObservation): WorkboardExte
 const OBSERVATION_FIELDS = new Set([
   "sourceUrl",
   "tenant",
+  "objectiveKey",
   "idempotencyKey",
   "sourceUpdatedAt",
   "cardId",
   "expectedRevision",
   "card",
   "link",
+]);
+const SOURCE_OBSERVATION_FIELDS = new Set([
+  "cardId",
+  "tenant",
+  "objectiveKey",
+  "sourceUrl",
+  "idempotencyKey",
+  "sourceState",
+  "staleAfterMisses",
+  "observedAt",
+  "expectedRevision",
 ]);
 const CARD_FIELDS = new Set([
   "title",
@@ -143,6 +166,15 @@ export function projectReconciliationObservation(
   return {
     sourceUrl: input.sourceUrl as string,
     tenant: input.tenant as string,
+    ...(input.objectiveKey === undefined
+      ? {}
+      : {
+          objectiveKey: readBoundedString(
+            input.objectiveKey,
+            "objectiveKey",
+            MAX_OBJECTIVE_KEY_LENGTH,
+          ),
+        }),
     idempotencyKey: input.idempotencyKey as string,
     sourceUpdatedAt: input.sourceUpdatedAt as number,
     ...(input.cardId === undefined ? {} : { cardId: readRequiredString(input.cardId, "cardId") }),
@@ -151,6 +183,40 @@ export function projectReconciliationObservation(
       : { expectedRevision: readTimestamp(input.expectedRevision, "expectedRevision") }),
     ...(card === undefined ? {} : { card: card as WorkboardReconciliationObservation["card"] }),
     ...(link === undefined ? {} : { link: link as WorkboardReconciliationObservation["link"] }),
+  };
+}
+
+export function projectReconciliationSourceObservation(
+  value: unknown,
+): WorkboardReconciliationSourceObservation {
+  const input = objectWithOnly(value, "source observation", SOURCE_OBSERVATION_FIELDS);
+  const sourceState = input.sourceState;
+  if (
+    sourceState !== "present" &&
+    sourceState !== "missing-after-successful-full-scan" &&
+    sourceState !== "dependency-failed"
+  ) {
+    throw new Error("sourceState is invalid.");
+  }
+  if (
+    !Number.isInteger(input.staleAfterMisses) ||
+    (input.staleAfterMisses as number) < 1 ||
+    (input.staleAfterMisses as number) > MAX_STALE_AFTER_MISSES
+  ) {
+    throw new Error("staleAfterMisses must be between 1 and 1000.");
+  }
+  return {
+    cardId: readRequiredString(input.cardId, "cardId"),
+    tenant: readRequiredString(input.tenant, "tenant"),
+    objectiveKey: readBoundedString(input.objectiveKey, "objectiveKey", MAX_OBJECTIVE_KEY_LENGTH),
+    sourceUrl: readBoundedString(input.sourceUrl, "sourceUrl", 2000),
+    idempotencyKey: readRequiredString(input.idempotencyKey, "idempotencyKey"),
+    sourceState,
+    staleAfterMisses: input.staleAfterMisses as number,
+    observedAt: readTimestamp(input.observedAt, "observedAt"),
+    ...(input.expectedRevision === undefined
+      ? {}
+      : { expectedRevision: readTimestamp(input.expectedRevision, "expectedRevision") }),
   };
 }
 
@@ -189,5 +255,11 @@ export class WorkboardReconciler {
     const projected = projectReconciliationObservation(observation);
     const link = linkFor(projected);
     return await this.store.applyReconciliation(projected, link);
+  }
+
+  async observeSource(value: WorkboardReconciliationSourceObservation) {
+    return await this.store.applyReconciliationSourceObservation(
+      projectReconciliationSourceObservation(value),
+    );
   }
 }

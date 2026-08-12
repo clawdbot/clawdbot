@@ -50,6 +50,7 @@ describe("workboard gateway methods", () => {
       "workboard.cards.list",
       "workboard.reconciliation.list",
       "workboard.reconciliation.apply",
+      "workboard.reconciliation.observeSource",
       "workboard.cards.create",
       "workboard.cards.update",
       "workboard.cards.move",

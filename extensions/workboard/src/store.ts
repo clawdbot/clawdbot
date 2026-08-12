@@ -6,6 +6,7 @@ import type {
   WorkboardExternalExecutionLink,
   WorkboardReconciliationApplyResult,
   WorkboardReconciliationObservation,
+  WorkboardReconciliationSourceObservation,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
 import type {
@@ -109,6 +110,10 @@ function appendExternalLink(card: WorkboardCard, link: WorkboardExternalExecutio
   ];
 }
 
+function objectiveKeyFor(card: WorkboardCard): string | undefined {
+  return card.metadata?.automation?.objectiveKey;
+}
+
 function reconciliationResult(
   card: WorkboardCard,
   applied: boolean,
@@ -129,6 +134,17 @@ export class WorkboardStore extends WorkboardNotificationStore {
   ): Promise<WorkboardReconciliationApplyResult> {
     return await this.enqueueMutation(async () => {
       const cards = await this.list();
+      const explicit = observation.cardId ? await this.get(observation.cardId) : undefined;
+      if (observation.cardId && !explicit) {
+        throw new Error(`card not found: ${observation.cardId}`);
+      }
+      if (
+        explicit &&
+        observation.objectiveKey !== undefined &&
+        objectiveKeyFor(explicit) !== observation.objectiveKey
+      ) {
+        throw new Error("objectiveKey does not match card.");
+      }
       const duplicate = cards.find(
         (card) =>
           card.metadata?.automation?.tenant === link.tenant &&
@@ -139,13 +155,14 @@ export class WorkboardStore extends WorkboardNotificationStore {
         return reconciliationResult(duplicate, true, reconciliationLinkFor(duplicate, link));
       }
 
-      const existing = observation.cardId
-        ? await this.get(observation.cardId)
-        : cards.find(
-            (card) =>
-              card.sourceUrl === link.sourceUrl &&
-              card.metadata?.automation?.tenant === link.tenant,
-          );
+      const existing = explicit
+        ? explicit
+        : cards.find((card) => {
+            if (card.metadata?.automation?.tenant !== link.tenant) return false;
+            return observation.objectiveKey !== undefined
+              ? objectiveKeyFor(card) === observation.objectiveKey
+              : card.sourceUrl === link.sourceUrl;
+          });
       if (existing) {
         if (
           existing.metadata?.automation?.tenant !== undefined &&
@@ -195,10 +212,6 @@ export class WorkboardStore extends WorkboardNotificationStore {
         return reconciliationResult(updated, true, reconciliationLinkFor(updated, link));
       }
 
-      if (observation.cardId) {
-        throw new Error(`card not found: ${observation.cardId}`);
-      }
-
       const card = observation.card ?? {};
       if (typeof card.title !== "string" || card.title.trim() === "") {
         throw new Error("card.title is required when creating a card.");
@@ -211,7 +224,17 @@ export class WorkboardStore extends WorkboardNotificationStore {
         sourceUrl: link.sourceUrl,
         tenant: link.tenant,
         idempotencyKey: link.idempotencyKey,
+        ...(observation.objectiveKey === undefined
+          ? {}
+          : { objectiveKey: observation.objectiveKey }),
         metadata: {
+          automation: {
+            tenant: link.tenant,
+            idempotencyKey: link.idempotencyKey,
+            ...(observation.objectiveKey === undefined
+              ? {}
+              : { objectiveKey: observation.objectiveKey }),
+          },
           lifecycleStatusSourceUpdatedAt: link.sourceUpdatedAt,
           links: [
             {
@@ -226,6 +249,56 @@ export class WorkboardStore extends WorkboardNotificationStore {
         },
       });
       return reconciliationResult(created, true, reconciliationLinkFor(created, link));
+    });
+  }
+
+  async applyReconciliationSourceObservation(
+    observation: WorkboardReconciliationSourceObservation,
+  ): Promise<WorkboardCard> {
+    return await this.enqueueMutation(async () => {
+      const card = await this.get(observation.cardId);
+      if (!card) throw new Error(`card not found: ${observation.cardId}`);
+      if (
+        card.metadata?.automation?.tenant !== observation.tenant ||
+        objectiveKeyFor(card) !== observation.objectiveKey ||
+        (observation.expectedRevision !== undefined &&
+          card.updatedAt !== observation.expectedRevision)
+      ) {
+        throw new Error("source observation does not match card.");
+      }
+      const linkId = externalLinkId({
+        sourceUrl: "",
+        tenant: observation.tenant,
+        idempotencyKey: observation.idempotencyKey,
+        sourceUpdatedAt: 0,
+      });
+      const links = card.metadata?.links ?? [];
+      const index = links.findIndex((link) => link.id === linkId);
+      if (index === -1)
+        throw new Error("source observation does not match an external association.");
+      if (observation.sourceState === "dependency-failed") return card;
+      const current = links[index]!;
+      if (current.url !== observation.sourceUrl) {
+        throw new Error("source observation does not match an external association.");
+      }
+      const misses =
+        observation.sourceState === "present"
+          ? 0
+          : (current.consecutiveSuccessfulFullScanMisses ?? 0) + 1;
+      const next = {
+        ...current,
+        consecutiveSuccessfulFullScanMisses: misses,
+        ...(observation.sourceState === "present"
+          ? { staleAt: undefined, staleState: undefined }
+          : misses >= observation.staleAfterMisses
+            ? { staleAt: observation.observedAt, staleState: "stale" as const }
+            : {}),
+      };
+      const nextLinks = [...links];
+      nextLinks[index] = next;
+      return await this.updateCard(card.id, {
+        metadata: { ...card.metadata, links: nextLinks },
+      });
     });
   }
 

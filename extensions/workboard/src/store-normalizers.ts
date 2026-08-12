@@ -427,6 +427,12 @@ export function normalizeAutomation(
     160,
     "idempotency key",
   );
+  const objectiveKey = normalizeBoundedString(
+    record.objectiveKey,
+    fallback.objectiveKey,
+    160,
+    "objective key",
+  );
   const summary = normalizeBoundedString(record.summary, fallback.summary, 2000, "summary");
   const skills = Object.hasOwn(record, "skills")
     ? normalizeStringList(record.skills, "skills")
@@ -459,6 +465,7 @@ export function normalizeAutomation(
     ...(boardId ? { boardId } : {}),
     ...(createdByCardId ? { createdByCardId } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
+    ...(objectiveKey ? { objectiveKey } : {}),
     ...(skills?.length ? { skills } : {}),
     ...(workspace ? { workspace } : {}),
     ...(workspaceAccess ? { workspaceAccess } : {}),
@@ -666,6 +673,18 @@ function normalizeLink(value: unknown): WorkboardLink | null {
     typeof record.sourceUpdatedAt === "number" && Number.isFinite(record.sourceUpdatedAt)
       ? normalizeTimestamp(record.sourceUpdatedAt, 0)
       : undefined;
+  const consecutiveSuccessfulFullScanMisses =
+    typeof record.consecutiveSuccessfulFullScanMisses === "number" &&
+    Number.isInteger(record.consecutiveSuccessfulFullScanMisses) &&
+    record.consecutiveSuccessfulFullScanMisses >= 0 &&
+    record.consecutiveSuccessfulFullScanMisses <= 1_000_000
+      ? record.consecutiveSuccessfulFullScanMisses
+      : undefined;
+  const staleAt =
+    typeof record.staleAt === "number" && Number.isFinite(record.staleAt)
+      ? normalizeTimestamp(record.staleAt, 0)
+      : undefined;
+  const staleState = record.staleState === "stale" ? "stale" : undefined;
   if (!targetCardId && !url) {
     return null;
   }
@@ -674,6 +693,11 @@ function normalizeLink(value: unknown): WorkboardLink | null {
     type: normalizeLinkType(record.type, "relates_to"),
     createdAt,
     ...(sourceUpdatedAt !== undefined ? { sourceUpdatedAt } : {}),
+    ...(consecutiveSuccessfulFullScanMisses !== undefined
+      ? { consecutiveSuccessfulFullScanMisses }
+      : {}),
+    ...(staleAt !== undefined ? { staleAt } : {}),
+    ...(staleState ? { staleState } : {}),
     ...(targetCardId ? { targetCardId } : {}),
     ...(title ? { title } : {}),
     ...(url ? { url } : {}),

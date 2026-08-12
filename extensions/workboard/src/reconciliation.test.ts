@@ -1,7 +1,7 @@
 // Workboard reconciliation tests cover the external scanner facade.
 import { describe, expect, it } from "vitest";
 import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
-import { WorkboardReconciler } from "./reconciliation.js";
+import { WorkboardReconciler, projectReconciliationSourceObservation } from "./reconciliation.js";
 import { WorkboardStore } from "./store.js";
 
 function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
@@ -23,6 +23,162 @@ function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T>
 }
 
 describe("WorkboardReconciler", () => {
+  it("canonicalizes one objective per tenant while retaining each external association", async () => {
+    const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
+    const first = await reconciler.apply({
+      sourceUrl: "https://example.test/runs/a",
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      idempotencyKey: "a",
+      sourceUpdatedAt: 100,
+      card: { title: "Deploy API" },
+    });
+    const second = await reconciler.apply({
+      sourceUrl: "https://example.test/runs/b",
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      idempotencyKey: "b",
+      sourceUpdatedAt: 200,
+      card: { title: "New title must not create a second card" },
+    });
+
+    expect(second.card.id).toBe(first.card.id);
+    expect(second.card.metadata?.automation?.objectiveKey).toBe("deploy-api");
+    expect(
+      second.card.metadata?.links?.filter((link) => link.id.startsWith("external:")),
+    ).toHaveLength(2);
+  });
+
+  it("keeps matching objective keys isolated by tenant and fails closed for an explicit mismatch", async () => {
+    const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
+    const acme = await reconciler.apply({
+      sourceUrl: "https://example.test/acme",
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      idempotencyKey: "acme-a",
+      sourceUpdatedAt: 100,
+      card: { title: "Acme deploy" },
+    });
+    const other = await reconciler.apply({
+      sourceUrl: "https://example.test/other",
+      tenant: "other",
+      objectiveKey: "deploy-api",
+      idempotencyKey: "other-a",
+      sourceUpdatedAt: 100,
+      card: { title: "Other deploy" },
+    });
+    expect(other.card.id).not.toBe(acme.card.id);
+    await expect(
+      reconciler.apply({
+        sourceUrl: "https://example.test/mismatch",
+        tenant: "acme",
+        objectiveKey: "different-objective",
+        idempotencyKey: "mismatch",
+        sourceUpdatedAt: 101,
+        cardId: acme.card.id,
+        card: { title: "Must not change" },
+      }),
+    ).rejects.toThrow("objectiveKey does not match card");
+  });
+
+  it("serializes concurrent creates for one tenant objective to one canonical card", async () => {
+    const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
+    const cards = await Promise.all(
+      ["a", "b", "c"].map((id) =>
+        reconciler.apply({
+          sourceUrl: `https://example.test/runs/${id}`,
+          tenant: "acme",
+          objectiveKey: "deploy-api",
+          idempotencyKey: id,
+          sourceUpdatedAt: 100,
+          card: { title: "Deploy API" },
+        }),
+      ),
+    );
+    expect(new Set(cards.map((result) => result.card.id))).toEqual(new Set([cards[0]!.card.id]));
+    expect(
+      cards.at(-1)?.card.metadata?.links?.filter((link) => link.id.startsWith("external:")),
+    ).toHaveLength(3);
+  });
+
+  it("updates stale source evidence on the link without changing protected manual state", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const reconciler = new WorkboardReconciler(store);
+    const created = await reconciler.apply({
+      sourceUrl: "https://example.test/runs/a",
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      idempotencyKey: "a",
+      sourceUpdatedAt: 100,
+      card: { title: "Deploy API", status: "running" },
+    });
+    await store.update(created.card.id, { status: "blocked" });
+
+    const missingOnce = await reconciler.observeSource({
+      cardId: created.card.id,
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      sourceUrl: "https://example.test/runs/a",
+      idempotencyKey: "a",
+      sourceState: "missing-after-successful-full-scan",
+      staleAfterMisses: 2,
+      observedAt: 200,
+    });
+    const link = (card: typeof missingOnce) =>
+      card.metadata?.links?.find((entry) => entry.id.includes("external:"));
+    expect(link(missingOnce)?.consecutiveSuccessfulFullScanMisses).toBe(1);
+    const stale = await reconciler.observeSource({
+      cardId: created.card.id,
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      sourceUrl: "https://example.test/runs/a",
+      idempotencyKey: "a",
+      sourceState: "missing-after-successful-full-scan",
+      staleAfterMisses: 2,
+      observedAt: 300,
+    });
+    expect(link(stale)?.staleAt).toBe(300);
+    const failed = await reconciler.observeSource({
+      cardId: created.card.id,
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      sourceUrl: "https://example.test/runs/a",
+      idempotencyKey: "a",
+      sourceState: "dependency-failed",
+      staleAfterMisses: 2,
+      observedAt: 400,
+    });
+    expect(link(failed)?.consecutiveSuccessfulFullScanMisses).toBe(2);
+    const present = await reconciler.observeSource({
+      cardId: created.card.id,
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      sourceUrl: "https://example.test/runs/a",
+      idempotencyKey: "a",
+      sourceState: "present",
+      staleAfterMisses: 2,
+      observedAt: 500,
+    });
+    expect(link(present)?.consecutiveSuccessfulFullScanMisses).toBe(0);
+    expect(link(present)?.staleAt).toBeUndefined();
+    expect(present.status).toBe("blocked");
+  });
+
+  it("rejects untrusted fields in the strict source-evidence observation", () => {
+    expect(() =>
+      projectReconciliationSourceObservation({
+        cardId: "card",
+        tenant: "acme",
+        objectiveKey: "deploy-api",
+        sourceUrl: "https://example.test/a",
+        idempotencyKey: "a",
+        sourceState: "present",
+        staleAfterMisses: 2,
+        observedAt: 1,
+        metadata: { claim: { token: "forged" } },
+      }),
+    ).toThrow("source observation.metadata is not allowed.");
+  });
   it("returns stable ID-ordered pages and rejects limits outside 1 through 100", async () => {
     const store = new WorkboardStore(createMemoryStore());
     await store.create({ title: "Zulu", boardId: "reconcile" });

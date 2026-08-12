@@ -14,7 +14,11 @@ import {
   registerWorkboardWorkspaceCardMethods,
   registerWorkboardWorkspaceWorkflowMethods,
 } from "./gateway-workspace-methods.js";
-import { WorkboardReconciler, projectReconciliationObservation } from "./reconciliation.js";
+import {
+  WorkboardReconciler,
+  projectReconciliationObservation,
+  projectReconciliationSourceObservation,
+} from "./reconciliation.js";
 import { WorkboardStore } from "./store.js";
 
 const READ_SCOPE = "operator.read" as const;
@@ -74,6 +78,22 @@ export function registerWorkboardGatewayMethods(params: {
       try {
         const result = await reconciler.apply(projectReconciliationObservation(requestParams));
         respond(true, { ...result, card: redactClaimToken(result.card) });
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: WRITE_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "workboard.reconciliation.observeSource",
+    async ({ params: requestParams, respond }) => {
+      try {
+        respond(true, {
+          card: redactClaimToken(
+            await reconciler.observeSource(projectReconciliationSourceObservation(requestParams)),
+          ),
+        });
       } catch (error) {
         respondError(respond, error);
       }

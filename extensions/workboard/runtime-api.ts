@@ -9,6 +9,7 @@ export type {
   WorkboardPriority,
   WorkboardReconciliationApplyResult,
   WorkboardReconciliationObservation,
+  WorkboardReconciliationSourceObservation,
   WorkboardReconciliationPage,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
