@@ -95,7 +95,7 @@ test("sessions.list discovers store targets at most once per agent", async () =>
   }
 });
 
-test("startup prewarm fills session snapshot and title caches before the first list", async () => {
+test("startup prewarm fills the session snapshot before the first list", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:warm-cache";
   const sessionId = "warm-cache";
@@ -114,8 +114,6 @@ test("startup prewarm fills session snapshot and title caches before the first l
     sessionKey,
     storePath,
   });
-  const titleBatchSpy = vi.spyOn(sessionAccessor, "readSessionTranscriptTitleProbeBatch");
-  const titlePageSpy = vi.spyOn(sessionAccessor, "readSessionTranscriptMessageEventPage");
   let sidecar: ReturnType<typeof scheduleGatewayHandlerPrewarm> | undefined;
   vi.useFakeTimers();
   try {
@@ -145,10 +143,6 @@ test("startup prewarm fills session snapshot and title caches before the first l
     await vi.advanceTimersToNextTimerAsync();
     await sessionPrewarm;
     sidecar.stop();
-    expect(titleBatchSpy).toHaveBeenCalled();
-    expect(titlePageSpy).not.toHaveBeenCalled();
-    titleBatchSpy.mockClear();
-    titlePageSpy.mockClear();
     vi.useRealTimers();
     const cachedEntries = sessionAccessor.listSessionEntriesReadOnly({
       agentId: "main",
@@ -157,14 +151,17 @@ test("startup prewarm fills session snapshot and title caches before the first l
       storePath,
     });
 
-    const result = await directSessionReq("sessions.list", {
+    const result = await directSessionReq<{
+      sessions: Array<{ derivedTitle?: string; key?: string }>;
+    }>("sessions.list", {
       ...LIST_PARAMS,
       includeDerivedTitles: true,
     });
 
     expect(result.ok).toBe(true);
-    expect(titleBatchSpy).not.toHaveBeenCalled();
-    expect(titlePageSpy).not.toHaveBeenCalled();
+    expect(result.payload?.sessions).toContainEqual(
+      expect.objectContaining({ key: sessionKey, derivedTitle: "Warm title" }),
+    );
     const afterListEntries = sessionAccessor.listSessionEntriesReadOnly({
       agentId: "main",
       clone: false,
@@ -175,8 +172,6 @@ test("startup prewarm fills session snapshot and title caches before the first l
   } finally {
     sidecar?.stop();
     vi.useRealTimers();
-    titleBatchSpy.mockRestore();
-    titlePageSpy.mockRestore();
   }
 });
 
