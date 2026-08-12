@@ -65,10 +65,59 @@ function configResponse() {
   };
 }
 
+function toolsEffectiveResponse() {
+  return {
+    agentId: "main",
+    profile: "full",
+    groups: [
+      {
+        id: "mcp",
+        label: "MCP",
+        source: "mcp",
+        tools: Array.from({ length: 28 }, (_, index) => {
+          const number = String(index + 1).padStart(2, "0");
+          return {
+            id: `mcp_connector_00_tool_${number}`,
+            label: `Project tool ${number}`,
+            description: `Operate on project resource ${number}`,
+            rawDescription: `Operate on project resource ${number}`,
+            source: "mcp",
+            mcpServer: "connector-00",
+            mcpToolName: `project-tool-${number}`,
+          };
+        }),
+      },
+    ],
+  };
+}
+
 suite.define(() => {
-  it("constrains long capability views and keeps keyboard focus visible", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 720 } }, async ({ page }) => {
+  it("caps every long capability view at 420px and keeps keyboard focus visible", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
+        featureMethods: ["chat.metadata", "chat.startup", "sessions.patch", "tools.effective"],
+        historyMessages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Review the release dashboard and flag anything that needs attention.",
+              },
+            ],
+            timestamp: Date.now() - 60_000,
+          },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "text",
+                text: "The rollout is healthy. I found two follow-ups:\n\n- Confirm the mobile smoke lane\n- Review the connector permission changes",
+              },
+            ],
+            timestamp: Date.now() - 30_000,
+          },
+        ],
         methodResponses: {
           "config.get": configResponse(),
           "sessions.list": sessionsList(),
@@ -77,6 +126,7 @@ suite.define(() => {
             managedSkillsDir: "/tmp/openclaw-e2e/skills",
             skills: Array.from({ length: 36 }, (_, index) => skill(index + 1)),
           },
+          "tools.effective": toolsEffectiveResponse(),
         },
       });
 
@@ -93,8 +143,8 @@ suite.define(() => {
 
       const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
       const captureStage = process.env.OPENCLAW_UI_E2E_CAPTURE_STAGE?.trim();
-      const capture = async (theme: "dark" | "light") => {
-        if (!artifactDir) {
+      const capture = async (view: string, theme: "dark" | "light") => {
+        if (!artifactDir || !captureStage) {
           return;
         }
         await fs.mkdir(artifactDir, { recursive: true });
@@ -102,60 +152,54 @@ suite.define(() => {
           document.documentElement.dataset.themeMode = mode;
         }, theme);
         await page.waitForTimeout(50);
-        if (captureStage === "after") {
-          const menuCenter = await dropdown.evaluate((node) => {
-            const menu = node.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
-            if (!menu) {
-              throw new Error("expected capability menu bounds");
-            }
-            const rect = menu.getBoundingClientRect();
-            return { x: rect.right - 8, y: rect.top + rect.height / 2 };
-          });
-          await page.mouse.move(menuCenter.x, menuCenter.y);
-          await page.mouse.wheel(0, 1);
-        }
-        await page.screenshot({ path: path.join(artifactDir, `${theme}-${captureStage}.png`) });
+        const menuCenter = await dropdown.evaluate((node) => {
+          const menu = node.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+          if (!menu) {
+            throw new Error("expected capability menu bounds");
+          }
+          const rect = menu.getBoundingClientRect();
+          return { x: rect.right - 8, y: rect.top + rect.height / 2 };
+        });
+        await page.mouse.move(menuCenter.x, menuCenter.y);
+        await page.mouse.wheel(0, 1);
+        await page.screenshot({
+          path: path.join(artifactDir, `${view}-${theme}-${captureStage}.png`),
+        });
       };
 
-      if (captureStage === "before") {
-        await capture("dark");
-        await capture("light");
-      }
-
-      const layout = await dropdown.evaluate((node) => {
-        const menu = node.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
-        const composerElement = node.closest<HTMLElement>(".agent-chat__input");
-        const back = node.querySelector<HTMLElement>('[value="back"]');
-        if (!menu || !composerElement || !back) {
-          throw new Error("expected capability menu layout");
-        }
-        menu.scrollTop = Math.floor((menu.scrollHeight - menu.clientHeight) / 2);
-        const menuRect = menu.getBoundingClientRect();
-        const backRect = back.getBoundingClientRect();
-        const style = getComputedStyle(menu);
-        return {
-          backOffset: backRect.top - menuRect.top,
-          clientHeight: menu.clientHeight,
-          maxHeight: Number.parseFloat(style.maxHeight),
-          overscrollY: style.overscrollBehaviorY,
-          scrollHeight: menu.scrollHeight,
-          scrollTop: menu.scrollTop,
-          token: Number.parseFloat(
-            getComputedStyle(composerElement).getPropertyValue(
-              "--chat-composer-popover-max-height",
+      const inspectView = async (view: string) => {
+        const layout = await dropdown.evaluate((node) => {
+          const menu = node.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+          const composerElement = node.closest<HTMLElement>(".agent-chat__input");
+          const back = node.querySelector<HTMLElement>('[value="back"]');
+          if (!menu || !composerElement || !back) {
+            throw new Error("expected capability menu layout");
+          }
+          menu.scrollTop = Math.floor((menu.scrollHeight - menu.clientHeight) / 2);
+          const menuRect = menu.getBoundingClientRect();
+          const backRect = back.getBoundingClientRect();
+          const style = getComputedStyle(menu);
+          return {
+            backOffset: backRect.top - menuRect.top,
+            clientHeight: menu.clientHeight,
+            maxHeight: Number.parseFloat(style.maxHeight),
+            overscrollY: style.overscrollBehaviorY,
+            scrollHeight: menu.scrollHeight,
+            scrollTop: menu.scrollTop,
+            token: Number.parseFloat(
+              getComputedStyle(composerElement).getPropertyValue(
+                "--chat-composer-popover-max-height",
+              ),
             ),
-          ),
-          viewportHeight: window.innerHeight,
-        };
-      });
-      const compactHeightCap = Math.min(layout.token, 420, layout.viewportHeight * 0.5);
-      expect(layout.scrollHeight).toBeGreaterThan(layout.clientHeight);
-      expect(layout.scrollTop).toBeGreaterThan(0);
-      expect(layout.maxHeight).toBeLessThanOrEqual(compactHeightCap + 1);
-      expect(layout.clientHeight).toBeLessThanOrEqual(compactHeightCap + 1);
-      expect(layout.overscrollY).toBe("contain");
-      expect(layout.backOffset).toBeGreaterThanOrEqual(0);
-      expect(layout.backOffset).toBeLessThanOrEqual(1);
+            viewportHeight: window.innerHeight,
+          };
+        });
+        await capture(view, "dark");
+        await capture(view, "light");
+        return { ...layout, view };
+      };
+
+      const layouts = [await inspectView("skills")];
 
       const back = dropdown.locator('[value="back"]');
       await back.focus();
@@ -178,24 +222,31 @@ suite.define(() => {
       await back.click();
       await dropdown.locator('[value="open-connectors"]').click();
       await expect.poll(() => dropdown.getAttribute("data-view")).toBe("connectors");
-      expect(
-        await dropdown.evaluate((node) => {
-          const menu = node.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
-          return Boolean(menu && menu.scrollHeight > menu.clientHeight);
-        }),
-      ).toBe(true);
+      layouts.push(await inspectView("connectors"));
 
-      await dropdown.locator('[value="back"]').click();
-      await dropdown.locator('[value="open-skills"]').click();
-      await dropdown.evaluate((node) => {
-        const menu = node.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
-        if (menu) {
-          menu.scrollTop = Math.floor((menu.scrollHeight - menu.clientHeight) / 2);
-        }
-      });
-      if (captureStage === "after") {
-        await capture("dark");
-        await capture("light");
+      await dropdown.locator('[value="tools:0"]').click();
+      await expect.poll(() => dropdown.getAttribute("data-view")).toBe("tools:connector-00");
+      await expect.poll(() => dropdown.getByText("28 of 28 tools on").isVisible()).toBe(true);
+      layouts.push(await inspectView("tool-access"));
+
+      if (artifactDir && captureStage) {
+        await fs.writeFile(
+          path.join(artifactDir, `${captureStage}-layout.json`),
+          `${JSON.stringify(layouts, null, 2)}\n`,
+        );
+      }
+
+      for (const layout of layouts) {
+        const compactHeightCap = Math.min(layout.token, 420, layout.viewportHeight * 0.5);
+        expect(compactHeightCap).toBe(420);
+        expect(layout.scrollHeight).toBeGreaterThan(layout.clientHeight);
+        expect(layout.scrollTop).toBeGreaterThan(0);
+        expect(layout.maxHeight).toBeGreaterThanOrEqual(compactHeightCap - 1);
+        expect(layout.maxHeight).toBeLessThanOrEqual(compactHeightCap + 1);
+        expect(layout.clientHeight).toBeLessThanOrEqual(compactHeightCap + 1);
+        expect(layout.overscrollY).toBe("contain");
+        expect(layout.backOffset).toBeGreaterThanOrEqual(0);
+        expect(layout.backOffset).toBeLessThanOrEqual(1);
       }
     });
   });
