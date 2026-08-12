@@ -1,5 +1,9 @@
 import path from "node:path";
-import { callGatewayFromCli, type GatewayRpcOpts } from "../cli/gateway-rpc.js";
+import {
+  callGatewayFromCli,
+  isImplicitLocalGatewayTargetFromCli,
+  type GatewayRpcOpts,
+} from "../cli/gateway-rpc.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import type { CronJob } from "../cron/types.js";
 import { executeGitCommand } from "../infra/git-exec.js";
@@ -9,6 +13,8 @@ import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { GIT_BACKUP_PUSH_CREDENTIAL_WARNING } from "./backup-git.js";
 
 const BACKUP_CRON_JOB_NAME = "openclaw-backup-scheduled";
+const LOCAL_GATEWAY_REQUIRED_ERROR =
+  "backup enable manages backups on the Gateway host and currently requires a local Gateway. Create the cron job manually with openclaw cron add for remote Gateways.";
 
 type BackupScheduleOptions = GatewayRpcOpts & {
   repository?: string;
@@ -77,13 +83,22 @@ async function findScheduledBackup(options: GatewayRpcOpts): Promise<CronJob | u
     limit: 200,
     offset: 0,
   })) as { jobs?: CronJob[] };
-  return response.jobs?.find((job) => job.name === BACKUP_CRON_JOB_NAME);
+  return response.jobs?.find((job) => job.declarationKey === BACKUP_CRON_JOB_NAME);
+}
+
+async function assertLocalGatewayScheduleTarget(options: GatewayRpcOpts): Promise<void> {
+  // V1 tradeoff: the CLI validates host-local repository paths, while cron runs
+  // on the Gateway host. Reject remote targets until Gateway-owned setup exists.
+  if (!(await isImplicitLocalGatewayTargetFromCli(options))) {
+    throw new Error(LOCAL_GATEWAY_REQUIRED_ERROR);
+  }
 }
 
 export async function backupEnableCommand(
   runtime: RuntimeEnv,
   options: BackupScheduleOptions,
 ): Promise<{ id: string; updated: boolean }> {
+  await assertLocalGatewayScheduleTarget(options);
   const repositoryPath = resolveRepository(options.repository);
   const every = options.every?.trim() || "24h";
   const everyMs = parseDurationMs(every, { defaultUnit: "ms" });
@@ -137,6 +152,7 @@ export async function backupDisableCommand(
   runtime: RuntimeEnv,
   options: GatewayRpcOpts,
 ): Promise<{ removed: boolean }> {
+  await assertLocalGatewayScheduleTarget(options);
   const existing = await findScheduledBackup(options);
   if (!existing) {
     runtime.log("Scheduled Git backups are already disabled.");

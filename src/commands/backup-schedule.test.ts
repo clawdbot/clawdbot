@@ -5,11 +5,18 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
-const callGatewayFromCli = vi.hoisted(() => vi.fn());
+const gatewayRpc = vi.hoisted(() => ({
+  call: vi.fn(),
+  isImplicitLocalTarget: vi.fn(async () => true),
+}));
 
 vi.mock("../cli/gateway-rpc.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../cli/gateway-rpc.js")>();
-  return { ...actual, callGatewayFromCli };
+  return {
+    ...actual,
+    callGatewayFromCli: gatewayRpc.call,
+    isImplicitLocalGatewayTargetFromCli: gatewayRpc.isImplicitLocalTarget,
+  };
 });
 
 import { GIT_BACKUP_PUSH_CREDENTIAL_WARNING } from "./backup-git.js";
@@ -32,7 +39,8 @@ async function pushReadyRepository(): Promise<string> {
 
 describe("scheduled backups", () => {
   beforeEach(() => {
-    callGatewayFromCli.mockReset();
+    gatewayRpc.call.mockReset();
+    gatewayRpc.isImplicitLocalTarget.mockReset().mockResolvedValue(true);
   });
 
   afterEach(async () => {
@@ -42,7 +50,7 @@ describe("scheduled backups", () => {
   });
 
   it("adds one isolated command job with the selected Git backup argv", async () => {
-    callGatewayFromCli.mockImplementation(async (method: string) => {
+    gatewayRpc.call.mockImplementation(async (method: string) => {
       if (method === "cron.add") {
         return { created: true, job: { id: "backup-job" } };
       }
@@ -58,7 +66,7 @@ describe("scheduled backups", () => {
         excludeSecrets: true,
       }),
     ).resolves.toEqual({ id: "backup-job", updated: false });
-    expect(callGatewayFromCli).toHaveBeenCalledWith(
+    expect(gatewayRpc.call).toHaveBeenCalledWith(
       "cron.add",
       expect.anything(),
       expect.objectContaining({
@@ -82,12 +90,12 @@ describe("scheduled backups", () => {
         },
       }),
     );
-    expect(callGatewayFromCli).toHaveBeenCalledOnce();
+    expect(gatewayRpc.call).toHaveBeenCalledOnce();
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it("atomically converges an existing declaration and removes it idempotently", async () => {
-    callGatewayFromCli.mockResolvedValueOnce({
+    gatewayRpc.call.mockResolvedValueOnce({
       created: false,
       updated: true,
       job: { id: "existing" },
@@ -99,8 +107,8 @@ describe("scheduled backups", () => {
         globalOnly: true,
       }),
     ).resolves.toEqual({ id: "existing", updated: true });
-    expect(callGatewayFromCli).toHaveBeenCalledOnce();
-    expect(callGatewayFromCli).toHaveBeenCalledWith(
+    expect(gatewayRpc.call).toHaveBeenCalledOnce();
+    expect(gatewayRpc.call).toHaveBeenCalledWith(
       "cron.add",
       expect.anything(),
       expect.objectContaining({
@@ -109,30 +117,43 @@ describe("scheduled backups", () => {
       }),
     );
 
-    callGatewayFromCli.mockReset();
-    callGatewayFromCli.mockImplementation(async (method: string) => {
+    gatewayRpc.call.mockReset();
+    gatewayRpc.call.mockImplementation(async (method: string) => {
       if (method === "cron.list") {
-        return { jobs: [{ id: "existing", name: BACKUP_CRON_JOB_NAME }] };
+        return {
+          jobs: [
+            { id: "decoy", name: BACKUP_CRON_JOB_NAME },
+            {
+              id: "existing",
+              name: "operator display name",
+              declarationKey: BACKUP_CRON_JOB_NAME,
+            },
+          ],
+        };
       }
       return { ok: true };
     });
     await expect(backupDisableCommand(runtime, {})).resolves.toEqual({ removed: true });
-    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.remove", {}, { id: "existing" });
+    expect(gatewayRpc.call).toHaveBeenCalledWith("cron.remove", {}, { id: "existing" });
+    expect(gatewayRpc.call).not.toHaveBeenCalledWith("cron.remove", {}, { id: "decoy" });
 
-    callGatewayFromCli.mockResolvedValueOnce({ jobs: [] });
+    gatewayRpc.call.mockReset();
+    gatewayRpc.call.mockResolvedValueOnce({
+      jobs: [{ id: "decoy", name: BACKUP_CRON_JOB_NAME }],
+    });
     await expect(backupDisableCommand(runtime, {})).resolves.toEqual({ removed: false });
   });
 
   it("redacts pushed schedules by default and warns only on explicit full fidelity", async () => {
     const runtime = createTestRuntime();
-    callGatewayFromCli.mockResolvedValue({ created: true, job: { id: "backup-job" } });
+    gatewayRpc.call.mockResolvedValue({ created: true, job: { id: "backup-job" } });
 
     // Default pushed schedule: redacted, no credential warning.
     await backupEnableCommand(runtime, {
       repository: await pushReadyRepository(),
       push: true,
     });
-    expect(callGatewayFromCli).toHaveBeenLastCalledWith(
+    expect(gatewayRpc.call).toHaveBeenLastCalledWith(
       "cron.add",
       expect.anything(),
       expect.objectContaining({
@@ -147,7 +168,7 @@ describe("scheduled backups", () => {
       push: true,
       includeSecrets: true,
     });
-    const lastSpec = callGatewayFromCli.mock.calls.at(-1)?.[2] as {
+    const lastSpec = gatewayRpc.call.mock.calls.at(-1)?.[2] as {
       payload: { argv: string[] };
     };
     expect(lastSpec.payload.argv).not.toContain("--exclude-secrets");
@@ -171,6 +192,25 @@ describe("scheduled backups", () => {
     await expect(backupEnableCommand(runtime, { repository: root, push: true })).rejects.toThrow(
       /--push requires an origin remote/,
     );
-    expect(callGatewayFromCli).not.toHaveBeenCalled();
+    expect(gatewayRpc.call).not.toHaveBeenCalled();
+  });
+
+  it("rejects scheduling through a non-local Gateway before touching local paths", async () => {
+    gatewayRpc.isImplicitLocalTarget.mockResolvedValue(false);
+    const runtime = createTestRuntime();
+    const expected =
+      "backup enable manages backups on the Gateway host and currently requires a local Gateway. Create the cron job manually with openclaw cron add for remote Gateways.";
+
+    await expect(
+      backupEnableCommand(runtime, {
+        repository: "/path/that/does/not/exist",
+        push: true,
+        url: "ws://127.0.0.1:18789",
+      }),
+    ).rejects.toThrow(expected);
+    await expect(
+      backupDisableCommand(runtime, { url: "wss://gateway.example.invalid" }),
+    ).rejects.toThrow(expected);
+    expect(gatewayRpc.call).not.toHaveBeenCalled();
   });
 });
