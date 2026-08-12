@@ -269,6 +269,14 @@ function skipAsciiWhitespace(buffer: Buffer, start: number): number {
 }
 
 function sniffActiveTextContent(buffer: Buffer): string | undefined {
+  if (buffer[0] === 0xff && buffer[1] === 0xfe) {
+    return sniffActiveTextContent(Buffer.from(buffer.subarray(2).toString("utf16le")));
+  }
+  if (buffer[0] === 0xfe && buffer[1] === 0xff) {
+    return sniffActiveTextContent(
+      Buffer.from(new TextDecoder("utf-16be").decode(buffer.subarray(2))),
+    );
+  }
   let cursor =
     buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf ? 3 : 0;
   // Walk the complete, already size-bounded payload. Active roots can legally

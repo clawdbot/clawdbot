@@ -95,6 +95,11 @@ function internalCapabilityUrl(publicUrl: string, pathName = "/internal/synology
   return `${pathName}${new URL(publicUrl).search}`;
 }
 
+function utf16Buffer(value: string, endian: "le" | "be"): Buffer {
+  const buffer = Buffer.from(`\ufeff${value}`, "utf16le");
+  return endian === "le" ? buffer : buffer.swap16();
+}
+
 describe("Synology Chat hosted outbound media", () => {
   afterAll(() => {
     resetPluginStateStoreForTests();
@@ -621,6 +626,30 @@ describe("Synology Chat hosted outbound media", () => {
       fileName: "diagram.bin",
     },
     {
+      name: "UTF-16LE HTML bytes with passive metadata",
+      buffer: utf16Buffer("<script>alert('active')</script>", "le"),
+      contentType: "image/png",
+      fileName: "photo.png",
+    },
+    {
+      name: "UTF-16BE SVG bytes with passive metadata",
+      buffer: utf16Buffer('  <!--fixture--><svg onload="alert(1)"/>', "be"),
+      contentType: "image/png",
+      fileName: "photo.png",
+    },
+    {
+      name: "UTF-16LE XML bytes with passive metadata",
+      buffer: utf16Buffer('<?xml version="1.0"?><document/>', "le"),
+      contentType: "application/octet-stream",
+      fileName: "document.bin",
+    },
+    {
+      name: "UTF-16BE HTML doctype bytes with passive metadata",
+      buffer: utf16Buffer("<!DOCTYPE html><html><body>active</body></html>", "be"),
+      contentType: "application/octet-stream",
+      fileName: "document.bin",
+    },
+    {
       name: "an active filename with generic content",
       buffer: Buffer.from("not markup"),
       contentType: "application/octet-stream",
@@ -639,6 +668,31 @@ describe("Synology Chat hosted outbound media", () => {
         mediaUrl: "https://files.example.com/disguised-content",
       }),
     ).rejects.toThrow("do not support active content type");
+  });
+
+  it.each(["le", "be"] as const)("keeps passive UTF-16%s attachments available", async (endian) => {
+    const buffer = utf16Buffer("Passive attachment text", endian);
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer,
+      kind: undefined,
+      contentType: "text/plain",
+      fileName: `notes-${endian}.txt`,
+    });
+    const account = createAccount();
+    const prepared = await prepareSynologyHostedMedia({
+      account,
+      mediaUrl: `https://files.example.com/notes-${endian}.txt`,
+    });
+    const response = makeRes();
+
+    await tryHandleSynologyHostedMediaRequest(
+      makeReq("GET", "", { url: internalCapabilityUrl(prepared.url) }),
+      response,
+      account,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(Buffer.from(response.body)).toEqual(buffer);
   });
 
   it("sanitizes response filenames before constructing headers", async () => {

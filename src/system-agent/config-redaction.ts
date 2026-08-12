@@ -7,9 +7,24 @@ import {
 import { parseConfigSetPath } from "../cli/config-cli-path.js";
 import { REDACTED_SENTINEL, redactConfigObject } from "../config/redact-snapshot.js";
 import { loadGatewayRuntimeConfigSchema } from "../config/runtime-schema.js";
+import { buildConfigSchemaCore } from "../config/schema.js";
 import { findWildcardHintMatch } from "../config/schema.shared.js";
 import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
-import type { ConfigUiHint } from "../shared/config-ui-hints-types.js";
+import type { ConfigUiHint, ConfigUiHints } from "../shared/config-ui-hints-types.js";
+
+function loadSystemAgentConfigUiHints(): ConfigUiHints {
+  try {
+    return loadGatewayRuntimeConfigSchema().uiHints;
+  } catch {
+    // Invalid config is a supported recovery state. Core hints plus the
+    // redactor's path heuristics remain available without reloading that config.
+    return {
+      ...buildConfigSchemaCore().uiHints,
+      "plugins.entries.*.config": { sensitive: true },
+      "channels.*": { sensitive: true },
+    };
+  }
+}
 
 function splitConfigHintPath(path: string): string[] {
   // Schema hint paths use `[]` as an array wildcard; config writes spell the
@@ -24,7 +39,7 @@ function resolveConfigUiHint(
 ): ConfigUiHint | undefined {
   return (
     findWildcardHintMatch({
-      uiHints: loadGatewayRuntimeConfigSchema().uiHints,
+      uiHints: loadSystemAgentConfigUiHints(),
       path,
       splitPath: splitConfigHintPath,
       includeAncestors,
@@ -77,7 +92,5 @@ function replaceRedactionSentinels(value: unknown): unknown {
 
 /** Redact a config object before any subtree is projected into a model-visible result. */
 export function redactSystemAgentConfig(value: unknown): unknown {
-  return replaceRedactionSentinels(
-    redactConfigObject(value, loadGatewayRuntimeConfigSchema().uiHints),
-  );
+  return replaceRedactionSentinels(redactConfigObject(value, loadSystemAgentConfigUiHints()));
 }

@@ -59,6 +59,7 @@ const mockConfig = vi.hoisted(() => {
   const state = {
     path: "/tmp/openclaw.json",
     exists: true,
+    valid: true,
     config: initial as TestConfig,
     sourceConfigBeforeMigrations: undefined as TestConfig | undefined,
     hash: "mock-hash-0" as string | undefined,
@@ -74,7 +75,7 @@ const mockConfig = vi.hoisted(() => {
       sourceConfigBeforeMigrations: structuredClone(state.sourceConfigBeforeMigrations ?? config),
       sourceConfig: config,
       resolved: config,
-      valid: state.exists,
+      valid: state.valid,
       runtimeConfig: config,
       config,
       hash: state.hash,
@@ -87,6 +88,7 @@ const mockConfig = vi.hoisted(() => {
     reset() {
       state.path = "/tmp/openclaw.json";
       state.exists = true;
+      state.valid = true;
       state.config = {};
       state.sourceConfigBeforeMigrations = undefined;
       state.hash = "mock-hash-0";
@@ -94,14 +96,19 @@ const mockConfig = vi.hoisted(() => {
     missing(pathLocal: string) {
       state.path = pathLocal;
       state.exists = false;
+      state.valid = false;
       state.config = {};
       state.sourceConfigBeforeMigrations = undefined;
       state.hash = undefined;
     },
-    currentConfig() {
-      return cloneConfig();
-    },
     setConfig(config: TestConfig) {
+      state.config = structuredClone(config);
+      state.valid = true;
+      state.sourceConfigBeforeMigrations = undefined;
+    },
+    setInvalidConfig(config: TestConfig) {
+      state.exists = true;
+      state.valid = false;
       state.config = structuredClone(config);
       state.sourceConfigBeforeMigrations = undefined;
     },
@@ -110,6 +117,12 @@ const mockConfig = vi.hoisted(() => {
       state.sourceConfigBeforeMigrations = structuredClone(sourceConfigBeforeMigrations);
     },
     readConfigFileSnapshot: vi.fn(async () => snapshot()),
+    getRuntimeConfig() {
+      if (!state.valid) {
+        throw new Error("invalid runtime config");
+      }
+      return cloneConfig();
+    },
     mutateConfigFile: vi.fn(
       async (params: {
         writeOptions?: {
@@ -200,7 +213,7 @@ vi.mock("./overview.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: () => mockConfig.currentConfig(),
+  getRuntimeConfig: mockConfig.getRuntimeConfig,
   mutateConfigFile: mockConfig.mutateConfigFile,
   readConfigFileSnapshot: mockConfig.readConfigFileSnapshot,
 }));
@@ -368,6 +381,30 @@ describe("parseSystemAgentOperation", () => {
         value: "/private/model-cache",
       }),
     ).toBe("set config models.providers.local.localService.env.HF_HOME to <redacted>");
+  });
+
+  it("keeps invalid config reads available without exposing recovery secrets", async () => {
+    mockConfig.setInvalidConfig({
+      gateway: { port: 19_001, auth: { token: "recovery-secret" } },
+      plugins: { entries: { custom: { config: { opaque: "plugin-secret" } } } },
+    });
+    const { runtime, lines } = createSystemAgentTestRuntime();
+
+    await expect(
+      executeSystemAgentOperation({ kind: "config-get", path: "gateway" }, runtime),
+    ).resolves.toEqual({ applied: false });
+
+    expect(lines.join("\n")).toContain('"port": 19001');
+    expect(lines.join("\n")).toContain('"token": "<redacted>"');
+    expect(lines.join("\n")).not.toContain("recovery-secret");
+
+    lines.length = 0;
+    await executeSystemAgentOperation(
+      { kind: "config-get", path: "plugins.entries.custom.config" },
+      runtime,
+    );
+    expect(lines.join("\n")).toContain('plugins.entries.custom.config = "<redacted>"');
+    expect(lines.join("\n")).not.toContain("plugin-secret");
   });
 
   it("redacts config values marked sensitive only by active plugin metadata", async () => {
