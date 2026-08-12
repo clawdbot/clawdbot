@@ -248,21 +248,14 @@ suite.define(() => {
         .toBe(true);
       const secondShortcut = secondModel.locator('[data-chat-model-shortcut-number="2"]');
       await expect.poll(() => secondShortcut.count()).toBe(1);
-      await page.keyboard.press("2");
-      await expect.poll(() => picker.getAttribute("open")).toBe(null);
-      await expect.poll(() => modelSelect.textContent()).toContain("Claude Sonnet 4.6");
-
-      await modelSelect.click();
-      const firstShortcut = firstModel.locator('[data-chat-model-shortcut-number="1"]');
-      await expect.poll(() => firstShortcut.count()).toBe(1);
       const menuBoxBeforeFocus = await page.locator(".chat-controls__model-menu").boundingBox();
-      const actionBoxBeforeFocus = await firstModel
+      const actionBoxBeforeFocus = await secondModel
         .locator(".chat-controls__model-option-action")
         .boundingBox();
       expect(menuBoxBeforeFocus).not.toBeNull();
       expect(actionBoxBeforeFocus).not.toBeNull();
       await expect
-        .poll(() => firstShortcut.evaluate((element) => getComputedStyle(element).opacity))
+        .poll(() => secondShortcut.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("1");
 
       await search.focus();
@@ -270,28 +263,29 @@ suite.define(() => {
         .poll(() => search.evaluate((element) => element === document.activeElement))
         .toBe(true);
       await expect
-        .poll(() => firstShortcut.evaluate((element) => getComputedStyle(element).opacity))
+        .poll(() => secondShortcut.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("0");
       expect(await page.locator(".chat-controls__model-menu").boundingBox()).toEqual(
         menuBoxBeforeFocus,
       );
-      expect(await firstModel.locator(".chat-controls__model-option-action").boundingBox()).toEqual(
-        actionBoxBeforeFocus,
-      );
+      expect(
+        await secondModel.locator(".chat-controls__model-option-action").boundingBox(),
+      ).toEqual(actionBoxBeforeFocus);
       await search.press("1");
       await expect.poll(() => search.inputValue()).toBe("1");
       await expect.poll(() => picker.getAttribute("open")).toBe("");
 
-      await search.fill("openai");
-      await expect.poll(() => firstModel.isVisible()).toBe(true);
-      await expect.poll(() => secondModel.isVisible()).toBe(false);
+      await search.fill("anthropic");
+      await expect.poll(() => firstModel.isVisible()).toBe(false);
+      await expect.poll(() => secondModel.isVisible()).toBe(true);
       await modelSelect.focus();
+      const filteredShortcut = secondModel.locator('[data-chat-model-shortcut-number="1"]');
       await expect
-        .poll(() => firstShortcut.evaluate((element) => getComputedStyle(element).opacity))
+        .poll(() => filteredShortcut.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("1");
       await page.keyboard.press("1");
       await expect.poll(() => picker.getAttribute("open")).toBe(null);
-      await expect.poll(() => modelSelect.textContent()).toContain("GPT 5.5");
+      await expect.poll(() => modelSelect.textContent()).toContain("Claude Sonnet 4.6");
     });
   });
 

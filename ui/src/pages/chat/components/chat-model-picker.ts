@@ -258,13 +258,9 @@ function handleModelPickerKeydown(event: KeyboardEvent): void {
   if (!details.open || event.target instanceof HTMLInputElement || !/^[1-9]$/u.test(event.key)) {
     return;
   }
-  const row = visibleModelRows(details).find(
-    (candidate) => candidate.dataset.chatModelIndex === String(Number(event.key) - 1),
-  );
-  if (row) {
-    event.preventDefault();
-    row.click();
-  }
+  const row = visibleModelRows(details)[Number(event.key) - 1];
+  event.preventDefault();
+  row?.click();
 }
 
 function renderCatalogState(state: ChatModelCatalogState | undefined, hasOptions: boolean) {
@@ -420,7 +416,9 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
         @click=${(event: MouseEvent) => {
           if (params.disabled) {
             event.preventDefault();
+            return;
           }
+          (event.currentTarget as HTMLElement).focus({ preventScroll: true });
         }}
       >
         ${modelToolsUnavailable
