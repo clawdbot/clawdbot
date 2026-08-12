@@ -342,6 +342,47 @@ describe("slackSetupWizard.prepare", () => {
     expect(result.cfg.channels?.slack).not.toHaveProperty("postAs");
   });
 
+  it("chooses Slack credential storage once before collecting both Socket Mode tokens", async () => {
+    vi.stubEnv("SLACK_BOT_TOKEN", "");
+    vi.stubEnv("SLACK_APP_TOKEN", "");
+    const queued = createQueuedWizardPrompter({
+      selectValues: ["bot", "plaintext"],
+      textValues: ["test-bot-token", "test-app-token"],
+    });
+    const configure = createSetupWizardAdapter({
+      plugin: {
+        id: "slack",
+        meta: { label: "Slack" },
+        config: {
+          listAccountIds: () => ["default"],
+          defaultAccountId: () => "default",
+        },
+        setupContract: slackSetupContract,
+      } as never,
+      wizard: credentialOnlySlackSetupWizard,
+    }).configure;
+
+    const result = await runSetupWizardConfigure({
+      configure,
+      cfg: {} as OpenClawConfig,
+      prompter: queued.prompter,
+    });
+
+    expect(result.cfg.channels?.slack).toMatchObject({
+      botToken: "test-bot-token",
+      appToken: "test-app-token",
+    });
+    expect(
+      queued.select.mock.calls.map(([params]) => (params as { message: string }).message),
+    ).toEqual([
+      "How should OpenClaw appear in Slack?",
+      "How do you want to provide these credentials?",
+    ]);
+    expect(
+      queued.text.mock.calls.map(([params]) => (params as { message: string }).message),
+    ).toEqual(["Enter Slack bot token (xoxb-...)", "Enter Slack app token (xapp-...)"]);
+  });
+
   it("keeps a named bot override when the channel default is user identity", async () => {
     const queued = createQueuedWizardPrompter({
       selectValues: ["bot"],

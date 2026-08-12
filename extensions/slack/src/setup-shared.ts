@@ -107,6 +107,7 @@ export function buildSlackManifest(botName = "OpenClaw") {
 
 export function buildSlackSetupLines(): string[] {
   return [
+    "Slack Socket Mode needs two credentials. You will enter the bot token (xoxb-...) first, then the app token (xapp-...).",
     "1) Slack API -> Create App -> From scratch or From manifest (with the JSON below)",
     "2) Add Socket Mode + enable it to get the app-level token (xapp-...)",
     "3) Install App to workspace to get the xoxb- bot token",

@@ -177,6 +177,9 @@ describe("custodian page", () => {
       wizardAnswer: { stepId: "features", value: ["chat", "announcements"] },
     });
     expect(secretInput.type).toBe("password");
+    expect(page.querySelector(".wizard-step__message--field")?.textContent).toContain(
+      "Twitch client secret",
+    );
     const revealSecret = page.querySelector<HTMLButtonElement>(
       '.custodian__wizard-step button[aria-label="Reveal value"]',
     );

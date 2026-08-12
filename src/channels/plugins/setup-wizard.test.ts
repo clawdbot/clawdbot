@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isSecretRef, type SecretInput } from "../../config/types.secrets.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import {
@@ -11,7 +12,7 @@ import { buildChannelSetupWizardAdapterFromSetupWizard } from "./setup-wizard.js
 
 type AccountConfig = {
   botId?: string;
-  secret?: string;
+  secret?: SecretInput;
   enabled?: boolean;
   marker?: { keep: string };
 };
@@ -101,6 +102,7 @@ function createLegacyWizard(): ChannelSetupWizard {
       unconfiguredLabel: "Not configured",
       resolveConfigured: ({ cfg }) => Boolean(resolveLegacyAccount(cfg).botId),
     },
+    supportsSharedCredentialInputMode: true,
     credentials: [
       {
         inputKey: "token",
@@ -131,21 +133,108 @@ function createLegacyWizard(): ChannelSetupWizard {
           return {
             accountConfigured: Boolean(secret),
             hasConfiguredValue: Boolean(secret),
-            resolvedValue: secret,
+            resolvedValue: typeof secret === "string" ? secret : undefined,
           };
         },
-        applySet: ({ cfg, resolvedValue: secret }) => setLegacyAccount(cfg, { secret }),
+        applySet: ({ cfg, value }) => {
+          if (typeof value !== "string" && !isSecretRef(value)) {
+            throw new Error("test invariant: expected credential input");
+          }
+          return setLegacyAccount(cfg, { secret: value });
+        },
       },
     ],
   };
 }
 
-function createConfigure() {
+function createConfigure(wizard = createLegacyWizard()) {
   return buildChannelSetupWizardAdapterFromSetupWizard({
     plugin: createLegacyPlugin(),
-    wizard: createLegacyWizard(),
+    wizard,
   }).configure;
 }
+
+describe("channel setup wizard credential input", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("chooses one secret input mode for all credentials in the setup run", async () => {
+    const queued = createQueuedWizardPrompter({
+      selectValues: ["plaintext"],
+      textValues: ["test-bot-id", "test-private-key"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: createConfigure(),
+      cfg: {} as OpenClawConfig,
+      prompter: queued.prompter,
+    });
+
+    expect(getChannelConfig(result.cfg)).toMatchObject({
+      botId: "test-bot-id",
+      secret: "test-private-key",
+    });
+    expect(queued.select).toHaveBeenCalledTimes(1);
+    expect(queued.select).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "How do you want to provide these credentials?" }),
+    );
+  });
+
+  it("allows each credential to override the shared input mode", async () => {
+    vi.stubEnv("DEMO_PRIVATE_KEY", "test-private-key");
+    const queued = createQueuedWizardPrompter({
+      selectValues: ["per-credential", "plaintext", "ref", "env"],
+      textValues: ["test-bot-id", "DEMO_PRIVATE_KEY"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: createConfigure(),
+      cfg: {} as OpenClawConfig,
+      prompter: queued.prompter,
+    });
+
+    expect(getChannelConfig(result.cfg)).toMatchObject({
+      botId: "test-bot-id",
+      secret: { source: "env", provider: "default", id: "DEMO_PRIVATE_KEY" },
+    });
+    expect(
+      queued.select.mock.calls.map(([params]) => (params as { message: string }).message),
+    ).toEqual([
+      "How do you want to provide these credentials?",
+      "How do you want to provide this Bot ID?",
+      "How do you want to provide this Token?",
+      "Where is this Token stored?",
+    ]);
+  });
+
+  it("keeps a single active credential on its ordinary input-mode prompt", async () => {
+    const wizard = createLegacyWizard();
+    wizard.supportsSharedCredentialInputMode = false;
+    const conditionalCredential = wizard.credentials[1];
+    if (!conditionalCredential) {
+      throw new Error("test invariant: expected a second credential");
+    }
+    conditionalCredential.shouldPrompt = () => false;
+    const queued = createQueuedWizardPrompter({
+      selectValues: ["plaintext"],
+      textValues: ["test-bot-id"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: createConfigure(wizard),
+      cfg: {} as OpenClawConfig,
+      prompter: queued.prompter,
+    });
+
+    expect(getChannelConfig(result.cfg)).toMatchObject({ botId: "test-bot-id" });
+    expect(getChannelConfig(result.cfg).secret).toBeUndefined();
+    expect(queued.select).toHaveBeenCalledOnce();
+    expect(queued.select).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "How do you want to provide this Bot ID?" }),
+    );
+  });
+});
 
 describe("channel setup wizard account scoping", () => {
   it("does not prefill or overwrite the existing account when adding a new account", async () => {

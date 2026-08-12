@@ -9,6 +9,7 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-ke
 import { resolveChannelSetupExecutionAdapter } from "./setup-contract.js";
 import { configureChannelAccessWithAllowlist } from "./setup-group-access-configure.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "./setup-helpers.js";
+import { resolveSharedChannelCredentialInputMode } from "./setup-wizard-credential-mode.js";
 import {
   promptResolvedAllowFrom,
   resolveAccountIdForConfigure,
@@ -377,6 +378,9 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
         if (usedEnvShortcut) {
           return;
         }
+        let secretInputMode = options?.secretInputMode;
+        let credentialInputModePolicySelected = Boolean(secretInputMode);
+        let chooseCredentialInputModesSeparately = false;
         for (const credential of wizard.credentials) {
           let credentialState = credential.inspect({ cfg: next, accountId });
           let resolvedCredentialValue = normalizeOptionalString(credentialState.resolvedValue);
@@ -401,12 +405,25 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
           }
           const allowEnv = credential.allowEnv?.({ cfg: next, accountId }) ?? false;
 
+          if (
+            !credentialInputModePolicySelected &&
+            wizard.supportsSharedCredentialInputMode === true
+          ) {
+            const policy = await resolveSharedChannelCredentialInputMode({ prompter });
+            credentialInputModePolicySelected = true;
+            if (policy === "per-credential") {
+              chooseCredentialInputModesSeparately = true;
+            } else {
+              secretInputMode = policy;
+            }
+          }
+
           const credentialResult = await runSingleChannelSecretStep({
             cfg: next,
             prompter,
             providerHint: credential.providerHint,
             credentialLabel: credential.credentialLabel,
-            secretInputMode: options?.secretInputMode,
+            secretInputMode: chooseCredentialInputModesSeparately ? undefined : secretInputMode,
             accountConfigured: credentialState.accountConfigured,
             hasConfigToken: credentialState.hasConfiguredValue,
             allowEnv,

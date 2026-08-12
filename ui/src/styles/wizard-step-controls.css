@@ -7,6 +7,13 @@
   white-space: pre-wrap;
 }
 
+.wizard-step__message--field {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
 .wizard-step__device-code {
   display: grid;
   justify-items: start;

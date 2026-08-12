@@ -371,6 +371,7 @@ export function createSlackSetupWizardBase(handlers: {
         !inspectSlackAccount({ cfg, accountId }).configured,
       apply: ({ cfg, accountId }) => enableSlackAccount(cfg, accountId),
     },
+    supportsSharedCredentialInputMode: true,
     credentials: [
       createSlackTokenCredential({
         inputKey: "botToken",

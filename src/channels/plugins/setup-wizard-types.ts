@@ -289,6 +289,8 @@ export type ChannelSetupWizard = {
   }) => boolean;
   prepare?: ChannelSetupWizardPrepare;
   stepOrder?: "credentials-first" | "text-first";
+  /** Offer one storage-mode choice when every setup path uses multiple credentials. */
+  supportsSharedCredentialInputMode?: boolean;
   credentials: ChannelSetupWizardCredential[];
   textInputs?: ChannelSetupWizardTextInput[];
   finalize?: ChannelSetupWizardFinalize;

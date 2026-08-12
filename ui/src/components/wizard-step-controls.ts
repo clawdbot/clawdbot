@@ -227,7 +227,7 @@ function renderTextStep(props: WizardStepControlsProps) {
       }}
     >
       ${step.message
-        ? html`<div class=${stepClass(props, "message")}>
+        ? html`<div class="${stepClass(props, "message")} ${stepClass(props, "message--field")}">
             <label for=${props.inputId}>${step.message}</label>
           </div>`
         : nothing}
