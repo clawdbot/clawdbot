@@ -251,6 +251,9 @@ describe("node worker supervisor", () => {
       HOME: path.join(root, "worker-home"),
       LANG: "en_US.UTF-8",
       LC_TIME: "de_DE.UTF-8",
+      NODE_EXTRA_CA_CERTS: path.join(root, "private-ca.pem"),
+      NODE_USE_SYSTEM_CA: "1",
+      OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: "1",
       OPENCLAW_SUPPLIED_SECRET: "supplied-openclaw-secret",
       NODE_OPTIONS: "--title=forbidden-worker-title",
       BASH_ENV: path.join(root, "forbidden-shell-init"),
@@ -271,6 +274,9 @@ describe("node worker supervisor", () => {
           HOME: suppliedEnv.HOME,
           LANG: suppliedEnv.LANG,
           LC_TIME: suppliedEnv.LC_TIME,
+          NODE_EXTRA_CA_CERTS: suppliedEnv.NODE_EXTRA_CA_CERTS,
+          NODE_USE_SYSTEM_CA: suppliedEnv.NODE_USE_SYSTEM_CA,
+          OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: suppliedEnv.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS,
           [suppliedPathKey]: suppliedEnv[suppliedPathKey],
         };
         const supervisor = createNodeWorkerSupervisor({ bundleRoot, env: suppliedEnv });
