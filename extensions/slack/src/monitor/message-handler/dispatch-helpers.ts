@@ -2,14 +2,89 @@ import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/channel-
 import { resolveChannelProgressDraftConfig } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import {
+  isReplyPayloadNonTerminalToolErrorWarning,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveSlackReplyRenderPlan } from "../../reply-blocks.js";
+import {
+  hasSlackThreadFailureNotice,
+  hasSlackThreadParticipation,
+  type SlackFailureNotice,
+} from "../../sent-thread-cache.js";
 import type { SlackMessageEvent } from "../../types.js";
 import { readSlackReplyBlocks, resolveSlackThreadTs } from "../replies.js";
 import { resolveSlackTimestampMs } from "./timestamp.js";
 import type { PreparedSlackMessage } from "./types.js";
+
+export type SlackFailureNoticeState = {
+  sawTerminalFailurePayload: boolean;
+  suppressedTerminalFailure?: boolean;
+  pendingFailureNotice?: SlackFailureNotice;
+};
+
+export function filterSlackPassiveFailure(params: {
+  payload: ReplyPayload;
+  prepared: PreparedSlackMessage;
+  statusThreadTs?: string;
+  hasVisibleReply: boolean;
+  state: SlackFailureNoticeState;
+}): ReplyPayload | null {
+  const { payload, prepared, state } = params;
+  if (state.suppressedTerminalFailure) {
+    return null;
+  }
+  if (
+    payload.isError !== true ||
+    prepared.ctxPayload.ChatType !== "channel" ||
+    isReplyPayloadNonTerminalToolErrorWarning(payload)
+  ) {
+    return payload;
+  }
+  state.sawTerminalFailurePayload = true;
+  if (params.hasVisibleReply) {
+    return payload;
+  }
+
+  const explicitlyAddressed =
+    prepared.ctxPayload.ExplicitlyMentionedBot === true ||
+    prepared.ctxPayload.MentionSource === "explicit_bot" ||
+    prepared.ctxPayload.MentionSource === "subteam" ||
+    prepared.ctxPayload.MentionSource === "mention_pattern" ||
+    prepared.ctxPayload.MentionSource === "command_bypass" ||
+    (prepared.ctxPayload.CommandTurn?.kind !== undefined &&
+      prepared.ctxPayload.CommandTurn.kind !== "normal" &&
+      prepared.ctxPayload.CommandTurn.authorized);
+  const threadTs = prepared.message.thread_ts;
+  const noticeThreadTs = threadTs ?? (explicitlyAddressed ? params.statusThreadTs : undefined);
+  const teamId = prepared.eventScope?.teamId;
+  const notice: SlackFailureNotice = {
+    accountId: prepared.account.accountId,
+    channelId: prepared.message.channel,
+    ...(noticeThreadTs ? { threadTs: noticeThreadTs } : {}),
+    failureText: payload.text ?? "",
+    ...(teamId ? { teamId } : {}),
+  };
+  if (
+    threadTs &&
+    !explicitlyAddressed &&
+    prepared.ctxPayload.MentionSource !== "implicit_thread" &&
+    !hasSlackThreadParticipation(notice.accountId, notice.channelId, threadTs, teamId)
+  ) {
+    state.suppressedTerminalFailure = true;
+    logVerbose("slack: suppressed passive failure before thread participation");
+    return null;
+  }
+  if (!explicitlyAddressed && hasSlackThreadFailureNotice(notice)) {
+    state.suppressedTerminalFailure = true;
+    logVerbose("slack: suppressed repeated passive channel or thread failure");
+    return null;
+  }
+  state.pendingFailureNotice = notice;
+  return payload;
+}
 
 function resolveSlackMessageTimestampMs(message: SlackMessageEvent): number | undefined {
   const ts = message.event_ts ?? message.ts;

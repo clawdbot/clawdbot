@@ -792,6 +792,7 @@ vi.mock("openclaw/plugin-sdk/reply-history", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/reply-payload", () => ({
+  isReplyPayloadNonTerminalToolErrorWarning: () => false,
   buildTtsSupplementMediaPayload: (payload: {
     text?: string;
     mediaUrl?: string;
@@ -878,6 +879,9 @@ vi.mock("../../limits.js", () => ({
 }));
 
 vi.mock("../../sent-thread-cache.js", () => ({
+  clearSlackThreadFailureNotice: () => {},
+  hasSlackThreadParticipation: () => false,
+  recordSlackThreadFailureNotice: () => true,
   recordSlackThreadParticipation: recordSlackThreadParticipationMock,
 }));
 

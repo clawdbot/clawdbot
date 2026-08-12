@@ -27,14 +27,22 @@ import { normalizeSlackOutboundText } from "../../format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "../../limits.js";
 import { emitSlackMessageSentHooks } from "../../message-sent-hook.js";
 import { resolveSlackReplyRenderPlan } from "../../reply-blocks.js";
-import { recordSlackThreadParticipation } from "../../sent-thread-cache.js";
+import {
+  clearSlackThreadFailureNotice,
+  recordSlackThreadFailureNotice,
+  recordSlackThreadParticipation,
+} from "../../sent-thread-cache.js";
 import {
   SlackStreamNotDeliveredError,
   stopSlackStream,
   type SlackStreamSession,
 } from "../../streaming.js";
 import { countSlackTextUtf8Bytes } from "../../truncate.js";
-import { resolveSlackBotLoopProtection } from "./dispatch-helpers.js";
+import {
+  filterSlackPassiveFailure,
+  resolveSlackBotLoopProtection,
+  type SlackFailureNoticeState,
+} from "./dispatch-helpers.js";
 import { createSlackProgressRuntime } from "./dispatch-progress.js";
 import { createSlackDispatchSetup } from "./dispatch-setup.js";
 import { createSlackStreamingDeliveryRuntime } from "./dispatch-streaming.js";
@@ -81,6 +89,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     },
   });
   const draftStream = progress.draftStream;
+  const failureNoticeThreadTs = message.thread_ts;
+  const failureNoticeTeamId = prepared.eventScope?.teamId;
+  const failureNoticeState: SlackFailureNoticeState = { sawTerminalFailurePayload: false };
 
   const deliverSlackPayload = async (
     payload: ReplyPayload,
@@ -367,6 +378,21 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       ctxPayload: prepared.ctxPayload,
       dispatcherOptions: {
         ...replyPipeline,
+        // A channel transform marks intentional silence before core can synthesize an empty-reply error.
+        transformReplyPayload: (payload) => {
+          const transformed = replyPipeline.transformReplyPayload
+            ? replyPipeline.transformReplyPayload(payload)
+            : payload;
+          return transformed
+            ? filterSlackPassiveFailure({
+                payload: transformed,
+                prepared,
+                statusThreadTs,
+                hasVisibleReply: delivery.observedReplyDelivery || draftPreviewCommitted.value,
+                state: failureNoticeState,
+              })
+            : null;
+        },
         humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
       },
       delivery: {
@@ -551,6 +577,17 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       const result = turnResult.dispatchResult;
       queuedFinal = result.queuedFinal;
       counts = result.counts;
+      if (
+        !failureNoticeState.sawTerminalFailurePayload &&
+        prepared.ctxPayload.ChatType === "channel"
+      ) {
+        clearSlackThreadFailureNotice({
+          accountId: account.accountId,
+          channelId: message.channel,
+          ...(failureNoticeThreadTs ? { threadTs: failureNoticeThreadTs } : {}),
+          ...(failureNoticeTeamId ? { teamId: failureNoticeTeamId } : {}),
+        });
+      }
     }
   } catch (err) {
     dispatchError = err;
@@ -626,6 +663,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       fallbackDelivered: streamFallbackDelivered,
     },
   );
+
+  if (failureNoticeState.pendingFailureNotice && anyReplyDelivered) {
+    recordSlackThreadFailureNotice(failureNoticeState.pendingFailureNotice);
+  }
 
   if (statusReactionsEnabled) {
     if (dispatchError) {

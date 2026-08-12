@@ -1,5 +1,6 @@
 // Slack plugin module implements sent thread cache behavior.
 import { createPersistentDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { getOptionalSlackRuntime } from "./runtime.js";
 
 /**
@@ -10,6 +11,7 @@ import { getOptionalSlackRuntime } from "./runtime.js";
 const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MAX_ENTRIES = 5000;
 const PERSISTENT_MAX_ENTRIES = 1000;
+const MAX_FAILURE_NOTICES = 1000;
 const PERSISTENT_NAMESPACE = "slack.thread-participation";
 
 type SlackThreadParticipationRecord = {
@@ -22,6 +24,7 @@ type SlackThreadParticipationRecord = {
  * auto-reply gating does not diverge between prepare/dispatch call paths.
  */
 const SLACK_THREAD_PARTICIPATION_KEY = Symbol.for("openclaw.slackThreadParticipation");
+const SLACK_THREAD_FAILURE_NOTICES_KEY = Symbol.for("openclaw.slackThreadFailureNotices");
 const threadParticipation = createPersistentDedupeCache<SlackThreadParticipationRecord>({
   globalKey: SLACK_THREAD_PARTICIPATION_KEY,
   ttlMs: TTL_MS,
@@ -41,6 +44,11 @@ const threadParticipation = createPersistentDedupeCache<SlackThreadParticipation
     },
   },
 });
+const threadFailureNotices = resolveGlobalSingleton(
+  SLACK_THREAD_FAILURE_NOTICES_KEY,
+  () => new Map<string, string>(),
+  (notices) => notices.clear(),
+);
 
 function makeKey(accountId: string, channelId: string, threadTs: string, teamId?: string): string {
   return `${accountId}:${teamId ? `${teamId}:` : ""}${channelId}:${threadTs}`;
@@ -88,6 +96,66 @@ export async function hasSlackThreadParticipationWithPersistence(params: {
   );
 }
 
+export type SlackFailureNotice = {
+  accountId: string;
+  channelId: string;
+  threadTs?: string;
+  failureText: string;
+  teamId?: string;
+};
+
+function makeFailureNoticeKey(params: Omit<SlackFailureNotice, "failureText">): string {
+  const scope = params.threadTs ? `thread:${params.threadTs}` : "channel";
+  return makeKey(params.accountId, params.channelId, scope, params.teamId);
+}
+
+/** Returns whether this failure was already delivered in the thread or channel. */
+export function hasSlackThreadFailureNotice(params: SlackFailureNotice): boolean {
+  const { accountId, channelId, failureText } = params;
+  const fingerprint = failureText.trim().replace(/\s+/gu, " ");
+  if (!accountId || !channelId || !fingerprint) {
+    return false;
+  }
+  return threadFailureNotices.get(makeFailureNoticeKey(params)) === fingerprint;
+}
+
+/** Records a failure after it was delivered in the thread or channel. */
+export function recordSlackThreadFailureNotice(params: SlackFailureNotice): boolean {
+  const { accountId, channelId, failureText } = params;
+  const fingerprint = failureText.trim().replace(/\s+/gu, " ");
+  if (!accountId || !channelId || !fingerprint) {
+    return false;
+  }
+  const key = makeFailureNoticeKey(params);
+  if (threadFailureNotices.get(key) === fingerprint) {
+    return false;
+  }
+  threadFailureNotices.delete(key);
+  threadFailureNotices.set(key, fingerprint);
+  if (threadFailureNotices.size > MAX_FAILURE_NOTICES) {
+    const oldestKey = threadFailureNotices.keys().next().value;
+    if (oldestKey !== undefined) {
+      threadFailureNotices.delete(oldestKey);
+    }
+  }
+  return true;
+}
+
+/** Clears a thread or channel outage notice after a healthy model turn completes. */
+export function clearSlackThreadFailureNotice(params: {
+  accountId: string;
+  channelId: string;
+  threadTs?: string;
+  teamId?: string;
+}): void {
+  const { accountId, channelId } = params;
+  if (!accountId || !channelId) {
+    return;
+  }
+  threadFailureNotices.delete(makeFailureNoticeKey(params));
+}
+
 export function clearSlackThreadParticipationCache(): void {
   threadParticipation.clearForTest();
+  threadFailureNotices.clear();
 }
