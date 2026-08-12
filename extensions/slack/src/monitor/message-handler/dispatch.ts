@@ -117,7 +117,15 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           kind: info.kind,
           forcedThreadTs: delivery.usedReplyThreadTs,
         });
-        await progress.finalizeDraftProgressCard(payload.isError === true ? "error" : "success");
+        const finalized = await progress.finalizeDraftProgressCard(
+          payload.isError === true ? "error" : "success",
+        );
+        // The final reply already landed separately. A card that could not be
+        // terminalized would linger in its Working state and misrepresent an
+        // in-progress turn, so drop it (mirrors the pre-card preview cleanup).
+        if (!finalized) {
+          await draftStream?.clear();
+        }
         progress.progressDraft.markFinalReplyDelivered();
         return;
       }

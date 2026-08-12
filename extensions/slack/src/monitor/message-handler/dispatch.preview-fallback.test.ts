@@ -2297,6 +2297,30 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(draftStream.clear).not.toHaveBeenCalled();
   });
 
+  it("clears the stale session card when the terminal edit fails after final delivery", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    // Final reply lands, but terminalizing the card into its ✅ state fails.
+    finalizeSlackPreviewEditMock.mockRejectedValueOnce(new Error("card edit failed"));
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
+    mockedReplyOptionEvents = [{ kind: "item", progressText: "working" }];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { mode: "progress", progress: { label: "Working" } } },
+      }),
+    );
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+    // A card left in its Working state would misrepresent a finished turn; the
+    // failed terminalization must drop it instead of leaving it stranded.
+    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps plan explanation in the session card with a fresh preamble", async () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
@@ -2429,6 +2453,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     async ({ finalText }) => {
       const draftStream = createDraftStreamStub();
       createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+      finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
       mockedSlackStreamingMode = "progress";
       mockedSlackDraftMode = "status_final";
       mockedDispatchSequence = [{ kind: "final", payload: { text: finalText } }];
@@ -2491,6 +2516,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   it("keeps and terminalizes the progress card when the final reply is an error", async () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
     mockedSlackStreamingMode = "progress";
     mockedSlackDraftMode = "status_final";
     mockedDispatchSequence = [{ kind: "final", payload: { text: "tool failed", isError: true } }];
