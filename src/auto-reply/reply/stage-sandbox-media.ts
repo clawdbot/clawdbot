@@ -243,6 +243,13 @@ function toPosixRelativePath(filePath: string): string {
 // during the run, but the UUID directory can outlive them. Prune empty leftovers
 // old enough that no in-flight run is still populating them.
 const STAGED_MEDIA_PRUNE_MIN_AGE_MS = 60 * 60 * 1000;
+// Housekeeping is best-effort and must not delay the current inbound-media
+// reply: each staging pass inspects at most this many pattern-matching
+// candidate directories and removes at most this many stale leftovers, so a
+// large accumulated backlog cannot postpone staging the current attachment.
+// Leftovers beyond the budget are swept by later passes.
+const STAGED_MEDIA_PRUNE_MAX_CANDIDATES_PER_PASS = 32;
+export const STAGED_MEDIA_PRUNE_MAX_REMOVALS_PER_PASS = 16;
 // Canonical shape emitted by stageSandboxMedia: `openclaw-staged-` + UUID.
 const STAGED_MEDIA_DIR_PATTERN =
   /^openclaw-staged-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -250,16 +257,25 @@ const STAGED_MEDIA_DIR_PATTERN =
 async function pruneEmptyStagedMediaDirs(inboundMediaDir: string): Promise<void> {
   const entries = await fs.readdir(inboundMediaDir, { withFileTypes: true }).catch(() => []);
   const cutoffMs = Date.now() - STAGED_MEDIA_PRUNE_MIN_AGE_MS;
+  const candidates: Array<{ dirPath: string; mtimeMs: number }> = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !STAGED_MEDIA_DIR_PATTERN.test(entry.name)) {
+      continue;
+    }
+    if (candidates.length >= STAGED_MEDIA_PRUNE_MAX_CANDIDATES_PER_PASS) {
+      break;
+    }
+    const dirPath = path.join(inboundMediaDir, entry.name);
+    const stat = await fs.lstat(dirPath).catch(() => null);
+    if (!stat?.isDirectory() || stat.mtimeMs > cutoffMs) {
+      continue;
+    }
+    candidates.push({ dirPath, mtimeMs: stat.mtimeMs });
+  }
+  // Reclaim the oldest leftovers first, up to the per-pass removal budget.
+  candidates.sort((a, b) => a.mtimeMs - b.mtimeMs);
   await Promise.all(
-    entries.map(async (entry) => {
-      if (!entry.isDirectory() || !STAGED_MEDIA_DIR_PATTERN.test(entry.name)) {
-        return;
-      }
-      const dirPath = path.join(inboundMediaDir, entry.name);
-      const stat = await fs.lstat(dirPath).catch(() => null);
-      if (!stat?.isDirectory() || stat.mtimeMs > cutoffMs) {
-        return;
-      }
+    candidates.slice(0, STAGED_MEDIA_PRUNE_MAX_REMOVALS_PER_PASS).map(async ({ dirPath }) => {
       // Remove the directory itself only if it is still empty. Non-recursive
       // removal tolerates ENOTEMPTY (a concurrent staging run wrote a file
       // after our check) and ENOENT (someone else removed it first), so a

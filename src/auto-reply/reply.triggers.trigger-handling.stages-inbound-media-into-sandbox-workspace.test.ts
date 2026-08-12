@@ -4,7 +4,10 @@ import path, { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MEDIA_MAX_BYTES } from "../media/store.js";
-import { stageSandboxMedia } from "./reply/stage-sandbox-media.js";
+import {
+  stageSandboxMedia,
+  STAGED_MEDIA_PRUNE_MAX_REMOVALS_PER_PASS,
+} from "./reply/stage-sandbox-media.js";
 import {
   createSandboxMediaContexts,
   createSandboxMediaStageConfig,
@@ -341,6 +344,76 @@ describe("stageSandboxMedia", () => {
       await expect(fs.readFile(ctx.media?.[0]?.path ?? "", "utf8")).resolves.toBe(
         "host-image-bytes",
       );
+    });
+  });
+
+  it("bounds stale-directory pruning so a large backlog cannot postpone staging", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      const { cfg, workspaceDir } = await setupSandboxWorkspace(home);
+      sandboxMocks.ensureSandboxWorkspaceForSession.mockResolvedValue(null);
+      const inboundMediaDir = join(workspaceDir, "media", "inbound");
+      await fs.mkdir(inboundMediaDir, { recursive: true });
+
+      // A backlog well beyond the per-pass removal budget: 24 stale empty
+      // staging directories, all older than the age cutoff.
+      const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      const staleDirs: string[] = [];
+      for (let i = 0; i < 24; i += 1) {
+        const dir = join(
+          inboundMediaDir,
+          `openclaw-staged-00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+        );
+        await fs.mkdir(dir, { recursive: true });
+        await fs.utimes(dir, old, old);
+        staleDirs.push(dir);
+      }
+      const countStaleRemaining = async (): Promise<number> => {
+        let count = 0;
+        for (const dir of staleDirs) {
+          if (
+            await fs.stat(dir).then(
+              () => true,
+              () => false,
+            )
+          ) {
+            count += 1;
+          }
+        }
+        return count;
+      };
+
+      const fileName = "host-prune-backlog.png";
+      await writeInboundMedia(home, fileName, "host-image-bytes");
+      const mediaUri = `media://inbound/${fileName}`;
+      const { ctx, sessionCtx } = createSandboxMediaContexts(mediaUri);
+
+      await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      // The current attachment is staged despite the backlog.
+      await expect(fs.readFile(ctx.media?.[0]?.path ?? "", "utf8")).resolves.toBe(
+        "host-image-bytes",
+      );
+
+      // Exactly the per-pass removal budget was reclaimed; the remainder is
+      // left for later passes instead of delaying this staging run.
+      expect(await countStaleRemaining()).toBe(24 - STAGED_MEDIA_PRUNE_MAX_REMOVALS_PER_PASS);
+
+      // A later pass sweeps the next batch, so the backlog is eventually
+      // reclaimed without any single staging run doing unbounded work.
+      await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+      expect(await countStaleRemaining()).toBe(0);
     });
   });
 
