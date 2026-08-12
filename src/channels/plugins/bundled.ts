@@ -496,13 +496,22 @@ function mergeManifestChannelSetupContractMetadata(
         ...setupContract.metadata,
         fields: setupContract.metadata.fields.map((field) => {
           const manifestField = manifestFieldsByKey.get(field.key);
-          return manifestField
-            ? {
-                ...field,
-                envVars: [...(manifestField.envVars ?? [])],
-                ...(manifestField.envVarMode ? { envVarMode: manifestField.envVarMode } : {}),
-              }
-            : field;
+          if (!manifestField) {
+            return field;
+          }
+          if (field.kind !== "boolean") {
+            return field;
+          }
+          const mergedField: typeof field = {
+            kind: field.kind,
+            cli: field.cli,
+            key: field.key,
+            envVars: [...(manifestField.envVars ?? [])],
+          };
+          if (manifestField.envVarMode) {
+            mergedField.envVarMode = manifestField.envVarMode;
+          }
+          return mergedField;
         }),
       },
     },
