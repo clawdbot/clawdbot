@@ -100,6 +100,7 @@ export async function evaluateSkillProposal(
   );
   const { read, bundles } = snapshot;
   const startedAt = new Date().toISOString();
+  abortSignal?.throwIfAborted();
   const rawOutcomes = bundles
     ? await runSkillProposalEvaluators(
         {
@@ -193,6 +194,7 @@ export async function evaluateSkillProposal(
           throw new Error(`Skill proposal ${read.record.id} changed while evaluation was running.`);
         }
       }
+      abortSignal?.throwIfAborted();
       return recordSkillProposalEvaluation({
         proposalId: read.record.id,
         expectedProposedVersion: read.record.proposedVersion,
