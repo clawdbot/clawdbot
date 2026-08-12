@@ -27,6 +27,7 @@ const COVERAGE_WEB_PROVIDER_PLUGIN_IDS = vi.hoisted(() => ({
   ],
   fetch: ["firecrawl"],
 }));
+const COVERAGE_CHANNEL_CONTRACTS = vi.hoisted(() => new Map<string, object>());
 
 vi.mock("../plugins/capability-provider-runtime.js", () => ({
   resolvePluginCapabilityProviders: () => [],
@@ -55,6 +56,11 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => {
     resolvePluginMetadataSnapshot: createSnapshot,
   };
 });
+
+vi.mock("./channel-contract-api.js", () => ({
+  loadChannelSecretContractApi: ({ channelId }: { channelId: string }) =>
+    COVERAGE_CHANNEL_CONTRACTS.get(channelId),
+}));
 
 vi.mock("./runtime-web-tools-manifest.runtime.js", () => ({
   resolveManifestContractPluginIds: ({ contract }: { contract: string }) => {
@@ -289,6 +295,50 @@ function loadCoverageRegistryEntries(): SecretRegistryEntry[] {
 }
 
 const COVERAGE_REGISTRY_ENTRIES = loadCoverageRegistryEntries();
+const COVERAGE_BUNDLED_CHANNEL_IDS = [
+  ...new Set(
+    COVERAGE_REGISTRY_ENTRIES.flatMap((entry) => {
+      const [scope, channelId] = entry.id.split(".");
+      return scope === "channels" && channelId && channelId !== "qqbot" ? [channelId] : [];
+    }),
+  ),
+];
+
+function loadCoverageChannelContract(channelId: string): Promise<object> {
+  switch (channelId) {
+    case "buzz":
+      return import("../../extensions/buzz/secret-contract-api.js");
+    case "clickclack":
+      return import("../../extensions/clickclack/secret-contract-api.js");
+    case "discord":
+      return import("../../extensions/discord/secret-contract-api.js");
+    case "feishu":
+      return import("../../extensions/feishu/secret-contract-api.js");
+    case "googlechat":
+      return import("../../extensions/googlechat/secret-contract-api.js");
+    case "irc":
+      return import("../../extensions/irc/secret-contract-api.js");
+    case "matrix":
+      return import("../../extensions/matrix/secret-contract-api.js");
+    case "mattermost":
+      return import("../../extensions/mattermost/secret-contract-api.js");
+    case "msteams":
+      return import("../../extensions/msteams/secret-contract-api.js");
+    case "nextcloud-talk":
+      return import("../../extensions/nextcloud-talk/secret-contract-api.js");
+    case "slack":
+      return import("../../extensions/slack/secret-contract-api.js");
+    case "sms":
+      return import("../../extensions/sms/secret-contract-api.js");
+    case "telegram":
+      return import("../../extensions/telegram/secret-contract-api.js");
+    case "zalo":
+      return import("../../extensions/zalo/secret-contract-api.js");
+    default:
+      throw new Error(`missing coverage contract loader for bundled channel ${channelId}`);
+  }
+}
+
 const DEBUG_COVERAGE_BATCHES = process.env.OPENCLAW_DEBUG_RUNTIME_COVERAGE === "1";
 const RUNTIME_COVERAGE_TEST_TIMEOUT_MS = 240_000;
 const COVERAGE_CONFIG_PLUGIN_SOURCE_DIRS = new Map([
@@ -902,34 +952,41 @@ function toCoverageBatchCase(batch: SecretRegistryEntry[]) {
 
 describe("secrets runtime target coverage", () => {
   beforeAll(async () => {
-    const [sharedRuntime, resolver, configCollectors, authCollectors, runtimeWebTools] =
-      await Promise.all([
-        import("./runtime-shared.js"),
-        import("./resolve.js"),
-        import("./runtime-config-collectors.js"),
-        import("./runtime-auth-collectors.js"),
-        import("./runtime-web-tools.js"),
-      ]);
+    const [
+      sharedRuntime,
+      resolver,
+      configCollectors,
+      authCollectors,
+      runtimeWebTools,
+      channelContracts,
+      officialExternalChannelContract,
+    ] = await Promise.all([
+      import("./runtime-shared.js"),
+      import("./resolve.js"),
+      import("./runtime-config-collectors.js"),
+      import("./runtime-auth-collectors.js"),
+      import("./runtime-web-tools.js"),
+      Promise.all(
+        COVERAGE_BUNDLED_CHANNEL_IDS.map(
+          async (channelId) => [channelId, await loadCoverageChannelContract(channelId)] as const,
+        ),
+      ),
+      import("./official-external-channel-secret-contract.js"),
+    ]);
+    for (const [channelId, contract] of channelContracts) {
+      COVERAGE_CHANNEL_CONTRACTS.set(channelId, contract);
+    }
+    const qqbotContract =
+      officialExternalChannelContract.loadOfficialExternalChannelSecretContractApi("qqbot");
+    if (!qqbotContract) {
+      throw new Error("missing coverage contract for official QQBot channel");
+    }
+    COVERAGE_CHANNEL_CONTRACTS.set("qqbot", qqbotContract);
     ({ applyResolvedAssignments, createResolverContext } = sharedRuntime);
     ({ resolveSecretRefValues } = resolver);
     ({ collectConfigAssignments } = configCollectors);
     ({ collectAuthStoreAssignments } = authCollectors);
     ({ resolveRuntimeWebTools } = runtimeWebTools);
-
-    const googleChatBatch = OPENCLAW_CORE_COVERAGE_BATCHES.find((batch) =>
-      batch.some((entry) => entry.id === "channels.googlechat.serviceAccount"),
-    );
-    if (googleChatBatch) {
-      await expectOpenClawCoverageBatchResolved("openclaw.json core", googleChatBatch);
-    }
-    const webProviderBatch = OPENCLAW_PLUGIN_COVERAGE_BATCHES.find((batch) =>
-      batch.some((entry) => entry.id.includes(".config.webSearch.")),
-    );
-    if (webProviderBatch) {
-      // Warm the shared plugin snapshot once; individual target assertions then
-      // measure resolution work instead of one-time manifest discovery.
-      await expectOpenClawCoverageBatchResolved("openclaw.json plugins", webProviderBatch);
-    }
   });
 
   describe("openclaw.json core and channel registry targets", () => {
