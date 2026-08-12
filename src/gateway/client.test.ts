@@ -809,6 +809,7 @@ describe("GatewayClient close handling", () => {
       expect.objectContaining({ message: "gateway tls fingerprint mismatch" }),
     );
     expect(onClose).toHaveBeenCalledWith(1008, "gateway tls fingerprint mismatch", {
+      connectError: expect.objectContaining({ message: "gateway tls fingerprint mismatch" }),
       phase: "pre-hello",
       socketOpened: true,
       transportValidated: false,
@@ -2591,6 +2592,11 @@ describe("GatewayClient connect auth payload", () => {
       "gateway client reconnect paused handler error: Error: paused callback failed",
     );
     expect(onClose).toHaveBeenCalledWith(1008, "connect failed", {
+      connectError: expect.objectContaining({
+        details: { code: "AUTH_TOKEN_MISSING" },
+        gatewayCode: "INVALID_REQUEST",
+        message: "unauthorized",
+      }),
       phase: "pre-hello",
       socketOpened: true,
       transportValidated: true,
