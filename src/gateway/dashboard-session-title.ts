@@ -3,6 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
+import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { generateConversationLabelWithFallback } from "../auto-reply/reply/conversation-label-generator.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
@@ -17,7 +18,14 @@ import { readSessionTitleFieldsFromTranscript } from "./session-transcript-title
 
 type DashboardSessionTitleModelEntry = Pick<
   SessionEntry,
-  "authProfileOverride" | "model" | "modelOverride" | "modelProvider" | "providerOverride"
+  | "agentHarnessId"
+  | "agentRuntimeOverride"
+  | "authProfileOverride"
+  | "model"
+  | "modelOverride"
+  | "modelProvider"
+  | "modelSelectionLocked"
+  | "providerOverride"
 >;
 
 const DASHBOARD_SESSION_TITLE_MAX_CHARS = 60;
@@ -163,6 +171,11 @@ export async function generateDashboardSessionTitle(params: {
     return null;
   }
   const regularModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
+  const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+    provider: regularModel.provider,
+    entry: params.entry,
+    cfg: params.cfg,
+  });
   const preferredProfile = resolveDashboardTitleAuthProfile({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -183,6 +196,7 @@ export async function generateDashboardSessionTitle(params: {
     prompt: DASHBOARD_SESSION_TITLE_PROMPT,
     cfg: params.cfg,
     agentId: params.agentId,
+    ...(agentHarnessRuntimeOverride ? { agentHarnessRuntimeOverride } : {}),
     ...(utilityModelRef ? { utilityModelRef } : {}),
     regularModelRef,
     ...(preferredProfile ? { preferredProfile } : {}),

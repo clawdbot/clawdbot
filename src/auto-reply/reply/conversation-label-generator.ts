@@ -25,6 +25,7 @@ export type ConversationLabelParams = {
   cfg: OpenClawConfig;
   agentId?: string;
   agentDir?: string;
+  agentHarnessRuntimeOverride?: string;
   modelRef?: string;
   timeoutMs?: number;
   maxLength?: number;
@@ -97,6 +98,7 @@ async function completeLabel(params: {
   cfg: OpenClawConfig;
   agentId: string;
   agentDir?: string;
+  agentHarnessRuntimeOverride?: string;
   attempt: ConversationLabelAttempt;
   userMessage: string;
   prompt: string;
@@ -114,6 +116,9 @@ async function completeLabel(params: {
     authProfileId: selection.profileId ?? params.attempt.preferredProfile,
     agentId: params.agentId,
     agentDir: params.agentDir ?? selection.agentDir,
+    ...(params.agentHarnessRuntimeOverride
+      ? { agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride }
+      : {}),
     systemPrompt: params.prompt,
     prompt: params.userMessage,
     timeoutMs: params.timeoutMs,
@@ -126,6 +131,7 @@ async function runLabelAttempts(params: {
   cfg: OpenClawConfig;
   agentId: string;
   agentDir?: string;
+  agentHarnessRuntimeOverride?: string;
   attempts: readonly ConversationLabelAttempt[];
   userMessage: string;
   prompt: string;
@@ -171,6 +177,9 @@ export async function generateConversationLabel(
     cfg: params.cfg,
     agentId,
     agentDir: params.agentDir,
+    ...(params.agentHarnessRuntimeOverride
+      ? { agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride }
+      : {}),
     attempts,
     userMessage: params.userMessage,
     prompt: params.prompt,
@@ -222,6 +231,9 @@ export async function generateConversationLabelWithFallback(
     cfg: params.cfg,
     agentId,
     agentDir: params.agentDir,
+    ...(params.agentHarnessRuntimeOverride
+      ? { agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride }
+      : {}),
     attempts: [...(utilityAttempt ? [utilityAttempt] : []), regularAttempt],
     userMessage: params.userMessage,
     prompt: params.prompt,

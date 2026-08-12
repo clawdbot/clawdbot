@@ -55,9 +55,12 @@ vi.mock("./prepared-model-runtime.js", () => ({
 vi.mock("./simple-completion-runtime.js", () => ({
   prepareSimpleCompletionModel: mocks.prepareSimpleCompletionModel,
 }));
-vi.mock("./runtime-plan/prepare-auth.js", () => ({
-  prepareAgentRuntimeAuth: mocks.prepareAgentRuntimeAuth,
-}));
+vi.mock("./runtime-plan/prepare-auth.js", async () => {
+  const actual = await vi.importActual<typeof import("./runtime-plan/prepare-auth.js")>(
+    "./runtime-plan/prepare-auth.js",
+  );
+  return { ...actual, prepareAgentRuntimeAuth: mocks.prepareAgentRuntimeAuth };
+});
 vi.mock("./runtime-plan/resolve-auth.js", () => ({
   scopeAuthProfileStoreToPreparedPlan: (
     store: { version: number; profiles: Record<string, unknown> },
@@ -293,6 +296,179 @@ describe("runIsolatedCompletion", () => {
       },
     ]);
     expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
+  });
+
+  it("does not unlock direct auth when a prepared profile becomes cooldown-blocked", async () => {
+    const profilePlan = {
+      providerForAuth: "openai",
+      modelId: "gpt-test",
+      harnessAuthProvider: "openai",
+      forwardedAuthProfileId: "openai:first",
+      forwardedAuthProfileSource: "auto" as const,
+      forwardedAuthProfileCandidateIds: ["openai:first"],
+      modelRoute: { authRequirement: "subscription" as const },
+    };
+    const directPlan = {
+      providerForAuth: "openai",
+      modelId: "gpt-test",
+      harnessAuthProvider: "openai",
+      modelRoute: { authRequirement: "api-key" as const },
+    };
+    mocks.ensureAuthProfileStore.mockReturnValueOnce({
+      version: 1,
+      profiles: {
+        "openai:first": { type: "token", provider: "openai", token: "first" },
+      },
+      usageStats: {
+        "openai:first": { cooldownUntil: Date.now() + 60_000 },
+      },
+    });
+    mocks.prepareAgentRuntimeAuth.mockReturnValueOnce({
+      plan: profilePlan,
+      attempts: [
+        { kind: "profile", plan: profilePlan, profileId: "openai:first" },
+        {
+          kind: "direct",
+          plan: directPlan,
+          allowAuthProfileFallback: false,
+          requiresPriorProfileAttempt: true,
+        },
+      ],
+    });
+    const runIsolatedCompletionV2 = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("profile unavailable"))
+      .mockResolvedValueOnce({ assistant: assistant([{ type: "text", text: "direct result" }]) });
+    mocks.getRegisteredAgentHarness.mockReturnValue({
+      harness: {
+        id: "codex",
+        label: "Codex",
+        authBootstrap: "harness",
+        supports: () => ({ supported: true }),
+        runAttempt: vi.fn(),
+        runIsolatedCompletionV2,
+      } satisfies AgentHarness,
+    });
+
+    await expect(runIsolatedCompletion(request())).rejects.toThrow("temporarily unavailable");
+    expect(runIsolatedCompletionV2).not.toHaveBeenCalled();
+    expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
+  });
+
+  it("skips a cooled profile without hiding a prepared healthy backup", async () => {
+    const firstPlan = {
+      providerForAuth: "openai",
+      modelId: "gpt-test",
+      harnessAuthProvider: "openai",
+      forwardedAuthProfileId: "openai:first",
+      forwardedAuthProfileSource: "auto" as const,
+      forwardedAuthProfileCandidateIds: ["openai:first", "openai:backup"],
+      modelRoute: { authRequirement: "subscription" as const },
+    };
+    const backupPlan = {
+      ...firstPlan,
+      forwardedAuthProfileId: "openai:backup",
+      forwardedAuthProfileCandidateIds: ["openai:backup"],
+    };
+    mocks.ensureAuthProfileStore.mockReturnValueOnce({
+      version: 1,
+      profiles: {
+        "openai:first": { type: "token", provider: "openai", token: "first" },
+        "openai:backup": { type: "token", provider: "openai", token: "backup" },
+      },
+      usageStats: {
+        "openai:first": { cooldownUntil: Date.now() + 60_000 },
+      },
+    });
+    mocks.prepareAgentRuntimeAuth.mockReturnValueOnce({
+      plan: firstPlan,
+      attempts: [
+        { kind: "profile", plan: firstPlan, profileId: "openai:first" },
+        { kind: "profile", plan: backupPlan, profileId: "openai:backup" },
+      ],
+    });
+    const runIsolatedCompletionV2 = vi.fn(async () => ({
+      assistant: assistant([{ type: "text", text: "backup result" }]),
+    }));
+    mocks.getRegisteredAgentHarness.mockReturnValue({
+      harness: {
+        id: "codex",
+        label: "Codex",
+        authBootstrap: "harness",
+        supports: () => ({ supported: true }),
+        runAttempt: vi.fn(),
+        runIsolatedCompletionV2,
+      } satisfies AgentHarness,
+    });
+
+    await expect(runIsolatedCompletion(request())).resolves.toMatchObject({
+      text: "backup result",
+    });
+    expect(runIsolatedCompletionV2).toHaveBeenCalledOnce();
+    expect(runIsolatedCompletionV2).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authorization: expect.objectContaining({
+          owner: "harness",
+          plan: expect.objectContaining({ forwardedAuthProfileId: "openai:backup" }),
+        }),
+      }),
+    );
+  });
+
+  it("allows direct auth after a prepared profile was actually dispatched", async () => {
+    const profilePlan = {
+      providerForAuth: "openai",
+      modelId: "gpt-test",
+      harnessAuthProvider: "openai",
+      forwardedAuthProfileId: "openai:first",
+      forwardedAuthProfileSource: "auto" as const,
+      forwardedAuthProfileCandidateIds: ["openai:first"],
+      modelRoute: { authRequirement: "subscription" as const },
+    };
+    const directPlan = {
+      providerForAuth: "openai",
+      modelId: "gpt-test",
+      harnessAuthProvider: "openai",
+      modelRoute: { authRequirement: "api-key" as const },
+    };
+    mocks.ensureAuthProfileStore.mockReturnValueOnce({
+      version: 1,
+      profiles: {
+        "openai:first": { type: "token", provider: "openai", token: "first" },
+      },
+    });
+    mocks.prepareAgentRuntimeAuth.mockReturnValueOnce({
+      plan: profilePlan,
+      attempts: [
+        { kind: "profile", plan: profilePlan, profileId: "openai:first" },
+        {
+          kind: "direct",
+          plan: directPlan,
+          allowAuthProfileFallback: false,
+          requiresPriorProfileAttempt: true,
+        },
+      ],
+    });
+    const runIsolatedCompletionV2 = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("profile unavailable"))
+      .mockResolvedValueOnce({ assistant: assistant([{ type: "text", text: "direct result" }]) });
+    mocks.getRegisteredAgentHarness.mockReturnValue({
+      harness: {
+        id: "codex",
+        label: "Codex",
+        authBootstrap: "harness",
+        supports: () => ({ supported: true }),
+        runAttempt: vi.fn(),
+        runIsolatedCompletionV2,
+      } satisfies AgentHarness,
+    });
+
+    await expect(runIsolatedCompletion(request())).resolves.toMatchObject({
+      text: "direct result",
+    });
+    expect(runIsolatedCompletionV2).toHaveBeenCalledTimes(2);
+    expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledOnce();
   });
 
   it("uses host authorization for V2 API-key routes", async () => {

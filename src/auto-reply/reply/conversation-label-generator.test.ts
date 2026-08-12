@@ -201,6 +201,23 @@ describe("generateConversationLabelWithFallback", () => {
     expect(runIsolatedCompletion).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps an explicit runtime owner across utility and primary attempts", async () => {
+    runIsolatedCompletion
+      .mockRejectedValueOnce(new Error("utility unavailable"))
+      .mockResolvedValueOnce({ text: "Primary title" });
+
+    await expect(
+      generateConversationLabelWithFallback({
+        ...params,
+        agentHarnessRuntimeOverride: "codex",
+      }),
+    ).resolves.toBe("Primary title");
+
+    expect(
+      runIsolatedCompletion.mock.calls.map(([request]) => request.agentHarnessRuntimeOverride),
+    ).toEqual(["codex", "codex"]);
+  });
+
   it("uses the regular candidate directly when no utility model exists", async () => {
     const { utilityModelRef: _utilityModelRef, ...regularOnlyParams } = params;
     await generateConversationLabelWithFallback(regularOnlyParams);

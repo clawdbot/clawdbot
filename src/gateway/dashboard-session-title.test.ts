@@ -123,6 +123,38 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     );
   });
 
+  it("preserves a locked session harness as the title runtime owner", async () => {
+    const entry = {
+      ...baseEntry,
+      agentHarnessId: "codex",
+      agentRuntimeOverride: "openclaw",
+      modelSelectionLocked: true,
+    };
+    mockSessionUpdate(entry);
+
+    await expect(maybeGenerateDashboardSessionTitle(titleParams(entry))).resolves.toBe(true);
+
+    expect(generateConversationLabelWithFallback).toHaveBeenCalledWith(
+      expect.objectContaining({ agentHarnessRuntimeOverride: "codex" }),
+    );
+  });
+
+  it("preserves a compatible session runtime override for title generation", async () => {
+    const entry = {
+      ...baseEntry,
+      providerOverride: "anthropic",
+      modelOverride: "claude-fable-5",
+      agentRuntimeOverride: "claude-cli",
+    };
+    mockSessionUpdate(entry);
+
+    await expect(maybeGenerateDashboardSessionTitle(titleParams(entry))).resolves.toBe(true);
+
+    expect(generateConversationLabelWithFallback).toHaveBeenCalledWith(
+      expect.objectContaining({ agentHarnessRuntimeOverride: "claude-cli" }),
+    );
+  });
+
   it("preserves the configured primary auth profile for explicit utility models", async () => {
     const profiledCfg = {
       agents: {

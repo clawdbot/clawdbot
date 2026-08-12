@@ -38,7 +38,9 @@ import {
   unwrapSecretSentinelsForProviderEgress,
 } from "./provider-secret-egress.js";
 import {
+  canRunPreparedAgentRuntimeAuthAttempt,
   prepareAgentRuntimeAuth,
+  preparedAgentRuntimeProfileAttemptHasCandidate,
   type PreparedAgentRuntimeAuthAttempt,
 } from "./runtime-plan/prepare-auth.js";
 import { scopeAuthProfileStoreToPreparedPlan } from "./runtime-plan/resolve-auth.js";
@@ -554,7 +556,33 @@ export async function runIsolatedCompletion(
           }).attempts;
         }
         let firstError: unknown;
-        for (const attempt of authAttempts?.length ? authAttempts : [undefined]) {
+        let priorProfileAttempted = false;
+        for (const preparedAttempt of authAttempts?.length ? authAttempts : [undefined]) {
+          const attempt: PreparedAgentRuntimeAuthAttempt | undefined =
+            preparedAttempt?.kind === "profile"
+              ? { ...preparedAttempt, plan: selectIsolatedHarnessAuthPlan(preparedAttempt) }
+              : preparedAttempt;
+          if (
+            attempt &&
+            !canRunPreparedAgentRuntimeAuthAttempt({ attempt, priorProfileAttempted })
+          ) {
+            firstError ??= new Error("Prepared direct auth requires a prior profile attempt.");
+            continue;
+          }
+          if (
+            attempt?.kind === "profile" &&
+            authProfileStore &&
+            !preparedAgentRuntimeProfileAttemptHasCandidate({
+              attempt,
+              store: authProfileStore,
+              modelId: request.model,
+            })
+          ) {
+            firstError ??= new Error(
+              "Prepared runtime auth candidates are temporarily unavailable.",
+            );
+            continue;
+          }
           try {
             let authorization: AgentHarnessIsolatedCompletionAuthorization;
             if (
@@ -562,7 +590,7 @@ export async function runIsolatedCompletion(
               attempt.plan.modelRoute?.authRequirement !== "api-key" &&
               authProfileStore
             ) {
-              const plan = selectIsolatedHarnessAuthPlan(attempt);
+              const plan = attempt.plan;
               authorization = {
                 owner: "harness",
                 plan,
@@ -580,13 +608,26 @@ export async function runIsolatedCompletion(
               });
               modelMaxTokens = authorization.model.maxTokens;
             }
-            result = await harness.runIsolatedCompletionV2(
+            if (
+              attempt?.kind === "profile" &&
+              authProfileStore &&
+              !preparedAgentRuntimeProfileAttemptHasCandidate({
+                attempt,
+                store: authProfileStore,
+                modelId: request.model,
+              })
+            ) {
+              throw new Error("Prepared runtime auth candidates are temporarily unavailable.");
+            }
+            const pending = harness.runIsolatedCompletionV2(
               prepareIsolatedHarnessParamsV2(harness, {
                 ...commonParams,
                 authorization,
                 streamParams: clampIsolatedStreamParams(request.streamParams, modelMaxTokens),
               }),
             );
+            priorProfileAttempted ||= attempt?.kind === "profile";
+            result = await pending;
             break;
           } catch (error) {
             if (request.abortSignal?.aborted) {
