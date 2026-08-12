@@ -436,6 +436,9 @@ const config = {
     ".": {
       ignoreDependencies: [
         "@openclaw/*",
+        // Cloudflare template dependency: declared in scripts/cloudflare/package.json
+        // (isolated deploy tooling), not in the root manifest.
+        "@cloudflare/containers",
         // Docker packaging stages @openclaw/ai without nested dependencies after
         // verifying the root owns its exact runtime dependency versions.
         "@mistralai/mistralai",

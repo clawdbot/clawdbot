@@ -1,6 +1,6 @@
 import { Container } from "@cloudflare/containers";
 
-export interface OpenClawContainerEnv {
+interface OpenClawContainerEnv {
   ANTHROPIC_API_KEY?: string;
   DISCORD_BOT_TOKEN?: string;
   LITESTREAM_ACCESS_KEY_ID: string;
