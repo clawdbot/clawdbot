@@ -184,7 +184,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
       );
       expect(resolved.skillsSnapshot?.prompt).not.toContain(escapeSkillXml(hostFilePath));
       expect(prompt).toContain(`<location>${escapeSkillXml(containerFilePath)}</location>`);
-      expect(prompt).not.toContain("/state/sandbox-skills/");
+      expect(prompt).not.toContain(escapeSkillXml(hostFilePath));
       expect(prompt).not.toContain(hostSkillPath);
     } finally {
       await fs.rm(root, { recursive: true, force: true });

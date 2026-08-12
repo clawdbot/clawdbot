@@ -214,7 +214,9 @@ export function resolveSandboxSkillRuntimeInputs(params: {
           )
         : (params.sandbox.containerWorkdir ?? skillsWorkspaceDir);
     // Prefer the sync-published materialized catalog over a live rescan of the
-    // shared skills directory. Host-path snapshots remain suppressed.
+    // shared skills directory. Host-path snapshots remain suppressed. A miss
+    // still live-scans (first publish only); refresh races keep the previous
+    // catalog in cache.
     const publishedSnapshot = peekPublishedSyncedSkillsSnapshot(skillsWorkspaceDir);
     const materializedSnapshot = publishedSnapshot
       ? remapMaterializedSkillsSnapshotForPrompt({

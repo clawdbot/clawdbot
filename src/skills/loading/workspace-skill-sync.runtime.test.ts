@@ -8,9 +8,12 @@ import { resolveSandboxSkillRuntimeInputs } from "../../agents/embedded-agent-ru
 import { withEnv, withEnvAsync } from "../../test-utils/env.js";
 import { resolveEmbeddedRunSkillEntries } from "../runtime/embedded-run-entries.js";
 import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
+import { recordRemoteSkillNodeInfo, replaceRemoteNodeSkills } from "../runtime/remote-skills.js";
+import { resetRemoteNodeSkillsForTests } from "../runtime/remote-skills.test-support.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 import { buildSkillSnapshot, resolveSkillsPrompt } from "./workspace-skill-prompt.js";
+import { peekPublishedSyncedSkillsSnapshot } from "./workspace-skill-sync-cache.js";
 import { syncWorkspaceSkills } from "./workspace-skill-sync.runtime.js";
 
 const mockResolvePluginSkillDirs = vi.hoisted(() => vi.fn(() => [] as string[]));
@@ -410,6 +413,9 @@ describe("syncWorkspaceSkills", () => {
 
     const manifestPath = path.join(targetWorkspace, "skills", ".openclaw-sync.json");
     expect(await pathExists(manifestPath)).toBe(false);
+    expect(
+      peekPublishedSyncedSkillsSnapshot(targetWorkspace)?.skills.map((skill) => skill.name),
+    ).toEqual(["alpha"]);
     await syncWorkspaceSkills({ ...syncParams, skillsSnapshot: secondSnapshot });
     expect(await pathExists(manifestPath)).toBe(true);
     expect(
@@ -471,8 +477,8 @@ describe("syncWorkspaceSkills", () => {
       managedSkillsDir,
       skillsSnapshot: firstSnapshot,
     });
-    const oldCatalog = first.skillsSnapshot.skills.map((skill) => skill.name).toSorted();
-    expect(oldCatalog).toEqual([...oldNames].toSorted());
+    const oldCatalog = [...oldNames].toSorted();
+    expect(first.skillsSnapshot.skills.map((skill) => skill.name).toSorted()).toEqual(oldCatalog);
 
     await fs.rm(path.join(sourceWorkspace, "skills", "skill-08"), { recursive: true, force: true });
     await writeSkill({
@@ -553,7 +559,9 @@ describe("syncWorkspaceSkills", () => {
         skillsSnapshot: skillsSnapshotForRun,
         workspaceDir: skillsPromptWorkspaceDir,
       });
-      const promptNames = oldCatalog.filter((name) => prompt.includes(`<name>${name}</name>`));
+      const promptNames = [...prompt.matchAll(/<name>([^<]*)<\/name>/g)]
+        .map((match) => match[1])
+        .toSorted();
       expect(promptNames).toEqual(oldCatalog);
       expect(skillsSnapshotForRun?.skills.map((skill) => skill.name).toSorted()).toEqual(
         oldCatalog,
@@ -568,6 +576,81 @@ describe("syncWorkspaceSkills", () => {
     } finally {
       releasePause();
       rmSpy.mockRestore();
+    }
+  });
+
+  it("keeps node-hosted skills in the published sandbox catalog", async () => {
+    resetRemoteNodeSkillsForTests();
+    const sourceWorkspace = await createCaseDir("source");
+    const targetWorkspace = await createCaseDir("target");
+    const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
+    const managedSkillsDir = path.join(sourceWorkspace, ".managed");
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "demo"),
+      name: "demo",
+      description: "Demo skill",
+    });
+    recordRemoteSkillNodeInfo({
+      nodeId: "node-1",
+      connId: "conn-1",
+      displayName: "Build Mac",
+      commands: ["system.run"],
+    });
+    replaceRemoteNodeSkills({
+      nodeId: "node-1",
+      displayName: "Build Mac",
+      skills: [
+        {
+          name: "release-helper",
+          description: "Prepare a release",
+          content: [
+            "---",
+            "name: release-helper",
+            "description: Prepare a release",
+            "---",
+            "",
+            "# Instructions",
+            "",
+          ].join("\n"),
+        },
+      ],
+    });
+    try {
+      const synced = await syncWorkspaceSkills({
+        sourceWorkspaceDir: sourceWorkspace,
+        targetWorkspaceDir: targetWorkspace,
+        bundledSkillsDir,
+        managedSkillsDir,
+        eligibility: { nodeSkills: { canExec: true } },
+      });
+      const nodeLocation = "node://node-1/skills/release-helper/SKILL.md";
+      expect(synced.skillsSnapshot.skills.map((skill) => skill.name).toSorted()).toEqual([
+        "demo",
+        "release-helper",
+      ]);
+      expect(synced.skillsSnapshot.prompt).toContain(nodeLocation);
+      expect(
+        synced.skillsSnapshot.resolvedSkills?.some((skill) => skill.filePath === nodeLocation),
+      ).toBe(true);
+
+      const resolved = resolveSandboxSkillRuntimeInputs({
+        sandbox: {
+          enabled: true,
+          containerWorkdir: "/workspace",
+          skillsWorkspaceDir: targetWorkspace,
+          workspaceAccess: "rw",
+        },
+        effectiveWorkspace: targetWorkspace,
+      });
+      expect(resolved.skillsSnapshot?.prompt).toContain(nodeLocation);
+      expect(resolved.skillsSnapshot?.prompt).toContain(
+        "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md",
+      );
+      expect(
+        resolved.skillsSnapshot?.resolvedSkills?.some((skill) => skill.filePath === nodeLocation),
+      ).toBe(true);
+    } finally {
+      resetRemoteNodeSkillsForTests();
     }
   });
 

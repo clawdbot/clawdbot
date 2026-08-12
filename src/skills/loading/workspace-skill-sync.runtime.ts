@@ -6,7 +6,6 @@ import { resolveSandboxPath } from "../../agents/sandbox-paths.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { tryReadJson, writeJson } from "../../infra/json-files.js";
-import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveUserPath } from "../../utils.js";
 import { getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
@@ -23,8 +22,10 @@ import { resolveSkillTelemetrySource } from "./source.js";
 import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 import {
+  pruneSyncedSkillsUsageCache,
+  readSyncedSkillsUsageCache,
   resolveSyncedSkillsCacheKey,
-  syncedSkillsUsageCache,
+  writeSyncedSkillsUsageCache,
 } from "./workspace-skill-sync-cache.js";
 
 const fsp = fs.promises;
@@ -100,7 +101,13 @@ function buildSyncedSkillsSnapshot(params: {
 }): SkillSnapshot {
   const syncedNames = new Set(params.skillUsagePaths.map((entry) => entry.skillName));
   const materializedEntries = params.plans.flatMap((plan) => {
-    if (!plan.destinationPath || !syncedNames.has(plan.entry.skill.name)) {
+    // Non-filesystem locators (node://) are planned without a destination and
+    // must stay in the published catalog. Dropping them makes peek suppress
+    // live loading and omit those skills from sandbox prompts.
+    if (!plan.destinationPath) {
+      return [plan.entry];
+    }
+    if (!syncedNames.has(plan.entry.skill.name)) {
       return [];
     }
     return [remapSkillEntryToSyncedDestination(plan.entry, plan.destinationPath)];
@@ -207,7 +214,7 @@ export async function syncWorkspaceSkills(params: {
               .toSorted(),
           ])
         : undefined;
-    const cachedUsage = syncedSkillsUsageCache.get(targetSkillsDir);
+    const cachedUsage = readSyncedSkillsUsageCache(targetSkillsDir);
     const manifestKey = manifest
       ? JSON.stringify([manifest.skillsVersion, manifest.entryKeys])
       : undefined;
@@ -269,8 +276,10 @@ export async function syncWorkspaceSkills(params: {
       manifest?.skillsVersion === skillsVersion && cachedUsage?.manifestKey === manifestKey
         ? cachedUsage
         : undefined;
-    // Keep the previous complete catalog cached until a successful publish so
-    // concurrent prompt builders can retain a stable generation handoff.
+    // Keep the previous complete catalog metadata cached until a successful
+    // publish so concurrent prompt builders do not live-scan the shared dir.
+    // Referenced files may still be replaced in place: the bind-mounted skills
+    // directory inode cannot be renamed.
     const preservedDestinations = new Set(
       plans.flatMap((plan) => {
         const destination = plan.destinationPath ? path.basename(plan.destinationPath) : null;
@@ -338,7 +347,7 @@ export async function syncWorkspaceSkills(params: {
         skillsVersion,
       };
       await writeJson(manifestPath, nextManifest, { trailingNewline: true });
-      syncedSkillsUsageCache.set(targetSkillsDir, {
+      writeSyncedSkillsUsageCache(targetSkillsDir, {
         destinations: new Map(
           plans.flatMap((plan) =>
             plan.destinationPath
@@ -350,7 +359,7 @@ export async function syncWorkspaceSkills(params: {
         skillUsagePaths,
         skillsSnapshot: nextSkillsSnapshot,
       });
-      pruneMapToMaxSize(syncedSkillsUsageCache, 100);
+      pruneSyncedSkillsUsageCache(100);
       return { skillUsagePaths, skillsSnapshot: nextSkillsSnapshot };
     }
     // Leave any previously published complete catalog in place. A failed

@@ -5,18 +5,18 @@
  * generation without importing the deferred sandbox copy path.
  */
 import path from "node:path";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { resolveUserPath } from "../../utils.js";
 import type { SkillSnapshot, SkillUsagePath } from "../types.js";
 
-export type SyncedSkillsUsageCacheEntry = {
+type SyncedSkillsUsageCacheEntry = {
   destinations: Map<string, string>;
   manifestKey: string;
   skillUsagePaths: SkillUsagePath[];
   skillsSnapshot: SkillSnapshot;
 };
 
-/** Process-local published catalog. Keyed by the target skills directory. */
-export const syncedSkillsUsageCache = new Map<string, SyncedSkillsUsageCacheEntry>();
+const syncedSkillsUsageCache = new Map<string, SyncedSkillsUsageCacheEntry>();
 
 export function resolveSyncedSkillsCacheKey(targetWorkspaceDir: string): string {
   return path.join(resolveUserPath(targetWorkspaceDir), "skills");
@@ -25,6 +25,23 @@ export function resolveSyncedSkillsCacheKey(targetWorkspaceDir: string): string 
 export function peekPublishedSyncedSkillsSnapshot(
   targetWorkspaceDir: string,
 ): SkillSnapshot | undefined {
-  return syncedSkillsUsageCache.get(resolveSyncedSkillsCacheKey(targetWorkspaceDir))
+  return readSyncedSkillsUsageCache(resolveSyncedSkillsCacheKey(targetWorkspaceDir))
     ?.skillsSnapshot;
+}
+
+export function readSyncedSkillsUsageCache(
+  targetSkillsDir: string,
+): SyncedSkillsUsageCacheEntry | undefined {
+  return syncedSkillsUsageCache.get(targetSkillsDir);
+}
+
+export function writeSyncedSkillsUsageCache(
+  targetSkillsDir: string,
+  entry: SyncedSkillsUsageCacheEntry,
+): void {
+  syncedSkillsUsageCache.set(targetSkillsDir, entry);
+}
+
+export function pruneSyncedSkillsUsageCache(maxSize: number): void {
+  pruneMapToMaxSize(syncedSkillsUsageCache, maxSize);
 }
