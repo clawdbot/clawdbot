@@ -131,6 +131,7 @@ async function classifyFileAttachment(params: {
   cfg: OpenClawConfig;
   limits: FileExtractionLimits;
   skipAttachmentIndexes?: Set<number>;
+  selfServePathsEnabled: boolean;
 }): Promise<ClassifiedFileAttachment> {
   const { attachment, cache, cfg, limits, skipAttachmentIndexes } = params;
   const attachmentFilename =
@@ -177,12 +178,31 @@ async function classifyFileAttachment(params: {
   // reaches model context; undefined drops the mime from block and marker.
   const binaryMime =
     sanitizeMimeType(normalizeMimeType(attachment.mime)) ?? sanitizeMimeType(classification.mime);
+  // Self-serve only for the cache's root-approved local read; a raw
+  // attachment.path may be blocked by policy with bytes served via URL
+  // fallback, and the marker must never point the agent at a blocked path.
+  // The caller vouches for host placement — sandboxed runtimes reject host
+  // mount paths, so absent that fact the directive stays off (#122411).
+  const selfServeLocalPath = params.selfServePathsEnabled ? bufferResult.localPath : undefined;
   if (
     classification.class !== "text" &&
     !(classification.class === "document" && classification.mime === "application/pdf")
   ) {
+    // An operator-pinned allowlist that excludes this type is a policy "no";
+    // it must win before any self-serve directive can name the file.
+    if (limits.allowedMimesConfigured && !(binaryMime && limits.allowedMimes.has(binaryMime))) {
+      return {
+        outcome: { kind: "policy-rejected", mime: binaryMime },
+        filename,
+        mimeType: binaryMime,
+      };
+    }
     return {
-      outcome: { kind: "unsupported-format", mime: binaryMime },
+      outcome: {
+        kind: "unsupported-format",
+        mime: binaryMime,
+        ...(selfServeLocalPath ? { localPath: selfServeLocalPath } : {}),
+      },
       filename,
       mimeType: binaryMime,
     };
@@ -218,7 +238,11 @@ async function classifyFileAttachment(params: {
     // claims support the active configuration disables.
     const outcome: FileAttachmentOutcome = limits.allowedMimesConfigured
       ? { kind: "policy-rejected", mime: mimeType }
-      : { kind: "unsupported-format", mime: mimeType };
+      : {
+          kind: "unsupported-format",
+          mime: mimeType,
+          ...(selfServeLocalPath ? { localPath: selfServeLocalPath } : {}),
+        };
     return { outcome, filename, mimeType };
   }
   let extracted: Awaited<ReturnType<typeof extractFileContentFromSource>>;
@@ -258,6 +282,7 @@ async function extractFileContext(params: {
   cfg: OpenClawConfig;
   limits: FileExtractionLimits;
   skipAttachmentIndexes?: Set<number>;
+  selfServePathsEnabled: boolean;
 }) {
   const { attachments, cache, cfg, limits, skipAttachmentIndexes } = params;
   if (!attachments || attachments.length === 0) {
@@ -275,6 +300,7 @@ async function extractFileContext(params: {
       cfg,
       limits,
       skipAttachmentIndexes,
+      selfServePathsEnabled: params.selfServePathsEnabled,
     });
     if (outcome.kind === "extracted" || outcome.kind === "rendered-to-images") {
       images.push(
@@ -366,6 +392,9 @@ export async function applyMediaUnderstanding(params: {
   activeModel?: ActiveMediaModel;
   /** Preserve native-harness ownership of image, video, and file inputs while applying STT. */
   processingMode?: "audio-only";
+  /** Caller-owned placement fact: true when the executing agent runs on the host
+   * and can open local media paths (embedded non-sandboxed sessions, ACP). */
+  selfServeLocalPaths?: boolean;
   /** Attachment indexes the caller (ACP) has already resolved into native turn attachments. */
   deliveredImageIndexes?: ReadonlySet<number>;
 }): Promise<ApplyMediaUnderstandingResult> {
@@ -522,6 +551,10 @@ export async function applyMediaUnderstanding(params: {
             limits: resolveFileExtractionLimits(cfg),
             skipAttachmentIndexes:
               audioAttachmentIndexes.size > 0 ? audioAttachmentIndexes : undefined,
+            // Placement is the caller's fact: embedded sessions resolve their
+            // sandbox state, ACP always executes on the host. Absent the fact,
+            // suppress — a wrong path is worse than the plain marker (#122411).
+            selfServePathsEnabled: params.selfServeLocalPaths === true,
           });
     const mediaMarkers =
       params.processingMode === "audio-only"

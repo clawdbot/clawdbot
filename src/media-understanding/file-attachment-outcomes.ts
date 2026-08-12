@@ -39,7 +39,10 @@ export type FileAttachmentOutcome =
   | { kind: "extracted"; text: string; images: DocumentExtractedImage[] }
   | { kind: "rendered-to-images"; images: DocumentExtractedImage[] }
   | { kind: "no-extractable-text" }
-  | { kind: "unsupported-format"; mime?: string }
+  // localPath is set only for files on local disk the agent can open itself;
+  // its presence switches the marker from a capability apology to a self-serve
+  // directive so the agent extracts the content instead of punting to the user.
+  | { kind: "unsupported-format"; mime?: string; localPath?: string }
   // Operator-pinned allowlist rejection: policy, not capability — the marker
   // must not claim PDF/text support the active configuration disables.
   | { kind: "policy-rejected"; mime?: string }
@@ -51,6 +54,28 @@ export type FileAttachmentOutcome =
 
 function wrapUntrustedAttachmentContent(content: string): string {
   return wrapExternalContent(content, { source: "unknown", includeWarning: false });
+}
+
+// Absolute host paths from the managed media store only; bounded, and
+// restricted by rejecting the characters that could smuggle prompt markup,
+// control tokens, or external-content markers into the directive. Letters and
+// digits of any script pass: filenames are routinely non-Latin, and dropping
+// the directive for them would silently restore the dead-end for those users.
+const MARKER_LOCAL_PATH_MAX_CHARS = 300;
+const POSIX_ABSOLUTE_PATH = /^\//;
+const WINDOWS_ABSOLUTE_PATH = /^[A-Za-z]:\\/;
+// Control chars, bidi/zero-width overrides, and prompt-structural punctuation.
+const MARKER_PATH_FORBIDDEN =
+  /[\p{C}\p{Zl}\p{Zp}\u200b-\u200f\u202a-\u202e\u2066-\u2069<>[\]{}"'`|*?]/u;
+
+function markerSafeLocalPath(value?: string): string | undefined {
+  if (!value || value.length > MARKER_LOCAL_PATH_MAX_CHARS) {
+    return undefined;
+  }
+  if (!POSIX_ABSOLUTE_PATH.test(value) && !WINDOWS_ABSOLUTE_PATH.test(value)) {
+    return undefined;
+  }
+  return MARKER_PATH_FORBIDDEN.test(value) ? undefined : value;
 }
 
 const SKIPPED_FILE_OUTCOME_KINDS = new Set<FileAttachmentOutcome["kind"]>([
@@ -74,9 +99,20 @@ export function renderFileAttachmentOutcome(outcome: FileAttachmentOutcome): str
       return "[No extractable text]";
     case "unsupported-format": {
       const mime = markerSafeMime(outcome.mime);
-      return mime
-        ? `[Unsupported document format: ${mime}. PDF and plain-text attachments can be read.]`
-        : "[Unsupported document format. PDF and plain-text attachments can be read.]";
+      const formatClause = mime
+        ? `Unsupported document format: ${mime}.`
+        : "Unsupported document format.";
+      const localPath = markerSafeLocalPath(outcome.localPath);
+      // Modern OOXML files unzip to XML; legacy OLE formats (msword, x-cfb) do
+      // not, and a wrong hint sends the agent down a dead extraction path.
+      const formatHint = outcome.mime?.startsWith("application/vnd.openxmlformats-officedocument")
+        ? " (this Office file is a zip archive containing XML)"
+        : "";
+      // Wording is deliberate: without the explicit "read it yourself, don't
+      // ask the user" directive, models punt back to the sender.
+      return localPath
+        ? `[${formatClause} The file is saved at ${localPath} — its text is not extracted automatically. Read it yourself with your tools before answering${formatHint}; do not ask the user to paste the contents.]`
+        : `[${formatClause} PDF and plain-text attachments can be read.]`;
     }
     case "policy-rejected": {
       const mime = markerSafeMime(outcome.mime);

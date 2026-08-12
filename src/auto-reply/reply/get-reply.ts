@@ -13,6 +13,7 @@ import {
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
+import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
@@ -162,6 +163,7 @@ async function applyMediaUnderstandingIfNeeded(params: {
   workspaceDir?: string;
   activeModel: { provider: string; model: string };
   processingMode?: "audio-only";
+  selfServeLocalPaths?: boolean;
 }): Promise<ApplyMediaUnderstandingResult | undefined> {
   if (!hasInboundMediaForUnderstanding(params.ctx)) {
     return undefined;
@@ -467,6 +469,13 @@ export async function getReplyFromConfig(
           agentDir,
           workspaceDir,
           activeModel: { provider, model },
+          // Embedded runner placement: host unless this session sandboxes exec
+          // (non-main mode keeps the main session on the host).
+          selfServeLocalPaths: !resolveSandboxRuntimeStatus({
+            cfg,
+            agentId,
+            sessionKey: agentSessionKey,
+          }).sandboxed,
           ...(shouldApplyLockedAudio ? { processingMode: "audio-only" as const } : {}),
         }),
       );
