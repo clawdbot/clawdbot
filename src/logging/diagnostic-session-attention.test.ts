@@ -172,6 +172,48 @@ describe("classifySessionAttention", () => {
         recoveryEligible: false,
       },
     },
+    {
+      name: "queued CLI-style streaming without activeWorkKind is not stuck",
+      queueDepth: 1,
+      activity: {
+        lastProgressAgeMs: 10_000,
+        lastProgressReason: "cli_live:stream_progress",
+      },
+      expected: {
+        eventType: "session.long_running",
+        reason: "queued_behind_active_work",
+        classification: "long_running",
+        recoveryEligible: false,
+      },
+    },
+    {
+      name: "queued CLI-style streaming with stale progress is stuck",
+      queueDepth: 1,
+      activity: {
+        lastProgressAgeMs: 31_000,
+        lastProgressReason: "cli_live:stream_progress",
+      },
+      expected: {
+        eventType: "session.stuck",
+        reason: "queued_work_without_active_run",
+        classification: "stale_session_state",
+        recoveryEligible: true,
+      },
+    },
+    {
+      name: "CLI-style streaming without queued work is long-running",
+      queueDepth: 0,
+      activity: {
+        lastProgressAgeMs: 10_000,
+        lastProgressReason: "cli_live:stream_progress",
+      },
+      expected: {
+        eventType: "session.long_running",
+        reason: "active_work",
+        classification: "long_running",
+        recoveryEligible: false,
+      },
+    },
   ])("$name", ({ activity, expected, queueDepth, state }) => {
     expect(
       classifySessionAttention({

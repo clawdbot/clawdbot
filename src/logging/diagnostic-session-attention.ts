@@ -134,6 +134,16 @@ export function classifySessionAttention(params: {
     };
   }
 
+  const lastProgressAgeMs = params.activity.lastProgressAgeMs;
+  if (typeof lastProgressAgeMs === "number" && lastProgressAgeMs <= params.staleMs) {
+    return {
+      eventType: "session.long_running",
+      reason: params.queueDepth > 0 ? "queued_behind_active_work" : "active_work",
+      classification: "long_running",
+      recoveryEligible: false,
+    };
+  }
+
   return {
     eventType: "session.stuck",
     reason: params.queueDepth > 0 ? "queued_work_without_active_run" : "stale_session_state",
