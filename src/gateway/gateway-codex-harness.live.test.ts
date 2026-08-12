@@ -2209,7 +2209,6 @@ describeLive("gateway live (Codex harness)", () => {
                 },
                 workspace,
               });
-              break;
             }
 
             if (CODEX_HARNESS_SUBAGENT_PROBE) {
