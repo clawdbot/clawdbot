@@ -57,18 +57,17 @@ const buzzSetupAdapter: ChannelSetupAdapter<BuzzSetupInput> = {
     if (!validRelayUrl(input.relayUrl)) {
       return "Buzz requires --relay-url with a ws:// or wss:// URL.";
     }
-    if (input.useEnv) {
-      return process.env.BUZZ_PRIVATE_KEY?.trim() ? null : "BUZZ_PRIVATE_KEY is not set.";
-    }
-    if (!input.privateKey?.trim()) {
+    if (!input.useEnv && !input.privateKey?.trim()) {
       return "Buzz requires --private-key or --use-env.";
     }
-    try {
-      decodeBuzzPrivateKey(input.privateKey);
-      return null;
-    } catch (error) {
-      return error instanceof Error ? error.message : "Invalid Buzz private key.";
+    if (!input.useEnv) {
+      try {
+        decodeBuzzPrivateKey(input.privateKey);
+      } catch (error) {
+        return error instanceof Error ? error.message : "Invalid Buzz private key.";
+      }
     }
+    return null;
   },
   applyAccountConfig: ({ cfg, input }) => {
     const currentPrivateKey = resolveComparableCurrentKey(cfg);
@@ -110,6 +109,7 @@ export const buzzSetupContract = defineChannelSetupContract({
         flags: "--use-env",
         description: "Use BUZZ_PRIVATE_KEY with the supplied relay URL",
       },
+      envVars: ["BUZZ_PRIVATE_KEY"],
     },
   },
   adapter: buzzSetupAdapter,

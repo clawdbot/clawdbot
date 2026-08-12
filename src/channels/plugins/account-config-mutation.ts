@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
@@ -25,6 +26,28 @@ type PreparedChannelAccountConfiguration = {
   accountId: string;
   input: unknown;
 };
+
+function resolveMissingSetupEnvMessage(plugin: ChannelPlugin, input: unknown): string | undefined {
+  if (!plugin.setupContract || !isRecord(input) || input.useEnv !== true) {
+    return undefined;
+  }
+  const useEnvField = plugin.setupContract.metadata.fields.find(
+    (field) => field.key === "useEnv" && field.kind === "boolean",
+  );
+  const envVars = useEnvField?.envVars;
+  if (!envVars?.length) {
+    return undefined;
+  }
+  const missing = envVars.filter((name) => !process.env[name]?.trim());
+  const ready =
+    useEnvField.envVarMode === "any" ? missing.length < envVars.length : !missing.length;
+  if (ready) {
+    return undefined;
+  }
+  return useEnvField.envVarMode === "any"
+    ? `Set one of these environment variables before using --use-env: ${missing.join(", ")}.`
+    : `Set these environment variables before using --use-env: ${missing.join(", ")}.`;
+}
 
 export async function prepareChannelAccountConfiguration(params: {
   cfg: OpenClawConfig;
@@ -76,6 +99,10 @@ export async function prepareChannelAccountConfiguration(params: {
   });
   if (validationError) {
     return resultError({ kind: "invalid-input", message: validationError });
+  }
+  const missingEnvMessage = resolveMissingSetupEnvMessage(params.plugin, input);
+  if (missingEnvMessage) {
+    return resultError({ kind: "invalid-input", message: missingEnvMessage });
   }
 
   return ok({

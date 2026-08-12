@@ -263,6 +263,7 @@ export const slackSetupContract = defineChannelSetupContract({
     useEnv: {
       kind: "boolean",
       cli: { flags: "--use-env", description: "Use Slack environment credentials" },
+      envVars: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"],
     },
   },
   legacyAdapter: slackSetupAdapter,

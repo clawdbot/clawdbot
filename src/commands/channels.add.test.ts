@@ -1,6 +1,6 @@
 // Channels add tests cover guided setup, plugin install paths, and channel account config writes.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import { defineChannelSetupContract } from "../channels/plugins/setup-contract.js";
@@ -45,6 +45,10 @@ const registryRefreshMocks = vi.hoisted(() => ({
 
 const pluginInstallRecordCommitMocks = vi.hoisted(() => ({
   commitConfigWithPendingPluginInstalls: vi.fn(),
+}));
+
+const terminalMocks = vi.hoisted(() => ({
+  isTerminalInteractive: vi.fn(() => true),
 }));
 
 const channelWizardMocks = vi.hoisted(() => {
@@ -98,6 +102,8 @@ vi.mock("./channel-setup/plugin-install.js", () => pluginInstallMocks);
 vi.mock("../plugins/registry-refresh.js", () => registryRefreshMocks);
 
 vi.mock("../plugins/install-record-commit.js", () => pluginInstallRecordCommitMocks);
+
+vi.mock("../cli/terminal-interactivity.js", () => terminalMocks);
 
 vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: () => channelWizardMocks.prompter,
@@ -365,6 +371,17 @@ function registerExternalChatSetupPlugin(pluginId = "@vendor/external-chat-plugi
   );
 }
 
+async function registerBundledSetupPlugin(channelId: string): Promise<void> {
+  const actual = await vi.importActual<typeof import("../channels/plugins/bundled.js")>(
+    "../channels/plugins/bundled.js",
+  );
+  const plugin = actual.getBundledChannelSetupPlugin(channelId as never);
+  if (!plugin) {
+    throw new Error(`Expected bundled setup plugin: ${channelId}`);
+  }
+  setActivePluginRegistry(createTestRegistry([{ pluginId: channelId, plugin, source: "test" }]));
+}
+
 type SignalAfterAccountConfigWritten = NonNullable<
   NonNullable<ChannelPlugin["setup"]>["afterAccountConfigWritten"]
 >;
@@ -450,6 +467,7 @@ describe("channelsAddCommand", () => {
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
+    terminalMocks.isTerminalInteractive.mockReset().mockReturnValue(true);
     catalogMocks.getChannelPluginCatalogEntry.mockClear();
     catalogMocks.getChannelPluginCatalogEntry.mockReturnValue(undefined);
     catalogMocks.listChannelPluginCatalogEntries.mockClear();
@@ -482,6 +500,88 @@ describe("channelsAddCommand", () => {
       async (...args: unknown[]) => args[0] as OpenClawConfig,
     );
     setMinimalChannelsAddRegistryForTests();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("fails fast before guided setup when no interactive terminal is available", async () => {
+    terminalMocks.isTerminalInteractive.mockReturnValue(false);
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand({ channel: "telegram" }, runtime, { hasFlags: false });
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("channels add --channel <id> --use-env"),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(channelWizardMocks.setupChannels).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      channel: "telegram",
+      options: {},
+      env: { TELEGRAM_BOT_TOKEN: "" },
+      missing: ["TELEGRAM_BOT_TOKEN"],
+    },
+    {
+      channel: "slack",
+      options: {},
+      env: { SLACK_BOT_TOKEN: "", SLACK_APP_TOKEN: "" },
+      missing: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"],
+    },
+    {
+      channel: "buzz",
+      options: { relayUrl: "wss://buzz.example.com" },
+      env: { BUZZ_PRIVATE_KEY: "" },
+      missing: ["BUZZ_PRIVATE_KEY"],
+    },
+  ])("rejects $channel --use-env when declared env vars are missing", async (testCase) => {
+    for (const [name, value] of Object.entries(testCase.env)) {
+      vi.stubEnv(name, value);
+    }
+    await registerBundledSetupPlugin(testCase.channel);
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand(
+      { channel: testCase.channel, useEnv: true, ...testCase.options },
+      runtime,
+      { hasFlags: true },
+    );
+
+    const error = String(runtime.error.mock.calls[0]?.[0] ?? "");
+    for (const missing of testCase.missing) {
+      expect(error).toContain(missing);
+    }
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      channel: "telegram",
+      env: { TELEGRAM_BOT_TOKEN: "telegram-token" },
+    },
+    {
+      channel: "slack",
+      env: { SLACK_BOT_TOKEN: "xoxb-token", SLACK_APP_TOKEN: "xapp-token" },
+    },
+  ])("commits $channel --use-env config when declared env vars are present", async (testCase) => {
+    for (const [name, value] of Object.entries(testCase.env)) {
+      vi.stubEnv(name, value);
+    }
+    await registerBundledSetupPlugin(testCase.channel);
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand({ channel: testCase.channel, useEnv: true }, runtime, {
+      hasFlags: true,
+    });
+
+    expect(writtenChannel(testCase.channel)).toEqual({ enabled: true });
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("keeps guided channel setup lazy until the user selects a channel", async () => {

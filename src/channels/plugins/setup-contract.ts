@@ -22,6 +22,8 @@ type ChannelSetupStringField = {
 type ChannelSetupBooleanField = {
   kind: "boolean";
   cli: ChannelSetupCliOption;
+  envVars?: readonly string[];
+  envVarMode?: "all" | "any";
 };
 
 type ChannelSetupIntegerField = {

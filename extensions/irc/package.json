@@ -114,7 +114,8 @@
             "cli": {
               "flags": "--use-env",
               "description": "Use IRC environment configuration"
-            }
+            },
+            "envVars": ["IRC_HOST", "IRC_NICK"]
           }
         ]
       }
