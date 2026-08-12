@@ -165,7 +165,7 @@ openclaw-crab-pet[data-dex-complete]::after {
 }
 
 .crab-pet--palette-eclipse .crab-pet__svg {
-  filter: drop-shadow(0 0 3px rgba(255, 209, 102, 0.72));
+  filter: drop-shadow(0 0 3px rgba(63, 255, 125, 0.72));
 }
 
 /* The cryptid is always photographed slightly out of focus. Its inner frame
@@ -256,7 +256,7 @@ openclaw-crab-pet[data-dex-complete]::after {
 
 /* Magma seams glow like cooling cracks. Offline pets lose both heat and pulse. */
 .crab-magma {
-  filter: drop-shadow(0 0 3px rgba(255, 106, 61, 0.9));
+  filter: drop-shadow(0 0 3px rgba(47, 191, 113, 0.9));
   animation: crab-pet-magma 3.8s ease-in-out infinite;
 }
 
@@ -1764,7 +1764,7 @@ openclaw-crab-pet[data-dex-complete]::after {
   top: -1px;
   right: 1px;
   font-size: 14px;
-  filter: drop-shadow(0 0 4px rgba(244, 184, 64, 0.4));
+  filter: drop-shadow(0 0 4px rgba(47, 191, 113, 0.4));
 }
 
 @media (max-width: 540px) {
