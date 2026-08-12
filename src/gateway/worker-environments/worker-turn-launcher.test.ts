@@ -1369,7 +1369,9 @@ describe("worker turn launcher", () => {
       acquireTurnCredential: vi.fn(async () => credential()),
       acknowledgeCredentialDelivery,
       startTunnel: vi.fn(async () => {
-        throw new Error("tunnel unavailable");
+        throw Object.assign(new Error("device-runner-transport-unimplemented: launch is pending"), {
+          code: "device-runner-transport-unimplemented",
+        });
       }),
       stopTunnel,
       destroy,
@@ -1388,7 +1390,7 @@ describe("worker turn launcher", () => {
         turn("run-tunnel-unavailable"),
         runLocal,
       ),
-    ).rejects.toThrow("tunnel unavailable");
+    ).rejects.toMatchObject({ code: "device-runner-transport-unimplemented" });
 
     expect(runLocal).not.toHaveBeenCalled();
     expect(acknowledgeCredentialDelivery).not.toHaveBeenCalled();

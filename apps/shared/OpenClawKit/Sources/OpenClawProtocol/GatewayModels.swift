@@ -7314,22 +7314,26 @@ public struct FailedSessionPlacement: Codable, Sendable {
 public struct SessionsDispatchParams: Codable, Sendable {
     public let key: String
     public let agentid: String?
-    public let profileid: String
+    public let profileid: String?
+    public let deviceid: String?
 
     public init(
         key: String,
         agentid: String? = nil,
-        profileid: String)
+        profileid: String? = nil,
+        deviceid: String? = nil)
     {
         self.key = key
         self.agentid = agentid
         self.profileid = profileid
+        self.deviceid = deviceid
     }
 
     private enum CodingKeys: String, CodingKey {
         case key
         case agentid = "agentId"
         case profileid = "profileId"
+        case deviceid = "deviceId"
     }
 }
 
