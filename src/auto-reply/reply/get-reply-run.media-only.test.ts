@@ -2527,12 +2527,16 @@ describe("runPreparedReply media-only handling", () => {
 
     nextRun.complete();
   });
-  it("re-drains system events after waiting behind an active run", async () => {
+  it("drains system events only after waiting behind an active run", async () => {
+    const actualSystemEvents = await vi.importActual<typeof import("./session-system-events.js")>(
+      "./session-system-events.js",
+    );
+    vi.mocked(drainFormattedSystemEvents).mockImplementation(
+      actualSystemEvents.drainFormattedSystemEvents,
+    );
     const queueSettings = await import("./queue/settings-runtime.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
-    vi.mocked(drainFormattedSystemEvents)
-      .mockResolvedValueOnce("System: [t] Initial event.")
-      .mockResolvedValueOnce("System: [t] Post-compaction context.");
+    enqueueSystemEvent("System event after active run", { sessionKey: "session-key" });
 
     const previousRun = createReplyOperation({
       sessionId: "session-events-after-wait",
@@ -2544,19 +2548,24 @@ describe("runPreparedReply media-only handling", () => {
     const runPromise = runPrepared({
       isNewSession: false,
       sessionId: "session-events-after-wait",
+      provider: "",
+      model: "",
+      resolvedThinkLevel: "off",
     });
 
     await Promise.resolve();
+    expect(peekSystemEventEntries("session-key").map((event) => event.text)).toEqual([
+      "System event after active run",
+    ]);
     previousRun.complete();
 
     await expect(runPromise).resolves.toEqual({ text: "ok" });
     const call = requireLastRunReplyAgentCall();
-    expect(call?.commandBody).toContain("System: [t] Initial event.");
-    expect(call?.commandBody).not.toContain("System: [t] Post-compaction context.");
-    expect(call?.transcriptCommandBody).not.toContain("System: [t] Initial event.");
-    expect(call?.followupRun.prompt).toContain("System: [t] Initial event.");
-    expect(call?.followupRun.prompt).not.toContain("System: [t] Post-compaction context.");
-    expect(call?.followupRun.transcriptPrompt).not.toContain("System: [t] Initial event.");
+    expect(call?.commandBody).toContain("System event after active run");
+    expect(call?.transcriptCommandBody).not.toContain("System event after active run");
+    expect(call?.followupRun.prompt).toContain("System event after active run");
+    expect(call?.followupRun.transcriptPrompt).not.toContain("System event after active run");
+    expect(peekSystemEventEntries("session-key")).toStrictEqual([]);
   });
 
   it("threads inbound context as current-turn context without changing transcript text", async () => {
