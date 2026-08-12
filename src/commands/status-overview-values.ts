@@ -24,6 +24,8 @@ type SummarySessionsLike = {
   };
 };
 
+export { buildBackupStatusValue } from "./backup-health.js";
+
 function countActiveStatusAgents(params: {
   agentStatus: AgentStatusLike;
   activeThresholdMs?: number;

@@ -3,6 +3,7 @@
 
 import type { OpenClawConfig } from "../config/types.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
+import { readBackupFreshness } from "./backup-health.js";
 import { buildStatusJsonPayload } from "./status-json-payload.ts";
 import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts";
 import { resolveStatusRuntimeSnapshot } from "./status-runtime-shared.ts";
@@ -89,6 +90,7 @@ export async function resolveStatusJsonOutput(params: {
     memoryPlugin: scan.memoryPlugin,
     agents: scan.agentStatus,
     secretDiagnostics: scan.secretDiagnostics,
+    backups: readBackupFreshness(),
     securityAudit,
     health,
     usage,

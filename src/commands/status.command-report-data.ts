@@ -9,6 +9,7 @@ import type { resolveOsSummary } from "../infra/os-summary.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { SecurityAuditReport } from "../security/audit.js";
 import type { SessionStatus, StatusSummary } from "../status/types.js";
+import type { BackupFreshness } from "./backup-health.js";
 import type { HealthSummary } from "./health.js";
 import {
   buildStatusChannelsTableRows,
@@ -83,6 +84,7 @@ export async function buildStatusCommandReportData(
     formatKTokens: (value: number) => string;
     formatTokensCompact: (value: SessionStatus) => string;
     formatPromptCacheCompact: (value: SessionStatus) => string | null;
+    backupFreshness?: BackupFreshness;
     formatHealthChannelLines: (summary: HealthSummary, opts: { accountMode: "all" }) => string[];
     formatPluginCompatibilityNotice: (notice: PluginCompatibilityNotice) => string;
     formatUpdateAvailableHint: (update: StatusOverviewSurface["update"]) => string | null;
@@ -114,6 +116,7 @@ export async function buildStatusCommandReportData(
     muted: params.muted,
     formatTimeAgo: params.formatTimeAgo,
     formatKTokens: params.formatKTokens,
+    backupFreshness: params.backupFreshness ?? {},
     resolveMemoryVectorState: params.resolveMemoryVectorState,
     resolveMemoryFtsState: params.resolveMemoryFtsState,
     resolveMemoryCacheSummary: params.resolveMemoryCacheSummary,

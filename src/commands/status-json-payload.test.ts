@@ -78,6 +78,15 @@ describe("status-json-payload", () => {
         memory: null,
         memoryPlugin: { enabled: true },
         agents: [{ id: "main" }],
+        backups: {
+          latest: {
+            id: "backup-1",
+            createdAt: 123,
+            archivePath: "/backups/git",
+            status: "ok",
+            kind: "git",
+          },
+        },
         secretDiagnostics: ["diag"],
         securityAudit: { summary: { critical: 1 } },
         health: { ok: true },
@@ -119,6 +128,15 @@ describe("status-json-payload", () => {
       gatewayService: { label: "LaunchAgent", installed: true, loadedText: "loaded" },
       nodeService: { label: "node", installed: true, loadedText: "loaded" },
       agents: [{ id: "main" }],
+      backups: {
+        latest: {
+          id: "backup-1",
+          createdAt: 123,
+          archivePath: "/backups/git",
+          status: "ok",
+          kind: "git",
+        },
+      },
       secretDiagnostics: ["diag"],
       securityAudit: { summary: { critical: 1 } },
       health: { ok: true },
@@ -137,7 +155,6 @@ describe("status-json-payload", () => {
       },
     });
   });
-
   it("omits optional sections when they are absent", () => {
     expect(
       buildStatusJsonPayload({

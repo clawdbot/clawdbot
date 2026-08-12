@@ -13,6 +13,7 @@ import {
 } from "./status-overview-surface.ts";
 import {
   buildStatusAllAgentsValue,
+  buildBackupStatusValue,
   buildStatusEventsValue,
   buildStatusPluginCompatibilityValue,
   buildStatusProbesValue,
@@ -55,6 +56,7 @@ export function buildStatusCommandOverviewRows(
     muted: (value: string) => string;
     formatTimeAgo: (ageMs: number) => string;
     formatKTokens: (value: number) => string;
+    backupFreshness?: import("./backup-health.js").BackupFreshness;
     updateValue?: string;
     updateRestartValue?: string | null;
   } & StatusMemoryStateResolvers,
@@ -149,6 +151,13 @@ export function buildStatusCommandOverviewRows(
       { Item: "Probes", Value: probesValue },
       { Item: "Events", Value: eventsValue },
       { Item: "Tasks", Value: tasksValue },
+      {
+        Item: "Backups",
+        Value: buildBackupStatusValue({
+          freshness: params.backupFreshness ?? {},
+          formatTimeAgo: params.formatTimeAgo,
+        }),
+      },
       { Item: "Heartbeat", Value: heartbeatValue },
       ...(lastHeartbeatValue ? [{ Item: "Last heartbeat", Value: lastHeartbeatValue }] : []),
       {

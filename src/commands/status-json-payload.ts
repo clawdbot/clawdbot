@@ -1,6 +1,7 @@
 // Builds the stable JSON payload for `openclaw status --json`.
 // Optional deep fields are included only when their upstream probes actually ran.
 
+import type { BackupFreshness } from "./backup-health.js";
 import { resolveStatusUpdateChannelInfo } from "./status-all/format.js";
 import {
   buildStatusGatewayJsonPayloadFromSurface,
@@ -21,6 +22,7 @@ export function buildStatusJsonPayload(params: {
   usage?: unknown;
   lastHeartbeat?: unknown;
   pluginCompatibility?: Array<Record<string, unknown>> | null | undefined;
+  backups?: BackupFreshness;
 }) {
   const channelInfo = resolveStatusUpdateChannelInfo({
     updateConfigChannel: params.surface.cfg.update?.channel ?? undefined,
@@ -38,6 +40,7 @@ export function buildStatusJsonPayload(params: {
     gatewayService: params.surface.gatewayService,
     nodeService: params.surface.nodeService,
     agents: params.agents,
+    backups: params.backups ?? {},
     secretDiagnostics: params.secretDiagnostics,
     ...(params.securityAudit ? { securityAudit: params.securityAudit } : {}),
     ...(params.pluginCompatibility
