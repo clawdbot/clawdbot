@@ -283,6 +283,16 @@
             "type": "boolean",
             "default": true
           },
+          "nativeHookRelay": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
           "requestTimeoutMs": {
             "type": "number",
             "minimum": 1,
@@ -608,6 +618,16 @@
     "appServer.loopDetectionPreToolUseRelay": {
       "label": "Loop Detection Pre-tool Relay",
       "help": "Install the Codex PreToolUse subprocess used only for OpenClaw loop detection and its no-policy marker. Disable to reduce per-tool process fan-out; before-tool and trusted policy relays remain enforced.",
+      "advanced": true
+    },
+    "appServer.nativeHookRelay": {
+      "label": "Native Hook Relay",
+      "help": "Control the OpenClaw native hook relay installed into Codex app-server threads. Omit for the historical always-on default. Approvals ride the app-server approval bridge and are not disabled by this key.",
+      "advanced": true
+    },
+    "appServer.nativeHookRelay.enabled": {
+      "label": "Native Hook Relay Enabled",
+      "help": "Set to false to remove the OpenClaw native hook relay from Codex attempts and side questions (relay hook arrays cleared and the OpenClaw session-layer hooks.state entries disabled). features.hooks is left untouched, so independent user, project, plugin, and managed Codex hooks keep running. This applies only when the effective approval policy for the thread is \"never\" and no OpenClaw before-tool policy is active (no before_tool_call hook and no trusted-tool policy). If either condition fails - a prompting or forced-prompting policy, or a live before-tool policy - the opt-out narrows to the required before-tool policy relay with a logged warning naming the reason.",
       "advanced": true
     },
     "appServer.requestTimeoutMs": {

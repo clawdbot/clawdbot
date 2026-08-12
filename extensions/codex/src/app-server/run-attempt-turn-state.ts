@@ -40,7 +40,7 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
   } = resources;
   const { context } = prompt;
   const { connection } = context.runtime;
-  const { params, options, appServer, runAbortController } = connection;
+  const { params, options, appServer, nativeHookRelay, runAbortController } = connection;
   const state = {
     latestStartupErrorNotification: undefined as CodexServerNotification | undefined,
     rateLimitsRevisionBeforeLastTurnStart: undefined as number | undefined,
@@ -138,7 +138,7 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     return completed;
   };
   const renewNativeHookRelayForTurnProgress = () => {
-    if (!resourceState.nativeHookRelay || options.nativeHookRelay?.ttlMs !== undefined) {
+    if (!resourceState.nativeHookRelay || nativeHookRelay?.ttlMs !== undefined) {
       return;
     }
     const now = Date.now();

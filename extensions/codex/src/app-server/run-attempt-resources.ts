@@ -12,6 +12,7 @@ import { CodexAppServerEventProjector } from "./event-projector.js";
 import { buildCodexHookRequester } from "./hook-requester.js";
 import {
   buildCodexNativeHookRelayDisabledConfig,
+  buildCodexNativeHookRelayOptOutConfig,
   buildCodexNativeHookRelayConfig,
   CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS,
   createCodexNativeHookRelay,
@@ -44,6 +45,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     runAbortController,
     sandbox,
     options,
+    nativeHookRelay: guardedNativeHookRelay,
     nativeHookRelayEvents,
   } = connection;
   const { toolBridge } = attemptTools;
@@ -212,7 +214,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       };
     }
     state.nativeHookRelay = createCodexNativeHookRelay({
-      options: options.nativeHookRelay,
+      options: guardedNativeHookRelay,
       generation:
         decision.action === "resume" ? decision.binding.nativeHookRelayGeneration : undefined,
       generationMismatchGraceMs:
@@ -257,11 +259,11 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
         ? buildCodexNativeHookRelayConfig({
             relay: state.nativeHookRelay,
             events: nativeHookRelayEvents,
-            hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
+            hookTimeoutSec: guardedNativeHookRelay?.hookTimeoutSec,
             loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
           })
-        : options.nativeHookRelay?.enabled === false
-          ? buildCodexNativeHookRelayDisabledConfig()
+        : guardedNativeHookRelay?.enabled === false
+          ? buildCodexNativeHookRelayOptOutConfig()
           : undefined,
       nativeHookRelayGeneration: state.nativeHookRelay?.generation,
     };

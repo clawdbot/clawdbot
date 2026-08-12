@@ -32,8 +32,7 @@ export async function cleanupCodexAttempt(
     runCleanupStep,
   } = resources;
   const { connection } = prompt.context.runtime;
-  const { params, options, runAbortController, terminalState, bindingStore, bindingIdentity } =
-    connection;
+  const { params, runAbortController, terminalState, bindingStore, bindingIdentity } = connection;
   const { state, steeringQueueRef, userInputBridgeRef, turnWatches } = turnRuntime;
   const {
     maybeEmitFastModeAutoResetBestEffort,
@@ -162,7 +161,7 @@ export async function cleanupCodexAttempt(
         // Native hook subprocesses can finish shortly after turn completion.
         scheduleCodexNativeHookRelayUnregister({
           relay: nativeHookRelay,
-          hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
+          hookTimeoutSec: connection.nativeHookRelay?.hookTimeoutSec,
         });
       } else {
         nativeHookRelay.unregister();

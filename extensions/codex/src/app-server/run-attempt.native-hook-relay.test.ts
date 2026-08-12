@@ -10,7 +10,10 @@ import {
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "openclaw/plugin-sdk/hook-runtime";
 import {
   createEmptyPluginRegistry,
   createMockPluginRegistry,
@@ -40,6 +43,9 @@ setupRunAttemptTestHooks();
 
 afterEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
+  // The relay guard reads live before-tool policy state, so a hook runner left
+  // behind by one test would change the next test's relay shape.
+  resetGlobalHookRunner();
 });
 
 const testing = {
@@ -926,6 +932,40 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     testing.flushPendingCodexNativeHookRelayUnregistersForTests();
   });
 
+  it("retains the pre_tool_use relay when a before-tool policy is active under explicit yolo", async () => {
+    // Explicit `approvalPolicy: "never"` plus a live before_tool_call hook. If the
+    // opt-out emitted `features.hooks: false` here, the relay that executes and can
+    // block that policy would never run for this attempt.
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
+    );
+    const sessionFile = path.join(tempDir, "policy-yolo.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-policy-yolo");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      pluginConfig: { appServer: { mode: "yolo", approvalPolicy: "never" } },
+      nativeHookRelay: { enabled: false },
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const startParams = startRequest?.params as
+      | { approvalPolicy?: unknown; config?: Record<string, unknown> }
+      | undefined;
+    expect(startParams?.approvalPolicy).toBe("never");
+    expect(startParams?.config?.["features.hooks"]).toBe(true);
+    const preToolUse = startParams?.config?.["hooks.PreToolUse"];
+    expect(Array.isArray(preToolUse) && preToolUse.length > 0).toBe(true);
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    expect(
+      nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)?.allowedEvents,
+    ).toEqual(["pre_tool_use"]);
+    testing.flushPendingCodexNativeHookRelayUnregistersForTests();
+  });
+
   it("sends clearing Codex native hook config when the relay is disabled", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -941,11 +981,26 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
       ?.config;
-    expect(startConfig?.["features.hooks"]).toBe(false);
+    // The opt-out clears the relay's own hooks only. Disabling `features.hooks`
+    // would also suppress independent user, project, plugin, and managed Codex
+    // hooks, so the key stays untouched.
+    expect(Object.hasOwn(startConfig ?? {}, "features.hooks")).toBe(false);
     expect(startConfig?.["hooks.PreToolUse"]).toEqual([]);
     expect(startConfig?.["hooks.PostToolUse"]).toEqual([]);
     expect(startConfig?.["hooks.PermissionRequest"]).toEqual([]);
     expect(startConfig?.["hooks.Stop"]).toEqual([]);
+    // Disabled state markers keep lower-precedence copies of the injected
+    // session-layer commands from being layered back in during discovery.
+    expect(startConfig?.["hooks.state"]).toEqual({
+      "/<session-flags>/config.toml:pre_tool_use:0:0": { enabled: false },
+      "<session-flags>/config.toml:pre_tool_use:0:0": { enabled: false },
+      "/<session-flags>/config.toml:post_tool_use:0:0": { enabled: false },
+      "<session-flags>/config.toml:post_tool_use:0:0": { enabled: false },
+      "/<session-flags>/config.toml:permission_request:0:0": { enabled: false },
+      "<session-flags>/config.toml:permission_request:0:0": { enabled: false },
+      "/<session-flags>/config.toml:stop:0:0": { enabled: false },
+      "<session-flags>/config.toml:stop:0:0": { enabled: false },
+    });
   });
 
   it("cleans up native hook relay state when turn/start fails", async () => {
