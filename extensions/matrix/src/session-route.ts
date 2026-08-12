@@ -107,7 +107,7 @@ export function resolveMatrixOutboundSessionRoute(params: ChannelOutboundSession
     accountId: effectiveAccountId,
     recipientSessionExact:
       target.kind === "room"
-        ? dmSessionScope === "per-room" && target.id.startsWith("!") && target.id.includes(":")
+        ? target.id.startsWith("!")
         : dmSessionScope === "per-user"
           ? isMatrixQualifiedUserId(target.id)
           : roomScopedDmId !== undefined,

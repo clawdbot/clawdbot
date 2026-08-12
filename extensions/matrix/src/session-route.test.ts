@@ -336,14 +336,17 @@ describe("resolveMatrixOutboundSessionRoute", () => {
     expect(route?.recipientSessionExact).toBe(false);
   });
 
-  it("does not claim room ids when DMs are keyed by user identity", () => {
+  it.each([
+    ["legacy room ids", "!ops:example.org"],
+    ["server-less room ids", "!kyPsk-bXS5fEmaIzUxZHgs6QVNyVjlbTSjy_ZkN48Ss"],
+  ])("claims %s independently of DM session scope", (_name, target) => {
     const route = resolveMatrixOutboundSessionRoute({
       cfg: {},
       agentId: "main",
-      target: "!ops:example.org",
+      target,
     });
 
-    expect(route?.recipientSessionExact).toBe(false);
+    expect(route?.recipientSessionExact).toBe(true);
   });
 
   it("resolves per-room DM metadata from the base key when currentSessionKey has a thread suffix", async () => {
