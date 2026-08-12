@@ -175,6 +175,7 @@ async function copyStagedScope(
 async function commitGitBackup(params: {
   repositoryPath: string;
   message: string;
+  scopes: string[];
   env?: NodeJS.ProcessEnv;
 }): Promise<string> {
   const email = await runGit(params.repositoryPath, ["config", "--get", "user.email"], {
@@ -184,9 +185,11 @@ async function commitGitBackup(params: {
     email.code === 0 && email.stdout.trim()
       ? []
       : ["-c", "user.name=OpenClaw", "-c", "user.email=backup@openclaw.local"];
-  await requireGit(params.repositoryPath, [...identityArgs, "commit", "-m", params.message], {
-    env: params.env,
-  });
+  await requireGit(
+    params.repositoryPath,
+    [...identityArgs, "commit", "-m", params.message, "--", ...params.scopes],
+    { env: params.env },
+  );
   return await requireGit(params.repositoryPath, ["rev-parse", "HEAD"], { env: params.env });
 }
 
@@ -261,9 +264,18 @@ export async function createGitBackup(params: {
     if (!Number.isFinite(now.getTime())) {
       throw new Error("Git backup timestamp is invalid.");
     }
+    const stagedBackupPaths = await requireGit(
+      repositoryPath,
+      ["diff", "--cached", "--name-only", "--", "global", "agents"],
+      { env: params.gitEnv },
+    );
+    const commitScopes = ["global", "agents"].filter((scope) =>
+      stagedBackupPaths.split("\n").some((entry) => entry.startsWith(`${scope}/`)),
+    );
     commit = await commitGitBackup({
       repositoryPath,
       message: `openclaw backup ${now.toISOString()}`,
+      scopes: commitScopes,
       env: params.gitEnv,
     });
   }

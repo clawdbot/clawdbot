@@ -143,6 +143,7 @@ unrelated files elsewhere in an adopted repository are never staged.
 - `device_auth_tokens`
 - `device_bootstrap_tokens`
 - `device_identities`
+- `device_pairing_join_codes`
 - `device_pairing_paired`
 - `gateway_origin_device_tokens`
 - `mcp_oauth_pending_authorizations`

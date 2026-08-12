@@ -85,6 +85,12 @@ async function createFormatFixture(databasePath: string): Promise<void> {
         meta_json TEXT,
         PRIMARY KEY (channel_key, account_id, request_id)
       ) STRICT;
+      CREATE TABLE device_pairing_join_codes (
+        shortcode TEXT,
+        payload_json TEXT,
+        created_at_ms INTEGER,
+        expires_at_ms INTEGER
+      ) STRICT;
       CREATE TABLE content (
         id INTEGER PRIMARY KEY,
         body TEXT NOT NULL,
@@ -128,6 +134,18 @@ async function createFormatFixture(databasePath: string): Promise<void> {
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .run("telegram", "default", "request", "pairing-code", "now", "now", null);
+    database
+      .prepare(
+        `INSERT INTO device_pairing_join_codes
+           (shortcode, payload_json, created_at_ms, expires_at_ms)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run(
+        "join-code",
+        JSON.stringify({ url: "wss://gateway.example", bootstrapToken: "bootstrap-secret" }),
+        1,
+        2,
+      );
   } finally {
     database.close();
   }
@@ -269,6 +287,7 @@ describe("Git-backed SQLite snapshots", () => {
     await requireGit(repositoryPath, ["config", "user.name", "OpenClaw Backup Test"]);
     await requireGit(repositoryPath, ["config", "user.email", "backup@example.invalid"]);
     await fs.writeFile(path.join(repositoryPath, "unrelated.txt"), "operator-owned\n");
+    await requireGit(repositoryPath, ["add", "unrelated.txt"]);
 
     const created = await createGitBackup({ repositoryPath, stateDir, databases: [database] });
     const unchanged = await createGitBackup({ repositoryPath, stateDir, databases: [database] });
@@ -276,8 +295,24 @@ describe("Git-backed SQLite snapshots", () => {
     expect(created.noChanges).toBe(false);
     expect(unchanged.noChanges).toBe(true);
     expect(await requireGit(repositoryPath, ["status", "--porcelain", "--", "unrelated.txt"])).toBe(
-      "?? unrelated.txt",
+      "A  unrelated.txt",
     );
+    const committedPaths = (
+      await requireGit(repositoryPath, ["show", "--pretty=format:", "--name-only", "HEAD"])
+    )
+      .split("\n")
+      .filter(Boolean);
+    expect(committedPaths.length).toBeGreaterThan(0);
+    expect(
+      committedPaths.every(
+        (entry) =>
+          entry === "global" ||
+          entry.startsWith("global/") ||
+          entry === "agents" ||
+          entry.startsWith("agents/"),
+      ),
+    ).toBe(true);
+    expect(committedPaths).not.toContain("unrelated.txt");
     expect(
       await requireGit(repositoryPath, ["ls-tree", "-r", "--name-only", "HEAD"]),
     ).not.toContain("unrelated.txt");
@@ -573,14 +608,20 @@ describe("Git-backed SQLite snapshots", () => {
     });
     expect(manifest.excludedTables).toContain("device_auth_tokens");
     expect(manifest.excludedTables).toContain("channel_pairing_requests");
+    expect(manifest.excludedTables).toContain("device_pairing_join_codes");
     expect(manifest.tables).not.toHaveProperty("device_auth_tokens");
     expect(manifest.tables).not.toHaveProperty("channel_pairing_requests");
+    expect(manifest.tables).not.toHaveProperty("device_pairing_join_codes");
     await expect(
       fs.lstat(path.join(dump, "tables", "channel_pairing_requests.jsonl")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.lstat(path.join(dump, "tables", "device_pairing_join_codes.jsonl")),
     ).rejects.toMatchObject({ code: "ENOENT" });
     const schema = await fs.readFile(path.join(dump, "schema.sql"), "utf8");
     expect(schema).not.toContain("device_auth_tokens");
     expect(schema).not.toContain("channel_pairing_requests");
+    expect(schema).not.toContain("device_pairing_join_codes");
     const restored = await restoreGitBackupDirectory({
       sourcePath: dump,
       targetPath: path.join(root, "redacted.sqlite"),

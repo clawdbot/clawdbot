@@ -8,6 +8,11 @@ const REVIEWED_SAFE_TABLES = {
   operator_approvals: "requested_by_device_token_auth is boolean provenance, not token material",
 } as const;
 
+const EMBEDDED_CREDENTIAL_TABLES = {
+  // payload_json stores the pairing setup payload, including its live bootstrapToken.
+  device_pairing_join_codes: "payload_json contains a pairing bootstrapToken",
+} as const;
+
 const CREDENTIAL_COLUMN_SEGMENT =
   /(?:^|_)(?:token|secret|private_key|api_key|password|credential)(?:_|$)/u;
 
@@ -70,5 +75,12 @@ describe("secret state table policy", () => {
 
     expect(missing, "credential-bearing tables must be redacted or reviewed safe").toEqual([]);
     expect([...classifiedSafeTables].toSorted()).toEqual([...reviewedSafeTables].toSorted());
+  });
+
+  it("classifies opaque payload tables that embed credentials", () => {
+    const secretTables = new Set<string>(STATE_SECRET_TABLE_NAMES);
+    for (const [table, reason] of Object.entries(EMBEDDED_CREDENTIAL_TABLES)) {
+      expect(secretTables.has(table), reason).toBe(true);
+    }
   });
 });
