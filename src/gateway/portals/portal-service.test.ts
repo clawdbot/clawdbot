@@ -68,7 +68,9 @@ describe("gateway portal service", () => {
       title: "Second",
       description: "Updated",
       path: "/preview",
+      publicUrl: `http://127.0.0.1:${first.listenPort}/preview`,
     });
+    expect(second.url).toBe(`${second.publicUrl}?${second.tokenQuery}`);
     expect(httpServers).toHaveLength(1);
     expect(service.list()).toEqual([second]);
   });
@@ -95,5 +97,16 @@ describe("gateway portal service", () => {
     await expect(service.open({ targetPort: 3000 })).rejects.toThrow(/already listening/u);
     expect(service.list()).toEqual([]);
     expect(httpServers).toEqual([]);
+  });
+
+  it.each([
+    ["0.0.0.0", "127.0.0.1"],
+    ["::", "[::1]"],
+  ])("maps wildcard bind host %s to openable host %s", async (bindHost, openableHost) => {
+    const { service } = makeService([bindHost]);
+    const portal = await service.open({ targetPort: 3000 });
+
+    expect(portal.publicUrl).toBe(`http://${openableHost}:${portal.listenPort}/`);
+    expect(portal.url).toBe(`${portal.publicUrl}?${portal.tokenQuery}`);
   });
 });

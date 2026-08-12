@@ -64,7 +64,11 @@ export const portalHandlers: GatewayRequestHandlers = {
       context.broadcast("portal.changed", { portals: service.list() }, { dropIfSlow: true });
       respond(true, portal, undefined);
     } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, error instanceof Error ? error.message : String(error)),
+      );
     }
   },
   "portal.close": async ({ params, respond, context }) => {
@@ -81,7 +85,11 @@ export const portalHandlers: GatewayRequestHandlers = {
       context.broadcast("portal.changed", { portals: service.list() }, { dropIfSlow: true });
       respond(true, { closed: true }, undefined);
     } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, error instanceof Error ? error.message : String(error)),
+      );
     }
   },
 };

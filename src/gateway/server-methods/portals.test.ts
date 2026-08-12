@@ -12,7 +12,8 @@ const portal: PortalSummary = {
   port: 3000,
   listenPort: 43123,
   tokenQuery: `openclaw_portal=${"a".repeat(64)}`,
-  url: "http://127.0.0.1:43123/",
+  url: `http://127.0.0.1:43123/?openclaw_portal=${"a".repeat(64)}`,
+  publicUrl: "http://127.0.0.1:43123/",
   createdAtMs: 1,
 };
 
@@ -100,6 +101,24 @@ describe("portal gateway methods", () => {
       false,
       undefined,
       expect.objectContaining({ code: "INVALID_REQUEST", message: "portals unavailable" }),
+    );
+  });
+
+  it("returns Error messages without the Error prefix", async () => {
+    const service: GatewayPortalService = {
+      list: () => [],
+      open: vi.fn(async () => {
+        throw new Error("portal bind failed");
+      }),
+      close: vi.fn(async () => {}),
+      closeAll: vi.fn(async () => {}),
+    };
+
+    const response = await harness(service).invoke("portal.open", { port: 3000 });
+    expect(response).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "UNAVAILABLE", message: "portal bind failed" }),
     );
   });
 

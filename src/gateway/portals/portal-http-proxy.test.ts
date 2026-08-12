@@ -12,12 +12,16 @@ type HttpResult = {
 
 let targetPort = 0;
 let targetHandler: (req: IncomingMessage, res: ServerResponse) => void;
+let targetWebSocketPath: string | undefined;
 const targetServer = createServer((req, res) => targetHandler(req, res));
 const targetWss = new WebSocketServer({ server: targetServer });
 const services = new Set<GatewayPortalService>();
 
 beforeAll(async () => {
-  targetWss.on("connection", (socket) => socket.on("message", (data) => socket.send(data)));
+  targetWss.on("connection", (socket, req) => {
+    targetWebSocketPath = req.url;
+    socket.on("message", (data) => socket.send(data));
+  });
   await new Promise<void>((resolve, reject) => {
     targetServer.once("error", reject);
     targetServer.listen(0, "127.0.0.1", () => resolve());
@@ -28,6 +32,7 @@ beforeAll(async () => {
 afterEach(async () => {
   await Promise.all([...services].map((service) => service.closeAll()));
   services.clear();
+  targetWebSocketPath = undefined;
 });
 
 afterAll(async () => {
@@ -78,7 +83,13 @@ async function httpCall(params: {
 }
 
 describe("portal HTTP proxy", () => {
-  it("exchanges the URL token for a private cookie", async () => {
+  it("proxies a URL token directly, sets a private cookie, and strips the token", async () => {
+    const targetPaths: string[] = [];
+    targetHandler = (req, res) => {
+      targetPaths.push(req.url ?? "/");
+      res.statusCode = 200;
+      res.end("proxied");
+    };
     const portal = await portalService().open({ targetPort, title: "App" });
 
     const unauthorized = await httpCall({ port: portal.listenPort });
@@ -90,9 +101,19 @@ describe("portal HTTP proxy", () => {
       port: portal.listenPort,
       path: `/preview?x=1&${portal.tokenQuery}`,
     });
-    expect(authorized.status).toBe(302);
-    expect(authorized.headers.location).toBe("/preview?x=1");
+    expect(authorized.status).toBe(200);
+    expect(authorized.body).toBe("proxied");
     expect(authorized.headers["set-cookie"]?.[0]).toContain("HttpOnly; SameSite=Lax; Path=/");
+    expect(targetPaths).toEqual(["/preview?x=1"]);
+
+    const token = portal.tokenQuery.slice("openclaw_portal=".length);
+    const cookieOnly = await httpCall({
+      port: portal.listenPort,
+      path: "/cookie?y=2",
+      headers: { Cookie: `openclaw_portal=${token}` },
+    });
+    expect(cookieOnly).toMatchObject({ status: 200, body: "proxied" });
+    expect(targetPaths).toEqual(["/preview?x=1", "/cookie?y=2"]);
   });
 
   it("streams HTTP requests and responses with rewritten safe headers", async () => {
@@ -194,7 +215,9 @@ describe("portal HTTP proxy", () => {
   it("splices WebSockets and destroys upgraded sockets and listeners on close", async () => {
     const service = portalService();
     const portal = await service.open({ targetPort });
-    const ws = new WebSocket(`ws://127.0.0.1:${portal.listenPort}/hmr?${portal.tokenQuery}`);
+    const ws = new WebSocket(
+      `ws://127.0.0.1:${portal.listenPort}/hmr?channel=dev&${portal.tokenQuery}`,
+    );
     await new Promise<void>((resolve, reject) => {
       ws.once("open", () => resolve());
       ws.once("error", reject);
@@ -204,6 +227,7 @@ describe("portal HTTP proxy", () => {
     );
     ws.send("hot reload");
     expect(await echoed).toBe("hot reload");
+    expect(targetWebSocketPath).toBe("/hmr?channel=dev");
 
     const closed = new Promise<void>((resolve) => ws.once("close", () => resolve()));
     await service.close(portal.id);

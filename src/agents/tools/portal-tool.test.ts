@@ -18,7 +18,8 @@ const portal: PortalSummary = {
   port: 3000,
   listenPort: 43123,
   tokenQuery: `openclaw_portal=${"a".repeat(64)}`,
-  url: "http://127.0.0.1:43123/",
+  url: `http://127.0.0.1:43123/?openclaw_portal=${"a".repeat(64)}`,
+  publicUrl: "http://127.0.0.1:43123/",
   createdAtMs: 1,
 };
 
@@ -76,7 +77,7 @@ describe("portal tool", () => {
     expect(opened.details).toEqual(portal);
     expect(opened.content[0]).toMatchObject({
       type: "text",
-      text: expect.stringContaining("Control UI Portals page"),
+      text: `Portal available at ${portal.url}. Pass PUBLIC_URL=${portal.publicUrl} and PORT=${portal.port} when starting the dev server. The operator can see it in the Control UI Portals page.`,
     });
     expect(listed.details).toEqual({ portals: [portal] });
     expect(closed.details).toEqual({ closed: true });

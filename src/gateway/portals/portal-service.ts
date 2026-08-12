@@ -4,7 +4,7 @@ import { createServer as createHttpsServer } from "node:https";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import type { TlsOptions } from "node:tls";
-import type { PortalSummary } from "../../../packages/gateway-protocol/src/schema/portals.js";
+import type { PortalSummary } from "../../../packages/gateway-protocol/src/index.js";
 import { listenGatewayHttpServer } from "../server/http-listen.js";
 import { handlePortalProxyRequest, handlePortalProxyUpgrade } from "./portal-http-proxy.js";
 
@@ -65,7 +65,8 @@ async function closeServers(servers: readonly HttpServer[]): Promise<void> {
 }
 
 function formatPortalHost(host: string): string {
-  return host.includes(":") ? `[${host}]` : host;
+  const openableHost = host === "0.0.0.0" ? "127.0.0.1" : host === "::" ? "::1" : host;
+  return openableHost.includes(":") ? `[${openableHost}]` : openableHost;
 }
 
 /** Creates the gateway-lifetime registry and per-portal transport listeners. */
@@ -84,13 +85,18 @@ export function createGatewayPortalService(params: {
       throw new Error("Gateway listener must start before opening a portal");
     }
     const scheme = params.tlsOptions ? "https" : "http";
+    const tokenQuery = `openclaw_portal=${portal.token}`;
+    const publicUrl = `${scheme}://${formatPortalHost(host)}:${portal.listenPort}${portal.path ?? "/"}`;
+    const openableUrl = new URL(publicUrl);
+    openableUrl.searchParams.set("openclaw_portal", portal.token);
     return {
       id: portal.id,
       title: portal.title,
       port: portal.targetPort,
       listenPort: portal.listenPort,
-      tokenQuery: `openclaw_portal=${portal.token}`,
-      url: `${scheme}://${formatPortalHost(host)}:${portal.listenPort}${portal.path ?? "/"}`,
+      tokenQuery,
+      url: openableUrl.toString(),
+      publicUrl,
       ...(portal.path ? { path: portal.path } : {}),
       ...(portal.description ? { description: portal.description } : {}),
       createdAtMs: portal.createdAtMs,

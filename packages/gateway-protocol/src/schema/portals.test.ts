@@ -17,7 +17,8 @@ const portal = {
   port: 3000,
   listenPort: 43123,
   tokenQuery: `openclaw_portal=${"a".repeat(64)}`,
-  url: "http://127.0.0.1:43123/app",
+  url: `http://127.0.0.1:43123/app?openclaw_portal=${"a".repeat(64)}`,
+  publicUrl: "http://127.0.0.1:43123/app",
   path: "/app",
   description: "Live preview",
   createdAtMs: 123,
@@ -44,6 +45,8 @@ describe("portal protocol schemas", () => {
     expect(Value.Check(PortalListResultSchema, { portals: [portal] })).toBe(true);
     expect(Value.Check(PortalCloseResultSchema, { closed: true })).toBe(true);
     expect(Value.Check(PortalChangedEventSchema, { portals: [portal] })).toBe(true);
+    const { publicUrl: _publicUrl, ...missingPublicUrl } = portal;
+    expect(Value.Check(PortalSummarySchema, missingPublicUrl)).toBe(false);
     expect(Value.Check(PortalSummarySchema, { ...portal, targetPort: 3000 })).toBe(false);
     expect(Value.Check(PortalChangedEventSchema, { portal })).toBe(false);
   });

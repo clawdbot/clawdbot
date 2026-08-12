@@ -9,6 +9,7 @@ export const PortalSummarySchema = closedObject({
   listenPort: Type.Integer({ minimum: 1, maximum: 65_535 }),
   tokenQuery: NonEmptyString,
   url: NonEmptyString,
+  publicUrl: NonEmptyString,
   path: Type.Optional(Type.String({ pattern: "^/" })),
   description: Type.Optional(Type.String()),
   createdAtMs: Type.Integer({ minimum: 0 }),

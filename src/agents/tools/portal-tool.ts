@@ -52,7 +52,7 @@ export function createPortalTool(options: PortalToolOptions = {}): AnyAgentTool 
     label: "Portal",
     name: "portal",
     description:
-      "Expose a local HTTP dev server through the gateway so the operator can view it live (a portal). Flow: pick a port (if the workspace has .openclaw/portals.json, use its declared entries), call action=open with that port to get the portal URL, then start the server with the exec tool (background=true) passing PORT=<port> and PUBLIC_URL=<url> in env. The proxy carries HTTP and WebSockets (hot reload works) and shows a retry page until the server listens. action=list shows active portals; action=close removes one. Portals end when the gateway restarts.",
+      "Expose a local HTTP dev server through the gateway so the operator can view it live (a portal). Flow: pick a port (if the workspace has .openclaw/portals.json, use its declared entries), call action=open with that port to get the portal URL, then start the server with the exec tool (background=true) passing PORT=<port> and PUBLIC_URL=<publicUrl> in env. The proxy carries HTTP and WebSockets (hot reload works) and shows a retry page until the server listens. action=list shows active portals; action=close removes one. Portals end when the gateway restarts.",
     parameters: PortalToolSchema,
     outputSchema: PortalToolOutputSchema,
     execute: async (_toolCallId, rawArgs) => {
@@ -96,7 +96,7 @@ export function createPortalTool(options: PortalToolOptions = {}): AnyAgentTool 
         ...(path !== undefined ? { path } : {}),
       });
       return portalResult(
-        `Portal available at ${portal.url}. The operator can see it in the Control UI Portals page.`,
+        `Portal available at ${portal.url}. Pass PUBLIC_URL=${portal.publicUrl} and PORT=${portal.port} when starting the dev server. The operator can see it in the Control UI Portals page.`,
         portal,
       );
     },

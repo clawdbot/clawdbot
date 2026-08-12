@@ -1,5 +1,10 @@
 import { timingSafeEqual } from "node:crypto";
-import type { IncomingHttpHeaders, IncomingMessage, OutgoingHttpHeaders } from "node:http";
+import type {
+  IncomingHttpHeaders,
+  IncomingMessage,
+  OutgoingHttpHeaders,
+  ServerResponse,
+} from "node:http";
 import { request as requestHttp } from "node:http";
 import net, { type Socket } from "node:net";
 import type { Duplex } from "node:stream";
@@ -23,8 +28,7 @@ export type PortalProxyTarget = {
 };
 
 type PortalAuthorization =
-  | { kind: "authorized" }
-  | { kind: "redirect"; location: string }
+  | { kind: "authorized"; requestPath: string; setCookie: boolean }
   | { kind: "unauthorized" };
 
 function tokensEqual(candidate: string | undefined, expected: string): boolean {
@@ -72,25 +76,50 @@ function parsePortalUrl(req: IncomingMessage): URL | undefined {
 function authorizePortalRequest(
   req: IncomingMessage,
   target: PortalProxyTarget,
-  allowQueryWithoutRedirect: boolean,
 ): PortalAuthorization {
   const url = parsePortalUrl(req);
   const queryToken = url?.searchParams.get(PORTAL_AUTH_NAME) ?? undefined;
   if (tokensEqual(queryToken, target.token)) {
-    if (allowQueryWithoutRedirect) {
-      return { kind: "authorized" };
-    }
     url?.searchParams.delete(PORTAL_AUTH_NAME);
-    return { kind: "redirect", location: `${url?.pathname ?? "/"}${url?.search ?? ""}` };
+    return {
+      kind: "authorized",
+      requestPath: `${url?.pathname ?? "/"}${url?.search ?? ""}`,
+      setCookie: true,
+    };
   }
   if (tokensEqual(readPortalCookie(req.headers.cookie), target.token)) {
-    return { kind: "authorized" };
+    url?.searchParams.delete(PORTAL_AUTH_NAME);
+    return {
+      kind: "authorized",
+      requestPath: `${url?.pathname ?? "/"}${url?.search ?? ""}`,
+      setCookie: false,
+    };
   }
   return { kind: "unauthorized" };
 }
 
+function portalCookie(target: PortalProxyTarget, tls: boolean): string {
+  return `${PORTAL_AUTH_NAME}=${target.token}; HttpOnly; SameSite=Lax; Path=/${tls ? "; Secure" : ""}`;
+}
+
+function setProxyResponseHeader(
+  res: ServerResponse,
+  name: string,
+  value: string | string[] | number,
+): void {
+  if (name !== "set-cookie") {
+    res.setHeader(name, value);
+    return;
+  }
+  const existing = res.getHeader("Set-Cookie");
+  const existingCookies =
+    existing === undefined ? [] : Array.isArray(existing) ? existing : [existing];
+  const targetCookies = Array.isArray(value) ? value : [String(value)];
+  res.setHeader("Set-Cookie", [...existingCookies.map(String), ...targetCookies]);
+}
+
 function htmlResponse(
-  res: import("node:http").ServerResponse,
+  res: ServerResponse,
   statusCode: number,
   html: string,
   headOnly: boolean,
@@ -103,21 +132,14 @@ function htmlResponse(
   res.end(headOnly ? undefined : html);
 }
 
-function respondPortalUnauthorized(
-  req: IncomingMessage,
-  res: import("node:http").ServerResponse,
-): void {
+function respondPortalUnauthorized(req: IncomingMessage, res: ServerResponse): void {
   const html =
     "<!doctype html><meta charset=utf-8><title>Private portal</title>" +
     "<p>This portal is private. Open it from the OpenClaw Control UI.</p>";
   htmlResponse(res, 401, html, req.method === "HEAD");
 }
 
-function respondPortalWaiting(
-  req: IncomingMessage,
-  res: import("node:http").ServerResponse,
-  targetPort: number,
-): void {
+function respondPortalWaiting(req: IncomingMessage, res: ServerResponse, targetPort: number): void {
   const html =
     '<!doctype html><meta charset=utf-8><meta http-equiv="refresh" content="2">' +
     `<title>Waiting for app</title><p>Waiting for the app on port ${targetPort}…</p>`;
@@ -162,26 +184,18 @@ function proxyHeaders(headers: IncomingHttpHeaders): OutgoingHttpHeaders {
 /** Proxies one authorized portal request only to the loopback target. */
 export function handlePortalProxyRequest(params: {
   req: IncomingMessage;
-  res: import("node:http").ServerResponse;
+  res: ServerResponse;
   target: PortalProxyTarget;
   tls: boolean;
 }): void {
   const { req, res, target, tls } = params;
-  const authorization = authorizePortalRequest(req, target, false);
-  if (authorization.kind === "redirect") {
-    res.statusCode = 302;
-    res.setHeader("Location", authorization.location);
-    res.setHeader(
-      "Set-Cookie",
-      `${PORTAL_AUTH_NAME}=${target.token}; HttpOnly; SameSite=Lax; Path=/${tls ? "; Secure" : ""}`,
-    );
-    res.setHeader("Cache-Control", "no-store");
-    res.end();
-    return;
-  }
+  const authorization = authorizePortalRequest(req, target);
   if (authorization.kind === "unauthorized") {
     respondPortalUnauthorized(req, res);
     return;
+  }
+  if (authorization.setCookie) {
+    res.setHeader("Set-Cookie", portalCookie(target, tls));
   }
 
   const headers = proxyHeaders(req.headers);
@@ -196,13 +210,13 @@ export function handlePortalProxyRequest(params: {
     hostname: "127.0.0.1",
     port: target.targetPort,
     method: req.method,
-    path: req.url ?? "/",
+    path: authorization.requestPath,
     headers,
   });
   proxyReq.once("response", (proxyRes) => {
     for (const [name, value] of Object.entries(proxyHeaders(proxyRes.headers))) {
       if (value !== undefined) {
-        res.setHeader(name, value);
+        setProxyResponseHeader(res, name, value);
       }
     }
     res.statusCode = proxyRes.statusCode ?? 502;
@@ -219,8 +233,8 @@ export function handlePortalProxyRequest(params: {
   req.pipe(proxyReq);
 }
 
-function websocketHeaders(req: IncomingMessage, targetPort: number): string {
-  const lines = [`${req.method ?? "GET"} ${req.url ?? "/"} HTTP/1.1`];
+function websocketHeaders(req: IncomingMessage, targetPort: number, requestPath: string): string {
+  const lines = [`${req.method ?? "GET"} ${requestPath} HTTP/1.1`];
   for (const [name, value] of Object.entries(req.headers)) {
     const normalized = name.toLowerCase();
     if (
@@ -263,7 +277,8 @@ export function handlePortalProxyUpgrade(params: {
   upgradedSockets: Set<Duplex>;
 }): void {
   const { req, socket, head, target, upgradedSockets } = params;
-  if (authorizePortalRequest(req, target, true).kind !== "authorized") {
+  const authorization = authorizePortalRequest(req, target);
+  if (authorization.kind !== "authorized") {
     rejectPortalUpgrade(socket);
     return;
   }
@@ -283,7 +298,7 @@ export function handlePortalProxyUpgrade(params: {
   socket.once("error", () => targetSocket.destroy());
   targetSocket.once("error", () => socket.destroy());
   targetSocket.once("connect", () => {
-    targetSocket.write(websocketHeaders(req, target.targetPort));
+    targetSocket.write(websocketHeaders(req, target.targetPort, authorization.requestPath));
     if (head.length > 0) {
       targetSocket.write(head);
     }
