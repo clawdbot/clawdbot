@@ -3913,13 +3913,23 @@ describe("matrix monitor handler draft streaming", () => {
       });
 
       const result = await deliver(payload, { kind: "final" });
+      if (redactEventMock.mock.calls.length > 0) {
+        throw new Error(
+          [
+            "non-visible replacement redacted the visible draft",
+            `draftSendOrder=${sendSingleTextMessageMatrixMock.mock.invocationCallOrder[0] ?? "none"}`,
+            `redactionOrder=${redactEventMock.mock.invocationCallOrder[0] ?? "none"}`,
+            `replacementOrder=${deliverMatrixRepliesMock.mock.invocationCallOrder[0] ?? "none"}`,
+            `replacementResult=${JSON.stringify(result)}`,
+          ].join(" "),
+        );
+      }
 
       expect(result).toMatchObject({
         messageIds: ["$draft1"],
         visibleReplySent: true,
         content: "Visible preview",
       });
-      expect(redactEventMock).not.toHaveBeenCalled();
       await finish();
       expect(redactEventMock).not.toHaveBeenCalled();
     },
@@ -4016,28 +4026,47 @@ describe("matrix monitor handler draft streaming", () => {
     expect(redactEventMock).toHaveBeenCalledTimes(1);
   });
 
-  it.each([{ branch: "followup" }, { branch: "block" }])(
-    "starts an active draft generation after a retained $branch boundary",
-    async ({ branch }) => {
+  it.each(
+    (["retained", "consumed"] as const).flatMap((priorDisposition) =>
+      (["block", "followup"] as const).flatMap((boundary) =>
+        (["complete", "abort"] as const).map((outcome) => ({
+          priorDisposition,
+          boundary,
+          outcome,
+        })),
+      ),
+    ),
+  )(
+    "settles $priorDisposition then $boundary draft generations through $outcome",
+    async ({ priorDisposition, boundary, outcome }) => {
       const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
       const { deliver, onError, opts, finish } = await dispatch();
 
-      opts.onPartialReply?.({ text: "Retained preview" });
+      opts.onPartialReply?.({ text: "First generation" });
       await waitForMatrixState(() => {
         expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
       });
-      deliverMatrixRepliesMock.mockRejectedValueOnce(new Error("replacement failed"));
-      if (branch === "block") {
-        await opts.onBlockReplyQueued?.({ text: "Retained preview" });
+      if (priorDisposition === "retained") {
+        deliverMatrixRepliesMock.mockRejectedValueOnce(new Error("replacement failed"));
       }
-      await deliver(
-        { text: "Something failed", isError: true },
-        { kind: branch === "block" ? "block" : "final" },
-      ).catch(() => undefined);
-      if (branch === "followup") {
+      if (boundary === "block") {
+        await opts.onBlockReplyQueued?.({ text: "First generation" });
+      }
+      const firstDelivery = deliver(
+        { text: "First replacement", isError: true },
+        { kind: boundary === "block" ? "block" : "final" },
+      );
+      if (priorDisposition === "retained") {
+        await firstDelivery.catch(() => undefined);
+      } else {
+        await firstDelivery;
+      }
+      if (boundary === "followup") {
         await opts.onQueuedFollowupAdmitted?.();
       } else {
-        onError(new Error("replacement failed"), { kind: "block" });
+        if (priorDisposition === "retained") {
+          onError(new Error("replacement failed"), { kind: "block" });
+        }
         opts.onAssistantMessageStart?.();
       }
 
@@ -4049,9 +4078,22 @@ describe("matrix monitor handler draft streaming", () => {
       await waitForMatrixState(() => {
         expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(2);
       });
+      if (outcome === "complete") {
+        await deliver({ text: "Second replacement", isError: true }, { kind: "final" });
+      }
       await finish();
 
-      expect(redactEventMock).toHaveBeenCalledExactlyOnceWith("!room:example.org", "$draft2");
+      const redactedEventIds = redactEventMock.mock.calls.map(([, eventId]) => eventId);
+      expect(redactedEventIds.filter((eventId) => eventId === "$draft1")).toHaveLength(
+        priorDisposition === "consumed" ? 1 : 0,
+      );
+      expect(redactedEventIds.filter((eventId) => eventId === "$draft2")).toHaveLength(1);
+      expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(outcome === "complete" ? 2 : 1);
+      if (outcome === "complete") {
+        expect(deliverMatrixRepliesMock.mock.invocationCallOrder[1]).toBeLessThan(
+          redactEventMock.mock.invocationCallOrder.at(-1)!,
+        );
+      }
     },
   );
 
