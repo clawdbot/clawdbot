@@ -84,4 +84,62 @@ describe("channel ingress drain debounce failures", () => {
       drain.dispose();
     });
   });
+
+  it("keeps watchdog recovery after retry settlement fails", async () => {
+    vi.useFakeTimers();
+    await withTempState(async (stateDir) => {
+      let clock = 10_000;
+      const queue = createTestIngressQueue(stateDir, { now: () => clock });
+      await queue.enqueue(
+        "debounced-settlement-failure",
+        { text: "retry me" },
+        { laneKey: "shared", receivedAt: clock },
+      );
+      queue.release = async () => {
+        throw new Error("persistent release failure");
+      };
+
+      const sessionError = new Error("Session changed while starting work. Retry.");
+      const debouncer = createInboundDebouncer<{ lifecycle: ChannelIngressDispatchLifecycle }>({
+        debounceMs: 0,
+        buildKey: () => "shared",
+        onFlush: (entries, createFlush) =>
+          createFlush({
+            lifecycle: entries[0]?.lifecycle,
+            dispatch: async () => {
+              throw sessionError;
+            },
+          }),
+        onError: () => undefined,
+      });
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        now: () => clock,
+        adoptionStallTimeoutMs: 200_000,
+        dispatchClaimedEvent: async (_event, lifecycle) => {
+          await debouncer.enqueue({ lifecycle });
+          return { kind: "deferred" };
+        },
+      });
+
+      expect(await drain.drainOnce()).toEqual({ started: 1 });
+      await vi.advanceTimersByTimeAsync(127_000);
+      clock += 127_000;
+      await drain.waitForIdle();
+
+      expect((await queue.listClaims()).map((claim) => claim.id)).toEqual([
+        "debounced-settlement-failure",
+      ]);
+      expect(drain.activeLaneKeys().has("shared")).toBe(true);
+
+      clock += 73_000;
+      await vi.advanceTimersByTimeAsync(73_000);
+      expect(await queue.listClaims()).toEqual([]);
+      expect(await queue.listFailed?.({ limit: "all" })).toMatchObject([
+        { id: "debounced-settlement-failure", reason: "handler-timeout" },
+      ]);
+      expect(drain.activeLaneKeys().has("shared")).toBe(false);
+      drain.dispose();
+    });
+  });
 });
