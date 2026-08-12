@@ -113,6 +113,8 @@ One object shape everywhere:
 { source: "env" | "file" | "exec" | "store", provider: "default", id: "..." }
 ```
 
+`provider: "default"` is a built-in alias: for `env` refs it resolves through the built-in env reader with no `secrets.providers.default` entry required. If you set `secrets.defaults.env` to a different alias, that alias becomes the effective env default instead. Any other provider alias must be registered under `secrets.providers` with a matching `source`, or resolution fails.
+
 <Tabs>
   <Tab title="env">
     ```json5
