@@ -1,10 +1,7 @@
 // Memory Wiki tests cover legacy source-sync key migration behavior (#118370).
 import fs from "node:fs/promises";
 import path from "node:path";
-import type {
-  OpenKeyedStoreOptions,
-  PluginStateKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -12,16 +9,18 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveUnsafeLocalPagePath } from "./source-path-shared.js";
 import {
-  configureMemoryWikiSourceSyncStateStore,
   countLegacyImportedSourceSyncRows,
-  createMemoryWikiSourceSyncStateStore,
   migrateLegacyImportedSourceSyncKeys,
+  translateLegacyImportedSourceSyncKey,
+} from "./source-sync-legacy-migration.js";
+import {
+  configureMemoryWikiSourceSyncStateStore,
+  createMemoryWikiSourceSyncStateStore,
   pruneImportedSourceEntries,
   readMemoryWikiSourceSyncState,
-  translateLegacyImportedSourceSyncKey,
   writeMemoryWikiSourceSyncState,
 } from "./source-sync-state.js";
-import { createMemoryWikiTestHarness } from "./test-helpers.js";
+import { createCapacityCappedKeyedStore, createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const tempDirs = createMemoryWikiTestHarness();
 
@@ -32,58 +31,6 @@ function openKeyedStoreForEnv(env: NodeJS.ProcessEnv) {
 
 function openStore(env: NodeJS.ProcessEnv) {
   return createMemoryWikiSourceSyncStateStore(openKeyedStoreForEnv(env));
-}
-
-// A reject-new store capped at `cap` rows: mirrors the real store's
-// PLUGIN_STATE_LIMIT_EXCEEDED contract without seeding 20,000 rows.
-function createCapacityCappedStore(cap: number) {
-  const limit = { cap };
-  const values = new Map<string, unknown>();
-  const openKeyedStore = <T>(_options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> => ({
-    async register(key, value) {
-      if (!values.has(key) && values.size >= limit.cap) {
-        throw Object.assign(new Error("namespace row limit reached"), {
-          code: "PLUGIN_STATE_LIMIT_EXCEEDED",
-        });
-      }
-      values.set(key, value);
-    },
-    async registerIfAbsent(key, value) {
-      if (values.has(key)) {
-        return false;
-      }
-      values.set(key, value);
-      return true;
-    },
-    async lookup(key) {
-      return values.get(key) as T | undefined;
-    },
-    async consume(key) {
-      const value = values.get(key) as T | undefined;
-      values.delete(key);
-      return value;
-    },
-    async delete(key) {
-      return values.delete(key);
-    },
-    async entries() {
-      return [...values.entries()].map(([key, value]) => ({
-        key,
-        value: value as T,
-        createdAt: 0,
-      }));
-    },
-    async clear() {
-      values.clear();
-    },
-  });
-  return {
-    openKeyedStore,
-    values,
-    setCap(next: number) {
-      limit.cap = next;
-    },
-  };
 }
 
 describe("memory wiki source sync legacy key migration", () => {
@@ -332,7 +279,7 @@ describe("memory wiki source sync legacy key migration", () => {
   it("retains a legacy row at namespace capacity and migrates once capacity frees", async () => {
     const stateDir = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const vaultRoot = path.join(stateDir, "vault");
-    const capped = createCapacityCappedStore(2);
+    const capped = createCapacityCappedKeyedStore(2);
     const store = createMemoryWikiSourceSyncStateStore(capped.openKeyedStore);
     // One scoped row plus one legacy row fill the namespace to its cap.
     await writeMemoryWikiSourceSyncState(
@@ -410,7 +357,7 @@ describe("memory wiki source sync legacy key migration", () => {
   it("completes a capacity-blocked translation in the same run after stale pruning frees a slot", async () => {
     const stateDir = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const vaultRoot = path.join(stateDir, "vault");
-    const capped = createCapacityCappedStore(2);
+    const capped = createCapacityCappedKeyedStore(2);
     const store = createMemoryWikiSourceSyncStateStore(capped.openKeyedStore);
     const pagePath = "sources/stale.md";
     const pageAbsPath = path.join(vaultRoot, pagePath);

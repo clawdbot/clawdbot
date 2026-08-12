@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type {
   OpenBlobStoreOptions,
   OpenKeyedStoreOptions,
+  PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginBlobStoreForTests,
@@ -28,10 +29,11 @@ import {
 import { resolveUnsafeLocalPagePath } from "./src/source-path-shared.js";
 import {
   createMemoryWikiSourceSyncStateStore,
+  MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES,
   readMemoryWikiSourceSyncState,
   resolveMemoryWikiSourceSyncStatePath,
 } from "./src/source-sync-state.js";
-import { createMemoryWikiTestHarness } from "./src/test-helpers.js";
+import { createCapacityCappedKeyedStore, createMemoryWikiTestHarness } from "./src/test-helpers.js";
 
 function requireStateMigration(id: string) {
   return expectDefined(
@@ -51,6 +53,7 @@ function migrationParams(params: {
   vaultRoot: string;
   agentIds?: string[];
   unsafeLocalPaths?: string[];
+  openKeyedStore?: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
 }) {
   const env = { ...process.env, HOME: params.stateDir, OPENCLAW_STATE_DIR: params.stateDir };
   return {
@@ -81,8 +84,10 @@ function migrationParams(params: {
     stateDir: params.stateDir,
     oauthDir: path.join(params.stateDir, "credentials"),
     context: {
-      openPluginStateKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
-        createPluginStateKeyedStoreForTests<T>("memory-wiki", { ...options, env }),
+      openPluginStateKeyedStore:
+        params.openKeyedStore ??
+        (<T>(options: OpenKeyedStoreOptions) =>
+          createPluginStateKeyedStoreForTests<T>("memory-wiki", { ...options, env })),
     },
   };
 }
@@ -351,6 +356,99 @@ describe("memory-wiki doctor source sync migration", () => {
       requireStateMigration("memory-wiki-source-sync-group-scoped-keys").detectLegacyState(params),
     ).resolves.toBeNull();
   });
+
+  it("skips the JSON import gracefully when hidden legacy rows fill the namespace", async () => {
+    // Ordering invariant: the JSON preflight only sees scoped rows until the
+    // rekey pass runs, so the exported migration order is part of the fix.
+    const migrationIds = stateMigrations.map((migration) => migration.id);
+    expect(migrationIds.indexOf("memory-wiki-source-sync-group-scoped-keys")).toBeLessThan(
+      migrationIds.indexOf("memory-wiki-source-sync-json-to-plugin-state"),
+    );
+
+    const stateDir = await tempDirs.createTempDir("memory-wiki-doctor-");
+    const vaultRoot = path.join(stateDir, "vault");
+    const capped = createCapacityCappedKeyedStore(MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES);
+    const params = migrationParams({
+      stateDir,
+      vaultRoot,
+      openKeyedStore: capped.openKeyedStore,
+    });
+    const store = createMemoryWikiSourceSyncStateStore(capped.openKeyedStore);
+    // A full namespace of valid legacy bridge rows plus one residual JSON entry.
+    const seedEntries = Object.fromEntries(
+      Array.from({ length: MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES }, (_, index) => [
+        `/tmp/source-${index}.md`,
+        {
+          group: "bridge" as const,
+          pagePath: `sources/source-${index}.md`,
+          sourcePath: `/tmp/source-${index}.md`,
+          sourceUpdatedAtMs: 100,
+          sourceSize: 200,
+          renderFingerprint: `fp-${index}`,
+        },
+      ]),
+    );
+    await store.write(vaultRoot, { version: 1, entries: seedEntries });
+    const legacyPath = resolveMemoryWikiSourceSyncStatePath(vaultRoot);
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.writeFile(
+      legacyPath,
+      `${JSON.stringify({
+        version: 1,
+        entries: {
+          gamma: {
+            group: "bridge",
+            pagePath: "sources/gamma.md",
+            sourcePath: "/tmp/gamma.md",
+            sourceUpdatedAtMs: 100,
+            sourceSize: 200,
+            renderFingerprint: "gamma",
+          },
+        },
+      })}\n`,
+    );
+    const rekey = requireStateMigration("memory-wiki-source-sync-group-scoped-keys");
+    const jsonImport = requireStateMigration("memory-wiki-source-sync-json-to-plugin-state");
+
+    // Full namespace: the rekey retains every row, and the JSON preflight
+    // counts the hidden rows and skips with a warning instead of crashing the
+    // write mid-import. Before the fix this import threw
+    // PLUGIN_STATE_LIMIT_EXCEEDED out of migrateLegacyState.
+    const retained = await rekey.migrateLegacyState(params);
+    expect(retained.changes).toEqual([]);
+    expect(retained.warnings).toHaveLength(MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES);
+    await expect(jsonImport.migrateLegacyState(params)).resolves.toEqual({
+      changes: [],
+      warnings: [
+        `Skipped Memory Wiki source-sync import for ${vaultRoot}: ${MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES + 1} entries exceeds ${MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES}`,
+      ],
+    });
+    await expect(fs.stat(legacyPath)).resolves.toBeDefined();
+
+    // Once removed sources free capacity, the ordered pass converges: rekey
+    // translates the remaining rows and the JSON import merges cleanly.
+    for (const storeKey of [...capped.values.keys()].slice(0, 2)) {
+      capped.values.delete(storeKey);
+    }
+    await expect(rekey.migrateLegacyState(params)).resolves.toEqual({
+      changes: [
+        `Migrated Memory Wiki source sync ownership -> group-scoped keys (${MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES - 2} translated, 0 stale pruned)`,
+      ],
+      warnings: [],
+    });
+    await expect(jsonImport.migrateLegacyState(params)).resolves.toEqual({
+      changes: [
+        `Migrated Memory Wiki source sync -> plugin state (1 imported, ${MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES - 2} existing)`,
+        expect.stringContaining("Archived Memory Wiki source-sync legacy source ->"),
+      ],
+      warnings: [],
+    });
+    const state = await readMemoryWikiSourceSyncState(vaultRoot, store);
+    expect(Object.keys(state.entries)).toHaveLength(MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES - 1);
+    expect(state.entries["bridge:gamma"]?.renderFingerprint).toBe("gamma");
+    await expect(fs.stat(legacyPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(rekey.detectLegacyState(params)).resolves.toBeNull();
+  }, 30_000);
 
   it("detects and migrates legacy import-run records into plugin state", async () => {
     const stateDir = await tempDirs.createTempDir("memory-wiki-doctor-");

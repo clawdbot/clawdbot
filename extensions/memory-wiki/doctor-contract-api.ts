@@ -29,14 +29,17 @@ import {
 } from "./src/import-runs-state.js";
 import {
   countLegacyImportedSourceSyncRows,
+  countUnscopedImportedSourceSyncRows,
+  migrateLegacyImportedSourceSyncKeys,
+  pruneLegacyImportedSourceRows,
+  translateLegacyImportedSourceSyncKey,
+} from "./src/source-sync-legacy-migration.js";
+import {
   createMemoryWikiSourceSyncStateStore,
   MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES,
   MEMORY_WIKI_SOURCE_SYNC_STATE_NAMESPACE,
-  migrateLegacyImportedSourceSyncKeys,
-  pruneLegacyImportedSourceRows,
   readLegacyMemoryWikiSourceSyncState,
   resolveMemoryWikiSourceSyncStatePath,
-  translateLegacyImportedSourceSyncKey,
   writeMemoryWikiSourceSyncState,
 } from "./src/source-sync-state.js";
 export { legacyConfigRules, normalizeCompatibilityConfig } from "./src/config-compat.js";
@@ -204,6 +207,64 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       return { changes, warnings };
     },
   },
+  // Rekey raw legacy rows before importing JSON: the JSON migration's capacity
+  // preflight only sees scoped rows until this pass runs, so importing first
+  // could crash a full namespace mid-write and leave both migrations stuck.
+  {
+    id: "memory-wiki-source-sync-group-scoped-keys",
+    label: "Memory Wiki source sync ownership keys",
+    async detectLegacyState(params) {
+      const previews: string[] = [];
+      for (const vaultRoot of resolveConfiguredVaultRoots({
+        config: params.config,
+        env: params.env,
+      })) {
+        const legacyCount = await countLegacyImportedSourceSyncRows({
+          vaultRoot,
+          openKeyedStore: params.context.openPluginStateKeyedStore,
+        });
+        if (legacyCount > 0) {
+          previews.push(
+            `- Memory Wiki source sync ownership: ${legacyCount} legacy entries for ${vaultRoot} -> group-scoped keys`,
+          );
+        }
+      }
+      return previews.length > 0 ? { preview: previews } : null;
+    },
+    async migrateLegacyState(params) {
+      const changes: string[] = [];
+      const warnings: string[] = [];
+      const resolved = resolveMemoryWikiConfig(readConfiguredPluginConfig(params.config), {
+        homedir: resolveHomeDir(params.env),
+      });
+      for (const vaultRoot of resolveConfiguredVaultRoots({
+        config: params.config,
+        env: params.env,
+      })) {
+        const result = await migrateLegacyImportedSourceSyncKeys({
+          vaultRoot,
+          openKeyedStore: params.context.openPluginStateKeyedStore,
+          unsafeLocalConfiguredPaths: resolved.unsafeLocal.paths,
+        });
+        if (result.translatedCount > 0 || result.prunedCount > 0) {
+          changes.push(
+            `Migrated Memory Wiki source sync ownership -> group-scoped keys (${result.translatedCount} translated, ${result.prunedCount} stale pruned)`,
+          );
+        }
+        for (const retainedKey of result.retainedKeys) {
+          warnings.push(
+            `Retained unrecognized Memory Wiki source sync row for ${vaultRoot}: ${retainedKey}`,
+          );
+        }
+        for (const capacityKey of result.capacityRetainedKeys) {
+          warnings.push(
+            `Memory Wiki source sync namespace is full; retained legacy ownership row for ${vaultRoot}: ${capacityKey}. The migration retries on each doctor run once stale rows or removed sources free namespace capacity.`,
+          );
+        }
+      }
+      return { changes, warnings };
+    },
+  },
   {
     id: "memory-wiki-source-sync-json-to-plugin-state",
     label: "Memory Wiki source sync state",
@@ -276,9 +337,17 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           ...existingState.entries,
         };
         const mergedCount = Object.keys(mergedEntries).length;
-        if (mergedCount > MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES) {
+        // store.read hides unscoped legacy rows, but a full write preserves
+        // them and they still occupy reject-new namespace capacity: count them
+        // or this preflight passes and the write crashes mid-import.
+        const unscopedRowCount = await countUnscopedImportedSourceSyncRows({
+          vaultRoot,
+          openKeyedStore: params.context.openPluginStateKeyedStore,
+        });
+        const physicalCount = mergedCount + unscopedRowCount;
+        if (physicalCount > MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES) {
           warnings.push(
-            `Skipped Memory Wiki source-sync import for ${vaultRoot}: ${mergedCount} entries exceeds ${MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES}`,
+            `Skipped Memory Wiki source-sync import for ${vaultRoot}: ${physicalCount} entries exceeds ${MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES}`,
           );
           continue;
         }
@@ -310,61 +379,6 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           changes,
           warnings,
         });
-      }
-      return { changes, warnings };
-    },
-  },
-  {
-    id: "memory-wiki-source-sync-group-scoped-keys",
-    label: "Memory Wiki source sync ownership keys",
-    async detectLegacyState(params) {
-      const previews: string[] = [];
-      for (const vaultRoot of resolveConfiguredVaultRoots({
-        config: params.config,
-        env: params.env,
-      })) {
-        const legacyCount = await countLegacyImportedSourceSyncRows({
-          vaultRoot,
-          openKeyedStore: params.context.openPluginStateKeyedStore,
-        });
-        if (legacyCount > 0) {
-          previews.push(
-            `- Memory Wiki source sync ownership: ${legacyCount} legacy entries for ${vaultRoot} -> group-scoped keys`,
-          );
-        }
-      }
-      return previews.length > 0 ? { preview: previews } : null;
-    },
-    async migrateLegacyState(params) {
-      const changes: string[] = [];
-      const warnings: string[] = [];
-      const resolved = resolveMemoryWikiConfig(readConfiguredPluginConfig(params.config), {
-        homedir: resolveHomeDir(params.env),
-      });
-      for (const vaultRoot of resolveConfiguredVaultRoots({
-        config: params.config,
-        env: params.env,
-      })) {
-        const result = await migrateLegacyImportedSourceSyncKeys({
-          vaultRoot,
-          openKeyedStore: params.context.openPluginStateKeyedStore,
-          unsafeLocalConfiguredPaths: resolved.unsafeLocal.paths,
-        });
-        if (result.translatedCount > 0 || result.prunedCount > 0) {
-          changes.push(
-            `Migrated Memory Wiki source sync ownership -> group-scoped keys (${result.translatedCount} translated, ${result.prunedCount} stale pruned)`,
-          );
-        }
-        for (const retainedKey of result.retainedKeys) {
-          warnings.push(
-            `Retained unrecognized Memory Wiki source sync row for ${vaultRoot}: ${retainedKey}`,
-          );
-        }
-        for (const capacityKey of result.capacityRetainedKeys) {
-          warnings.push(
-            `Memory Wiki source sync namespace is full; retained legacy ownership row for ${vaultRoot}: ${capacityKey}. The migration retries on each doctor run once stale rows or removed sources free namespace capacity.`,
-          );
-        }
       }
       return { changes, warnings };
     },
