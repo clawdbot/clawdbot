@@ -6,6 +6,7 @@ import type {
   WorkboardReconciliationApplyResult,
   WorkboardReconciliationObservation,
   WorkboardReconciliationPage,
+  WorkboardReconciliationTriage,
   WorkboardReconciliationSourceObservation,
   WorkboardReconciliationSourceObservationResult,
   WorkboardStatus,
@@ -17,6 +18,9 @@ const MAX_OBJECTIVE_KEY_LENGTH = 160;
 const MAX_STALE_AFTER_MISSES = 1000;
 const MAX_OBSERVATION_ID_LENGTH = 200;
 const MAX_ASSOCIATION_KEY_LENGTH = 160;
+const MAX_TRIAGE_ENTRIES = 20;
+const MAX_TRIAGE_CARD_ID_LENGTH = 120;
+const MAX_TRIAGE_REFERENCE_URL_LENGTH = 2000;
 const DEFAULT_PAGE_SIZE = 50;
 const RECONCILIATION_PROTECTED_STATUSES = new Set<WorkboardStatus>(["blocked", "review", "done"]);
 
@@ -143,6 +147,7 @@ const OBSERVATION_FIELDS = new Set([
   "expectedRevision",
   "card",
   "link",
+  "triage",
 ]);
 const SOURCE_OBSERVATION_FIELDS = new Set([
   "cardId",
@@ -172,6 +177,9 @@ const CARD_FIELDS = new Set([
   "boardId",
 ]);
 const LINK_FIELDS = new Set(["title"]);
+const TRIAGE_FIELDS = new Set(["candidateCardIds", "evidence"]);
+const TRIAGE_EVIDENCE_FIELDS = new Set(["reference", "sha256"]);
+const TRIAGE_REFERENCE_FIELDS = new Set(["type", "url"]);
 
 function objectWithOnly(
   value: unknown,
@@ -188,6 +196,56 @@ function objectWithOnly(
     }
   }
   return record;
+}
+
+function readSafeTriageCardId(value: unknown): string {
+  const id = readBoundedString(value, "candidateCardIds entry", MAX_TRIAGE_CARD_ID_LENGTH);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) {
+    throw new Error("candidateCardIds entries must be safe card IDs.");
+  }
+  return id;
+}
+
+function projectReconciliationTriage(value: unknown): WorkboardReconciliationTriage {
+  const input = objectWithOnly(value, "triage", TRIAGE_FIELDS);
+  if (
+    !Array.isArray(input.candidateCardIds) ||
+    input.candidateCardIds.length > MAX_TRIAGE_ENTRIES
+  ) {
+    throw new Error("candidateCardIds supports at most 20 entries.");
+  }
+  if (!Array.isArray(input.evidence) || input.evidence.length > MAX_TRIAGE_ENTRIES) {
+    throw new Error("triage evidence supports at most 20 entries.");
+  }
+  return {
+    candidateCardIds: input.candidateCardIds.map(readSafeTriageCardId),
+    evidence: input.evidence.map((value) => {
+      const evidence = objectWithOnly(value, "triage evidence", TRIAGE_EVIDENCE_FIELDS);
+      const reference = objectWithOnly(
+        evidence.reference,
+        "triage evidence reference",
+        TRIAGE_REFERENCE_FIELDS,
+      );
+      if (reference.type !== "url")
+        throw new Error("triage evidence reference.type is unsupported.");
+      const url = readBoundedString(
+        reference.url,
+        "triage evidence reference.url",
+        MAX_TRIAGE_REFERENCE_URL_LENGTH,
+      );
+      if (/\p{C}/u.test(url))
+        throw new Error("triage evidence reference.url must not contain control characters.");
+      try {
+        if (new URL(url).protocol !== "https:") throw new Error();
+      } catch {
+        throw new Error("triage evidence reference.url must be an HTTPS URL.");
+      }
+      if (typeof evidence.sha256 !== "string" || !/^[a-f0-9]{64}$/i.test(evidence.sha256)) {
+        throw new Error("triage evidence sha256 must be 64 hexadecimal characters.");
+      }
+      return { reference: { type: "url", url }, sha256: evidence.sha256.toLowerCase() };
+    }),
+  };
 }
 
 export function projectReconciliationObservation(
@@ -221,6 +279,7 @@ export function projectReconciliationObservation(
       : { expectedRevision: readTimestamp(input.expectedRevision, "expectedRevision") }),
     ...(card === undefined ? {} : { card: card as WorkboardReconciliationObservation["card"] }),
     ...(link === undefined ? {} : { link: link as WorkboardReconciliationObservation["link"] }),
+    ...(input.triage === undefined ? {} : { triage: projectReconciliationTriage(input.triage) }),
   };
 }
 

@@ -5,6 +5,7 @@ import type {
   WorkboardCard,
   WorkboardLink,
   WorkboardMetadata,
+  WorkboardReconciliationTriage,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
 import type {
@@ -317,7 +318,10 @@ export class WorkboardCoreStore {
   protected async createDirect(
     input: WorkboardLinkedCreateInput,
     scope?: WorkboardMutationScope,
-    options: { reconciliationObjectiveKey?: string } = {},
+    options: {
+      reconciliationObjectiveKey?: string;
+      reconciliationTriage?: WorkboardReconciliationTriage;
+    } = {},
   ): Promise<WorkboardCard> {
     const now = Date.now();
     const requestedStatus = normalizeStatus(input.status, "todo");
@@ -390,7 +394,11 @@ export class WorkboardCoreStore {
         templateId: normalizeTemplateId(input.templateId),
         ...(childAutomation ? { automation: childAutomation } : {}),
       },
-      { allowDependencyLinks: false, allowArchivedAt: false },
+      {
+        allowDependencyLinks: false,
+        allowArchivedAt: false,
+        allowReconciliationTriage: options.reconciliationTriage !== undefined,
+      },
     );
     let syncedMetadata = trimMetadataToBudget(
       syncExecutionAttemptMetadata(metadata, execution, now),
@@ -474,6 +482,7 @@ export class WorkboardCoreStore {
     patch: WorkboardCardPatch,
     options: {
       allowMetadataDependencyLinks?: boolean;
+      allowReconciliationTriage?: boolean;
       enforceStatusHolds?: boolean;
       preserveProofId?: string;
       updatedAt?: number;
@@ -535,6 +544,7 @@ export class WorkboardCoreStore {
         : normalizeExecution(effectivePatch.execution);
     let metadata = normalizeMetadata(effectivePatch.metadata, existing.metadata, {
       allowDependencyLinks: options.allowMetadataDependencyLinks !== false,
+      allowReconciliationTriage: options.allowReconciliationTriage === true,
       preserveProofId: options.preserveProofId,
     });
     if (status !== existing.status && !hasFreshLifecycleStatusSource) {

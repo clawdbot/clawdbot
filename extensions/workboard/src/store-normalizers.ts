@@ -32,6 +32,7 @@ import {
   type WorkboardLink,
   type WorkboardLinkType,
   type WorkboardMetadata,
+  type WorkboardReconciliationTriage,
   type WorkboardNotification,
   type WorkboardNotificationKind,
   type WorkboardNotificationSubscription,
@@ -1086,6 +1087,7 @@ export function normalizeMetadata(
   options: {
     allowDependencyLinks?: boolean;
     allowArchivedAt?: boolean;
+    allowReconciliationTriage?: boolean;
     preserveProofId?: string;
   } = {},
 ): WorkboardMetadata {
@@ -1207,6 +1209,10 @@ export function normalizeMetadata(
       typeof record.failureCount === "number" && Number.isFinite(record.failureCount)
         ? Math.max(0, Math.trunc(record.failureCount))
         : fallback.failureCount,
+    reconciliationTriage:
+      options.allowReconciliationTriage && Object.hasOwn(record, "reconciliationTriage")
+        ? (record.reconciliationTriage as WorkboardReconciliationTriage | undefined)
+        : fallback.reconciliationTriage,
   };
   return trimMetadataToBudget(normalized, options);
 }
@@ -1324,6 +1330,7 @@ export function removeUndefinedMetadataFields(metadata: WorkboardMetadata): Work
     "stale",
     "lifecycleStatusSourceUpdatedAt",
     "failureCount",
+    "reconciliationTriage",
   ] as const) {
     const value = next[key];
     if (

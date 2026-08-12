@@ -352,6 +352,17 @@ export type WorkboardMetadata = {
   stale?: WorkboardStaleState;
   lifecycleStatusSourceUpdatedAt?: number;
   failureCount?: number;
+  reconciliationTriage?: WorkboardReconciliationTriage;
+};
+
+export type WorkboardReconciliationTriageEvidence = {
+  reference: { type: "url"; url: string };
+  sha256: string;
+};
+
+export type WorkboardReconciliationTriage = {
+  candidateCardIds: string[];
+  evidence: WorkboardReconciliationTriageEvidence[];
 };
 
 export type WorkboardCard = {
@@ -417,6 +428,8 @@ export type WorkboardReconciliationObservation = {
     >
   > & { boardId?: string };
   link?: Pick<WorkboardExternalExecutionLink, "title">;
+  /** Strict reconciliation-only metadata for manual duplicate resolution. */
+  triage?: WorkboardReconciliationTriage;
 };
 
 export type WorkboardReconciliationSourceObservation = {

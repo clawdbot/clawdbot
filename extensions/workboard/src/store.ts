@@ -288,29 +288,39 @@ export class WorkboardStore extends WorkboardNotificationStore {
           (latestAssociationSourceUpdatedAt !== undefined &&
             link.sourceUpdatedAt < latestAssociationSourceUpdatedAt)
         ) {
-          const associated = await this.updateCard(existing.id, {
-            metadata: {
-              ...existing.metadata,
-              links: appendExternalLink(existing, link),
+          const associated = await this.updateCard(
+            existing.id,
+            {
+              metadata: {
+                ...existing.metadata,
+                links: appendExternalLink(existing, link),
+                ...(observation.triage ? { reconciliationTriage: observation.triage } : {}),
+              },
             },
-          });
+            { allowReconciliationTriage: true },
+          );
           return reconciliationResult(associated, true, reconciliationLinkFor(associated, link));
         }
         const patch = observation.card ?? {};
-        const updated = await this.updateCard(existing.id, {
-          ...patch,
-          ...(RECONCILIATION_PROTECTED_STATUSES.has(patch.status as WorkboardStatus)
-            ? { status: existing.status }
-            : {}),
-          sourceUrl: link.sourceUrl,
-          tenant: link.tenant,
-          idempotencyKey: link.idempotencyKey,
-          metadata: {
-            ...existing.metadata,
-            lifecycleStatusSourceUpdatedAt: link.sourceUpdatedAt,
-            links: appendExternalLink(existing, link),
+        const updated = await this.updateCard(
+          existing.id,
+          {
+            ...patch,
+            ...(RECONCILIATION_PROTECTED_STATUSES.has(patch.status as WorkboardStatus)
+              ? { status: existing.status }
+              : {}),
+            sourceUrl: link.sourceUrl,
+            tenant: link.tenant,
+            idempotencyKey: link.idempotencyKey,
+            metadata: {
+              ...existing.metadata,
+              lifecycleStatusSourceUpdatedAt: link.sourceUpdatedAt,
+              links: appendExternalLink(existing, link),
+              ...(observation.triage ? { reconciliationTriage: observation.triage } : {}),
+            },
           },
-        });
+          { allowReconciliationTriage: true },
+        );
         return reconciliationResult(updated, true, reconciliationLinkFor(updated, link));
       }
 
@@ -345,6 +355,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
                 ...(link.title ? { title: link.title } : {}),
               },
             ],
+            ...(observation.triage ? { reconciliationTriage: observation.triage } : {}),
           },
         },
         undefined,
@@ -352,6 +363,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
           ...(observation.objectiveKey === undefined
             ? {}
             : { reconciliationObjectiveKey: observation.objectiveKey }),
+          ...(observation.triage === undefined ? {} : { reconciliationTriage: observation.triage }),
         },
       );
       return reconciliationResult(created, true, reconciliationLinkFor(created, link));

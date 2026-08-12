@@ -5,7 +5,11 @@ import path from "node:path";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
-import { WorkboardReconciler, projectReconciliationSourceObservation } from "./reconciliation.js";
+import {
+  WorkboardReconciler,
+  projectReconciliationObservation,
+  projectReconciliationSourceObservation,
+} from "./reconciliation.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { WorkboardStore } from "./store.js";
 
@@ -28,6 +32,143 @@ function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T>
 }
 
 describe("WorkboardReconciler", () => {
+  it("persists bounded reconciliation triage through unrelated updates and a SQLite reopen", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "workboard-triage-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const triage = {
+      candidateCardIds: ["candidate-alpha", "candidate-beta"],
+      evidence: [
+        {
+          reference: { type: "url", url: "https://example.test/evidence/alpha" },
+          sha256: "a".repeat(64),
+        },
+        {
+          reference: { type: "url", url: "https://example.test/evidence/beta" },
+          sha256: "b".repeat(64),
+        },
+      ],
+    };
+    const stores = createWorkboardSqliteStores({ dbPath });
+    try {
+      const store = new WorkboardStore(stores.cards, stores);
+      const reconciler = new WorkboardReconciler(store);
+      const created = await reconciler.apply({
+        sourceUrl: "https://example.test/runs/triage",
+        tenant: "acme",
+        idempotencyKey: "triage-create",
+        sourceUpdatedAt: 100,
+        card: { title: "Resolve matching cards" },
+        triage,
+      } as never);
+
+      expect(created.card.metadata?.reconciliationTriage).toEqual(triage);
+      await store.update(created.card.id, { priority: "urgent" });
+      expect(
+        (await reconciler.list({ tenant: "acme" })).cards[0]?.metadata?.reconciliationTriage,
+      ).toEqual(triage);
+    } finally {
+      stores.close();
+    }
+
+    const reopened = createWorkboardSqliteStores({ dbPath });
+    try {
+      const restored = await reopened.cards.lookup(
+        (await reopened.cards.entries())[0]?.key ?? "missing",
+      );
+      expect(restored?.card.metadata?.reconciliationTriage).toEqual(triage);
+    } finally {
+      reopened.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unsafe reconciliation triage before mutation and ignores generic metadata injection", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const reconciler = new WorkboardReconciler(store);
+    const before = await store.create({
+      title: "Generic metadata cannot write reconciliation triage",
+      metadata: {
+        reconciliationTriage: {
+          candidateCardIds: ["forged"],
+          evidence: [
+            {
+              reference: { type: "url", url: "https://example.test/forged" },
+              sha256: "c".repeat(64),
+            },
+          ],
+        },
+      },
+    });
+    expect(before.metadata?.reconciliationTriage).toBeUndefined();
+
+    const reconciled = await reconciler.apply({
+      sourceUrl: "https://example.test/runs/generic-update",
+      tenant: "acme",
+      idempotencyKey: "generic-update",
+      sourceUpdatedAt: 100,
+      card: { title: "Reconciliation owns this metadata" },
+      triage: {
+        candidateCardIds: ["candidate-owned"],
+        evidence: [
+          {
+            reference: { type: "url", url: "https://example.test/evidence/owned" },
+            sha256: "e".repeat(64),
+          },
+        ],
+      },
+    } as never);
+    await store.update(reconciled.card.id, {
+      metadata: { reconciliationTriage: { candidateCardIds: [], evidence: [] } },
+    });
+    expect((await store.get(reconciled.card.id))?.metadata?.reconciliationTriage).toEqual(
+      reconciled.card.metadata?.reconciliationTriage,
+    );
+
+    await expect(
+      reconciler.apply({
+        sourceUrl: "https://example.test/runs/invalid-triage",
+        tenant: "acme",
+        idempotencyKey: "invalid-triage",
+        sourceUpdatedAt: 100,
+        card: { title: "Must not mutate" },
+        triage: {
+          candidateCardIds: Array.from({ length: 21 }, (_, index) => `candidate-${index}`),
+          evidence: [],
+        },
+      } as never),
+    ).rejects.toThrow("candidateCardIds supports at most 20 entries.");
+    await expect(
+      reconciler.apply({
+        sourceUrl: "https://example.test/runs/invalid-reference",
+        tenant: "acme",
+        idempotencyKey: "invalid-reference",
+        sourceUpdatedAt: 100,
+        card: { title: "Must not mutate" },
+        triage: {
+          candidateCardIds: [],
+          evidence: [
+            {
+              reference: { type: "file", url: "file:///private" },
+              sha256: "d".repeat(64),
+            },
+          ],
+        },
+      } as never),
+    ).rejects.toThrow("triage evidence reference.type is unsupported.");
+    expect(await store.list()).toHaveLength(2);
+
+    expect(() =>
+      projectReconciliationObservation({
+        sourceUrl: "https://example.test/runs/unknown-triage",
+        tenant: "acme",
+        idempotencyKey: "unknown-triage",
+        sourceUpdatedAt: 100,
+        card: { title: "Unknown triage field" },
+        triage: { candidateCardIds: [], evidence: [], notes: "not allowed" },
+      }),
+    ).toThrow("triage.notes is not allowed.");
+  });
+
   it("canonicalizes one objective per tenant while retaining each external association", async () => {
     const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
     const first = await reconciler.apply({
