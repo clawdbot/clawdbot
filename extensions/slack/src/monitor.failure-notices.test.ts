@@ -25,7 +25,7 @@ type SlackFailureTestEvent = {
   text: string;
   ts: string;
   channel: string;
-  channel_type: "im" | "channel";
+  channel_type: "im" | "mpim" | "channel";
   thread_ts?: string;
   parent_user_id?: string;
 };
@@ -59,6 +59,23 @@ function mockReplySequence(...payloads: Array<{ text: string; isError?: boolean 
     runIndex += 1;
     return payload;
   });
+}
+
+function enableAmbientChannelReplies(replyToMode: "all" | "off" = "all"): void {
+  slackTestState.config = {
+    messages: { groupChat: { visibleReplies: "automatic" } },
+    channels: {
+      slack: {
+        dm: { enabled: true },
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        groupPolicy: "open",
+        requireMention: false,
+        replyToMode,
+        channels: { C1: { allow: true, requireMention: false } },
+      },
+    },
+  };
 }
 
 describe("Slack thread failure notices", () => {
@@ -187,30 +204,82 @@ describe("Slack thread failure notices", () => {
   });
 
   it.each(["all", "off"] as const)(
-    "does not broadcast failures for ambient channel messages with reply mode %s",
+    "announces one failure for unmentioned channel messages with reply mode %s",
     async (replyToMode) => {
-      slackTestState.config = {
-        messages: { groupChat: { visibleReplies: "automatic" } },
-        channels: {
-          slack: {
-            dm: { enabled: true },
-            dmPolicy: "open",
-            allowFrom: ["*"],
-            groupPolicy: "open",
-            requireMention: false,
-            replyToMode,
-            channels: { C1: { allow: true, requireMention: false } },
-          },
-        },
-      };
+      enableAmbientChannelReplies(replyToMode);
       mockReplySequence({ text: AUTH_FAILURE, isError: true });
 
       await dispatchEvent({ ts: "105.000000" });
+      await dispatchEvent({ ts: "105.000001" });
 
-      expect(slackTestState.replyMock).toHaveBeenCalledTimes(1);
-      expect(slackTestState.sendMock).not.toHaveBeenCalled();
+      expect(slackTestState.replyMock).toHaveBeenCalledTimes(2);
+      expect(slackTestState.sendMock).toHaveBeenCalledTimes(1);
+      expect(slackTestState.sendMock.mock.calls[0]?.[1]).toBe(AUTH_FAILURE);
     },
   );
+
+  it("announces a changed failure for unmentioned channel messages", async () => {
+    enableAmbientChannelReplies();
+    mockReplySequence(
+      { text: AUTH_FAILURE, isError: true },
+      { text: AUTH_FAILURE, isError: true },
+      { text: BACKEND_FAILURE, isError: true },
+    );
+
+    await dispatchEvent({ ts: "105.010000" });
+    await dispatchEvent({ ts: "105.010001" });
+    await dispatchEvent({ ts: "105.010002" });
+
+    expect(slackTestState.sendMock).toHaveBeenCalledTimes(2);
+    expect(slackTestState.sendMock.mock.calls[1]?.[1]).toBe(BACKEND_FAILURE);
+  });
+
+  it("announces an unmentioned channel failure again after a successful reply", async () => {
+    enableAmbientChannelReplies();
+    mockReplySequence(
+      { text: AUTH_FAILURE, isError: true },
+      { text: AUTH_FAILURE, isError: true },
+      { text: "Recovered" },
+      { text: AUTH_FAILURE, isError: true },
+    );
+
+    await dispatchEvent({ ts: "105.020000" });
+    await dispatchEvent({ ts: "105.020001" });
+    await dispatchEvent({ ts: "105.020002" });
+    await dispatchEvent({ ts: "105.020003" });
+
+    expect(slackTestState.sendMock).toHaveBeenCalledTimes(3);
+    expect(slackTestState.sendMock.mock.calls[2]?.[1]).toBe(AUTH_FAILURE);
+  });
+
+  it("always answers an explicit mention after an unmentioned channel failure", async () => {
+    enableAmbientChannelReplies();
+    mockReplySequence({ text: AUTH_FAILURE, isError: true });
+
+    await dispatchEvent({ ts: "105.030000" });
+    await dispatchEvent({ ts: "105.030001" });
+    await dispatchEvent({ text: "<@bot-user> are you working now?", ts: "105.030002" });
+
+    expect(slackTestState.sendMock).toHaveBeenCalledTimes(2);
+    expect(slackTestState.sendMock.mock.calls[1]?.[1]).toBe(AUTH_FAILURE);
+  });
+
+  it("retries the same thread failure when its first Slack delivery fails", async () => {
+    mockReplySequence(
+      { text: "Working normally" },
+      { text: AUTH_FAILURE, isError: true },
+      { text: AUTH_FAILURE, isError: true },
+    );
+
+    await dispatchEvent({ text: "<@bot-user> please help", ts: "105.040000" });
+    slackTestState.sendMock.mockRejectedValueOnce(new Error("Slack delivery unavailable"));
+
+    await dispatchEvent({ ts: "105.040001", thread_ts: "105.040000", parent_user_id: "U1" });
+    await dispatchEvent({ ts: "105.040002", thread_ts: "105.040000", parent_user_id: "U1" });
+
+    expect(slackTestState.sendMock).toHaveBeenCalledTimes(3);
+    expect(slackTestState.sendMock.mock.calls[2]?.[1]).toBe(AUTH_FAILURE);
+  });
 
   it("does not suppress warnings for non-terminal tool failures", async () => {
     const warning = setReplyPayloadMetadata(
@@ -232,6 +301,28 @@ describe("Slack thread failure notices", () => {
     await dispatchEvent({ channel: "D1", channel_type: "im", ts: "106.000000" });
     await dispatchEvent({ channel: "D1", channel_type: "im", ts: "106.000001" });
 
+    expect(slackTestState.sendMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps failures visible in Slack group direct messages", async () => {
+    slackTestState.config = {
+      messages: { groupChat: { visibleReplies: "automatic" } },
+      channels: {
+        slack: {
+          dm: { enabled: true, groupEnabled: true },
+          dmPolicy: "open",
+          allowFrom: ["U1"],
+          groupPolicy: "open",
+          replyToMode: "off",
+        },
+      },
+    };
+    mockReplySequence({ text: AUTH_FAILURE, isError: true });
+
+    await dispatchEvent({ channel: "G1", channel_type: "mpim", ts: "107.000000" });
+    await dispatchEvent({ channel: "G1", channel_type: "mpim", ts: "107.000001" });
+
+    expect(slackTestState.replyMock).toHaveBeenCalledTimes(2);
     expect(slackTestState.sendMock).toHaveBeenCalledTimes(2);
   });
 });

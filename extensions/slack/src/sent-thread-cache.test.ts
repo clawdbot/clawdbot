@@ -11,6 +11,7 @@ import { setSlackRuntime } from "./runtime.js";
 import {
   clearSlackThreadFailureNotice,
   clearSlackThreadParticipationCache,
+  hasSlackThreadFailureNotice,
   hasSlackThreadParticipation,
   hasSlackThreadParticipationWithPersistence,
   recordSlackThreadFailureNotice,
@@ -71,6 +72,61 @@ describe("slack sent-thread-cache", () => {
       recordSlackThreadFailureNotice({ ...notice, failureText: "App server unavailable" }),
     ).toBe(true);
     expect(recordSlackThreadFailureNotice(notice)).toBe(true);
+  });
+
+  it("checks a failure without marking it delivered", () => {
+    const notice = {
+      accountId: "A1",
+      channelId: "C123",
+      threadTs: "1700000000.000001",
+      failureText: "Model login expired",
+    };
+
+    expect(hasSlackThreadFailureNotice(notice)).toBe(false);
+    expect(hasSlackThreadFailureNotice(notice)).toBe(false);
+    expect(recordSlackThreadFailureNotice(notice)).toBe(true);
+    expect(hasSlackThreadFailureNotice(notice)).toBe(true);
+    expect(hasSlackThreadFailureNotice({ ...notice, failureText: "Model  login\nexpired" })).toBe(
+      true,
+    );
+    expect(hasSlackThreadFailureNotice({ ...notice, failureText: "App server unavailable" })).toBe(
+      false,
+    );
+  });
+
+  it("deduplicates top-level failures per channel without mixing them with threads", () => {
+    const channelNotice = {
+      accountId: "A1",
+      channelId: "C123",
+      failureText: "Model login expired",
+      teamId: "T1",
+    };
+
+    expect(hasSlackThreadFailureNotice(channelNotice)).toBe(false);
+    expect(recordSlackThreadFailureNotice(channelNotice)).toBe(true);
+    expect(hasSlackThreadFailureNotice(channelNotice)).toBe(true);
+    expect(recordSlackThreadFailureNotice(channelNotice)).toBe(false);
+    expect(hasSlackThreadFailureNotice({ ...channelNotice, channelId: "C456" })).toBe(false);
+    expect(hasSlackThreadFailureNotice({ ...channelNotice, accountId: "A2" })).toBe(false);
+    expect(hasSlackThreadFailureNotice({ ...channelNotice, teamId: "T2" })).toBe(false);
+    expect(hasSlackThreadFailureNotice({ ...channelNotice, threadTs: "1700000000.000001" })).toBe(
+      false,
+    );
+
+    clearSlackThreadFailureNotice(channelNotice);
+    expect(hasSlackThreadFailureNotice(channelNotice)).toBe(false);
+    expect(recordSlackThreadFailureNotice(channelNotice)).toBe(true);
+  });
+
+  it("does not deduplicate failures with empty text", () => {
+    const notice = {
+      accountId: "A1",
+      channelId: "C123",
+      failureText: "   ",
+    };
+
+    expect(hasSlackThreadFailureNotice(notice)).toBe(false);
+    expect(recordSlackThreadFailureNotice(notice)).toBe(false);
   });
 
   it("isolates thread failures by account, channel, thread, and enterprise workspace", () => {

@@ -27,6 +27,7 @@ import { emitSlackMessageSentHooks } from "../../message-sent-hook.js";
 import { resolveSlackReplyRenderPlan } from "../../reply-blocks.js";
 import {
   clearSlackThreadFailureNotice,
+  hasSlackThreadFailureNotice,
   hasSlackThreadParticipation,
   recordSlackThreadFailureNotice,
   recordSlackThreadParticipation,
@@ -84,14 +85,23 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     },
   });
   const draftStream = progress.draftStream;
-  const failureNoticeThreadTs = statusThreadTs ?? message.thread_ts;
+  const failureNoticeThreadTs = message.thread_ts;
   const failureNoticeTeamId = prepared.eventScope?.teamId;
   let sawTerminalFailurePayload = false;
+  let pendingFailureNotice:
+    | {
+        accountId: string;
+        channelId: string;
+        threadTs?: string;
+        failureText: string;
+        teamId?: string;
+      }
+    | undefined;
 
   const filterPassiveThreadFailure = (payload: ReplyPayload): ReplyPayload | null => {
     if (
       payload.isError !== true ||
-      !prepared.isRoomish ||
+      prepared.ctxPayload.ChatType !== "channel" ||
       isReplyPayloadNonTerminalToolErrorWarning(payload)
     ) {
       return payload;
@@ -110,29 +120,24 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       (prepared.ctxPayload.CommandTurn?.kind !== undefined &&
         prepared.ctxPayload.CommandTurn.kind !== "normal" &&
         prepared.ctxPayload.CommandTurn.authorized);
-
-    if (!failureNoticeThreadTs) {
-      if (!explicitlyAddressed) {
-        logVerbose("slack: suppressed passive failure without a thread");
-        return null;
-      }
-      return payload;
-    }
+    const noticeThreadTs =
+      failureNoticeThreadTs ?? (explicitlyAddressed ? statusThreadTs : undefined);
 
     const notice = {
       accountId: account.accountId,
       channelId: message.channel,
-      threadTs: failureNoticeThreadTs,
+      ...(noticeThreadTs ? { threadTs: noticeThreadTs } : {}),
       failureText: payload.text ?? "",
       ...(failureNoticeTeamId ? { teamId: failureNoticeTeamId } : {}),
     };
     if (
+      failureNoticeThreadTs &&
       !explicitlyAddressed &&
       prepared.ctxPayload.MentionSource !== "implicit_thread" &&
       !hasSlackThreadParticipation(
         notice.accountId,
         notice.channelId,
-        notice.threadTs,
+        failureNoticeThreadTs,
         failureNoticeTeamId,
       )
     ) {
@@ -140,11 +145,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       return null;
     }
 
-    const isNewFailure = recordSlackThreadFailureNotice(notice);
-    if (!explicitlyAddressed && !isNewFailure) {
-      logVerbose("slack: suppressed repeated passive thread failure");
+    if (!explicitlyAddressed && hasSlackThreadFailureNotice(notice)) {
+      logVerbose("slack: suppressed repeated passive channel or thread failure");
       return null;
     }
+    pendingFailureNotice = notice;
     return payload;
   };
 
@@ -588,11 +593,15 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       counts = result.counts;
       const agentRunOutcome = readAgentRunTerminalOutcome(result);
       agentRunFailed = agentRunOutcome === "failed";
-      if (agentRunOutcome === "completed" && !sawTerminalFailurePayload && failureNoticeThreadTs) {
+      if (
+        agentRunOutcome === "completed" &&
+        !sawTerminalFailurePayload &&
+        prepared.ctxPayload.ChatType === "channel"
+      ) {
         clearSlackThreadFailureNotice({
           accountId: account.accountId,
           channelId: message.channel,
-          threadTs: failureNoticeThreadTs,
+          ...(failureNoticeThreadTs ? { threadTs: failureNoticeThreadTs } : {}),
           ...(failureNoticeTeamId ? { teamId: failureNoticeTeamId } : {}),
         });
       }
@@ -673,6 +682,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       fallbackDelivered: streamFallbackDelivered,
     },
   );
+
+  if (pendingFailureNotice && anyReplyDelivered) {
+    recordSlackThreadFailureNotice(pendingFailureNotice);
+  }
 
   if (dispatchError || agentRunFailed) {
     await progress.finalizeDraftProgressCard("error");

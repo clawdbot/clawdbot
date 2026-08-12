@@ -94,20 +94,37 @@ export async function hasSlackThreadParticipationWithPersistence(params: {
   );
 }
 
-/** Returns false after this exact failure has already been announced in the thread. */
-export function recordSlackThreadFailureNotice(params: {
+type SlackFailureNotice = {
   accountId: string;
   channelId: string;
-  threadTs: string;
+  threadTs?: string;
   failureText: string;
   teamId?: string;
-}): boolean {
-  const { accountId, channelId, threadTs, failureText, teamId } = params;
+};
+
+function makeFailureNoticeKey(params: Omit<SlackFailureNotice, "failureText">): string {
+  const scope = params.threadTs ? `thread:${params.threadTs}` : "channel";
+  return makeKey(params.accountId, params.channelId, scope, params.teamId);
+}
+
+/** Returns whether this failure was already delivered in the thread or channel. */
+export function hasSlackThreadFailureNotice(params: SlackFailureNotice): boolean {
+  const { accountId, channelId, failureText } = params;
   const fingerprint = failureText.trim().replace(/\s+/gu, " ");
-  if (!accountId || !channelId || !threadTs || !fingerprint) {
+  if (!accountId || !channelId || !fingerprint) {
     return false;
   }
-  const key = makeKey(accountId, channelId, threadTs, teamId);
+  return threadFailureNotices.get(makeFailureNoticeKey(params)) === fingerprint;
+}
+
+/** Records a failure after it was delivered in the thread or channel. */
+export function recordSlackThreadFailureNotice(params: SlackFailureNotice): boolean {
+  const { accountId, channelId, failureText } = params;
+  const fingerprint = failureText.trim().replace(/\s+/gu, " ");
+  if (!accountId || !channelId || !fingerprint) {
+    return false;
+  }
+  const key = makeFailureNoticeKey(params);
   if (threadFailureNotices.get(key) === fingerprint) {
     return false;
   }
@@ -122,18 +139,18 @@ export function recordSlackThreadFailureNotice(params: {
   return true;
 }
 
-/** Clears a thread's outage notice after a healthy model turn completes. */
+/** Clears a thread or channel outage notice after a healthy model turn completes. */
 export function clearSlackThreadFailureNotice(params: {
   accountId: string;
   channelId: string;
-  threadTs: string;
+  threadTs?: string;
   teamId?: string;
 }): void {
-  const { accountId, channelId, threadTs, teamId } = params;
-  if (!accountId || !channelId || !threadTs) {
+  const { accountId, channelId } = params;
+  if (!accountId || !channelId) {
     return;
   }
-  threadFailureNotices.delete(makeKey(accountId, channelId, threadTs, teamId));
+  threadFailureNotices.delete(makeFailureNoticeKey(params));
 }
 
 export function clearSlackThreadParticipationCache(): void {
