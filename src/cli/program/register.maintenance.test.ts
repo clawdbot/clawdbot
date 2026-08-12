@@ -186,6 +186,18 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runtime.exit).toHaveBeenCalledWith(0);
   });
 
+  it("preserves standalone post-upgrade diagnostics", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["doctor", "--post-upgrade", "--json"]);
+
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [, options] = commandCall(doctorCommand);
+    expect(options.postUpgrade).toBe(true);
+    expect(options.json).toBe(true);
+    expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
+
   it("rejects simultaneous shared-state and session SQLite modes", async () => {
     await runMaintenanceCli(["doctor", "--state-sqlite", "compact", "--session-sqlite", "compact"]);
 
@@ -241,6 +253,51 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
+  it.each([
+    ["lint and session SQLite import", ["--lint", "--session-sqlite", "import"]],
+    [
+      "lint and selected session SQLite import",
+      ["--lint", "--session-sqlite", "import", "--session-sqlite-agent", "main"],
+    ],
+    ["lint and repair", ["--lint", "--fix"]],
+    ["lint and repair alias", ["--lint", "--repair"]],
+    ["lint and gateway-token mutation", ["--lint", "--generate-gateway-token"]],
+    ["lint and post-upgrade checks", ["--lint", "--post-upgrade"]],
+    [
+      "session inspection and post-upgrade checks",
+      ["--session-sqlite", "inspect", "--post-upgrade"],
+    ],
+    ["session import and repair", ["--session-sqlite", "import", "--fix"]],
+    ["post-upgrade checks and repair", ["--post-upgrade", "--fix"]],
+  ])("rejects %s before either doctor operation runs", async (_label, args) => {
+    await runMaintenanceCli(["doctor", ...args]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("mutually exclusive"));
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it("rejects lint with session selectors before running read-only checks", async () => {
+    await runMaintenanceCli(["doctor", "--lint", "--session-sqlite-agent", "main"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "doctor session SQLite options require --session-sqlite. Use `openclaw doctor --session-sqlite dry-run ...`.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it("rejects GitHub issue creation for non-recovery session operations", async () => {
+    await runMaintenanceCli(["doctor", "--session-sqlite", "inspect", "--github-issue"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith("--github-issue requires --session-sqlite recover.");
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
   it("runs doctor lint mode without invoking repair doctor", async () => {
     runDoctorLintCli.mockResolvedValue(1);
 
@@ -256,6 +313,7 @@ describe("registerMaintenanceCommands doctor action", () => {
       "--only",
       "b",
       "--allow-exec",
+      "--deep",
     ]);
 
     expect(doctorCommand).not.toHaveBeenCalled();
@@ -266,7 +324,7 @@ describe("registerMaintenanceCommands doctor action", () => {
       skipIds: ["a"],
       onlyIds: ["b"],
       allowExec: true,
-      deep: false,
+      deep: true,
     });
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });

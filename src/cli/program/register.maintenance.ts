@@ -110,6 +110,35 @@ export function registerMaintenanceCommands(program: Command) {
         defaultRuntime.exit(2);
         return;
       }
+      if (hasSessionSqliteOnlyDoctorOptions(opts)) {
+        defaultRuntime.error(
+          "doctor session SQLite options require --session-sqlite. Use `openclaw doctor --session-sqlite dry-run ...`.",
+        );
+        defaultRuntime.exit(2);
+        return;
+      }
+      const requestedOperationCount = [
+        opts.lint === true,
+        opts.postUpgrade === true,
+        typeof opts.stateSqlite === "string",
+        typeof opts.sessionSqlite === "string",
+        opts.repair === true ||
+          opts.fix === true ||
+          opts.force === true ||
+          opts.generateGatewayToken === true,
+      ].filter(Boolean).length;
+      if (requestedOperationCount > 1) {
+        defaultRuntime.error(
+          "doctor operations are mutually exclusive: choose one of --lint, --fix/--repair, --post-upgrade, --state-sqlite, or --session-sqlite.",
+        );
+        defaultRuntime.exit(2);
+        return;
+      }
+      if (opts.githubIssue === true && opts.sessionSqlite !== "recover") {
+        defaultRuntime.error("--github-issue requires --session-sqlite recover.");
+        defaultRuntime.exit(2);
+        return;
+      }
       if (opts.lint === true) {
         await runCommandWithRuntime(
           defaultRuntime,
@@ -131,13 +160,6 @@ export function registerMaintenanceCommands(program: Command) {
             defaultRuntime.exit(2);
           },
         );
-        return;
-      }
-      if (hasSessionSqliteOnlyDoctorOptions(opts)) {
-        defaultRuntime.error(
-          "doctor session SQLite options require --session-sqlite. Use `openclaw doctor --session-sqlite dry-run ...`.",
-        );
-        defaultRuntime.exit(2);
         return;
       }
       if (hasLintOnlyDoctorOptions(opts)) {
