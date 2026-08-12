@@ -27,9 +27,9 @@ import {
   resetMemoryCoreDreamingStateForTests,
 } from "../test-helpers.js";
 import "./test-runtime-mocks.js";
-import type { MemoryIndexManager } from "./index.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
+import type { MemoryIndexManager } from "./manager.js";
 import {
   closeAllMemoryIndexManagers,
   closeMemoryIndexManagersForAgent,
