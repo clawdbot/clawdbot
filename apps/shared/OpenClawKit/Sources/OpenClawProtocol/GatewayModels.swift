@@ -2304,6 +2304,7 @@ public struct DesktopObserveResult: Codable, Sendable {
     public let control: Bool
     public let vncpassword: String?
     public let auth: String?
+    public let preauthenticated: Bool?
 
     public init(
         transport: String,
@@ -2311,7 +2312,8 @@ public struct DesktopObserveResult: Codable, Sendable {
         expiresatms: Int,
         control: Bool,
         vncpassword: String? = nil,
-        auth: String? = nil)
+        auth: String? = nil,
+        preauthenticated: Bool? = nil)
     {
         self.transport = transport
         self.wspath = wspath
@@ -2319,6 +2321,7 @@ public struct DesktopObserveResult: Codable, Sendable {
         self.control = control
         self.vncpassword = vncpassword
         self.auth = auth
+        self.preauthenticated = preauthenticated
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2328,6 +2331,7 @@ public struct DesktopObserveResult: Codable, Sendable {
         case control
         case vncpassword = "vncPassword"
         case auth
+        case preauthenticated
     }
 }
 
