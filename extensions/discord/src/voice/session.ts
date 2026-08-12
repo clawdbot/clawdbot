@@ -28,6 +28,16 @@ export type VoiceOperationResult = {
   guildId?: string;
 };
 
+export type VoiceJoinOptions = {
+  preserveFollowState?: boolean;
+  transcripts?: VoiceSessionEntry["transcripts"];
+};
+
+export type VoiceSessionGeneration = {
+  generation: number;
+  isCurrent: () => boolean;
+};
+
 export type DiscordVoiceMode = "stt-tts" | "agent-proxy" | "bidi";
 
 export function resolveDiscordVoiceMode(voice: DiscordAccountConfig["voice"]): DiscordVoiceMode {
@@ -81,6 +91,7 @@ export type VoiceRealtimeLifecycle =
 
 export type VoiceSessionEntry = {
   generation: number;
+  sessionLifecycle: { status: "active" } | { status: "stopped"; reason: string };
   guildId: string;
   guildName?: string;
   channelId: string;
@@ -93,16 +104,13 @@ export type VoiceSessionEntry = {
   playbackQueue: Promise<void>;
   processingQueue: Promise<void>;
   capture: VoiceCaptureState;
-  pendingRealtime?: VoiceRealtimeSession;
-  realtime?: VoiceRealtimeSession;
   realtimeLifecycle: VoiceRealtimeLifecycle;
   transcripts?: {
     sessionId: string;
     onUtterance: (utterance: TranscriptUtterance) => void | Promise<void>;
   };
   receiveRecovery: VoiceReceiveRecoveryState;
-  isStopped: () => boolean;
-  stop: () => void;
+  stop: (reason?: string) => void;
 };
 
 export function logVoiceVerbose(message: string): void {

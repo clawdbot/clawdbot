@@ -82,30 +82,6 @@ export class DiscordVoiceReceive {
     this.daveRecoveryAttempts.clear();
   }
 
-  enqueueProcessing(entry: VoiceSessionEntry, task: () => Promise<void>): void {
-    entry.processingQueue = entry.processingQueue
-      .then(task)
-      .catch((err: unknown) =>
-        logger.warn(`discord voice: processing failed: ${formatErrorMessage(err)}`),
-      );
-  }
-
-  enqueuePlayback(entry: VoiceSessionEntry, task: () => Promise<void>): void {
-    entry.playbackQueue = entry.playbackQueue
-      .then(task)
-      .catch((err: unknown) =>
-        logger.warn(`discord voice: playback failed: ${formatErrorMessage(err)}`),
-      );
-  }
-
-  clearCaptureFinalizeTimer(
-    entry: VoiceSessionEntry,
-    userId: string,
-    generation?: number,
-  ): boolean {
-    return clearVoiceCaptureFinalizeTimer(entry.capture, userId, generation);
-  }
-
   scheduleCaptureFinalize(entry: VoiceSessionEntry, userId: string, reason: string): void {
     const graceMs = resolveVoiceTimeoutMs(
       this.params.discordConfig.voice?.captureSilenceGraceMs,
@@ -135,7 +111,7 @@ export class DiscordVoiceReceive {
     if (isVoiceCaptureActive(entry.capture, userId)) {
       const activeCapture = getActiveVoiceCapture(entry.capture, userId);
       const extended = activeCapture
-        ? this.clearCaptureFinalizeTimer(entry, userId, activeCapture.generation)
+        ? clearVoiceCaptureFinalizeTimer(entry.capture, userId, activeCapture.generation)
         : false;
       logVoiceVerbose(
         `capture start ignored (already active): guild ${entry.guildId} channel ${entry.channelId} user ${userId}${extended ? " (finalize canceled)" : ""}`,
@@ -149,7 +125,9 @@ export class DiscordVoiceReceive {
     const voiceSdk = loadDiscordVoiceSdk();
     const voiceMode = resolveDiscordVoiceMode(this.params.discordConfig.voice);
     const realtime =
-      entry.realtime && isDiscordRealtimeVoiceMode(voiceMode) ? entry.realtime : undefined;
+      entry.realtimeLifecycle.status === "active" && isDiscordRealtimeVoiceMode(voiceMode)
+        ? entry.realtimeLifecycle.instance
+        : undefined;
     if (entry.player.state.status === voiceSdk.AudioPlayerStatus.Playing && !realtime) {
       logVoiceVerbose(
         `capture ignored during playback: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
@@ -263,12 +241,16 @@ export class DiscordVoiceReceive {
       logVoiceVerbose(
         `capture ready (${durationSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
       );
-      this.enqueueProcessing(entry, async () => {
-        if (!this.params.isEntryCurrent(entry)) {
-          return;
-        }
-        await this.processSegment({ entry, wavPath, userId, durationSeconds });
-      });
+      entry.processingQueue = entry.processingQueue
+        .then(async () => {
+          if (!this.params.isEntryCurrent(entry)) {
+            return;
+          }
+          await this.processSegment({ entry, wavPath, userId, durationSeconds });
+        })
+        .catch((err: unknown) =>
+          logger.warn(`discord voice: processing failed: ${formatErrorMessage(err)}`),
+        );
     } catch (err) {
       if (!receiveFailureHandled) {
         this.handleReceiveError(entry, err);
@@ -306,7 +288,11 @@ export class DiscordVoiceReceive {
           : undefined;
       },
       enqueuePlayback: (entry, task) => {
-        this.enqueuePlayback(entry, task);
+        entry.playbackQueue = entry.playbackQueue
+          .then(task)
+          .catch((err: unknown) =>
+            logger.warn(`discord voice: playback failed: ${formatErrorMessage(err)}`),
+          );
       },
     });
   }
@@ -323,7 +309,7 @@ export class DiscordVoiceReceive {
     }
     logger.warn(`discord voice: receive error: ${analysis.message}`);
     if (analysis.shouldAttemptPassthrough) {
-      if (this.params.getSession(entry.guildId) === entry && !entry.isStopped()) {
+      if (this.params.isEntryCurrent(entry)) {
         const recovery = tryRecoverDaveZeroTransition({
           target: entry,
           sdk: loadDiscordVoiceSdk(),
@@ -485,7 +471,7 @@ export class DiscordVoiceReceive {
     if (force) {
       if (
         this.params.getSession(entry.guildId) !== entry ||
-        entry.isStopped() ||
+        entry.sessionLifecycle.status === "stopped" ||
         entry.receiveRecovery.decryptRecoveryInFlight
       ) {
         return;
@@ -526,7 +512,7 @@ export class DiscordVoiceReceive {
 
   private resetDecryptFailureState(entry: VoiceSessionEntry): void {
     resetVoiceReceiveRecoveryState(entry.receiveRecovery);
-    if (this.params.getSession(entry.guildId) === entry && !entry.isStopped()) {
+    if (this.params.isEntryCurrent(entry)) {
       this.daveRecoveryAttempts.delete(entry.guildId);
     }
   }

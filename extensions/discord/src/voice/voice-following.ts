@@ -99,6 +99,7 @@ export class DiscordVoiceFollowing {
     private readonly params: {
       accountId: string;
       allowedChannels: VoiceChannelResidency[] | null;
+      autoJoinChannels: VoiceChannelResidency[];
       botUserId: () => string | undefined;
       client: Client;
       deleteRecoveryAttempt: (guildId: string) => void;
@@ -306,9 +307,7 @@ export class DiscordVoiceFollowing {
         guildIds.add(normalized);
       }
     }
-    for (const entry of normalizeVoiceChannelResidencies(
-      this.params.discordConfig.voice?.autoJoin,
-    )) {
+    for (const entry of this.params.autoJoinChannels) {
       guildIds.add(entry.guildId);
     }
     for (const entry of this.params.allowedChannels ?? []) {
@@ -646,9 +645,7 @@ export class DiscordVoiceFollowing {
   }
 
   private resolveVoiceResidencyTarget(guildId: string): VoiceChannelResidency | null {
-    const autoJoinTarget = normalizeVoiceChannelResidencies(
-      this.params.discordConfig.voice?.autoJoin,
-    )
+    const autoJoinTarget = this.params.autoJoinChannels
       .toReversed()
       .find((entry) => entry.guildId === guildId);
     if (autoJoinTarget && this.params.isAllowedVoiceChannel(autoJoinTarget)) {

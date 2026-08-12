@@ -7,7 +7,12 @@ import { formatMention } from "../mentions.js";
 import { resolveDiscordVoiceEnabled } from "./config.js";
 import { DiscordVoiceMembershipTracker } from "./membership.js";
 import { resolveDiscordVoiceAccess } from "./owner-access.js";
-import { logVoiceVerbose, type VoiceOperationResult, type VoiceSessionEntry } from "./session.js";
+import {
+  logVoiceVerbose,
+  type VoiceJoinOptions,
+  type VoiceOperationResult,
+  type VoiceSessionEntry,
+} from "./session.js";
 import { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
 import {
   DiscordVoiceFollowing,
@@ -15,11 +20,7 @@ import {
   type VoiceChannelResidency,
 } from "./voice-following.js";
 import { DiscordVoiceReceive } from "./voice-receive.js";
-import {
-  destroyVoiceConnectionSafely,
-  DiscordVoiceSessions,
-  type VoiceJoinOptions,
-} from "./voice-session.js";
+import { destroyVoiceConnectionSafely, DiscordVoiceSessions } from "./voice-session.js";
 
 const logger = createSubsystemLogger("discord/voice");
 const DISCORD_VOICE_FATAL_AUTOJOIN_ERROR_PATTERNS = [
@@ -67,7 +68,7 @@ export class DiscordVoiceManager {
   private readonly guildLifecycles = new Map<string, VoiceGuildLifecycle>();
   private nextGuildGeneration = 0;
   private readonly joinTasks = new Map<string, Promise<VoiceOperationResult>>();
-  private botUserId?: string;
+  private readonly botUserId?: string;
   private readonly voiceEnabled: boolean;
   private autoJoinTask: Promise<void> | null = null;
   private readonly fatalAutoJoinFailures = new Map<
@@ -79,12 +80,10 @@ export class DiscordVoiceManager {
   private readonly speakerContext: DiscordVoiceSpeakerContextResolver;
   private readonly membership: DiscordVoiceMembershipTracker;
   private readonly allowedChannels: VoiceChannelResidency[] | null;
+  private readonly autoJoinChannels: VoiceChannelResidency[];
   private readonly following: DiscordVoiceFollowing;
   private readonly receive: DiscordVoiceReceive;
   private readonly voiceSessions: DiscordVoiceSessions;
-  private readonly daveRecoveryAttempts: Map<string, number>;
-  private readonly followedUserChannels: Map<string, VoiceChannelResidency>;
-  private readonly followedVoiceGuilds: Set<string>;
   private destroyed = false;
 
   constructor(
@@ -106,6 +105,7 @@ export class DiscordVoiceManager {
       params.discordConfig.voice?.allowedChannels === undefined
         ? null
         : normalizeVoiceChannelResidencies(params.discordConfig.voice.allowedChannels);
+    this.autoJoinChannels = normalizeVoiceChannelResidencies(params.discordConfig.voice?.autoJoin);
     this.speakerContext = new DiscordVoiceSpeakerContextResolver({
       client: params.client,
       ownerAllowFrom: this.ownerAllowFrom,
@@ -133,6 +133,7 @@ export class DiscordVoiceManager {
     this.following = new DiscordVoiceFollowing({
       accountId: params.accountId,
       allowedChannels: this.allowedChannels,
+      autoJoinChannels: this.autoJoinChannels,
       botUserId: () => this.botUserId,
       client: params.client,
       deleteRecoveryAttempt: (guildId) => this.receive.deleteRecoveryAttempt(guildId),
@@ -176,23 +177,10 @@ export class DiscordVoiceManager {
       receive: this.receive,
       sessions: this.sessions,
     });
-    this.daveRecoveryAttempts = this.receive.daveRecoveryAttempts;
-    this.followedUserChannels = this.following.followedUserChannels;
-    this.followedVoiceGuilds = this.following.followedVoiceGuilds;
-  }
-
-  setBotUserId(id?: string): void {
-    if (id) {
-      this.botUserId = id;
-    }
   }
 
   refreshGuildRoster(guildId: string): void {
     this.voiceSessions.refreshGuildRoster(guildId);
-  }
-
-  isEnabled(): boolean {
-    return this.voiceEnabled;
   }
 
   async autoJoin(): Promise<void> {
@@ -203,7 +191,7 @@ export class DiscordVoiceManager {
       return this.autoJoinTask;
     }
     this.autoJoinTask = (async () => {
-      const entries = this.params.discordConfig.voice?.autoJoin ?? [];
+      const entries = this.autoJoinChannels;
       const entriesByGuild = new Map<string, { guildId: string; channelId: string }>();
       const duplicateGuilds = new Set<string>();
       for (const entry of entries) {
@@ -463,29 +451,9 @@ export class DiscordVoiceManager {
     return (
       lifecycle?.status === "active" &&
       lifecycle.generation === entry.generation &&
-      lifecycle.instance === entry
+      lifecycle.instance === entry &&
+      entry.sessionLifecycle.status === "active"
     );
-  }
-
-  private handleSpeakingStart(entry: VoiceSessionEntry, userId: string): Promise<void> {
-    return this.receive.handleSpeakingStart(entry, userId);
-  }
-
-  private handleReceiveError(entry: VoiceSessionEntry, err: unknown): void {
-    this.receive.handleReceiveError(entry, err);
-  }
-
-  private scheduleCaptureFinalize(entry: VoiceSessionEntry, userId: string, reason: string): void {
-    this.receive.scheduleCaptureFinalize(entry, userId, reason);
-  }
-
-  private processSegment(params: {
-    entry: VoiceSessionEntry;
-    wavPath: string;
-    userId: string;
-    durationSeconds: number;
-  }): Promise<void> {
-    return this.receive.processSegment(params);
   }
 }
 

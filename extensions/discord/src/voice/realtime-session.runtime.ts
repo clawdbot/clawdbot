@@ -201,14 +201,12 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   private readonly consults: DiscordRealtimeConsults;
   private lifecycle: DiscordRealtimeLifecycle = { status: "inactive", generation: 0 };
   private nextLifecycleGeneration = 0;
-  private stopped = false;
   private consultToolPolicy: RealtimeVoiceAgentConsultToolPolicy = "safe-read-only";
   private consultToolsAllow: string[] | undefined;
   private consultPolicy: "auto" | "always" = "auto";
   private wakeNamePolicy: DiscordRealtimeWakeNamePolicy = "never";
   private wakeNames: string[] = [];
   private realtimeProviderId: string | undefined;
-  private bridgeReady = false;
   private providerGenerationObserved = false;
   private providerContinuityEpoch = 0;
   private lastRealtimeError:
@@ -309,8 +307,6 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       generation: lifecycleGeneration,
       instance: this,
     };
-    this.stopped = false;
-    this.bridgeReady = false;
     const resolved = resolveConfiguredRealtimeVoiceProvider({
       configuredProviderId: this.realtimeConfig?.provider,
       providerConfigs: buildProviderConfigs(this.realtimeConfig),
@@ -506,15 +502,12 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       return false;
     }
     this.lifecycle = { status: "active", generation, instance: this };
-    this.bridgeReady = true;
     return true;
   }
 
   private stopLifecycle(reason: string): void {
     const generation = this.lifecycle.generation;
     this.lifecycle = { status: "stopped", generation, reason };
-    this.stopped = true;
-    this.bridgeReady = false;
   }
 
   private humanParticipantCount(): number {
@@ -559,7 +552,6 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       return;
     }
     this.providerGenerationObserved = false;
-    this.bridgeReady = false;
     if (this.lifecycle.status === "active") {
       this.lifecycle = {
         status: "starting",

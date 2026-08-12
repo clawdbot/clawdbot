@@ -23,7 +23,9 @@ import {
   VOICE_CONNECT_READY_TIMEOUT_MS,
   VOICE_RECONNECT_GRACE_MS,
   type DiscordVoiceMode,
+  type VoiceJoinOptions,
   type VoiceOperationResult,
+  type VoiceSessionGeneration,
   type VoiceSessionEntry,
 } from "./session.js";
 import type { DiscordVoiceReceive } from "./voice-receive.js";
@@ -119,16 +121,6 @@ function resolveDiscordVoiceAgentRoute(params: {
   };
 }
 
-export type VoiceJoinOptions = {
-  preserveFollowState?: boolean;
-  transcripts?: VoiceSessionEntry["transcripts"];
-};
-
-export type VoiceSessionGeneration = {
-  generation: number;
-  isCurrent: () => boolean;
-};
-
 export class DiscordVoiceSessions {
   constructor(
     private readonly params: {
@@ -148,7 +140,7 @@ export class DiscordVoiceSessions {
 
   refreshGuildRoster(guildId: string): void {
     const entry = this.params.sessions.get(guildId.trim());
-    if (!entry || entry.isStopped()) {
+    if (!entry || entry.sessionLifecycle.status === "stopped") {
       return;
     }
     this.params.membership.activate(entry, this.params.botUserId());
@@ -370,7 +362,6 @@ export class DiscordVoiceSessions {
 
     const player = voiceSdk.createAudioPlayer();
     connection.subscribe(player);
-    let stopped = false;
     const clearSessionIfCurrent = () => {
       const active = this.params.sessions.get(guildId);
       if (active?.connection === connection) {
@@ -381,10 +372,10 @@ export class DiscordVoiceSessions {
       entry: VoiceSessionEntry,
       optionsLocal: { destroyConnection: boolean; reason: string },
     ) => {
-      if (stopped) {
+      if (entry.sessionLifecycle.status === "stopped") {
         return;
       }
-      stopped = true;
+      entry.sessionLifecycle = { status: "stopped", reason: optionsLocal.reason };
       this.params.membership.deactivate(entry);
       if (speakingHandler) {
         connection.receiver.speaking.off("start", speakingHandler);
@@ -411,10 +402,6 @@ export class DiscordVoiceSessions {
         generation: realtimeLifecycle.generation,
         reason: optionsLocal.reason,
       };
-      entry.pendingRealtime?.close();
-      entry.pendingRealtime = undefined;
-      entry.realtime?.close();
-      entry.realtime = undefined;
       player.stop();
       if (optionsLocal.destroyConnection) {
         destroyVoiceConnectionSafely({
@@ -428,6 +415,7 @@ export class DiscordVoiceSessions {
 
     const entry: VoiceSessionEntry = {
       generation: authority?.generation ?? 0,
+      sessionLifecycle: { status: "active" },
       guildId,
       guildName:
         channelInfo &&
@@ -452,12 +440,11 @@ export class DiscordVoiceSessions {
       transcripts: options?.transcripts,
       receiveRecovery: createVoiceReceiveRecoveryState(),
       realtimeLifecycle: { status: "inactive", generation: 0 },
-      isStopped: () => stopped,
-      stop: () => {
+      stop(reason) {
         clearSessionIfCurrent();
         stopEntry(entry, {
           destroyConnection: true,
-          reason: `stop guild ${guildId} channel ${channelId}`,
+          reason: reason ?? `stop guild ${guildId} channel ${channelId}`,
         });
       },
     };
@@ -633,7 +620,7 @@ export class DiscordVoiceSessions {
       discordConfig: this.params.discordConfig,
     });
     if (
-      entry.isStopped() ||
+      entry.sessionLifecycle.status === "stopped" ||
       options?.isCurrent?.() === false ||
       (options?.requireLiveEntry === true && this.params.sessions.get(entry.guildId) !== entry)
     ) {
@@ -655,7 +642,7 @@ export class DiscordVoiceSessions {
         logger.error(
           `discord voice: realtime session failed terminally guild=${entry.guildId} channel=${entry.channelId}: ${formatErrorMessage(error)}`,
         );
-        entry.stop();
+        entry.stop("realtime terminal error");
       },
       runAgentTurn: ({ context, message, toolsAllow, userId }) =>
         this.params.receive.runDiscordRealtimeAgentTurn({
@@ -668,15 +655,13 @@ export class DiscordVoiceSessions {
     });
     const generation = entry.realtimeLifecycle.generation + 1;
     entry.realtimeLifecycle = { status: "starting", generation, instance: realtime };
-    entry.pendingRealtime = realtime;
     try {
       await realtime.connect();
       if (
         entry.realtimeLifecycle.status !== "starting" ||
         entry.realtimeLifecycle.generation !== generation ||
         entry.realtimeLifecycle.instance !== realtime ||
-        entry.pendingRealtime !== realtime ||
-        entry.isStopped() ||
+        entry.sessionLifecycle.status === "stopped" ||
         options?.isCurrent?.() === false ||
         (options?.requireLiveEntry === true && this.params.sessions.get(entry.guildId) !== entry)
       ) {
@@ -686,14 +671,9 @@ export class DiscordVoiceSessions {
           message: "Discord realtime voice session stopped before startup completed.",
         };
       }
-      entry.pendingRealtime = undefined;
-      entry.realtime = realtime;
       entry.realtimeLifecycle = { status: "active", generation, instance: realtime };
       return { ok: true };
     } catch (err) {
-      if (entry.pendingRealtime === realtime) {
-        entry.pendingRealtime = undefined;
-      }
       realtime.close();
       if (
         entry.realtimeLifecycle.status === "starting" &&

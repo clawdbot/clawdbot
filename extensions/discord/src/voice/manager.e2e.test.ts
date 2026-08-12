@@ -485,6 +485,7 @@ describe("DiscordVoiceManager", () => {
     clientOverride?: ReturnType<typeof createClient>,
     cfgOverride: ConstructorParameters<typeof managerModule.DiscordVoiceManager>[0]["cfg"] = {},
     accountId = "default",
+    botUserId?: string,
   ) =>
     new managerModule.DiscordVoiceManager({
       client: (clientOverride ?? createClient()) as never,
@@ -492,6 +493,7 @@ describe("DiscordVoiceManager", () => {
       discordConfig,
       accountId,
       runtime: createRuntime(),
+      botUserId,
     });
 
   type DiscordConfig = ConstructorParameters<
@@ -538,16 +540,28 @@ describe("DiscordVoiceManager", () => {
     clientOverride?: ReturnType<typeof createClient>,
     overrides?: AgentProxyConfigOverrides,
     cfgOverride?: ConstructorParameters<typeof managerModule.DiscordVoiceManager>[0]["cfg"],
-  ) => createManager(makeAgentProxyConfig(overrides), clientOverride, cfgOverride);
+    botUserId?: string,
+  ) =>
+    createManager(
+      makeAgentProxyConfig(overrides),
+      clientOverride,
+      cfgOverride,
+      "default",
+      botUserId,
+    );
 
   const createFollowManager = (
     voice: Partial<VoiceConfig> = {},
     clientOverride?: ReturnType<typeof createClient>,
     overrides: Omit<Partial<DiscordConfig>, "voice"> = {},
+    botUserId?: string,
   ) =>
     createManager(
       makeVoiceConfig({ followUsers: ["u-owner"], ...voice }, overrides),
       clientOverride,
+      {},
+      "default",
+      botUserId,
     );
 
   const expectConnectedStatus = (
@@ -574,8 +588,59 @@ describe("DiscordVoiceManager", () => {
     if (!entry) {
       throw new Error(`expected Discord voice session for guild ${guildId}`);
     }
+    if (!Object.hasOwn(entry, "realtime")) {
+      const realtimeLifecycle = () =>
+        (
+          entry as unknown as {
+            realtimeLifecycle:
+              | { status: "inactive" | "stopped" }
+              | { status: "starting" | "active"; instance: unknown };
+          }
+        ).realtimeLifecycle;
+      Object.defineProperties(entry, {
+        pendingRealtime: {
+          configurable: true,
+          get: () => {
+            const lifecycle = realtimeLifecycle();
+            return lifecycle.status === "starting" ? lifecycle.instance : undefined;
+          },
+        },
+        realtime: {
+          configurable: true,
+          get: () => {
+            const lifecycle = realtimeLifecycle();
+            return lifecycle.status === "active" ? lifecycle.instance : undefined;
+          },
+        },
+      });
+    }
     return entry;
   };
+
+  const getVoiceReceive = (manager: InstanceType<typeof managerModule.DiscordVoiceManager>) =>
+    (
+      manager as unknown as {
+        receive: {
+          daveRecoveryAttempts: Map<string, number>;
+          handleReceiveError: (entry: unknown, error: unknown) => void;
+          handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
+          processSegment: (params: {
+            entry: unknown;
+            wavPath: string;
+            userId: string;
+            durationSeconds: number;
+          }) => Promise<void>;
+          scheduleCaptureFinalize: (entry: unknown, userId: string, reason: string) => void;
+        };
+      }
+    ).receive;
+
+  const getVoiceFollowing = (manager: InstanceType<typeof managerModule.DiscordVoiceManager>) =>
+    (
+      manager as unknown as {
+        following: { followedUserChannels: Map<string, { channelId: string }> };
+      }
+    ).following;
 
   const beginSpeakerTurn = (
     entry: TestRealtimeSessionEntry,
@@ -753,9 +818,7 @@ describe("DiscordVoiceManager", () => {
 
   const emitDecryptFailure = (manager: InstanceType<typeof managerModule.DiscordVoiceManager>) => {
     const entry = getSessionEntry(manager);
-    (
-      manager as unknown as { handleReceiveError: (e: unknown, err: unknown) => void }
-    ).handleReceiveError(
+    getVoiceReceive(manager).handleReceiveError(
       entry,
       new Error("Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)"),
     );
@@ -835,20 +898,11 @@ describe("DiscordVoiceManager", () => {
     expect(joinVoiceChannelMock).not.toHaveBeenCalled();
   });
 
-  type ProcessSegmentInvoker = {
-    processSegment: (params: {
-      entry: unknown;
-      wavPath: string;
-      userId: string;
-      durationSeconds: number;
-    }) => Promise<void>;
-  };
-
   const processVoiceSegment = async (
     manager: InstanceType<typeof managerModule.DiscordVoiceManager>,
     userId: string,
   ) =>
-    await (manager as unknown as ProcessSegmentInvoker).processSegment({
+    await getVoiceReceive(manager).processSegment({
       entry: {
         guildId: "g1",
         channelId: "1001",
@@ -885,12 +939,7 @@ describe("DiscordVoiceManager", () => {
     manager: InstanceType<typeof managerModule.DiscordVoiceManager>,
     entry: unknown,
     userId: string,
-  ) =>
-    await (
-      manager as unknown as {
-        handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
-      }
-    ).handleSpeakingStart(entry, userId);
+  ) => await getVoiceReceive(manager).handleSpeakingStart(entry, userId);
 
   it("keeps the new session when an old disconnected handler fires", async () => {
     const oldConnection = createConnectionMock();
@@ -1034,8 +1083,7 @@ describe("DiscordVoiceManager", () => {
       onUtterance,
     });
     expect(entry.realtime).toBeTruthy();
-    const attempts = (manager as unknown as { daveRecoveryAttempts: Map<string, number> })
-      .daveRecoveryAttempts;
+    const attempts = getVoiceReceive(manager).daveRecoveryAttempts;
     attempts.set("g1", Date.now());
 
     const stopNotesResult = await manager.leave(
@@ -1317,8 +1365,7 @@ describe("DiscordVoiceManager", () => {
   it("enqueues the initial voice roster without speaking on its own", async () => {
     const client = createClient();
     configureVoiceStateGateway(client, createDefaultVoiceStates);
-    const manager = createManager(undefined, client);
-    manager.setBotUserId("bot-user");
+    const manager = createManager(undefined, client, {}, "default", "bot-user");
 
     await manager.join({ guildId: "g1", channelId: "1001" });
     await vi.waitFor(() => expect(enqueueSystemEventMock).toHaveBeenCalledOnce());
@@ -1461,8 +1508,7 @@ describe("DiscordVoiceManager", () => {
       roles: [],
       user: { id: userId, username: userId, globalName: undefined, discriminator: "0" },
     }));
-    const manager = createManager(undefined, client);
-    manager.setBotUserId("bot-user");
+    const manager = createManager(undefined, client, {}, "default", "bot-user");
     await manager.join({ guildId: "g1", channelId: "1001" });
     await vi.waitFor(() => expect(enqueueSystemEventMock).toHaveBeenCalledOnce());
     enqueueSystemEventMock.mockClear();
@@ -1743,8 +1789,7 @@ describe("DiscordVoiceManager", () => {
       user_id: "bot-user",
       channel_id: "1001",
     });
-    const manager = createFollowManager({}, client, { guilds: { g1: {} } });
-    manager.setBotUserId("bot-user");
+    const manager = createFollowManager({}, client, { guilds: { g1: {} } }, "bot-user");
 
     await manager.autoJoin();
     await manager.destroy();
@@ -1768,8 +1813,7 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("preserves follow ownership when a bot voice move rebuilds the session", async () => {
-    const manager = createFollowManager();
-    manager.setBotUserId("bot-user");
+    const manager = createFollowManager({}, undefined, {}, "bot-user");
 
     await updateVoiceState(manager, "u-owner", "1001");
     await updateVoiceState(manager, "bot-user", "1002");
@@ -1857,10 +1901,12 @@ describe("DiscordVoiceManager", () => {
     const guilds = Object.fromEntries(
       Array.from({ length: 10 }, (_, index) => [`g${index + 1}`, {}]),
     );
-    const manager = createFollowManager({ followUsers: ["u1", "u2", "u3", "u4", "u5"] }, client, {
-      guilds,
-    });
-    manager.setBotUserId("bot-user");
+    const manager = createFollowManager(
+      { followUsers: ["u1", "u2", "u3", "u4", "u5"] },
+      client,
+      { guilds },
+      "bot-user",
+    );
 
     await manager.autoJoin();
     await manager.destroy();
@@ -1917,8 +1963,8 @@ describe("DiscordVoiceManager", () => {
       { followUsers: Array.from({ length: 40 }, (_, index) => `u${index + 1}`) },
       client,
       { guilds: { g1: {} } },
+      "bot-user",
     );
-    manager.setBotUserId("bot-user");
 
     await manager.autoJoin();
     expect(client.rest.get).toHaveBeenCalledTimes(31);
@@ -1951,8 +1997,8 @@ describe("DiscordVoiceManager", () => {
       { followUsers: Array.from({ length: 40 }, (_, index) => `u${index + 1}`) },
       client,
       { guilds: { g1: {}, g2: {} } },
+      "bot-user",
     );
-    manager.setBotUserId("bot-user");
 
     await manager.autoJoin();
     expect(client.rest.get).toHaveBeenCalledTimes(31);
@@ -1985,8 +2031,8 @@ describe("DiscordVoiceManager", () => {
       { followUsers: Array.from({ length: 10 }, (_, index) => `u${index + 1}`) },
       client,
       { guilds: { g1: {}, g2: {}, g3: {} } },
+      "bot-user",
     );
-    manager.setBotUserId("bot-user");
 
     await manager.autoJoin();
     expect(client.rest.get).toHaveBeenCalledTimes(32);
@@ -2019,8 +2065,11 @@ describe("DiscordVoiceManager", () => {
         autoJoin: [{ guildId: "g1", channelId: "1001" }],
         allowedChannels: [{ guildId: "g1", channelId: "1001" }],
       }),
+      undefined,
+      {},
+      "default",
+      "bot-user",
     );
-    manager.setBotUserId("bot-user");
     await manager.join({ guildId: "g1", channelId: "1001" });
 
     await updateVoiceState(manager, "bot-user", "1002");
@@ -3320,8 +3369,8 @@ describe("DiscordVoiceManager", () => {
           list: [{ id: "agent-1", identity: { name: "Molty" } }],
         },
       },
+      "bot-user",
     );
-    manager.setBotUserId("bot-user");
     await manager.join({ guildId: "g1", channelId: "1001" });
     const entry = getSessionEntry(manager);
     const bridgeParams = lastRealtimeBridgeParams();
@@ -4776,9 +4825,7 @@ describe("DiscordVoiceManager", () => {
     const staleEntry = getSessionEntry(manager);
     await manager.join({ guildId: "g1", channelId: "1002" });
 
-    (
-      manager as unknown as { handleReceiveError: (entry: unknown, err: unknown) => void }
-    ).handleReceiveError(
+    getVoiceReceive(manager).handleReceiveError(
       staleEntry,
       new Error("Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)"),
     );
@@ -4797,9 +4844,9 @@ describe("DiscordVoiceManager", () => {
 
     await manager.join({ guildId: "g1", channelId: "1001" });
     const entry = getSessionEntry(manager) as TestRealtimeSessionEntry & {
-      isStopped: () => boolean;
+      sessionLifecycle: { status: "active" } | { status: "stopped"; reason: string };
     };
-    entry.isStopped = () => true;
+    entry.sessionLifecycle = { status: "stopped", reason: "test" };
 
     emitDecryptFailure(manager);
 
@@ -4816,9 +4863,7 @@ describe("DiscordVoiceManager", () => {
     const manager = createManager();
 
     await manager.join({ guildId: "g1", channelId: "1001" });
-    (
-      manager as unknown as { handleReceiveError: (entry: unknown, err: unknown) => void }
-    ).handleReceiveError(
+    getVoiceReceive(manager).handleReceiveError(
       getSessionEntry(manager),
       new Error("DecryptionFailed(InvalidCiphertext)"),
     );
@@ -4968,9 +5013,7 @@ describe("DiscordVoiceManager", () => {
       await vi.advanceTimersByTimeAsync(10_000);
 
       expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
-      const followedUsers = (
-        manager as unknown as { followedUserChannels: Map<string, { channelId: string }> }
-      ).followedUserChannels;
+      const followedUsers = getVoiceFollowing(manager).followedUserChannels;
       expect(followedUsers.get("g1:u-owner")?.channelId).toBe("1001");
 
       await vi.advanceTimersByTimeAsync(20_000);
@@ -5125,8 +5168,7 @@ describe("DiscordVoiceManager", () => {
     const manager = createManager();
 
     await manager.join({ guildId: "g1", channelId: "1001" });
-    const attempts = (manager as unknown as { daveRecoveryAttempts: Map<string, number> })
-      .daveRecoveryAttempts;
+    const attempts = getVoiceReceive(manager).daveRecoveryAttempts;
     attempts.set("g1", Date.now() - DECRYPT_FAILURE_WINDOW_MS);
     attempts.set("other-guild", Date.now());
 
@@ -5162,9 +5204,7 @@ describe("DiscordVoiceManager", () => {
     await manager.join({ guildId: "g2", channelId: "2001" });
     emitDecryptFailure(manager);
     await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(3));
-    (
-      manager as unknown as { handleReceiveError: (entry: unknown, err: unknown) => void }
-    ).handleReceiveError(
+    getVoiceReceive(manager).handleReceiveError(
       getSessionEntry(manager, "g2"),
       new Error("Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)"),
     );
@@ -5175,8 +5215,7 @@ describe("DiscordVoiceManager", () => {
 
   it("clears poisoned-DAVE reconnect budgets when the manager is destroyed", async () => {
     const manager = createManager();
-    const attempts = (manager as unknown as { daveRecoveryAttempts: Map<string, number> })
-      .daveRecoveryAttempts;
+    const attempts = getVoiceReceive(manager).daveRecoveryAttempts;
     attempts.set("g1", Date.now());
 
     await manager.destroy();
@@ -5246,8 +5285,7 @@ describe("DiscordVoiceManager", () => {
     emitDecryptFailure(manager);
     emitDecryptFailure(manager);
     const entry = getSessionEntry(manager);
-    const attempts = (manager as unknown as { daveRecoveryAttempts: Map<string, number> })
-      .daveRecoveryAttempts;
+    const attempts = getVoiceReceive(manager).daveRecoveryAttempts;
     attempts.set("g1", Date.now());
     expect(entry.receiveRecovery.decryptFailureCount).toBe(2);
     const stream = {
@@ -5406,11 +5444,7 @@ describe("DiscordVoiceManager", () => {
       entry.capture.captureGenerations.set("u1", 1);
       entry.capture.activeCaptureStreams.set("u1", { generation: 1, stream: firstStream });
 
-      (
-        manager as unknown as {
-          scheduleCaptureFinalize: (entry: unknown, userId: string, reason: string) => void;
-        }
-      ).scheduleCaptureFinalize(entry, "u1", "test");
+      getVoiceReceive(manager).scheduleCaptureFinalize(entry, "u1", "test");
 
       await vi.advanceTimersByTimeAsync(2_500);
 
@@ -5461,11 +5495,7 @@ describe("DiscordVoiceManager", () => {
         stream: stream as unknown as Readable,
       });
 
-      (
-        manager as unknown as {
-          scheduleCaptureFinalize: (entry: unknown, userId: string, reason: string) => void;
-        }
-      ).scheduleCaptureFinalize(entry, "u1", "test");
+      getVoiceReceive(manager).scheduleCaptureFinalize(entry, "u1", "test");
 
       await vi.advanceTimersByTimeAsync(3_999);
       expect(stream.destroy).not.toHaveBeenCalled();
@@ -5816,8 +5846,9 @@ describe("DiscordVoiceManager", () => {
       },
       client,
       {},
+      "default",
+      "bot-user",
     );
-    manager.setBotUserId("bot-user");
 
     await processVoiceSegment(manager, "u-owner");
 
@@ -6137,7 +6168,9 @@ describe("DiscordVoiceManager", () => {
     resolveConnect();
     await connect;
 
-    expect((session as unknown as { bridgeReady: boolean }).bridgeReady).toBe(false);
+    expect((session as unknown as { lifecycle: { status: string } }).lifecycle.status).toBe(
+      "stopped",
+    );
   });
 
   it("provider reset fences transcript, tool, playback, and consult completions", async () => {
