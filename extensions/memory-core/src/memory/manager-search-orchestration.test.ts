@@ -43,12 +43,20 @@ describe("memory index", () => {
     }
   }
 
-  it("finds keyword matches via hybrid search when query embedding is zero", async () => {
-    await expectHybridKeywordSearchFindsMemory(
-      createCfg({
-        hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
-      }),
-    );
+  it.each([
+    {
+      name: "zero vector weight",
+      config: { hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 } },
+    },
+    {
+      name: "minimum score exceeds text weight",
+      config: {
+        minScore: 0.35,
+        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+      },
+    },
+  ])("finds keyword matches via hybrid search when $name", async ({ config }) => {
+    await expectHybridKeywordSearchFindsMemory(createCfg(config));
   });
 
   it("retries transient query embedding transport failures during search", async () => {
@@ -131,15 +139,6 @@ describe("memory index", () => {
 
     await expect(manager.search("alpha")).rejects.toThrow("fetch failed");
     expect(queryCalls).toBe(3);
-  });
-
-  it("preserves keyword-only hybrid hits when minScore exceeds text weight", async () => {
-    await expectHybridKeywordSearchFindsMemory(
-      createCfg({
-        minScore: 0.35,
-        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
-      }),
-    );
   });
 
   it("supplements thin strict FTS results for conversational queries", async () => {

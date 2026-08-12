@@ -56,12 +56,29 @@ describe("memory index", () => {
     expect(noResults.length).toBe(0);
   });
 
-  it("ranks an exact path stem ahead of a body match before applying the result limit", async () => {
+  it.each([
+    {
+      name: "slug path stem",
+      config: { hybrid: { enabled: true } },
+      exactFile: "project-lantern.md",
+      bodyText: "Project lantern project lantern project lantern.",
+      query: "project-lantern",
+      expectedPath: "memory/project-lantern.md",
+    },
+    {
+      name: "dated path stem",
+      config: {},
+      exactFile: "2020-01-01.md",
+      bodyText: "2020 01 01 2020 01 01 2020 01 01",
+      query: "2020-01-01",
+      expectedPath: "memory/2020-01-01.md",
+    },
+  ])("ranks an exact $name ahead of a body match", async (testCase) => {
     providerFixture.forceNoProvider = true;
     const cfg = createCfg({
       provider: "none",
       minScore: 0.35,
-      hybrid: { enabled: true },
+      ...testCase.config,
     });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     const manager = requireManager(result);
@@ -72,18 +89,15 @@ describe("memory index", () => {
     }
 
     await fs.writeFile(
-      path.join(fixture.paths.memory, "project-lantern.md"),
+      path.join(fixture.paths.memory, testCase.exactFile),
       "Unrelated exact-path body.",
     );
-    await fs.writeFile(
-      path.join(fixture.paths.memory, "body-match.md"),
-      "Project lantern project lantern project lantern.",
-    );
+    await fs.writeFile(path.join(fixture.paths.memory, "body-match.md"), testCase.bodyText);
     await manager.sync({ reason: "test" });
 
-    const results = await manager.search("project-lantern", { maxResults: 1 });
+    const results = await manager.search(testCase.query, { maxResults: 1 });
     expect(results).toHaveLength(1);
-    expect(results[0]?.path).toContain("memory/project-lantern.md");
+    expect(results[0]?.path).toContain(testCase.expectedPath);
     expect(results[0]?.score).toBe(1);
   });
 
@@ -408,36 +422,6 @@ describe("memory index", () => {
     expect(results).toHaveLength(1);
     expect(results[0]?.path).toContain("memory/project-memory-notes.md");
     expect(results[0]?.score).toBeLessThanOrEqual(1);
-  });
-
-  it("keeps an exact dated path ahead in FTS-only mode", async () => {
-    providerFixture.forceNoProvider = true;
-    const cfg = createCfg({
-      provider: "none",
-      minScore: 0.35,
-    });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    const manager = requireManager(result);
-    trackManager(manager);
-    resetManagerForTest(manager);
-    if (!manager.status().fts?.available) {
-      return;
-    }
-
-    await fs.writeFile(
-      path.join(fixture.paths.memory, "2020-01-01.md"),
-      "Unrelated exact-path body.",
-    );
-    await fs.writeFile(
-      path.join(fixture.paths.memory, "body-match.md"),
-      "2020 01 01 2020 01 01 2020 01 01",
-    );
-    await manager.sync({ reason: "test" });
-
-    const results = await manager.search("2020-01-01", { maxResults: 1 });
-    expect(results).toHaveLength(1);
-    expect(results[0]?.path).toContain("memory/2020-01-01.md");
-    expect(results[0]?.score).toBe(1);
   });
 
   it("prefers exact session transcript hits in FTS-only mode", async () => {
