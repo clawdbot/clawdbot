@@ -7286,6 +7286,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const fullReleaseWorkflow = readWorkflow(".github/workflows/full-release-validation.yml");
     const releaseWorkflow = readReleaseChecksWorkflow();
     const telegramWorkflow = readWorkflow(".github/workflows/openclaw-release-telegram-qa.yml");
+    const telegramProvenanceHelper = readFileSync("scripts/release-telegram-provenance.sh", "utf8");
     const fullReleaseDispatchStep = fullReleaseWorkflow.jobs.release_checks.steps.find(
       (step: WorkflowStep) => step.name === "Dispatch and monitor release checks",
     );
@@ -7337,29 +7338,40 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     for (const provenanceStep of provenanceSteps) {
       expect(provenanceStep.env.TARGET_CONTEXT_REF).toBe("${{ inputs.target_context_ref }}");
-      expect(provenanceStep.run).toContain("frozen-release-branch-head");
-      expect(provenanceStep.run).toContain(
-        'elif [[ "$candidate_version" =~ ^${release_version_pattern}-beta\\.[0-9]+$ ]]',
-      );
-      expect(provenanceStep.run).toContain(
-        'frozen_release_branch_pattern="^release/${candidate_version_pattern}-code-frozen(-r[1-9][0-9]*)?$"',
-      );
-      expect(provenanceStep.run).toContain('elif [[ -z "$frozen_release_branch_pattern" ]]; then');
-      expect(provenanceStep.run).toContain(
-        "Telegram candidate version ${candidate_version} does not belong to release ${release_version}.",
-      );
-      expect(provenanceStep.run).toContain(
-        "Telegram candidate version ${candidate_version} does not match context ${normalized_context_ref}.",
-      );
-      expect(provenanceStep.run).toContain('context_release_branch="$normalized_context_ref"');
-      expect(provenanceStep.run).toContain('context_release_tag="$normalized_context_ref"');
-      expect(provenanceStep.run).toContain(
-        "Frozen release candidate ${candidate_sha} requires a valid maintainer signature.",
-      );
-      expect(provenanceStep.run).toContain(
-        'select(.state == "OPEN" and .headRepository.nameWithOwner == $repo and',
+      expect(provenanceStep.run.trim()).toBe(
+        'bash "${GITHUB_WORKSPACE}/scripts/release-telegram-provenance.sh"',
       );
     }
+    expect(telegramProvenanceHelper).toContain(
+      'if [[ "$candidate_version" == "$release_version" ||',
+    );
+    expect(telegramProvenanceHelper).toContain(
+      '"$candidate_version" =~ ^${release_version_pattern}-beta\\.[0-9]+$ ]]; then',
+    );
+    expect(telegramProvenanceHelper).toContain('context_release_branch="$normalized_context_ref"');
+    expect(telegramProvenanceHelper).toContain('context_release_tag="$normalized_context_ref"');
+    expect(telegramProvenanceHelper).toContain(
+      "Telegram candidate version ${candidate_version} does not belong to release ${release_version}.",
+    );
+    expect(telegramProvenanceHelper).toContain(
+      "Telegram candidate version ${candidate_version} does not match context ${normalized_context_ref}.",
+    );
+    expect(telegramProvenanceHelper).toContain(
+      'select(.state == "OPEN" and .headRepository.nameWithOwner == $repo and',
+    );
+    expect(telegramProvenanceHelper).toContain(
+      'select(.state == "MERGED" and .baseRepository.nameWithOwner == $repo and',
+    );
+    expect(telegramProvenanceHelper).toContain(".mergeCommit.oid == $sha)]");
+    expect(telegramProvenanceHelper).toContain(
+      'if [[ "$(jq \'length\' <<<"$matching_merge_prs")" != "1" ]]; then',
+    );
+    expect(telegramProvenanceHelper).toContain(
+      'if [[ "$permission" != "admin" && "$role_name" != "maintain" ]]; then',
+    );
+    expect(telegramProvenanceHelper).not.toContain("code-frozen");
+    expect(telegramProvenanceHelper).not.toContain("frozen-release-branch-head");
+    expect(telegramProvenanceHelper).not.toContain(".baseRefName ==");
   });
 
   it("keeps maturity scorecard release docs opt-in from release checks", () => {
