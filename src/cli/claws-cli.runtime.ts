@@ -380,9 +380,15 @@ export async function runClawsAddCommand(
     };
     const canResumeWorkspace =
       resumeRecord.status === "workspace_ready" || resumeRecord.status === "config_committed";
-    const expectedCommittedAgentConfig = legacyResumePlan?.agent.config ?? plan.agent.config;
+    const expectedCommittedAgentConfigs = legacyResumePlan
+      ? [legacyResumePlan.agent.config, plan.agent.config]
+      : [plan.agent.config];
     const committedAgent = listAgentEntries(config).find(
-      (agent) => stableStringify(agent) === stableStringify(expectedCommittedAgentConfig),
+      (agent) =>
+        agent.id === resumeRecord.agentId &&
+        expectedCommittedAgentConfigs.some(
+          (expected) => stableStringify(agent) === stableStringify(expected),
+        ),
     );
     const canResumeAgent =
       resumeRecord.status === "config_committed" ||

@@ -108,8 +108,26 @@ describe("claws add legacy v1 resume", () => {
         .prepare("UPDATE claw_installs SET schema_version = ? WHERE agent_id = ?")
         .run("openclaw.clawInstallRecord.v1", "demo-agent");
       await mkdir(workspace);
-      mocks.loadConfig.mockReturnValue({ agents: { list: [legacyPlan.agent.config] } });
+      let config = { agents: { list: [legacyPlan.agent.config] } };
+      mocks.loadConfig.mockImplementation(() => config);
+      mocks.applyClawAddPlan.mockImplementationOnce(async (boundedPlan) => {
+        config = { agents: { list: [boundedPlan.agent.config] } };
+        return {
+          schemaVersion: "openclaw.clawAddResult.v1",
+          stability: "experimental",
+          status: "partial",
+          agent: boundedPlan.agent,
+        };
+      });
 
+      await expect(
+        runClawsAddCommand(manifestPath, {
+          yes: true,
+          planIntegrity: legacyPlan.planIntegrity,
+          workspace,
+          json: true,
+        }),
+      ).rejects.toThrow("__exit__:1");
       await runClawsAddCommand(manifestPath, {
         yes: true,
         planIntegrity: legacyPlan.planIntegrity,
@@ -117,7 +135,7 @@ describe("claws add legacy v1 resume", () => {
         json: true,
       });
 
-      expect(mocks.applyClawAddPlan).toHaveBeenCalledWith(
+      expect(mocks.applyClawAddPlan).toHaveBeenLastCalledWith(
         expect.objectContaining({
           planIntegrity: expect.not.stringMatching(legacyPlan.planIntegrity),
           agent: expect.objectContaining({
