@@ -6,7 +6,7 @@ import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
 import { safeAttachmentHref } from "./chat-attachment-href.ts";
-import { type ChatMediaPlaybackMode } from "./chat-media-playback.ts";
+import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import { ChatMediaSourceController } from "./chat-media-source.ts";
 
 class ChatVideoPlayer extends OpenClawLightDomContentsElement {

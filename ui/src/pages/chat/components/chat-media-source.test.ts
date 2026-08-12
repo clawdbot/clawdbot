@@ -169,9 +169,9 @@ describe("ChatMediaSourceController", () => {
     );
     const media = document.createElement("audio");
     const controller = new ChatMediaSourceController();
-    controller.sync(media, "/media/voice.mp3?mediaTicket=old", "media:voice", "native");
+    void controller.sync(media, "/media/voice.mp3?mediaTicket=old", "media:voice", "native");
     expect(controller.handleError(media)).toBe(false);
-    controller.sync(media, "/media/voice.mp3?mediaTicket=old", "media:voice", "native");
+    void controller.sync(media, "/media/voice.mp3?mediaTicket=old", "media:voice", "native");
 
     const pending = controller.sync(
       media,
@@ -194,7 +194,7 @@ describe("ChatMediaSourceController", () => {
     );
     const media = document.createElement("audio");
     const controller = new ChatMediaSourceController();
-    controller.sync(media, "/media/voice.caf?mediaTicket=old", "media:voice", "native");
+    void controller.sync(media, "/media/voice.caf?mediaTicket=old", "media:voice", "native");
     expect(controller.handleError(media)).toBe(false);
 
     await controller.sync(
@@ -229,7 +229,7 @@ describe("ChatMediaSourceController", () => {
     );
     const media = document.createElement("video");
     const controller = new ChatMediaSourceController();
-    controller.sync(
+    void controller.sync(
       media,
       "/media/protected.mp4?mediaTicket=old",
       "media:protected",
