@@ -252,6 +252,34 @@ test("keyed sessions remain recoverable across overlapping create and delete wav
   }
 });
 
+test("sessions.reset preserves the session sidebar category", async () => {
+  const key = "agent:main:reset-category-regression";
+  const created = await directSessionReq<{ key: string }>("sessions.create", {
+    agentId: "main",
+    key,
+  });
+  expect(created.ok).toBe(true);
+
+  const patched = await directSessionReq("sessions.patch", {
+    agentId: "main",
+    key,
+    category: "Operations",
+  });
+  expect(patched.ok).toBe(true);
+  expect(loadSessionEntry({ agentId: "main", sessionKey: key })?.category).toBe("Operations");
+
+  const reset = await directSessionReq<{ entry?: { category?: string } }>("sessions.reset", {
+    agentId: "main",
+    key,
+  });
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.entry?.category).toBe("Operations");
+  expect(loadSessionEntry({ agentId: "main", sessionKey: key })?.category).toBe("Operations");
+
+  const deleted = await directSessionReq("sessions.delete", { agentId: "main", key });
+  expect(deleted.ok).toBe(true);
+});
+
 test("sessions.create keeps incognito rows process-local through list, spawn, reset, and delete", async () => {
   const { storePath } = await createSessionStoreDir();
   try {
