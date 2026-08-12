@@ -506,7 +506,7 @@ describe("models-config write serialization", () => {
     });
   });
 
-  it("bootstraps a missing secondary root catalog from the default agent on skip", async () => {
+  it("plans a missing secondary root catalog from the default agent without writing it", async () => {
     await withModelsTempHome(async (home) => {
       const cfg = { agents: { list: [{ id: "main", default: true }] } };
       const defaultAgentDir = resolveDefaultAgentDir(cfg);
@@ -517,7 +517,7 @@ describe("models-config write serialization", () => {
             openai: {
               baseUrl: "https://gateway.example/v1",
               headers: { "X-Tenant": "ops" },
-              apiKey: "$" + "{OPENAI_API_KEY}",
+              apiKey: "${OPENAI_API_KEY}",
               models: [{ id: "gpt-test", name: "GPT Test" }],
             },
           },
@@ -529,15 +529,14 @@ describe("models-config write serialization", () => {
       await fs.writeFile(path.join(defaultAgentDir, "models.json"), contents, "utf8");
       planOpenClawModelsJsonMock.mockResolvedValue({ action: "skip" });
 
-      const result = await ensureOpenClawModelsJson(cfg, agentDir);
+      const result = await planOpenClawModelsJsonSource(cfg, agentDir);
 
-      expect(result.wrote).toBe(true);
-      expect(await fs.readFile(path.join(agentDir, "models.json"), "utf8")).toBe(contents);
-      expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([]);
+      expect(result.modelsJsonContents).toBe(contents);
+      await expectMissingPath(fs.access(path.join(agentDir, "models.json")));
     });
   });
 
-  it("does not overwrite an existing secondary root catalog on skip", async () => {
+  it("keeps an existing malformed secondary root catalog authoritative on skip", async () => {
     await withModelsTempHome(async (home) => {
       const cfg = { agents: { list: [{ id: "main", default: true }] } };
       const defaultAgentDir = resolveDefaultAgentDir(cfg);
@@ -549,14 +548,14 @@ describe("models-config write serialization", () => {
       await fs.writeFile(targetPath, "{ malformed catalog");
       planOpenClawModelsJsonMock.mockResolvedValue({ action: "skip" });
 
-      const result = await ensureOpenClawModelsJson(cfg, agentDir);
+      const result = await planOpenClawModelsJsonSource(cfg, agentDir);
 
-      expect(result.wrote).toBe(false);
+      expect(result.modelsJsonContents).toBe("{ malformed catalog");
       expect(await fs.readFile(targetPath, "utf8")).toBe("{ malformed catalog");
     });
   });
 
-  it("retries secondary bootstrap when the default catalog appears after an earlier skip", async () => {
+  it("keeps ensure non-mutating when only the default agent has a root catalog", async () => {
     await withModelsTempHome(async (home) => {
       const cfg = { agents: { list: [{ id: "main", default: true }] } };
       const defaultAgentDir = resolveDefaultAgentDir(cfg);
@@ -564,14 +563,11 @@ describe("models-config write serialization", () => {
       const targetPath = path.join(agentDir, "models.json");
       const contents = '{"providers":{"main":{}}}\n';
       planOpenClawModelsJsonMock.mockResolvedValue({ action: "skip" });
-
-      expect((await ensureOpenClawModelsJson(cfg, agentDir)).wrote).toBe(false);
       await fs.mkdir(defaultAgentDir, { recursive: true });
       await fs.writeFile(path.join(defaultAgentDir, "models.json"), contents);
 
-      expect((await ensureOpenClawModelsJson(cfg, agentDir)).wrote).toBe(true);
-      expect(await fs.readFile(targetPath, "utf8")).toBe(contents);
-      expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(2);
+      expect((await ensureOpenClawModelsJson(cfg, agentDir)).wrote).toBe(false);
+      await expectMissingPath(fs.access(targetPath));
     });
   });
 
