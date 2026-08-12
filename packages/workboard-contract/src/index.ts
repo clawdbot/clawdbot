@@ -152,6 +152,7 @@ export type WorkboardLink = {
   lastSourceObservationId?: string;
   lastSourceObservationRequestJson?: string;
   lastSourceObservationRevision?: number;
+  lastSourceObservationEvidenceJson?: string;
   targetCardId?: string;
   title?: string;
   url?: string;

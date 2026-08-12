@@ -30,7 +30,7 @@ import type {
   WorkboardKeyedStore,
 } from "./persistence-types.js";
 const WORKBOARD_DB_RELATIVE_PATH = ["plugins", "workboard", "workboard.sqlite"] as const;
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 const WORKBOARD_SQLITE_BUSY_TIMEOUT_MS = 5000;
 const WORKBOARD_SQLITE_DIR_MODE = 0o700;
 const WORKBOARD_SQLITE_FILE_MODE = 0o600;
@@ -253,6 +253,7 @@ const WORKBOARD_SCHEMA_SQL = `
       last_source_observation_id TEXT,
       last_source_observation_request_json TEXT,
       last_source_observation_revision INTEGER,
+      last_source_observation_evidence_json TEXT,
       created_at INTEGER NOT NULL
     ) STRICT;
 
@@ -392,6 +393,12 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
     "workboard_card_links",
     "last_source_observation_revision",
     "last_source_observation_revision INTEGER",
+  );
+  ensureColumn(
+    db,
+    "workboard_card_links",
+    "last_source_observation_evidence_json",
+    "last_source_observation_evidence_json TEXT",
   );
   const migrationId = `schema-${SCHEMA_VERSION}`;
   const current = db
@@ -698,6 +705,10 @@ function readMetadata(
       "last_source_observation_request_json",
     );
     const lastSourceObservationRevision = numberValue(child, "last_source_observation_revision");
+    const lastSourceObservationEvidenceJson = stringValue(
+      child,
+      "last_source_observation_evidence_json",
+    );
     if (targetCardId) {
       entry.targetCardId = targetCardId;
     }
@@ -719,6 +730,8 @@ function readMetadata(
       entry.lastSourceObservationRequestJson = lastSourceObservationRequestJson;
     if (lastSourceObservationRevision !== undefined)
       entry.lastSourceObservationRevision = lastSourceObservationRevision;
+    if (lastSourceObservationEvidenceJson)
+      entry.lastSourceObservationEvidenceJson = lastSourceObservationEvidenceJson;
     return entry;
   });
   const proof = childRows(db, "workboard_card_proof", cardId, preloaded).map((child) => {
@@ -1094,8 +1107,8 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
     db.prepare(
       `
         INSERT INTO workboard_card_links
-          (id, card_id, ordinal, type, target_card_id, title, url, source_updated_at, consecutive_successful_full_scan_misses, stale_at, stale_state, last_source_observation_id, last_source_observation_request_json, last_source_observation_revision, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (id, card_id, ordinal, type, target_card_id, title, url, source_updated_at, consecutive_successful_full_scan_misses, stale_at, stale_state, last_source_observation_id, last_source_observation_request_json, last_source_observation_revision, last_source_observation_evidence_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     ).run(
       entry.id,
@@ -1112,6 +1125,7 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
       bindNull(entry.lastSourceObservationId),
       bindNull(entry.lastSourceObservationRequestJson),
       bindNull(entry.lastSourceObservationRevision),
+      bindNull(entry.lastSourceObservationEvidenceJson),
       entry.createdAt,
     );
   });

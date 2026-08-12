@@ -476,6 +476,7 @@ export class WorkboardCoreStore {
       allowMetadataDependencyLinks?: boolean;
       enforceStatusHolds?: boolean;
       preserveProofId?: string;
+      updatedAt?: number;
     } = {},
   ): Promise<WorkboardCard> {
     const existing = await this.get(id);
@@ -509,7 +510,7 @@ export class WorkboardCoreStore {
       }
     }
     const status = normalizeStatus(effectivePatch.status, existing.status);
-    const now = Date.now();
+    const now = Math.max(options.updatedAt ?? Date.now(), existing.updatedAt + 1);
     const startedAt =
       effectivePatch.startedAt === undefined
         ? status === "running"

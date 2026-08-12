@@ -146,6 +146,7 @@ function sourceObservationResult(
   observation: WorkboardReconciliationSourceObservation,
   evidence: WorkboardLink,
 ): WorkboardReconciliationSourceObservationResult {
+  const persistedEvidence = sourceObservationEvidence(evidence);
   return {
     card,
     association: {
@@ -156,18 +157,37 @@ function sourceObservationResult(
       idempotencyKey: observation.idempotencyKey,
     },
     observationId: observation.observationId,
-    revision: card.updatedAt,
+    revision: evidence.lastSourceObservationRevision ?? card.updatedAt,
     evidence: {
-      ...(evidence.consecutiveSuccessfulFullScanMisses === undefined
-        ? {}
-        : { consecutiveSuccessfulFullScanMisses: evidence.consecutiveSuccessfulFullScanMisses }),
-      ...(evidence.staleAt === undefined ? {} : { staleAt: evidence.staleAt }),
-      ...(evidence.staleState === undefined ? {} : { staleState: evidence.staleState }),
+      ...persistedEvidence,
       ...(evidence.lastSourceObservationId === undefined
         ? {}
         : { lastSourceObservationId: evidence.lastSourceObservationId }),
     },
   };
+}
+
+function sourceObservationEvidence(evidence: WorkboardLink) {
+  const fallback = {
+    ...(evidence.consecutiveSuccessfulFullScanMisses === undefined
+      ? {}
+      : { consecutiveSuccessfulFullScanMisses: evidence.consecutiveSuccessfulFullScanMisses }),
+    ...(evidence.staleAt === undefined ? {} : { staleAt: evidence.staleAt }),
+    ...(evidence.staleState === undefined ? {} : { staleState: evidence.staleState }),
+  };
+  if (!evidence.lastSourceObservationEvidenceJson) return fallback;
+  try {
+    const value = JSON.parse(evidence.lastSourceObservationEvidenceJson) as Record<string, unknown>;
+    return {
+      ...(typeof value.consecutiveSuccessfulFullScanMisses === "number"
+        ? { consecutiveSuccessfulFullScanMisses: value.consecutiveSuccessfulFullScanMisses }
+        : {}),
+      ...(typeof value.staleAt === "number" ? { staleAt: value.staleAt } : {}),
+      ...(value.staleState === "stale" ? { staleState: "stale" as const } : {}),
+    };
+  } catch {
+    return fallback;
+  }
 }
 
 // Capability layers split review boundaries only; the core still owns persistence and mutation order.
@@ -350,10 +370,8 @@ export class WorkboardStore extends WorkboardNotificationStore {
           : observation.sourceState === "dependency-failed"
             ? current.consecutiveSuccessfulFullScanMisses
             : (current.consecutiveSuccessfulFullScanMisses ?? 0) + 1;
-      const next = {
+      const nextEvidence = {
         ...current,
-        lastSourceObservationId: observation.observationId,
-        lastSourceObservationRequestJson: requestJson,
         ...(misses === undefined ? {} : { consecutiveSuccessfulFullScanMisses: misses }),
         ...(observation.sourceState === "dependency-failed"
           ? {}
@@ -363,11 +381,23 @@ export class WorkboardStore extends WorkboardNotificationStore {
               ? { staleAt: observation.observedAt, staleState: "stale" as const }
               : {}),
       };
+      const acknowledgementRevision = Math.max(Date.now(), card.updatedAt + 1);
+      const next = {
+        ...nextEvidence,
+        lastSourceObservationId: observation.observationId,
+        lastSourceObservationRequestJson: requestJson,
+        lastSourceObservationRevision: acknowledgementRevision,
+        lastSourceObservationEvidenceJson: JSON.stringify(sourceObservationEvidence(nextEvidence)),
+      };
       const nextLinks = [...links];
       nextLinks[index] = next;
-      const updated = await this.updateCard(card.id, {
-        metadata: { ...card.metadata, links: nextLinks },
-      });
+      const updated = await this.updateCard(
+        card.id,
+        {
+          metadata: { ...card.metadata, links: nextLinks },
+        },
+        { updatedAt: acknowledgementRevision },
+      );
       const evidence = updated.metadata?.links?.find((link) => link.id === linkId);
       if (!evidence) throw new Error("source observation evidence was not persisted.");
       return sourceObservationResult(updated, observation, evidence);

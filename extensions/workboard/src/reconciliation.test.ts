@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
 import { WorkboardReconciler, projectReconciliationSourceObservation } from "./reconciliation.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
@@ -277,6 +277,87 @@ describe("WorkboardReconciler", () => {
     ).rejects.toThrow("observationId conflicts");
   });
 
+  it("replays the original acknowledgement after an intervening card mutation", async () => {
+    const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
+    const created = await reconciler.apply({
+      sourceUrl: "https://example.test/runs/ack",
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      idempotencyKey: "ack",
+      sourceUpdatedAt: 1,
+      card: { title: "Original acknowledgement" },
+    });
+    const observation = {
+      cardId: created.card.id,
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      sourceUrl: "https://example.test/runs/ack",
+      idempotencyKey: "ack",
+      observationId: "ack-1",
+      sourceState: "missing-after-successful-full-scan" as const,
+      staleAfterMisses: 1,
+      observedAt: 2,
+    };
+    const first = await reconciler.observeSource(observation);
+    await (reconciler as unknown as { store: WorkboardStore }).store.update(created.card.id, {
+      notes: "Changed after acknowledgement",
+    });
+    const replay = await reconciler.observeSource(observation);
+
+    expect(replay).toMatchObject({
+      association: first.association,
+      observationId: first.observationId,
+      revision: first.revision,
+      evidence: first.evidence,
+      card: { notes: "Changed after acknowledgement" },
+    });
+    expect(replay.card.updatedAt).toBeGreaterThan(first.revision);
+  });
+
+  it("advances revisions under frozen time so stale source observations cannot double-count", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    try {
+      const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
+      const created = await reconciler.apply({
+        sourceUrl: "https://example.test/runs/frozen",
+        tenant: "acme",
+        objectiveKey: "deploy-api",
+        idempotencyKey: "frozen",
+        sourceUpdatedAt: 1,
+        card: { title: "Frozen revision" },
+      });
+      const first = await reconciler.observeSource({
+        cardId: created.card.id,
+        tenant: "acme",
+        objectiveKey: "deploy-api",
+        sourceUrl: "https://example.test/runs/frozen",
+        idempotencyKey: "frozen",
+        observationId: "frozen-1",
+        sourceState: "missing-after-successful-full-scan",
+        staleAfterMisses: 3,
+        observedAt: 2,
+        expectedRevision: created.card.updatedAt,
+      });
+      expect(first.revision).toBeGreaterThan(created.card.updatedAt);
+      await expect(
+        reconciler.observeSource({
+          cardId: created.card.id,
+          tenant: "acme",
+          objectiveKey: "deploy-api",
+          sourceUrl: "https://example.test/runs/frozen",
+          idempotencyKey: "frozen",
+          observationId: "frozen-2",
+          sourceState: "missing-after-successful-full-scan",
+          staleAfterMisses: 3,
+          observedAt: 3,
+          expectedRevision: created.card.updatedAt,
+        }),
+      ).rejects.toThrow("source observation does not match card.");
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it("chains acknowledgement revisions across two external associations", async () => {
     const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
     const firstLink = await reconciler.apply({
@@ -430,6 +511,33 @@ describe("WorkboardReconciler", () => {
         metadata: { claim: { token: "forged" } },
       }),
     ).toThrow("source observation.metadata is not allowed.");
+  });
+  it("requires a bounded source observation ID", () => {
+    expect(() =>
+      projectReconciliationSourceObservation({
+        cardId: "card",
+        tenant: "acme",
+        objectiveKey: "deploy-api",
+        sourceUrl: "https://example.test/a",
+        idempotencyKey: "a",
+        sourceState: "present",
+        staleAfterMisses: 2,
+        observedAt: 1,
+      }),
+    ).toThrow("observationId is required.");
+    expect(() =>
+      projectReconciliationSourceObservation({
+        cardId: "card",
+        tenant: "acme",
+        objectiveKey: "deploy-api",
+        sourceUrl: "https://example.test/a",
+        idempotencyKey: "a",
+        observationId: "x".repeat(201),
+        sourceState: "present",
+        staleAfterMisses: 2,
+        observedAt: 1,
+      }),
+    ).toThrow("observationId must be 200 characters or fewer.");
   });
   it("returns stable ID-ordered pages and rejects limits outside 1 through 100", async () => {
     const store = new WorkboardStore(createMemoryStore());

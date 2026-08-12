@@ -698,6 +698,12 @@ function normalizeLink(value: unknown): WorkboardLink | null {
     Number.isFinite(record.lastSourceObservationRevision)
       ? normalizeTimestamp(record.lastSourceObservationRevision, 0)
       : undefined;
+  const lastSourceObservationEvidenceJson = normalizeBoundedString(
+    record.lastSourceObservationEvidenceJson,
+    undefined,
+    1000,
+    "source observation evidence",
+  );
   if (!targetCardId && !url) {
     return null;
   }
@@ -714,6 +720,7 @@ function normalizeLink(value: unknown): WorkboardLink | null {
     ...(lastSourceObservationId ? { lastSourceObservationId } : {}),
     ...(lastSourceObservationRequestJson ? { lastSourceObservationRequestJson } : {}),
     ...(lastSourceObservationRevision !== undefined ? { lastSourceObservationRevision } : {}),
+    ...(lastSourceObservationEvidenceJson ? { lastSourceObservationEvidenceJson } : {}),
     ...(targetCardId ? { targetCardId } : {}),
     ...(title ? { title } : {}),
     ...(url ? { url } : {}),
