@@ -228,17 +228,10 @@ export function createReplyRestartRecoveryClaimController(params: {
       if (entry.abortedLastRun === true) {
         throw new Error("restart recovery claim changed before agent adoption");
       }
-      // Drift tolerance: an exact claim whose session drifted to a
-      // non-running status during a gateway event-loop stall is stale. Retire
-      // it and return duplicate-source so the caller unwinds cleanly and the
-      // next user turn proceeds without a wedge.
-      //
-      // Refusal handling: retirement is declined when the claim's delivery
-      // receipt is still "terminal-pending" — the retire helper preserves
-      // unknown provider outcomes for restart-safe reconciliation. In that
-      // case we must NOT unwind as duplicate-source (that would no-op the turn
-      // and leave the untracked terminal-pending claim blocking later turns).
-      // Throw so the caller keeps the claim visible for reconciliation.
+      // Drift tolerance: retire stale exact claims (session drifted to
+      // non-running during a gateway event-loop stall) and unwind as
+      // duplicate-source. If retirement is declined (terminal-pending receipt
+      // preserved for provider reconciliation), throw to keep the claim visible.
       if (entry.status !== "running") {
         const retired = await retireTerminalRestartRecoverySourceClaim({
           sessionId,
@@ -250,9 +243,6 @@ export function createReplyRestartRecoveryClaimController(params: {
           params.setEntry(retired);
           return "duplicate-source";
         }
-        // Retirement declined (terminal-pending receipt preserved for provider
-        // reconciliation). Do not adopt — adopting would clear the pending
-        // receipt. Throw so the claim stays visible for restart-safe reconciliation.
         throw new Error("restart recovery claim changed before agent adoption");
       }
       // Clear the retry verifier as the exact admitted claim crosses into execution.
