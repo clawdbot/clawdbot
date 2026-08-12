@@ -1387,6 +1387,55 @@ describe("openclaw state database", () => {
     },
   );
 
+  it.each(["runtime open", "doctor repair"] as const)(
+    "preserves a foreign commitments table and colliding index through %s",
+    (migrationPath) => {
+      const stateDir = createTempStateDir();
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      const databasePath = materializeCurrentStateDatabase(stateDir);
+      const { DatabaseSync } = requireNodeSqlite();
+      const foreign = new DatabaseSync(databasePath);
+      foreign.exec(`
+        CREATE TABLE commitments (marker TEXT NOT NULL PRIMARY KEY) STRICT;
+        CREATE TABLE foreign_commitment_index_owner (marker TEXT NOT NULL) STRICT;
+        CREATE INDEX idx_commitments_scope_due
+          ON foreign_commitment_index_owner(marker);
+      `);
+      markStateDatabaseAsV6(foreign);
+      foreign.close();
+
+      if (migrationPath === "doctor repair") {
+        const result = repairOpenClawStateDatabaseSchema(options);
+        expect(result.changes).toEqual([]);
+        expect(result.warnings.join("\n")).toMatch(/commitments/u);
+      } else {
+        expect(() => openOpenClawStateDatabase(options)).toThrow(/commitments/u);
+      }
+
+      const preserved = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(readSqliteNumberPragma(preserved, "user_version")).toBe(6);
+        expect(
+          preserved
+            .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+            .get(),
+        ).toEqual({ schema_version: 6 });
+        expect(
+          preserved.prepare("SELECT sql FROM sqlite_schema WHERE name = 'commitments'").get(),
+        ).toEqual({
+          sql: "CREATE TABLE commitments (marker TEXT NOT NULL PRIMARY KEY) STRICT",
+        });
+        expect(
+          preserved
+            .prepare("SELECT tbl_name FROM sqlite_schema WHERE name = 'idx_commitments_scope_due'")
+            .get(),
+        ).toEqual({ tbl_name: "foreign_commitment_index_owner" });
+      } finally {
+        preserved.close();
+      }
+    },
+  );
+
   it("keeps the additive worker SSH fallback table compatible with older v6 containment", () => {
     const database = openMaterializedCurrentStateDatabase();
     try {

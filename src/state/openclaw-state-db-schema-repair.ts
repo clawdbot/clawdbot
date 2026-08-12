@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   canRepairLegacyAuditEventsSchema,
@@ -30,6 +31,51 @@ export function dropLegacyStateTables(db: DatabaseSync): void {
   db.exec("DROP TABLE IF EXISTS node_pairing_pending; DROP TABLE IF EXISTS node_pairing_paired;");
 }
 
+const RETIRED_COMMITMENTS_SCHEMA_SQL = `
+CREATE TABLE commitments (
+  id TEXT NOT NULL PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  account_id TEXT,
+  recipient_id TEXT,
+  thread_id TEXT,
+  sender_id TEXT,
+  kind TEXT NOT NULL,
+  sensitivity TEXT NOT NULL,
+  source TEXT NOT NULL,
+  status TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  suggested_text TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL,
+  confidence REAL NOT NULL,
+  due_earliest_ms INTEGER NOT NULL,
+  due_latest_ms INTEGER NOT NULL,
+  due_timezone TEXT NOT NULL,
+  source_message_id TEXT,
+  source_run_id TEXT,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  attempts INTEGER NOT NULL,
+  last_attempt_at_ms INTEGER,
+  sent_at_ms INTEGER,
+  dismissed_at_ms INTEGER,
+  snoozed_until_ms INTEGER,
+  expired_at_ms INTEGER,
+  record_json TEXT NOT NULL
+) STRICT;
+CREATE INDEX idx_commitments_scope_due
+  ON commitments(agent_id, session_key, status, due_earliest_ms, due_latest_ms);
+CREATE INDEX idx_commitments_status_due
+  ON commitments(status, due_earliest_ms, due_latest_ms);
+CREATE INDEX idx_commitments_scope_dedupe
+  ON commitments(agent_id, session_key, channel, dedupe_key, status);
+CREATE INDEX idx_commitments_agent_due
+  ON commitments(agent_id, status, due_earliest_ms, due_latest_ms, session_key);
+CREATE INDEX idx_commitments_agent_sent
+  ON commitments(agent_id, status, sent_at_ms, session_key);
+`;
+
 export function migrateRetiredCommitmentsSchema(
   db: DatabaseSync,
   previousVersion: number,
@@ -37,18 +83,19 @@ export function migrateRetiredCommitmentsSchema(
   if (previousVersion >= 7) {
     return false;
   }
-  const hadCommitments = tableExists(db, "commitments");
+  if (!tableExists(db, "commitments")) {
+    return false;
+  }
   // The commitments runtime was removed before v7; retained rows are inert
   // migration debt and have no remaining product owner or export contract.
-  db.exec(`
-    DROP INDEX IF EXISTS idx_commitments_scope_due;
-    DROP INDEX IF EXISTS idx_commitments_status_due;
-    DROP INDEX IF EXISTS idx_commitments_scope_dedupe;
-    DROP INDEX IF EXISTS idx_commitments_agent_due;
-    DROP INDEX IF EXISTS idx_commitments_agent_sent;
-    DROP TABLE IF EXISTS commitments;
-  `);
-  return hadCommitments;
+  assertSqliteSchemaContains(
+    db,
+    "retired OpenClaw commitments schema",
+    RETIRED_COMMITMENTS_SCHEMA_SQL,
+  );
+  // DROP TABLE removes only the validated table's indexes and sqlite_stat rows.
+  db.exec("DROP TABLE commitments;");
+  return true;
 }
 
 function hasCanonicalAgentDatabasesPrimaryKey(db: DatabaseSync): boolean {

@@ -1112,9 +1112,10 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   sharded JSON registry files and removes successful sources. Runtime reads use
   the typed row columns as source of truth; `entry_json` is only a replay/debug
   copy.
-- Shared schema version 7 removes the retired `commitments` table and discards
-  its inert rows. Runtime no longer reads or writes commitment state. Doctor
-  leaves the legacy `commitments.json` source untouched.
+- Shared schema version 7 validates and removes the exact retired `commitments`
+  table and discards its inert rows. Unknown same-named tables or indexes are
+  preserved and the migration is refused. Runtime no longer reads or writes
+  commitment state. Doctor leaves the legacy `commitments.json` source untouched.
 - Web Push subscriptions and the generated VAPID identity now use typed shared
   `web_push_subscriptions` and `web_push_vapid_keys` rows. Runtime registration,
   expiry cleanup, and first-use key generation use row-level SQLite
