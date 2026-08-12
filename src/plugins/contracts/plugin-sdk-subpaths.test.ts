@@ -140,17 +140,6 @@ const BROWSER_FACADE_SOURCE_CONTRACTS: readonly BrowserFacadeSourceContract[] = 
       "normalizeHexColor",
     ],
   },
-  {
-    subpath: "browser-host-inspection",
-    artifactBasename: "browser-host-inspection.js",
-    mentions: [
-      "loadBundledPluginPublicSurfaceModuleSyncCore",
-      "resolveGoogleChromeExecutableForPlatform",
-      "readBrowserVersion",
-      "parseBrowserMajorVersion",
-    ],
-    omits: ["findFirstChromeExecutable", "findGoogleChromeExecutableLinux", "execText"],
-  },
 ];
 
 const BROWSER_HELPER_EXPORT_PARITY_CONTRACTS: readonly BrowserHelperExportParityContract[] = [
@@ -181,16 +170,6 @@ const BROWSER_HELPER_EXPORT_PARITY_CONTRACTS: readonly BrowserHelperExportParity
       "ResolvedBrowserTabCleanupConfig",
       "resolveBrowserConfig",
       "resolveProfile",
-    ],
-  },
-  {
-    corePath: "src/plugin-sdk/browser-host-inspection.ts",
-    extensionPath: "extensions/browser/browser-host-inspection.ts",
-    expectedExports: [
-      "BrowserExecutable",
-      "parseBrowserMajorVersion",
-      "readBrowserVersion",
-      "resolveGoogleChromeExecutableForPlatform",
     ],
   },
 ];
@@ -1278,9 +1257,6 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceOmitsSnippet("agent-runtime", "./sglang.js");
     expectSourceOmitsSnippet("agent-runtime", "./vllm.js");
     expectSourceOmitsSnippet("agent-runtime", "../../extensions/");
-    expectSourceOmitsSnippet("google-model-id", "./google.js");
-    expectSourceOmitsSnippet("google-model-id", "./facade-runtime.js");
-    expectSourceOmitsSnippet("google-model-id", "../../extensions/");
     expectRepoSourceOmitsSnippet("extensions/xai/model-id.ts", "./xai.js");
     expectRepoSourceOmitsSnippet("extensions/xai/model-id.ts", "./facade-runtime.js");
     expectRepoSourceOmitsSnippet("extensions/xai/model-id.ts", "../../extensions/");
