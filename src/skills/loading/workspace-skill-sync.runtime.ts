@@ -16,10 +16,12 @@ import type {
   SkillSnapshot,
   SkillUsagePath,
 } from "../types.js";
+import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import { serializeByKey } from "./serialize.js";
 import { resolveSkillTelemetrySource } from "./source.js";
 import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
+import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 
 const fsp = fs.promises;
 const skillsLogger = createSubsystemLogger("skills");
@@ -45,14 +47,79 @@ type SyncedSkillsManifest = {
   skillsVersion: number;
 };
 
+export type SyncedWorkspaceSkills = {
+  skillUsagePaths: SkillUsagePath[];
+  /** Complete materialized catalog for this sync generation (host destination paths). */
+  skillsSnapshot: SkillSnapshot;
+};
+
 const syncedSkillsUsageCache = new Map<
   string,
   {
     destinations: Map<string, string>;
     manifestKey: string;
     skillUsagePaths: SkillUsagePath[];
+    skillsSnapshot: SkillSnapshot;
   }
 >();
+
+function createEmptySyncedSkillsSnapshot(skillsVersion: number): SkillSnapshot {
+  return {
+    prompt: "",
+    skills: [],
+    resolvedSkills: [],
+    version: skillsVersion,
+    promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
+  };
+}
+
+function remapSkillEntryToSyncedDestination(
+  entry: SkillEntry,
+  destinationPath: string,
+): SkillEntry {
+  const relativeFilePath = path.relative(entry.skill.baseDir, entry.skill.filePath);
+  const filePath = path.join(destinationPath, relativeFilePath);
+  return {
+    ...entry,
+    skill: {
+      ...entry.skill,
+      baseDir: destinationPath,
+      filePath,
+      sourceInfo: {
+        ...entry.skill.sourceInfo,
+        path: filePath,
+        ...(entry.skill.sourceInfo.baseDir === undefined ? {} : { baseDir: destinationPath }),
+      },
+    },
+  };
+}
+
+function buildSyncedSkillsSnapshot(params: {
+  targetWorkspaceDir: string;
+  plans: Array<{ destinationPath?: string; entry: SkillEntry }>;
+  skillUsagePaths: SkillUsagePath[];
+  config?: OpenClawConfig;
+  skillFilter?: string[];
+  agentId?: string;
+  eligibility?: SkillEligibilityContext;
+  skillsVersion: number;
+}): SkillSnapshot {
+  const syncedNames = new Set(params.skillUsagePaths.map((entry) => entry.skillName));
+  const materializedEntries = params.plans.flatMap((plan) => {
+    if (!plan.destinationPath || !syncedNames.has(plan.entry.skill.name)) {
+      return [];
+    }
+    return [remapSkillEntryToSyncedDestination(plan.entry, plan.destinationPath)];
+  });
+  return buildSkillSnapshot(params.targetWorkspaceDir, {
+    entries: materializedEntries,
+    config: params.config,
+    agentId: params.agentId,
+    skillFilter: params.skillFilter,
+    eligibility: params.eligibility,
+    snapshotVersion: params.skillsVersion,
+  });
+}
 
 function resolveSyncedSkillIdentity(skillKey: string, skillName: string): string {
   return JSON.stringify([skillKey, skillName]);
@@ -119,11 +186,14 @@ export async function syncWorkspaceSkills(params: {
   bundledSkillsDir?: string;
   pluginSkillsDir?: string;
   skillsSnapshot?: SkillSnapshot;
-}): Promise<SkillUsagePath[]> {
+}): Promise<SyncedWorkspaceSkills> {
   const sourceDir = resolveUserPath(params.sourceWorkspaceDir);
   const targetDir = resolveUserPath(params.targetWorkspaceDir);
   if (sourceDir === targetDir) {
-    return [];
+    return {
+      skillUsagePaths: [],
+      skillsSnapshot: createEmptySyncedSkillsSnapshot(getSkillsSnapshotVersion(sourceDir)),
+    };
   }
 
   return await serializeByKey(`syncSkills:${targetDir}`, async () => {
@@ -152,7 +222,10 @@ export async function syncWorkspaceSkills(params: {
       manifestKey === expectedManifestKey &&
       cachedUsage?.manifestKey === manifestKey
     ) {
-      return cachedUsage.skillUsagePaths.map((entry) => ({ ...entry }));
+      return {
+        skillUsagePaths: cachedUsage.skillUsagePaths.map((entry) => ({ ...entry })),
+        skillsSnapshot: cachedUsage.skillsSnapshot,
+      };
     }
 
     const entries = loadWorkspaceSkills(sourceDir, {
@@ -202,7 +275,8 @@ export async function syncWorkspaceSkills(params: {
       manifest?.skillsVersion === skillsVersion && cachedUsage?.manifestKey === manifestKey
         ? cachedUsage
         : undefined;
-    syncedSkillsUsageCache.delete(targetSkillsDir);
+    // Keep the previous complete catalog cached until a successful publish so
+    // concurrent prompt builders can retain a stable generation handoff.
     const preservedDestinations = new Set(
       plans.flatMap((plan) => {
         const destination = plan.destinationPath ? path.basename(plan.destinationPath) : null;
@@ -254,6 +328,16 @@ export async function syncWorkspaceSkills(params: {
         skillSource: resolveSkillTelemetrySource(entry.skill),
       });
     }
+    const nextSkillsSnapshot = buildSyncedSkillsSnapshot({
+      targetWorkspaceDir: targetDir,
+      plans,
+      skillUsagePaths,
+      config: params.config,
+      skillFilter: params.skillFilter,
+      agentId: params.agentId,
+      eligibility: params.eligibility,
+      skillsVersion,
+    });
     if (!copyFailed) {
       const nextManifest: SyncedSkillsManifest = {
         entryKeys: plans.map((plan) => plan.identity).toSorted(),
@@ -270,9 +354,12 @@ export async function syncWorkspaceSkills(params: {
         ),
         manifestKey: JSON.stringify([skillsVersion, nextManifest.entryKeys]),
         skillUsagePaths,
+        skillsSnapshot: nextSkillsSnapshot,
       });
       pruneMapToMaxSize(syncedSkillsUsageCache, 100);
+      return { skillUsagePaths, skillsSnapshot: nextSkillsSnapshot };
     }
-    return skillUsagePaths;
+    syncedSkillsUsageCache.delete(targetSkillsDir);
+    return { skillUsagePaths, skillsSnapshot: nextSkillsSnapshot };
   });
 }

@@ -1,12 +1,16 @@
 // Workspace skill sync runtime tests cover sandbox synchronization and plugin-provided skills.
+import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { resolveSandboxSkillRuntimeInputs } from "../../agents/embedded-agent-runner/sandbox-skills.js";
 import { withEnv, withEnvAsync } from "../../test-utils/env.js";
+import { resolveEmbeddedRunSkillEntries } from "../runtime/embedded-run-entries.js";
 import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
-import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
+import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
+import { buildSkillSnapshot, resolveSkillsPrompt } from "./workspace-skill-prompt.js";
 import { syncWorkspaceSkills } from "./workspace-skill-sync.runtime.js";
 
 const mockResolvePluginSkillDirs = vi.hoisted(() => vi.fn(() => [] as string[]));
@@ -132,7 +136,7 @@ describe("syncWorkspaceSkills", () => {
       "export {}",
     );
 
-    const skillUsagePaths = await syncWorkspaceSkills({
+    const { skillUsagePaths, skillsSnapshot } = await syncWorkspaceSkills({
       sourceWorkspaceDir: sourceWorkspace,
       targetWorkspaceDir: targetWorkspace,
       config: { skills: { load: { extraDirs: [extraDir] } } },
@@ -147,6 +151,10 @@ describe("syncWorkspaceSkills", () => {
         skillName: "demo-skill",
         skillSource: "workspace",
       },
+    ]);
+    expect(skillsSnapshot.skills.map((skill) => skill.name)).toEqual(["demo-skill"]);
+    expect(skillsSnapshot.resolvedSkills?.map((skill) => skill.filePath)).toEqual([
+      path.join(targetWorkspace, "skills", "demo-skill", "SKILL.md"),
     ]);
 
     const prompt = buildPrompt(targetWorkspace, {
@@ -205,7 +213,8 @@ describe("syncWorkspaceSkills", () => {
     const copyCount = copy.mock.calls.length;
     copy.mockRestore();
 
-    expect(second).toEqual(first);
+    expect(second.skillUsagePaths).toEqual(first.skillUsagePaths);
+    expect(second.skillsSnapshot).toEqual(first.skillsSnapshot);
     expect(copyCount).toBe(0);
     expect(await pathExists(path.join(targetWorkspace, "skills", "alpha", "SKILL.md"))).toBe(true);
     expect(await pathExists(path.join(targetWorkspace, "skills", "hidden", "SKILL.md"))).toBe(true);
@@ -252,7 +261,7 @@ describe("syncWorkspaceSkills", () => {
     );
 
     const copy = vi.spyOn(fs, "cp");
-    const usagePaths = await syncWorkspaceSkills(syncParams);
+    const { skillUsagePaths: usagePaths } = await syncWorkspaceSkills(syncParams);
     const copyCount = copy.mock.calls.length;
     copy.mockRestore();
 
@@ -433,6 +442,135 @@ describe("syncWorkspaceSkills", () => {
       expect(await pathExists(path.join(targetSkillsDir, "demo-skill", "SKILL.md"))).toBe(true);
     },
   );
+
+  it("keeps concurrent prompt readers on a complete catalog during changed refresh", async () => {
+    const sourceWorkspace = await createCaseDir("source");
+    const targetWorkspace = await createCaseDir("target");
+    const bundledSkillsDir = path.join(sourceWorkspace, ".bundled");
+    const managedSkillsDir = path.join(sourceWorkspace, ".managed");
+    const oldNames = Array.from(
+      { length: 8 },
+      (_, index) => `skill-${String(index + 1).padStart(2, "0")}`,
+    );
+    for (const name of oldNames) {
+      await writeSkill({
+        dir: path.join(sourceWorkspace, "skills", name),
+        name,
+        description: `${name} skill`,
+      });
+    }
+    const firstSnapshot = buildSkillSnapshot(sourceWorkspace, {
+      bundledSkillsDir,
+      managedSkillsDir,
+      snapshotVersion: getSkillsSnapshotVersion(sourceWorkspace),
+    });
+    const first = await syncWorkspaceSkills({
+      sourceWorkspaceDir: sourceWorkspace,
+      targetWorkspaceDir: targetWorkspace,
+      bundledSkillsDir,
+      managedSkillsDir,
+      skillsSnapshot: firstSnapshot,
+    });
+    const oldCatalog = first.skillsSnapshot.skills.map((skill) => skill.name).toSorted();
+    expect(oldCatalog).toEqual([...oldNames].toSorted());
+
+    await fs.rm(path.join(sourceWorkspace, "skills", "skill-08"), { recursive: true, force: true });
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "skill-09"),
+      name: "skill-09",
+      description: "skill-09 skill",
+    });
+    const nextVersion = bumpSkillsSnapshotVersion({ workspaceDir: sourceWorkspace });
+    const secondSnapshot = buildSkillSnapshot(sourceWorkspace, {
+      bundledSkillsDir,
+      managedSkillsDir,
+      snapshotVersion: nextVersion,
+    });
+    const newCatalog = secondSnapshot.skills.map((skill) => skill.name).toSorted();
+
+    let releasePause!: () => void;
+    const pause = new Promise<void>((resolve) => {
+      releasePause = resolve;
+    });
+    let pausedAfterRemoval = false;
+    const originalRm = nodeFs.promises.rm.bind(nodeFs.promises);
+    const rmSpy = vi.spyOn(nodeFs.promises, "rm").mockImplementation(async (target, opts) => {
+      const targetPath = String(target);
+      const isSkillChildRemoval =
+        targetPath.includes(`${path.sep}skills${path.sep}`) &&
+        !targetPath.endsWith(".openclaw-sync.json");
+      const result = await originalRm(target, opts);
+      // Pause after the first live child removal so concurrent readers can
+      // observe the destructive window without a host directory rename.
+      if (!pausedAfterRemoval && isSkillChildRemoval) {
+        pausedAfterRemoval = true;
+        await pause;
+      }
+      return result;
+    });
+
+    try {
+      const syncPromise = syncWorkspaceSkills({
+        sourceWorkspaceDir: sourceWorkspace,
+        targetWorkspaceDir: targetWorkspace,
+        bundledSkillsDir,
+        managedSkillsDir,
+        skillsSnapshot: secondSnapshot,
+      });
+      await vi.waitFor(() => {
+        expect(pausedAfterRemoval).toBe(true);
+      });
+
+      // Live directory scan can observe a partial tree during the destructive window.
+      const liveNames = loadWorkspaceSkills(targetWorkspace, { workspaceOnly: true })
+        .map((entry) => entry.skill.name)
+        .toSorted();
+      expect(oldCatalog.some((name) => !liveNames.includes(name))).toBe(true);
+      expect(newCatalog.every((name) => liveNames.includes(name))).toBe(false);
+
+      // Sandbox prompt readers consume the sync-published generation instead.
+      const {
+        skillsSnapshot: skillsSnapshotForRun,
+        skillsPromptWorkspaceDir,
+        skillsWorkspaceDir,
+        workspaceOnly,
+      } = resolveSandboxSkillRuntimeInputs({
+        sandbox: {
+          enabled: true,
+          containerWorkdir: "/workspace",
+          skillsWorkspaceDir: targetWorkspace,
+          skillsSnapshot: first.skillsSnapshot,
+          workspaceAccess: "rw",
+        },
+        effectiveWorkspace: targetWorkspace,
+      });
+      const { shouldLoadSkillEntries } = resolveEmbeddedRunSkillEntries({
+        workspaceDir: skillsWorkspaceDir,
+        skillsSnapshot: skillsSnapshotForRun,
+        workspaceOnly,
+      });
+      expect(shouldLoadSkillEntries).toBe(false);
+      const prompt = resolveSkillsPrompt({
+        skillsSnapshot: skillsSnapshotForRun,
+        workspaceDir: skillsPromptWorkspaceDir,
+      });
+      const promptNames = oldCatalog.filter((name) => prompt.includes(`<name>${name}</name>`));
+      expect(promptNames).toEqual(oldCatalog);
+      expect(skillsSnapshotForRun?.skills.map((skill) => skill.name).toSorted()).toEqual(
+        oldCatalog,
+      );
+      expect(prompt).toContain("/workspace/.openclaw/sandbox-skills/skills/skill-01/SKILL.md");
+
+      releasePause();
+      const second = await syncPromise;
+      expect(second.skillsSnapshot.skills.map((skill) => skill.name).toSorted()).toEqual(
+        newCatalog,
+      );
+    } finally {
+      releasePause();
+      rmSpy.mockRestore();
+    }
+  });
 
   it("syncs the explicit agent skill subset instead of inherited defaults", async () => {
     const sourceWorkspace = await createCaseDir("source");
@@ -714,7 +852,7 @@ describe("syncWorkspaceSkills for plugin skills", () => {
 
     mockResolvePluginSkillDirs.mockReturnValueOnce([realPluginSkillDir]);
 
-    const skillUsagePaths = await syncWorkspaceSkills({
+    const { skillUsagePaths } = await syncWorkspaceSkills({
       sourceWorkspaceDir: sourceWorkspace,
       targetWorkspaceDir: targetWorkspace,
       pluginSkillsDir,

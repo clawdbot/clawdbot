@@ -81,6 +81,53 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     });
   });
 
+  it("keeps the sync-published materialized catalog and remaps prompt paths for sandboxes", () => {
+    const materializedSnapshot: SkillSnapshot = {
+      prompt:
+        "<available_skills>\n  <skill>\n    <name>demo</name>\n    <description>Demo skill</description>\n    <location>/state/sandbox-skills/skills/demo/SKILL.md</location>\n  </skill>\n</available_skills>",
+      skills: [{ name: "demo", skillKey: "demo" }],
+      resolvedSkills: [
+        {
+          name: "demo",
+          description: "Demo skill",
+          filePath: "/state/sandbox-skills/skills/demo/SKILL.md",
+          baseDir: "/state/sandbox-skills/skills/demo",
+          source: "openclaw-workspace",
+          sourceInfo: createSyntheticSourceInfo("/state/sandbox-skills/skills/demo/SKILL.md", {
+            source: "openclaw-workspace",
+            baseDir: "/state/sandbox-skills/skills/demo",
+          }),
+          disableModelInvocation: false,
+        },
+      ],
+      version: 7,
+    };
+
+    const resolved = resolveSandboxSkillRuntimeInputs({
+      sandbox: {
+        enabled: true,
+        containerWorkdir: "/workspace",
+        skillsWorkspaceDir: "/state/sandbox-skills",
+        skillsSnapshot: materializedSnapshot,
+        workspaceAccess: "rw",
+      },
+      effectiveWorkspace: "/workspace",
+      skillsSnapshot: snapshot,
+    });
+
+    expect(resolved.skillsSnapshot?.skills).toEqual(materializedSnapshot.skills);
+    expect(resolved.skillsSnapshot?.prompt).toContain(
+      "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md",
+    );
+    expect(resolved.skillsSnapshot?.prompt).not.toContain(hostSkillPath);
+    expect(resolved.skillsSnapshot?.resolvedSkills?.[0]?.filePath).toBe(
+      "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md",
+    );
+    expect(resolved.skillsPromptWorkspaceDir).toBe("/workspace/.openclaw/sandbox-skills");
+    expect(resolved.skillsWorkspaceDir).toBe("/state/sandbox-skills");
+    expect(resolved.workspaceOnly).toBe(true);
+  });
+
   it("falls back to the effective workspace for older sandbox contexts", () => {
     expect(
       resolveSandboxSkillRuntimeInputs({

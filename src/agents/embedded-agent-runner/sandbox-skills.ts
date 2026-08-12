@@ -5,6 +5,7 @@
  * copies instead of reusing host-path snapshots.
  */
 import path from "node:path";
+import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
 import type { SkillEligibilityContext, SkillSnapshot, SkillUsagePath } from "../../skills/types.js";
 import type { SkillEntry } from "../../skills/types.js";
 import type { SandboxContext } from "../sandbox/types.js";
@@ -14,7 +15,11 @@ type SandboxSkillRuntimeContext = Pick<SandboxContext, "enabled"> &
   Partial<
     Pick<
       SandboxContext,
-      "skillsEligibility" | "skillsWorkspaceDir" | "containerWorkdir" | "workspaceAccess"
+      | "skillsEligibility"
+      | "skillsWorkspaceDir"
+      | "skillsSnapshot"
+      | "containerWorkdir"
+      | "workspaceAccess"
     >
   >;
 
@@ -123,6 +128,43 @@ export function mapSandboxSkillUsagePaths(params: {
   }));
 }
 
+function remapMaterializedSkillsSnapshotForPrompt(params: {
+  skillsSnapshot: SkillSnapshot;
+  skillsWorkspaceDir: string;
+  skillsPromptWorkspaceDir: string;
+  skillsEligibility?: SkillEligibilityContext;
+}): SkillSnapshot {
+  if (params.skillsWorkspaceDir === params.skillsPromptWorkspaceDir) {
+    return params.skillsSnapshot;
+  }
+  const hostEntries = (params.skillsSnapshot.resolvedSkills ?? []).map((skill) => ({ skill }));
+  const mappedEntries = mapSandboxSkillEntriesForPrompt({
+    entries: hostEntries,
+    skillsWorkspaceDir: params.skillsWorkspaceDir,
+    skillsPromptWorkspaceDir: params.skillsPromptWorkspaceDir,
+  });
+  const remapped = buildSkillSnapshot(params.skillsPromptWorkspaceDir, {
+    entries: mappedEntries,
+    eligibility: params.skillsEligibility,
+    snapshotVersion: params.skillsSnapshot.version,
+  });
+  // Preserve the full eligible identity list (including prompt-hidden skills)
+  // from the sync-published generation; only prompt paths need container remap.
+  return {
+    ...remapped,
+    skills: params.skillsSnapshot.skills,
+    ...(params.skillsSnapshot.skillFilter === undefined
+      ? {}
+      : { skillFilter: params.skillsSnapshot.skillFilter }),
+    ...(params.skillsSnapshot.skillOverrides
+      ? { skillOverrides: params.skillsSnapshot.skillOverrides }
+      : {}),
+    ...(params.skillsSnapshot.nodeSkillsEligibility
+      ? { nodeSkillsEligibility: params.skillsSnapshot.nodeSkillsEligibility }
+      : {}),
+  };
+}
+
 export function resolveSandboxSkillRuntimeInputs(params: {
   sandbox?: SandboxSkillRuntimeContext | null;
   effectiveWorkspace: string;
@@ -145,12 +187,24 @@ export function resolveSandboxSkillRuntimeInputs(params: {
             ...MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS,
           )
         : (params.sandbox.containerWorkdir ?? skillsWorkspaceDir);
+    // Prefer the sync-published materialized catalog over a live rescan of the
+    // shared skills directory. Host-path snapshots remain suppressed.
+    const materializedSnapshot = params.sandbox.skillsSnapshot
+      ? remapMaterializedSkillsSnapshotForPrompt({
+          skillsSnapshot: params.sandbox.skillsSnapshot,
+          skillsWorkspaceDir,
+          skillsPromptWorkspaceDir,
+          ...(params.sandbox.skillsEligibility
+            ? { skillsEligibility: params.sandbox.skillsEligibility }
+            : {}),
+        })
+      : undefined;
     return {
       ...(params.sandbox.skillsEligibility
         ? { skillsEligibility: params.sandbox.skillsEligibility }
         : {}),
       skillsPromptWorkspaceDir,
-      skillsSnapshot: undefined,
+      skillsSnapshot: materializedSnapshot,
       skillsWorkspaceDir,
       workspaceOnly: true,
     };

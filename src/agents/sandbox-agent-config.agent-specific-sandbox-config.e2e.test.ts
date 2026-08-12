@@ -35,7 +35,10 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
 }));
 
 vi.mock("../skills/loading/workspace-skill-sync.runtime.js", () => ({
-  syncWorkspaceSkills: vi.fn(async () => undefined),
+  syncWorkspaceSkills: vi.fn(async () => ({
+    skillUsagePaths: [],
+    skillsSnapshot: { prompt: "", skills: [], resolvedSkills: [] },
+  })),
 }));
 
 let resolveSandboxContext: typeof import("./sandbox/context.js").resolveSandboxContext;

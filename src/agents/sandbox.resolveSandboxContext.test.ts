@@ -12,7 +12,14 @@ import { isSandboxProvisioningError } from "./sandbox/provisioning-error.js";
 const updateRegistryMock = vi.hoisted(() => vi.fn());
 const readRegisteredSandboxRuntimeIdsMock = vi.hoisted(() => vi.fn(async () => [] as string[]));
 const syncSkillsToWorkspaceMock = vi.hoisted(() =>
-  vi.fn<() => Promise<SkillUsagePath[]>>(async () => []),
+  vi.fn(async () => ({
+    skillUsagePaths: [] as SkillUsagePath[],
+    skillsSnapshot: {
+      prompt: "",
+      skills: [],
+      resolvedSkills: [],
+    },
+  })),
 );
 const ensureSandboxBrowserMock = vi.hoisted(() => vi.fn(async () => null));
 const resolveNodeExecEligibilityMock = vi.hoisted(() => vi.fn(() => ({ canExec: false })));
@@ -744,7 +751,12 @@ describe("resolveSandboxContext", () => {
         skillSource: "workspace" as const,
       },
     ];
-    syncSkillsToWorkspaceMock.mockResolvedValueOnce(skillUsagePaths);
+    const skillsSnapshot = {
+      prompt: "<available_skills></available_skills>",
+      skills: [{ name: "demo" }],
+      resolvedSkills: [],
+    };
+    syncSkillsToWorkspaceMock.mockResolvedValueOnce({ skillUsagePaths, skillsSnapshot });
 
     const cfg: OpenClawConfig = {
       agents: {
@@ -790,6 +802,7 @@ describe("resolveSandboxContext", () => {
       remote: { note: "test-remote" },
     });
     expect(result.skillUsagePaths).toEqual(skillUsagePaths);
+    expect(result.skillsSnapshot).toEqual(skillsSnapshot);
   }, 15_000);
 
   it("materializes skills into a hidden read-only workspace for writable sandboxes", async () => {
