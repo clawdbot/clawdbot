@@ -64,6 +64,7 @@ type GatewayConnectionOptions = {
   token?: string;
   password?: string;
   tlsFingerprint?: string;
+  allowConfiguredAuthForExactTarget?: boolean;
 };
 
 type GatewayEvent = TuiEvent;
@@ -543,9 +544,15 @@ async function resolveGatewayConnection(
   const hasExplicitGatewayTarget = Boolean(
     urlOverride.url || env.OPENCLAW_GATEWAY_PORT?.trim() || isRemoteMode,
   );
-  const activeLocalGatewayPort = hasExplicitGatewayTarget
-    ? undefined
-    : await readActiveGatewayLockPort();
+  const resumeMayMatchLocalTarget =
+    opts.allowConfiguredAuthForExactTarget === true &&
+    urlOverride.source === "cli" &&
+    !isRemoteMode &&
+    !env.OPENCLAW_GATEWAY_PORT?.trim();
+  const activeLocalGatewayPort =
+    !hasExplicitGatewayTarget || resumeMayMatchLocalTarget
+      ? await readActiveGatewayLockPort()
+      : undefined;
   if (
     !urlOverride.source &&
     gatewayAuthMode !== "none" &&
@@ -564,25 +571,22 @@ async function resolveGatewayConnection(
     explicitAuth,
     env,
     authPolicy: "interactive",
+    allowConfiguredAuthForExactTarget: opts.allowConfiguredAuthForExactTarget,
     ...(activeLocalGatewayPort ? { localPortOverride: activeLocalGatewayPort } : {}),
     explicitTlsFingerprint: opts.tlsFingerprint,
     allowStoredOriginAuth: hasStoredOriginDeviceAuth,
     overrideAuthErrorHint:
       "Fix: pass --token or --password once to request pairing, approve it in that gateway's Control UI (Settings -> Devices), then retry with the same credential so OpenClaw can store the device token.",
     buildConnectionDetails: buildGatewayConnectionDetails,
-    resolveTlsFingerprint: async ({ urlSource, explicitTlsFingerprint }) =>
-      explicitTlsFingerprint ??
-      (urlSource === "config gateway.remote.url"
-        ? normalizeOptionalString(config.gateway?.remote?.tlsFingerprint)
-        : undefined),
   });
   const hasStoredOriginAuth = Boolean(
     bootstrap.deviceAuthScope && hasStoredOriginDeviceAuth(bootstrap.deviceAuthScope),
   );
-  if (
-    bootstrap.authFailureReason &&
-    (bootstrap.authFailureReason !== "Missing gateway auth credentials." || !hasStoredOriginAuth)
-  ) {
+  const missingSharedAuth =
+    bootstrap.authFailureReason === "Missing gateway auth credentials." ||
+    bootstrap.authFailureReason === "Missing gateway auth token." ||
+    bootstrap.authFailureReason === "Missing gateway auth password.";
+  if (bootstrap.authFailureReason && (!missingSharedAuth || !hasStoredOriginAuth)) {
     throwGatewayAuthResolutionError(bootstrap.authFailureReason);
   }
   return {

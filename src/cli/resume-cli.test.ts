@@ -49,6 +49,11 @@ const ttyDescriptors = [process.stdin, process.stdout].map(
 
 function createGatewayClient(rows: SessionRow[]) {
   const client = {
+    connection: {
+      url: "wss://resolved.example/control",
+      token: "resolved-token",
+      tlsFingerprint: "sha256:resolved-pin",
+    },
     listSessions: vi.fn().mockResolvedValue({ sessions: rows }),
     onConnected: undefined as (() => void) | undefined,
     onConnectError: undefined as ((error: Error) => void) | undefined,
@@ -167,8 +172,36 @@ describe("runResumeCommand", () => {
     );
     expect(mocks.runTui).toHaveBeenCalledWith(
       expect.objectContaining({
+        boundGateway: {
+          url: "wss://resolved.example/control",
+          token: "resolved-token",
+          tlsFingerprint: "sha256:resolved-pin",
+        },
         session: "agent:main:alpha",
         forceProcessExitOnReturn: true,
+      }),
+    );
+  });
+
+  it("resolves the resume connection once and hands it to the TUI as bound", async () => {
+    createGatewayClient([
+      { key: "agent:main:alpha", displayName: "Alpha planning", label: "roadmap" },
+    ]);
+
+    await runResumeCommand("agent:main:alpha", { url: "wss://gateway.example/control" });
+
+    expect(mocks.connect).toHaveBeenCalledWith({
+      url: "wss://gateway.example/control",
+      allowConfiguredAuthForExactTarget: true,
+    });
+    expect(mocks.runTui).toHaveBeenCalledWith(
+      expect.objectContaining({
+        boundGateway: {
+          url: "wss://resolved.example/control",
+          token: "resolved-token",
+          tlsFingerprint: "sha256:resolved-pin",
+        },
+        session: "agent:main:alpha",
       }),
     );
   });

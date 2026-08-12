@@ -1,5 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { hasTerminalControl } from "../../lib/terminal-command.ts";
 
 const CLOUD_WORKSPACE_CONFLICT_TRANSCRIPT_TYPE = "cloud-workspace-conflict";
 const WORKSPACE_CONFLICT_VISIBLE_PATH_LIMIT = 5;
@@ -9,17 +10,6 @@ export type WorkspaceResultConflict = {
   stagedResultRef: string;
   totalCount?: number;
 };
-
-function hasTerminalControl(entryPath: string): boolean {
-  // Copied commands must not preserve terminal controls: bracketed-paste terminators
-  // can turn a displayed filename into executed shell input.
-  return Array.from(entryPath).some((character) => {
-    const codePoint = character.codePointAt(0);
-    return (
-      codePoint !== undefined && (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f))
-    );
-  });
-}
 
 function isWorkspaceConflictPath(entryPath: string): boolean {
   if (!entryPath || entryPath.startsWith("/") || entryPath.includes("\0")) {

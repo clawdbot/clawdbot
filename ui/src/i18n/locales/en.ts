@@ -4616,6 +4616,15 @@ export const en: TranslationMap = {
       openParent: "Open parent session {title}",
       panels: "Panels",
       layout: "Layout",
+      continueInTerminal: {
+        action: "Continue in terminal…",
+        title: "Continue in terminal",
+        description: "Copy this command to continue the current session in your terminal.",
+        authNote:
+          "The command contains no credentials. The terminal authenticates independently, and the session's access controls still apply.",
+        disconnected: "Connect to the Gateway to continue this session in a terminal.",
+        unavailable: "This session or Gateway address cannot be continued in a terminal.",
+      },
       workspaceAria: "Workspace actions for {workspace}",
       revealFinder: "Reveal in Finder",
       revealFileExplorer: "Reveal in File Explorer",

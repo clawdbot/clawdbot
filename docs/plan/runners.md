@@ -386,8 +386,15 @@ Independently mergeable PR series; 3–5 can interleave after 1c.
 
 1. **1c naming cleanup**: finish nodes → devices in route ids, i18n keys,
    labels; `node-pairing.ts` facade merge. Before any new placement copy.
-2. **Continuation ergonomics** (in progress): `openclaw resume`, web
-   "Continue in terminal".
+2. **Continuation ergonomics** (in progress): `openclaw resume` plus the web
+   **Continue in terminal…** session action. The browser copies one
+   credential-free command with the exact qualified session key and selected
+   Gateway WebSocket URL; it never executes the CLI or delegates first-use
+   authentication. Resume may reuse only the current profile's auth,
+   SecretRefs, exact-origin device auth, and TLS pin when the explicit URL
+   byte-for-byte matches its local + Control UI base path, remote, or public
+   origin + base path target. Mismatches fail closed, terminal auth remains
+   independent, and session ACLs stay authoritative.
 3. **`openclaw connect`**: verb + `oc-pair://` decoder + TLS pin in payload +
    `/j/<shortcode>` join route (reserved prefix, single-use, rate-limited) +
    shortcode mint + curl wrapper on the public site. Exit: a fresh machine

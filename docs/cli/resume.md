@@ -38,9 +38,8 @@ status 1. If no recent session matches, it suggests the picker and
 | `--password <pass>`          | (none)                           | Gateway password if required.                                       |
 | `--tls-fingerprint <sha256>` | `gateway.remote.tlsFingerprint`  | Expected TLS certificate fingerprint for a pinned `wss://` Gateway. |
 
-`resume` uses the same Gateway URL, authentication, and TLS resolution as
-[`openclaw tui`](/cli/tui). It never starts a Gateway automatically. If the
-configured Gateway is unavailable, start or repair it and rerun the command.
+`resume` never starts a Gateway automatically. If the configured Gateway is
+unavailable, start or repair it and rerun the command.
 
 `resume` resolves configured Gateway auth SecretRefs for token/password auth
 when possible (`env`/`file`/`exec`/`store` providers).
@@ -50,6 +49,31 @@ then `gateway.remote.url` when `gateway.mode` is `remote`, then the local
 loopback Gateway. For that local Gateway, `OPENCLAW_GATEWAY_PORT` takes
 precedence over the active port recorded by a running Gateway, which takes
 precedence over the configured or default `gateway.port`.
+
+An explicit `--url` normally requires an explicit `--token` or `--password`;
+OpenClaw does not borrow credentials or a TLS pin from a different configured
+target. `resume` has one narrow exception for commands copied from the Control
+UI: when `--url` byte-for-byte matches a canonical target of the current
+profile, it may reuse that profile's configured interactive auth, SecretRef,
+stored exact-origin device auth, and TLS pin. The eligible targets are the
+current local target with `gateway.controlUi.basePath`, `gateway.remote.url` in
+remote mode, and `gateway.publicOrigin` converted to WebSocket form with the
+Control UI base path. A host, port, path, profile, query, or fragment mismatch
+fails closed under the normal explicit-URL policy. OpenClaw never scans other
+profiles for a match.
+
+## Continue from the Control UI
+
+Open the selected session's header menu and choose **Continue in terminal…**.
+The dialog shows one copyable command containing the exact qualified session
+key and selected Gateway WebSocket URL, including any Control UI base path.
+The command contains no token, password, device credential, or bootstrap
+credential, and the browser does not execute it.
+
+Run the command in an already configured OpenClaw terminal. The terminal
+authenticates independently, and the Gateway's session access controls remain
+authoritative. This flow continues an existing session; it does not delegate
+first-use authentication from the browser.
 
 ## Examples
 

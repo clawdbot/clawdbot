@@ -28,7 +28,10 @@ async function fetchResumeSessions(
   options: { agentId?: string; includeGlobal?: boolean } = {},
 ) {
   const { GatewayChatClient } = await import("../tui/gateway-chat.js");
-  const client = await GatewayChatClient.connect(opts);
+  const client = await GatewayChatClient.connect({
+    ...opts,
+    allowConfiguredAuthForExactTarget: true,
+  });
   try {
     await new Promise<void>((resolve, reject) => {
       let settled = false;
@@ -45,7 +48,10 @@ async function fetchResumeSessions(
         finish(() => reject(new Error(reason || "Gateway connection closed")));
       client.start();
     });
-    return await loadRecentSessions(client, options);
+    return {
+      connection: client.connection,
+      sessions: await loadRecentSessions(client, options),
+    };
   } catch (error) {
     const [{ formatTuiErrorMessage }, { resolveGatewayDisconnectState }] = await Promise.all([
       import("../tui/tui-formatters.js"),
@@ -132,7 +138,7 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
   requireInteractiveResumeTerminal();
   const trimmedQuery = query?.trim();
   const explicitGlobalSession = resolveExplicitGlobalSessionKey(trimmedQuery);
-  const sessions = await fetchResumeSessions(
+  const discovery = await fetchResumeSessions(
     opts,
     explicitGlobalSession
       ? { agentId: explicitGlobalSession.agentId, includeGlobal: true }
@@ -142,7 +148,7 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
   if (explicitGlobalSession) {
     sessionKey = explicitGlobalSession.key;
   } else if (trimmedQuery) {
-    const resolution = resolveResumeSession(sessions, trimmedQuery);
+    const resolution = resolveResumeSession(discovery.sessions, trimmedQuery);
     if (resolution.kind !== "match") {
       reportResumeFailure(trimmedQuery, resolution);
       defaultRuntime.exit(1);
@@ -150,17 +156,21 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
     }
     sessionKey = resolution.session.value;
   } else {
-    sessionKey = await promptResumeSession(sessions);
+    sessionKey = await promptResumeSession(discovery.sessions);
   }
   if (!sessionKey) {
     return;
   }
   const { runTui } = await import("../tui/tui.js");
   await runTui({
-    url: opts.url,
-    token: opts.token,
-    password: opts.password,
-    tlsFingerprint: opts.tlsFingerprint,
+    boundGateway: {
+      url: discovery.connection.url,
+      ...(discovery.connection.token ? { token: discovery.connection.token } : {}),
+      ...(discovery.connection.password ? { password: discovery.connection.password } : {}),
+      ...(discovery.connection.tlsFingerprint
+        ? { tlsFingerprint: discovery.connection.tlsFingerprint }
+        : {}),
+    },
     session: sessionKey,
     forceProcessExitOnReturn: true,
   });

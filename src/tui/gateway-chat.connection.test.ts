@@ -218,6 +218,151 @@ describe("resolveGatewayConnection", () => {
     });
   });
 
+  it("reuses local interactive auth for an exact resume target with the active port and base path", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        port: 18789,
+        controlUi: { basePath: "/control" },
+        auth: { token: "configured-token" },
+      },
+    });
+    readActiveGatewayLockPortMock.mockResolvedValue(48789);
+
+    await expect(
+      resolveGatewayConnection({
+        url: "ws://127.0.0.1:48789/control",
+        allowConfiguredAuthForExactTarget: true,
+      }),
+    ).resolves.toMatchObject({
+      url: "ws://127.0.0.1:48789/control",
+      token: "configured-token",
+    });
+  });
+
+  it("allows an exact configured resume target to use stored origin device auth", async () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", controlUi: { basePath: "/control" } },
+    });
+    loadDeviceIdentityIfPresentMock.mockReturnValue({ deviceId: "device-1" });
+    loadOriginDeviceTokenMock.mockImplementation(({ gatewayScope }: { gatewayScope: string }) =>
+      gatewayScope === "ws://127.0.0.1:18789/control"
+        ? { token: "stored-origin-token", scopes: ["operator.read"] }
+        : null,
+    );
+
+    await expect(
+      resolveGatewayConnection({
+        url: "ws://127.0.0.1:18789/control",
+        allowConfiguredAuthForExactTarget: true,
+      }),
+    ).resolves.toMatchObject({
+      deviceAuthScope: "ws://127.0.0.1:18789/control",
+      token: undefined,
+      password: undefined,
+    });
+  });
+
+  it("reuses local SecretRef auth for an exact public-origin resume target", async () => {
+    loadConfig.mockReturnValue({
+      secrets: { providers: { default: { source: "env" } } },
+      gateway: {
+        mode: "local",
+        publicOrigin: "HTTPS://Gateway.Example/",
+        controlUi: { basePath: "/openclaw" },
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "PROFILE_GATEWAY_TOKEN" },
+        },
+      },
+    });
+
+    await withEnvAsync({ PROFILE_GATEWAY_TOKEN: "resolved-profile-token" }, async () => {
+      await expect(
+        resolveGatewayConnection({
+          url: "wss://gateway.example/openclaw",
+          allowConfiguredAuthForExactTarget: true,
+        }),
+      ).resolves.toMatchObject({
+        url: "wss://gateway.example/openclaw",
+        token: "resolved-profile-token",
+      });
+    });
+  });
+
+  it("reuses remote interactive auth and its TLS pin for an exact resume target", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://remote.example/gateway",
+          password: "configured-remote-password", // pragma: allowlist secret
+          tlsFingerprint: "sha256:configured-remote-pin",
+        },
+      },
+    });
+
+    await expect(
+      resolveGatewayConnection({
+        url: "wss://remote.example/gateway",
+        allowConfiguredAuthForExactTarget: true,
+      }),
+    ).resolves.toMatchObject({
+      password: "configured-remote-password",
+      tlsFingerprint: "sha256:configured-remote-pin",
+      url: "wss://remote.example/gateway",
+    });
+  });
+
+  it("fails closed when one exact target maps to both local and remote auth identities", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        publicOrigin: "https://gateway.example",
+        controlUi: { basePath: "/gateway" },
+        auth: { token: "local-token" },
+        remote: { url: "wss://gateway.example/gateway", token: "remote-token" },
+      },
+    });
+
+    await expect(
+      resolveGatewayConnection({
+        url: "wss://gateway.example/gateway",
+        allowConfiguredAuthForExactTarget: true,
+      }),
+    ).rejects.toThrow(/pass --token or --password once to request pairing/i);
+  });
+
+  it.each([
+    ["host", "wss://other.example/gateway"],
+    ["port", "wss://remote.example:444/gateway"],
+    ["path", "wss://remote.example/other"],
+    ["query", "wss://remote.example/gateway?mode=resume"],
+    ["fragment", "wss://remote.example/gateway#resume"],
+  ])("fails closed on an exact resume target %s mismatch", async (_part, url) => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://remote.example/gateway",
+          token: "configured-remote-token",
+          tlsFingerprint: "sha256:configured-remote-pin",
+        },
+      },
+    });
+
+    await expect(
+      resolveGatewayConnection({ url, allowConfiguredAuthForExactTarget: true }),
+    ).rejects.toThrow(/pass --token or --password once to request pairing/i);
+    const explicit = await resolveGatewayConnection({
+      url,
+      token: "explicit-token",
+      allowConfiguredAuthForExactTarget: true,
+    });
+    expect(explicit.token).toBe("explicit-token");
+    expect(explicit.tlsFingerprint).toBeUndefined();
+  });
+
   it("allows a url override with an exact-origin stored device credential", async () => {
     loadConfig.mockReturnValue({ gateway: { mode: "local" } });
     loadDeviceIdentityIfPresentMock.mockReturnValue({ deviceId: "device-1" });

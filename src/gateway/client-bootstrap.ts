@@ -1,6 +1,7 @@
 // Gateway client bootstrap resolver.
 // Collects URL, auth, and handshake settings before constructing a GatewayClient.
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
+import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import {
@@ -11,6 +12,7 @@ import {
   buildGatewayConnectionDetailsWithResolvers,
   type GatewayConnectionDetails,
 } from "./connection-details.js";
+import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
 import {
   resolveExplicitGatewayAuth,
@@ -83,6 +85,71 @@ export function ensureExplicitGatewayAuth(params: {
 
 type GatewayClientBootstrapAuthPolicy = "default" | "interactive" | "probe";
 
+type ConfiguredGatewayTargetIdentity = {
+  authSurface: "local" | "remote";
+  tlsSource: "local loopback" | "config gateway.remote.url";
+};
+
+function appendControlUiBasePath(url: string, basePath: string): string {
+  return `${url}${normalizeControlUiBasePath(basePath)}`;
+}
+
+function resolveExactConfiguredGatewayTarget(params: {
+  buildConnectionDetails: (options: {
+    config: OpenClawConfig;
+    ignoreEnvUrlOverride?: boolean;
+    localPortOverride?: number;
+  }) => GatewayConnectionDetails;
+  config: OpenClawConfig;
+  explicitUrl: string;
+  localPortOverride?: number;
+}): ConfiguredGatewayTargetIdentity | undefined {
+  const localGateway = { ...params.config.gateway, mode: "local" as const };
+  delete localGateway.remote;
+  const localUrl = params.buildConnectionDetails({
+    config: { ...params.config, gateway: localGateway },
+    ignoreEnvUrlOverride: true,
+    ...(params.localPortOverride !== undefined
+      ? { localPortOverride: params.localPortOverride }
+      : {}),
+  }).url;
+  const basePath = params.config.gateway?.controlUi?.basePath ?? "";
+  const candidates: Array<{
+    target: string;
+    identity: ConfiguredGatewayTargetIdentity;
+  }> = [
+    {
+      target: appendControlUiBasePath(localUrl, basePath),
+      identity: { authSurface: "local", tlsSource: "local loopback" },
+    },
+  ];
+  const remoteUrl =
+    params.config.gateway?.mode === "remote"
+      ? trimToUndefined(params.config.gateway.remote?.url)
+      : undefined;
+  if (remoteUrl) {
+    candidates.push({
+      target: remoteUrl,
+      identity: { authSurface: "remote", tlsSource: "config gateway.remote.url" },
+    });
+  }
+  const publicOrigin = resolveGatewayPublicOrigin(params.config);
+  if (publicOrigin) {
+    candidates.push({
+      target: appendControlUiBasePath(
+        publicOrigin.replace(/^https:/u, "wss:").replace(/^http:/u, "ws:"),
+        basePath,
+      ),
+      identity: { authSurface: "local", tlsSource: "local loopback" },
+    });
+  }
+  const matches = candidates.filter(({ target }) => target === params.explicitUrl);
+  const identities = new Map(
+    matches.map(({ identity }) => [`${identity.authSurface}\0${identity.tlsSource}`, identity]),
+  );
+  return identities.size === 1 ? identities.values().next().value : undefined;
+}
+
 /** Resolve the only URL overrides allowed to displace configured Gateway targets. */
 export function resolveGatewayUrlOverride(params: {
   gatewayUrl?: string;
@@ -110,6 +177,8 @@ export async function resolveGatewayClientBootstrap(params: {
   explicitAuth?: ExplicitGatewayAuth;
   env?: NodeJS.ProcessEnv;
   authPolicy?: GatewayClientBootstrapAuthPolicy;
+  /** Permit current-profile auth only after bootstrap proves an exact configured target match. */
+  allowConfiguredAuthForExactTarget?: boolean;
   modeOverride?: GatewayCredentialMode;
   ignoreEnvUrlOverride?: boolean;
   localPortOverride?: number;
@@ -168,28 +237,45 @@ export async function resolveGatewayClientBootstrap(params: {
   });
   const detectedUrlOverrideSource = resolveGatewayUrlOverrideSource(connection.urlSource);
   const urlOverrideSource = urlOverride.source ?? detectedUrlOverrideSource;
+  const configuredTarget =
+    params.allowConfiguredAuthForExactTarget &&
+    urlOverrideSource === "cli" &&
+    !explicitAuth.token &&
+    !explicitAuth.password
+      ? resolveExactConfiguredGatewayTarget({
+          buildConnectionDetails,
+          config: params.config,
+          explicitUrl: connection.url,
+          ...(params.localPortOverride !== undefined
+            ? { localPortOverride: params.localPortOverride }
+            : {}),
+        })
+      : undefined;
+  const tlsUrlSource = configuredTarget?.tlsSource ?? connection.urlSource;
   const tlsFingerprint = params.resolveTlsFingerprint
     ? await params.resolveTlsFingerprint({
         config: params.config,
         url: connection.url,
-        urlSource: connection.urlSource,
+        urlSource: tlsUrlSource,
         explicitTlsFingerprint: params.explicitTlsFingerprint,
       })
     : await resolveGatewayConnectionTlsFingerprint({
         config: params.config,
         url: connection.url,
-        urlSource: connection.urlSource,
+        urlSource: tlsUrlSource,
         explicitTlsFingerprint: params.explicitTlsFingerprint,
         loadGatewayTlsRuntime,
       });
   // Only direct CLI/env URL overrides should constrain token/password fallback. Config-derived
   // remote URLs are canonical config, not a caller override.
   const surface =
-    params.modeOverride ?? (params.config.gateway?.mode === "remote" ? "remote" : "local");
+    configuredTarget?.authSurface ??
+    params.modeOverride ??
+    (params.config.gateway?.mode === "remote" ? "remote" : "local");
   let auth: { token?: string; password?: string; failureReason?: string };
   if (params.skipImplicitAuth) {
     auth = explicitAuth;
-  } else if (urlOverrideSource) {
+  } else if (urlOverrideSource && !configuredTarget) {
     auth = await resolveGatewayCredentialsWithSecretInputs({
       config: params.config,
       explicitAuth,
@@ -221,7 +307,7 @@ export async function resolveGatewayClientBootstrap(params: {
     urlOverrideSource || params.config.gateway?.mode === "remote"
       ? gatewayOriginScope(connection.url)
       : undefined;
-  if (params.overrideAuthErrorHint) {
+  if (params.overrideAuthErrorHint && !configuredTarget) {
     ensureExplicitGatewayAuth({
       urlOverride: urlOverrideSource ? connection.url : undefined,
       urlOverrideSource,

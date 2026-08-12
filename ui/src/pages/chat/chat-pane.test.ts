@@ -97,6 +97,63 @@ function nativeHistoryMessage(seq: number, text = `message ${seq}`) {
 }
 
 describe("chat pane header state", () => {
+  it.each(["session", "target", "client", "reconnect"] as const)(
+    "closes terminal continuation after a %s ownership change",
+    async (change) => {
+      const client = { gatewayUrl: "wss://gateway.example/control" } as GatewayBrowserClient;
+      const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+      const row = {
+        key: "bare-session",
+        agentId: "row-agent",
+        kind: "direct",
+        updatedAt: 0,
+      } satisfies GatewaySessionRow;
+      const replacementRow = { ...row, key: "other-session" };
+      const container = document.createElement("div");
+      const paint = (selected: GatewaySessionRow) =>
+        render(
+          pane.renderPaneHeader(
+            createSessionWorkspaceProps(state),
+            createBackgroundTasksProps(state),
+            selected,
+            false,
+            undefined,
+            false,
+          ),
+          container,
+        );
+
+      await pane.handleHeaderSessionAction({ kind: "continue-in-terminal" }, row);
+      paint(row);
+      expect(
+        container.querySelector(".continue-in-terminal-dialog .login-gate__command code")
+          ?.textContent,
+      ).toBe("openclaw resume agent:row-agent:bare-session --url wss://gateway.example/control");
+
+      if (change === "target") {
+        pane.context.gateway.connection.gatewayUrl = "wss://other.example/control";
+        paint(row);
+        pane.context.gateway.connection.gatewayUrl = "ws://example.test";
+      } else if (change === "client") {
+        pane.context.gateway.snapshot.client = {
+          gatewayUrl: "wss://replacement.example/control",
+        } as GatewayBrowserClient;
+        paint(row);
+        pane.context.gateway.snapshot.client = client;
+      } else if (change === "reconnect") {
+        pane.connectionGeneration += 1;
+        paint(row);
+        pane.connectionGeneration -= 1;
+      } else {
+        paint(replacementRow);
+      }
+
+      expect(container.querySelector("openclaw-modal-dialog")).toBeNull();
+      paint(row);
+      expect(container.querySelector("openclaw-modal-dialog")).toBeNull();
+    },
+  );
+
   it("forks through the shared session organizer flow and selects the new session", async () => {
     const create = vi.fn(async () => "agent:main:forked");
     const sessions = {

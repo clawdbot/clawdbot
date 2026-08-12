@@ -22,6 +22,7 @@ import { headerPlatformByClient } from "./chat-pane-shared.ts";
 import { patchChatSessionLabel } from "./chat-state-route.ts";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
+import { buildContinueInTerminalCommand } from "./continue-in-terminal-command.ts";
 
 export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   private headerSessionOperationsLoad: Promise<
@@ -60,6 +61,10 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     }
     if (action.kind === "rename") {
       this.beginHeaderRename(row);
+      return;
+    }
+    if (action.kind === "continue-in-terminal") {
+      this.openContinueInTerminalDialog(row);
       return;
     }
     const scope = this.captureHeaderSessionActionScope();
@@ -123,6 +128,73 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         this.publishHeaderError(error);
       }
     }
+  }
+
+  private resolveContinueInTerminalCommand(row: GatewaySessionRow, client: GatewayBrowserClient) {
+    return buildContinueInTerminalCommand({
+      gatewayUrl: client.gatewayUrl,
+      sessionKey: row.key,
+      rowAgentId: row.agentId,
+      selectedAgentId: this.context.agentSelection.state.selectedId ?? undefined,
+    });
+  }
+
+  protected continueInTerminalDisabledReason(row: GatewaySessionRow): string | undefined {
+    const gateway = this.context.gateway;
+    const client = gateway.snapshot.client;
+    if (gateway.snapshot.phase !== "connected" || !client) {
+      return t("chat.sessionHeader.continueInTerminal.disconnected");
+    }
+    if (this.resolveContinueInTerminalCommand(row, client)) {
+      return undefined;
+    }
+    return t("chat.sessionHeader.continueInTerminal.unavailable");
+  }
+
+  private openContinueInTerminalDialog(row: GatewaySessionRow): void {
+    const scope = this.captureConnectionScope();
+    if (!scope) {
+      return;
+    }
+    const command = this.resolveContinueInTerminalCommand(row, scope.client);
+    if (!command) {
+      return;
+    }
+    this.continueInTerminalDialog = {
+      command,
+      sessionKey: row.key,
+      selectedGatewayUrl: this.context.gateway.connection.gatewayUrl,
+      clientGatewayUrl: scope.client.gatewayUrl,
+      scope,
+    };
+    this.requestUpdate();
+  }
+
+  protected closeContinueInTerminalDialog(): void {
+    if (!this.continueInTerminalDialog) {
+      return;
+    }
+    this.continueInTerminalDialog = null;
+    this.requestUpdate();
+  }
+
+  protected currentContinueInTerminalCommand(row: GatewaySessionRow | undefined): string | null {
+    const dialog = this.continueInTerminalDialog;
+    const gateway = this.context.gateway;
+    const client = gateway.snapshot.client;
+    if (!dialog) {
+      return null;
+    }
+    if (
+      !this.isConnectionScopeCurrent(dialog.scope) ||
+      row?.key !== dialog.sessionKey ||
+      gateway.connection.gatewayUrl !== dialog.selectedGatewayUrl ||
+      client?.gatewayUrl !== dialog.clientGatewayUrl
+    ) {
+      this.continueInTerminalDialog = null;
+      return null;
+    }
+    return dialog.command;
   }
 
   private captureHeaderSessionActionScope(): SidebarSessionMutationScope | null {

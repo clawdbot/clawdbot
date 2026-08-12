@@ -99,7 +99,21 @@ separately when first pairing with a Gateway origin.
 
 ### Continue in the terminal
 
-For Gateway-backed continuation, pass the URL or reference to `openclaw tui`:
+From the Control UI, open the session header menu and choose **Continue in
+terminal…**. The dialog copies a credential-free `openclaw resume` command with
+the exact qualified session key and selected Gateway WebSocket URL. Run it in
+an OpenClaw CLI profile that is already configured for that Gateway; the
+terminal authenticates independently and the session ACL still applies.
+
+You can also choose or query a recent session directly:
+
+```bash
+openclaw resume
+openclaw resume agent:main:deploy-monitor
+```
+
+For Gateway-backed continuation from a URL or short reference, pass the target
+to `openclaw tui`:
 
 ```bash
 openclaw tui https://claw.example.com/dashboard/main/deploy-monitor-6db92d48
@@ -136,7 +150,12 @@ launch options.
 
 A URL or gateway shorthand authoritatively selects one normalized Gateway
 origin. OpenClaw never reuses configured credentials or a stored device token
-from another origin for that target.
+from another origin for that target. The credential-free command copied by
+**Continue in terminal…** has a narrower rule: `openclaw resume` may reuse the
+current CLI profile only when its explicit WebSocket URL byte-for-byte matches
+that profile's configured local, remote, or public-origin target. It never
+searches other profiles, and any host, port, or path mismatch returns to the
+normal explicit-credential requirement.
 
 On first contact:
 
@@ -149,6 +168,10 @@ On first contact:
    in SQLite under that exact normalized Gateway origin.
 4. Later connections to the same origin can use the stored device token. An
    explicit `--token` or `--password` always wins for the entire connection.
+
+The Control UI continuation command does not perform these first-contact steps
+or carry their credentials. Configure or pair the terminal independently before
+using it.
 
 Revoke or remove the device from the same Gateway's **Devices** page when that
 client should no longer connect. Tokens do not cross origins. Read-only probes
