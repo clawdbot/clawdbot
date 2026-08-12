@@ -263,8 +263,10 @@ export function resolveGatewaySessionThinkingProjectionInternal(
     agentRuntime,
     thinkingLevel,
     effectiveThinkingLevel: thinkingLevel ?? metadata.thinkingDefault,
-    ...metadata,
+    // Preserve the established serialized projection order for byte-stable responses.
+    thinkingLevels: metadata.thinkingLevels,
     thinkingOptions: metadata.thinkingLevels.map((level) => level.label),
+    thinkingDefault: metadata.thinkingDefault,
   };
 }
 
@@ -306,8 +308,10 @@ export function getSessionDefaults(
     model: resolved.model ?? null,
     contextTokens: contextTokens ?? null,
     agentRuntime,
-    ...thinkingProfile,
+    // Preserve the established serialized projection order for byte-stable responses.
+    thinkingLevels: thinkingProfile.thinkingLevels,
     thinkingOptions: thinkingProfile.thinkingLevels.map((level) => level.label),
+    thinkingDefault: thinkingProfile.thinkingDefault,
   };
 }
 

@@ -364,8 +364,10 @@ export function listAgentsForGateway(
         workspace,
         workspaceGit,
         agentRuntime,
-        ...thinkingProfile,
+        // Preserve the established serialized projection order for byte-stable responses.
+        thinkingLevels: thinkingProfile.thinkingLevels,
         thinkingOptions: thinkingProfile.thinkingLevels.map((level) => level.label),
+        thinkingDefault: thinkingProfile.thinkingDefault,
       },
       model ? { model } : {},
     );
