@@ -3494,10 +3494,9 @@ describe("createCliJsonlStreamingParser", () => {
   });
 
   it("carries complete tool args from content_block_start input without input_json_delta chunks", () => {
-    // Regression: backends that deliver the whole tool input on the start block
-    // (instead of streaming input_json_delta parts) used to emit a start delta
-    // with empty args, dropping the resolved command/args from the Discord
-    // progress draft (name-only rows). See #120306.
+    // Regression: start-block-only backends used to emit a start delta with
+    // empty args, dropping the command/args from the Discord progress draft
+    // (name-only rows). See #120306.
     const starts: CliToolUseStartDelta[] = [];
     const parser = createCliJsonlStreamingParser({
       backend: {
