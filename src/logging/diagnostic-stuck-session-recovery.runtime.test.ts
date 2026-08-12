@@ -487,6 +487,39 @@ describe("stuck session recovery", () => {
     ]);
   });
 
+  it.each(["preflight_compacting", "memory_flushing"])(
+    "keeps zero-backlog maintenance phase %s out of the stale reclaim path",
+    async (phase) => {
+      mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("maintenance-reply-session");
+      mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+      mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+      mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
+      mocks.resolveEmbeddedAgentReplyRunPhase.mockReturnValue(phase);
+      mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({
+        lastProgressAgeMs: 720_000,
+      });
+
+      const outcome = await recoverStuckDiagnosticSession({
+        sessionId: "maintenance-reply-session",
+        sessionKey: "agent:main:main",
+        ageMs: 720_000,
+        queueDepth: 0,
+      });
+
+      // Preflight compaction and memory flush are recognized maintenance
+      // phases that may legitimately outlive the stale threshold (they honor a
+      // configured compaction timeout). The zero-backlog exemption must not
+      // turn a running maintenance operation into a reclaim target.
+      expect(outcome).toMatchObject({
+        status: "skipped",
+        action: "keep_lane",
+        reason: "active_reply_work",
+        activeSessionId: "maintenance-reply-session",
+      });
+      expect(mocks.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps reply-only ownership with recent progress even with zero queued backlog", async () => {
     mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("live-reply-session");
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
