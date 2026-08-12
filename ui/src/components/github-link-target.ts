@@ -2,7 +2,7 @@ const GITHUB_HOST = "github.com";
 
 export const GITHUB_HOVERCARD_OPEN_DELAY_MS = 250;
 
-export type GitHubItemTarget = {
+type GitHubItemTarget = {
   kind: "issue" | "pull";
   number: number;
   owner: string;

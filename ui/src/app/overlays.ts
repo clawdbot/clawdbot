@@ -4,7 +4,7 @@ import {
 } from "../../../src/gateway/events.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { UpdateHoldResult, UpdateScheduleState } from "../api/types.ts";
-import { controlUiVersionDiffersFrom, reloadControlUiIfStale } from "../build-info.ts";
+import { controlUiVersionDiffersFrom } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import {
   closeDevicePairSetup as closeDevicePairSetupState,
