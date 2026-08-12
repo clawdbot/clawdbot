@@ -7,6 +7,7 @@ import {
 } from "../../agents/agent-auth-credentials.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { setPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -30,13 +31,12 @@ function createOwner(
       ]),
     ),
   };
-  return {
+  const owner: PreparedModelRuntimeSnapshot = {
     agentId: "main",
     agentDir: `/tmp/${id}/agent`,
     workspaceDir: `/tmp/${id}/workspace`,
     activeProjectKeys: [],
     config,
-    authStore,
     authModes: resolveUsableAgentCredentialModes(credentials),
     metadataSnapshot: { index: { plugins: [] }, plugins: [] } as never,
     allowGatewaySubagentBinding: false,
@@ -51,6 +51,8 @@ function createOwner(
       modelRegistry: {} as never,
     }),
   };
+  setPreparedModelRuntimeAuthStore(owner, authStore);
+  return owner;
 }
 
 function createHarness(

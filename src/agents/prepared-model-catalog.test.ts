@@ -61,15 +61,23 @@ import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalo
 import {
   getPublishedPreparedModelCatalogOwnerSnapshot,
   getPreparedModelCatalogSnapshot,
+  loadPreparedModelCatalogOwnerSnapshot,
   loadPreparedModelCatalogSnapshot,
   loadResolvedPublishedModelCatalogOwner,
   loadPublishedPreparedModelCatalog,
   loadPublishedPreparedModelCatalogOwnerSnapshot,
 } from "./prepared-model-catalog.js";
+import {
+  getPreparedModelRuntimeAuthStore,
+  setPreparedModelRuntimeAuthStore,
+} from "./prepared-model-runtime-auth.js";
 import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.js";
 
 const fullSnapshot = {
   config: mocks.config,
+  authModes: {},
+  authStore: { version: 1, profiles: {} },
+  metadataSnapshot: { index: { plugins: [] }, plugins: [] },
   modelCatalog: { entries: [{ provider: "test", id: "full", name: "Full" }], routeVariants: [] },
 };
 const readOnlySnapshot = {
@@ -191,11 +199,13 @@ describe("prepared model catalog access", () => {
       routeVariants: [],
     };
     const loadFullModelCatalog = vi.fn(async () => discoveredCatalog);
+    const { authStore, ...snapshotFacts } = fullSnapshot;
     const snapshot = {
-      ...fullSnapshot,
+      ...snapshotFacts,
       modelCatalog: configuredCatalog,
       loadFullModelCatalog,
     };
+    setPreparedModelRuntimeAuthStore(snapshot, authStore);
     mocks.prepareSnapshot.mockResolvedValue(snapshot);
 
     await expect(loadPreparedModelCatalogSnapshot({ readOnly: true })).resolves.toBe(
@@ -203,9 +213,10 @@ describe("prepared model catalog access", () => {
     );
     expect(loadFullModelCatalog).not.toHaveBeenCalled();
 
-    await expect(loadPreparedModelCatalogSnapshot({ readOnly: false })).resolves.toBe(
-      discoveredCatalog,
-    );
+    const materialized = await loadPreparedModelCatalogOwnerSnapshot({ readOnly: false });
+    expect(materialized.modelCatalog).toBe(discoveredCatalog);
+    expect(materialized).not.toHaveProperty("authStore");
+    expect(getPreparedModelRuntimeAuthStore(materialized)).toBe(authStore);
     expect(loadFullModelCatalog).toHaveBeenCalledOnce();
 
     mocks.getSnapshot.mockReturnValue(snapshot);
@@ -292,6 +303,9 @@ describe("prepared model catalog access", () => {
       agentDir: "/tmp/prepared-model-catalog-agent",
       workspaceDir: "/tmp/prepared-model-catalog-workspace",
       config: committedSnapshot.config,
+      authModes: {},
+      authStore: { version: 1, profiles: {} },
+      metadataSnapshot: fullSnapshot.metadataSnapshot,
       modelCatalog: committedSnapshot.modelCatalog,
     });
   });

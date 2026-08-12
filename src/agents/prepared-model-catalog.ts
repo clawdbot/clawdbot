@@ -13,6 +13,7 @@ import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.ty
 import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owner.js";
 import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
 import type { ResolvedPublishedModelCatalogOwner } from "./prepared-model-catalog.types.js";
+import { copyPreparedModelRuntimeAuthState } from "./prepared-model-runtime-auth.js";
 import { isPreparedModelCatalogFull } from "./prepared-model-runtime.facts.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -62,9 +63,12 @@ async function materializeRequestedModelCatalog(
     return snapshot;
   }
   const modelCatalog = await snapshot.loadFullModelCatalog();
-  return modelCatalog === snapshot.modelCatalog
-    ? snapshot
-    : Object.freeze({ ...snapshot, modelCatalog });
+  if (modelCatalog === snapshot.modelCatalog) {
+    return snapshot;
+  }
+  const materialized = Object.freeze({ ...snapshot, modelCatalog });
+  copyPreparedModelRuntimeAuthState(snapshot, materialized);
+  return materialized;
 }
 
 function acceptsPreparedSnapshotConfig(

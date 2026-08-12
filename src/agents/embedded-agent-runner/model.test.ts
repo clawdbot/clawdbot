@@ -972,7 +972,6 @@ describe("resolveModel", () => {
       activeProjectKeys: [],
       allowGatewaySubagentBinding: false,
       config: cfg,
-      authStore: { version: 1, profiles: {} },
       authModes: {},
       metadataSnapshot: { plugins: [] } as never,
       modelCatalog: { entries: [], routeVariants: [] },

@@ -10,7 +10,7 @@ export type PublishedModelCatalogOwnerCandidate = Readonly<{
   workspaceDir?: string;
   config: OpenClawConfig;
   authModes: PreparedAgentCredentialModes;
-  authStore: AuthProfileStore;
+  authStore?: AuthProfileStore;
   metadataSnapshot: PluginMetadataSnapshot;
   modelCatalog: ModelCatalogSnapshot;
 }>;

@@ -1,21 +1,39 @@
-/** Secret-free successful-auth facts owned by an immutable prepared model generation. */
 import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
-import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 
-const materializationsBySnapshot = new WeakMap<
-  PreparedModelRuntimeSnapshot,
-  readonly RuntimeAuthMaterialization[]
->();
+/** Private auth facts owned by an immutable prepared model generation. */
+const authStoreBySnapshot = new WeakMap<object, AuthProfileStore>();
+const materializationsBySnapshot = new WeakMap<object, readonly RuntimeAuthMaterialization[]>();
+
+// Secret-bearing state stays lifecycle-owned without becoming part of the public snapshot shape.
+export function setPreparedModelRuntimeAuthStore(
+  snapshot: object,
+  authStore: AuthProfileStore,
+): void {
+  authStoreBySnapshot.set(snapshot, authStore);
+}
+
+export function getPreparedModelRuntimeAuthStore(snapshot: object): AuthProfileStore | undefined {
+  return authStoreBySnapshot.get(snapshot);
+}
 
 export function setPreparedModelRuntimeAuthMaterializations(
-  snapshot: PreparedModelRuntimeSnapshot,
+  snapshot: object,
   materializations: readonly RuntimeAuthMaterialization[],
 ): void {
   materializationsBySnapshot.set(snapshot, materializations);
 }
 
 export function getPreparedModelRuntimeAuthMaterializations(
-  snapshot: PreparedModelRuntimeSnapshot,
+  snapshot: object,
 ): readonly RuntimeAuthMaterialization[] {
   return materializationsBySnapshot.get(snapshot) ?? [];
+}
+
+export function copyPreparedModelRuntimeAuthState(source: object, target: object): void {
+  const authStore = authStoreBySnapshot.get(source);
+  if (authStore) {
+    authStoreBySnapshot.set(target, authStore);
+  }
+  materializationsBySnapshot.set(target, getPreparedModelRuntimeAuthMaterializations(source));
 }

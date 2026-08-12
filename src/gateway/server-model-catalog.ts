@@ -1,7 +1,6 @@
 import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-catalog-owner.js";
 import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
 import { getPreparedModelRuntimeAuthMaterializations } from "../agents/prepared-model-runtime-auth.js";
-import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.types.js";
 // Gateway catalog reads use the atomic prepared runtime generation.
 import { getRuntimeConfig } from "../config/io.js";
 import type {
@@ -68,9 +67,7 @@ async function loadGatewayModelCatalogOwnerSnapshot(
   });
   return {
     ...resolvePublishedModelCatalogOwner(candidate),
-    authMaterializations: getPreparedModelRuntimeAuthMaterializations(
-      candidate as PreparedModelRuntimeSnapshot,
-    ),
+    authMaterializations: getPreparedModelRuntimeAuthMaterializations(candidate),
   };
 }
 

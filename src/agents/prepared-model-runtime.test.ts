@@ -2,6 +2,7 @@ import "./prepared-model-runtime.test-harness.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
+import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
 import { startSerializedSnapshotBuild } from "./prepared-model-runtime.build.js";
 import {
   acquireReadOnlyPreparedModelRuntime,
@@ -585,7 +586,7 @@ describe("prepared model runtime snapshots", () => {
 
     expect(credentialFree).not.toBe(await prepareModelRuntimeSnapshot({ config, agentDir }));
     expect(mocks.discoverAuthStorage).toHaveBeenCalledOnce();
-    expect(credentialFree.authStore).toEqual({ version: 1, profiles: {} });
+    expect(getPreparedModelRuntimeAuthStore(credentialFree)).toEqual({ version: 1, profiles: {} });
   });
 
   it("reuses one lifecycle-owned snapshot without rediscovering files", async () => {
