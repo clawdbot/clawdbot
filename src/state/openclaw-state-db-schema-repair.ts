@@ -1,7 +1,10 @@
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import {
+  assertSqliteSchemaContains,
+  collectSqliteSchemaIssues,
+} from "../infra/sqlite-schema-contract.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   canRepairLegacyAuditEventsSchema,
@@ -76,6 +79,34 @@ CREATE INDEX idx_commitments_agent_sent
   ON commitments(agent_id, status, sent_at_ms, session_key);
 `;
 
+const EARLY_RETIRED_COMMITMENTS_SCHEMA_SQL = `
+CREATE TABLE commitments (
+  id TEXT NOT NULL PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  status TEXT NOT NULL,
+  due_earliest_ms INTEGER NOT NULL,
+  due_latest_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  record_json TEXT NOT NULL
+);
+`;
+
+function assertRecognizedRetiredCommitmentsSchema(db: DatabaseSync): void {
+  if (
+    collectSqliteSchemaIssues(db, RETIRED_COMMITMENTS_SCHEMA_SQL).length === 0 ||
+    collectSqliteSchemaIssues(db, EARLY_RETIRED_COMMITMENTS_SCHEMA_SQL).length === 0
+  ) {
+    return;
+  }
+  assertSqliteSchemaContains(
+    db,
+    "retired OpenClaw commitments schema",
+    RETIRED_COMMITMENTS_SCHEMA_SQL,
+  );
+}
+
 export function migrateRetiredCommitmentsSchema(
   db: DatabaseSync,
   previousVersion: number,
@@ -88,11 +119,7 @@ export function migrateRetiredCommitmentsSchema(
   }
   // The commitments runtime was removed before v7; retained rows are inert
   // migration debt and have no remaining product owner or export contract.
-  assertSqliteSchemaContains(
-    db,
-    "retired OpenClaw commitments schema",
-    RETIRED_COMMITMENTS_SCHEMA_SQL,
-  );
+  assertRecognizedRetiredCommitmentsSchema(db);
   // DROP TABLE removes only the validated table's indexes and sqlite_stat rows.
   db.exec("DROP TABLE commitments;");
   return true;

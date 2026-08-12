@@ -1388,6 +1388,52 @@ describe("openclaw state database", () => {
   );
 
   it.each(["runtime open", "doctor repair"] as const)(
+    "retires the supported early commitments layout through %s",
+    (migrationPath) => {
+      const stateDir = createTempStateDir();
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+      fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+      const { DatabaseSync } = requireNodeSqlite();
+      const early = new DatabaseSync(databasePath);
+      early.exec(`
+        CREATE TABLE commitments (
+          id TEXT NOT NULL PRIMARY KEY,
+          agent_id TEXT NOT NULL,
+          session_key TEXT NOT NULL,
+          channel TEXT NOT NULL,
+          status TEXT NOT NULL,
+          due_earliest_ms INTEGER NOT NULL,
+          due_latest_ms INTEGER NOT NULL,
+          updated_at_ms INTEGER NOT NULL,
+          record_json TEXT NOT NULL
+        );
+        INSERT INTO commitments (
+          id, agent_id, session_key, channel, status, due_earliest_ms,
+          due_latest_ms, updated_at_ms, record_json
+        ) VALUES (
+          'early-commitment', 'main', 'agent:main:main', 'telegram', 'pending',
+          10, 20, 1, '{}'
+        );
+      `);
+      early.close();
+
+      if (migrationPath === "doctor repair") {
+        const result = repairOpenClawStateDatabaseSchema(options);
+        expect(result.warnings).toEqual([]);
+        expect(result.changes).toContain("Retired shared state commitments table and indexes");
+      }
+      const migrated = openOpenClawStateDatabase(options);
+      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
+      expect(
+        migrated.db.prepare("SELECT name FROM sqlite_schema WHERE name = 'commitments'").get(),
+      ).toBeUndefined();
+    },
+  );
+
+  it.each(["runtime open", "doctor repair"] as const)(
     "preserves a foreign commitments table and colliding index through %s",
     (migrationPath) => {
       const stateDir = createTempStateDir();
