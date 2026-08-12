@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadBundledPluginPublicSurface } from "../plugin-sdk/test-helpers/public-surface-loader.js";
 import type {
   PluginOrigin,
   PluginWebFetchProviderEntry,
@@ -303,41 +304,6 @@ const COVERAGE_BUNDLED_CHANNEL_IDS = [
     }),
   ),
 ];
-
-function loadCoverageChannelContract(channelId: string): Promise<object> {
-  switch (channelId) {
-    case "buzz":
-      return import("../../extensions/buzz/secret-contract-api.js");
-    case "clickclack":
-      return import("../../extensions/clickclack/secret-contract-api.js");
-    case "discord":
-      return import("../../extensions/discord/secret-contract-api.js");
-    case "feishu":
-      return import("../../extensions/feishu/secret-contract-api.js");
-    case "googlechat":
-      return import("../../extensions/googlechat/secret-contract-api.js");
-    case "irc":
-      return import("../../extensions/irc/secret-contract-api.js");
-    case "matrix":
-      return import("../../extensions/matrix/secret-contract-api.js");
-    case "mattermost":
-      return import("../../extensions/mattermost/secret-contract-api.js");
-    case "msteams":
-      return import("../../extensions/msteams/secret-contract-api.js");
-    case "nextcloud-talk":
-      return import("../../extensions/nextcloud-talk/secret-contract-api.js");
-    case "slack":
-      return import("../../extensions/slack/secret-contract-api.js");
-    case "sms":
-      return import("../../extensions/sms/secret-contract-api.js");
-    case "telegram":
-      return import("../../extensions/telegram/secret-contract-api.js");
-    case "zalo":
-      return import("../../extensions/zalo/secret-contract-api.js");
-    default:
-      throw new Error(`missing coverage contract loader for bundled channel ${channelId}`);
-  }
-}
 
 const DEBUG_COVERAGE_BATCHES = process.env.OPENCLAW_DEBUG_RUNTIME_COVERAGE === "1";
 const RUNTIME_COVERAGE_TEST_TIMEOUT_MS = 240_000;
@@ -968,7 +934,14 @@ describe("secrets runtime target coverage", () => {
       import("./runtime-web-tools.js"),
       Promise.all(
         COVERAGE_BUNDLED_CHANNEL_IDS.map(
-          async (channelId) => [channelId, await loadCoverageChannelContract(channelId)] as const,
+          async (channelId) =>
+            [
+              channelId,
+              await loadBundledPluginPublicSurface<object>({
+                pluginId: channelId,
+                artifactBasename: "secret-contract-api.js",
+              }),
+            ] as const,
         ),
       ),
       import("./official-external-channel-secret-contract.js"),
