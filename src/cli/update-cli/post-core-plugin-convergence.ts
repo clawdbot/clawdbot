@@ -173,14 +173,17 @@ export async function runPostCorePluginConvergence(params: {
   // became bundled with the new core must not survive into the next startup's contract graph.
   const { maybeRepairStaleManagedNpmBundledPlugins } =
     await import("../../commands/doctor-plugin-registry.js");
-  maybeRepairStaleManagedNpmBundledPlugins({
+  const staleManagedNpmBundledPluginRepair = maybeRepairStaleManagedNpmBundledPlugins({
     config: params.cfg,
     env,
     prompter: { shouldRepair: true },
+    ...(params.baselineInstallRecords ? { installRecords: params.baselineInstallRecords } : {}),
   });
-  const prunedBaseline = params.baselineInstallRecords
+  const convergenceBaseline =
+    staleManagedNpmBundledPluginRepair?.installRecords ?? params.baselineInstallRecords;
+  const prunedBaseline = convergenceBaseline
     ? pruneStaleLocalBundledPluginInstallRecords({
-        installRecords: params.baselineInstallRecords,
+        installRecords: convergenceBaseline,
         env,
       })
     : null;
@@ -264,6 +267,9 @@ export async function runPostCorePluginConvergence(params: {
 
   return {
     changes: [
+      ...(staleManagedNpmBundledPluginRepair?.removedPluginIds.map(
+        (pluginId) => `Removed stale managed install record for bundled plugin "${pluginId}".`,
+      ) ?? []),
       ...(prunedBaseline?.stale.map(
         (record) => `Removed stale local bundled plugin install record "${record.pluginId}".`,
       ) ?? []),

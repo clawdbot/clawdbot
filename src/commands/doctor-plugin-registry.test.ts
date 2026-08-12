@@ -691,7 +691,15 @@ describe("maybeRepairPluginRegistryState", () => {
       retainedAt: "2026-04-25T00:00:00.000Z",
       reason: "test-retained-generation",
     });
-    await writePersistedInstalledPluginIndex(createCurrentIndex(), { stateDir });
+    await writePersistedInstalledPluginIndex(
+      createCurrentIndexWithNpmRecord({
+        pluginId: "google-meet",
+        packageName: "@openclaw/google-meet",
+        packageDir: managed.packageDir,
+        version: "2026.5.2",
+      }),
+      { stateDir },
+    );
 
     await maybeRepairPluginRegistryState({
       stateDir,
@@ -719,6 +727,13 @@ describe("maybeRepairPluginRegistryState", () => {
     });
 
     expect(fs.existsSync(managed.packageDir)).toBe(true);
+    const persisted = await readRequiredPersistedInstalledPluginIndex(stateDir);
+    expect(persisted.installRecords["google-meet"]).toMatchObject({
+      source: "npm",
+      installPath: managed.packageDir,
+      resolvedName: "@openclaw/google-meet",
+      resolvedVersion: "2026.5.2",
+    });
     expect(vi.mocked(note).mock.calls.join("\n")).not.toContain(
       "Removed stale managed npm plugin package",
     );

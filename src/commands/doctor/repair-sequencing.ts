@@ -151,7 +151,7 @@ export async function runDoctorRepairSequence(params: {
     applyMutation(mutation);
   }
   applyMutation(maybeRepairBundledPluginLoadPaths(state.candidate, env));
-  const removedStaleManagedNpmBundledPlugins = maybeRepairStaleManagedNpmBundledPlugins({
+  const staleManagedNpmBundledPluginRepair = maybeRepairStaleManagedNpmBundledPlugins({
     config: state.candidate,
     env,
     prompter: { shouldRepair: true },
@@ -197,11 +197,14 @@ export async function runDoctorRepairSequence(params: {
     repairMissingConfiguredPluginInstalls({
       cfg: state.candidate,
       env,
+      ...(staleManagedNpmBundledPluginRepair
+        ? { baselineRecords: staleManagedNpmBundledPluginRepair.installRecords }
+        : {}),
     }),
   );
   const repairedPluginIds = missingConfiguredPluginInstallRepair.repairedPluginIds ?? [];
   if (
-    removedStaleManagedNpmBundledPlugins ||
+    staleManagedNpmBundledPluginRepair ||
     repairedPluginOpenClawHostLinks ||
     missingConfiguredPluginInstallRepair.pluginInventoryChanged
   ) {
