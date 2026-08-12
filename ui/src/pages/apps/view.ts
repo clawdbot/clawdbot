@@ -160,7 +160,7 @@ const APP_SECTIONS: readonly AppSection[] = [
     cards: [
       {
         id: "chrome-extension",
-        gradient: ["#f59e0b", "#ea580c"],
+        gradient: ["#34d399", "#047857"],
         icon: appsBrandIcons.chrome,
         title: () => t("appsPage.cards.chrome.title"),
         desc: () => t("appsPage.cards.chrome.desc"),

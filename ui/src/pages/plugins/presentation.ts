@@ -194,7 +194,7 @@ export function pluginArtPath(slug: string): string | null {
  * tile keeps a distinct identity instead of an empty box.
  */
 const FALLBACK_GRADIENTS: ReadonlyArray<readonly [string, string]> = [
-  ["#f59e0b", "#ea580c"],
+  ["#34d399", "#047857"],
   ["#38bdf8", "#1d4ed8"],
   ["#34d399", "#047857"],
   ["#a855f7", "#6b21a8"],

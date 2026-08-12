@@ -1086,7 +1086,7 @@ openclaw-settings-save-indicator {
 
 .sidebar-attention__item--error {
   border-color: var(--danger-subtle);
-  background: rgba(239, 68, 68, 0.06);
+  background: rgba(74, 222, 128, 0.06);
 }
 
 .sidebar-attention__item:hover {
