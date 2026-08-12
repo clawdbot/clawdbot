@@ -4,6 +4,7 @@ import { fetchAssistantIdentity } from "../../app/assistant-identity.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   autoPromptNotificationsOnSend,
+  hasActiveNotificationPromptGesture,
   shouldAutoPromptNotificationsOnSend,
 } from "../../app/notifications-auto-prompt.ts";
 import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/settings.ts";
@@ -290,7 +291,10 @@ export function createPageState(
     if (
       shouldAutoPromptNotificationsOnSend({
         connected: state.connected,
-        directComposerSend: messageOverride === undefined && options === undefined,
+        directComposerSend:
+          messageOverride === undefined &&
+          options === undefined &&
+          hasActiveNotificationPromptGesture(),
         message,
         hasAttachments: state.chatAttachments.length > 0,
         isCommand,

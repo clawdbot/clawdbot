@@ -12,6 +12,12 @@ type NotificationsAutoPromptCandidate = {
   isCommand: boolean;
 };
 
+export function hasActiveNotificationPromptGesture(): boolean {
+  // User activation can survive awaited work. window.event exists only while
+  // the originating input event is dispatching, so deferred sends stay out.
+  return typeof window !== "undefined" && window.event !== undefined;
+}
+
 export function shouldAutoPromptNotificationsOnSend(
   candidate: NotificationsAutoPromptCandidate,
 ): boolean {

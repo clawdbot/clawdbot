@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import {
   autoPromptNotificationsOnSend,
+  hasActiveNotificationPromptGesture,
   shouldAutoPromptNotificationsOnSend,
 } from "./notifications-auto-prompt.ts";
 
@@ -175,6 +176,24 @@ describe("notification auto-prompt send boundary", () => {
     expect(
       shouldAutoPromptNotificationsOnSend({ ...candidate, message: "", hasAttachments: true }),
     ).toBe(true);
+  });
+
+  it("recognizes only the synchronous browser event dispatch", async () => {
+    const button = document.createElement("button");
+    let duringDispatch = false;
+    let afterDispatch = true;
+    button.addEventListener("click", () => {
+      duringDispatch = hasActiveNotificationPromptGesture();
+      queueMicrotask(() => {
+        afterDispatch = hasActiveNotificationPromptGesture();
+      });
+    });
+
+    button.click();
+    await Promise.resolve();
+
+    expect(duringDispatch).toBe(true);
+    expect(afterDispatch).toBe(false);
   });
 
   it.each([
