@@ -1472,8 +1472,10 @@ async function createChatPickerScenario(
     // Advertised Gateway methods gate session actions (see
     // ui/src/lib/session-method-access.ts). Omitting the mutation methods left
     // every session context-menu row disabled, so the harness could not show
-    // the menu operators actually see.
+    // the menu operators actually see. browser.request/terminal.open likewise
+    // gate the chat header's panel toggles, which stayed invisible here.
     featureMethods: [
+      "browser.request",
       "chat.metadata",
       "chat.startup",
       "question.list",
@@ -1493,7 +1495,11 @@ async function createChatPickerScenario(
       "sessions.catalog.list",
       "sessions.catalog.read",
       "system.info",
+      "terminal.open",
     ],
+    // Terminal has a second gate beyond the advertised method (see
+    // ui/src/lib/terminal-availability.ts).
+    terminalEnabled: true,
     historyMessages: buildScrollableChatHistory(baseTime),
     // Lights up the footer facepile and who's-online roster; the email-only
     // entry keeps the roster's no-display-name row exercised.
