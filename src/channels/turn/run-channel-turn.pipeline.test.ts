@@ -231,6 +231,34 @@ describe("channel turn pipeline", () => {
     expect(onDelivered).toHaveBeenCalledOnce();
   });
 
+  it("carries route system-event ownership privately into a thread dispatch", async () => {
+    const routeSessionKey = "agent:main:slack:channel:c1";
+    const dispatchSessionKey = `${routeSessionKey}:thread:123.456`;
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (params) => {
+      expect(params.ctx).not.toHaveProperty("SystemEventSessionKey");
+      expect(params.replyOptions).toMatchObject({ systemEventSessionKey: routeSessionKey });
+      await params.dispatcherOptions.deliver({ text: "reply" }, { kind: "final" });
+      return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+    }) as DispatchReplyWithBufferedBlockDispatcher;
+
+    await dispatchTestAssembledTurn({
+      channel: "slack",
+      routeSessionKey,
+      ctxPayload: createCtx({
+        SessionKey: dispatchSessionKey,
+        Surface: "slack",
+        Provider: "slack",
+      }),
+      recordInboundSession: createRecordInboundSession(),
+      dispatchReplyWithBufferedBlockDispatcher,
+      delivery: {
+        deliver: async () => ({ visibleReplySent: true }),
+      },
+    });
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
+  });
+
   it("does not emit a second failure when a post-send observer throws", async () => {
     const observerError = new Error("observer failed");
     const onError = vi.fn();

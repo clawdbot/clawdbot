@@ -132,7 +132,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   const drainedSystemEventBlocks: string[] = [];
   const rebuildPromptBodies = async () => {
     if (!useFastReplyRuntime) {
-      const routeSystemEventSessionKey = normalizeOptionalString(ctx.SystemEventSessionKey);
+      const routeSystemEventSessionKey = normalizeOptionalString(opts?.systemEventSessionKey);
       const systemEventSessionKeys =
         routeSystemEventSessionKey && routeSystemEventSessionKey !== sessionKey
           ? [routeSystemEventSessionKey, sessionKey]

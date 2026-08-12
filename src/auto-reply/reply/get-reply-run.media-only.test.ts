@@ -3647,10 +3647,8 @@ describe("runPreparedReply media-only handling", () => {
     });
 
     await runPrepared({
-      ctx: {
-        ...createInboundBody("report queued reactions"),
-        SystemEventSessionKey: "agent:main:slack:channel:c123",
-      },
+      ctx: createInboundBody("report queued reactions"),
+      opts: { systemEventSessionKey: "agent:main:slack:channel:c123" },
       provider: "",
       model: "",
       resolvedThinkLevel: "off",

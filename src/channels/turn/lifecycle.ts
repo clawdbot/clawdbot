@@ -113,12 +113,20 @@ function resolveAssembledReplyPipeline(
 ): Pick<AssembledChannelTurn, "dispatcherOptions" | "replyOptions"> {
   const turnAdoptionLifecycle =
     params.turnAdoptionLifecycle ?? params.replyOptions?.turnAdoptionLifecycle;
+  const systemEventSessionKey =
+    params.routeSessionKey !== params.ctxPayload.SessionKey ? params.routeSessionKey : undefined;
+  const replyOptions =
+    turnAdoptionLifecycle || systemEventSessionKey
+      ? {
+          ...params.replyOptions,
+          ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
+          ...(systemEventSessionKey ? { systemEventSessionKey } : {}),
+        }
+      : params.replyOptions;
   if (!params.replyPipeline) {
     return {
       dispatcherOptions: params.dispatcherOptions,
-      replyOptions: turnAdoptionLifecycle
-        ? { ...params.replyOptions, turnAdoptionLifecycle }
-        : params.replyOptions,
+      replyOptions,
     };
   }
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
@@ -135,8 +143,7 @@ function resolveAssembledReplyPipeline(
     },
     replyOptions: {
       onModelSelected,
-      ...params.replyOptions,
-      ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
+      ...replyOptions,
     },
   };
 }
