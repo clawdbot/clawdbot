@@ -40,7 +40,7 @@ import {
   buildCliDeliveredFailure,
   buildCliRunResult,
   cliRunSettlementDeps,
-  isClaudeCliProvider,
+  isClaudeCliBackend,
   resolveCliSourceReplyMirror,
   settleCliBackendOutcome,
   settleCliPreparationError,
@@ -109,7 +109,7 @@ export async function isCliBindingFlushed(
   workspaceDir?: string,
   options?: { skipTranscriptProbe?: boolean },
 ): Promise<boolean> {
-  if (!provider || !isClaudeCliProvider(provider)) {
+  if (!provider || !isClaudeCliBackend(provider)) {
     return true;
   }
   if (!sessionId) {
@@ -142,7 +142,7 @@ export function runCliAgent(paramsInput: RunCliAgentParams): Promise<EmbeddedAge
   // Observability services register before turns and keep subscriptions process-stable.
   // Snapshot listener presence here so disabled installs pay no synthetic trace cost.
   return withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
-    isClaudeCliProvider(params.provider) &&
+    isClaudeCliBackend(params.provider) &&
     areDiagnosticsEnabledForProcess() &&
     hasInternalDiagnosticEventListeners()
       ? runClaudeCliAgentTurnWithDiagnostics(params, (diagnosticLifecycle) =>
@@ -252,7 +252,7 @@ export async function runPreparedCliAgent(
   };
   const sessionBindingDisabled = context.preparedBackend.backend.sessionMode === "none";
   const preparedContextAgentMeta =
-    isClaudeCliProvider(params.provider) && context.contextWindowInfo
+    isClaudeCliBackend(params.provider) && context.contextWindowInfo
       ? { contextTokens: context.contextWindowInfo.tokens }
       : {};
   const isolatedCompletion = params.isolatedCompletion === true;

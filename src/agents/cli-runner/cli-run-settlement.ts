@@ -90,7 +90,7 @@ async function settleCliAuthProfile(params: {
   }
 }
 
-export function isClaudeCliProvider(provider: string): boolean {
+export function isClaudeCliBackend(provider: string): boolean {
   return provider.trim().toLowerCase() === "claude-cli";
 }
 
@@ -478,7 +478,7 @@ export function buildCliRunResult(params: {
   const createdReseedReceipt =
     persistedCliSessionId &&
     usedHistoryPrompt &&
-    isClaudeCliProvider(runParams.provider) &&
+    isClaudeCliBackend(runParams.provider) &&
     output.finalPromptText !== undefined &&
     userTurnHandled &&
     runParams.sessionId
