@@ -134,7 +134,7 @@ export function renderBackgroundTasksStatusRow(
             <span class="chat-tasks-status__sep" aria-hidden="true">·</span>
           `
         : nothing}
-      <span class="agent-chat__sr-only" role="status">${label}</span>
+      <span class="sr-only" role="status">${label}</span>
       <openclaw-tooltip class="chat-tasks-status__preview">
         <button class="chat-tasks-status__link" type="button" @click=${openRail}>${label}</button>
         ${renderStatusPreview(remainingTasks)}

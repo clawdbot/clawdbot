@@ -296,7 +296,10 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   // Fork-per-file isolation parallelizes poorly on 4 vCPU; keep it on the
   // 8 vCPU class, where it still runs a measured ~90s under fleet load.
   ["core-unit-fast-isolated", 90],
-  ["core-unit-src-security", 205],
+  // In 35 green main runs on 2026-08-11/12, compact large jobs owned the
+  // critical tail 15 times and reached p90=457s. This group's former 205s
+  // hint repeatedly packed another 58s of serial work beside that tail.
+  ["core-unit-src-security", 295],
   ["core-unit-support", 17],
 ]);
 // Advisory per-file wall-clock hints (seconds) for stripe balancing, measured
@@ -1441,6 +1444,45 @@ export function createNodeTestShards(options: NodeTestPlanOptions = {}): NodeTes
       },
     ];
   });
+}
+
+/** Select planner envelopes that produce the protected Vitest transform-cache seed. */
+export function createVitestCacheWarmGroups(): Array<{
+  configs: string[];
+  env?: Record<string, string>;
+  includePatterns?: string[];
+  shard_name: string;
+}> {
+  const additionalShardNames = new Set([
+    "agentic-agents-embedded",
+    "agentic-gateway-methods",
+    "auto-reply-reply-commands-3",
+  ]);
+  const allShards = createNodeTestShards();
+  const coreShards = allShards.filter((candidate) =>
+    candidate.shardName.startsWith("core-unit-fast"),
+  );
+  if (coreShards.length === 0) {
+    throw new Error("core-unit-fast cache seed shards are missing");
+  }
+  const additionalShards = allShards.filter((candidate) =>
+    additionalShardNames.has(candidate.shardName),
+  );
+  const foundAdditionalShardNames = new Set(additionalShards.map((shard) => shard.shardName));
+  const missingShardNames = [...additionalShardNames].filter(
+    (name) => !foundAdditionalShardNames.has(name),
+  );
+  if (missingShardNames.length > 0) {
+    throw new Error(`cache seed shards are missing: ${missingShardNames.join(", ")}`);
+  }
+  return [...coreShards, ...additionalShards].flatMap((shard) =>
+    shard.configs.map((config) => ({
+      configs: [config],
+      ...(shard.env ? { env: shard.env } : {}),
+      ...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {}),
+      shard_name: `cache-warm:${shard.shardName}:${config}`,
+    })),
+  );
 }
 
 function resolveCiNodeTestRunner(shard: NodeTestShard): string {

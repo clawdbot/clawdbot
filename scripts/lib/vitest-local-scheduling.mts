@@ -11,9 +11,9 @@ export type LocalVitestScheduling = {
 };
 
 import os from "node:os";
+import { parsePermissiveBooleanToken } from "./arg-utils.mts";
 
 const MAX_LOCAL_FULL_SUITE_PARALLELISM = 10;
-const TRUTHY_ENV_VALUES = new Set(["1", "true", "yes", "on"]);
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
@@ -37,13 +37,12 @@ function isSystemThrottleDisabled(env: Record<string, string | undefined>) {
   return normalized === "1" || normalized === "true";
 }
 
-function isTruthyEnvValue(value: string | undefined) {
-  return TRUTHY_ENV_VALUES.has(value?.trim().toLowerCase() ?? "");
-}
-
 /** @internal Shared repository-script contract. */
 export function isCiLikeEnv(env: Record<string, string | undefined> = process.env) {
-  return isTruthyEnvValue(env.CI) || isTruthyEnvValue(env.GITHUB_ACTIONS);
+  return (
+    parsePermissiveBooleanToken(env.CI) === true ||
+    parsePermissiveBooleanToken(env.GITHUB_ACTIONS) === true
+  );
 }
 
 /** @internal Shared repository-script contract. */

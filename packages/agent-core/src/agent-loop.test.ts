@@ -1143,6 +1143,12 @@ describe("agentLoop tool termination", () => {
     expect(requestMessages[1]?.at(-1)).toBe(firstSteer);
     expect(requestMessages[1]).not.toContain(secondSteer);
     expect(requestMessages[2]?.at(-1)).toBe(secondSteer);
+    const queuedMessageStarts = events.filter(
+      (event): event is Extract<AgentEvent, { type: "message_start" }> =>
+        event.type === "message_start" && event.message.role === "user",
+    );
+    expect(queuedMessageStarts.at(-2)?.message).toBe(firstSteer);
+    expect(queuedMessageStarts.at(-1)?.message).toBe(secondSteer);
     expect(
       requestMessages[1]?.find((message) => message.role === "toolResult" && message.isError),
     ).not.toHaveProperty("__openclaw");

@@ -539,6 +539,28 @@ describe("renderModelProviders", () => {
     expect(onOpenModelSetup).toHaveBeenCalledOnce();
   });
 
+  it("does not present catalog-rejected credentials as signed in", () => {
+    const container = mount(
+      props({
+        cards: [
+          card({
+            auth: { kind: "ok", profileCount: 1 },
+            profiles: [{ profileId: "openai:chatgpt", type: "oauth", status: "ok" }],
+            catalogStatus: "auth-rejected",
+            modelCount: 0,
+            availableModelCount: 0,
+          }),
+        ],
+        configuredModels: [],
+        defaultModels: { primary: "", fallbacks: [], utilityModel: null },
+      }),
+    );
+
+    const provider = container.querySelector('[data-provider-id="openai"]');
+    expect(text(provider)).toContain("Credentials rejected");
+    expect(text(provider)).not.toContain("Signed in");
+  });
+
   it("does not report an unverified API key as ready", () => {
     const container = mount(
       props({

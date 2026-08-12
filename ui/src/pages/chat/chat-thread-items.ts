@@ -1,4 +1,5 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
 import { escapeRegExp } from "../../../../src/shared/regexp.js";
@@ -58,11 +59,10 @@ export function appendCanvasBlockToAssistantMessage(
 
 export function messageMatchesSearchQuery(message: unknown, query: string): boolean {
   const normalizedQuery = normalizeLowercaseStringOrEmpty(query);
-  if (!normalizedQuery) {
-    return true;
-  }
-  const text = normalizeLowercaseStringOrEmpty(extractTextCached(message));
-  return text.includes(normalizedQuery);
+  return (
+    !normalizedQuery ||
+    normalizeLowercaseStringOrEmpty(extractTextCached(message)).includes(normalizedQuery)
+  );
 }
 
 export function turnHasMatchingAssistant(
@@ -534,7 +534,6 @@ export function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem
 
   return collapsed;
 }
-
 export function hasRenderableNormalizedMessage(message: unknown): boolean {
   const normalized = safeNormalizeMessage(message);
   if (!normalized) {
@@ -564,6 +563,7 @@ export function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unk
       kind: "pending-send",
       id: item.id,
       state: item.sendState,
+      ...(item.replyToId ? { replyToId: item.replyToId } : {}),
       ...(item.sender?.id ? { senderId: item.sender.id } : {}),
       ...(item.sender?.name ? { senderName: item.sender.name } : {}),
       ...(item.sender?.username ? { senderUsername: item.sender.username } : {}),
@@ -575,8 +575,7 @@ export function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unk
 }
 
 export function rawMessageTimestamp(message: unknown): number | null {
-  const timestamp = asRecord(message)?.timestamp;
-  return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : null;
+  return asFiniteNumber(asRecord(message)?.timestamp) ?? null;
 }
 
 function chatItemTimestamp(item: ChatItem): number | null {

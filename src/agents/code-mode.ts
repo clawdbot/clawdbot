@@ -17,7 +17,7 @@ import {
   isCodeModeControlTool,
   markCodeModeControlTool,
 } from "./code-mode-control-tools.js";
-import { runExec, runWait } from "./code-mode-execution.js";
+import { runCodeModeExec, runWait } from "./code-mode-execution.js";
 import { createHeadlessAbortScope, runCodeModeScriptHeadless } from "./code-mode-headless.js";
 import { describeCodeModeNamespacesForPrompt } from "./code-mode-namespaces.js";
 import {
@@ -210,7 +210,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       const executionContext = getAgentToolExecutionContext();
       let runtime: ToolSearchRuntime | undefined;
       const result = normalizeCodeModeTimeoutResult(
-        await runExec({
+        await runCodeModeExec({
           toolCallId,
           ctx,
           code: input.code,

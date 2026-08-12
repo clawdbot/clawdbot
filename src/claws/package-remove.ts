@@ -1,3 +1,4 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { runPluginUninstallCommand } from "../cli/plugins-uninstall-command.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-artifacts.js";
 import { resolveInstalledClawHubPlugin } from "../plugins/plugin-install-preflight.js";
@@ -578,7 +579,7 @@ async function applyClawPackageRemovalsUnlocked(
       results.push({
         ...base,
         action: "error",
-        reason: error instanceof Error ? error.message : String(error),
+        reason: coerceErrorMessage(error),
       });
     } finally {
       try {

@@ -348,11 +348,11 @@ describe("scripts/run-vitest", () => {
       [["run", file], [file]],
       [
         ["run", file, "--reporter=verbose"],
-        [file, "--reporter=verbose"],
+        [file, "--", "--reporter=verbose"],
       ],
       [
         ["--reporter=verbose", "run", file],
-        ["--reporter=verbose", file],
+        [file, "--", "--reporter=verbose"],
       ],
       [
         ["run", file, "--", "--watch"],
@@ -373,6 +373,7 @@ describe("scripts/run-vitest", () => {
     expect(resolveTestProjectsDelegationArgs([file])).toEqual([file]);
     expect(resolveTestProjectsDelegationArgs(["run", file, "--reporter=verbose"])).toEqual([
       file,
+      "--",
       "--reporter=verbose",
     ]);
   });
@@ -381,7 +382,7 @@ describe("scripts/run-vitest", () => {
     expect(resolveTestProjectsDelegationArgs(["test/scripts"])).toEqual(["test/scripts"]);
     expect(
       resolveTestProjectsDelegationArgs(["run", "test/scripts", "--reporter=verbose"]),
-    ).toEqual(["test/scripts", "--reporter=verbose"]);
+    ).toEqual(["test/scripts", "--", "--reporter=verbose"]);
     expect(resolveTestProjectsDelegationArgs(["test/scripts/*.test.ts"])).toEqual([
       "test/scripts/*.test.ts",
     ]);
@@ -390,6 +391,15 @@ describe("scripts/run-vitest", () => {
     expect(resolveTestProjectsDelegationArgs(["./src"])).toBeNull();
     const prefix = "extensions/telegram/src/format";
     expect(resolveTestProjectsDelegationArgs([prefix])).toEqual([prefix]);
+  });
+
+  it("delegates owned agent directories with separate Vitest option values", () => {
+    const directory = "src/agents/embedded-agent-runner/run";
+
+    expect(resolveTestProjectsDelegationArgs([directory])).toEqual([directory]);
+    expect(
+      resolveTestProjectsDelegationArgs([directory, "--sequence.shuffle", "--sequence.seed", "3"]),
+    ).toEqual([directory, "--", "--sequence.shuffle", "--sequence.seed", "3"]);
   });
 
   it("delegates mixed filters when an explicit file target is present", () => {
@@ -420,13 +430,27 @@ describe("scripts/run-vitest", () => {
       ["--run=false", "test/scripts/run-vitest.test.ts"],
       ["--no-run", "test/scripts/run-vitest.test.ts"],
       ["--run", "false", "test/scripts/run-vitest.test.ts"],
-      ["--diff", "scripts/run-vitest.mjs"],
-      ["--testNamePattern", "run", "test/scripts/run-vitest.test.ts"],
-      ["run", "test/scripts/run-vitest.test.ts", "-t", "src"],
     ];
     for (const argv of directArgvCases) {
       expect(resolveTestProjectsDelegationArgs(argv)).toBeNull();
     }
+  });
+
+  it.each([
+    [
+      ["--diff", "scripts/run-vitest.mjs", "test/scripts/run-vitest.test.ts"],
+      ["test/scripts/run-vitest.test.ts", "--", "--diff", "scripts/run-vitest.mjs"],
+    ],
+    [
+      ["--testNamePattern", "run", "test/scripts/run-vitest.test.ts"],
+      ["test/scripts/run-vitest.test.ts", "--", "--testNamePattern", "run"],
+    ],
+    [
+      ["run", "test/scripts/run-vitest.test.ts", "-t", "src"],
+      ["test/scripts/run-vitest.test.ts", "--", "-t", "src"],
+    ],
+  ])("keeps option value %j out of project target classification", (argv, expected) => {
+    expect(resolveTestProjectsDelegationArgs(argv)).toEqual(expected);
   });
 
   it("reports missing explicit test files before Vitest can silently ignore them", () => {

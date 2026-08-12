@@ -3,7 +3,7 @@ import { afterAll, afterEach, expect, it } from "vitest";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
-  makeTempDir,
+  makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
   writePlugin,
@@ -49,7 +49,7 @@ it("keeps the configured context engine active in a prepared agent registry", as
   const activeRegistry = loadAndActivateRootPluginRegistry({
     cache: false,
     config,
-    workspaceDir: makeTempDir(),
+    workspaceDir: makePluginLoaderTempDir(),
     onlyPluginIds: [engineId],
   });
   const preparedRegistry = loadAgentRuntimePluginRegistryHandle({

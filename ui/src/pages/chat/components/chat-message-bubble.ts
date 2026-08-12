@@ -1,4 +1,6 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons, type IconName } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
@@ -112,18 +114,67 @@ function renderInlineToolCards(
  * Max characters for auto-detecting and pretty-printing JSON.
  * Prevents DoS from large JSON payloads in assistant/tool messages.
  */
-function renderReplyPill(replyTarget: NormalizedMessage["replyTarget"]) {
+type ReplyPreview = {
+  sourceMessageId?: string;
+  senderLabel?: string | null;
+  text: string;
+};
+
+function renderReplyPreview(
+  replyTarget: NormalizedMessage["replyTarget"],
+  preview: ReplyPreview | undefined,
+  onOpenReply: ((replyToId: string) => void) | undefined,
+  onResolveReply: ((replyToId: string) => void) | undefined,
+  navigationLoading: boolean,
+) {
   if (!replyTarget) {
     return nothing;
   }
+  const replyToId = replyTarget.kind === "id" ? replyTarget.id : null;
+  const name = preview?.senderLabel?.trim()
+    ? preview.senderLabel
+    : replyTarget.kind === "current"
+      ? t("chat.messages.currentMessage")
+      : t("chat.messages.message");
+  const content = preview?.text.trim() ?? "";
+  const resolveMissingPreview = (element?: Element) => {
+    if (element && replyToId && !preview) {
+      onResolveReply?.(replyToId);
+    }
+  };
+  const body = html`
+    <span class="chat-reply-preview__icon"
+      >${navigationLoading
+        ? html`<span class="session-run-spinner" aria-hidden="true"></span>`
+        : icons.messageSquare}</span
+    >
+    <span class="chat-reply-preview__label"> ${t("chat.messages.replyingTo", { name })} </span>
+    ${content
+      ? html`<span class="chat-reply-preview__text"
+          >${truncateUtf16Safe(content, 120)}${content.length > 120 ? "..." : ""}</span
+        >`
+      : nothing}
+  `;
+  if (replyToId && onOpenReply) {
+    return html`
+      <button
+        ${ref(resolveMissingPreview)}
+        type="button"
+        class="chat-reply-preview chat-reply-preview--message"
+        ?disabled=${navigationLoading}
+        aria-busy=${navigationLoading ? "true" : "false"}
+        @click=${() => onOpenReply(replyToId)}
+      >
+        ${body}
+      </button>
+    `;
+  }
   return html`
-    <div class="chat-reply-pill">
-      <span class="chat-reply-pill__icon">${icons.messageSquare}</span>
-      <span class="chat-reply-pill__label">
-        ${t("chat.messages.replyingTo", {
-          name: replyTarget.kind === "current" ? t("chat.messages.currentMessage") : replyTarget.id,
-        })}
-      </span>
+    <div
+      ${ref(resolveMissingPreview)}
+      class="chat-reply-preview chat-reply-preview--message chat-reply-preview--unavailable"
+    >
+      ${body}
     </div>
   `;
 }
@@ -191,6 +242,10 @@ export function renderGroupedMessage(
     entryId?: string;
     /** Freshly submitted user turn: play the one-shot composer entry animation. */
     entryAnimated?: boolean;
+    resolveReplyPreview?: (replyToId: string) => ReplyPreview | undefined;
+    onResolveReply?: (replyToId: string) => void;
+    onOpenReply?: (replyToId: string) => void;
+    replyNavigationId?: string | null;
   },
   onOpenSidebar?: (content: SidebarContent) => void,
 ) {
@@ -350,7 +405,19 @@ export function renderGroupedMessage(
         data-entry-id=${opts.entryId || nothing}
         data-message-text=${actionText || nothing}
       >
-        ${renderReplyPill(normalizedMessage.replyTarget)}
+        ${renderReplyPreview(
+          normalizedMessage.replyTarget,
+          normalizedMessage.replyTarget?.kind === "id"
+            ? (opts.resolveReplyPreview?.(normalizedMessage.replyTarget.id) ??
+                normalizedMessage.replyPreview)
+            : undefined,
+          opts.onOpenReply,
+          opts.onResolveReply,
+          opts.replyNavigationId ===
+            (normalizedMessage.replyTarget?.kind === "id"
+              ? normalizedMessage.replyTarget.id
+              : null),
+        )}
         ${renderInlineToolCards(toolCards, {
           messageKey,
           sessionKey: opts.sessionKey,
@@ -385,7 +452,17 @@ export function renderGroupedMessage(
       data-entry-id=${opts.entryId || nothing}
       data-message-text=${actionText || nothing}
     >
-      ${renderReplyPill(normalizedMessage.replyTarget)}
+      ${renderReplyPreview(
+        normalizedMessage.replyTarget,
+        normalizedMessage.replyTarget?.kind === "id"
+          ? (opts.resolveReplyPreview?.(normalizedMessage.replyTarget.id) ??
+              normalizedMessage.replyPreview)
+          : undefined,
+        opts.onOpenReply,
+        opts.onResolveReply,
+        opts.replyNavigationId ===
+          (normalizedMessage.replyTarget?.kind === "id" ? normalizedMessage.replyTarget.id : null),
+      )}
       ${isStandaloneToolMessage
         ? html`
             <div

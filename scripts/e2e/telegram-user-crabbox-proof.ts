@@ -14,6 +14,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { parseStrictBooleanArg } from "../lib/arg-utils.mts";
+import { coerceErrorMessage } from "../lib/error-format.mts";
 import { sleep } from "../lib/sleep.mjs";
 import { resolveWindowsTaskkillPath } from "../lib/windows-taskkill.mjs";
 import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mts";
@@ -303,16 +305,6 @@ function parseTcpPort(value: string, label: string) {
   return parsed;
 }
 
-function parseBoolean(value: string, label: string) {
-  if (value === "true") {
-    return true;
-  }
-  if (value === "false") {
-    return false;
-  }
-  throw new Error(`${label} must be true or false.`);
-}
-
 function createTelegramProofRunId() {
   return `${new Date().toISOString().replace(/[:.]/gu, "-")}-${randomUUID().slice(0, 8)}`;
 }
@@ -417,7 +409,7 @@ export function parseArgs(argvInput: string[]): Options {
     } else if (arg === "--keep-box") {
       opts.keepBox = true;
     } else if (arg === "--link-preview") {
-      opts.linkPreview = parseBoolean(readValue(), "--link-preview");
+      opts.linkPreview = parseStrictBooleanArg(readValue(), "--link-preview");
     } else if (arg === "--mock-port") {
       opts.mockPort = parseTcpPort(readValue(), "--mock-port");
     } else if (arg === "--mock-response-file") {
@@ -1656,9 +1648,7 @@ function destroyLocalSutRuntime(sut: { containerName?: string; tempRoot?: string
 }
 
 function cleanupFailureMessage(message: string, cleanupErrors: unknown[]) {
-  const details = cleanupErrors.map((error) =>
-    error instanceof Error ? error.message : String(error),
-  );
+  const details = cleanupErrors.map(coerceErrorMessage);
   return [message, ...details.map((detail) => `Cleanup failure: ${detail}`)].join("\n");
 }
 

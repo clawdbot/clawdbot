@@ -158,7 +158,7 @@ export const testTailnetIPv4 = gatewayTestHoisted.testTailnetIPv4;
 export const testTailscaleWhois = gatewayTestHoisted.testTailscaleWhois;
 export const agentDiscoveryMock = gatewayTestHoisted.agentDiscoveryMock;
 export const cronIsolatedRun = gatewayTestHoisted.cronIsolatedRun;
-export const agentCommand = gatewayTestHoisted.agentCommand;
+export const agentCommandMock = gatewayTestHoisted.agentCommand;
 export const dispatchInboundMessageMock = gatewayTestHoisted.dispatchInboundMessage;
 export const gatewayReplyMock = gatewayTestHoisted.getReplyFromConfig;
 export const mockGetReplyFromConfigOnce = (impl: GetReplyFromConfigFn) => {

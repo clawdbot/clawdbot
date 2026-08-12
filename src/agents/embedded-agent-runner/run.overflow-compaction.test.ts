@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type { ContextEngine } from "../../context-engine/types.js";
@@ -11,6 +13,8 @@ import {
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./run/execution-context.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 // Keep this dedicated leaf on the compaction composition boundary. Runtime/auth/lane policy is
 // covered at its direct owners so this shard never reloads the complete public runner graph.
@@ -167,7 +171,10 @@ describe("createEmbeddedRunCompactionRuntime", () => {
         agentId: "main",
         sessionId: "session-1",
         sessionKey: "agent:main:session-1",
-        storePath: "/tmp/openclaw.sqlite",
+        storePath: path.join(
+          tempDirs.make("openclaw-overflow-compaction-session-"),
+          "openclaw.sqlite",
+        ),
       },
       adoptSessionId: vi.fn((sessionId?: string) => {
         if (sessionId) {

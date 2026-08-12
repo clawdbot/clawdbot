@@ -7,7 +7,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
 import {
   normalizePluginsConfigWithResolver,
-  resolveEffectivePluginActivationState,
+  resolvePolicyPluginActivationState,
 } from "../plugins/config-policy.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
@@ -150,7 +150,7 @@ export function loadEnabledBundleAgentSettingsSnapshot(params: {
     if (record.format !== "bundle" || settingsFiles.length === 0) {
       continue;
     }
-    const activationState = resolveEffectivePluginActivationState({
+    const activationState = resolvePolicyPluginActivationState({
       id: record.id,
       origin: record.origin,
       config: normalizedPlugins,

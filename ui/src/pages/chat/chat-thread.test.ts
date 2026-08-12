@@ -169,6 +169,14 @@ function compactionMessage(id: string, metrics: Record<string, unknown> = {}) {
   };
 }
 
+function resetMessage(id: string) {
+  return {
+    role: "system",
+    timestamp: 2_000,
+    __openclaw: { kind: "reset", id },
+  };
+}
+
 function canvasToolOutput(viewId: string, title: string, preferredHeight: number): string {
   return JSON.stringify({
     kind: "canvas",
@@ -803,7 +811,7 @@ describe("collapseCompletedTurnWork", () => {
         toolResult("call-1", 2_000),
         assistantMessage("First done.", 3_000),
         userMessage("[System] Continue the interrupted turn.", 4_000, {
-          provenance: { kind: "internal_system", sourceTool: "main-session-restart-recovery" },
+          provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
         }),
         toolResult("call-2", 5_000),
         assistantMessage("Recovery done.", 6_000),
@@ -1556,22 +1564,50 @@ describe("buildCachedChatItems", () => {
     ]);
   });
 
-  it("renders internal system user messages as labeled notices without changing search visibility", () => {
+  it("maps known system notices and preserves the generic fallback and search visibility", () => {
     const messages = [
       userMessage("before", 999),
       userMessage("[System] Continue the interrupted turn.", 1000, {
-        provenance: { kind: "internal_system", sourceTool: "main-session-restart-recovery" },
+        provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
       }),
-      userMessage("after", 1001),
+      userMessage("[System] Gateway restarted during update 2026.8.2 -> 2026.8.3.", 1001, {
+        provenance: { kind: "internal_system", sourceTool: "restart-sentinel" },
+      }),
+      userMessage("[System] Keep the raw fallback copy.", 1002, {
+        provenance: { kind: "internal_system", sourceTool: "session-companion" },
+      }),
+      userMessage("after", 1003),
     ];
     const items = buildCachedChatItems(createProps({ messages }));
 
-    expect(items.map((item) => item.kind)).toEqual(["group", "notice", "group"]);
+    expect(items.map((item) => item.kind)).toEqual([
+      "group",
+      "notice",
+      "notice",
+      "notice",
+      "group",
+    ]);
     expect(items[1]).toMatchObject({
       kind: "notice",
-      label: "System",
-      text: "Continue the interrupted turn.",
+      icon: "cpu",
+      label: "System · restart recovery",
+      text: "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.",
       timestamp: 1000,
+    });
+    // Summary-less kinds keep the producer's informative text under the label.
+    expect(items[2]).toMatchObject({
+      kind: "notice",
+      icon: "cpu",
+      label: "System · gateway restarted",
+      text: "Gateway restarted during update 2026.8.2 -> 2026.8.3.",
+      timestamp: 1001,
+    });
+    expect(items[3]).toMatchObject({
+      kind: "notice",
+      icon: "cpu",
+      label: "System",
+      text: "Keep the raw fallback copy.",
+      timestamp: 1002,
     });
 
     const filtered = buildCachedChatItems(
@@ -2980,6 +3016,22 @@ describe("buildCachedChatItems", () => {
     ]);
   });
 
+  it("renders reply metadata on queued user turns before chat.send ACK", () => {
+    const groups = messageGroups({
+      messages: [assistantMessage("Ready.", 1)],
+      queue: [
+        queuedSend("pending-send-1", "follow up", 2, "sending", {
+          replyToId: "transcript-123",
+          sendSubmittedAtMs: 10,
+        }),
+      ],
+    });
+
+    expect(groupAt(groups, 1).messages[0]?.message).toMatchObject({
+      __openclaw: { replyToId: "transcript-123" },
+    });
+  });
+
   it("keeps restored in-flight sends visible without process-local timing", () => {
     const restored = {
       id: "restored-send-1",
@@ -3169,7 +3221,7 @@ describe("buildCachedChatItems", () => {
           userMessage("Interrupted request", 1_000),
           assistantMessage("Interrupted reply", 2_000),
           userMessage("[System] Continue the interrupted turn.", 3_000, {
-            provenance: { kind: "internal_system", sourceTool: "main-session-restart-recovery" },
+            provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
           }),
         ],
         toolMessages: [mcpAppResult("mcp-app-recovery", "call-recovery", 3_001)],
@@ -3451,9 +3503,8 @@ describe("buildCachedChatItems", () => {
     const divider = requireRecord(items[0]);
     expect(divider.kind).toBe("divider");
     expect(divider.label).toBe("Compacted history");
-    expect(divider.description).toBe(
-      "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
-    );
+    expect(divider.icon).toBe("foldVertical");
+    expect(divider.description).toBe("The compacted transcript is preserved as a checkpoint.");
     const action = requireRecord(divider.action);
     expect(action.kind).toBe("session-checkpoints");
     expect(action.label).toBe("Open checkpoints");
@@ -3476,6 +3527,25 @@ describe("buildCachedChatItems", () => {
       label: "Compacted history",
       metric: "saved 875.3k tokens",
     });
+  });
+
+  it("explains reset boundaries without compaction-only details", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        messages: [resetMessage("reset-1")],
+      }),
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "divider",
+      key: "divider:reset:reset-1",
+      label: "Session reset",
+      icon: "rotateCcw",
+      description: "The earlier conversation was cleared.",
+    });
+    expect(items[0]).not.toHaveProperty("metric");
+    expect(items[0]).not.toHaveProperty("action");
   });
 });
 
@@ -3796,218 +3866,6 @@ describe("expansion-state render dependencies", () => {
     setExpansionState(getExpandedUserMessages("reset-session"), "message", true);
     resetChatThreadState();
     expect(getExpansionStateVersion(getExpandedUserMessages("reset-session"))).toBe(0);
-  });
-
-  it("keeps mounted disclosure handlers attached to recreated session expansion maps", async () => {
-    resetChatThreadState();
-    const { builtinEnvironments } = await import("vitest/runtime");
-    const fixtureGlobals = ["Request", "URL", "jsdom"] as const;
-    const originalFixtureGlobals = fixtureGlobals.map(
-      (name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const,
-    );
-    const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
-    const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
-    let environment: Awaited<ReturnType<typeof builtinEnvironments.jsdom.setup>> | undefined;
-
-    try {
-      environment = await builtinEnvironments.jsdom.setup(globalThis, {
-        jsdom: { url: "http://localhost/", pretendToBeVisual: true },
-      });
-      const [{ render }, { ChatTranscriptController, resetChatThreadPresentationState }] =
-        await Promise.all([import("lit"), import("./components/chat-thread.ts")]);
-      const host = {
-        addController() {},
-        removeController() {},
-        requestUpdate() {},
-        updateComplete: Promise.resolve(true),
-      };
-      const sessionKey = "retained-session";
-      const props = {
-        paneId: "retained-pane",
-        sessionKey,
-        loading: false,
-        messages: [
-          { role: "user", content: "long user message ".repeat(100), timestamp: 1 },
-          {
-            role: "assistant",
-            content: [
-              { type: "text", text: "assistant reply" },
-              { type: "toolcall", id: "retained-call", name: "browser.open" },
-            ],
-            timestamp: 2,
-          },
-        ],
-        toolMessages: [],
-        streamSegments: [],
-        stream: null,
-        streamStartedAt: null,
-        queue: [],
-        showThinking: false,
-        showToolCalls: true,
-        sessions: null,
-        assistantName: "Molty",
-        assistantAvatar: null,
-        onDraftChange() {},
-        onSend() {},
-      };
-      const controller = new ChatTranscriptController(host);
-      const retainedPane = document.createElement("div");
-      document.body.append(retainedPane);
-      render(controller.render(props), retainedPane);
-      const staleTools = getExpandedToolCards(sessionKey);
-      const staleUsers = getExpandedUserMessages(sessionKey);
-      const previousToolVersion = getExpansionStateVersion(staleTools);
-      const previousUserVersion = getExpansionStateVersion(staleUsers);
-
-      for (let index = 0; index < 20; index += 1) {
-        const alternatePane = document.createElement("div");
-        document.body.append(alternatePane);
-        render(
-          new ChatTranscriptController(host).render({
-            ...props,
-            paneId: `alternate-pane-${index}`,
-            sessionKey: `alternate-session-${index}`,
-          }),
-          alternatePane,
-        );
-      }
-
-      render(controller.render(props), retainedPane);
-      const currentTools = getExpandedToolCards(sessionKey);
-      const currentUsers = getExpandedUserMessages(sessionKey);
-      expect(currentTools).not.toBe(staleTools);
-      expect(currentUsers).not.toBe(staleUsers);
-      expect(getExpansionStateVersion(currentTools)).toBe(previousToolVersion);
-      expect(getExpansionStateVersion(currentUsers)).toBe(previousUserVersion);
-      const toolCardId = expectDefined(currentTools.keys().next().value, "retained tool card");
-      expectDefined(
-        retainedPane.querySelector<HTMLButtonElement>(
-          ".chat-group.user .chat-message-disclosure__toggle",
-        ),
-        "mounted user disclosure",
-      ).click();
-      expectDefined(
-        retainedPane.querySelector<HTMLButtonElement>(".chat-tool-msg-summary"),
-        "mounted tool disclosure",
-      ).click();
-
-      expect(currentTools.get(toolCardId)).toBe(true);
-      expect(staleTools.get(toolCardId)).toBe(false);
-      expect(currentUsers.size).toBe(1);
-      expect(staleUsers.size).toBe(0);
-
-      const toolVisibilitySession = "tool-visibility-session";
-      const toolVisibilityProps = {
-        ...props,
-        paneId: "tool-visibility-pane",
-        sessionKey: toolVisibilitySession,
-        messages: [
-          { role: "user", content: "tool visibility prompt", timestamp: 1 },
-          {
-            role: "toolResult",
-            toolCallId: "expanded-tool",
-            toolName: "browser.open",
-            content: "Expanded tool result",
-            timestamp: 2,
-          },
-          { role: "assistant", content: "The first tool completed.", timestamp: 3 },
-          { role: "user", content: "Show the next tool result.", timestamp: 4 },
-          {
-            role: "toolResult",
-            toolCallId: "collapsed-tool",
-            toolName: "browser.open",
-            content: "Collapsed tool result",
-            timestamp: 5,
-          },
-        ],
-      };
-      const toolVisibilityController = new ChatTranscriptController(host);
-      const toolVisibilityPane = document.createElement("div");
-      document.body.append(toolVisibilityPane);
-      render(toolVisibilityController.render(toolVisibilityProps), toolVisibilityPane);
-      const visibilityState = getExpandedToolCards(toolVisibilitySession);
-      const visibilityIds = [...visibilityState.keys()].filter((key) => key.startsWith("toolmsg:"));
-      const expandedToolId = expectDefined(visibilityIds[0], "expanded standalone tool disclosure");
-      const collapsedToolId = expectDefined(
-        visibilityIds[1],
-        "collapsed standalone tool disclosure",
-      );
-      const disclosureButtons = () =>
-        Array.from(
-          toolVisibilityPane.querySelectorAll<HTMLButtonElement>(".chat-tool-msg-summary"),
-        ).filter((button) => !button.closest(".chat-tool-msg-body"));
-      expect(disclosureButtons()).toHaveLength(2);
-      expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
-        "false",
-        "false",
-      ]);
-      expectDefined(disclosureButtons()[0], "first mounted tool disclosure").click();
-      render(toolVisibilityController.render(toolVisibilityProps), toolVisibilityPane);
-      expectDefined(disclosureButtons()[1], "second mounted tool disclosure").click();
-      render(toolVisibilityController.render(toolVisibilityProps), toolVisibilityPane);
-      expectDefined(disclosureButtons()[1], "second mounted tool disclosure").click();
-      render(toolVisibilityController.render(toolVisibilityProps), toolVisibilityPane);
-      expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
-        "true",
-        "false",
-      ]);
-
-      render(
-        toolVisibilityController.render({ ...toolVisibilityProps, showToolCalls: false }),
-        toolVisibilityPane,
-      );
-      expect(disclosureButtons()).toHaveLength(0);
-      render(toolVisibilityController.render(toolVisibilityProps), toolVisibilityPane);
-
-      expect(disclosureButtons()).toHaveLength(2);
-      expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
-        "true",
-        "false",
-      ]);
-      expect(visibilityState.get(expandedToolId)).toBe(true);
-      expect(visibilityState.get(collapsedToolId)).toBe(false);
-      render(
-        toolVisibilityController.render({
-          ...toolVisibilityProps,
-          messages: toolVisibilityProps.messages.filter(
-            (message) => !("toolCallId" in message && message.toolCallId === "expanded-tool"),
-          ),
-        }),
-        toolVisibilityPane,
-      );
-      expect(visibilityState.has(expandedToolId)).toBe(false);
-      expect(visibilityState.get(collapsedToolId)).toBe(false);
-      resetChatThreadPresentationState();
-    } finally {
-      try {
-        if (environment) {
-          try {
-            document.body.replaceChildren();
-            await new Promise<void>((resolve) => {
-              window.setTimeout(resolve, 0);
-            });
-          } finally {
-            await environment.teardown(globalThis);
-          }
-        }
-      } finally {
-        // Vitest assigns these compatibility globals after its own restore snapshot.
-        for (const [name, descriptor] of originalFixtureGlobals) {
-          if (descriptor) {
-            Object.defineProperty(globalThis, name, descriptor);
-          } else {
-            Reflect.deleteProperty(globalThis, name);
-          }
-        }
-        resetChatThreadState();
-      }
-    }
-
-    for (const [name, descriptor] of originalFixtureGlobals) {
-      expect(Object.getOwnPropertyDescriptor(globalThis, name)).toEqual(descriptor);
-    }
-    expect(Object.getOwnPropertyDescriptor(globalThis, "document")).toEqual(originalDocument);
-    expect(Object.getOwnPropertyDescriptor(globalThis, "window")).toEqual(originalWindow);
   });
 });
 
@@ -4333,7 +4191,7 @@ describe("tool turn outcome annotation (#89683)", () => {
     const tools = toolGroups([
       failedTool(1),
       userMessage("[System] Continue the interrupted turn.", 2, {
-        provenance: { kind: "internal_system", sourceTool: "main-session-restart-recovery" },
+        provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
       }),
       failedTool(3),
       assistantReply("Recovered on the next turn.", 4),

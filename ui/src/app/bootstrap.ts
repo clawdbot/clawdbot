@@ -13,7 +13,7 @@ import { setSessionPathBuilder } from "../app-session-path-builder.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { createChannelCapability } from "../lib/channels/index.ts";
-import { createRuntimeConfigCapability } from "../lib/config/index.ts";
+import { createRuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { createWorkboardCapability } from "../lib/workboard/capability.ts";
@@ -76,6 +76,13 @@ function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void
   root.style.colorScheme = root.dataset.themeMode;
   root.style.setProperty("--control-ui-text-scale", `${(settings.textScale ?? 100) / 100}`);
   syncCustomThemeStyleTag(settings.customTheme);
+  const background = getComputedStyle(root).getPropertyValue("--bg").trim();
+  if (background) {
+    for (const meta of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) {
+      meta.content = background;
+      meta.removeAttribute("media");
+    }
+  }
 }
 
 function createApplicationTheme(

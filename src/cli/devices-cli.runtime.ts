@@ -1,4 +1,5 @@
 // Device pairing runtime commands for gateway and loopback-local fallback operations.
+import { coerceErrorMessage as normalizeErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -273,13 +274,6 @@ async function findQueryPendingNodeApprovalNotices(
     nodes.filter((node) => pairedMatches.some((device) => nodeMatchesPairedDevice(node, device))),
     opts,
   );
-}
-
-function normalizeErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error);
 }
 
 function isDevicePairingApprovalDenied(error: unknown): boolean {

@@ -6,7 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
-  listSessionEntries,
+  listSessionEntriesCore,
   loadTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
 import type { appendExactAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.runtime.js";
@@ -384,7 +384,7 @@ function requireStorePath(): string {
 }
 
 function findStoredSessionEntry(sessionKey: string): SessionEntry | undefined {
-  return listSessionEntries({ storePath: requireStorePath() }).find(
+  return listSessionEntriesCore({ storePath: requireStorePath() }).find(
     (candidate) => candidate.sessionKey === sessionKey,
   )?.entry;
 }

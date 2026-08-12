@@ -2,6 +2,7 @@ import type { ReactiveController } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import type { AnnotationStroke } from "./browser-annotation.ts";
+import type { BrowserInspectedNode, BrowserPanelTab } from "./browser-client.ts";
 import {
   captureBrowserScreenshot,
   clickBrowserCoords,
@@ -17,8 +18,6 @@ import {
   pressBrowserKey,
   scrollBrowserBy,
   startBrowser,
-  type BrowserInspectedNode,
-  type BrowserPanelTab,
 } from "./browser-client.ts";
 import {
   BrowserPanelOperationOwnership,
@@ -147,7 +146,7 @@ export class BrowserPanelController implements ReactiveController {
         return;
       }
       this.setState("running", snapshot.running);
-      this.setState("tabs", snapshot.tabs);
+      this.setState("tabs", this.operations.retainTabSnapshot(client, snapshot.tabs));
       // A mutation may adopt the same tab while this snapshot is pending.
       // Reconcile its tab strip, but never let it own document or loading state.
       if (!this.operations.canCaptureSnapshot(invocation)) {
@@ -223,6 +222,9 @@ export class BrowserPanelController implements ReactiveController {
         shot.url && observedMetrics?.url && shot.url !== observedMetrics.url
           ? null
           : observedMetrics;
+      // Tab snapshots can lag history and in-page navigation. Keep the stable
+      // identity aligned with the document this capture owns.
+      this.setState("tabs", this.operations.capturedTabs(this.tabs, targetId, metrics, shot.url));
       this.setState("view", { targetId, dataUrl, image, url: shot.url, metrics });
       if (!this.urlDraftEditing && shot.url) {
         this.setState("urlDraft", shot.url);
@@ -349,32 +351,31 @@ export class BrowserPanelController implements ReactiveController {
       }
     } catch (error) {
       if (invocation.isCurrent()) {
-        this.reportError(error);
         if (previousNavigationQueued && this.activeTargetId) {
           const targetId = this.activeTargetId;
-          const navigationErrorText = this.errorText;
           // An earlier queued navigation may already have committed remotely.
           // Recover its actual document without replacing an unchanged view.
-          try {
-            const refreshed = await this.refreshTabsOnly(client, () => invocation.isCurrent());
-            const active = this.tabs.find((tab) => tab.id === targetId);
-            if (refreshed === "accepted" && invocation.isCurrent() && active) {
-              await this.refreshView(targetId, invocation.epoch);
-              if (
-                invocation.isCurrent() &&
-                this.view?.targetId === targetId &&
-                this.errorText === navigationErrorText
-              ) {
-                this.operations.markNavigationReconciled(client, targetId);
-              }
+          const refreshed = await this.refreshTabsOnly(client, () => invocation.isCurrent());
+          const active = this.tabs.find((tab) => tab.id === targetId);
+          if (refreshed === "accepted" && invocation.isCurrent() && active) {
+            this.setState("view", null);
+            await this.refreshView(targetId, invocation.epoch);
+            if (invocation.isCurrent() && this.view?.targetId === targetId) {
+              this.operations.markNavigationReconciled(client, targetId);
             }
-          } catch {
-            // Recovery is best-effort; retain the original navigation failure.
           }
-          if (invocation.isCurrent()) {
-            this.reportError(error);
+          if (
+            invocation.isCurrent() &&
+            this.operations.hasUnreconciledNavigation(client, targetId)
+          ) {
+            this.setState("activeTargetId", null);
+            this.setState("view", null);
+            if (!this.urlDraftEditing) {
+              this.setState("urlDraft", "");
+            }
           }
         }
+        this.reportError(error);
       }
     } finally {
       if (invocation.isCurrent()) {
@@ -395,7 +396,7 @@ export class BrowserPanelController implements ReactiveController {
         this.operations.acceptSnapshot(invocation, this.activeTargetId, this.activeTargetId)
       ) {
         this.setState("running", snapshot.running);
-        this.setState("tabs", snapshot.tabs);
+        this.setState("tabs", this.operations.retainTabSnapshot(client, snapshot.tabs));
         return "accepted";
       }
       return "rejected";
@@ -410,17 +411,30 @@ export class BrowserPanelController implements ReactiveController {
     if (targetId === this.activeTargetId) {
       return;
     }
+    const client = this.operations.captureClient();
     const previous = { targetId: this.activeTargetId, view: this.view };
     this.invalidateViewOperations();
     const epoch = this.operations.epoch;
     this.setState("activeTargetId", targetId);
     this.setState("view", null);
     this.exitCaptureModes();
-    const focused = await this.runAction(async (client) => {
-      await focusBrowserTab(client, targetId);
+    const focused = await this.runAction(async (actionClient) => {
+      await focusBrowserTab(actionClient, targetId);
       await this.refreshView(targetId);
+      if (this.activeTargetId === targetId && this.view?.targetId === targetId) {
+        this.operations.markNavigationReconciled(actionClient, targetId);
+      }
     }, false);
     if (!focused && this.operations.isLive(epoch) && this.activeTargetId === targetId) {
+      if (this.operations.hasPendingNavigation(client, previous.targetId)) {
+        // The prior remote document changed while selection failed. Expose an
+        // unavailable state instead of restoring a screenshot that no longer owns it.
+        this.setState("activeTargetId", null);
+        if (!this.urlDraftEditing) {
+          this.setState("urlDraft", "");
+        }
+        return;
+      }
       this.setState("activeTargetId", previous.targetId);
       this.setState("view", previous.view);
     }
@@ -430,6 +444,7 @@ export class BrowserPanelController implements ReactiveController {
     await this.runAction(async (client) => {
       const epoch = this.operations.epoch;
       await closeBrowserTab(client, targetId);
+      this.operations.forgetNavigation(client, targetId);
       if (!this.operations.isLive(epoch, client)) {
         if (this.operations.isLive(this.operations.epoch, client)) {
           await this.refreshAll();
@@ -465,6 +480,7 @@ export class BrowserPanelController implements ReactiveController {
         this.setState("loading", false);
       }
     }, false);
+    await this.host.updateComplete;
   }
 
   /** Real page reload: re-navigate to the current URL, then re-capture. A bare

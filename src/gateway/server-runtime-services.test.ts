@@ -70,11 +70,6 @@ vi.mock("../sessions/session-upstream-monitor.js", () => ({
   startSessionUpstreamMonitor: hoisted.startSessionUpstreamMonitor,
 }));
 
-vi.mock("../infra/env.js", () => ({
-  isTruthyEnvValue: (value?: string) =>
-    ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? ""),
-}));
-
 vi.mock("../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloads: hoisted.deliverOutboundPayloads,
   deliverOutboundPayloadsInternal: hoisted.deliverOutboundPayloads,

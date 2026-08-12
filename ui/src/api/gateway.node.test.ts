@@ -6,6 +6,7 @@ import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-client/browser";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -201,12 +202,7 @@ type ConnectTimingPayload = {
   errorCode?: string;
 };
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label");
 
 function requireFirstMockArg(
   mock: ReturnType<typeof vi.fn>,
@@ -719,6 +715,39 @@ describe("GatewayBrowserClient", () => {
       id: frame.id,
       method: "sessions.list",
       ok: true,
+    });
+  });
+
+  it("settles a companion ask from one final response", async () => {
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+    const { ws, connectFrame } = await startConnect(client);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: { type: "hello-ok", protocol: 4, auth: { role: "operator", scopes: [] } },
+    });
+
+    const answer = client.request(
+      "sessions.companion.ask",
+      { sessionKey: "agent:main:main", question: "What changed?" },
+      { timeoutMs: 70_000 },
+    );
+    const frame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string; method?: string };
+    expect(frame.method).toBe("sessions.companion.ask");
+    ws.emitMessage({
+      type: "res",
+      id: frame.id,
+      ok: true,
+      payload: { answer: "The companion was simplified.", ts: 4 },
+    });
+
+    await expect(answer).resolves.toEqual({
+      answer: "The companion was simplified.",
+      ts: 4,
     });
   });
 

@@ -1564,6 +1564,7 @@ export async function performGatewaySessionReset(params: {
                 createdVia: currentEntry.createdVia,
                 createdActor: currentEntry.createdActor,
                 createdAt: currentEntry.createdAt,
+                projectId: currentEntry.projectId,
               }
             : params.creation
               ? buildSessionCreationStamp(params.creation)

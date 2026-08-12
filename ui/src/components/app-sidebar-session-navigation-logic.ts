@@ -158,6 +158,7 @@ export function buildSidebarSessionNavigationState(input: {
     }
     return {
       key: row.key,
+      sessionId: row.sessionId,
       displayName: row.displayName,
       incognito: row.incognito === true,
       createdActor: row.createdActor,

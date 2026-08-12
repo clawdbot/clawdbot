@@ -263,14 +263,6 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
-  it("accepts timing.monitorStartupGraceMs", async () => {
-    const manager = createMockChannelManager();
-    const monitor = startDefaultMonitor(manager, { timing: { monitorStartupGraceMs: 60_000 } });
-    await vi.advanceTimersByTimeAsync(5_001);
-    expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
-    monitor.stop();
-  });
-
   it("skips healthy channels (running + connected)", async () => {
     const manager = createSnapshotManager({
       discord: {

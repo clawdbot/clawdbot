@@ -24,7 +24,7 @@ const hoisted = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
-  readSessionTranscriptVisibleMessageDelta: vi.fn(),
+  readSessionTranscriptVisibleMessageDeltaCore: vi.fn(),
 }));
 
 vi.mock("./open-path.js", async () => {
@@ -42,7 +42,7 @@ vi.mock("../session-utils.js", async () => {
   return {
     ...actual,
     loadSessionEntry: hoisted.loadSessionEntry,
-    loadSessionEntryReadOnly: hoisted.loadSessionEntry,
+    loadGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
   };
 });
 
@@ -52,13 +52,14 @@ vi.mock("../session-transcript-readers.js", async () => {
   );
   return {
     ...actual,
-    readSessionTranscriptVisibleMessageDelta: hoisted.readSessionTranscriptVisibleMessageDelta,
+    readSessionTranscriptVisibleMessageDeltaCore:
+      hoisted.readSessionTranscriptVisibleMessageDeltaCore,
   };
 });
 
 const invokeSessionFilesHandler = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
 const mockVisibleMessages = createVisibleMessagesMock(
-  hoisted.readSessionTranscriptVisibleMessageDelta,
+  hoisted.readSessionTranscriptVisibleMessageDeltaCore,
 );
 
 describe("sessions.files RPC handlers", () => {
@@ -66,7 +67,7 @@ describe("sessions.files RPC handlers", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    hoisted.readSessionTranscriptVisibleMessageDelta.mockReset();
+    hoisted.readSessionTranscriptVisibleMessageDeltaCore.mockReset();
     workspaceRoot = createWorkspaceFixture("openclaw-session-files-test-");
     hoisted.resolveDefaultAgentId.mockReturnValue("main");
     hoisted.resolveAgentWorkspaceDir.mockReturnValue(workspaceRoot);
@@ -939,7 +940,7 @@ describe("sessions.files RPC handlers", () => {
 
   it.each([
     { format: "RTF", mimeType: "application/rtf", content: "{\\rtf1\\ansi hello}" },
-    { format: "XML", mimeType: "application/xml", content: '<?xml version="1.0"?><root/>' },
+    { format: "XML", mimeType: "text/xml", content: '<?xml version="1.0"?><root/>' },
     { format: "WebVTT", mimeType: "text/vtt", content: "WEBVTT\n\n00:00.000 --> 00:01.000\nHi" },
     { format: "vCard", mimeType: "text/vcard", content: "BEGIN:VCARD\nVERSION:4.0\nEND:VCARD\n" },
     {

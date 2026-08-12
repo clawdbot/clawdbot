@@ -31,15 +31,13 @@ import {
 } from "./model-ref-shared.js";
 import { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
 import {
-  resolveAllowedModelRef as resolveAllowedModelRefInternal,
+  resolveAllowedModelRefCore as resolveAllowedModelRefInternal,
   resolveConfiguredModelFallbacks,
 } from "./model-selection-resolve.js";
 import {
   buildAllowedModelSetWithFallbacks,
-  buildConfiguredAllowlistKeys,
   buildConfiguredModelCatalog,
   buildModelAliasIndex,
-  inferUniqueProviderFromCatalog,
   inferUniqueProviderFromConfiguredModels,
   normalizeModelSelection,
   resolveBareModelDefaultProvider,
@@ -48,23 +46,18 @@ import {
   resolveModelAliasFromPair,
   resolveModelRefFromString,
   type ModelAliasIndex,
-  type ModelRefStatus,
 } from "./model-selection-shared.js";
 
-export type { ModelAliasIndex, ModelManifestNormalizationContext, ModelRef, ModelRefStatus };
-
-export type { ThinkLevel } from "../auto-reply/thinking.shared.js";
+export type { ModelAliasIndex, ModelManifestNormalizationContext, ModelRef };
 
 export { resolveDefaultModelForAgent, resolveSubagentConfiguredModelSelection };
 
 export {
-  buildConfiguredAllowlistKeys,
   buildConfiguredModelCatalog,
   buildModelAliasIndex,
   findNormalizedProviderKey,
   findNormalizedProviderValue,
   inferUniqueProviderFromConfiguredModels,
-  inferUniqueProviderFromCatalog,
   legacyModelKey,
   modelKey,
   normalizeModelRef,

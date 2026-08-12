@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   applySessionEntryLifecycleMutation,
   copySessionOwnedStateForCanonicalRepair,
@@ -9,8 +9,8 @@ import {
   loadTranscriptEvents,
   rehomeSessionDeliveryReferencesForCanonicalRepair,
   rehomeSessionDeliveryReferencesForCanonicalRepairBatch,
+  type SessionEntryLifecycleRemoval,
 } from "../config/sessions/session-accessor.js";
-import type { SessionEntryLifecycleRemoval } from "../config/sessions/session-accessor.lifecycle-types.js";
 import { writeTranscriptArchive } from "../config/sessions/session-accessor.sqlite-archive.js";
 import {
   copySessionNodeArtifactsForRepair,
@@ -238,7 +238,10 @@ function resolveCanonicalDestination(params: {
           params.sourceAgentId ?? resolveSessionStoreAgentId(params.cfg, params.canonicalKey),
         )
       : resolveSessionStoreAgentId(params.cfg, params.canonicalKey);
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId, env: params.env });
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
+    agentId,
+    env: params.env,
+  });
   return {
     agentId,
     storePath,

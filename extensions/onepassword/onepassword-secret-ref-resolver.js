@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { DEFAULT_SECRET_FILE_MAX_BYTES, tryReadSecretFileSync } from "@openclaw/fs-safe/secret";
 import { execa } from "execa";
+import { coerceErrorMessage as errorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTrustedOnePasswordCli } from "./onepassword-op-path.js";
 import { resolveOnePasswordSecretReference } from "./onepassword-secret-id.js";
 
@@ -63,10 +64,6 @@ async function resolveOpCommand() {
 
 function opMissingMessage(command) {
   return `1Password CLI "${command}" is not installed or cannot be executed. Install the official 1Password CLI v2, and set CLAW_1PASSWORD_OP to its absolute path.`;
-}
-
-function errorMessage(error) {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function resolveOsHome() {

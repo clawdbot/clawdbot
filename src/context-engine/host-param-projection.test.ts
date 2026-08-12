@@ -128,27 +128,6 @@ describe("context-engine host parameter projection", () => {
     });
   });
 
-  it("uses the legacy parameter set for undeclared engines during the window", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-29T12:00:00Z"));
-    const assembleCalls: Array<Record<string, unknown>> = [];
-    const compactCalls: Array<Record<string, unknown>> = [];
-    const engineId = registerProbeEngine({ assembleCalls, compactCalls });
-
-    await invokeHostParamMethods(
-      await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } }),
-    );
-
-    for (const call of [...assembleCalls, ...compactCalls]) {
-      expect(call).not.toHaveProperty("sessionKey");
-      expect(call).not.toHaveProperty("runtimeSettings");
-    }
-    expect(assembleCalls[0]).not.toHaveProperty("prompt");
-    expect(compactCalls[0]).not.toHaveProperty("sessionTarget");
-    expect(compactCalls[0]).not.toHaveProperty("runtimeContext");
-    expect(compactCalls[0]).toHaveProperty("sessionId", "session-1");
-  });
-
   it("projects host parameters on fresh logical-turn engines", async () => {
     const assembleCalls: Array<Record<string, unknown>> = [];
     const compactCalls: Array<Record<string, unknown>> = [];
@@ -211,7 +190,6 @@ describe("context-engine host parameter projection", () => {
         activeMessagePosition: 1,
       },
       messages: [message],
-      prePromptMessageCount: 1,
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       sessionTarget: { agentId: "main", sessionId: "session-1" },
@@ -235,9 +213,7 @@ describe("context-engine host parameter projection", () => {
     ]);
   });
 
-  it("passes every host parameter to fresh undeclared engines after the window", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-13T00:00:00Z"));
+  it("passes every host parameter to fresh undeclared engines", async () => {
     const assembleCalls: Array<Record<string, unknown>> = [];
     const compactCalls: Array<Record<string, unknown>> = [];
     const engineId = registerProbeEngine({ assembleCalls, compactCalls });
@@ -266,15 +242,12 @@ describe("context-engine host parameter projection", () => {
     ]);
   });
 
-  it("switches undeclared engines to full parameters after the window", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-29T12:00:00Z"));
+  it("passes every host parameter to resolved undeclared engines", async () => {
     const assembleCalls: Array<Record<string, unknown>> = [];
     const compactCalls: Array<Record<string, unknown>> = [];
     const engineId = registerProbeEngine({ assembleCalls, compactCalls });
     const engine = await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } });
 
-    vi.setSystemTime(new Date("2026-08-13T00:00:00Z"));
     await invokeHostParamMethods(engine);
 
     expect(assembleCalls[0]).toMatchObject({
@@ -318,15 +291,13 @@ describe("context-engine host parameter projection", () => {
   });
 
   it("does not mutate frozen engines reused by a factory", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-29T12:00:00Z"));
     const engineId = `host-param-frozen-${++engineCounter}`;
     const assemble = vi.fn<ContextEngine["assemble"]>(async (params) => ({
       messages: params.messages,
       estimatedTokens: 0,
     }));
     class FrozenProbeEngine implements ContextEngine {
-      readonly #info = { id: engineId, name: "Frozen Probe" };
+      readonly #info = { id: engineId, name: "Frozen Probe", acceptedHostParams: [] };
 
       get info() {
         return this.#info;
@@ -347,7 +318,7 @@ describe("context-engine host parameter projection", () => {
 
     const first = await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } });
     const second = await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } });
-    expect(first.info).toEqual({ id: engineId, name: "Frozen Probe" });
+    expect(first.info).toEqual({ id: engineId, name: "Frozen Probe", acceptedHostParams: [] });
     await first.assemble({ sessionId: "session-1", sessionKey: "first", messages: [message] });
     await second.assemble({ sessionId: "session-2", sessionKey: "second", messages: [message] });
 

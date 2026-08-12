@@ -29,7 +29,7 @@ import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import { installConnectedSessionStoreGatewaySuite } from "./test-helpers.connected-session-store.js";
 import {
-  agentCommand,
+  agentCommandMock,
   installGatewayTestHooks,
   agentDiscoveryMock,
   rpcReq,
@@ -236,7 +236,7 @@ const defaultRegistry = createRegistry([
 
 describe("gateway server agent", () => {
   beforeEach(() => {
-    vi.mocked(agentCommand).mockClear();
+    vi.mocked(agentCommandMock).mockClear();
     testState.agentsConfig = undefined;
     testState.allowFrom = undefined;
     setRegistry(defaultRegistry);
@@ -257,7 +257,7 @@ describe("gateway server agent", () => {
       },
     });
     let subordinateAdmissionClosed: boolean | undefined;
-    vi.mocked(agentCommand).mockImplementationOnce(async () => {
+    vi.mocked(agentCommandMock).mockImplementationOnce(async () => {
       const suspension = tryBeginGatewaySuspendAdmission(() => {});
       expect(suspension).not.toBeNull();
       try {
@@ -455,7 +455,7 @@ describe("gateway server agent", () => {
       const executionFinished = new Promise<void>((resolve) => {
         finishExecution = resolve;
       });
-      vi.mocked(agentCommand).mockImplementationOnce(async (rawOpts) => {
+      vi.mocked(agentCommandMock).mockImplementationOnce(async (rawOpts) => {
         const opts = rawOpts as {
           runId: string;
           operationalRunInstance: OperationalRunInstanceRef;
@@ -516,7 +516,7 @@ describe("gateway server agent", () => {
     expect(res.ok).toBe(false);
     expect(res.error?.message).toContain("unknown channel");
 
-    const spy = vi.mocked(agentCommand);
+    const spy = vi.mocked(agentCommandMock);
     expect(spy).not.toHaveBeenCalled();
   });
 
@@ -531,7 +531,7 @@ describe("gateway server agent", () => {
     expect(res.ok).toBe(false);
     expect(res.error?.message).toContain("does not match session key agent");
 
-    const spy = vi.mocked(agentCommand);
+    const spy = vi.mocked(agentCommandMock);
     expect(spy).not.toHaveBeenCalled();
   });
 
@@ -544,7 +544,7 @@ describe("gateway server agent", () => {
     expect(res.ok).toBe(false);
     expect(res.error?.message).toContain("malformed session key");
 
-    const spy = vi.mocked(agentCommand);
+    const spy = vi.mocked(agentCommandMock);
     expect(spy).not.toHaveBeenCalled();
   });
 
@@ -706,7 +706,7 @@ describe("gateway server agent", () => {
       expect(res.ok).toBe(false);
       expect(res.error?.code).toBe("INVALID_REQUEST");
       expect(res.error?.message).toContain("Channel is required");
-      expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
+      expect(vi.mocked(agentCommandMock)).not.toHaveBeenCalled();
     } finally {
       testState.allowFrom = undefined;
     }

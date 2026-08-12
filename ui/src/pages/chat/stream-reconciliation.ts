@@ -1,4 +1,5 @@
 // Control UI chat module implements stream reconciliation behavior.
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   streamSegmentHasItemId,
   streamSegmentUsesAccumulatedText,
@@ -505,12 +506,8 @@ function messageTimestampMs(message: unknown): number | null {
   if (!message || typeof message !== "object") {
     return null;
   }
-  const timestamp = (message as { timestamp?: unknown; ts?: unknown }).timestamp;
-  if (typeof timestamp === "number" && Number.isFinite(timestamp)) {
-    return timestamp;
-  }
-  const ts = (message as { timestamp?: unknown; ts?: unknown }).ts;
-  return typeof ts === "number" && Number.isFinite(ts) ? ts : null;
+  const record = message as { timestamp?: unknown; ts?: unknown };
+  return asFiniteNumber(record.timestamp) ?? asFiniteNumber(record.ts) ?? null;
 }
 
 function timestampForInsertedVisibleStream(

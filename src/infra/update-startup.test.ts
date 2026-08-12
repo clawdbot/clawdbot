@@ -1097,6 +1097,7 @@ describe("update-startup", () => {
       timeoutMs: 2500,
       fetchGit: true,
       includeRegistry: false,
+      useDetachedDevUpstream: true,
     });
     expect(resolveNpmChannelTag).not.toHaveBeenCalled();
     expect(getUpdateAvailable()).toEqual({
@@ -1214,6 +1215,32 @@ describe("update-startup", () => {
     });
   });
 
+  it("continues managed dev campaigns from a detached tracked deployment", async () => {
+    mockDevGitStatus({ branch: "HEAD", upstreamSource: "tracking" });
+    const runAutoUpdate = createAutoUpdateSuccessMock();
+
+    await runGatewayUpdateCheck({
+      cfg: { update: { channel: "dev", auto: { enabled: true } } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+      activeWorkInspectors: idleActiveWorkInspectors(),
+      runAutoUpdate,
+    });
+
+    expect(getUpdateSchedule()?.campaign?.state).toBe("countdown");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(runAutoUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        devTarget: {
+          mode: "tracked",
+          upstreamRef: "origin/main",
+          upstreamSha: "upstream-sha",
+        },
+      }),
+    );
+  });
+
   it.each([
     { name: "successful install", status: "ok", reason: undefined },
     {
@@ -1256,6 +1283,7 @@ describe("update-startup", () => {
       timeoutMs: 2500,
       fetchGit: true,
       includeRegistry: false,
+      useDetachedDevUpstream: true,
       gitUpstreamFallback: { currentSha: "current-sha", upstreamRef: "origin/main" },
     });
     expect(getUpdateSchedule()?.campaign?.state).toBe("countdown");
@@ -1275,7 +1303,10 @@ describe("update-startup", () => {
     { name: "ahead", git: { ahead: 1, behind: 0 } },
     { name: "diverged", git: { ahead: 1, behind: 2 } },
     { name: "non-main", git: { branch: "feature" } },
-    { name: "detached", git: { branch: "HEAD" } },
+    {
+      name: "detached without tracking",
+      git: { branch: "HEAD", upstream: null, upstreamSha: null, ahead: null, behind: null },
+    },
   ])("does not announce an automatic dev campaign for a $name checkout", async ({ git }) => {
     mockDevGitStatus(git);
     const runAutoUpdate = createAutoUpdateSuccessMock();

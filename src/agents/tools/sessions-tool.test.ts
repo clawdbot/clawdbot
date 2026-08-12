@@ -3,14 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
-  patchSessionEntry,
-  upsertSessionEntry,
+  patchSessionEntryCore,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isAgentSessionModelPatchOrigin } from "../../gateway/session-model-patch-origin.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createAgentPatchedSessionModelRunGuard } from "../session-model-auto-revert.js";
 import { createSessionsTool } from "./sessions-tool.js";
 
@@ -164,10 +164,19 @@ describe("sessions tool", () => {
       callGateway: callGateway as never,
     });
 
-    await tool.execute("delete-session", { action: "delete", sessionKey });
+    await tool.execute("delete-session", {
+      action: "delete",
+      sessionKey,
+      expectedSessionId: sessionId,
+    });
 
     expect(callGateway.mock.calls).toEqual([
-      [{ method: "sessions.patch", params: { key: sessionKey, archived: true } }],
+      [
+        {
+          method: "sessions.patch",
+          params: { key: sessionKey, archived: true, expectedSessionId: sessionId },
+        },
+      ],
       [
         {
           method: "sessions.delete",
@@ -181,6 +190,23 @@ describe("sessions tool", () => {
         },
       ],
     ]);
+  });
+
+  it("does not discover a lifecycle identity while deleting another session", async () => {
+    const callGateway = vi.fn();
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:main:main",
+      config: { tools: { sessions: { visibility: "agent" } } },
+      callGateway,
+    });
+
+    await expect(
+      tool.execute("delete-without-identity", {
+        action: "delete",
+        sessionKey: "agent:main:dashboard:finished",
+      }),
+    ).rejects.toThrow("requires a durable session identity");
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("forwards an explicit transcript-preservation choice on deletion", async () => {
@@ -200,6 +226,7 @@ describe("sessions tool", () => {
     await tool.execute("delete-preserve", {
       action: "delete",
       sessionKey,
+      expectedSessionId: sessionId,
       deleteTranscript: false,
     });
 
@@ -216,6 +243,7 @@ describe("sessions tool", () => {
 
   it("does not delete a session when archive cannot identify its generation", async () => {
     const sessionKey = "agent:main:dashboard:finished";
+    const sessionId = "finished-session";
     const callGateway = vi.fn(async () => ({ ok: true }));
     const tool = createSessionsTool({
       agentSessionKey: "agent:main:main",
@@ -224,7 +252,11 @@ describe("sessions tool", () => {
     });
 
     await expect(
-      tool.execute("delete-missing-generation", { action: "delete", sessionKey }),
+      tool.execute("delete-missing-generation", {
+        action: "delete",
+        sessionKey,
+        expectedSessionId: sessionId,
+      }),
     ).rejects.toThrow("archive did not return its session identity");
 
     expect(callGateway).toHaveBeenCalledTimes(1);
@@ -233,6 +265,7 @@ describe("sessions tool", () => {
       params: {
         key: sessionKey,
         archived: true,
+        expectedSessionId: sessionId,
       },
     });
   });
@@ -272,14 +305,14 @@ describe("sessions tool", () => {
   });
 
   it("patches its session, then reverts a failed agent-selected model", async () => {
-    await withTempDir({ prefix: "openclaw-sessions-tool-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-sessions-tool-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const sessionKey = "agent:main:main";
       const cfg: OpenClawConfig = {
         session: { store: storePath },
         agents: { defaults: { model: { primary: "openai/good" } } },
       };
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey, storePath },
         {
           sessionId: "session-main",
@@ -300,7 +333,7 @@ describe("sessions tool", () => {
         async (request: { method: string; params: Record<string, unknown> }) => {
           expect(request.method).toBe("sessions.patch");
           expect(isAgentSessionModelPatchOrigin()).toBe(true);
-          await patchSessionEntry({ agentId: "main", sessionKey, storePath }, () => ({
+          await patchSessionEntryCore({ agentId: "main", sessionKey, storePath }, () => ({
             label: request.params.label as string,
             model: "bad",
             modelProvider: "broken",
@@ -411,10 +444,10 @@ describe("sessions tool", () => {
   });
 
   it("clears the model fallback marker after a successful run", async () => {
-    await withTempDir({ prefix: "openclaw-sessions-tool-success-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-sessions-tool-success-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const sessionKey = "agent:main:main";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey, storePath },
         {
           sessionId: "session-main",
@@ -462,10 +495,10 @@ describe("sessions tool", () => {
   });
 
   it("reverts when the patched model fails but a fallback completes the run", async () => {
-    await withTempDir({ prefix: "openclaw-sessions-tool-fallback-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-sessions-tool-fallback-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const sessionKey = "agent:main:main";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey, storePath },
         {
           sessionId: "session-main",
@@ -509,13 +542,13 @@ describe("sessions tool", () => {
   });
 
   it("promotes the newest validated model across overlapping patches", async () => {
-    await withTempDir({ prefix: "openclaw-sessions-tool-overlap-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-sessions-tool-overlap-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const sessionKey = "agent:main:main";
       const cfg: OpenClawConfig = {
         agents: { defaults: { model: { primary: "openai/a" } } },
       };
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey, storePath },
         {
           sessionId: "session-main",
@@ -538,7 +571,7 @@ describe("sessions tool", () => {
         sessionKey,
         storePath,
       });
-      await patchSessionEntry({ agentId: "main", sessionKey, storePath }, () => ({
+      await patchSessionEntryCore({ agentId: "main", sessionKey, storePath }, () => ({
         model: "c",
         modelOverride: "c",
         modelFallback: {
@@ -554,7 +587,7 @@ describe("sessions tool", () => {
         sessionKey,
         storePath,
       });
-      await patchSessionEntry({ agentId: "main", sessionKey, storePath }, () => ({
+      await patchSessionEntryCore({ agentId: "main", sessionKey, storePath }, () => ({
         model: "d",
         modelOverride: "d",
         modelFallback: {
@@ -801,11 +834,11 @@ describe("sessions tool", () => {
   });
 
   it("keeps resolved model and thinking metadata when self-archive is deferred", async () => {
-    await withTempDir({ prefix: "openclaw-sessions-tool-archive-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-sessions-tool-archive-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const sessionKey = "agent:main:subagent:archive-me";
       const sessionId = "archive-me-session";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey, storePath },
         { sessionId, updatedAt: 1 },
       );
@@ -818,6 +851,7 @@ describe("sessions tool", () => {
       }));
       const tool = createSessionsTool({
         agentSessionKey: sessionKey,
+        agentSessionId: sessionId,
         config: { session: { store: storePath } },
         callGateway: callGateway as never,
       });
@@ -874,6 +908,7 @@ describe("sessions tool", () => {
     const callGateway = vi.fn(async () => ({ ok: true }));
     const tool = createSessionsTool({
       agentSessionKey: "agent:main:main",
+      agentSessionId: "session-main",
       config: {},
       callGateway: callGateway as never,
     });
@@ -899,6 +934,7 @@ describe("sessions tool", () => {
             attention: "key",
             ttlMinutes: 45,
             archived: true,
+            expectedSessionId: "session-main",
           },
         },
       ],

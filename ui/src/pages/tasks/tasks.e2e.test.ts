@@ -65,8 +65,38 @@ const failedTask = {
   error: "Worker exited",
 };
 
+const pageTwoSentinel = {
+  id: "task-page-two-sentinel",
+  taskId: "task-page-two-sentinel",
+  kind: "subagent",
+  runtime: "subagent",
+  status: "running",
+  title: "Page two running sentinel",
+  agentId: "main",
+  childSessionKey: "agent:main:subagent:page-two-sentinel",
+  createdAt: baseTime + 4_000,
+  updatedAt: baseTime + 5_000,
+  progressSummary: "Visible only after active pagination",
+};
+
+const activePageOneTasks = [
+  runningTask,
+  queuedTask,
+  ...Array.from({ length: 498 }, (_, index) => ({
+    id: `task-page-one-${index}`,
+    taskId: `task-page-one-${index}`,
+    kind: "cron",
+    runtime: "cron",
+    status: "running",
+    title: `Page one active task ${index + 1}`,
+    agentId: "main",
+    createdAt: baseTime - 20_000 - index,
+    updatedAt: baseTime - 10_000 - index,
+  })),
+];
+
 suite.define(() => {
-  it("renders task sections, applies pushed completion, and sends cancel", async () => {
+  it("renders every active page, applies pushed completion, and cancels a page-two task", async () => {
     await rm(artifactDir, { force: true, recursive: true });
     await mkdir(artifactDir, { recursive: true });
     const rawVideoDir = path.join(artifactDir, "raw-video");
@@ -83,12 +113,37 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         methodResponses: {
           "tasks.list": {
-            tasks: [runningTask, queuedTask, completedTask, failedTask],
+            cases: [
+              {
+                match: {
+                  agentId: "main",
+                  cursor: "active-page-2",
+                  limit: 500,
+                  status: ["queued", "running"],
+                },
+                response: { tasks: [pageTwoSentinel] },
+              },
+              {
+                match: {
+                  agentId: "main",
+                  limit: 500,
+                  status: ["queued", "running"],
+                },
+                response: {
+                  tasks: activePageOneTasks,
+                  nextCursor: "active-page-2",
+                },
+              },
+              {
+                match: { agentId: "main", limit: 200 },
+                response: { tasks: [completedTask, failedTask] },
+              },
+            ],
           },
           "tasks.cancel": {
             found: true,
             cancelled: true,
-            task: { ...queuedTask, status: "cancelled", updatedAt: baseTime + 2_000 },
+            task: { ...pageTwoSentinel, status: "cancelled", updatedAt: baseTime + 6_000 },
           },
         },
       });
@@ -97,15 +152,39 @@ suite.define(() => {
       expect(response?.status()).toBe(200);
       const active = page.locator('[data-task-section="active"]');
       const recent = page.locator('[data-task-section="recent"]');
+      await active.locator('[data-task-id="task-page-two-sentinel"]').waitFor({
+        state: "visible",
+      });
       await active.locator('[data-task-id="task-running"]').waitFor({ state: "visible" });
       await active.locator('[data-task-id="task-queued"]').waitFor({ state: "visible" });
       await recent.locator('[data-task-id="task-completed"]').waitFor({ state: "visible" });
       await recent.locator('[data-task-id="task-failed"]').waitFor({ state: "visible" });
       expect(await active.textContent()).toContain("Reading subscription paths");
+      expect(await active.textContent()).toContain("Visible only after active pagination");
       expect(await recent.textContent()).toContain("Worker exited");
+      const listRequests = await gateway.getRequests("tasks.list");
+      expect(
+        listRequests.filter(
+          (request) => (request.params as { status?: unknown }).status !== undefined,
+        ),
+      ).toHaveLength(2);
+      expect(
+        listRequests.filter(
+          (request) => (request.params as { status?: unknown }).status === undefined,
+        ),
+      ).toHaveLength(1);
+      expect(listRequests).toContainEqual({
+        id: expect.any(String),
+        method: "tasks.list",
+        params: {
+          agentId: "main",
+          cursor: "active-page-2",
+          limit: 500,
+          status: ["queued", "running"],
+        },
+      });
       await page.screenshot({
-        path: path.join(artifactDir, "01-task-sections.png"),
-        fullPage: true,
+        path: path.join(artifactDir, "01-page-two-sentinel.png"),
       });
 
       await gateway.emitGatewayEvent("task", {
@@ -122,15 +201,26 @@ suite.define(() => {
       expect(await recent.textContent()).toContain("Review complete");
       await page.screenshot({
         path: path.join(artifactDir, "02-pushed-completion.png"),
-        fullPage: true,
       });
 
       await active
-        .locator('[data-task-id="task-queued"]')
-        .getByRole("button", { name: "Cancel Nightly cleanup" })
+        .locator('[data-task-id="task-page-two-sentinel"]')
+        .getByRole("button", { name: "Cancel Page two running sentinel" })
         .click();
       const cancelRequest = await gateway.waitForRequest("tasks.cancel");
-      expect(cancelRequest.params).toEqual({ taskId: "task-queued" });
+      expect(cancelRequest.params).toEqual({ taskId: "task-page-two-sentinel" });
+      expect(await gateway.getRequests("tasks.cancel")).toHaveLength(1);
+      const cancelledSentinel = recent.locator('[data-task-id="task-page-two-sentinel"]');
+      await cancelledSentinel.waitFor({
+        state: "visible",
+      });
+      await active.locator('[data-task-id="task-page-two-sentinel"]').waitFor({
+        state: "detached",
+      });
+      await cancelledSentinel.scrollIntoViewIfNeeded();
+      await page.screenshot({
+        path: path.join(artifactDir, "03-page-two-cancelled.png"),
+      });
     } finally {
       await context.close();
       if (video) {

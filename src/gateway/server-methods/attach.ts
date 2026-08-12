@@ -1,3 +1,4 @@
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
@@ -15,11 +16,6 @@ import {
   getActiveMcpLoopbackRuntime,
 } from "../mcp-http.loopback-runtime.js";
 import type { GatewayRequestHandlers } from "./types.js";
-
-function readPositiveNumber(params: Record<string, unknown>, key: string): number | undefined {
-  const value = params[key];
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
 
 export const attachHandlers: GatewayRequestHandlers = {
   "attach.grant": async ({ params, respond, context }) => {
@@ -56,7 +52,7 @@ export const attachHandlers: GatewayRequestHandlers = {
     const grant = mintAttachGrant({
       sessionKey,
       ...(agentId ? { agentId } : {}),
-      ttlMs: readPositiveNumber(grantParams, "ttlMs"),
+      ttlMs: asPositiveFiniteNumber(grantParams.ttlMs),
     });
     respond(true, {
       sessionKey: grant.sessionKey,

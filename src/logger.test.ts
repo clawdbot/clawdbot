@@ -12,7 +12,7 @@ import {
 } from "./logging.js";
 import { flushLogger } from "./logging/logger.js";
 import type { RuntimeEnv } from "./runtime.js";
-import { withTempDir } from "./test-helpers/temp-dir.js";
+import { withTestDir } from "./test-helpers/temp-dir.js";
 
 describe("logger helpers", () => {
   afterEach(() => {
@@ -50,7 +50,7 @@ describe("logger helpers", () => {
   });
 
   it("writes to configured log file at configured level", async () => {
-    await withTempDir({ prefix: "openclaw-log-test-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-log-test-" }, async (dir) => {
       const logPath = path.join(dir, "openclaw.log");
       setLoggerOverride({ level: "info", file: logPath });
       fs.writeFileSync(logPath, "");
@@ -64,7 +64,7 @@ describe("logger helpers", () => {
   });
 
   it("filters messages below configured level", async () => {
-    await withTempDir({ prefix: "openclaw-log-test-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-log-test-" }, async (dir) => {
       const logPath = path.join(dir, "openclaw.log");
       setLoggerOverride({ level: "warn", file: logPath });
       logInfo("info-only");
@@ -77,7 +77,7 @@ describe("logger helpers", () => {
   });
 
   it("uses daily rolling log files and prunes old ones", async () => {
-    await withTempDir({ prefix: "openclaw-log-test-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-log-test-" }, async (dir) => {
       resetLogger();
       const today = localDateString(new Date());
       const todayPath = path.join(dir, `openclaw-${today}.log`);

@@ -1,6 +1,6 @@
 import { isCompletionReportInputProvenance } from "../sessions/input-provenance.js";
 import { isRuntimeToolAllowed } from "./tool-policy-match.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { ToolAuthorizationError } from "./tools/common.js";
@@ -96,7 +96,7 @@ export function applyDelegationCapability(
     return tools;
   }
   return tools.flatMap((tool) => {
-    const name = normalizeToolName(tool.name);
+    const name = normalizeToolPolicyName(tool.name);
     if (NEW_DELEGATION_TOOL_NAMES.has(name)) {
       return [];
     }

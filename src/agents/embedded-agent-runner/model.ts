@@ -20,7 +20,7 @@ import {
   type ModelRegistry,
 } from "../sessions/index.js";
 import { mergeModelMediaInput } from "./model.compat.js";
-import { resolveConfiguredFallbackModel } from "./model.configured-fallback.js";
+import { buildConfiguredFallbackModel } from "./model.configured-fallback.js";
 import {
   applyConfiguredProviderOverrides,
   resolveConfiguredProviderConfig,
@@ -62,7 +62,6 @@ type CommonModelResolutionOptions = {
 type AsyncModelResolutionOptions = CommonModelResolutionOptions & {
   allowBundledStaticCatalogFallback?: boolean;
   preferBundledStaticCatalogTransport?: boolean;
-  retryTransientProviderRuntimeMiss?: boolean;
   agentRuntimeId?: string;
   skipAgentDiscovery?: boolean;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
@@ -412,17 +411,11 @@ export async function resolveModelAsync(
       ? explicitModel.model
       : undefined;
   model ??= await resolveDynamicAttempt();
-  if (!model && !explicitModel && options?.retryTransientProviderRuntimeMiss) {
-    // Startup can race the first provider-runtime snapshot load on a fresh
-    // gateway boot. Retry once before surfacing a user-visible "Unknown model"
-    // that disappears on the next message.
-    model = await resolveDynamicAttempt();
-  }
   if (!model && !explicitModel && options?.allowBundledStaticCatalogFallback) {
     model = await resolveStaticCatalogFallbackModel();
   }
   if (!model && !explicitModel && options?.allowBundledStaticCatalogFallback) {
-    model = resolveConfiguredFallbackModel({
+    model = buildConfiguredFallbackModel({
       provider: normalizedRef.provider,
       modelId: normalizedRef.model,
       cfg,

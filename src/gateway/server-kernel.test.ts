@@ -1,7 +1,15 @@
 import fs from "node:fs/promises";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createPluginRecord } from "../plugins/loader-records.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  stageActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
@@ -30,25 +38,65 @@ describe("createGatewayKernel", () => {
         VITEST: "1",
       },
     });
-    const timelinePath = state.path("kernel-startup.jsonl");
-    state.envVars.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH = timelinePath;
-    const token = "gateway-kernel-no-transport-token";
-    await state.writeConfig({
-      gateway: {
-        auth: { mode: "token", token },
-        controlUi: { enabled: false },
-        port,
+    const originalPluginRegistry = captureActivePluginRegistrySnapshot();
+    const inspectAccount = vi.fn(() => ({ enabled: true, configured: true }));
+    const capturedRegistryCleanup = vi.fn();
+    const ambientPlugin = createChannelTestPluginBase({
+      id: "telegram",
+      config: { inspectAccount },
+    });
+    const ambientRegistry = createTestRegistry([
+      {
+        pluginId: ambientPlugin.id,
+        plugin: ambientPlugin,
+        source: "gateway-kernel-test",
       },
+    ]);
+    ambientRegistry.plugins.push(
+      createPluginRecord({
+        id: ambientPlugin.id,
+        source: "gateway-kernel-test",
+        origin: "bundled",
+        enabled: true,
+        configSchema: false,
+      }),
+    );
+    ambientRegistry.runtimeLifecycles.push({
+      pluginId: ambientPlugin.id,
+      pluginName: ambientPlugin.meta.label,
+      lifecycle: {
+        id: "gateway-kernel-test-cleanup",
+        cleanup: capturedRegistryCleanup,
+      },
+      source: "gateway-kernel-test",
     });
-    state.applyEnv();
-
-    const kernel = await createGatewayKernel(port, {
-      auth: { mode: "token", token },
-      bind: "loopback",
-      controlUiEnabled: false,
-      sidecarStartup: "defer",
-    });
+    let capturedLoadedPluginRegistry:
+      | ReturnType<typeof captureActivePluginRegistrySnapshot>
+      | undefined;
+    let prematureCleanupCalls: number | undefined;
+    let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
     try {
+      stageActivePluginRegistry(ambientRegistry, null, "default");
+      capturedLoadedPluginRegistry = captureActivePluginRegistrySnapshot();
+      const timelinePath = state.path("kernel-startup.jsonl");
+      state.envVars.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH = timelinePath;
+      const token = "gateway-kernel-no-transport-token";
+      await state.writeConfig({
+        gateway: {
+          auth: { mode: "token", token },
+          controlUi: { enabled: false },
+          port,
+        },
+      });
+      state.applyEnv();
+      stageActivePluginRegistry(createEmptyPluginRegistry(), null, "default");
+
+      kernel = await createGatewayKernel(port, {
+        auth: { mode: "token", token },
+        bind: "loopback",
+        controlUiEnabled: false,
+        sidecarStartup: "defer",
+      });
       expect(kernel.transportBridge.current()).toBeUndefined();
       await expect(kernel.ensureSandboxHostPort()).rejects.toThrow(
         "Gateway listener must start before the sandbox host",
@@ -134,9 +182,23 @@ describe("createGatewayKernel", () => {
         "gateway.request-context",
       ]);
     } finally {
-      await kernel.closeOnStartupFailure();
-      await state.cleanup();
+      try {
+        await kernel?.closeOnStartupFailure();
+      } finally {
+        try {
+          await state.cleanup();
+        } finally {
+          if (capturedLoadedPluginRegistry) {
+            restoreActivePluginRegistrySnapshot(capturedLoadedPluginRegistry);
+          }
+          prematureCleanupCalls = capturedRegistryCleanup.mock.calls.length;
+          restoreActivePluginRegistrySnapshot(originalPluginRegistry);
+        }
+      }
     }
+    expect(prematureCleanupCalls).toBe(0);
+    await vi.waitFor(() => expect(capturedRegistryCleanup).toHaveBeenCalledOnce());
+    expect(inspectAccount).not.toHaveBeenCalled();
   });
 
   it("runs kernel teardown when required TLS material is unavailable", async () => {

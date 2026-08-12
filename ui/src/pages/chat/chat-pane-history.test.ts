@@ -34,15 +34,21 @@ type TestChatPane = HTMLElement & {
   syncHistoryObserver: () => void;
   prependUniqueNativeMessages: (messages: unknown[], current: unknown[]) => unknown[];
   prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
-  loadOlderMessages: () => Promise<void>;
+  loadOlderMessages: () => Promise<boolean>;
+  requestReplyMessage: (messageId: string) => void;
+  readReplyMessage: (messageId: string) => unknown;
+  openReplyMessage: (messageId: string) => void;
+  currentReplyNavigationId: (sessionKey: string) => string | null;
   hasOlderMessages: () => boolean;
   loadingOlder: boolean;
   olderOffsetsSeen: Set<number>;
   resetOlderMessagesViewport: () => void;
+  readonly updateComplete: Promise<boolean>;
   transcriptScrollTop: number | null;
   transcript: {
     activeSessionKey: string | null;
     pendingScrollOffsetFor: (sessionKey: string) => number | null;
+    revealMessage: (messageId: string) => boolean;
   };
 };
 
@@ -160,6 +166,114 @@ function nativeHistorySeq(message: unknown): number | undefined {
 }
 
 describe("chat pane native history pagination", () => {
+  it("resolves an unloaded reply preview through chat.message.get", async () => {
+    const message = {
+      role: "assistant",
+      content: "Original answer",
+      __openclaw: { id: "source-message" },
+    };
+    const request = vi.fn().mockResolvedValue({ ok: true, message });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    state.assistantAgentId = "main";
+
+    pane.requestReplyMessage("source-message");
+
+    await vi.waitFor(() => expect(pane.readReplyMessage("source-message")).toBe(message));
+    expect(request).toHaveBeenCalledWith("chat.message.get", {
+      sessionKey: state.sessionKey,
+      messageId: "source-message",
+      maxChars: 500,
+    });
+  });
+
+  it("pages backward until a clicked reply target is loaded, then reveals it", async () => {
+    const target = {
+      ...nativeHistoryMessage(1, "Original answer"),
+      __openclaw: { id: "source-message", seq: 1 },
+    };
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: [nativeHistoryMessage(3), nativeHistoryMessage(4)],
+        hasMore: true,
+        nextOffset: 4,
+        totalMessages: 6,
+      })
+      .mockResolvedValueOnce({
+        messages: [target, nativeHistoryMessage(2)],
+        hasMore: false,
+        totalMessages: 6,
+      });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    state.chatMessages = [nativeHistoryMessage(5), nativeHistoryMessage(6)];
+    state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 6 };
+    vi.spyOn(pane, "updateComplete", "get").mockReturnValue(Promise.resolve(true));
+    const revealMessage = vi.spyOn(pane.transcript, "revealMessage").mockReturnValue(true);
+
+    pane.openReplyMessage("source-message");
+
+    expect(pane.currentReplyNavigationId(state.sessionKey)).toBe("source-message");
+    await vi.waitFor(() => expect(revealMessage).toHaveBeenCalledWith("source-message"));
+    expect(request).toHaveBeenNthCalledWith(1, "chat.history", {
+      sessionKey: state.sessionKey,
+      limit: 100,
+      offset: 2,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "chat.history", {
+      sessionKey: state.sessionKey,
+      limit: 100,
+      offset: 4,
+    });
+    expect(pane.currentReplyNavigationId(state.sessionKey)).toBeNull();
+  });
+
+  it("abandons reply navigation when the pane switches sessions", async () => {
+    const deferred = createDeferred<{
+      messages: unknown[];
+      hasMore: boolean;
+      totalMessages: number;
+    }>();
+    const request = vi.fn(() => deferred.promise);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    state.chatMessages = [nativeHistoryMessage(3), nativeHistoryMessage(4)];
+    state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
+    const revealMessage = vi.spyOn(pane.transcript, "revealMessage");
+
+    pane.openReplyMessage("source-message");
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    state.sessionKey = "agent:main:other";
+    pane.resetOlderMessagesViewport();
+    deferred.resolve({ messages: [], hasMore: false, totalMessages: 4 });
+    await deferred.promise;
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(pane.currentReplyNavigationId(state.sessionKey)).toBeNull();
+    expect(revealMessage).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("reports an unavailable reply after history is exhausted", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [nativeHistoryMessage(1), nativeHistoryMessage(2)],
+      hasMore: false,
+      totalMessages: 4,
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    state.chatMessages = [nativeHistoryMessage(3), nativeHistoryMessage(4)];
+    state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
+
+    pane.openReplyMessage("missing-message");
+
+    await vi.waitFor(() => expect(state.lastError).toBe("The original message is unavailable."));
+    expect(pane.currentReplyNavigationId(state.sessionKey)).toBeNull();
+  });
+
   it("does not request older rows from a complete imported snapshot", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });

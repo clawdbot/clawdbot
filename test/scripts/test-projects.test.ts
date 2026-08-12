@@ -956,14 +956,15 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
-  it("routes the bundled provider auth parity test to the isolated tooling shard", () => {
-    expectSingleVitestRunPlan(
-      buildVitestRunPlans(["test/plugins/bundled-provider-auth-literal-parity.test.ts"]),
-      {
-        config: "test/vitest/vitest.tooling-isolated.config.ts",
-        includePatterns: ["test/plugins/bundled-provider-auth-literal-parity.test.ts"],
-      },
-    );
+  it.each([
+    "test/plugins/bundled-provider-auth-literal-parity.test.ts",
+    "test/plugins/bundled-provider-auth-literal-parity.2.test.ts",
+    "test/plugins/bundled-provider-auth-literal-parity.3.test.ts",
+  ])("routes bundled provider auth parity test %s to the isolated tooling shard", (testFile) => {
+    expectSingleVitestRunPlan(buildVitestRunPlans([testFile]), {
+      config: "test/vitest/vitest.tooling-isolated.config.ts",
+      includePatterns: [testFile],
+    });
   });
 
   it.each([
@@ -993,10 +994,6 @@ describe("scripts/test-projects changed-target routing", () => {
       "test/vitest/vitest.agents-embedded-agent.config.ts",
     ],
     [
-      "src/agents/embedded-agent-runner/run.incomplete-turn.test.ts",
-      "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts",
-    ],
-    [
       "src/agents/embedded-agent-runner/run.overflow-compaction.test.ts",
       "test/vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts",
     ],
@@ -1021,6 +1018,28 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes every split incomplete-turn test to its dedicated serial shard", () => {
+    const root = "src/agents/embedded-agent-runner";
+    const discovered = fs
+      .readdirSync(root)
+      .filter((name) => name.startsWith("run.incomplete-turn.") && name.endsWith(".test.ts"))
+      .map((name) => `${root}/${name}`)
+      .toSorted();
+    const owned = agentVitestProjectOwners.embeddedIncompleteTurn.include.toSorted();
+
+    expect(owned).toEqual(discovered);
+    for (const testFile of discovered) {
+      expect(buildVitestRunPlans([testFile])).toEqual([
+        {
+          config: "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts",
+          forwardedArgs: [],
+          includePatterns: [testFile],
+          watchMode: false,
+        },
+      ]);
+    }
+  });
+
   it.each([
     [
       "src/agents/embedded-agent-runner/run",
@@ -1029,21 +1048,29 @@ describe("scripts/test-projects changed-target routing", () => {
     ["src/agents/runtime-plan", "test/vitest/vitest.agents-support.config.ts"],
     ["src/agents/tools", "test/vitest/vitest.agents-tools.config.ts"],
   ])("routes focused agent directory %s to its owning shard", (directory, config) => {
-    const plans = buildVitestRunPlans([directory]);
+    expect(buildVitestRunPlans([directory])).toEqual([
+      {
+        config,
+        forwardedArgs: [directory],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
+  });
 
-    expect(plans).toEqual(
-      expect.arrayContaining([
-        {
-          config,
-          forwardedArgs: [],
-          includePatterns: [`${directory}/**/*.test.ts`],
-          watchMode: false,
-        },
-      ]),
-    );
-    expect(plans.map((plan) => plan.config)).not.toContain(
-      "test/vitest/vitest.agents-core.config.ts",
-    );
+  it("keeps shuffle options on the single owning embedded-run shard", () => {
+    const directory = "src/agents/embedded-agent-runner/run";
+
+    expect(
+      buildVitestRunPlans([directory, "--", "--sequence.shuffle", "--sequence.seed", "3"]),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.agents-embedded-agent-run.config.ts",
+        forwardedArgs: ["--sequence.shuffle", "--sequence.seed", "3", directory],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
   });
 
   it("splits the embedded-agent parent directory across every isolated harness", () => {
@@ -1061,7 +1088,7 @@ describe("scripts/test-projects changed-target routing", () => {
         {
           config: "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts",
           forwardedArgs: [],
-          includePatterns: [`${root}/run.incomplete-turn.test.ts`],
+          includePatterns: agentVitestProjectOwners.embeddedIncompleteTurn.include,
           watchMode: false,
         },
         {

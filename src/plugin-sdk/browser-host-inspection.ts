@@ -1,7 +1,7 @@
 /**
  * Public SDK facade for browser executable lookup and browser version inspection.
  */
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
+import { loadBundledPluginPublicSurfaceModuleSyncCore } from "./facade-loader.js";
 
 /** Browser executable candidate discovered on the host platform. */
 export type BrowserExecutable = {
@@ -19,7 +19,7 @@ let cachedBrowserHostInspectionSurface: BrowserHostInspectionSurface | undefined
 
 function loadBrowserHostInspectionSurface(): BrowserHostInspectionSurface {
   cachedBrowserHostInspectionSurface ??=
-    loadBundledPluginPublicSurfaceModuleSync<BrowserHostInspectionSurface>({
+    loadBundledPluginPublicSurfaceModuleSyncCore<BrowserHostInspectionSurface>({
       dirName: "browser",
       artifactBasename: "browser-host-inspection.js",
     });

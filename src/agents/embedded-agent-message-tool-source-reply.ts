@@ -1,7 +1,7 @@
 /**
  * Detects message-tool sends that delivered a visible reply to the current source.
  */
-import { safeParseJson } from "@openclaw/normalization-core";
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString, readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
@@ -10,8 +10,8 @@ import {
   isMessageToolSendActionName,
   isMessagingToolDeliveryAction,
 } from "./embedded-agent-messaging.js";
-import { isToolResultError } from "./embedded-agent-subscribe.tools.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
+import { isToolResultError } from "./tool-result-error.js";
 
 const MESSAGE_TOOL_NAME = "message";
 const SESSIONS_SEND_TOOL_NAME = "sessions_send";
@@ -100,7 +100,7 @@ function isBareSentDeliveryStatus(value: unknown): boolean {
 }
 
 function parseJsonRecord(value: string): Record<string, unknown> | undefined {
-  return asOptionalRecord(safeParseJson(value));
+  return safeParseJsonRecord(value);
 }
 
 function recordHasDeliveredMessageId(record: Record<string, unknown>): boolean {
@@ -535,7 +535,7 @@ export function isDeliveredMessagingToolResult(params: {
   if (params.isError || isToolResultError(params.result) || isToolResultError(params.hookResult)) {
     return false;
   }
-  const normalizedToolName = normalizeToolName(params.toolName ?? MESSAGE_TOOL_NAME);
+  const normalizedToolName = normalizeToolPolicyName(params.toolName ?? MESSAGE_TOOL_NAME);
   const mutationHasBareOk =
     isMessagingToolDeliveryAction(normalizedToolName, args) &&
     action !== "broadcast" &&
@@ -590,7 +590,7 @@ export function isDeliveredMessageToolOnlySourceReplyResult(params: {
   if (params.sourceReplyDeliveryMode !== "message_tool_only" && !confirmedCurrentSourceRoute) {
     return false;
   }
-  if (normalizeToolName(params.toolName) !== MESSAGE_TOOL_NAME) {
+  if (normalizeToolPolicyName(params.toolName) !== MESSAGE_TOOL_NAME) {
     return false;
   }
   const args = asOptionalRecord(params.args) ?? {};

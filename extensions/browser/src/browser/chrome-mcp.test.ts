@@ -33,6 +33,7 @@ import {
   uploadChromeMcpFile,
   withChromeMcpDocument,
 } from "./chrome-mcp.js";
+import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 
 type ToolCall = {
   name: string;
@@ -971,6 +972,38 @@ describe("chrome MCP page parsing", () => {
       uid: secondRef ?? "",
     });
     expect(clickedUids).toEqual(["1_2", "1_2"]);
+  });
+
+  it("wraps deeply nested snapshot refs without recursive traversal", async () => {
+    let root: ChromeMcpSnapshotNode = { id: "leaf", role: "text", name: "leaf" };
+    for (let index = 0; index < 50_000; index += 1) {
+      root = {
+        id: `n${index}`,
+        role: "generic",
+        name: `n${index}`,
+        children: [root],
+      };
+    }
+    const session = createPageSession({
+      pid: 141,
+      pages: [{ id: 1, url: "https://a.example" }],
+      onTool: (call) =>
+        call.name === "take_snapshot" ? { structuredContent: { snapshot: root } } : undefined,
+    });
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    const [target] = await listChromeMcpTabs("chrome-live");
+    let node = await takeChromeMcpSnapshot({
+      profileName: "chrome-live",
+      targetId: target?.targetId ?? "",
+    });
+    let depth = 0;
+    while (node.children?.[0]) {
+      node = node.children[0];
+      depth += 1;
+    }
+    expect(depth).toBe(50_000);
+    expect(node.id).toMatch(/^mcp-ref:/);
   });
 
   it("unwraps current snapshot refs for every ref-scoped MCP adapter", async () => {

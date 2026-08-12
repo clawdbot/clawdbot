@@ -12,7 +12,7 @@ import { setChatError } from "./chat-send-queue-state.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
-import { resetChatThreadSessionPresentationState } from "./components/chat-thread.ts";
+import { resetTranscriptSession } from "./components/chat-thread-interactions.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 
 /** Owns the resources and composer state that follow one retained presentation. */
@@ -58,7 +58,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     this.settleResetConfirmation(false);
     this.cancelHeaderRename();
     dismissConfirmedActionPopovers(this);
-    resetChatThreadSessionPresentationState(this.presentationId, this);
+    resetTranscriptSession(this.presentationId, this);
     const state = this.state;
     if (state) {
       stopChatRealtimeTalk(state);

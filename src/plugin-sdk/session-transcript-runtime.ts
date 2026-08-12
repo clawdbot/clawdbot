@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { redactTranscriptMessage } from "../agents/transcript-redact.js";
 import {
   appendTranscriptMessage,
@@ -9,7 +10,7 @@ import {
   publishTranscriptUpdate,
   persistSessionTranscriptTurn,
   readTranscriptRawDelta,
-  readSessionTranscriptVisibleMessageDelta as readVisibleMessageDelta,
+  readSessionTranscriptVisibleMessageDeltaCore as readVisibleMessageDelta,
   readLatestTranscriptAssistantText,
   resolveSessionTranscriptRuntimeTarget,
   withTranscriptWriteLock,
@@ -39,7 +40,7 @@ export type {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
+import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import type { AgentMessage } from "./agent-core.js";
 import { withProjectedSessionTranscriptWriteLock } from "./session-transcript-lock-runtime.js";
 import {
@@ -518,15 +519,11 @@ function extractAssistantMirrorComparableText(
     message as Parameters<typeof redactTranscriptMessage>[0],
     config,
   ) as SessionTranscriptAssistantMessage;
-  return extractAssistantVisibleText(redacted)?.trim() || undefined;
+  return extractAssistantPhaseText(redacted)?.trim() || undefined;
 }
 
 function isDeliveryMirrorAssistantMessage(message: SessionTranscriptAssistantMessage): boolean {
   return message.provider === "openclaw" && message.model === "delivery-mirror";
-}
-
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
 function isAgentMessageRecord(value: unknown): value is AgentMessage & Record<string, unknown> {

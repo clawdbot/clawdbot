@@ -11,7 +11,7 @@ import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import type { AgentRuntimeIdentity } from "../../agent-runtime-identity-token.js";
 import {
   connectOk,
-  getFreePort,
+  getGatewayTestPort,
   installGatewayTestHooks,
   onceMessage,
   startTestGatewayServer,
@@ -377,7 +377,7 @@ describe("authenticated WebSocket request trace dispatch", () => {
     setTestPluginRegistry(registry);
 
     const token = "gateway-request-trace-test-token";
-    const port = await getFreePort();
+    const port = await getGatewayTestPort();
     const server = await startTestGatewayServer(port, {
       auth: { mode: "token", token },
       bind: "loopback",

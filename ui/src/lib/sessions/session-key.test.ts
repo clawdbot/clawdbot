@@ -20,8 +20,14 @@ describe("session archive eligibility", () => {
     ["unknown", { key: "unknown", kind: "unknown" }, false, false],
     ["archived global", { key: "global", kind: "global", archived: true }, false, true],
   ] as const)("classifies %s", (_name, row, archiveAllowed, deleteAllowed) => {
-    expect(canArchiveSessionRow(row, "home")).toBe(archiveAllowed);
+    expect(canArchiveSessionRow({ sessionId: "durable-session", ...row }, "home")).toBe(
+      archiveAllowed,
+    );
     expect(canDeleteSessionRows([row], "home")).toBe(deleteAllowed);
+  });
+
+  it("rejects lifecycle actions for a row without a durable identity", () => {
+    expect(canArchiveSessionRow({ key: "agent:main:work" }, "home")).toBe(false);
   });
 
   it("keeps mixed archived and idle batch deletion disabled", () => {

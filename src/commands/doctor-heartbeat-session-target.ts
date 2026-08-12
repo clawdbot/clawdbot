@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries, listAgentIds, resolveAgentConfig } from "../agents/agent-scope.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -118,7 +118,7 @@ export function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig): strin
       continue;
     }
     const storeAgentId = resolvedAgentId;
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: storeAgentId });
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: storeAgentId });
     const entry =
       loadSessionEntryReadOnly({
         agentId: storeAgentId,

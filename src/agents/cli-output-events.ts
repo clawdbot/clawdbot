@@ -1,3 +1,4 @@
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createReasoningTagTextPartitioner,
@@ -470,11 +471,7 @@ function readThinkingProgressTokens(delta: Record<string, unknown>): number | un
   if (delta.type !== "thinking_delta" || delta.thinking !== "") {
     return undefined;
   }
-  const estimatedTokens = delta.estimated_tokens;
-  if (typeof estimatedTokens !== "number" || !Number.isFinite(estimatedTokens)) {
-    return undefined;
-  }
-  return estimatedTokens > 0 ? estimatedTokens : undefined;
+  return asPositiveFiniteNumber(delta.estimated_tokens);
 }
 
 function emitClaudeThinkingProgress(

@@ -213,4 +213,53 @@ describe("external channel secret contract api", () => {
 
     expect(api).toBeUndefined();
   });
+
+  it("falls back to official host secret metadata when an external plugin has no artifact", () => {
+    loadPluginMetadataSnapshotMock.mockReturnValue({ plugins: [] });
+
+    const api = loadChannelSecretContractApi({
+      channelId: "qqbot",
+      config: { channels: { qqbot: { appId: "app" } } },
+      env: {},
+    });
+
+    expect(api?.secretTargetRegistryEntries?.map((entry) => entry.id)).toEqual([
+      "channels.qqbot.accounts.*.clientSecret",
+      "channels.qqbot.clientSecret",
+    ]);
+    expect(api?.collectRuntimeConfigAssignments).toBeTypeOf("function");
+  });
+
+  it("falls back to official host secret metadata when plugin metadata is unavailable", () => {
+    loadPluginMetadataSnapshotMock.mockImplementation(() => {
+      throw new Error("metadata unavailable");
+    });
+
+    const api = loadChannelSecretContractApi({
+      channelId: "qqbot",
+      config: { channels: { qqbot: { appId: "app" } } },
+      env: {},
+    });
+
+    expect(api?.secretTargetRegistryEntries?.map((entry) => entry.id)).toEqual([
+      "channels.qqbot.accounts.*.clientSecret",
+      "channels.qqbot.clientSecret",
+    ]);
+  });
+
+  it("does not hide installed plugin contract loading failures behind the official fallback", () => {
+    const record = writeExternalChannelPlugin({ pluginId: "qqbot", channelId: "qqbot" });
+    loadPluginMetadataSnapshotMock.mockReturnValue({ plugins: [record] });
+    shouldRejectHardlinkedPluginFilesMock.mockImplementation(() => {
+      throw new Error("contract policy failed");
+    });
+
+    expect(() =>
+      loadChannelSecretContractApi({
+        channelId: "qqbot",
+        config: { channels: { qqbot: { appId: "app" } } },
+        env: {},
+      }),
+    ).toThrow("contract policy failed");
+  });
 });
