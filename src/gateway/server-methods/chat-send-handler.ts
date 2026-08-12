@@ -296,6 +296,9 @@ export async function handleChatSend(
 /** Dispatches Gateway-authored system input without widening the public chat-send contract. */
 export async function handleTrustedInternalChatSend(
   options: GatewayRequestHandlerOptions,
+  onAdmissionOwned?: () => Promise<boolean>,
 ): Promise<void> {
-  await handleChatSendWithOptions(options, undefined, undefined, { trustedSystemInput: true });
+  await handleChatSendWithOptions(options, onAdmissionOwned, undefined, {
+    trustedSystemInput: true,
+  });
 }

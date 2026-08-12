@@ -143,3 +143,72 @@ test("sessions.recover rejects a healthy session", async () => {
     error: { code: "INVALID_REQUEST", message: expect.stringContaining("tombstoned") },
   });
 });
+
+test("sessions.recover rejects continuation launch after runtime authority closes", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sourceKey = "agent:main:dashboard:authority-race";
+  const sourceSessionId = "authority-race-source";
+  await writeSessionStore({
+    entries: {
+      [sourceKey]: sessionStoreEntry(sourceSessionId, {
+        status: "failed",
+        abortedLastRun: true,
+        mainRestartRecovery: {
+          cycleId: "cycle-authority-race",
+          revision: 1,
+          chargedAttempts: 3,
+          tombstone: { reason: "automatic recovery exhausted" },
+        },
+      }),
+    },
+  });
+  await seedSessionTranscript({
+    agentId: "main",
+    sessionId: sourceSessionId,
+    sessionKey: sourceKey,
+    storePath,
+    messages: [{ role: "user", content: "continue after recovery" }],
+  });
+  let validations = 0;
+
+  const recovered = await directSessionReq<{
+    key: string;
+    continuation: { status: string; error?: { message?: string } };
+  }>(
+    "sessions.recover",
+    { agentId: "main", key: sourceKey },
+    {
+      context: {
+        validateAgentRuntimeApprovalAuthority: () => ++validations < 2,
+      },
+      client: {
+        connect: { scopes: ["operator.write"] },
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey: sourceKey,
+          },
+        },
+      } as never,
+    },
+  );
+
+  expect(recovered).toMatchObject({
+    ok: true,
+    payload: {
+      continuation: {
+        status: "rejected",
+        error: { message: "agent runtime authority is no longer active" },
+      },
+    },
+  });
+  expect(validations).toBe(2);
+  expect(
+    loadSessionEntry({
+      agentId: "main",
+      sessionKey: recovered.payload?.key ?? "",
+      storePath,
+    }),
+  ).toBeDefined();
+});

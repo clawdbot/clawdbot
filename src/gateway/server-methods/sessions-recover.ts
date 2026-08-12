@@ -28,6 +28,7 @@ export const sessionRecoverHandlers: GatewayRequestHandlers = {
         await launchSessionRecoveryContinuation({
           ...continuation,
           client,
+          ...(authority.commitGuard ? { commitGuard: authority.commitGuard } : {}),
           context,
           req,
         }),
