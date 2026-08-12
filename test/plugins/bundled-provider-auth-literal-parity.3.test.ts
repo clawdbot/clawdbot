@@ -1,3 +1,3 @@
 import { defineBundledProviderAuthLiteralParityTests } from "./bundled-provider-auth-literal-parity.test-support.js";
 
-defineBundledProviderAuthLiteralParityTests(0);
+defineBundledProviderAuthLiteralParityTests(2);
