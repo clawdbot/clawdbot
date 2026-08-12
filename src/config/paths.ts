@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveProfileStateDir } from "../cli/profile-utils.js";
+import { normalizeProfileName, resolveProfileStateDir } from "../cli/profile-utils.js";
 import { resolveGatewayNativeServiceIdentityConflict } from "../daemon/constants.js";
 import { resolveHomeRelativePath, resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
@@ -468,11 +468,10 @@ export function resolveGatewayPort(
       return configPort;
     }
   }
-  const stateDirName = profileStateDirName(env);
-  if (!stateDirName || stateDirName === NEW_STATE_DIRNAME) {
+  const profile = normalizeProfileName(env.OPENCLAW_PROFILE);
+  if (!profile) {
     return DEFAULT_GATEWAY_PORT;
   }
-  const profile = env.OPENCLAW_PROFILE!.trim();
   // Keep byte-for-byte aligned with AppProfile.defaultGatewayPort in
   // apps/macos/Sources/OpenClaw/AppProfile.swift so both surfaces connect to the same Gateway.
   let hash = 2_166_136_261;
