@@ -331,16 +331,22 @@ pub enum ClientError {
     EventLagged(u64),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConnectChallenge {
+    pub nonce: String,
+    pub issued_at_ms: u64,
+}
+
 pub struct GatewayClient;
 
 impl GatewayClient {
-    /// Connect after the Gateway supplies its challenge nonce.
+    /// Connect after the Gateway supplies its nonce and signing timestamp.
     pub async fn connect<F, Fut, E>(
         config: GatewayClientConfig,
         make_params: F,
     ) -> Result<GatewaySession, ClientError>
     where
-        F: FnOnce(String) -> Fut,
+        F: FnOnce(ConnectChallenge) -> Fut,
         Fut: Future<Output = Result<Value, E>>,
         E: std::fmt::Display + Send + Sync + 'static,
     {
@@ -369,13 +375,13 @@ impl GatewayClient {
         .map_err(|_| ClientError::ConnectTimeout)?
         .map_err(|error| classify_connect_error(error, secure_endpoint))?;
 
-        let nonce = tokio::time::timeout(
+        let challenge = tokio::time::timeout(
             config.challenge_timeout,
             wait_for_challenge(&mut socket, config.write_timeout),
         )
         .await
         .map_err(|_| ClientError::ChallengeTimeout)??;
-        let params = make_params(nonce)
+        let params = make_params(challenge)
             .await
             .map_err(|error| ClientError::ConnectParams(error.to_string()))?;
 
@@ -671,7 +677,7 @@ struct GatewayErrorShape {
 async fn wait_for_challenge<S>(
     socket: &mut tokio_tungstenite::WebSocketStream<S>,
     write_timeout: Duration,
-) -> Result<String, ClientError>
+) -> Result<ConnectChallenge, ClientError>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
@@ -684,7 +690,14 @@ where
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .ok_or_else(|| ClientError::InvalidChallenge("missing nonce".into()))?;
-                return Ok(nonce.into());
+                let issued_at_ms = payload
+                    .get("ts")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| ClientError::InvalidChallenge("missing timestamp".into()))?;
+                return Ok(ConnectChallenge {
+                    nonce: nonce.into(),
+                    issued_at_ms,
+                });
             }
             IncomingFrame::Event { .. } | IncomingFrame::Response { .. } => {}
         }

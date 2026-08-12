@@ -367,7 +367,7 @@ impl NodeConnectOptions {
         self
     }
 
-    fn finalize_identity(mut self, nonce: &str) -> Result<Self, IdentityError> {
+    fn finalize_identity(mut self, nonce: &str, issued_at_ms: u64) -> Self {
         if self.activated {
             self.advertised_caps.clone_from(&self.declared_caps);
             self.advertised_commands.clone_from(&self.declared_commands);
@@ -375,15 +375,16 @@ impl NodeConnectOptions {
                 .clone_from(&self.declared_permissions);
         }
         let Some(identity) = self.identity.take() else {
-            return Ok(self);
+            return self;
         };
-        self.device = Some(identity.sign_connect(
+        self.device = Some(identity.sign_connect_at(
             nonce,
             &self.client.platform,
             self.client.device_family.as_deref(),
             self.auth.as_ref().and_then(ConnectAuth::signature_token),
-        )?);
-        Ok(self)
+            issued_at_ms,
+        ));
+        self
     }
 }
 
@@ -559,13 +560,11 @@ impl NodeClient {
         }
         let activated = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let activated_for_connect = activated.clone();
-        let gateway = GatewayClient::connect(gateway_config, move |nonce| async move {
-            let options = make_options(nonce.clone())
+        let gateway = GatewayClient::connect(gateway_config, move |challenge| async move {
+            let options = make_options(challenge.nonce.clone())
                 .await
                 .map_err(|error| ConnectOptionsError(error.to_string()))?;
-            let options = options
-                .finalize_identity(&nonce)
-                .map_err(|error| ConnectOptionsError(error.to_string()))?;
+            let options = options.finalize_identity(&challenge.nonce, challenge.issued_at_ms);
             activated_for_connect.store(options.activated, std::sync::atomic::Ordering::Relaxed);
             serde_json::to_value(options).map_err(|error| ConnectOptionsError(error.to_string()))
         })

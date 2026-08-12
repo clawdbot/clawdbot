@@ -905,7 +905,10 @@ mod tests {
                     &mut socket,
                     json!({
                         "type":"event", "event":"connect.challenge",
-                        "payload":{"nonce":format!("nonce-{attempt}")}
+                        "payload":{
+                            "nonce":format!("nonce-{attempt}"),
+                            "ts":1_700_000_000_123_u64
+                        }
                     }),
                 )
                 .await;

@@ -15,7 +15,7 @@ async fn connects_publishes_events_and_correlates_requests() {
         send_json(
             &mut socket,
             json!({
-                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-1"}
+                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-1","ts":1_700_000_000_123_u64}
             }),
         )
         .await;
@@ -54,8 +54,9 @@ async fn connects_publishes_events_and_correlates_requests() {
 
     let session = GatewayClient::connect(
         GatewayClientConfig::new(format!("ws://{address}")).unwrap(),
-        |nonce| async move {
-            assert_eq!(nonce, "nonce-1");
+        |challenge| async move {
+            assert_eq!(challenge.nonce, "nonce-1");
+            assert_eq!(challenge.issued_at_ms, 1_700_000_000_123);
             Ok::<_, io::Error>(json!({
                 "minProtocol":4, "maxProtocol":4,
                 "client":{"id":"node-host","version":"test","platform":"test","mode":"node"},
@@ -94,7 +95,7 @@ async fn idle_disconnect_unblocks_the_retained_event_receiver() {
         send_json(
             &mut socket,
             json!({
-                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-close"}
+                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-close","ts":1_700_000_000_123_u64}
             }),
         )
         .await;
@@ -133,7 +134,7 @@ async fn raw_event_subscription_closes_with_the_session() {
         send_json(
             &mut socket,
             json!({
-                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-subscribe"}
+                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-subscribe","ts":1_700_000_000_123_u64}
             }),
         )
         .await;
@@ -179,7 +180,7 @@ async fn default_buffer_retains_256_small_events() {
         send_json(
             &mut socket,
             json!({
-                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-buffer"}
+                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-buffer","ts":1_700_000_000_123_u64}
             }),
         )
         .await;
@@ -227,7 +228,7 @@ async fn oversized_retained_event_lags_without_closing_the_session() {
         send_json(
             &mut socket,
             json!({
-                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-large-event"}
+                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-large-event","ts":1_700_000_000_123_u64}
             }),
         )
         .await;
@@ -287,7 +288,7 @@ async fn abandoned_request_releases_its_in_flight_permit() {
         send_json(
             &mut socket,
             json!({
-                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-abandon"}
+                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-abandon","ts":1_700_000_000_123_u64}
             }),
         )
         .await;
@@ -352,7 +353,7 @@ async fn drains_a_queued_event_before_reporting_disconnect() {
         send_json(
             &mut socket,
             json!({
-                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-final"}
+                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-final","ts":1_700_000_000_123_u64}
             }),
         )
         .await;
@@ -410,7 +411,7 @@ async fn surfaces_websocket_ping_as_transport_activity() {
         send_json(
             &mut socket,
             json!({
-                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-ping"}
+                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-ping","ts":1_700_000_000_123_u64}
             }),
         )
         .await;
@@ -456,7 +457,7 @@ async fn connect_response_uses_the_request_timeout() {
         send_json(
             &mut socket,
             json!({
-                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-slow"}
+                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-slow","ts":1_700_000_000_123_u64}
             }),
         )
         .await;
@@ -515,7 +516,7 @@ async fn connect_rejection_preserves_recovery_details() {
         send_json(
             &mut socket,
             json!({
-                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-2"}
+                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-2","ts":1_700_000_000_123_u64}
             }),
         )
         .await;

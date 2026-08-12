@@ -1,4 +1,4 @@
-use std::{fmt::Write as _, time::SystemTime};
+use std::fmt::Write as _;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use ed25519_dalek::{Signer, SigningKey};
@@ -13,8 +13,6 @@ const SECRET_KEY_BYTES: usize = 32;
 pub enum IdentityError {
     #[error("operating-system randomness failed: {0}")]
     Random(String),
-    #[error("system clock predates the Unix epoch")]
-    Clock,
 }
 
 /// A stable Ed25519 identity used to sign `OpenClaw` Gateway challenges.
@@ -66,23 +64,7 @@ impl NodeIdentity {
         id
     }
 
-    pub(crate) fn sign_connect(
-        &self,
-        nonce: &str,
-        platform: &str,
-        device_family: Option<&str>,
-        signature_token: Option<&str>,
-    ) -> Result<DeviceProof, IdentityError> {
-        let signed_at = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map_err(|_| IdentityError::Clock)?
-            .as_millis()
-            .try_into()
-            .map_err(|_| IdentityError::Clock)?;
-        Ok(self.sign_connect_at(nonce, platform, device_family, signature_token, signed_at))
-    }
-
-    fn sign_connect_at(
+    pub(crate) fn sign_connect_at(
         &self,
         nonce: &str,
         platform: &str,

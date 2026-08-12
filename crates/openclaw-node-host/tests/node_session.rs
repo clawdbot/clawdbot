@@ -17,7 +17,7 @@ async fn node_profile_uses_shared_session_for_invocations() {
         send_json(
             &mut socket,
             json!({
-                "type":"event", "event":"connect.challenge", "payload":{"nonce":"node-nonce"}
+                "type":"event", "event":"connect.challenge", "payload":{"nonce":"node-nonce","ts":1_700_000_000_123_u64}
             }),
         )
         .await;

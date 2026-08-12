@@ -14,8 +14,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use subtle::ConstantTimeEq;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, Webview};
 use tokio::sync::{mpsc, oneshot};
 #[cfg(test)]
@@ -600,7 +599,7 @@ impl GatewayClient {
             ));
         }
         let shared_config = SharedGatewayClientConfig::new(&config.ws_url)
-            .map_err(|error| RequestFailure::from_shared(error))?
+            .map_err(RequestFailure::from_shared)?
             .tls_trust(trust)
             .challenge_timeout(HANDSHAKE_TIMEOUT)
             .request_timeout(REQUEST_TIMEOUT);
@@ -610,13 +609,12 @@ impl GatewayClient {
             .is_none_or(|value| value.trim().is_empty());
         let connect_identity = identity.clone();
         let connect_auth = auth.clone();
-        let connect = SharedGatewayClient::connect(shared_config, move |nonce| async move {
-            let signed_at_ms = unix_time_ms()?;
+        let connect = SharedGatewayClient::connect(shared_config, move |challenge| async move {
             connect_params(
                 &connect_identity,
                 &connect_auth,
-                &nonce,
-                signed_at_ms,
+                &challenge.nonce,
+                challenge.issued_at_ms,
                 inline_widgets_available,
             )
         });
@@ -1033,7 +1031,7 @@ async fn perform_request(
             let payload = session
                 .request("chat.send", params)
                 .await
-                .map_err(|error| RequestFailure::from_shared(error))?;
+                .map_err(RequestFailure::from_shared)?;
             serde_json::from_value(payload)
                 .map(GatewayResponse::ChatSend)
                 .map_err(|error| {
@@ -1048,7 +1046,7 @@ async fn perform_request(
             let payload = session
                 .request("plugin.surface.refresh", params)
                 .await
-                .map_err(|error| RequestFailure::from_shared(error))?;
+                .map_err(RequestFailure::from_shared)?;
             let response: PluginSurfaceRefreshResponse =
                 serde_json::from_value(payload).map_err(|error| {
                     RequestFailure::transport(format!(
@@ -1071,7 +1069,7 @@ async fn request_agents_list(
     let payload = session
         .request("agents.list", json!({}))
         .await
-        .map_err(|error| RequestFailure::from_shared(error))?;
+        .map_err(RequestFailure::from_shared)?;
     serde_json::from_value(payload).map_err(|error| {
         RequestFailure::transport(format!("Invalid agents.list response: {error}"))
     })
@@ -1357,34 +1355,6 @@ mod tests {
         // Pinning only withdraws inline widgets; agent-kind is unconditional.
         assert_eq!(pinned_params["caps"], json!([AGENT_KIND_CLIENT_CAPABILITY]));
         std::fs::remove_dir_all(directory).expect("remove connect fixture");
-    }
-
-    #[test]
-    fn connect_challenge_uses_gateway_timestamp() {
-        let Ok(challenge) = parse_connect_challenge(&json!({
-            "payload": {
-                "nonce": " fixture-nonce ",
-                "ts": 1_700_000_000_123_u64
-            }
-        })) else {
-            panic!("expected valid challenge");
-        };
-
-        assert_eq!(
-            challenge,
-            ConnectChallenge {
-                nonce: "fixture-nonce".to_string(),
-                issued_at_ms: 1_700_000_000_123,
-            }
-        );
-        assert!(parse_connect_challenge(&json!({
-            "payload": { "nonce": "missing-time" }
-        }))
-        .is_err());
-        assert!(parse_connect_challenge(&json!({
-            "payload": { "nonce": "fixture-nonce", "ts": "1700000000123" }
-        }))
-        .is_err());
     }
 
     #[test]
