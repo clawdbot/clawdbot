@@ -202,22 +202,70 @@ suite.define(() => {
       const layouts = [await inspectView("skills")];
 
       const back = dropdown.locator('[value="back"]');
-      await back.focus();
-      await back.press("End");
-      await expect
-        .poll(() =>
-          dropdown.evaluate((node) => {
-            const menu = node.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
-            const active = document.activeElement;
-            if (!menu || !(active instanceof HTMLElement)) {
-              return false;
-            }
-            const menuRect = menu.getBoundingClientRect();
-            const activeRect = active.getBoundingClientRect();
-            return activeRect.top >= menuRect.top && activeRect.bottom <= menuRect.bottom;
-          }),
-        )
-        .toBe(true);
+      const interactionTarget = dropdown.locator('[value="skill:19"]');
+      const captureInteraction = async (state: "focus" | "hover", theme: "dark" | "light") => {
+        await page.evaluate((mode) => {
+          document.documentElement.dataset.themeMode = mode;
+        }, theme);
+        await interactionTarget.scrollIntoViewIfNeeded();
+
+        if (state === "hover") {
+          await interactionTarget.hover();
+          await expect
+            .poll(() => interactionTarget.evaluate((node) => node.matches(":hover")))
+            .toBe(true);
+        } else {
+          await back.focus();
+          await page.keyboard.press("Home");
+          for (let index = 0; index < 20; index += 1) {
+            await page.keyboard.press("ArrowDown");
+          }
+          await page.mouse.move(900, 500);
+          await expect
+            .poll(() =>
+              interactionTarget.evaluate(
+                (node) => document.activeElement === node && node.matches(":focus-visible"),
+              ),
+            )
+            .toBe(true);
+        }
+
+        await expect
+          .poll(() =>
+            dropdown.evaluate((node, target) => {
+              const menu = node.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+              const backRow = node.querySelector<HTMLElement>('[value="back"]');
+              const targetRow = node.querySelector<HTMLElement>(target);
+              if (!menu || !backRow || !targetRow) {
+                return false;
+              }
+              const menuRect = menu.getBoundingClientRect();
+              const backRect = backRow.getBoundingClientRect();
+              const targetRect = targetRow.getBoundingClientRect();
+              return (
+                menu.scrollTop > 0 &&
+                menu.scrollHeight > menu.clientHeight &&
+                backRect.top >= menuRect.top &&
+                backRect.bottom <= menuRect.bottom &&
+                targetRect.top >= menuRect.top &&
+                targetRect.bottom <= menuRect.bottom
+              );
+            }, '[value="skill:19"]'),
+          )
+          .toBe(true);
+
+        if (artifactDir && captureStage === "after") {
+          await page.waitForTimeout(50);
+          await page.screenshot({
+            path: path.join(artifactDir, `skill-20-${state}-${theme}-after.png`),
+          });
+        }
+      };
+
+      await captureInteraction("hover", "dark");
+      await captureInteraction("hover", "light");
+      await captureInteraction("focus", "dark");
+      await captureInteraction("focus", "light");
 
       await back.click();
       await dropdown.locator('[value="open-connectors"]').click();
