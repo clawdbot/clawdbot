@@ -3632,6 +3632,37 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.run.extraSystemPrompt ?? "").not.toContain("Runtime System Events");
   });
 
+  it("includes route system events in a thread-scoped turn", async () => {
+    const actualSystemEvents = await vi.importActual<typeof import("./session-system-events.js")>(
+      "./session-system-events.js",
+    );
+    vi.mocked(drainFormattedSystemEvents).mockImplementation(
+      actualSystemEvents.drainFormattedSystemEvents,
+    );
+    enqueueSystemEvent("Slack reaction added: :eyes:", {
+      sessionKey: "agent:main:slack:channel:c123",
+    });
+    enqueueSystemEvent("Slack message in #claw-test from Alice", {
+      sessionKey: "agent:main:slack:channel:c123:thread:123.456",
+    });
+
+    await runPrepared({
+      ctx: {
+        ...createInboundBody("report queued reactions"),
+        SystemEventSessionKey: "agent:main:slack:channel:c123",
+      },
+      sessionKey: "agent:main:slack:channel:c123:thread:123.456",
+    });
+
+    const prompt = requireRunReplyAgentCall().followupRun.prompt;
+    expect(prompt).toContain("Slack reaction added: :eyes:");
+    expect(prompt).toContain("Slack message in #claw-test from Alice");
+    expect(peekSystemEventEntries("agent:main:slack:channel:c123")).toStrictEqual([]);
+    expect(
+      peekSystemEventEntries("agent:main:slack:channel:c123:thread:123.456"),
+    ).toStrictEqual([]);
+  });
+
   it("keeps sender ownership when queued system events are prepended", async () => {
     vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
       "System: [t] External webhook payload.",
