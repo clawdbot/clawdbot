@@ -326,6 +326,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       ? { onQueueDisposition: opts.onFollowupQueueDisposition }
       : {}),
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
+    messageIds: sessionCtx.MessageSids,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),
     images: currentTurnImages.images,

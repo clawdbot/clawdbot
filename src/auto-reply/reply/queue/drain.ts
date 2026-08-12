@@ -313,6 +313,11 @@ function collectQueuedPromptMedia(
   };
 }
 
+function collectQueuedMessageIds(items: FollowupRun[]): string[] | undefined {
+  const ids = items.flatMap((item) => item.messageIds ?? (item.messageId ? [item.messageId] : []));
+  return ids.length > 1 ? ids : undefined;
+}
+
 type FollowupRuntimeMetadata = Pick<
   FollowupRun,
   | "currentInboundEventKind"
@@ -916,6 +921,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     transcriptPrompt: source.transcriptPrompt,
     media: source.media,
     messageId: source.messageId,
+    messageIds: source.messageIds,
     summaryLine: source.summaryLine,
     enqueuedAt: source.enqueuedAt,
     originatingChannel: source.originatingChannel,
@@ -985,6 +991,7 @@ async function runSyntheticOverflowSummary(params: {
     queueAbortSignal: params.source.queueAbortSignal,
     transcriptPrompt: params.prompt,
     messageId: params.source.messageId,
+    messageIds: collectQueuedMessageIds(params.sources),
     userTurnTranscriptRecorder,
     run: params.source.run,
     enqueuedAt: Date.now(),
@@ -1327,6 +1334,7 @@ export function scheduleFollowupDrain(
                 messageId:
                   groupSource?.messageId ??
                   (groupSource ? resolveFollowupReplyAnchor(groupSource) : undefined),
+                messageIds: collectQueuedMessageIds(activeGroupItems),
                 enqueuedAt: Date.now(),
                 ...routing,
                 ...collectRuntimeMetadata(activeGroupItems, cancellation.signal),

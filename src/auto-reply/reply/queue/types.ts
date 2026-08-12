@@ -96,6 +96,8 @@ export type FollowupRun = {
   onQueueDisposition?: (disposition: FollowupQueueDisposition) => void;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
+  /** Provider message IDs represented by an aggregate queued turn. */
+  messageIds?: string[];
   summaryLine?: string;
   /** Force individual drain; never merge this run into a collect batch. */
   disableCollectBatching?: boolean;
