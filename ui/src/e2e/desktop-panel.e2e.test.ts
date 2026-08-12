@@ -3,7 +3,7 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
-  name: "cloud worker desktop panel",
+  name: "desktop source panel",
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`.`,
@@ -48,11 +48,15 @@ async function installDesktopClientFake(panel: import("playwright").Locator) {
     (
       element as HTMLElement & {
         desktopClientFactory: () => {
-          connect(): Promise<{ disconnect(): void }>;
+          connect(options: { credentials?: { password?: string } }): Promise<{
+            disconnect(): void;
+          }>;
         };
       }
     ).desktopClientFactory = () => ({
-      async connect() {
+      async connect(options) {
+        element.dataset.connectCount = String(Number(element.dataset.connectCount ?? "0") + 1);
+        element.dataset.usedCredentials = options.credentials?.password ? "true" : "false";
         return {
           disconnect() {
             element.dataset.disconnectCount = String(
@@ -73,7 +77,7 @@ suite.define(() => {
         methodResponses: { "sessions.list": sessionsList("active") },
       },
       {
-        featureMethods: ["environments.list", "worker.desktop.observe"],
+        featureMethods: ["environments.list", "desktop.observe"],
         methodResponses: { "sessions.list": sessionsList("active") },
         operatorScopes: ["operator.read"],
       },
@@ -87,34 +91,87 @@ suite.define(() => {
     }
   });
 
-  it("keeps the desktop command and panel unavailable for a local session", async () => {
+  it("keeps the desktop command and panel available without a cloud session", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
-        featureMethods: ["environments.list", "worker.desktop.observe"],
-        methodResponses: { "sessions.list": sessionsList("local") },
+        featureMethods: ["environments.list", "desktop.observe"],
+        methodResponses: {
+          "sessions.list": sessionsList("local"),
+          "environments.list": { environments: [] },
+        },
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       await openPalette(page);
-      expect(await page.getByRole("option", { name: "Desktop", exact: true }).count()).toBe(0);
+      expect(await page.getByRole("option", { name: "Desktop", exact: true }).count()).toBe(1);
 
-      await page.evaluate(() => {
-        window.dispatchEvent(
-          new CustomEvent("openclaw:desktop-toggle", { detail: { open: true } }),
-        );
+      await page.getByRole("option", { name: "Desktop", exact: true }).click();
+      await page.locator("openclaw-desktop-panel section[aria-label='Desktop']").waitFor();
+      await gateway.waitForRequest("environments.list");
+    });
+  });
+
+  it("connects the host source after an in-memory VNC password prompt", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["desktop.observe", "environments.list"],
+        methodResponses: {
+          "sessions.list": sessionsList("local"),
+          "environments.list": {
+            environments: [
+              { id: "gateway", type: "local", status: "available", desktop: true },
+              {
+                id: "legacy-nested-worker",
+                type: "worker",
+                status: "available",
+                worker: {
+                  providerId: "crabbox",
+                  state: "ready",
+                  ageMs: 1_000,
+                  attachedSessionIds: [],
+                  tunnelStatus: "connected",
+                  desktop: true,
+                },
+              },
+            ],
+          },
+          "desktop.observe": {
+            transport: "rfb",
+            wsPath: "/desktop/observe?token=host",
+            expiresAtMs: 60_000,
+            control: false,
+            auth: "vnc-password",
+          },
+        },
       });
-      await page.waitForTimeout(250);
-      expect(
-        await page.locator("openclaw-desktop-panel section[aria-label='Desktop']").count(),
-      ).toBe(0);
-      expect(await gateway.getRequests("environments.list")).toHaveLength(0);
+
+      const panel = await openDesktopPanel(page);
+      await gateway.waitForRequest("environments.list");
+      await panel.getByText("This machine", { exact: true }).waitFor();
+      expect(await panel.getByText("legacy-nested-worker", { exact: true }).count()).toBe(0);
+      await installDesktopClientFake(panel);
+
+      await panel.getByRole("button", { name: "Connect", exact: true }).click();
+      const observeRequest = await gateway.waitForRequest("desktop.observe");
+      expect(observeRequest.params).toEqual({ source: { kind: "host" }, control: false });
+      await panel.getByText("Enter the VNC password for this machine.", { exact: true }).waitFor();
+      expect(await panel.getAttribute("data-connect-count")).toBeNull();
+
+      await panel.getByLabel("VNC password", { exact: true }).fill("memory-only-test-password");
+      await panel.getByRole("button", { name: "Connect", exact: true }).click();
+      await expect.poll(async () => await panel.getAttribute("data-connect-count")).toBe("1");
+      expect(await panel.getAttribute("data-used-credentials")).toBe("true");
+      expect(await panel.getByRole("button", { name: "Browser", exact: true }).count()).toBe(0);
+      expect(await panel.getByRole("button", { name: "Terminal", exact: true }).count()).toBe(0);
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(1);
+      expect(await gateway.getRequests("desktop.launch")).toHaveLength(0);
     });
   });
 
   it("launches advertised desktop apps and keeps observe controls working", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
-        deferredMethods: ["worker.desktop.launch"],
-        featureMethods: ["environments.list", "worker.desktop.launch", "worker.desktop.observe"],
+        deferredMethods: ["desktop.launch"],
+        featureMethods: ["desktop.launch", "desktop.observe", "environments.list"],
         methodResponses: {
           "sessions.list": sessionsList("active"),
           "environments.list": {
@@ -123,22 +180,25 @@ suite.define(() => {
                 id: "worker-desktop-1",
                 type: "worker",
                 status: "available",
+                desktop: true,
                 worker: {
                   providerId: "crabbox",
                   state: "attached",
                   ageMs: 1_000,
                   attachedSessionIds: ["agent:main:desktop"],
                   tunnelStatus: "connected",
-                  desktop: true,
                   desktopApps: ["browser", "terminal"],
                 },
               },
             ],
           },
-          "worker.desktop.observe": {
+          "desktop.observe": {
             cases: [
               {
-                match: { environmentId: "worker-desktop-1", control: false },
+                match: {
+                  source: { kind: "environment", environmentId: "worker-desktop-1" },
+                  control: false,
+                },
                 response: {
                   transport: "rfb",
                   wsPath: "/desktop/observe?token=view",
@@ -147,7 +207,10 @@ suite.define(() => {
                 },
               },
               {
-                match: { environmentId: "worker-desktop-1", control: true },
+                match: {
+                  source: { kind: "environment", environmentId: "worker-desktop-1" },
+                  control: true,
+                },
                 response: {
                   transport: "rfb",
                   wsPath: "/desktop/observe?token=control",
@@ -157,7 +220,7 @@ suite.define(() => {
               },
             ],
           },
-          "worker.desktop.launch": { app: "browser", status: "ready" },
+          "desktop.launch": { app: "browser", status: "ready" },
         },
       });
 
@@ -168,8 +231,11 @@ suite.define(() => {
       await installDesktopClientFake(panel);
 
       await panel.getByRole("button", { name: "Connect", exact: true }).click();
-      const viewRequest = await gateway.waitForRequest("worker.desktop.observe");
-      expect(viewRequest.params).toEqual({ environmentId: "worker-desktop-1", control: false });
+      const viewRequest = await gateway.waitForRequest("desktop.observe");
+      expect(viewRequest.params).toEqual({
+        source: { kind: "environment", environmentId: "worker-desktop-1" },
+        control: false,
+      });
       await panel.getByText("Connecting to desktop…", { exact: true }).waitFor();
       await panel.getByRole("button", { name: "Browser", exact: true }).waitFor();
       await panel.getByRole("button", { name: "Terminal", exact: true }).waitFor();
@@ -197,17 +263,20 @@ suite.define(() => {
       expect(stageUsesAppBackground).toBe(true);
 
       await browserButton.click();
-      const launchRequest = await gateway.waitForRequest("worker.desktop.launch");
-      expect(launchRequest.params).toEqual({ environmentId: "worker-desktop-1", app: "browser" });
+      const launchRequest = await gateway.waitForRequest("desktop.launch");
+      expect(launchRequest.params).toEqual({
+        source: { kind: "environment", environmentId: "worker-desktop-1" },
+        app: "browser",
+      });
       await expect.poll(async () => await browserButton.getAttribute("aria-busy")).toBe("true");
       expect(await terminalButton.isEnabled()).toBe(true);
-      await gateway.resolveDeferred("worker.desktop.launch", { app: "browser", status: "ready" });
+      await gateway.resolveDeferred("desktop.launch", { app: "browser", status: "ready" });
       await expect.poll(async () => await browserButton.getAttribute("aria-busy")).toBe("false");
 
-      await gateway.deferNext("worker.desktop.launch");
+      await gateway.deferNext("desktop.launch");
       await browserButton.click();
-      await gateway.waitForRequest("worker.desktop.launch");
-      await gateway.rejectDeferred("worker.desktop.launch", {
+      await gateway.waitForRequest("desktop.launch");
+      await gateway.rejectDeferred("desktop.launch", {
         message: "worker desktop app launch unavailable; try again",
       });
       await panel
@@ -218,24 +287,20 @@ suite.define(() => {
       expect(await browserButton.isEnabled()).toBe(true);
 
       await panel.getByRole("button", { name: "Disconnect", exact: true }).click();
-      await panel.getByText("Cloud worker desktops", { exact: true }).waitFor();
+      await panel.getByText("Desktop sources", { exact: true }).waitFor();
       expect(
         await panel
           .getByText("worker desktop app launch unavailable; try again", { exact: true })
           .count(),
       ).toBe(0);
       await panel.getByRole("button", { name: "Connect", exact: true }).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("worker.desktop.observe")).length)
-        .toBe(2);
+      await expect.poll(async () => (await gateway.getRequests("desktop.observe")).length).toBe(2);
 
       await panel.getByRole("button", { name: "Take control", exact: true }).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("worker.desktop.observe")).length)
-        .toBe(3);
-      const observeRequests = await gateway.getRequests("worker.desktop.observe");
+      await expect.poll(async () => (await gateway.getRequests("desktop.observe")).length).toBe(3);
+      const observeRequests = await gateway.getRequests("desktop.observe");
       expect(observeRequests[2]?.params).toEqual({
-        environmentId: "worker-desktop-1",
+        source: { kind: "environment", environmentId: "worker-desktop-1" },
         control: true,
       });
       expect(await panel.getByRole("button", { name: "Take control", exact: true }).count()).toBe(
@@ -243,7 +308,7 @@ suite.define(() => {
       );
 
       await panel.getByRole("button", { name: "Disconnect", exact: true }).click();
-      await panel.getByText("Cloud worker desktops", { exact: true }).waitFor();
+      await panel.getByText("Desktop sources", { exact: true }).waitFor();
       expect(Number((await panel.getAttribute("data-disconnect-count")) ?? "0")).toBeGreaterThan(0);
     });
   });
@@ -251,7 +316,7 @@ suite.define(() => {
   it("shows only apps advertised by the selected environment", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
-        featureMethods: ["environments.list", "worker.desktop.launch", "worker.desktop.observe"],
+        featureMethods: ["desktop.launch", "desktop.observe", "environments.list"],
         methodResponses: {
           "sessions.list": sessionsList("active"),
           "environments.list": {
@@ -260,19 +325,19 @@ suite.define(() => {
                 id: "terminal-only-worker",
                 type: "worker",
                 status: "available",
+                desktop: true,
                 worker: {
                   providerId: "crabbox",
                   state: "ready",
                   ageMs: 1_000,
                   attachedSessionIds: [],
                   tunnelStatus: "connected",
-                  desktop: true,
                   desktopApps: ["terminal"],
                 },
               },
             ],
           },
-          "worker.desktop.observe": {
+          "desktop.observe": {
             transport: "rfb",
             wsPath: "/desktop/observe?token=view",
             expiresAtMs: 60_000,

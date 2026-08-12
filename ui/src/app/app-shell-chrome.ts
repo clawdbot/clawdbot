@@ -1,5 +1,3 @@
-import { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
-import type { GatewaySessionRow } from "../api/types.ts";
 import { isSettingsNavigationRoute } from "../app-navigation.ts";
 import { routeIdFromPath, type RouteId } from "../app-route-paths.ts";
 import {
@@ -24,7 +22,6 @@ import type { BoardFace } from "../lib/board/settings.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
-import { findUiSessionRow } from "../lib/sessions/route-navigation.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
@@ -58,13 +55,11 @@ export function isBrowserPanelAvailable(
 
 export function isDesktopPanelAvailable(
   snapshot: ApplicationContext["gateway"]["snapshot"],
-  session: GatewaySessionRow | undefined,
 ): boolean {
   return (
-    isCloudWorkerPlacementState(session?.placement?.state) &&
     snapshot.phase === "connected" &&
     hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
-    isGatewayMethodAdvertised(snapshot, "worker.desktop.observe") === true
+    isGatewayMethodAdvertised(snapshot, "desktop.observe") === true
   );
 }
 
@@ -508,8 +503,7 @@ export class ShellChromeOwner {
   readonly handleDeferredDesktopToggle = (event: Event): void => {
     const host = this.host;
     const context = host.context;
-    const session = context ? findUiSessionRow(context, host.activeSessionKey) : undefined;
-    if (!context || !isDesktopPanelAvailable(context.gateway.snapshot, session)) {
+    if (!context || !isDesktopPanelAvailable(context.gateway.snapshot)) {
       event.stopImmediatePropagation();
       return;
     }

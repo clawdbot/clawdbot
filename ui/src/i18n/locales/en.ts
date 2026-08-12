@@ -1982,23 +1982,25 @@ export const en: TranslationMap = {
     resize: "Resize desktop panel",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
-    pickerTitle: "Cloud worker desktops",
+    pickerTitle: "Desktop sources",
+    thisMachine: "This machine",
     refresh: "Refresh",
     refreshing: "Refreshing…",
-    loading: "Loading worker environments…",
-    empty:
-      "No desktop-capable worker environments exist. Enable one with desktop: true in a crabbox cloud-worker profile.",
+    loading: "Loading desktop sources…",
+    empty: "No desktop-capable sources are available.",
     connect: "Connect",
     connecting: "Connecting to desktop…",
     takeControl: "Take control",
     disconnect: "Disconnect",
     reconnect: "Reconnect",
+    passwordPrompt: "Enter the VNC password for this machine.",
+    passwordLabel: "VNC password",
     controlTaken: "Another operator took control",
     disconnected: "Desktop disconnected: {reason}",
     closeCode: "connection closed with code {code}",
     unknownReason: "unknown reason",
     errors: {
-      listFailed: "Could not load worker environments: {error}",
+      listFailed: "Could not load desktop sources: {error}",
       securityFailed: "Desktop security negotiation failed: {reason}",
     },
   },
@@ -2866,6 +2868,11 @@ export const en: TranslationMap = {
       title: "Message audit metadata",
       description:
         "Record content-free metadata for direct conversations in the audit ledger. Message content is never stored.",
+    },
+    hostDesktop: {
+      title: "Host Desktop",
+      description:
+        "Watch and control this Gateway machine from the Desktop panel through its existing VNC or Screen Sharing server.",
     },
     workerDesktop: {
       title: "Cloud Worker Desktop",
