@@ -3,6 +3,7 @@ import type {
   SessionCreatedVia,
 } from "../../config/sessions/session-entry-provenance.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
+import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
 
 export type TrustedSessionCreation = {
   via: SessionCreatedVia;
@@ -51,13 +52,20 @@ export function resolveOperatorSessionCreation(
       inheritedToolPolicy: agentRuntimeIdentity.sessionSpawnContext.inheritedToolPolicy,
     };
   }
-  const profileId = client?.authenticatedUserProfile?.profileId;
-  // Actor only when proven: a profile-less wire connection may be an agent-tool
-  // client on a remote topology, so claiming a human actor would misattribute
-  // agent-caused creations. Absent actor means unknown, never inferred.
+  const invoker = getGatewayLocalUserIngress(client)?.facts.invoker;
+  // The session stamp and run admission consume the same prepared connection
+  // fact. Device, credential, and profile-less clients never become people.
   return {
     via: "operator",
-    ...(profileId ? { actor: { type: "human" as const, id: profileId } } : {}),
+    ...(invoker?.state === "present" && invoker.kind === "person"
+      ? {
+          actor: {
+            type: "human" as const,
+            id: invoker.rawPrincipalRef,
+            ...(invoker.displayLabel ? { label: invoker.displayLabel } : {}),
+          },
+        }
+      : {}),
   };
 }
 

@@ -91,6 +91,15 @@ this boundary. A run becomes
 `attribution-only` only when an authoritative ingress supplies an invoker fact.
 Neither state means that identity affected an allow or deny decision.
 
+Authenticated Gateway runs record connection facts once and reuse them for the
+session creator and run admission. A resolved durable profile, including one
+established by verified trusted-proxy or Tailscale identity, supplies a
+pseudonymized person invoker. A paired device adds device assurance but never
+becomes a person. Shared tokens, passwords, auth-none connections, and other
+profileless clients remain unattributed. If authenticated user evidence promises
+a durable profile but profile resolution fails, the invoker is `unknown` rather
+than guessed from headers, device ids, connection ids, or credentials.
+
 Each present context currently projects one run-admission receipt. Its outcome
 is `not-applicable`, its policy and grant references are empty, and its reason
 states that no identity-aware policy or grant evaluation was proven. This is
