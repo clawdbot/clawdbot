@@ -29,6 +29,12 @@ const MAX_UNTRUSTED_HISTORY_ENTRIES = 20;
 // chars; 150k leaves ~3.5x headroom while bounding channel-supplied structured
 // entries, whose count is unbounded (one block per entry).
 const MAX_INBOUND_CONTEXT_TOTAL_CHARS = 150_000;
+// `blocks.join("\n\n")` renders this many chars before every block after the
+// first; the budget charges them so the separators cannot escape the cap.
+const BLOCK_SEPARATOR_CHARS = 2;
+const CONTEXT_BUDGET_EXHAUSTED_BLOCK = markInboundContextLabel(
+  "…[truncated: inbound context budget exhausted]",
+);
 const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
 const MAX_ACTIVE_GOAL_OBJECTIVE_CHARS = 200;
 const ACTIVE_GOAL_CONTEXT_PREFIX = "Active goal: ";
@@ -623,21 +629,28 @@ export function buildInboundUserContextPrefix(
   sessionEntry?: SessionEntry,
 ): string {
   const blocks: string[] = [];
-  let contextBudgetRemaining = MAX_INBOUND_CONTEXT_TOTAL_CHARS;
+  // Reserve the exhaustion marker and its own separator up front so the budget
+  // can always render it; whatever is left pays for blocks and their framing.
+  let contextBudgetRemaining =
+    MAX_INBOUND_CONTEXT_TOTAL_CHARS -
+    (CONTEXT_BUDGET_EXHAUSTED_BLOCK.length + BLOCK_SEPARATOR_CHARS);
   let contextBudgetExhausted = false;
   // One cumulative budget for the whole assembly: once it is spent, later
   // blocks are dropped behind a single explicit marker (marked like any other
-  // injected header so strippers recognize it).
+  // injected header so strippers recognize it). Blocks are charged the
+  // separator `join` renders before them as well as their own length, so the
+  // returned prefix never exceeds MAX_INBOUND_CONTEXT_TOTAL_CHARS.
   const pushContextBlock = (block: string) => {
     if (contextBudgetExhausted) {
       return;
     }
-    if (block.length > contextBudgetRemaining) {
+    const renderedLength = block.length + (blocks.length > 0 ? BLOCK_SEPARATOR_CHARS : 0);
+    if (renderedLength > contextBudgetRemaining) {
       contextBudgetExhausted = true;
-      blocks.push(markInboundContextLabel("…[truncated: inbound context budget exhausted]"));
+      blocks.push(CONTEXT_BUDGET_EXHAUSTED_BLOCK);
       return;
     }
-    contextBudgetRemaining -= block.length;
+    contextBudgetRemaining -= renderedLength;
     blocks.push(block);
   };
   const chatType = normalizeChatType(ctx.ChatType);

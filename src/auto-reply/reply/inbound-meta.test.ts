@@ -1559,8 +1559,27 @@ describe("buildInboundUserContextPrefix", () => {
       })),
     } as TemplateContext);
 
-    expect(text.length).toBeLessThan(152_000);
+    expect(text.length).toBeLessThanOrEqual(150_000);
     expect(text).toContain("…[truncated: inbound context budget exhausted]");
+  });
+
+  it("charges the block separators and the exhaustion marker to the total budget", () => {
+    // Separator-dominated shape: thousands of tiny blocks make the "\n\n" that
+    // `join` renders between them, plus the marker appended on exhaustion, the
+    // dominant unbudgeted cost rather than the block payloads themselves.
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      OriginatingChannel: "whatsapp",
+      ChannelStructuredContext: Array.from({ length: 6_000 }, (_, index) => ({
+        label: `Tiny ${index}`,
+        source: "whatsapp",
+        type: "tiny",
+        payload: { a: index },
+      })),
+    } as TemplateContext);
+
+    expect(text).toContain("…[truncated: inbound context budget exhausted]");
+    expect(text.length).toBeLessThanOrEqual(150_000);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

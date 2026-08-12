@@ -29,20 +29,28 @@ export function appendChannelPromptContext(base: string, channelPromptContext?: 
   const header = markInboundContextLabel("Context:");
   // Charge the exact model-visible framing as well as entry content. The
   // direct string path bypasses the inbound assembly budget, so delimiters
-  // must not create a second unbounded channel.
-  let budgetRemaining = MAX_CONTEXT_JSON_BLOCK_CHARS - header.length;
+  // must not create a second unbounded channel. `[header, ...kept].join("\n")`
+  // renders one separator before every kept line (the header is always first),
+  // and the exhaustion marker needs a line of its own, so both are reserved
+  // before any entry is retained.
+  let budgetRemaining =
+    MAX_CONTEXT_JSON_BLOCK_CHARS -
+    header.length -
+    (BUDGET_TRUNCATION_MARKER.length + LINE_SEPARATOR_CHARS);
   let budgetExhausted = false;
   for (const entry of entries) {
-    const renderedLength = entry.length + (kept.length > 0 ? 1 : 0);
+    const renderedLength = entry.length + LINE_SEPARATOR_CHARS;
     if (renderedLength <= budgetRemaining) {
       budgetRemaining -= renderedLength;
       kept.push(entry);
       continue;
     }
-    const markerLength = BUDGET_TRUNCATION_MARKER.length + 1;
-    kept.push(
-      `${truncateUtf16Safe(entry, Math.max(0, budgetRemaining - markerLength - 14)).trimEnd()}…[truncated]`,
-    );
+    // Head-keep whatever still fits on its own line beside the reserved
+    // marker, like truncateContextJsonString does, and flag the drop.
+    const available = budgetRemaining - LINE_SEPARATOR_CHARS - STRING_TRUNCATION_SUFFIX.length;
+    if (available > 0) {
+      kept.push(`${truncateUtf16Safe(entry, available).trimEnd()}${STRING_TRUNCATION_SUFFIX}`);
+    }
     budgetExhausted = true;
     break;
   }
@@ -73,6 +81,19 @@ const MAX_CONTEXT_JSON_BLOCK_CHARS = 50_000;
 
 const DEPTH_TRUNCATION_MARKER = "…[truncated: max depth reached]";
 const BUDGET_TRUNCATION_MARKER = "…[truncated: context budget exhausted]";
+const STRING_TRUNCATION_SUFFIX = "…[truncated]";
+// One char per `join("\n")` separator in the string-context block.
+const LINE_SEPARATOR_CHARS = 1;
+// Chars formatContextJsonBlock renders around the serialized payload:
+// "```json" + "```" plus the three newlines `join("\n")` inserts.
+const JSON_BLOCK_FENCE_CHARS = "```json".length + "```".length + 3;
+// Punctuation JSON.stringify adds around the budgeted values of the ROOT
+// container only. Nested containers are already charged exactly, because a
+// parent commits `serializedLength(sanitized)` for the whole retained subtree.
+// The root pays for its own braces, one colon and one comma per retained key,
+// and the exhaustion marker property appended after the budget loop.
+const MAX_ROOT_JSON_PUNCTUATION_CHARS =
+  2 + MAX_CONTEXT_JSON_OBJECT_KEYS * 2 + BUDGET_TRUNCATION_MARKER.length + 8;
 
 export function neutralizeMarkdownFences(value: string): string {
   return value.replaceAll("```", "`\u200b``");
@@ -191,7 +212,16 @@ function sanitizeContextJsonValue(
 }
 
 export function formatContextJsonBlock(label: string, payload: unknown): string {
-  const budget: ContextJsonBudget = { remaining: MAX_CONTEXT_JSON_BLOCK_CHARS };
+  // Reserve everything the block renders around the budgeted payload (the
+  // label line, the fences, the newlines, and the root container's own
+  // punctuation) so the rendered block stays at or below the stated cap.
+  const budget: ContextJsonBudget = {
+    remaining:
+      MAX_CONTEXT_JSON_BLOCK_CHARS -
+      label.length -
+      JSON_BLOCK_FENCE_CHARS -
+      MAX_ROOT_JSON_PUNCTUATION_CHARS,
+  };
   return [
     label,
     "```json",

@@ -3,6 +3,12 @@
 // crossed into the prompt unbounded.
 import { describe, expect, it } from "vitest";
 import { appendChannelPromptContext, formatContextJsonBlock } from "./channel-prompt-context.js";
+import { markInboundContextLabel } from "./inbound-context-marker.js";
+
+/** The model-visible context block only, without the base body it is appended to. */
+function renderedBlock(rendered: string, base = "hello"): string {
+  return rendered.slice(base.length + "\n\n".length);
+}
 
 function parseContextJsonBlock(block: string): unknown {
   const json = block.slice(
@@ -114,7 +120,7 @@ describe("formatContextJsonBlock", () => {
 
     const block = formatContextJsonBlock("Context:", payload);
 
-    expect(block.length).toBeLessThan(60_000);
+    expect(block.length).toBeLessThanOrEqual(50_000);
     expect(block).toContain("…[truncated: context budget exhausted]");
     expect(() => parseContextJsonBlock(block)).not.toThrow();
   });
@@ -135,7 +141,7 @@ describe("formatContextJsonBlock", () => {
 
     const block = formatContextJsonBlock("Context:", payload);
 
-    expect(block.length).toBeLessThan(60_000);
+    expect(block.length).toBeLessThanOrEqual(50_000);
     expect(block).toContain("…[truncated: context budget exhausted]");
     expect(() => parseContextJsonBlock(block)).not.toThrow();
   });
@@ -160,11 +166,49 @@ describe("formatContextJsonBlock", () => {
     expect(emittedKeyChars).toBeGreaterThan(50_000);
 
     const block = formatContextJsonBlock("Context:", payload);
-    const json = block.slice(block.indexOf("```json\n") + "```json\n".length);
 
     expect(block).toContain("…[truncated: context budget exhausted]");
-    expect(json.length).toBeLessThan(51_000);
+    expect(block.length).toBeLessThanOrEqual(50_000);
     expect(() => parseContextJsonBlock(block)).not.toThrow();
+  });
+
+  it("keeps every rendered block at or below the stated cap, framing included", () => {
+    // The budget is only meaningful if it bounds what the model actually sees:
+    // the label line, the fences, the newlines join() inserts, and the root
+    // container's own punctuation all ship with the payload.
+    const shapes: Array<[string, unknown]> = [
+      [
+        "wide object of wide objects",
+        Object.fromEntries(
+          Array.from({ length: 50 }, (_g, g) => [
+            `group-${g}`,
+            Object.fromEntries(
+              Array.from({ length: 50 }, (_i, i) => [`item-${i}`, `value-${g}-${i}`]),
+            ),
+          ]),
+        ),
+      ],
+      [
+        "50 keys x 20 entries x 2,000 chars",
+        Object.fromEntries(
+          Array.from({ length: 50 }, (_k, k) => [
+            `key-${k}`,
+            Array.from({ length: 20 }, (_e, e) => `value-${k}-${e}-${"x".repeat(2_000)}`),
+          ]),
+        ),
+      ],
+      ["root array of oversized rows", Array.from({ length: 20 }, () => "x".repeat(50_000))],
+      ["single oversized string root", "x".repeat(500_000)],
+    ];
+
+    for (const [name, payload] of shapes) {
+      const block = formatContextJsonBlock(
+        markInboundContextLabel("Conversation info:"),
+        payload as unknown,
+      );
+      expect(block.length, `${name} exceeded the block cap`).toBeLessThanOrEqual(50_000);
+      expect(() => parseContextJsonBlock(block), `${name} emitted invalid JSON`).not.toThrow();
+    }
   });
 
   it("charges a nested value to the budget once, not during recursion and again on retain", () => {
@@ -260,7 +304,7 @@ describe("appendChannelPromptContext", () => {
     const rendered = appendChannelPromptContext("hello", entries);
 
     expect(rendered).toContain("…[truncated: context budget exhausted]");
-    expect(rendered.length).toBeLessThan(51_000);
+    expect(renderedBlock(rendered).length).toBeLessThanOrEqual(50_000);
     expect(rendered).not.toContain("entry-100");
   });
 
@@ -271,7 +315,7 @@ describe("appendChannelPromptContext", () => {
     );
 
     expect(rendered).toContain("…[truncated: context budget exhausted]");
-    expect(rendered.length).toBeLessThan(51_000);
+    expect(renderedBlock(rendered).length).toBeLessThanOrEqual(50_000);
   });
 
   it("truncates a single oversized string entry instead of appending it whole", () => {
@@ -279,6 +323,23 @@ describe("appendChannelPromptContext", () => {
 
     expect(rendered).toContain("…[truncated]");
     expect(rendered).toContain("…[truncated: context budget exhausted]");
-    expect(rendered.length).toBeLessThan(51_000);
+    expect(renderedBlock(rendered).length).toBeLessThanOrEqual(50_000);
+  });
+
+  it("keeps the rendered block at the stated cap across delimiter-dominated shapes", () => {
+    // One separator is rendered before every kept line and the exhaustion
+    // marker needs a line of its own; entry counts near the cap are where an
+    // unreserved delimiter shows up as an off-by-N overrun.
+    for (const count of [49_900, 49_977, 49_978, 50_000, 120_000]) {
+      const rendered = appendChannelPromptContext(
+        "hello",
+        Array.from({ length: count }, () => "x"),
+      );
+      const block = renderedBlock(rendered);
+      expect(block).toContain("…[truncated: context budget exhausted]");
+      expect(block.length, `${count} single-char entries exceeded the cap`).toBeLessThanOrEqual(
+        50_000,
+      );
+    }
   });
 });
