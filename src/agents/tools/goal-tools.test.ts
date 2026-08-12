@@ -148,7 +148,7 @@ describe("goal tools", () => {
       config,
     });
 
-    const storePath = resolveStorePath(template, { agentId: "research" });
+    const storePath = resolveSessionStorePathCore(template, { agentId: "research" });
     await upsertSessionEntry({
       storePath,
       sessionKey: "global",
