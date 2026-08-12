@@ -77,7 +77,7 @@ function expectDeepseekAssistant(value: unknown) {
 }
 
 function expectFailoverAssistantErrorCallsScopedTo(provider: string) {
-  const calls = mockedIsFailoverAssistantError.mock.calls;
+  const calls = mockedIsFailoverAssistantError.mock.calls as unknown[][];
   expect(calls.length).toBeGreaterThan(0);
   for (const call of calls) {
     expect(call[1]).toEqual({ provider });
