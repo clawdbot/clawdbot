@@ -125,6 +125,7 @@ function startStubGatewayClient() {
       phase: "pre-hello",
       socketOpened: true,
       transportValidated: true,
+      connectRequestSent: true,
       transientPreHelloCleanClose: true,
     });
     lastClientOptions?.onHelloOk?.(makeStubGatewayHello());
@@ -133,12 +134,14 @@ function startStubGatewayClient() {
       phase: "pre-hello",
       socketOpened: true,
       transportValidated: true,
+      connectRequestSent: true,
       transientPreHelloCleanClose: true,
     });
     lastClientOptions?.onClose?.(1000, "", {
       phase: "pre-hello",
       socketOpened: true,
       transportValidated: true,
+      connectRequestSent: true,
       transientPreHelloCleanClose: true,
     });
   } else if (startMode === "connect-error") {

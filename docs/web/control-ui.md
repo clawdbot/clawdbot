@@ -98,7 +98,7 @@ An already paired administrator can create the iOS/Android connection QR without
 
 <Steps>
   <Step title="Open mobile pairing">
-    Select **Devices**, then click **Pair mobile device** in the **Devices** card.
+    Select **Devices**, then click **Pair device** in the **Devices** card.
   </Step>
   <Step title="Connect the phone">
     In the OpenClaw mobile app, open **Settings** → **Gateway** and scan the QR code. You can copy and paste the setup code instead.

@@ -745,6 +745,7 @@ describe("GatewayClient close handling", () => {
         phase: "pre-hello",
         socketOpened: false,
         transportValidated: false,
+        connectRequestSent: false,
         transientPreHelloCleanClose: false,
       },
     );
@@ -768,6 +769,7 @@ describe("GatewayClient close handling", () => {
       phase: "pre-hello",
       socketOpened: false,
       transportValidated: false,
+      connectRequestSent: false,
       transientPreHelloCleanClose: false,
     });
     client.stop();
@@ -785,6 +787,7 @@ describe("GatewayClient close handling", () => {
       phase: "pre-hello",
       socketOpened: false,
       transportValidated: false,
+      connectRequestSent: false,
       transientPreHelloCleanClose: false,
     });
     client.stop();
@@ -813,6 +816,7 @@ describe("GatewayClient close handling", () => {
       phase: "pre-hello",
       socketOpened: true,
       transportValidated: false,
+      connectRequestSent: false,
       transientPreHelloCleanClose: false,
     });
     client.stop();
@@ -831,6 +835,7 @@ describe("GatewayClient close handling", () => {
       phase: "pre-hello",
       socketOpened: false,
       transportValidated: false,
+      connectRequestSent: false,
       transientPreHelloCleanClose: false,
     });
     expect(logDebugMock).toHaveBeenCalledWith(
@@ -895,6 +900,7 @@ describe("GatewayClient close handling", () => {
         phase: "pre-hello",
         socketOpened: true,
         transportValidated: true,
+        connectRequestSent: true,
         transientPreHelloCleanClose: true,
       });
 
@@ -981,12 +987,14 @@ describe("GatewayClient close handling", () => {
         phase: "pre-hello",
         socketOpened: true,
         transportValidated: true,
+        connectRequestSent: true,
         transientPreHelloCleanClose: true,
       });
       expect(onClose).toHaveBeenNthCalledWith(2, 1000, "", {
         phase: "pre-hello",
         socketOpened: true,
         transportValidated: true,
+        connectRequestSent: true,
         transientPreHelloCleanClose: true,
       });
       expect(onConnectError).toHaveBeenCalledOnce();
@@ -1106,6 +1114,7 @@ describe("GatewayClient close handling", () => {
       phase: "pre-hello",
       socketOpened: false,
       transportValidated: false,
+      connectRequestSent: false,
       transientPreHelloCleanClose: false,
     });
     client.stop();
@@ -1174,6 +1183,7 @@ describe("GatewayClient connect auth payload", () => {
       maxProtocol?: number;
       scopes?: string[];
       client?: {
+        id?: string;
         mode?: string;
         platform?: string;
       };
@@ -2401,6 +2411,66 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
   });
 
+  it("emits only the signed bootstrap credential in a preferred node-host connect frame", () => {
+    loadDeviceAuthTokenMock.mockReturnValue({ token: "stale-device-token" });
+    const signDevicePayload = vi.fn((_privateKeyPem: string, _payload: string) => "signature");
+    const client = createClientWithIdentity("device-pairing-bootstrap", vi.fn(), {
+      token: "shared-token",
+      bootstrapToken: "bootstrap-token",
+      password: "shared-password", // pragma: allowlist secret
+      preferBootstrapToken: true,
+      role: "node",
+      mode: GATEWAY_CLIENT_MODES.NODE,
+      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      scopes: [],
+      hostDeps: { signDevicePayload },
+    });
+
+    const { connect } = startClientAndConnect({ client });
+
+    expect(connect.params?.client).toMatchObject({
+      id: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      mode: GATEWAY_CLIENT_MODES.NODE,
+    });
+    expect(connect.params?.auth).toEqual({ bootstrapToken: "bootstrap-token" });
+    expect(signDevicePayload.mock.calls[0]?.[1]?.split("|")[7]).toBe("bootstrap-token");
+    client.stop();
+  });
+
+  it("prefers a paired bootstrap token once, then reconnects with stored device auth", async () => {
+    loadDeviceAuthTokenMock.mockReturnValue({ token: "stale-device-token" });
+    const onHelloOk = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
+      bootstrapToken: "bootstrap-token",
+      password: "shared-password", // pragma: allowlist secret
+      preferBootstrapToken: true,
+      onHelloOk,
+    });
+
+    const { ws, connect } = startClientAndConnect({ client });
+    expect(connectFrameFrom(ws)).toMatchObject({ bootstrapToken: "bootstrap-token" });
+    expect(connectFrameFrom(ws).token).toBeUndefined();
+    expect(connectFrameFrom(ws).deviceToken).toBeUndefined();
+
+    loadDeviceAuthTokenMock.mockReturnValue({ token: "issued-device-token" });
+    emitHelloOk(ws, connect.id);
+    await waitForFast(() => expect(onHelloOk).toHaveBeenCalledOnce());
+    ws.emitClose(1006, "socket lost");
+    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(1), { timeout: 3_000 });
+    const reconnect = getLatestWs();
+    reconnect.emitOpen();
+    emitConnectChallenge(reconnect, "nonce-reconnect");
+    expect(connectFrameFrom(reconnect)).toMatchObject({
+      token: "issued-device-token",
+      deviceToken: "issued-device-token",
+    });
+    expect(connectFrameFrom(reconnect).password).toBeUndefined();
+    expect(connectFrameFrom(reconnect).bootstrapToken).toBeUndefined();
+    client.stop();
+  });
+
   it("prefers explicit deviceToken over stored device token", () => {
     loadDeviceAuthTokenMock.mockReturnValue({
       token: "stored-device-token",
@@ -2600,6 +2670,7 @@ describe("GatewayClient connect auth payload", () => {
       phase: "pre-hello",
       socketOpened: true,
       transportValidated: true,
+      connectRequestSent: true,
       transientPreHelloCleanClose: false,
     });
   });

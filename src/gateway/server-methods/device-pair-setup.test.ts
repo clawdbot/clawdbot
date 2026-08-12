@@ -43,6 +43,7 @@ function createOptions(
     respond,
     context: {
       getRuntimeConfig: vi.fn(() => config),
+      gatewayTlsFingerprint: "sha256:gateway-leaf",
     },
   } as unknown as GatewayRequestHandlerOptions;
   return { options, respond };
@@ -59,6 +60,7 @@ const okResolution = {
   urlSource: "remote",
   access: "full" as const,
   accessDowngraded: false,
+  expiresAtMs: 123_456,
 };
 
 describe("device.pair.setupCode", () => {
@@ -95,9 +97,14 @@ describe("device.pair.setupCode", () => {
       auth: "token",
       urlSource: "remote",
       access: "full",
+      expiresAtMs: 123_456,
     });
     // The bootstrap token only lives inside the (opaque) setup code, never as a field.
     expect(JSON.stringify(payload)).not.toContain("boot-123");
+    expect(mocks.resolvePairingSetupFromConfig).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ localTlsFingerprint: "sha256:gateway-leaf" }),
+    );
   });
 
   it("reports when plaintext transport limits a requested full-access code", async () => {

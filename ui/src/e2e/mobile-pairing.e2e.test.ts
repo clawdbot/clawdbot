@@ -68,7 +68,7 @@ suite.define(() => {
         await gateway.deferNext("device.pair.list");
         await sidebarPairingButton.click();
 
-        const dialog = page.getByRole("dialog", { name: "OpenClaw mobile" });
+        const dialog = page.getByRole("dialog", { name: "Pair a device" });
         const qr = page.getByAltText("OpenClaw mobile pairing QR code");
         await dialog.waitFor();
         expect(await dialog.isVisible()).toBe(true);
@@ -84,7 +84,7 @@ suite.define(() => {
 
         // modal-dialog renders its content in light DOM outside the native dialog element.
         const accessRadios = page.locator('input[name="device-pair-access"]');
-        await expect.poll(async () => accessRadios.count()).toBe(2);
+        await expect.poll(async () => accessRadios.count()).toBe(3);
         const fullAccess = accessRadios.nth(0);
         const limitedAccess = accessRadios.nth(1);
         expect(await fullAccess.isChecked()).toBe(true);
@@ -136,7 +136,7 @@ suite.define(() => {
         expect(settingsResponse?.status()).toBe(200);
         const quickSettingsPairingButton = page
           .locator(".security-page")
-          .getByRole("button", { name: "Pair mobile device" });
+          .getByRole("button", { name: "Pair device" });
         await quickSettingsPairingButton.waitFor();
         const setupRequestsBeforeQuickSettings = (
           await gateway.getRequests("device.pair.setupCode")
@@ -190,6 +190,34 @@ suite.define(() => {
         expect((await gateway.getRequests("device.pair.setupCode")).at(-1)?.params).toEqual({
           bootstrapProfile: "limited",
         });
+
+        await page.locator(".device-pair-setup__close").click();
+        await dialog.waitFor({ state: "hidden" });
+        await gateway.setMethodResponse("device.pair.setupCode", {
+          access: "node",
+          auth: "token",
+          expiresAtMs: Date.now() + 60_000,
+          gatewayUrl: "wss://gateway.example.test",
+          setupCode: "Node_AbC123",
+          urlSource: "test",
+        });
+        await quickSettingsPairingButton.click();
+        await dialog.waitFor();
+        const nodeAccess = page.locator('input[name="device-pair-access"]').nth(2);
+        await nodeAccess.check();
+        await page.getByRole("button", { name: "Create setup code" }).click();
+        await expect
+          .poll(async () => (await gateway.getRequests("device.pair.setupCode")).length)
+          .toBe(setupRequestsBeforeQuickSettings + 3);
+        expect((await gateway.getRequests("device.pair.setupCode")).at(-1)?.params).toEqual({
+          bootstrapProfile: "node",
+          includeQr: false,
+        });
+        const nodeCommand = page.getByText('openclaw node run --pair "oc-pair://Node_AbC123"', {
+          exact: true,
+        });
+        await nodeCommand.waitFor();
+        expect(await nodeCommand.isVisible()).toBe(true);
 
         await page.getByRole("button", { name: "Manage devices" }).click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/devices");

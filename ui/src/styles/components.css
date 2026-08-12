@@ -5278,6 +5278,12 @@ td.data-table-key-col {
   text-align: center;
 }
 
+.device-pair-setup__command {
+  display: grid;
+  width: min(540px, 100%);
+  gap: 10px;
+}
+
 .device-pair-setup__meta {
   display: flex;
   max-width: 100%;

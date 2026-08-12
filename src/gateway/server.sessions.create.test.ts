@@ -38,6 +38,10 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  attachGatewayLocalUserIngress,
+  prepareGatewayLocalUserIngress,
+} from "./local-user-ingress.js";
 import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import {
   agentCommandMock,
@@ -3088,8 +3092,25 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
 });
 
 test("sessions.create stamps trusted operator provenance and records created", async () => {
-  await createSessionStoreDir();
+  const { storePath } = await createSessionStoreDir();
   const profileId = "profile-session-creator";
+  const client = {
+    connect: { scopes: ["operator.write"] },
+    authenticatedUserProfile: {
+      profileId,
+      displayName: "Test Operator",
+      hasAvatar: false,
+      updatedAt: 1,
+    },
+  };
+  attachGatewayLocalUserIngress(
+    client,
+    prepareGatewayLocalUserIngress({
+      authenticatedUserExpected: true,
+      profile: { profileId, displayName: "Test Operator" },
+      isLocalClient: false,
+    }),
+  );
   const created = await directSessionReq<{
     key?: string;
     entry?: {
@@ -3097,21 +3118,7 @@ test("sessions.create stamps trusted operator provenance and records created", a
       createdActor?: { type: string; id?: string };
       createdAt?: number;
     };
-  }>(
-    "sessions.create",
-    { agentId: "main" },
-    {
-      client: {
-        connect: { scopes: ["operator.write"] },
-        authenticatedUserProfile: {
-          profileId,
-          displayName: "Test Operator",
-          hasAvatar: false,
-          updatedAt: 1,
-        },
-      } as never,
-    },
-  );
+  }>("sessions.create", { agentId: "main" }, { client: client as never });
 
   expect(created.ok).toBe(true);
   expect(created.payload?.entry).toMatchObject({
@@ -3119,7 +3126,9 @@ test("sessions.create stamps trusted operator provenance and records created", a
     createdActor: { type: "human", id: profileId },
     createdAt: expect.any(Number),
   });
+  expect(created.payload?.entry).not.toHaveProperty("createdActor.label");
   const key = requireNonEmptyString(created.payload?.key, "created session key");
+  expect(loadSessionEntry({ sessionKey: key, storePath })).not.toHaveProperty("createdActor.label");
   expect(listSessionStateEventsSince(key, "main", 0, 20).events).toContainEqual(
     expect.objectContaining({
       kind: "created",

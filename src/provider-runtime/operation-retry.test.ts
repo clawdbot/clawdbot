@@ -51,6 +51,7 @@ describe("executeProviderOperationWithRetry", () => {
     "EHOSTUNREACH",
     "ENETUNREACH",
     "EAI_AGAIN",
+    "UND_ERR_SOCKET",
     "ENOTFOUND",
   ])("retries %s network failures from structured errors", async (code) => {
     const cause = Object.assign(new Error("connect failed"), { code });

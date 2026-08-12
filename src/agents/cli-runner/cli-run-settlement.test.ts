@@ -4,7 +4,7 @@ import {
   isCliBindingFlushed,
   restoreCliRunnerTestDeps,
   setCliRunnerTestDeps,
-} from "./cli-runner.js";
+} from "../cli-runner.js";
 
 describe("isCliBindingFlushed", () => {
   const workspaceDir = "/tmp/openclaw-workspace";
