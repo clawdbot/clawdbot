@@ -992,6 +992,61 @@ describe("stuck session diagnostics threshold", () => {
     expect(recoverStuckSession).not.toHaveBeenCalled();
   });
 
+  it("does not recover queued CLI streaming without an active-work marker while progress is fresh", () => {
+    // CLI backends emit cli_live:stream_progress without activeWorkKind. This
+    // heartbeat path is what prevents requestStuckSessionRecovery for that case.
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test-followup" });
+
+      for (let i = 0; i < 3; i += 1) {
+        vi.advanceTimersByTime(29_000);
+        markDiagnosticRunProgressForTest({
+          sessionId: "s1",
+          sessionKey: "main",
+          runId: "run-1",
+          reason: "cli_live:stream_progress",
+        });
+        vi.advanceTimersByTime(1_000);
+      }
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events.some((event) => event.type === "session.stuck")).toBe(false);
+    expect(events.some((event) => event.type === "session.stalled")).toBe(false);
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+    const longRunningEvents = events.filter((event) => event.type === "session.long_running");
+    expect(longRunningEvents).toHaveLength(1);
+    expectRecordFields(requireRecord(longRunningEvents[0], "long-running event"), {
+      classification: "long_running",
+      reason: "queued_behind_active_work",
+      queueDepth: 1,
+      lastProgressReason: "cli_live:stream_progress",
+    });
+    expect(longRunningEvents[0]).not.toHaveProperty("activeWorkKind");
+    const activity = getDiagnosticSessionActivitySnapshot({ sessionId: "s1", sessionKey: "main" });
+    expect(activity.activeWorkKind).toBeUndefined();
+    expect(activity.hasActiveEmbeddedRun).toBeUndefined();
+    expectRecordFields(activity, {
+      lastProgressReason: "cli_live:stream_progress",
+    });
+  });
+
   it("recovers stale model calls through the active embedded-run abort path", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
