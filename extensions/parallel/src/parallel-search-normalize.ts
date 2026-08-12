@@ -153,7 +153,7 @@ export function normalizeParallelSearchQueries(value: unknown): string[] {
   return out;
 }
 
-export function invalidSearchQueriesPayload() {
+function invalidSearchQueriesPayload() {
   return {
     error: "invalid_search_queries",
     message:
@@ -176,7 +176,7 @@ export function normalizeParallelResults(payload: unknown): ParallelSearchResult
 }
 
 /** Maps a Parallel v1 response into wrapped `web_search` result entries. */
-export function mapParallelResults(response: ParallelSearchResponse): Record<string, unknown>[] {
+function mapParallelResults(response: ParallelSearchResponse): Record<string, unknown>[] {
   return normalizeParallelResults(response).map((entry) => {
     const title = typeof entry.title === "string" ? entry.title : "";
     const url = typeof entry.url === "string" ? entry.url : "";
