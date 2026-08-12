@@ -30,9 +30,13 @@ export function loadDeferredCatalog(
   agentId: string,
   readOnly: boolean,
 ) {
+  // This timing control is Gateway-private; exposing it on GatewayRequestContext would turn an
+  // implementation detail into a Plugin SDK contract.
   return context.loadGatewayModelCatalogSnapshot({
     agentId,
     deferAuthRefresh: true,
     readOnly,
+  } as NonNullable<Parameters<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>[0]> & {
+    deferAuthRefresh: true;
   });
 }
