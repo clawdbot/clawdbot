@@ -44,7 +44,12 @@ final class GatewaySleepCycleController {
         do {
             switch try await self.prepare(self.requestID) {
             case let .ready(suspensionID):
-                guard generation == self.cycleGeneration else { return }
+                guard generation == self.cycleGeneration else {
+                    // The wake already happened; release the late lease right away
+                    // instead of fencing the gateway until its two-minute expiry.
+                    try await self.resume(suspensionID)
+                    return
+                }
                 self.suspension = (id: suspensionID, route: self.currentRoute())
             case .busy:
                 self.log("gateway sleep preparation skipped because the gateway is busy")

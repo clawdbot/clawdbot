@@ -32,6 +32,9 @@ final class GatewayConnectivityCoordinator {
     private init() {
         self.sleepCycleController = GatewaySleepCycleController(
             requestID: "macos-sleep-\(UUID().uuidString.lowercased())",
+            // Route tokens and the shared RPC connection both follow the endpoint
+            // store; a switch between the two reads fails conservatively — the wake
+            // path drops a mismatched lease and lets it self-expire.
             currentRoute: { [weak self] in
                 guard case let .ready(_, url, _, _, _) = self?.endpointState else { return nil }
                 return url.absoluteString

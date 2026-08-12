@@ -1,5 +1,5 @@
-@testable import OpenClaw
 import Testing
+@testable import OpenClaw
 
 private struct PrepareFailure: Error {}
 
@@ -20,8 +20,7 @@ struct GatewaySleepCycleControllerTests {
             },
             resume: { resumedIDs.append($0) },
             refresh: { refreshCount += 1 },
-            log: { _ in }
-        )
+            log: { _ in })
 
         await controller.willSleep(mode: .local)
         await controller.didWake(mode: .local)
@@ -30,6 +29,33 @@ struct GatewaySleepCycleControllerTests {
         #expect(preparedRequestIDs == ["macos-sleep-test-run"])
         #expect(resumedIDs == ["suspension-1"])
         #expect(refreshCount == 2)
+    }
+
+    @Test func `prepare response arriving after wake resumes the late lease immediately`() async {
+        var resumedIDs: [String] = []
+        var releasePrepare: CheckedContinuation<Void, Never>?
+        let controller = GatewaySleepCycleController(
+            requestID: "macos-sleep-test-run",
+            currentRoute: { "ws://127.0.0.1:18789" },
+            prepare: { _ in
+                await withCheckedContinuation { releasePrepare = $0 }
+                return .ready(suspensionID: "late-suspension")
+            },
+            resume: { resumedIDs.append($0) },
+            refresh: {},
+            log: { _ in })
+
+        let sleepTask = Task { await controller.willSleep(mode: .local) }
+        // Let willSleep reach the suspended prepare before waking.
+        while releasePrepare == nil {
+            await Task.yield()
+        }
+        await controller.didWake(mode: .local)
+        releasePrepare?.resume()
+        await sleepTask.value
+        await controller.didWake(mode: .local)
+
+        #expect(resumedIDs == ["late-suspension"])
     }
 
     @Test func `busy preparation does not resume but still refreshes`() async {
@@ -41,8 +67,7 @@ struct GatewaySleepCycleControllerTests {
             prepare: { _ in .busy },
             resume: { _ in resumeCount += 1 },
             refresh: { refreshCount += 1 },
-            log: { _ in }
-        )
+            log: { _ in })
 
         await controller.willSleep(mode: .local)
         await controller.didWake(mode: .local)
@@ -60,8 +85,7 @@ struct GatewaySleepCycleControllerTests {
             prepare: { _ in throw PrepareFailure() },
             resume: { _ in resumeCount += 1 },
             refresh: { refreshCount += 1 },
-            log: { _ in }
-        )
+            log: { _ in })
 
         await controller.willSleep(mode: .local)
         await controller.didWake(mode: .local)
@@ -83,8 +107,7 @@ struct GatewaySleepCycleControllerTests {
             },
             resume: { _ in resumeCount += 1 },
             refresh: { refreshCount += 1 },
-            log: { _ in }
-        )
+            log: { _ in })
 
         await controller.willSleep(mode: .remote)
         await controller.didWake(mode: .remote)
@@ -105,8 +128,7 @@ struct GatewaySleepCycleControllerTests {
             prepare: { _ in .ready(suspensionID: "suspension-1") },
             resume: { resumedIDs.append($0) },
             refresh: { refreshCount += 1 },
-            log: { logs.append($0) }
-        )
+            log: { logs.append($0) })
 
         await controller.willSleep(mode: .local)
         route = "ws://127.0.0.1:19001"
@@ -129,8 +151,7 @@ struct GatewaySleepCycleControllerTests {
             prepare: { _ in .ready(suspensionID: "suspension-1") },
             resume: { resumedIDs.append($0) },
             refresh: { refreshCount += 1 },
-            log: { logs.append($0) }
-        )
+            log: { logs.append($0) })
 
         await controller.willSleep(mode: .local)
         await controller.didWake(mode: .remote)
