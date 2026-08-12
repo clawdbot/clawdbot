@@ -151,8 +151,8 @@ export function resolveChatPaneParentSession(
 /**
  * Header identity trail: which project, then which session inside it. Segments
  * and separators are rendered from one list so a further segment — the parent
- * session of a nested thread (#121700), yielding project / parent / child —
- * slots in without moving the project chip or the title.
+ * session of a nested thread, yielding project / parent / child — slots in
+ * without moving the project chip or the title.
  */
 function renderIdentityCrumbs(
   props: ChatPaneHeaderProps,
