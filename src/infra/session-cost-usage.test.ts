@@ -16,14 +16,23 @@ import {
   resetRemoteModelCatalogOverlayForTest,
   setRemoteModelCatalogOverlaySourcesForTest,
 } from "../model-catalog/remote-overlay.test-support.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
+import { acquireOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import * as usageFormat from "../utils/usage-format.js";
 import * as formatDatetime from "./format-time/format-datetime.js";
-import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import {
-  acquireSessionCostUsageRefreshLock,
+  refreshCostUsageCacheForAgent,
+  resolveUsageCostCacheDatabasePath,
+} from "./session-cost-usage-aggregation.js";
+import {
   readSessionCostUsageRollupRows,
+  SESSION_COST_USAGE_REFRESH_LEASE_OPTIONS,
+  type SessionCostUsageRefreshLeaseOwner,
   writeSessionCostUsageRollup,
 } from "./session-cost-usage-cache.sqlite.js";
 import {
@@ -49,6 +58,9 @@ const withMainAgent = <T extends object>(params: T): T & { agentId: string } => 
       ? (params as { agentId: string }).agentId
       : "main",
 });
+const testLeaseOwner = {
+  assertOwnedInTransaction: () => {},
+} satisfies SessionCostUsageRefreshLeaseOwner;
 
 const discoverAllSessions = (
   params: WithOptionalAgentId<typeof discoverAllSessionsForAgent> = {},
@@ -1152,6 +1164,7 @@ describe("session cost usage", () => {
       expect(
         writeSessionCostUsageRollup({
           agentId: "main",
+          leaseOwner: testLeaseOwner,
           rollupId: sessionFile,
           previousValueJson: currentRow.valueJson,
           valueJson: JSON.stringify(currentRollup),
@@ -1937,15 +1950,69 @@ describe("session cost usage", () => {
     );
 
     await withStateDir(root, async () => {
-      const lock = acquireSessionCostUsageRefreshLock("main");
-      expect(lock.acquired).toBe(true);
-      const releaseTimer = setTimeout(lock.release, 40);
+      const databasePath = resolveUsageCostCacheDatabasePath("main");
+      const lease = await acquireOpenClawStateLease({
+        ...SESSION_COST_USAGE_REFRESH_LEASE_OPTIONS,
+        database: { scope: "agent", agentId: "main", path: databasePath },
+      });
+      const releaseTimer = setTimeout(() => void lease.release(), 40);
       try {
         const summary = await loadSessionCostSummary({ agentId: "main", sessionFile });
         expect(summary?.totalTokens).toBe(12);
       } finally {
         clearTimeout(releaseTimer);
-        lock.release();
+        await lease.release();
+      }
+    });
+  });
+
+  it("recovers an expired refresh lease after a PID-1 crash and respects an active owner", async () => {
+    const root = await makeSessionCostRoot("cost-session-refresh-lease-restart");
+
+    await withStateDir(root, async () => {
+      const agentId = "main";
+      const databasePath = resolveUsageCostCacheDatabasePath(agentId);
+      const database = openOpenClawAgentDatabase({ agentId, path: databasePath });
+      const now = Date.now();
+      database.db
+        .prepare(
+          `INSERT INTO state_leases
+             (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, NULL, ?, ?)`,
+        )
+        .run(
+          SESSION_COST_USAGE_REFRESH_LEASE_OPTIONS.scope,
+          SESSION_COST_USAGE_REFRESH_LEASE_OPTIONS.key,
+          "crashed-container-pid-1",
+          now - 1,
+          now - 60_000,
+          now - 60_000,
+          now - 60_000,
+        );
+      closeOpenClawAgentDatabasesForTest();
+
+      const pidDescriptor = Object.getOwnPropertyDescriptor(process, "pid");
+      Object.defineProperty(process, "pid", { configurable: true, value: 1 });
+      try {
+        await expect(
+          refreshCostUsageCacheForAgent({ agentId: "main", databasePath, sessionsDir: root }),
+        ).resolves.toBe("refreshed");
+
+        const lease = await acquireOpenClawStateLease({
+          ...SESSION_COST_USAGE_REFRESH_LEASE_OPTIONS,
+          database: { scope: "agent", agentId: "main", path: databasePath },
+        });
+        try {
+          await expect(
+            refreshCostUsageCacheForAgent({ agentId: "main", databasePath, sessionsDir: root }),
+          ).resolves.toBe("busy");
+        } finally {
+          await lease.release();
+        }
+      } finally {
+        if (pidDescriptor) {
+          Object.defineProperty(process, "pid", pidDescriptor);
+        }
       }
     });
   });

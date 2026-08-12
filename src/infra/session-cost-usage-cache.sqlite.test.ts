@@ -11,15 +11,21 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { withEnv } from "../test-utils/env.js";
+import { acquireOpenClawStateLease } from "../state/openclaw-state-lease.js";
+import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import {
   deleteSessionCostUsageRollupsExcept,
   isSessionCostUsageRefreshRunning,
   readSessionCostUsageRollupRows,
+  SESSION_COST_USAGE_REFRESH_LEASE_OPTIONS,
+  type SessionCostUsageRefreshLeaseOwner,
   writeSessionCostUsageRollup,
 } from "./session-cost-usage-cache.sqlite.js";
 
 const tempDirs: string[] = [];
+const testLeaseOwner = {
+  assertOwnedInTransaction: () => {},
+} satisfies SessionCostUsageRefreshLeaseOwner;
 
 function countRegisteredAgentDatabases(): number {
   const row = openOpenClawStateDatabase()
@@ -71,6 +77,7 @@ describe("session cost usage SQLite cache", () => {
         writeSessionCostUsageRollup({
           agentId,
           databasePath,
+          leaseOwner: testLeaseOwner,
           rollupId: "session.jsonl",
           previousValueJson: null,
           valueJson: "{}",
@@ -78,6 +85,72 @@ describe("session cost usage SQLite cache", () => {
         }),
       ).toBe(true);
       expect(countRegisteredAgentDatabases()).toBe(1);
+    });
+  });
+
+  it("keeps independent PID-1 owners mutually exclusive", async () => {
+    const stateDir = makeTempDir(tempDirs, "openclaw-usage-cache-pid1-");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const agentId = "worker-1";
+      const databasePath = resolveOpenClawAgentSqlitePath({ agentId });
+      const pidDescriptor = Object.getOwnPropertyDescriptor(process, "pid");
+      Object.defineProperty(process, "pid", { configurable: true, value: 1 });
+      try {
+        const options = {
+          ...SESSION_COST_USAGE_REFRESH_LEASE_OPTIONS,
+          database: { scope: "agent" as const, agentId, path: databasePath },
+        };
+        const owner = await acquireOpenClawStateLease(options);
+        try {
+          expect(isSessionCostUsageRefreshRunning(agentId, databasePath)).toBe(true);
+          await expect(acquireOpenClawStateLease(options)).rejects.toMatchObject({
+            code: "OPENCLAW_STATE_LEASE_TIMEOUT",
+          });
+        } finally {
+          await owner.release();
+        }
+        expect(isSessionCostUsageRefreshRunning(agentId, databasePath)).toBe(false);
+      } finally {
+        if (pidDescriptor) {
+          Object.defineProperty(process, "pid", pidDescriptor);
+        }
+      }
+    });
+  });
+
+  it("fences rollup writes from a stale refresh lease owner", async () => {
+    const stateDir = makeTempDir(tempDirs, "openclaw-usage-cache-fenced-write-");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const agentId = "worker-1";
+      const databasePath = resolveOpenClawAgentSqlitePath({ agentId });
+      const owner = await acquireOpenClawStateLease({
+        ...SESSION_COST_USAGE_REFRESH_LEASE_OPTIONS,
+        database: { scope: "agent", agentId, path: databasePath },
+      });
+      try {
+        const database = openOpenClawAgentDatabase({ agentId, path: databasePath });
+        database.db
+          .prepare("UPDATE state_leases SET owner = ? WHERE scope = ? AND lease_key = ?")
+          .run(
+            "successor-owner",
+            SESSION_COST_USAGE_REFRESH_LEASE_OPTIONS.scope,
+            SESSION_COST_USAGE_REFRESH_LEASE_OPTIONS.key,
+          );
+        expect(() =>
+          writeSessionCostUsageRollup({
+            agentId,
+            databasePath,
+            leaseOwner: owner,
+            rollupId: "session.jsonl",
+            previousValueJson: null,
+            valueJson: "{}",
+            updatedAt: 1,
+          }),
+        ).toThrow(expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_LOST" }));
+        expect(readSessionCostUsageRollupRows(agentId, databasePath)).toEqual([]);
+      } finally {
+        await owner.release();
+      }
     });
   });
 
@@ -95,6 +168,7 @@ describe("session cost usage SQLite cache", () => {
       expect(
         writeSessionCostUsageRollup({
           agentId,
+          leaseOwner: testLeaseOwner,
           rollupId,
           previousValueJson: null,
           valueJson: staleValue,
@@ -109,6 +183,7 @@ describe("session cost usage SQLite cache", () => {
             expect(
               writeSessionCostUsageRollup({
                 agentId,
+                leaseOwner: testLeaseOwner,
                 rollupId,
                 previousValueJson: staleValue,
                 valueJson: refreshedValue,
@@ -120,7 +195,7 @@ describe("session cost usage SQLite cache", () => {
         }
       })();
 
-      deleteSessionCostUsageRollupsExcept({ agentId, liveKeys, rows });
+      deleteSessionCostUsageRollupsExcept({ agentId, leaseOwner: testLeaseOwner, liveKeys, rows });
 
       expect(readSessionCostUsageRollupRows(agentId)).toEqual([
         { key: rollupId, updatedAt: 2, valueJson: refreshedValue },
@@ -136,6 +211,7 @@ describe("session cost usage SQLite cache", () => {
       expect(
         writeSessionCostUsageRollup({
           agentId,
+          leaseOwner: testLeaseOwner,
           rollupId: "current.jsonl",
           previousValueJson: null,
           valueJson: '{"version":2}',
@@ -156,6 +232,7 @@ describe("session cost usage SQLite cache", () => {
 
       deleteSessionCostUsageRollupsExcept({
         agentId,
+        leaseOwner: testLeaseOwner,
         liveKeys: new Set(["current.jsonl"]),
         rows,
       });
@@ -164,7 +241,6 @@ describe("session cost usage SQLite cache", () => {
         database.db.prepare("SELECT scope, key FROM cache_entries ORDER BY scope, key").all(),
       ).toEqual([
         { key: "keep", scope: "other" },
-        { key: "refresh-lock", scope: "session-cost-usage" },
         { key: "current.jsonl", scope: "session-cost-usage-rollup-v2" },
       ]);
     });

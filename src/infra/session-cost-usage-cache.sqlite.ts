@@ -3,23 +3,30 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
+import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 // Per-agent SQLite storage for rebuildable per-session usage rollups.
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { isTransientSqliteError } from "./unhandled-rejections.js";
 
 const LEGACY_CACHE_SCOPE = "session-cost-usage";
-const LEGACY_CACHE_KEY = "cache";
-const REFRESH_LOCK_KEY = "refresh-lock";
 const RETIRED_ROLLUP_SCOPE = "session-cost-usage-rollup-v1";
 const ROLLUP_SCOPE = "session-cost-usage-rollup-v2";
 
-type AgentCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
+type AgentCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries" | "state_leases">;
 
-type SessionCostUsageRefreshLock = {
-  pid: number;
-  startedAt: number;
-  ownerNonce: string;
-};
+export const SESSION_COST_USAGE_REFRESH_LEASE_OPTIONS = {
+  scope: "session-cost-usage",
+  key: "refresh",
+  leaseMs: 60_000,
+  waitMs: 0,
+  leaseLabel: "session cost usage refresh lease",
+  operationLabel: "session-cost-usage.refresh.lease",
+} as const;
+
+export type SessionCostUsageRefreshLeaseOwner = Pick<
+  OpenClawStateLeaseContext,
+  "assertOwnedInTransaction"
+>;
 
 type SessionCostUsageRollupRow = {
   key: string;
@@ -47,56 +54,6 @@ function readCacheDatabase<T>(
   }
 }
 
-function readCacheValue(
-  agentId: string | undefined,
-  scope: string,
-  key: string,
-  databasePath?: string,
-): string | null {
-  return (
-    readCacheDatabase(agentId, databasePath, (database) => {
-      const kysely = getNodeSqliteKysely<AgentCacheDatabase>(database.db);
-      const row = executeSqliteQuerySync(
-        database.db,
-        kysely
-          .selectFrom("cache_entries")
-          .select("value_json")
-          .where("scope", "=", scope)
-          .where("key", "=", key)
-          .limit(1),
-      ).rows[0];
-      return row?.value_json ?? null;
-    }) ?? null
-  );
-}
-
-function deleteCacheValueIfUnchanged(params: {
-  agentId?: string;
-  databasePath?: string;
-  scope: string;
-  key: string;
-  valueJson: string;
-}): void {
-  runOpenClawAgentWriteTransaction(
-    (database) => {
-      const kysely = getNodeSqliteKysely<AgentCacheDatabase>(database.db);
-      executeSqliteQuerySync(
-        database.db,
-        kysely
-          .deleteFrom("cache_entries")
-          .where("scope", "=", params.scope)
-          .where("key", "=", params.key)
-          .where("value_json", "=", params.valueJson),
-      );
-    },
-    {
-      agentId: normalizeAgentId(params.agentId),
-      ...(params.databasePath ? { path: params.databasePath } : {}),
-    },
-    { operationLabel: `session-cost-usage.${params.key}.delete` },
-  );
-}
-
 export function readSessionCostUsageRollupRows(
   agentId?: string,
   databasePath?: string,
@@ -122,6 +79,7 @@ export function readSessionCostUsageRollupRows(
 export function writeSessionCostUsageRollup(params: {
   agentId?: string;
   databasePath?: string;
+  leaseOwner: SessionCostUsageRefreshLeaseOwner;
   rollupId: string;
   previousValueJson: string | null;
   valueJson: string;
@@ -129,6 +87,7 @@ export function writeSessionCostUsageRollup(params: {
 }): boolean {
   return runOpenClawAgentWriteTransaction(
     (database) => {
+      params.leaseOwner.assertOwnedInTransaction(database.db);
       const kysely = getNodeSqliteKysely<AgentCacheDatabase>(database.db);
       const currentValueJson =
         executeSqliteQuerySync(
@@ -177,12 +136,14 @@ export function writeSessionCostUsageRollup(params: {
 export function deleteSessionCostUsageRollupsExcept(params: {
   agentId?: string;
   databasePath?: string;
+  leaseOwner: SessionCostUsageRefreshLeaseOwner;
   liveKeys: ReadonlySet<string>;
   rows: readonly SessionCostUsageRollupRow[];
 }): void {
   const existing = params.rows.filter((row) => !params.liveKeys.has(row.key));
   runOpenClawAgentWriteTransaction(
     (database) => {
+      params.leaseOwner.assertOwnedInTransaction(database.db);
       const kysely = getNodeSqliteKysely<AgentCacheDatabase>(database.db);
       for (const row of existing) {
         executeSqliteQuerySync(
@@ -195,19 +156,7 @@ export function deleteSessionCostUsageRollupsExcept(params: {
             .where("updated_at", "=", row.updatedAt),
         );
       }
-      executeSqliteQuerySync(
-        database.db,
-        kysely
-          .deleteFrom("cache_entries")
-          .where("scope", "=", LEGACY_CACHE_SCOPE)
-          .where("key", "=", LEGACY_CACHE_KEY),
-      );
-      // v1 duplicated a multi-megabyte pricing catalog per row (#115282).
-      // Delete by scope so those values are never materialized during cleanup.
-      executeSqliteQuerySync(
-        database.db,
-        kysely.deleteFrom("cache_entries").where("scope", "=", RETIRED_ROLLUP_SCOPE),
-      );
+      deleteRetiredSessionCostUsageCacheEntriesInTransaction(database.db);
     },
     {
       agentId: normalizeAgentId(params.agentId),
@@ -217,129 +166,50 @@ export function deleteSessionCostUsageRollupsExcept(params: {
   );
 }
 
-function parseRefreshLock(raw: string | null): SessionCostUsageRefreshLock | null {
-  if (!raw) {
-    return null;
-  }
-  try {
-    const value = JSON.parse(raw) as Partial<SessionCostUsageRefreshLock> | null;
-    if (
-      !value ||
-      typeof value.pid !== "number" ||
-      !Number.isInteger(value.pid) ||
-      value.pid <= 0 ||
-      typeof value.startedAt !== "number" ||
-      !Number.isFinite(value.startedAt) ||
-      typeof value.ownerNonce !== "string" ||
-      !value.ownerNonce
-    ) {
-      return null;
-    }
-    return { pid: value.pid, startedAt: value.startedAt, ownerNonce: value.ownerNonce };
-  } catch {
-    return null;
-  }
-}
-
-function isProcessRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
 export function isSessionCostUsageRefreshRunning(agentId?: string, databasePath?: string): boolean {
-  const raw = readCacheValue(agentId, LEGACY_CACHE_SCOPE, REFRESH_LOCK_KEY, databasePath);
-  const lock = parseRefreshLock(raw);
-  if (lock && isProcessRunning(lock.pid)) {
-    return true;
-  }
-  if (raw !== null) {
-    deleteCacheValueIfUnchanged({
-      agentId,
-      databasePath,
-      scope: LEGACY_CACHE_SCOPE,
-      key: REFRESH_LOCK_KEY,
-      valueJson: raw,
-    });
-  }
-  return false;
-}
-
-export function acquireSessionCostUsageRefreshLock(
-  agentId?: string,
-  databasePath?: string,
-): { acquired: boolean; release: () => void } {
-  const previousRaw = readCacheValue(agentId, LEGACY_CACHE_SCOPE, REFRESH_LOCK_KEY, databasePath);
-  const previousLock = parseRefreshLock(previousRaw);
-  // Process liveness is resolved before BEGIN. The transaction only compares
-  // the authoritative row and commits the prepared replacement synchronously.
-  const previousOwnerIsRunning = previousLock ? isProcessRunning(previousLock.pid) : false;
-  const lock: SessionCostUsageRefreshLock = {
-    pid: process.pid,
-    startedAt: Date.now(),
-    ownerNonce: `${process.pid}:${Date.now()}:${process.hrtime.bigint()}`,
-  };
-  const lockJson = JSON.stringify(lock);
-  const acquired = runOpenClawAgentWriteTransaction(
-    (database) => {
+  return (
+    readCacheDatabase(agentId, databasePath, (database) => {
       const kysely = getNodeSqliteKysely<AgentCacheDatabase>(database.db);
-      const currentRaw =
+      return (
         executeSqliteQuerySync(
           database.db,
           kysely
-            .selectFrom("cache_entries")
-            .select("value_json")
-            .where("scope", "=", LEGACY_CACHE_SCOPE)
-            .where("key", "=", REFRESH_LOCK_KEY)
+            .selectFrom("state_leases")
+            .select("owner")
+            .where("scope", "=", SESSION_COST_USAGE_REFRESH_LEASE_OPTIONS.scope)
+            .where("lease_key", "=", SESSION_COST_USAGE_REFRESH_LEASE_OPTIONS.key)
+            .where("expires_at", ">", Date.now())
             .limit(1),
-        ).rows[0]?.value_json ?? null;
-      if (currentRaw !== previousRaw || previousOwnerIsRunning) {
-        return false;
-      }
-      executeSqliteQuerySync(
-        database.db,
-        kysely
-          .insertInto("cache_entries")
-          .values({
-            scope: LEGACY_CACHE_SCOPE,
-            key: REFRESH_LOCK_KEY,
-            value_json: lockJson,
-            blob: null,
-            expires_at: null,
-            updated_at: lock.startedAt,
-          })
-          .onConflict((conflict) =>
-            conflict.columns(["scope", "key"]).doUpdateSet({
-              value_json: lockJson,
-              blob: null,
-              expires_at: null,
-              updated_at: lock.startedAt,
-            }),
-          ),
+        ).rows[0] !== undefined
       );
-      return true;
-    },
-    {
-      agentId: normalizeAgentId(agentId),
-      ...(databasePath ? { path: databasePath } : {}),
-    },
-    { operationLabel: "session-cost-usage.refresh-lock.acquire" },
+    }) ?? false
   );
-  return {
-    acquired,
-    release: () => {
-      if (acquired) {
-        deleteCacheValueIfUnchanged({
-          agentId,
-          databasePath,
-          scope: LEGACY_CACHE_SCOPE,
-          key: REFRESH_LOCK_KEY,
-          valueJson: lockJson,
-        });
-      }
+}
+
+function deleteRetiredSessionCostUsageCacheEntriesInTransaction(database: DatabaseSync): void {
+  const kysely = getNodeSqliteKysely<AgentCacheDatabase>(database);
+  executeSqliteQuerySync(
+    database,
+    kysely.deleteFrom("cache_entries").where("scope", "=", LEGACY_CACHE_SCOPE),
+  );
+  // v1 duplicated a multi-megabyte pricing catalog per row (#115282).
+  // Delete by scope so those values are never materialized during cleanup.
+  executeSqliteQuerySync(
+    database,
+    kysely.deleteFrom("cache_entries").where("scope", "=", RETIRED_ROLLUP_SCOPE),
+  );
+}
+
+export function deleteRetiredSessionCostUsageCacheEntries(params: {
+  agentId?: string;
+  databasePath?: string;
+}): void {
+  runOpenClawAgentWriteTransaction(
+    (database) => deleteRetiredSessionCostUsageCacheEntriesInTransaction(database.db),
+    {
+      agentId: normalizeAgentId(params.agentId),
+      ...(params.databasePath ? { path: params.databasePath } : {}),
     },
-  };
+    { operationLabel: "session-cost-usage.retired.delete" },
+  );
 }

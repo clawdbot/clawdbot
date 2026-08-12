@@ -15,11 +15,17 @@ import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-vis
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import {
+  OpenClawStateLeaseError,
+  type OpenClawStateLeaseContext,
+  withOpenClawStateLease,
+} from "../state/openclaw-state-lease.js";
 import { resolveModelCostConfigFingerprint } from "../utils/usage-format.js";
 import {
-  acquireSessionCostUsageRefreshLock,
   deleteSessionCostUsageRollupsExcept,
   readSessionCostUsageRollupRows,
+  SESSION_COST_USAGE_REFRESH_LEASE_OPTIONS,
+  type SessionCostUsageRefreshLeaseOwner,
   writeSessionCostUsageRollup,
 } from "./session-cost-usage-cache.sqlite.js";
 import {
@@ -569,7 +575,7 @@ async function scanUsageFileForRollup(params: {
     : await scanJsonlUsageRollup(params);
 }
 
-export async function refreshCostUsageCacheForAgent(params: {
+type RefreshCostUsageCacheForAgentParams = {
   config?: OpenClawConfig;
   agentId: string;
   agentDir?: string;
@@ -578,85 +584,106 @@ export async function refreshCostUsageCacheForAgent(params: {
   sessionsDir?: string;
   sessionFiles?: string[];
   startMs?: number;
-}): Promise<UsageCostRefreshResult> {
-  const databasePath = params.databasePath ?? resolveUsageCostCacheDatabasePath(params.agentId);
-  const lock = acquireSessionCostUsageRefreshLock(params.agentId, databasePath);
-  if (!lock.acquired) {
-    return "busy";
+};
+
+async function refreshCostUsageCacheForAgentOwned(
+  params: RefreshCostUsageCacheForAgentParams,
+  databasePath: string,
+  leaseOwner: OpenClawStateLeaseContext,
+): Promise<"refreshed"> {
+  // Cache writes only need transactional fence authority; retain the generic
+  // lease context separately for pre-scan ownership checks.
+  const transactionLeaseOwner: SessionCostUsageRefreshLeaseOwner = leaseOwner;
+  const agentDir = params.agentDir ?? resolveUsageCostAgentDir(params.config, params.agentId);
+  const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
+  const rows = readSessionCostUsageRollupRows(params.agentId, databasePath);
+  const rawValues = new Map(rows.map((row) => [row.key, row.valueJson]));
+  const rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath, rows);
+  const discoveredFiles = await listUsageCountedTranscriptStats(
+    params.agentId,
+    params.sessionsDir ? { sessionsDir: params.sessionsDir } : undefined,
+  );
+  const requestedFiles: UsageCostTranscriptFile[] = [];
+  for (const requested of params.sessionFiles ?? []) {
+    const resolved = await resolveUsageCostTranscriptFile(requested);
+    if (resolved) {
+      requestedFiles.push(resolved);
+    }
   }
-  try {
-    const agentDir = params.agentDir ?? resolveUsageCostAgentDir(params.config, params.agentId);
-    const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
-    const rows = readSessionCostUsageRollupRows(params.agentId, databasePath);
-    const rawValues = new Map(rows.map((row) => [row.key, row.valueJson]));
-    const rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath, rows);
-    const discoveredFiles = await listUsageCountedTranscriptStats(
-      params.agentId,
-      params.sessionsDir ? { sessionsDir: params.sessionsDir } : undefined,
-    );
-    const requestedFiles: UsageCostTranscriptFile[] = [];
-    for (const requested of params.sessionFiles ?? []) {
-      const resolved = await resolveUsageCostTranscriptFile(requested);
-      if (resolved) {
-        requestedFiles.push(resolved);
-      }
-    }
-    const filesByPath = new Map(discoveredFiles.map((file) => [file.filePath, file]));
-    for (const file of requestedFiles) {
-      filesByPath.set(file.filePath, file);
-    }
-    const files = [...filesByPath.values()];
-    deleteSessionCostUsageRollupsExcept({
+  const filesByPath = new Map(discoveredFiles.map((file) => [file.filePath, file]));
+  for (const file of requestedFiles) {
+    filesByPath.set(file.filePath, file);
+  }
+  const files = [...filesByPath.values()];
+  deleteSessionCostUsageRollupsExcept({
+    agentId: params.agentId,
+    databasePath,
+    leaseOwner: transactionLeaseOwner,
+    liveKeys: new Set(files.map((file) => file.filePath)),
+    rows,
+  });
+
+  const requestedPaths = new Set(requestedFiles.map((file) => file.filePath));
+  const refreshFiles =
+    requestedPaths.size > 0
+      ? files.filter((file) => requestedPaths.has(file.filePath))
+      : params.startMs === undefined
+        ? files
+        : files.filter((file) => file.mtimeMs >= params.startMs!);
+  const maxFiles =
+    params.maxFiles !== undefined && Number.isFinite(params.maxFiles) && params.maxFiles > 0
+      ? Math.floor(params.maxFiles)
+      : undefined;
+  const staleFiles = getUsageCostStaleRollupFiles({ rollups, files: refreshFiles })
+    .toSorted((a, b) => a.size - b.size || a.filePath.localeCompare(b.filePath))
+    .slice(0, maxFiles);
+  const resolveCost = createUsageCostResolver({ config: params.config, agentDir });
+
+  for (const file of staleFiles) {
+    leaseOwner.assertOwned();
+    const previous = rollups.get(file.filePath);
+    const entry = await scanUsageFileForRollup({
+      file,
+      previous,
+      pricingFingerprint,
+      resolveCost,
+    });
+    const valueJson = JSON.stringify(entry);
+    const written = writeSessionCostUsageRollup({
       agentId: params.agentId,
       databasePath,
-      liveKeys: new Set(files.map((file) => file.filePath)),
-      rows,
+      leaseOwner: transactionLeaseOwner,
+      rollupId: file.filePath,
+      previousValueJson: rawValues.get(file.filePath) ?? null,
+      valueJson,
+      updatedAt: entry.scannedAt,
     });
-
-    const requestedPaths = new Set<string>();
-    for (const file of requestedFiles) {
-      requestedPaths.add(file.filePath);
+    if (!written) {
+      throw new Error(`usage rollup changed while refreshing: ${file.filePath}`);
     }
-    const refreshFiles =
-      requestedPaths.size > 0
-        ? files.filter((file) => requestedPaths.has(file.filePath))
-        : params.startMs === undefined
-          ? files
-          : files.filter((file) => file.mtimeMs >= params.startMs!);
-    const maxFiles =
-      params.maxFiles !== undefined && Number.isFinite(params.maxFiles) && params.maxFiles > 0
-        ? Math.floor(params.maxFiles)
-        : undefined;
-    const staleFiles = getUsageCostStaleRollupFiles({ rollups, files: refreshFiles })
-      .toSorted((a, b) => a.size - b.size || a.filePath.localeCompare(b.filePath))
-      .slice(0, maxFiles);
-    const resolveCost = createUsageCostResolver({ config: params.config, agentDir });
+    rollups.set(file.filePath, { entry, valueJson });
+    rawValues.set(file.filePath, valueJson);
+  }
+  return "refreshed";
+}
 
-    for (const file of staleFiles) {
-      const previous = rollups.get(file.filePath);
-      const entry = await scanUsageFileForRollup({
-        file,
-        previous,
-        pricingFingerprint,
-        resolveCost,
-      });
-      const valueJson = JSON.stringify(entry);
-      const written = writeSessionCostUsageRollup({
-        agentId: params.agentId,
-        databasePath,
-        rollupId: file.filePath,
-        previousValueJson: rawValues.get(file.filePath) ?? null,
-        valueJson,
-        updatedAt: entry.scannedAt,
-      });
-      if (!written) {
-        throw new Error(`usage rollup changed while refreshing: ${file.filePath}`);
-      }
-      rollups.set(file.filePath, { entry, valueJson });
-      rawValues.set(file.filePath, valueJson);
+export async function refreshCostUsageCacheForAgent(
+  params: RefreshCostUsageCacheForAgentParams,
+): Promise<UsageCostRefreshResult> {
+  const databasePath = params.databasePath ?? resolveUsageCostCacheDatabasePath(params.agentId);
+  try {
+    return await withOpenClawStateLease(
+      {
+        ...SESSION_COST_USAGE_REFRESH_LEASE_OPTIONS,
+        database: { scope: "agent", agentId: params.agentId, path: databasePath },
+      },
+      async (leaseOwner) =>
+        await refreshCostUsageCacheForAgentOwned(params, databasePath, leaseOwner),
+    );
+  } catch (error) {
+    if (error instanceof OpenClawStateLeaseError && error.code === "OPENCLAW_STATE_LEASE_TIMEOUT") {
+      return "busy";
     }
-    return "refreshed";
-  } finally {
-    lock.release();
+    throw error;
   }
 }
