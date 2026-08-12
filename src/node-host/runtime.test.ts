@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { NODE_DEVICE_APPS_COMMAND } from "../infra/node-commands.js";
+import { NODE_DESKTOP_STREAM_COMMAND, NODE_DEVICE_APPS_COMMAND } from "../infra/node-commands.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import type { NodeHostClient } from "./client.js";
 import { listRegisteredNodeHostCapsAndCommands } from "./plugin-node-host.js";
@@ -177,6 +177,24 @@ describe("node-host invocation cancellation", () => {
     expect(held.signal?.aborted).toBe(true);
     held.release();
     await invoking;
+  });
+});
+
+describe("node-host desktop manifest", () => {
+  it("advertises desktop.stream only when the node-local desktop is enabled", async () => {
+    const disabled = await prepareNodeHostRuntime({
+      config: {},
+      env: { PATH: "/usr/bin" },
+      platform: "linux",
+    });
+    expect(disabled.manifest.commands).not.toContain(NODE_DESKTOP_STREAM_COMMAND);
+
+    const enabled = await prepareNodeHostRuntime({
+      config: { desktop: { host: { enabled: true } } },
+      env: { PATH: "/usr/bin" },
+      platform: "linux",
+    });
+    expect(enabled.manifest.commands).toContain(NODE_DESKTOP_STREAM_COMMAND);
   });
 });
 

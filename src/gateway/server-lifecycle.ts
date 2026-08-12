@@ -100,6 +100,8 @@ export async function prepareGatewayLifecycle(params: {
     defaultWorkspaceDir,
     activeTaskCount,
     residentRegistry,
+    desktopSessionRegistry,
+    nodeDesktopStreamBroker,
   } = runtime;
   const completeControlUiDeviceAuthMigrationForEffectiveOperator = (
     device: EffectiveOperatorDeviceIdentity,
@@ -180,6 +182,15 @@ export async function prepareGatewayLifecycle(params: {
       removeRemoteNodeInfoForConnection(nodeId, connId);
     },
   });
+  const nodeDesktopService =
+    desktopSessionRegistry && nodeDesktopStreamBroker
+      ? (await import("./desktop/node-source.js")).createNodeDesktopService({
+          getConfig: getRuntimeConfig,
+          nodeRegistry,
+          desktopRegistry: desktopSessionRegistry,
+          streamBroker: nodeDesktopStreamBroker,
+        })
+      : undefined;
   const { createWatchNodeHttpRuntime } = await import("./watch-node-http.js");
   const watchNodeHttpRuntime = createWatchNodeHttpRuntime({
     nodeRegistry,
@@ -633,6 +644,7 @@ export async function prepareGatewayLifecycle(params: {
     unsubscribeSessionMessageEvents,
     restartRecoveryCandidates,
     nodeRegistry,
+    nodeDesktopService,
     nodePresenceTimers,
     nodeSendToSession,
     nodeSendToAllSubscribed,

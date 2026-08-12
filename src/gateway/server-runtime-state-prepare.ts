@@ -6,6 +6,7 @@ import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { NODE_DESKTOP_STREAM_COMMAND } from "../infra/node-commands.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { runtimeForLogger } from "../logging/subsystem.js";
@@ -14,6 +15,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
+import { createNodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import { isLoopbackHost } from "./net.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
@@ -117,13 +119,24 @@ export async function prepareGatewayKernelState(params: {
     Boolean(workerEnvironmentStartup?.hasNonlocalPlacementRecords);
   const hostDesktopConfig = gatewayPluginConfigAtStart.desktop?.host;
   const hostDesktopEnabled = hostDesktopConfig?.enabled === true;
+  const nodeCommandConfig = gatewayPluginConfigAtStart.gateway?.nodes?.commands;
+  const nodeDesktopObserveAvailable =
+    (nodeCommandConfig?.allow ?? []).some(
+      (command) => command.trim() === NODE_DESKTOP_STREAM_COMMAND,
+    ) &&
+    !(nodeCommandConfig?.deny ?? []).some(
+      (command) => command.trim() === NODE_DESKTOP_STREAM_COMMAND,
+    );
   const workerGatewayEndpoint = {
     resolve: (() => undefined) as () => { host: "127.0.0.1" | "::1"; port: number } | undefined,
   };
   const desktopSessionRegistry =
-    shouldStartWorkerEnvironmentService || hostDesktopEnabled
+    shouldStartWorkerEnvironmentService || hostDesktopEnabled || nodeDesktopObserveAvailable
       ? createDesktopSessionRegistry()
       : undefined;
+  const nodeDesktopStreamBroker = nodeDesktopObserveAvailable
+    ? createNodeDesktopStreamBroker()
+    : undefined;
   const hostDesktopService =
     hostDesktopConfig && hostDesktopEnabled && desktopSessionRegistry
       ? (
@@ -181,7 +194,8 @@ export async function prepareGatewayKernelState(params: {
     : undefined;
   const workerDesktopObserveAvailable =
     Boolean(workerEnvironmentService) && gatewayPluginConfigAtStart.cloudWorkers?.desktop === true;
-  const desktopObserveAvailable = workerDesktopObserveAvailable || Boolean(hostDesktopService);
+  const desktopObserveAvailable =
+    workerDesktopObserveAvailable || nodeDesktopObserveAvailable || Boolean(hostDesktopService);
   const channelLogs = Object.fromEntries(
     listGatewayStartupChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
@@ -440,6 +454,7 @@ export async function prepareGatewayKernelState(params: {
       (await watchNodeRequestHandler.current?.(req, res)) ?? false,
     workerIngressEnabled: Boolean(workerEnvironmentService),
     desktopSessionRegistry,
+    nodeDesktopStreamBroker,
     clients: connectionState.clients,
   });
   const {
@@ -473,6 +488,8 @@ export async function prepareGatewayKernelState(params: {
     workerDesktopObserveAvailable,
     desktopObserveAvailable,
     desktopSessionRegistry,
+    nodeDesktopObserveAvailable,
+    nodeDesktopStreamBroker,
     hostDesktopService,
     channelLogs,
     channelRuntimeEnvs,

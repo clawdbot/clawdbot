@@ -79,6 +79,7 @@ type GatewayRequestContextParams = {
     scopes: string[];
   }) => void;
   nodeRegistry: GatewayRequestContext["nodeRegistry"];
+  nodeDesktopService?: GatewayRequestContext["nodeDesktopService"];
   workerEnvironmentService?: GatewayRequestContext["workerEnvironmentService"];
   hostDesktopService?: GatewayRequestContext["hostDesktopService"];
   workerSessionPlacementService?: GatewayRequestContext["workerSessionPlacementService"];
@@ -365,6 +366,7 @@ export function createGatewayRequestContext(
     releaseControlUiDeviceAuthMigrationClaim: params.releaseControlUiDeviceAuthMigrationClaim,
     completeControlUiDeviceAuthMigration: params.completeControlUiDeviceAuthMigration,
     nodeRegistry: params.nodeRegistry,
+    ...(params.nodeDesktopService ? { nodeDesktopService: params.nodeDesktopService } : {}),
     ...(params.workerEnvironmentService
       ? { workerEnvironmentService: params.workerEnvironmentService }
       : {}),

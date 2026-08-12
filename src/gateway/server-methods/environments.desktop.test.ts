@@ -160,12 +160,31 @@ describe("desktop gateway methods", () => {
   });
 
   it("rejects unknown desktop source kinds before dispatch", async () => {
-    const [ok, , error] = await invoke(
-      "desktop.observe",
-      { source: { kind: "node", nodeId: "one" } },
-      {},
-    );
+    const [ok, , error] = await invoke("desktop.observe", { source: { kind: "future" } }, {});
     expect(ok).toBe(false);
     expect(error.code).toBe(ErrorCodes.INVALID_REQUEST);
+  });
+
+  it("forwards node credentials only to the paired-node desktop service", async () => {
+    const observe = vi.fn(async () => ({
+      transport: "rfb" as const,
+      wsPath: "/desktop/observe?token=node",
+      expiresAtMs: 42,
+      control: false,
+      auth: "vnc-password" as const,
+    }));
+    const credentials = { password: "memory-only-node-password" };
+    const [ok, result] = await invoke(
+      "desktop.observe",
+      { source: { kind: "node", nodeId: "node-1" }, credentials },
+      { nodeDesktopService: { observe } },
+    );
+    expect(ok).toBe(true);
+    expect(result).not.toHaveProperty("vncPassword");
+    expect(observe).toHaveBeenCalledWith({
+      nodeId: "node-1",
+      control: false,
+      credentials,
+    });
   });
 });

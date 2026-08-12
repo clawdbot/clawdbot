@@ -18,6 +18,8 @@ export const NODE_BROWSER_PROXY_COMMANDS = [
 export const NODE_MCP_TOOLS_CALL_COMMAND = "mcp.tools.call.v1";
 export const NODE_AGENT_CLI_CLAUDE_RUN_COMMAND = "agent.cli.claude.run.v1";
 export const NODE_DEVICE_APPS_COMMAND = "device.apps";
+export const NODE_DESKTOP_STREAM_COMMAND = "desktop.stream";
+export const NODE_DESKTOP_ATTACH_PATH = "/node-desktop/attach";
 
 // Node duplex heartbeats must arrive before the Gateway relay declares the
 // invoke idle, so both processes share this timeout contract.

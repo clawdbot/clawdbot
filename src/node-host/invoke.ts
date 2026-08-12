@@ -38,6 +38,7 @@ import {
 } from "../infra/host-env-security.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
+  NODE_DESKTOP_STREAM_COMMAND,
   NODE_DEVICE_APPS_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
 } from "../infra/node-commands.js";
@@ -45,6 +46,7 @@ import { logWarn } from "../logger.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import type { NodeHostClient } from "./client.js";
+import { invokeNodeDesktopStream } from "./desktop-stream-command.js";
 import {
   handleClaudeCliNodeInvoke,
   type NodeHostInvokeRuntime,
@@ -614,6 +616,27 @@ async function dispatchInvoke(
       await sendJsonPayloadResult(client, frame, result.payload);
     } else {
       await sendErrorResult(client, frame, result.code, result.message);
+    }
+    return;
+  }
+  if (command === NODE_DESKTOP_STREAM_COMMAND) {
+    try {
+      await invokeNodeDesktopStream({
+        paramsJSON: frame.paramsJSON,
+        gatewayUrl: runtime.gatewayUrl,
+        gatewayTlsFingerprint: runtime.gatewayTlsFingerprint,
+        config: runtime.desktopHostConfig,
+        signal: runtime.signal,
+        emitStatus: runtime.emitProgress,
+      });
+      await sendJsonPayloadResult(client, frame, { status: "closed" });
+    } catch (error) {
+      await sendErrorResult(
+        client,
+        frame,
+        "UNAVAILABLE",
+        error instanceof Error ? error.message : "desktop stream unavailable",
+      );
     }
     return;
   }
