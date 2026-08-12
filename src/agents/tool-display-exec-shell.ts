@@ -488,7 +488,12 @@ export function hasShellCompoundCommand(command: string): boolean {
     unquoted[index] = char;
     return true;
   });
-  return /(?:^|;|&&|\|\||\n)\s*(?:(?:for|while|until|if|case)\b|\{)/u.test(unquoted.join(""));
+  const syntax = unquoted.join("");
+  return (
+    /(?:^|;|&&|\|\||\n)\s*(?:(?:for|while|until|if|case)\b|\{)/u.test(syntax) ||
+    /(?:^|;|&&|\|\||\n)\s*\(/u.test(syntax) ||
+    /\b[A-Za-z_][A-Za-z0-9_]*\s*\(\s*\)\s*\{/u.test(syntax)
+  );
 }
 
 /** Splits a command on top-level stage separators such as `;`, `&&`, and `||`. */

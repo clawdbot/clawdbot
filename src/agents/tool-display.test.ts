@@ -266,22 +266,19 @@ describe("tool display details", () => {
   it("keeps shell compound commands intact instead of inventing command stages", () => {
     const loop = 'for d in $(find . -type d); do echo "$d"; ls "$d"; done';
     const conditional = "echo start && if test -f package.json; then pnpm test; fi";
+    const subshell = "(echo one; echo two)";
+    const functionBody = "f() { echo one; echo two; }";
     const quoted = "printf '%s' '; if ' && pnpm test";
 
-    for (const command of [loop, conditional]) {
+    for (const command of [loop, conditional, subshell, functionBody]) {
       expect(splitTopLevelStages(command)).toEqual([command]);
+      expect(
+        formatToolDetail(
+          resolveToolDisplay({ name: "exec", args: { command }, detailMode: "explain" }),
+        ),
+      ).toBe(command);
     }
 
-    expect(
-      formatToolDetail(
-        resolveToolDisplay({ name: "exec", args: { command: loop }, detailMode: "explain" }),
-      ),
-    ).toBe(loop);
-    expect(
-      formatToolDetail(
-        resolveToolDisplay({ name: "exec", args: { command: conditional }, detailMode: "explain" }),
-      ),
-    ).toBe(conditional);
     expect(splitTopLevelStages(quoted)).toEqual(["printf '%s' '; if '", "pnpm test"]);
     expect(
       formatToolDetail(
