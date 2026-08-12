@@ -18,6 +18,8 @@ replica_url_for_db() {
       relative_path=${resolved_path#"$STATE_ROOT/state/"}
       replica_path="replicas/state/$relative_path"
       ;;
+    # case globs match "/" (fnmatch without FNM_PATHNAME), so this accepts the
+    # nested canonical layout agents/<id>/agent/openclaw-agent.sqlite.
     "$STATE_ROOT"/agents/*.sqlite)
       relative_path=${resolved_path#"$STATE_ROOT/agents/"}
       replica_path="replicas/agents/$relative_path"

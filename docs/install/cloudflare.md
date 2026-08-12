@@ -119,6 +119,12 @@ At boot, the entrypoint uses R2's S3 `ListObjectsV2` API as the restore manifest
   </Step>
 
   <Step title="Bootstrap OpenClaw">
+    First boot needs one interactive session inside the Container. SSH access ships disabled; enable it temporarily by adding this to the container entry in `wrangler.jsonc`, then redeploy:
+
+    ```jsonc
+    "ssh": { "enabled": true }
+    ```
+
     Open the deployed Worker URL once to start the instance. Then locate the application and instance IDs and connect:
 
     ```bash
@@ -126,6 +132,8 @@ At boot, the entrypoint uses R2's S3 `ListObjectsV2` API as the restore manifest
     npx wrangler containers instances <application-id> --json
     npx wrangler containers ssh <instance-id>
     ```
+
+    SSH is wrangler-mediated and limited to accounts with container write access. After bootstrap you can remove the `ssh` block and redeploy; the restored state survives the replacement via Litestream.
 
     Inside the Container, run a SecretRef-based setup. This example uses OpenAI and Telegram:
 
