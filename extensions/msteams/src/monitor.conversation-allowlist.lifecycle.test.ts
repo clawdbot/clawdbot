@@ -63,7 +63,8 @@ vi.mock("../runtime-api.js", async () => {
       resolveChannelLimitMb: (context: { cfg: OpenClawConfig }) => number | undefined;
     }) => {
       const mediaMaxMb =
-        params.resolveChannelLimitMb({ cfg: params.cfg }) ?? params.cfg.agents?.defaults?.mediaMaxMb;
+        params.resolveChannelLimitMb({ cfg: params.cfg }) ??
+        params.cfg.agents?.defaults?.mediaMaxMb;
       return typeof mediaMaxMb === "number" && mediaMaxMb > 0
         ? Math.floor(mediaMaxMb * 1024 * 1024)
         : undefined;
