@@ -98,6 +98,15 @@ Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` sum
 `.artifacts/check-changed-receipts` by default; use `--proof-receipt-dir <dir>`
 for isolated benchmark or CI experiments.
 
+When `check:changed` delegates to Blacksmith Testbox, the macOS caller does not
+trust a local receipt to bypass the remote runtime. Instead, it forwards a
+bounded bundle of full prior receipts to the fresh Testbox. The remote child
+rebuilds the current expected proof inputs under its own checkout, Node, wrapper,
+tool, and config closure, then applies the same exact/descendant-safe evaluator
+before deciding whether to skip a native `tsgo` or `tsgolint` child. After a
+successful remote plan, Crabbox retrieves one required proof-export artifact and
+the caller imports only schema-valid passed receipts from that bounded bundle.
+
 Reuse is deliberately narrow. Exact-target reuse still requires a schema-valid
 receipt with `status=passed`, `exitCode=0`, `ranTool=true`, the same command
 family, and matching repo identity, base/head, merge-base, Git head/tree,

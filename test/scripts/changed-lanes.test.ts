@@ -1,6 +1,13 @@
 // Changed Lanes tests cover changed lanes script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -19,7 +26,12 @@ import {
 import {
   commandFamily,
   createCheckProofReceipt,
+  createCheckProofReceiptBundleFromDir,
+  decodeCheckProofReceiptBundleFromEnv,
+  encodeCheckProofReceiptBundleForEnv,
   createWrapperProof,
+  importCheckProofReceiptBundle,
+  readCheckProofReceiptBundleFromArtifactTarball,
   type DescendantProofPlan,
   type DescendantProofReuseOptions,
   evaluateReusableReceipt,
@@ -57,6 +69,7 @@ import {
   shouldRunWrapperShadowingCheck,
   createNpmLockGuardCommand,
   delegationFailedBeforeRunning,
+  resolveChangedCheckProofArtifactPath,
 } from "../../scripts/check-changed.mts";
 import { resolveOxfmtInvocation } from "../../scripts/format-docs.mts";
 import { isDirectRunPath } from "../../scripts/lib/direct-run.mjs";
@@ -154,6 +167,75 @@ function writeRepoFile(repoDir: string, filePath: string, contents: string): voi
 
 const prettyJson = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
 const cloneJson = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+const emptyProofBundleJson =
+  '{"schemaVersion":1,"artifact":"changed-check evidence receipt bundle","receipts":[],"digest":"fbc8f7c0412a18f1e1a1b82206a9dbc886fe8bc4e2a6819bfe9c2348464b7faa"}';
+
+function writeFakeSuccessfulCrabboxNode(binDir: string): void {
+  writeFileSync(
+    path.join(binDir, "node"),
+    [
+      "#!/bin/sh",
+      "set -eu",
+      "export_path=",
+      "lease=tbx_fake",
+      'while [ "$#" -gt 0 ]; do',
+      '  if [ "$1" = "--artifact-glob" ]; then',
+      "    shift",
+      '    export_path="$1"',
+      "  fi",
+      "  shift || true",
+      "done",
+      'if [ -z "$export_path" ]; then exit 1; fi',
+      'mkdir -p "$(dirname "$export_path")" ".crabbox/runs/$lease"',
+      `printf '%s' ${JSON.stringify(emptyProofBundleJson)} > "$export_path"`,
+      'tar -czf ".crabbox/runs/$lease/blacksmith-artifacts.tgz" "$export_path"',
+      'printf \'{"provider":"blacksmith-testbox","leaseId":"%s","exitCode":0,"artifacts":[{"kind":"artifact-glob","path":"%s/.crabbox/runs/%s/blacksmith-artifacts.tgz"}]}\\n\' "$lease" "$PWD" "$lease" >&2',
+      "exit 0",
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+}
+
+function writeFakeLifecycleCrabboxNode(binDir: string): void {
+  writeFileSync(
+    path.join(binDir, "node"),
+    [
+      "#!/bin/sh",
+      "set -eu",
+      "export_path=",
+      "prior_bundle=",
+      "lease=tbx_lifecycle",
+      'while [ "$#" -gt 0 ]; do',
+      '  if [ "$1" = "--artifact-glob" ]; then',
+      "    shift",
+      '    export_path="$1"',
+      "  else",
+      '    case "$1" in',
+      '      OPENCLAW_CHECK_CHANGED_PRIOR_RECEIPTS_B64=*) prior_bundle="${1#OPENCLAW_CHECK_CHANGED_PRIOR_RECEIPTS_B64=}" ;;',
+      "    esac",
+      "  fi",
+      "  shift || true",
+      "done",
+      'if [ -z "$export_path" ]; then exit 1; fi',
+      'if [ -n "$prior_bundle" ]; then',
+      '  printf "%s" "$prior_bundle" > "$CAPTURE_BUNDLE_PATH"',
+      "else",
+      "  count=0",
+      '  if [ -f "$HEAVY_COUNT_PATH" ]; then count="$(cat "$HEAVY_COUNT_PATH")"; fi',
+      "  count=$((count + 1))",
+      '  printf "%s\\n" "$count" > "$HEAVY_COUNT_PATH"',
+      "fi",
+      'mkdir -p "$(dirname "$export_path")" ".crabbox/runs/$lease"',
+      'cp "$FIRST_BUNDLE_PATH" "$export_path"',
+      'tar -czf ".crabbox/runs/$lease/blacksmith-artifacts.tgz" "$export_path"',
+      'printf \'{"provider":"blacksmith-testbox","leaseId":"%s","exitCode":0,"artifacts":[{"kind":"artifact-glob","path":"%s/.crabbox/runs/%s/blacksmith-artifacts.tgz"}]}\\n\' "$lease" "$PWD" "$lease" >&2',
+      "exit 0",
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+}
 
 function createProofRepo(prefix: string) {
   const dir = makeTempRepoRoot(tempDirs, prefix);
@@ -494,7 +576,7 @@ describe("scripts/changed-lanes", () => {
       OPENCLAW_TESTBOX: "1",
     });
 
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain(expected.contains);
     expect(result.stdout).not.toContain(expected.excludes);
@@ -506,7 +588,7 @@ describe("scripts/changed-lanes", () => {
       PATH: "/nonexistent",
     });
 
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe("");
     expect(result.stderr.trim()).toBe("[check:changed] no changed paths; nothing to run");
   });
@@ -518,7 +600,7 @@ describe("scripts/changed-lanes", () => {
     commitAll(dir, "initial");
     const binDir = path.join(dir, "bin");
     mkdirSync(binDir, { recursive: true });
-    writeFileSync(path.join(binDir, "node"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    writeFakeSuccessfulCrabboxNode(binDir);
 
     const result = spawnSync(process.execPath, [path.join(repoRoot, "scripts/check-changed.mjs")], {
       cwd: dir,
@@ -533,7 +615,7 @@ describe("scripts/changed-lanes", () => {
       },
     });
 
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toContain("delegating through Crabbox workload routing");
     expect(result.stderr).not.toContain("ambiguous argument");
   });
@@ -548,7 +630,7 @@ describe("scripts/changed-lanes", () => {
     writeRepoFile(dir, "node_modules/typescript/package.json", '{"name":"typescript"}\n');
     const binDir = path.join(dir, "bin");
     mkdirSync(binDir, { recursive: true });
-    writeFileSync(path.join(binDir, "node"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    writeFakeSuccessfulCrabboxNode(binDir);
 
     const result = spawnSync(
       process.execPath,
@@ -567,8 +649,115 @@ describe("scripts/changed-lanes", () => {
       },
     );
 
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toContain("delegating through Crabbox workload routing");
+  });
+
+  it("persists delegated remote proof and forwards it to the next Testbox without a duplicate native child", () => {
+    const repo = createProofRepo("changed-check-delegated-proof-lifecycle-");
+    writeRepoFile(repo.dir, "src/core.ts", "export const core = 42;\n");
+    commitAll(repo.dir, "core producer");
+    const producerHead = git(repo.dir, ["rev-parse", "HEAD"]);
+    const remoteEnv = {
+      CI: "1",
+      OPENCLAW_CHECK_CHANGED_REMOTE_CHILD: "1",
+      OPENCLAW_CHANGED_LANES_RAW_SYNC: "1",
+      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
+      PATH: "/usr/bin",
+    };
+    const plan = createChangedCheckPlan(detectChangedLanes(["src/core.ts"]), {
+      base: repo.base,
+      env: remoteEnv,
+      head: producerHead,
+    });
+    const planCommand = expectDefined(
+      plan.commands.find((command) => command.name === "typecheck core"),
+      "typecheck core command",
+    );
+    const command = planCommand.bin
+      ? ({ ...planCommand, bin: planCommand.bin } as ReturnType<typeof createPnpmManagedCommand>)
+      : createPnpmManagedCommand(planCommand);
+    const wrapperProof = createWrapperProofForCommand("typecheck core", repo.dir);
+    const receipt = createCheckProofReceipt({
+      command,
+      context: {
+        base: repo.base,
+        changedPaths: ["src/core.ts"],
+        cwd: repo.dir,
+        head: producerHead,
+        planCommands: plan.commands,
+        planSummary: plan.summary,
+      },
+      exitCode: 0,
+      expectedWrapperProof: wrapperProof,
+      wrapperProof,
+    });
+    const firstReceiptDir = makeTempRepoRoot(tempDirs, "changed-check-first-remote-receipts-");
+    writeCheckProofReceipt(firstReceiptDir, receipt);
+    const firstBundlePath = path.join(repo.dir, "first-remote-bundle.json");
+    writeFileSync(
+      firstBundlePath,
+      prettyJson(createCheckProofReceiptBundleFromDir(firstReceiptDir)),
+    );
+
+    const binDir = path.join(repo.dir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    writeFakeLifecycleCrabboxNode(binDir);
+    const heavyCountPath = path.join(repo.dir, "remote-heavy-count.txt");
+    const captureBundlePath = path.join(repo.dir, "second-prior-bundle.txt");
+    const env = {
+      ...createNestedGitEnv(),
+      CAPTURE_BUNDLE_PATH: captureBundlePath,
+      CI: "",
+      FIRST_BUNDLE_PATH: firstBundlePath,
+      GITHUB_ACTIONS: "",
+      HEAVY_COUNT_PATH: heavyCountPath,
+      OPENCLAW_CHECK_CHANGED_REMOTE_CHILD: "",
+      OPENCLAW_TESTBOX: "1",
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+    };
+    const script = path.join(repoRoot, "scripts/check-changed.mjs");
+    const args = ["--base", repo.base, "--head", "HEAD"];
+
+    const first = spawnSync(process.execPath, [script, ...args], {
+      cwd: repo.dir,
+      encoding: "utf8",
+      env,
+    });
+    expect(first.status, first.stderr).toBe(0);
+    expect(first.stderr).toContain("imported remote changed-check proof receipts: 1");
+    expect(readFileSync(heavyCountPath, "utf8").trim()).toBe("1");
+    expect(
+      existsSync(
+        path.join(repo.dir, ".artifacts/check-changed-receipts", `${receipt.fingerprint}.json`),
+      ),
+    ).toBe(true);
+
+    const second = spawnSync(process.execPath, [script, ...args], {
+      cwd: repo.dir,
+      encoding: "utf8",
+      env,
+    });
+    expect(second.status, second.stderr).toBe(0);
+    expect(readFileSync(heavyCountPath, "utf8").trim()).toBe("1");
+
+    const decoded = decodeCheckProofReceiptBundleFromEnv(
+      readFileSync(captureBundlePath, "utf8").trim(),
+    );
+    expect(decoded.ok).toBe(true);
+    if (!decoded.ok) {
+      throw new Error(decoded.reason);
+    }
+    const stagedReceiptDir = makeTempRepoRoot(tempDirs, "changed-check-second-remote-receipts-");
+    expect(importCheckProofReceiptBundle(stagedReceiptDir, decoded.bundle)).toEqual(
+      expect.objectContaining({ imported: 1 }),
+    );
+    expect(evaluateReusableReceipt(stagedReceiptDir, receipt)).toEqual(
+      expect.objectContaining({
+        reusable: true,
+        reason: "exact-target evidence reuse",
+      }),
+    );
   });
 
   it.each([
@@ -1355,6 +1544,8 @@ describe("scripts/changed-lanes", () => {
       wrapperProof,
     });
 
+    expect(stored.requiredInputs.repo).not.toHaveProperty("worktreeRoot");
+    expect(stored.producer.worktreeRoot).toBe(repoRoot);
     expect(isReusableCheckProofReceipt(stored, expected)).toBe(true);
     writeCheckProofReceipt(receiptDir, stored);
     expect(evaluateReusableReceipt(receiptDir, expected)).toEqual(
@@ -1382,6 +1573,167 @@ describe("scripts/changed-lanes", () => {
         expected,
       ),
     ).toBe(false);
+  });
+
+  it("round-trips bounded remote proof bundles without letting failed writes overwrite PASS", () => {
+    const fixture = createStoredProof({
+      commandName: "typecheck core",
+      producerContents: "export const core = 21;\n",
+      producerPath: "src/core.ts",
+    });
+    const encoded = expectDefined(
+      encodeCheckProofReceiptBundleForEnv(fixture.receiptDir),
+      "encoded receipt bundle",
+    );
+    const decoded = decodeCheckProofReceiptBundleFromEnv(encoded);
+    expect(decoded.ok).toBe(true);
+    if (!decoded.ok) {
+      throw new Error(decoded.reason);
+    }
+    expect(decoded.bundle.receipts).toHaveLength(1);
+
+    const importedDir = makeTempRepoRoot(tempDirs, "changed-check-imported-evidence-");
+    expect(importCheckProofReceiptBundle(importedDir, decoded.bundle)).toEqual(
+      expect.objectContaining({ imported: 1 }),
+    );
+    const expected = createExpectedProof({
+      currentPaths: ["src/core.ts"],
+      fixture,
+    });
+    expect(evaluateReusableReceipt(importedDir, expected)).toEqual(
+      expect.objectContaining({
+        reusable: true,
+        reason: "exact-target evidence reuse",
+      }),
+    );
+
+    const skipped = cloneJson(fixture.receipt);
+    skipped.status = "skipped";
+    skipped.ranTool = false;
+    writeCheckProofReceipt(importedDir, skipped);
+    const failed = cloneJson(fixture.receipt);
+    failed.status = "failed";
+    failed.exitCode = 1;
+    writeCheckProofReceipt(importedDir, failed);
+
+    expect(
+      JSON.parse(
+        readFileSync(path.join(importedDir, `${fixture.receipt.fingerprint}.json`), "utf8"),
+      ),
+    ).toEqual(expect.objectContaining({ status: "passed", ranTool: true }));
+    expect(createCheckProofReceiptBundleFromDir(importedDir).receipts).toHaveLength(1);
+    expect(evaluateReusableReceipt(importedDir, expected)).toEqual(
+      expect.objectContaining({ reusable: true }),
+    );
+  });
+
+  it("fails closed for malformed remote bundles and unsafe Crabbox artifact archives", () => {
+    const fixture = createStoredProof({
+      commandName: "typecheck core",
+      producerContents: "export const core = 22;\n",
+      producerPath: "src/core.ts",
+    });
+    const bundle = createCheckProofReceiptBundleFromDir(fixture.receiptDir);
+    const bundleJson = prettyJson(bundle);
+    const exportPath = ".artifacts/check-changed-proof-export/testnonce.json";
+    const artifactRoot = makeTempRepoRoot(tempDirs, "changed-check-proof-artifact-");
+    mkdirSync(path.join(artifactRoot, path.dirname(exportPath)), { recursive: true });
+    writeFileSync(path.join(artifactRoot, exportPath), bundleJson, "utf8");
+    const tarballPath = path.join(artifactRoot, "proof.tgz");
+    execFileSync("tar", ["-czf", tarballPath, exportPath], { cwd: artifactRoot });
+
+    expect(readCheckProofReceiptBundleFromArtifactTarball(tarballPath, exportPath)).toEqual(
+      expect.objectContaining({ receipts: [fixture.receipt] }),
+    );
+
+    const badDigest = { ...bundle, digest: "0".repeat(64) };
+    const badEncoded = Buffer.from(prettyJson(badDigest), "utf8").toString("base64");
+    expect(decodeCheckProofReceiptBundleFromEnv(badEncoded)).toEqual(
+      expect.objectContaining({ ok: false, reason: "changed-check proof bundle digest mismatch" }),
+    );
+    expect(decodeCheckProofReceiptBundleFromEnv("not-base64")).toEqual(
+      expect.objectContaining({ ok: false }),
+    );
+    expect(
+      decodeCheckProofReceiptBundleFromEnv(
+        Buffer.from("x".repeat(70 * 1024), "utf8").toString("base64"),
+      ),
+    ).toEqual(expect.objectContaining({ ok: false }));
+
+    const extraRoot = makeTempRepoRoot(tempDirs, "changed-check-proof-extra-");
+    mkdirSync(path.join(extraRoot, path.dirname(exportPath)), { recursive: true });
+    writeFileSync(path.join(extraRoot, exportPath), bundleJson, "utf8");
+    writeFileSync(path.join(extraRoot, "extra.json"), "{}\n", "utf8");
+    const extraTarball = path.join(extraRoot, "extra.tgz");
+    execFileSync("tar", ["-czf", extraTarball, exportPath, "extra.json"], { cwd: extraRoot });
+    expect(() => readCheckProofReceiptBundleFromArtifactTarball(extraTarball, exportPath)).toThrow(
+      /member mismatch/u,
+    );
+
+    const symlinkRoot = makeTempRepoRoot(tempDirs, "changed-check-proof-symlink-");
+    mkdirSync(path.join(symlinkRoot, path.dirname(exportPath)), { recursive: true });
+    writeFileSync(path.join(symlinkRoot, "real.json"), bundleJson, "utf8");
+    symlinkSync("../../real.json", path.join(symlinkRoot, exportPath));
+    const symlinkTarball = path.join(symlinkRoot, "symlink.tgz");
+    execFileSync("tar", ["-czf", symlinkTarball, exportPath], { cwd: symlinkRoot });
+    expect(() =>
+      readCheckProofReceiptBundleFromArtifactTarball(symlinkTarball, exportPath),
+    ).toThrow(/regular file/u);
+  });
+
+  it("resolves the exact Blacksmith artifact tarball from final timing JSON", () => {
+    const root = makeTempRepoRoot(tempDirs, "changed-check-proof-timing-");
+    const preserved = path.join(root, ".crabbox", "runs", "tbx_test", "blacksmith-artifacts.tgz");
+    mkdirSync(path.dirname(preserved), { recursive: true });
+    writeFileSync(preserved, "tarball\n", "utf8");
+    const timing = JSON.stringify({
+      provider: "blacksmith-testbox",
+      leaseId: "tbx_test",
+      exitCode: 0,
+      artifacts: [
+        {
+          kind: "artifact-glob",
+          path: "/tmp/openclaw-crabbox-sync/.crabbox/runs/tbx_test/blacksmith-artifacts.tgz",
+        },
+      ],
+    });
+
+    expect(resolveChangedCheckProofArtifactPath(`noise\n${timing}\n`, root)).toBe(preserved);
+    const arbitrary = path.join(root, "blacksmith-artifacts.tgz");
+    writeFileSync(arbitrary, "tarball\n", "utf8");
+    expect(() =>
+      resolveChangedCheckProofArtifactPath(
+        JSON.stringify({
+          provider: "blacksmith-testbox",
+          leaseId: "tbx_test",
+          exitCode: 0,
+          artifacts: [{ kind: "artifact-glob", path: arbitrary }],
+        }),
+        root,
+      ),
+    ).toThrow(/does not match lease-local/u);
+    expect(() =>
+      resolveChangedCheckProofArtifactPath(
+        JSON.stringify({
+          provider: "blacksmith-testbox",
+          leaseId: "tbx_test",
+          exitCode: 0,
+          artifacts: [],
+        }),
+        root,
+      ),
+    ).toThrow(/did not report an artifact-glob/u);
+    expect(() =>
+      resolveChangedCheckProofArtifactPath(
+        JSON.stringify({
+          provider: "blacksmith-testbox",
+          leaseId: "tbx_test",
+          exitCode: 1,
+          artifacts: [{ kind: "artifact-glob", path: preserved }],
+        }),
+        root,
+      ),
+    ).toThrow(/did not report success/u);
   });
 
   it("reuses ancestor proof when descendant commits are docs-only or release metadata only", () => {
@@ -1595,7 +1947,11 @@ describe("scripts/changed-lanes", () => {
     git(nonAncestor.dir, ["switch", "-q", "main"]);
     const nonAncestorReceipt = cloneJson(nonAncestor.receipt);
     nonAncestorReceipt.requiredInputs.git.currentHead = sideHead;
-    writeCheckProofReceipt(nonAncestor.receiptDir, nonAncestorReceipt);
+    writeFileSync(
+      path.join(nonAncestor.receiptDir, `${nonAncestorReceipt.fingerprint}.json`),
+      prettyJson(nonAncestorReceipt),
+      "utf8",
+    );
     writeRepoFile(nonAncestor.dir, "docs/current.md", "current\n");
     commitAll(nonAncestor.dir, "current descendant");
     expect(
@@ -1621,7 +1977,11 @@ describe("scripts/changed-lanes", () => {
     });
     const unresolvedReceipt = cloneJson(unresolved.receipt);
     unresolvedReceipt.requiredInputs.git.currentHead = "f".repeat(40);
-    writeCheckProofReceipt(unresolved.receiptDir, unresolvedReceipt);
+    writeFileSync(
+      path.join(unresolved.receiptDir, `${unresolvedReceipt.fingerprint}.json`),
+      prettyJson(unresolvedReceipt),
+      "utf8",
+    );
     writeRepoFile(unresolved.dir, "docs/current.md", "current\n");
     commitAll(unresolved.dir, "current descendant");
     expect(
@@ -1673,7 +2033,11 @@ describe("scripts/changed-lanes", () => {
     const skippedReceipt = cloneJson(skipped.receipt);
     skippedReceipt.status = "skipped";
     skippedReceipt.ranTool = false;
-    writeCheckProofReceipt(skipped.receiptDir, skippedReceipt);
+    writeFileSync(
+      path.join(skipped.receiptDir, `${skippedReceipt.fingerprint}.json`),
+      prettyJson(skippedReceipt),
+      "utf8",
+    );
     writeRepoFile(skipped.dir, "docs/current.md", "current\n");
     commitAll(skipped.dir, "current descendant");
     expect(
@@ -2086,7 +2450,14 @@ describe("scripts/changed-lanes", () => {
     ).toBe(true);
     expect(changedCheckRequiresRemote(result)).toBe(true);
 
-    expect(buildChangedCheckCrabboxArgs(["--base", "origin/main", "--head", "HEAD"])).toEqual([
+    const proofExportPath = ".artifacts/check-changed-proof-export/testnonce.json";
+    const receiptDir = makeTempRepoRoot(tempDirs, "changed-check-empty-proof-bundle-");
+    const args = buildChangedCheckCrabboxArgs(["--base", "origin/main", "--head", "HEAD"], {
+      proofExportPath,
+      proofReceiptDir: receiptDir,
+    });
+
+    expect(args).toEqual([
       "scripts/crabbox-wrapper.mjs",
       "run",
       "--workload",
@@ -2096,12 +2467,17 @@ describe("scripts/changed-lanes", () => {
       "--ttl",
       "240m",
       "--timing-json",
+      "--artifact-glob",
+      proofExportPath,
+      "--require-artifact",
+      proofExportPath,
       "--",
       "env",
       "OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1",
       "OPENCLAW_CHANGED_LANES_RAW_SYNC=1",
       "CI=1",
       "PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false",
+      `OPENCLAW_CHECK_CHANGED_PROOF_EXPORT=${proofExportPath}`,
       "corepack",
       "pnpm",
       "check:changed",
@@ -2110,6 +2486,31 @@ describe("scripts/changed-lanes", () => {
       "--head",
       "HEAD",
     ]);
+    expect(args).not.toContain("--download");
+    expect(args.some((arg) => /SKIP|skip/u.test(arg))).toBe(false);
+
+    const fixture = createStoredProof({
+      commandName: "typecheck core",
+      producerContents: "export const core = 23;\n",
+      producerPath: "src/core.ts",
+    });
+    const bundledArgs = buildChangedCheckCrabboxArgs(["--base", "origin/main"], {
+      proofExportPath,
+      proofReceiptDir: fixture.receiptDir,
+    });
+    const bundleEnv = expectDefined(
+      bundledArgs.find((arg) => arg.startsWith("OPENCLAW_CHECK_CHANGED_PRIOR_RECEIPTS_B64=")),
+      "prior bundle env",
+    );
+    const decoded = decodeCheckProofReceiptBundleFromEnv(
+      bundleEnv.slice("OPENCLAW_CHECK_CHANGED_PRIOR_RECEIPTS_B64=".length),
+    );
+    expect(decoded).toEqual(
+      expect.objectContaining({
+        ok: true,
+        bundle: expect.objectContaining({ receipts: [fixture.receipt] }),
+      }),
+    );
   });
 
   it("routes a changed export signature remotely through its own source lane", () => {

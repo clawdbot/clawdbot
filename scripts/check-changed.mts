@@ -1,10 +1,12 @@
 // Runs the changed-file check lanes selected by `scripts/changed-lanes.mts`.
 import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import {
   accessSync,
   chmodSync,
   constants,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -32,11 +34,16 @@ import {
   commandFamily,
   createCheckProofReceipt,
   createToolProofEnv,
+  decodeCheckProofReceiptBundleFromEnv,
   defaultCheckProofReceiptDir,
+  encodeCheckProofReceiptBundleForEnv,
   evaluateReusableReceipt,
+  importCheckProofReceiptBundle,
+  readCheckProofReceiptBundleFromArtifactTarball,
   readWrapperProofReceipt,
   type DescendantProofReuseOptions,
   type WrapperProof,
+  writeCheckProofReceiptBundleFileAtomic,
   writeCheckProofReceipt,
 } from "./lib/check-proof-reuse.mts";
 import { printTimingSummary } from "./lib/check-timing-summary.mts";
@@ -47,6 +54,7 @@ import {
   resolveLocalHeavyCheckEnv,
 } from "./lib/local-heavy-check-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
+import { isRecord } from "./lib/record-shared.mjs";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mts";
 import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mts";
 import { createOxlintWrapperProofForArgs } from "./run-oxlint.mts";
@@ -300,8 +308,24 @@ function changedCheckDiffRefsReady({
   return true;
 }
 
-export function buildChangedCheckCrabboxArgs(argv: string[] = [], options: { cwd?: string } = {}) {
+type ChangedCheckCrabboxArgOptions = {
+  cwd?: string;
+  proofExportPath?: string;
+  proofReceiptDir?: string;
+};
+
+const REMOTE_PROOF_BUNDLE_ENV_KEY = "OPENCLAW_CHECK_CHANGED_PRIOR_RECEIPTS_B64";
+const REMOTE_PROOF_EXPORT_ENV_KEY = "OPENCLAW_CHECK_CHANGED_PROOF_EXPORT";
+
+export function buildChangedCheckCrabboxArgs(
+  argv: string[] = [],
+  options: ChangedCheckCrabboxArgOptions = {},
+) {
   const delegatedArgv = buildDelegatedChangedCheckArgv(argv, options);
+  const proofExportPath = options.proofExportPath ?? createRemoteProofExportPath();
+  const proofReceiptDir = options.proofReceiptDir ?? defaultCheckProofReceiptDir(options.cwd);
+  const priorBundle = encodeCheckProofReceiptBundleForEnv(proofReceiptDir);
+  const priorBundleEnv = priorBundle ? [`${REMOTE_PROOF_BUNDLE_ENV_KEY}=${priorBundle}`] : [];
   return [
     "scripts/crabbox-wrapper.mjs",
     "run",
@@ -314,17 +338,27 @@ export function buildChangedCheckCrabboxArgs(argv: string[] = [], options: { cwd
     "--ttl",
     "240m",
     "--timing-json",
+    "--artifact-glob",
+    proofExportPath,
+    "--require-artifact",
+    proofExportPath,
     "--",
     "env",
     "OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1",
     "OPENCLAW_CHANGED_LANES_RAW_SYNC=1",
     "CI=1",
     "PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false",
+    `${REMOTE_PROOF_EXPORT_ENV_KEY}=${proofExportPath}`,
+    ...priorBundleEnv,
     "corepack",
     "pnpm",
     "check:changed",
     ...delegatedArgv,
   ];
+}
+
+function createRemoteProofExportPath() {
+  return `.artifacts/check-changed-proof-export/${randomBytes(16).toString("hex")}.json`;
 }
 
 function buildDelegatedChangedCheckArgv(argv: string[], options: { cwd?: string } = {}) {
@@ -490,12 +524,15 @@ export function delegationFailedBeforeRunning(output: string) {
 async function runChangedCheckViaCrabbox(
   argv: string[] = [],
   env: NodeJS.ProcessEnv = process.env,
+  options: { proofReceiptDir?: string } = {},
 ) {
   console.error("[check:changed] delegating through Crabbox workload routing.");
   let tail = "";
+  const proofExportPath = createRemoteProofExportPath();
+  const proofReceiptDir = options.proofReceiptDir ?? defaultCheckProofReceiptDir();
   const exitCode = await runManagedCommand({
     bin: "node",
-    args: buildChangedCheckCrabboxArgs(argv),
+    args: buildChangedCheckCrabboxArgs(argv, { proofExportPath, proofReceiptDir }),
     env,
     stdio: ["inherit", "pipe", "pipe"],
     onReady: (child) => {
@@ -513,10 +550,166 @@ async function runChangedCheckViaCrabbox(
       }
     },
   });
+  if (exitCode === 0) {
+    try {
+      const artifactPath = resolveChangedCheckProofArtifactPath(tail);
+      const bundle = readCheckProofReceiptBundleFromArtifactTarball(artifactPath, proofExportPath);
+      const imported = importCheckProofReceiptBundle(proofReceiptDir, bundle);
+      console.error(
+        `[check:changed] imported remote changed-check proof receipts: ${imported.imported}`,
+      );
+    } catch (error) {
+      console.error(
+        `[check:changed] remote proof artifact import failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return {
+        exitCode: 1,
+        backendUnavailable: false,
+      };
+    }
+  }
   return {
     exitCode,
     backendUnavailable: exitCode !== 0 && delegationFailedBeforeRunning(tail),
   };
+}
+
+export function resolveChangedCheckProofArtifactPath(
+  output: string,
+  cwd = process.cwd(),
+  fileExists: (candidate: string) => boolean = existsSync,
+) {
+  const report = lastCrabboxTimingReport(output);
+  if (!report) {
+    throw new Error("missing Crabbox timing JSON");
+  }
+  if (report.exitCode !== 0) {
+    throw new Error("Crabbox timing JSON did not report success");
+  }
+  const artifacts = Array.isArray(report.artifacts) ? report.artifacts : [];
+  const artifact = artifacts.filter(isCrabboxArtifactGlob).at(-1);
+  if (!artifact) {
+    throw new Error("Crabbox timing JSON did not report an artifact-glob tarball");
+  }
+  const leaseId = safeCrabboxLeaseId(report.leaseId);
+  const artifactPath = artifact.path.replaceAll("\\", "/");
+  const basename = path.posix.basename(artifactPath);
+  if (!leaseId || !/^[A-Za-z0-9_.-]+\.tgz$/u.test(basename)) {
+    throw new Error("Crabbox timing JSON artifact path is not replay-safe");
+  }
+  const expectedSuffix = `/.crabbox/runs/${leaseId}/${basename}`;
+  const relativeExpectedSuffix = `.crabbox/runs/${leaseId}/${basename}`;
+  if (!artifactPath.endsWith(expectedSuffix) && artifactPath !== relativeExpectedSuffix) {
+    throw new Error("Crabbox timing JSON artifact path does not match lease-local run output");
+  }
+  const directPath = path.resolve(cwd, artifact.path);
+  if (fileExists(directPath)) {
+    return directPath;
+  }
+  const preserved = path.join(cwd, ".crabbox", "runs", leaseId, basename);
+  if (!fileExists(preserved)) {
+    throw new Error("Crabbox proof artifact tarball was not preserved by the wrapper");
+  }
+  return preserved;
+}
+
+function lastCrabboxTimingReport(output: string) {
+  const lines = output.split(/\r?\n/u).reverse();
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (
+        isRecord(parsed) &&
+        typeof parsed.provider === "string" &&
+        typeof parsed.exitCode === "number" &&
+        Array.isArray(parsed.artifacts)
+      ) {
+        return parsed;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+function isCrabboxArtifactGlob(value: unknown): value is { kind: string; path: string } {
+  return (
+    isRecord(value) &&
+    value.kind === "artifact-glob" &&
+    typeof value.path === "string" &&
+    value.path.trim().length > 0
+  );
+}
+
+function safeCrabboxLeaseId(value: unknown) {
+  return typeof value === "string" && /^[A-Za-z0-9_.-]+$/u.test(value) ? value : null;
+}
+
+type RemoteChildProofState = {
+  cleanup: () => void;
+  proofReceiptDir?: string;
+};
+
+function prepareRemoteChildProofState(env: NodeJS.ProcessEnv = process.env): RemoteChildProofState {
+  if (!isOpenEndedTruthyValue(env.OPENCLAW_CHECK_CHANGED_REMOTE_CHILD)) {
+    return { cleanup: () => {} };
+  }
+  const stagingParent = path.join(
+    process.cwd(),
+    ".artifacts",
+    "check-changed-remote-proof-staging",
+  );
+  mkdirSync(stagingParent, { recursive: true });
+  const proofReceiptDir = mkdtempSync(path.join(stagingParent, "receipts-"));
+  const encodedBundle = env[REMOTE_PROOF_BUNDLE_ENV_KEY];
+  if (encodedBundle) {
+    const decoded = decodeCheckProofReceiptBundleFromEnv(encodedBundle);
+    if (decoded.ok) {
+      const imported = importCheckProofReceiptBundle(proofReceiptDir, decoded.bundle);
+      console.error(
+        `[check:changed] imported prior changed-check proof receipts: ${imported.imported}`,
+      );
+    } else {
+      console.error(`[check:changed] ignoring prior changed-check proof bundle: ${decoded.reason}`);
+    }
+  }
+  return {
+    proofReceiptDir,
+    cleanup: () => {
+      rmSync(proofReceiptDir, { force: true, recursive: true });
+    },
+  };
+}
+
+function finishRemoteChildProofExport(status: number, state: RemoteChildProofState) {
+  if (!state.proofReceiptDir) {
+    return status;
+  }
+  const exportPath = process.env[REMOTE_PROOF_EXPORT_ENV_KEY];
+  if (status !== 0 || !exportPath) {
+    return status;
+  }
+  try {
+    const bundle = writeCheckProofReceiptBundleFileAtomic(exportPath, state.proofReceiptDir);
+    console.error(
+      `[check:changed] exported remote changed-check proof receipts: ${bundle.receipts.length}`,
+    );
+    return status;
+  } catch (error) {
+    console.error(
+      `[check:changed] remote proof export failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return 1;
+  }
 }
 
 export function createChangedCheckPlan(
@@ -1571,71 +1764,82 @@ async function main() {
     printUsage();
     process.exitCode = 0;
   } else {
+    const remoteProofState = prepareRemoteChildProofState(process.env);
+    const proofReceiptDir = remoteProofState.proofReceiptDir ?? (args.proofReceiptDir || undefined);
     let paths: string[] | undefined;
     try {
-      paths = args.noChanges
-        ? []
-        : args.paths.length > 0
-          ? args.paths
-          : args.staged
-            ? listStagedChangedPaths()
-            : listChangedPathsFromGit({ base: args.base, head: args.head });
-    } catch (error) {
-      // A sparse/fresh checkout may not have the requested base ref yet. The remote
-      // workflow fetches it, so preserve explicit/default delegation instead of dying locally.
-      if (!shouldDelegateChangedCheckToCrabbox(argv, process.env)) {
-        throw error;
-      }
-      // No local fallback here: this path exists because the checkout cannot
-      // resolve the diff refs itself, so there is nothing local to run.
-      const delegated = await runChangedCheckViaCrabbox(argv, process.env);
-      if (delegated.backendUnavailable) {
-        throw error;
-      }
-      process.exitCode = delegated.exitCode;
-    }
-    if (paths) {
-      const result = detectChangedLanesForPaths({
-        paths,
-        base: args.base,
-        head: args.head,
-        staged: args.staged,
-      });
-      if (
-        shouldDelegateChangedCheckToCrabbox(argv, process.env, {
-          cwd: process.cwd(),
-          result,
-          diffRefsReady: result.lanes.releaseMetadata
-            ? args.staged ||
-              changedCheckDiffRefsReady({
-                base: args.base,
-                head: args.head,
-              })
-            : undefined,
-        })
-      ) {
-        const delegated = await runChangedCheckViaCrabbox(argv, process.env);
-        if (delegated.backendUnavailable) {
-          // Say this loudly: the proof below is local, so whoever reads the run
-          // knows which machine produced it and that Linux-only lanes are unproven.
-          console.error(
-            "[check:changed] the remote backend never ran the checks (no run summary). Falling back to local execution; note this in the proof summary.",
-          );
+      try {
+        paths = args.noChanges
+          ? []
+          : args.paths.length > 0
+            ? args.paths
+            : args.staged
+              ? listStagedChangedPaths()
+              : listChangedPathsFromGit({ base: args.base, head: args.head });
+      } catch (error) {
+        // A sparse/fresh checkout may not have the requested base ref yet. The remote
+        // workflow fetches it, so preserve explicit/default delegation instead of dying locally.
+        if (!shouldDelegateChangedCheckToCrabbox(argv, process.env)) {
+          throw error;
         }
-        process.exitCode = delegated.backendUnavailable
-          ? await runChangedCheck(result, {
-              ...args,
-              proofReceiptDir: args.proofReceiptDir || undefined,
-              explicitPaths: args.paths.length > 0,
-            })
-          : delegated.exitCode;
-      } else {
-        process.exitCode = await runChangedCheck(result, {
-          ...args,
-          proofReceiptDir: args.proofReceiptDir || undefined,
-          explicitPaths: args.paths.length > 0,
+        // No local fallback here: this path exists because the checkout cannot
+        // resolve the diff refs itself, so there is nothing local to run.
+        const delegated = await runChangedCheckViaCrabbox(argv, process.env, {
+          proofReceiptDir,
         });
+        if (delegated.backendUnavailable) {
+          throw error;
+        }
+        process.exitCode = delegated.exitCode;
       }
+      if (paths) {
+        const result = detectChangedLanesForPaths({
+          paths,
+          base: args.base,
+          head: args.head,
+          staged: args.staged,
+        });
+        if (
+          shouldDelegateChangedCheckToCrabbox(argv, process.env, {
+            cwd: process.cwd(),
+            result,
+            diffRefsReady: result.lanes.releaseMetadata
+              ? args.staged ||
+                changedCheckDiffRefsReady({
+                  base: args.base,
+                  head: args.head,
+                })
+              : undefined,
+          })
+        ) {
+          const delegated = await runChangedCheckViaCrabbox(argv, process.env, {
+            proofReceiptDir,
+          });
+          if (delegated.backendUnavailable) {
+            // Say this loudly: the proof below is local, so whoever reads the run
+            // knows which machine produced it and that Linux-only lanes are unproven.
+            console.error(
+              "[check:changed] the remote backend never ran the checks (no run summary). Falling back to local execution; note this in the proof summary.",
+            );
+          }
+          process.exitCode = delegated.backendUnavailable
+            ? await runChangedCheck(result, {
+                ...args,
+                proofReceiptDir,
+                explicitPaths: args.paths.length > 0,
+              })
+            : delegated.exitCode;
+        } else {
+          process.exitCode = await runChangedCheck(result, {
+            ...args,
+            proofReceiptDir,
+            explicitPaths: args.paths.length > 0,
+          });
+        }
+      }
+      process.exitCode = finishRemoteChildProofExport(process.exitCode ?? 0, remoteProofState);
+    } finally {
+      remoteProofState.cleanup();
     }
   }
 }

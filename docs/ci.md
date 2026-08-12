@@ -280,7 +280,10 @@ pnpm perf:kova:summary --report .artifacts/kova/reports/mock-provider/report.jso
 `tsgo` and `tsgolint` work through changed-check evidence receipts. Reuse is
 stricter than CI cache restore: the receipt must match the current repo
 identity, refs, changed paths, lane plan, command, effective env, wrapper
-inputs, toolchain/runtime, and config closure. Use `--dry-run` to see the
+inputs, toolchain/runtime, and config closure. Delegated Blacksmith runs
+retrieve a bounded proof-export artifact after success and forward full receipts
+to the next Testbox for revalidation; the macOS caller never treats a remote
+receipt as permission to skip Crabbox itself. Use `--dry-run` to see the
 evidence SHA or force-fresh/no-reuse reason without launching heavy children.
 
 ## OpenClaw Performance
@@ -713,6 +716,10 @@ Local changed-lane logic lives in `scripts/changed-lanes.mjs` and is executed by
 Affected lanes are sufficient for changed-check evidence reuse only when every
 path is classified without `lanes.all`, refs resolve, sparse inputs are
 present, and every current required command is either run or exactly proven.
+For remote runs, "proven" means the fresh Testbox rebuilt the expected
+runtime/toolchain inputs and accepted a full passed receipt from the bounded
+artifact-forwarded bundle; missing, stale, corrupt, oversized, skipped, or
+wrong-family receipts are non-proof and rerun the native child.
 `tsBuildInfo` files remain TypeScript compiler cache only and are never treated
 as a passed changed-check receipt.
 
@@ -831,6 +838,11 @@ command result. The linked GitHub Actions run owns hydration and keepalive; it
 can finish as `cancelled` when the Testbox is stopped externally after the SSH
 command has already returned. Treat that as a cleanup/status artifact unless
 the wrapper `exitCode` is non-zero or the command output shows a failed test.
+The `check:changed` delegation path uses Crabbox `--artifact-glob` plus
+`--require-artifact` for the exact `.artifacts/check-changed-proof-export/...`
+receipt bundle and resolves the resulting `artifacts[].path` from the final
+timing JSON. Do not add `--download` for Blacksmith Testbox; that provider owns
+transport and rejects normal download sync.
 One-shot Blacksmith-backed Crabbox runs should stop the Testbox automatically;
 if a run is interrupted or cleanup is unclear, inspect live boxes and stop only
 the boxes you created:

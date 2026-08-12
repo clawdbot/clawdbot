@@ -48,7 +48,7 @@ type PathState =
   | { kind: "other"; digest: string };
 
 export type CheckProofReceipt = {
-  schemaVersion: 2;
+  schemaVersion: 3;
   artifact: "changed-check evidence receipt";
   status: "passed" | "failed" | "skipped";
   exitCode: number;
@@ -58,7 +58,6 @@ export type CheckProofReceipt = {
   requiredInputs: {
     repo: {
       remoteOrigin: string | null;
-      worktreeRoot: string | null;
     };
     git: {
       baseRef: string | null;
@@ -95,6 +94,16 @@ export type CheckProofReceipt = {
   observed: {
     wrapperProof: WrapperProof | null;
   };
+  producer: {
+    worktreeRoot: string | null;
+  };
+};
+
+export type CheckProofReceiptBundle = {
+  schemaVersion: 1;
+  artifact: "changed-check evidence receipt bundle";
+  digest: string;
+  receipts: CheckProofReceipt[];
 };
 
 type ReuseDecision =
@@ -161,6 +170,14 @@ const CHECK_EVIDENCE_INPUT_PATHS = [
   "scripts/run-tsgo.mts",
 ].toSorted();
 const DESCENDANT_RECEIPT_SCAN_LIMIT = 512;
+export const CHECK_PROOF_BUNDLE_MAX_RECEIPTS = 64;
+export const CHECK_PROOF_BUNDLE_MAX_BYTES = 64 * 1024;
+const CHECK_PROOF_BUNDLE_MAX_STRING_BYTES = 4096;
+const CHECK_PROOF_BUNDLE_MAX_ARRAY_LENGTH = 256;
+const CHECK_PROOF_BUNDLE_MAX_OBJECT_KEYS = 256;
+const CHECK_PROOF_BUNDLE_MAX_DEPTH = 32;
+const CHECK_PROOF_BUNDLE_MAX_NODES = 10_000;
+const CHECK_PROOF_ARTIFACT_TARBALL_MAX_BYTES = 1024 * 1024;
 const FULL_GIT_SHA_RE = /^[0-9a-f]{40}$/u;
 const RELEASE_METADATA_INVALIDATION_EXCEPTIONS = new Set(["package.json"]);
 
@@ -287,7 +304,7 @@ export function createCheckProofReceipt(params: {
     family,
   });
   const receiptWithoutFingerprint: CheckProofReceipt = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     artifact: "changed-check evidence receipt",
     status,
     exitCode: params.exitCode,
@@ -297,6 +314,9 @@ export function createCheckProofReceipt(params: {
     requiredInputs,
     observed: {
       wrapperProof: params.wrapperProof,
+    },
+    producer: {
+      worktreeRoot: gitText(["rev-parse", "--show-toplevel"], cwd),
     },
   };
   return {
@@ -521,7 +541,431 @@ export function readReusableReceipt(receiptDir: string, expected: CheckProofRece
 
 export function writeCheckProofReceipt(receiptDir: string, receipt: CheckProofReceipt) {
   fs.mkdirSync(receiptDir, { recursive: true });
-  writeJsonAtomic(path.join(receiptDir, `${receipt.fingerprint}.json`), receipt);
+  if (!isDurablePassedReceipt(receipt)) {
+    writeReceiptDiagnostic(receiptDir, receipt);
+    return { installed: false, reason: "non-reusable receipt" };
+  }
+  const target = path.join(receiptDir, `${receipt.fingerprint}.json`);
+  const lockPath = path.join(receiptDir, ".install.lock");
+  let lock: number | null = null;
+  try {
+    lock = fs.openSync(lockPath, "wx", 0o600);
+  } catch (error) {
+    const code = isRecord(error) ? error.code : null;
+    if (code !== "EEXIST") {
+      writeReceiptDiagnostic(receiptDir, receipt);
+    }
+    return { installed: false, reason: "receipt store busy" };
+  }
+  try {
+    const existing = readSchemaValidReceipt(target);
+    if (
+      existing &&
+      existing.fingerprint === receipt.fingerprint &&
+      isDurablePassedReceipt(existing)
+    ) {
+      return { installed: false, reason: "existing reusable receipt kept" };
+    }
+    writeJsonAtomic(target, receipt);
+    return { installed: true, reason: "installed reusable receipt" };
+  } finally {
+    if (lock !== null) {
+      fs.closeSync(lock);
+    }
+    try {
+      fs.unlinkSync(lockPath);
+    } catch {
+      // A missing lock is recoverable; the durable receipt write already finished.
+    }
+  }
+}
+
+export function createCheckProofReceiptBundleFromDir(receiptDir: string) {
+  return createCheckProofReceiptBundle(selectNewestUsableReceipts(receiptDir));
+}
+
+export function createCheckProofReceiptBundle(receipts: CheckProofReceipt[]) {
+  const bounded = receipts.filter(isDurablePassedReceipt).slice(0, CHECK_PROOF_BUNDLE_MAX_RECEIPTS);
+  while (bounded.length > 0) {
+    const bundle = withBundleDigest({
+      schemaVersion: 1,
+      artifact: "changed-check evidence receipt bundle",
+      receipts: bounded,
+    });
+    if (Buffer.byteLength(stableStringify(bundle), "utf8") <= CHECK_PROOF_BUNDLE_MAX_BYTES) {
+      return bundle;
+    }
+    bounded.pop();
+  }
+  return withBundleDigest({
+    schemaVersion: 1,
+    artifact: "changed-check evidence receipt bundle",
+    receipts: [],
+  });
+}
+
+export function encodeCheckProofReceiptBundleForEnv(receiptDir: string) {
+  const bundle = createCheckProofReceiptBundleFromDir(receiptDir);
+  if (bundle.receipts.length === 0) {
+    return null;
+  }
+  const encoded = stableStringify(bundle);
+  if (Buffer.byteLength(encoded, "utf8") > CHECK_PROOF_BUNDLE_MAX_BYTES) {
+    return null;
+  }
+  return Buffer.from(encoded, "utf8").toString("base64");
+}
+
+export function decodeCheckProofReceiptBundleFromEnv(value: string | undefined) {
+  if (!value) {
+    return { ok: false as const, reason: "missing bundle" };
+  }
+  const compact = value.trim();
+  if (
+    compact.length === 0 ||
+    compact.length > Math.ceil(CHECK_PROOF_BUNDLE_MAX_BYTES / 3) * 4 + 4 ||
+    compact.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/u.test(compact)
+  ) {
+    return { ok: false as const, reason: "malformed bundle encoding" };
+  }
+  let decoded: Buffer;
+  try {
+    decoded = Buffer.from(compact, "base64");
+  } catch {
+    return { ok: false as const, reason: "malformed bundle encoding" };
+  }
+  if (decoded.byteLength > CHECK_PROOF_BUNDLE_MAX_BYTES) {
+    return { ok: false as const, reason: "oversized bundle" };
+  }
+  return parseCheckProofReceiptBundle(decoded.toString("utf8"));
+}
+
+export function writeCheckProofReceiptBundleFileAtomic(
+  target: string,
+  receiptDir: string,
+): CheckProofReceiptBundle {
+  const bundle = createCheckProofReceiptBundleFromDir(receiptDir);
+  validateRemoteProofExportPath(target);
+  const encoded = stableStringify(bundle);
+  if (Buffer.byteLength(encoded, "utf8") > CHECK_PROOF_BUNDLE_MAX_BYTES) {
+    throw new Error("changed-check proof export bundle exceeds size bound");
+  }
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  writeJsonAtomic(target, bundle);
+  return bundle;
+}
+
+export function importCheckProofReceiptBundle(receiptDir: string, bundle: CheckProofReceiptBundle) {
+  const validation = validateCheckProofReceiptBundle(bundle);
+  if (!validation.ok) {
+    return { imported: 0, reason: validation.reason };
+  }
+  let imported = 0;
+  for (const receipt of validation.bundle.receipts) {
+    const result = writeCheckProofReceipt(receiptDir, receipt);
+    if (result.installed) {
+      imported += 1;
+    }
+  }
+  return { imported, reason: "imported reusable receipts" };
+}
+
+export function readCheckProofReceiptBundleFromArtifactTarball(
+  tarballPath: string,
+  expectedMember: string,
+) {
+  validateRemoteProofExportPath(expectedMember);
+  const stat = fs.statSync(tarballPath);
+  if (!stat.isFile() || stat.size > CHECK_PROOF_ARTIFACT_TARBALL_MAX_BYTES) {
+    throw new Error("changed-check proof artifact tarball is missing or oversized");
+  }
+  const members = tarList(tarballPath);
+  if (members.length !== 1 || members[0] !== expectedMember || !safeTarMember(members[0])) {
+    throw new Error("changed-check proof artifact tarball member mismatch");
+  }
+  const verbose = tarVerboseList(tarballPath);
+  if (verbose.length !== 1 || !verbose[0]?.startsWith("-")) {
+    throw new Error("changed-check proof artifact tarball member is not a regular file");
+  }
+  const decoded = execFileSync("tar", ["-xOf", tarballPath, expectedMember], {
+    encoding: "utf8",
+    maxBuffer: CHECK_PROOF_BUNDLE_MAX_BYTES + 1,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (Buffer.byteLength(decoded, "utf8") > CHECK_PROOF_BUNDLE_MAX_BYTES) {
+    throw new Error("changed-check proof artifact member exceeds size bound");
+  }
+  const parsed = parseCheckProofReceiptBundle(decoded);
+  if (!parsed.ok) {
+    throw new Error(parsed.reason);
+  }
+  return parsed.bundle;
+}
+
+function selectNewestUsableReceipts(receiptDir: string) {
+  const receiptPaths = listAtomicReceiptPaths(receiptDir);
+  if (typeof receiptPaths === "string") {
+    return [];
+  }
+  const candidates = receiptPaths
+    .map((receiptPath) => {
+      const receipt = readSchemaValidReceipt(receiptPath);
+      if (!receipt || !receiptFilenameMatchesFingerprint(receiptPath, receipt)) {
+        return null;
+      }
+      if (!isDurablePassedReceipt(receipt)) {
+        return null;
+      }
+      let mtimeMs = 0;
+      try {
+        mtimeMs = fs.statSync(receiptPath).mtimeMs;
+      } catch {
+        return null;
+      }
+      return { path: receiptPath, receipt, key: receiptCommandKey(receipt), mtimeMs };
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+    .toSorted(
+      (left, right) =>
+        right.mtimeMs - left.mtimeMs ||
+        left.path.localeCompare(right.path) ||
+        left.receipt.fingerprint.localeCompare(right.receipt.fingerprint),
+    );
+  const selected = new Map<string, CheckProofReceipt>();
+  for (const candidate of candidates) {
+    if (!selected.has(candidate.key)) {
+      selected.set(candidate.key, candidate.receipt);
+    }
+    if (selected.size >= CHECK_PROOF_BUNDLE_MAX_RECEIPTS) {
+      break;
+    }
+  }
+  return [...selected.entries()]
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([, receipt]) => receipt);
+}
+
+function parseCheckProofReceiptBundle(source: string) {
+  if (Buffer.byteLength(source, "utf8") > CHECK_PROOF_BUNDLE_MAX_BYTES) {
+    return { ok: false as const, reason: "oversized changed-check proof bundle" };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source);
+  } catch {
+    return { ok: false as const, reason: "malformed changed-check proof bundle" };
+  }
+  const bounded = validateBoundedJsonValue(parsed);
+  if (!bounded.ok) {
+    return { ok: false as const, reason: bounded.reason };
+  }
+  return validateCheckProofReceiptBundle(parsed);
+}
+
+function validateCheckProofReceiptBundle(value: unknown) {
+  if (!isRecord(value)) {
+    return { ok: false as const, reason: "malformed changed-check proof bundle" };
+  }
+  const keys = Object.keys(value).toSorted((left, right) => left.localeCompare(right));
+  if (
+    stableStringify(keys) !== stableStringify(["artifact", "digest", "receipts", "schemaVersion"])
+  ) {
+    return { ok: false as const, reason: "changed-check proof bundle shape mismatch" };
+  }
+  if (
+    value.schemaVersion !== 1 ||
+    value.artifact !== "changed-check evidence receipt bundle" ||
+    typeof value.digest !== "string" ||
+    !Array.isArray(value.receipts) ||
+    value.receipts.length > CHECK_PROOF_BUNDLE_MAX_RECEIPTS
+  ) {
+    return { ok: false as const, reason: "changed-check proof bundle schema mismatch" };
+  }
+  const bundle = value as CheckProofReceiptBundle;
+  const expectedDigest = bundleDigest({
+    schemaVersion: bundle.schemaVersion,
+    artifact: bundle.artifact,
+    receipts: bundle.receipts,
+  });
+  if (bundle.digest !== expectedDigest) {
+    return { ok: false as const, reason: "changed-check proof bundle digest mismatch" };
+  }
+  const seenFingerprints = new Set<string>();
+  const seenCommands = new Set<string>();
+  for (const receipt of bundle.receipts) {
+    if (!isDurablePassedReceipt(receipt)) {
+      return {
+        ok: false as const,
+        reason: "changed-check proof bundle contains non-proof receipt",
+      };
+    }
+    const commandKey = receiptCommandKey(receipt);
+    if (seenFingerprints.has(receipt.fingerprint) || seenCommands.has(commandKey)) {
+      return { ok: false as const, reason: "changed-check proof bundle contains duplicates" };
+    }
+    seenFingerprints.add(receipt.fingerprint);
+    seenCommands.add(commandKey);
+  }
+  return { ok: true as const, bundle };
+}
+
+function withBundleDigest(
+  payload: Omit<CheckProofReceiptBundle, "digest">,
+): CheckProofReceiptBundle {
+  return {
+    ...payload,
+    digest: bundleDigest(payload),
+  };
+}
+
+function bundleDigest(payload: Omit<CheckProofReceiptBundle, "digest">) {
+  return sha256(stableStringify(payload));
+}
+
+function validateBoundedJsonValue(value: unknown) {
+  let nodes = 0;
+  const visit = (entry: unknown, depth: number): string | null => {
+    nodes += 1;
+    if (nodes > CHECK_PROOF_BUNDLE_MAX_NODES) {
+      return "changed-check proof bundle has too many nodes";
+    }
+    if (depth > CHECK_PROOF_BUNDLE_MAX_DEPTH) {
+      return "changed-check proof bundle exceeds depth bound";
+    }
+    if (typeof entry === "string") {
+      return Buffer.byteLength(entry, "utf8") > CHECK_PROOF_BUNDLE_MAX_STRING_BYTES
+        ? "changed-check proof bundle string exceeds size bound"
+        : null;
+    }
+    if (entry === null || typeof entry === "number" || typeof entry === "boolean") {
+      return null;
+    }
+    if (Array.isArray(entry)) {
+      if (entry.length > CHECK_PROOF_BUNDLE_MAX_ARRAY_LENGTH) {
+        return "changed-check proof bundle array exceeds count bound";
+      }
+      for (const child of entry) {
+        const reason = visit(child, depth + 1);
+        if (reason) {
+          return reason;
+        }
+      }
+      return null;
+    }
+    if (!isRecord(entry)) {
+      return "changed-check proof bundle contains unsupported JSON value";
+    }
+    const objectKeys = Object.keys(entry);
+    if (objectKeys.length > CHECK_PROOF_BUNDLE_MAX_OBJECT_KEYS) {
+      return "changed-check proof bundle object exceeds key bound";
+    }
+    for (const key of objectKeys) {
+      if (Buffer.byteLength(key, "utf8") > CHECK_PROOF_BUNDLE_MAX_STRING_BYTES) {
+        return "changed-check proof bundle key exceeds size bound";
+      }
+      const reason = visit(entry[key], depth + 1);
+      if (reason) {
+        return reason;
+      }
+    }
+    return null;
+  };
+  const reason = visit(value, 0);
+  return reason ? { ok: false as const, reason } : { ok: true as const };
+}
+
+function isDurablePassedReceipt(receipt: unknown): receipt is CheckProofReceipt {
+  if (!isCheckProofReceipt(receipt)) {
+    return false;
+  }
+  const expectedWrapperProof = receipt.requiredInputs.expectedWrapperProof;
+  return (
+    receipt.status === "passed" &&
+    receipt.exitCode === 0 &&
+    receipt.ranTool === true &&
+    receipt.commandFamily !== "other" &&
+    receipt.requiredInputs.command.family === receipt.commandFamily &&
+    expectedWrapperProof !== null &&
+    receipt.fingerprint === receiptFingerprint(receipt) &&
+    stableStringify(receipt.observed.wrapperProof) === stableStringify(expectedWrapperProof)
+  );
+}
+
+function receiptFingerprint(receipt: CheckProofReceipt) {
+  return sha256(stableStringify(receipt.requiredInputs));
+}
+
+function receiptFilenameMatchesFingerprint(receiptPath: string, receipt: CheckProofReceipt) {
+  return path.basename(receiptPath) === `${receipt.fingerprint}.json`;
+}
+
+function receiptCommandKey(receipt: CheckProofReceipt) {
+  const command = receipt.requiredInputs.command;
+  return stableStringify({
+    family: receipt.commandFamily,
+    name: command.name,
+    bin: command.bin,
+    args: command.args,
+  });
+}
+
+function writeReceiptDiagnostic(receiptDir: string, receipt: CheckProofReceipt) {
+  const fingerprint =
+    typeof receipt.fingerprint === "string" && /^[0-9a-f]{64}$/u.test(receipt.fingerprint)
+      ? receipt.fingerprint
+      : sha256(stableStringify(receipt));
+  const diagnosticDir = path.join(receiptDir, "diagnostics");
+  fs.mkdirSync(diagnosticDir, { recursive: true });
+  writeJsonAtomic(
+    path.join(diagnosticDir, `${fingerprint}-${process.pid}-${Date.now()}.json`),
+    receipt,
+  );
+}
+
+function validateRemoteProofExportPath(candidate: string) {
+  const normalized = candidate.replaceAll("\\", "/");
+  if (
+    candidate !== normalized ||
+    path.isAbsolute(normalized) ||
+    normalized.includes("\0") ||
+    normalized.includes("..") ||
+    !/^\.artifacts\/check-changed-proof-export\/[A-Za-z0-9_-]+\.json$/u.test(normalized)
+  ) {
+    throw new Error("unsafe changed-check proof export path");
+  }
+}
+
+function tarList(tarballPath: string) {
+  return execFileSync("tar", ["-tf", tarballPath], {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024,
+    stdio: ["ignore", "pipe", "pipe"],
+  })
+    .split("\n")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function tarVerboseList(tarballPath: string) {
+  return execFileSync("tar", ["-tvf", tarballPath], {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024,
+    stdio: ["ignore", "pipe", "pipe"],
+  })
+    .split("\n")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function safeTarMember(member: string) {
+  return (
+    member === member.replaceAll("\\", "/") &&
+    !member.startsWith("/") &&
+    !member.startsWith("./") &&
+    !member.includes("\0") &&
+    !member.split("/").includes("..")
+  );
 }
 
 export function defaultCheckProofReceiptDir(cwd = process.cwd()) {
@@ -538,7 +982,6 @@ function createRequiredInputs(params: {
   return {
     repo: {
       remoteOrigin: gitText(["config", "--get", "remote.origin.url"], params.cwd),
-      worktreeRoot: gitText(["rev-parse", "--show-toplevel"], params.cwd),
     },
     git: {
       baseRef: params.context.base ?? null,
@@ -729,7 +1172,7 @@ function gitChangedPathsBetween(producerHead: string, currentHead: string, cwd: 
 function isCheckProofReceipt(value: unknown): value is CheckProofReceipt {
   return (
     isRecord(value) &&
-    value.schemaVersion === 2 &&
+    value.schemaVersion === 3 &&
     value.artifact === "changed-check evidence receipt" &&
     (value.status === "passed" || value.status === "failed" || value.status === "skipped") &&
     typeof value.exitCode === "number" &&
@@ -740,7 +1183,9 @@ function isCheckProofReceipt(value: unknown): value is CheckProofReceipt {
       value.commandFamily === "other") &&
     isRequiredInputs(value.requiredInputs) &&
     isRecord(value.observed) &&
-    (value.observed.wrapperProof === null || isWrapperProof(value.observed.wrapperProof))
+    (value.observed.wrapperProof === null || isWrapperProof(value.observed.wrapperProof)) &&
+    isRecord(value.producer) &&
+    (typeof value.producer.worktreeRoot === "string" || value.producer.worktreeRoot === null)
   );
 }
 
@@ -766,7 +1211,6 @@ function isRequiredInputs(value: unknown): value is CheckProofReceipt["requiredI
     isRecord(value) &&
     isRecord(value.repo) &&
     (typeof value.repo.remoteOrigin === "string" || value.repo.remoteOrigin === null) &&
-    (typeof value.repo.worktreeRoot === "string" || value.repo.worktreeRoot === null) &&
     isRecord(value.git) &&
     isNullableString(value.git.baseRef) &&
     isNullableString(value.git.headRef) &&
@@ -939,7 +1383,7 @@ function describeReceiptRejection(receipt: unknown, expected: CheckProofReceipt)
   if (!isRecord(receipt)) {
     return "malformed changed-check evidence receipt";
   }
-  if (receipt.schemaVersion !== 2 || receipt.artifact !== "changed-check evidence receipt") {
+  if (receipt.schemaVersion !== 3 || receipt.artifact !== "changed-check evidence receipt") {
     return "current-schema changed-check evidence receipt not found";
   }
   if (receipt.status !== "passed" || receipt.exitCode !== 0 || receipt.ranTool !== true) {
