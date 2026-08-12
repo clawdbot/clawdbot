@@ -3,18 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createPluginMetadataSnapshot,
-  makeRegistry,
-} from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
-import * as providerRuntime from "../plugins/provider-runtime.js";
 import {
   discoverAuthStorage,
   discoverModels,
   discoverModelsFromCapturedSources,
-  normalizeDiscoveredAgentModel,
 } from "./agent-model-discovery.js";
 
 // Discovery must not cold-load bundled plugin runtime: with build artifacts
@@ -26,10 +20,7 @@ beforeEach(() => {
   clearCurrentPluginMetadataSnapshot();
 });
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-});
+afterEach(() => vi.unstubAllEnvs());
 
 function writeModelsJson(agentDir: string, modelId: string): void {
   fs.writeFileSync(
@@ -48,41 +39,6 @@ function writeModelsJson(agentDir: string, modelId: string): void {
 }
 
 describe("discoverModels", () => {
-  it("reuses the prepared plugin metadata snapshot for provider normalization", () => {
-    const metadataSnapshot = createPluginMetadataSnapshot({
-      manifestRegistry: makeRegistry([]),
-      workspaceDir: "/tmp/prepared-workspace",
-    });
-    const normalizeModel = vi
-      .spyOn(providerRuntime, "normalizeProviderResolvedModelWithPlugin")
-      .mockReturnValue(undefined);
-    const normalizeTransport = vi
-      .spyOn(providerRuntime, "applyProviderResolvedTransportWithPlugin")
-      .mockReturnValue(undefined);
-
-    normalizeDiscoveredAgentModel(
-      {
-        id: "gpt-test",
-        name: "GPT Test",
-        provider: "openai",
-        api: "openai-responses",
-      },
-      "/tmp/agent",
-      {
-        config: {},
-        workspaceDir: "/tmp/prepared-workspace",
-        pluginMetadataSnapshot: metadataSnapshot,
-      },
-    );
-
-    expect(normalizeModel).toHaveBeenCalledWith(
-      expect.objectContaining({ pluginMetadataSnapshot: metadataSnapshot }),
-    );
-    expect(normalizeTransport).toHaveBeenCalledWith(
-      expect.objectContaining({ pluginMetadataSnapshot: metadataSnapshot }),
-    );
-  });
-
   it("uses a directory-independent source label for lifecycle-captured catalogs", () => {
     const firstAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-models-first-"));
     const secondAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-models-second-"));

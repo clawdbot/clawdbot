@@ -3,11 +3,7 @@ import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
-import type {
-  PluginMetadataRegistryView,
-  PluginMetadataSnapshot,
-  PluginMetadataSnapshotOwnerMaps,
-} from "../plugins/plugin-metadata-snapshot.types.js";
+import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import {
   applyProviderResolvedTransportWithPlugin,
@@ -44,13 +40,12 @@ type DiscoverModelsOptions = {
   modelsJsonContents?: string | null;
   pluginCatalogs?: readonly PersistedPluginModelCatalog[];
   providerFilter?: string;
-  pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot | PluginMetadataSnapshot;
+  pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
   workspaceDir?: string;
   normalizeModels?: boolean;
 };
 
 type NormalizeDiscoveredModelOptions = Pick<DiscoverModelsOptions, "config" | "workspaceDir"> & {
-  pluginMetadataSnapshot?: PluginMetadataRegistryView;
   providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
 };
 
@@ -88,7 +83,6 @@ export function normalizeDiscoveredAgentModel<T>(
       provider: model.provider,
       modelId: model.id,
       ...runtimeContext,
-      pluginMetadataSnapshot: options?.pluginMetadataSnapshot,
       context: {
         provider: model.provider,
         modelId: model.id,
@@ -101,7 +95,6 @@ export function normalizeDiscoveredAgentModel<T>(
       provider: model.provider,
       modelId: model.id,
       ...runtimeContext,
-      pluginMetadataSnapshot: options?.pluginMetadataSnapshot,
       context: {
         provider: model.provider,
         modelId: model.id,
@@ -155,10 +148,6 @@ function createOpenClawModelRegistry(
   const matchesProviderFilter = (entry: Model) =>
     !providerFilter || normalizeProviderId(entry.provider) === providerFilter;
   const shouldNormalize = options?.normalizeModels !== false;
-  const providerPluginMetadataSnapshot =
-    options?.pluginMetadataSnapshot && "manifestRegistry" in options.pluginMetadataSnapshot
-      ? options.pluginMetadataSnapshot
-      : undefined;
   const findCache = new Map<string, Model | undefined>();
   const normalizeEntry = (entry: Model) => {
     if (!shouldNormalize) {
@@ -168,11 +157,7 @@ function createOpenClawModelRegistry(
       throw new Error("agent directory is required for model normalization");
     }
     return normalizeDiscoveredAgentModel(entry, agentDir, {
-      ...(options?.config ? { config: options.config } : {}),
-      ...(options?.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
-      ...(providerPluginMetadataSnapshot
-        ? { pluginMetadataSnapshot: providerPluginMetadataSnapshot }
-        : {}),
+      ...options,
       ...(pluginMetadataSnapshot?.owners
         ? { providerMetadataOwners: pluginMetadataSnapshot.owners }
         : {}),

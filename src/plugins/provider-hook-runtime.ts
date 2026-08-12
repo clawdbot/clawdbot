@@ -326,7 +326,6 @@ export function resolveProviderHookPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-  pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderPlugin | undefined {
   const runtimePlugin = resolveProviderRuntimePlugin(params);
   if (runtimePlugin) {
@@ -339,7 +338,6 @@ export function resolveProviderHookPlugin(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    pluginMetadataSnapshot: params.pluginMetadataSnapshot,
   }).find((candidate) => matchesProviderPluginRef(candidate, params.provider));
 }
 

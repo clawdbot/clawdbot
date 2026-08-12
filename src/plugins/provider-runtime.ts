@@ -348,7 +348,6 @@ export function applyProviderResolvedTransportWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-  pluginMetadataSnapshot?: PluginMetadataRegistryView;
   context: ProviderNormalizeResolvedModelContext;
 }): ProviderRuntimeModel | undefined {
   const config = params.context.config ?? params.config;
@@ -359,7 +358,6 @@ export function applyProviderResolvedTransportWithPlugin(params: {
     workspaceDir,
     env: params.env,
     modelId: params.context.modelId,
-    pluginMetadataSnapshot: params.pluginMetadataSnapshot,
     context: {
       ...(config !== undefined ? { config } : {}),
       ...(workspaceDir !== undefined ? { workspaceDir } : {}),
@@ -407,7 +405,6 @@ export function normalizeProviderTransportWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-  pluginMetadataSnapshot?: PluginMetadataRegistryView;
   context: ProviderNormalizeTransportContext;
 }): { api?: string | null; baseUrl?: string } | undefined {
   const hasTransportChange = (normalized: { api?: string | null; baseUrl?: string }) =>

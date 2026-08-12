@@ -62,8 +62,8 @@ import {
 
 type EnsureSessionDiffBaseline =
   (typeof import("../sessions/session-diff-baseline.js"))["ensureSessionDiffBaseline"];
-type GenerateDashboardSessionTitle =
-  (typeof import("./dashboard-session-title.js"))["generateDashboardSessionTitle"];
+type GenerateConversationLabelWithFallback =
+  (typeof import("../auto-reply/reply/conversation-label-generator.js"))["generateConversationLabelWithFallback"];
 type ScheduleChatDashboardSessionTitle =
   (typeof import("./server-methods/chat-send-background.js"))["scheduleChatDashboardSessionTitle"];
 type ReadSessionMessageCountAsync =
@@ -74,9 +74,9 @@ const sessionDiffBaselineMocks = vi.hoisted(() => ({
   useReal: false,
 }));
 
-const dashboardTitleMocks = vi.hoisted(() => ({
-  actual: undefined as GenerateDashboardSessionTitle | undefined,
-  generate: vi.fn<GenerateDashboardSessionTitle>(),
+const dashboardTitleGenerationMocks = vi.hoisted(() => ({
+  actual: undefined as GenerateConversationLabelWithFallback | undefined,
+  generate: vi.fn<GenerateConversationLabelWithFallback>(),
 }));
 
 const dashboardTitleScheduleMocks = vi.hoisted(() => ({
@@ -99,11 +99,17 @@ vi.mock("../sessions/session-diff-baseline.js", async (importOriginal) => {
   return { ...actual, ensureSessionDiffBaseline: sessionDiffBaselineMocks.ensure };
 });
 
-vi.mock("./dashboard-session-title.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./dashboard-session-title.js")>();
-  dashboardTitleMocks.actual = actual.generateDashboardSessionTitle;
-  dashboardTitleMocks.generate.mockImplementation(actual.generateDashboardSessionTitle);
-  return { ...actual, generateDashboardSessionTitle: dashboardTitleMocks.generate };
+vi.mock("../auto-reply/reply/conversation-label-generator.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../auto-reply/reply/conversation-label-generator.js")>();
+  dashboardTitleGenerationMocks.actual = actual.generateConversationLabelWithFallback;
+  dashboardTitleGenerationMocks.generate.mockImplementation(
+    actual.generateConversationLabelWithFallback,
+  );
+  return {
+    ...actual,
+    generateConversationLabelWithFallback: dashboardTitleGenerationMocks.generate,
+  };
 });
 
 vi.mock("./server-methods/chat-send-background.js", async (importOriginal) => {
@@ -129,11 +135,11 @@ beforeEach(() => {
   sessionDiffBaselineMocks.ensure.mockClear();
   // Baseline capture has dedicated owner coverage and one authenticated integration below.
   sessionDiffBaselineMocks.useReal = false;
-  dashboardTitleMocks.generate.mockReset();
-  if (!dashboardTitleMocks.actual) {
+  dashboardTitleGenerationMocks.generate.mockReset();
+  if (!dashboardTitleGenerationMocks.actual) {
     throw new Error("actual dashboard title generator was not loaded");
   }
-  dashboardTitleMocks.generate.mockImplementation(dashboardTitleMocks.actual);
+  dashboardTitleGenerationMocks.generate.mockImplementation(dashboardTitleGenerationMocks.actual);
   dashboardTitleScheduleMocks.schedule.mockReset();
   if (!dashboardTitleScheduleMocks.actual) {
     throw new Error("actual dashboard title scheduler was not loaded");
@@ -1328,10 +1334,11 @@ test("sessions.create names its managed worktree without waiting for the model t
     content: Buffer.from(pastedText).toString("base64"),
   };
   let resolveTitle: ((title: string) => void) | undefined;
-  const generatedTitle = new Promise<string>((resolve) => {
-    resolveTitle = resolve;
-  });
-  dashboardTitleMocks.generate.mockReturnValueOnce(generatedTitle);
+  dashboardTitleGenerationMocks.generate.mockReturnValueOnce(
+    new Promise<string>((resolve) => {
+      resolveTitle = resolve;
+    }),
+  );
   dispatchInboundMessageMock.mockResolvedValueOnce({
     queuedFinal: false,
     counts: { block: 0, final: 0, tool: 0 },
