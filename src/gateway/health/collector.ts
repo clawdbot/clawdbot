@@ -6,7 +6,7 @@ import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.j
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { buildChannelAccountSnapshotFromAccount } from "../../channels/plugins/status.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listContextEngineQuarantines } from "../../context-engine/registry.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
@@ -24,7 +24,6 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
-  evaluateChannelHealth,
   resolveChannelHealthState,
 } from "../channel-health-policy.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
@@ -206,7 +205,7 @@ export async function collectGatewayHealthSnapshot(params: {
   const sessionCache = new Map<string, HealthSummary["sessions"]>();
   const agents: AgentHealthSummary[] = [];
   for (const entry of ordered) {
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: entry.id });
     const sessionCacheKey = `${storePath}\0${entry.id}`;
     const sessions =
       sessionCache.get(sessionCacheKey) ?? (await buildHealthSessionSummary(storePath, entry.id));
@@ -226,7 +225,7 @@ export async function collectGatewayHealthSnapshot(params: {
   const sessions =
     defaultAgent?.sessions ??
     (await buildHealthSessionSummary(
-      resolveStorePath(cfg.session?.store, { agentId: defaultAgentId }),
+      resolveSessionStorePathCore(cfg.session?.store, { agentId: defaultAgentId }),
       defaultAgentId,
     ));
 
@@ -331,13 +330,12 @@ export async function collectGatewayHealthSnapshot(params: {
       if (lastProbeAt) {
         snapshot.lastProbeAt = lastProbeAt;
       }
-      const health = evaluateChannelHealth(snapshot, {
+      const healthState = resolveChannelHealthState(snapshot, {
         channelId: plugin.id,
         now: Date.now(),
         staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
         channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
       });
-      const healthState = resolveChannelHealthState(snapshot, health);
       if (healthState !== undefined) {
         snapshot.healthState = healthState;
       }

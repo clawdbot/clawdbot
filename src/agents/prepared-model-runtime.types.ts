@@ -2,15 +2,31 @@ import type { PreparedMessageToolCatalog } from "../channels/plugins/message-act
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
+import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
+import type { PreparedAgentCredentialModes } from "./agent-auth-credentials.js";
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
 import type { AgentHarnessPluginSelection } from "./harness/runtime-plugin-load-plan.js";
-import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.configured.js";
 import type { AuthStorage } from "./sessions/auth-storage.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
 export type PreparedModelRuntimeCatalogMode = "live" | "static";
+
+export type PreparedModelRuntimePluginGeneration = Readonly<{
+  pluginMetadataSnapshot: PluginMetadataSnapshot;
+  messageToolCatalog?: PreparedMessageToolCatalog;
+  mediaCapabilityProviders?: ReturnType<typeof prepareMediaCapabilityProviders>;
+  preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
+  /** Present for live generations, including when the resolved model set is empty. */
+  providerStaticModels?: readonly ProviderRuntimeModel[];
+  inlineProviderModels: readonly InlineModelEntry[];
+  configuredCatalogEntries: readonly ModelCatalogEntry[];
+  pluginRegistry?: PluginRegistry;
+  inboundPluginRegistry?: PluginRegistry;
+}>;
 
 export type PreparedModelRuntimeSnapshot = Readonly<{
   agentId?: string;
@@ -24,6 +40,8 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   /** Session active project set, ordered most-recent first; empty before run binding. */
   activeProjectKeys: readonly string[];
   config: OpenClawConfig;
+  /** Secret-free usable auth modes captured by this exact lifecycle generation. */
+  authModes: PreparedAgentCredentialModes;
   metadataSnapshot: PluginMetadataSnapshot;
   messageToolCatalog?: PreparedMessageToolCatalog;
   mediaCapabilityProviders?: ReturnType<typeof prepareMediaCapabilityProviders>;
@@ -42,6 +60,16 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   /** Inline provider projection prepared once for all resolutions owned by this snapshot. */
   inlineProviderModels: readonly InlineModelEntry[];
   createStores: () => PreparedModelRuntimeStores;
+}>;
+
+/** Closed Gateway turn facts published atomically for one configured agent. */
+export type PreparedReplyDispatchRuntime = Readonly<{
+  agentId: string;
+  agentDir: string;
+  workspaceDir: string;
+  config: OpenClawConfig;
+  modelCatalog: ModelCatalogSnapshot;
+  inboundPluginRegistry: PluginRegistry;
 }>;
 
 export type PreparedModelRuntimeStores = {
@@ -115,6 +143,7 @@ export type PreparedModelRuntimeOwner = {
   needsRefresh: boolean;
   refreshError?: Error;
   snapshot?: PreparedModelRuntimeSnapshot;
+  pluginGeneration?: PreparedModelRuntimePluginGeneration;
   pending?: Promise<PreparedModelRuntimeSnapshot>;
   buildCompletion?: Promise<void>;
   leaseCount?: number;

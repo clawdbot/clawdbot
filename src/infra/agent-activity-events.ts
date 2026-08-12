@@ -16,6 +16,7 @@ export type AgentItemEventData = {
   status: AgentItemEventStatus;
   name?: string;
   meta?: string;
+  commandBearing?: boolean;
   toolCallId?: string;
   startedAt?: number;
   endedAt?: number;
@@ -57,57 +58,27 @@ export type AgentPatchSummaryEventData = {
   summary: string;
 };
 
-/** Emits an item activity event on the shared agent event bus. */
-export function emitAgentItemEvent(params: {
-  runId: string;
-  data: AgentItemEventData;
-  sessionKey?: string;
-}) {
-  emitAgentEvent({
-    runId: params.runId,
-    stream: "item",
-    data: params.data as unknown as Record<string, unknown>,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-  });
-}
+type AgentActivityEventDataByStream = {
+  item: AgentItemEventData;
+  approval: AgentApprovalEventData;
+  command_output: AgentCommandOutputEventData;
+  patch: AgentPatchSummaryEventData;
+};
 
-/** Emits an approval event on the shared agent event bus. */
-export function emitAgentApprovalEvent(params: {
-  runId: string;
-  data: AgentApprovalEventData;
-  sessionKey?: string;
-}) {
-  emitAgentEvent({
-    runId: params.runId,
-    stream: "approval",
-    data: params.data as unknown as Record<string, unknown>,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-  });
-}
+type AgentActivityEventParams = {
+  [Stream in keyof AgentActivityEventDataByStream]: {
+    runId: string;
+    sessionKey?: string;
+    stream: Stream;
+    data: AgentActivityEventDataByStream[Stream];
+  };
+}[keyof AgentActivityEventDataByStream];
 
-/** Emits command output for a running or completed item/tool call. */
-export function emitAgentCommandOutputEvent(params: {
-  runId: string;
-  data: AgentCommandOutputEventData;
-  sessionKey?: string;
-}) {
+/** Emits a typed activity event on the shared agent event bus. */
+export function emitAgentActivityEvent(params: AgentActivityEventParams): void {
   emitAgentEvent({
     runId: params.runId,
-    stream: "command_output",
-    data: params.data as unknown as Record<string, unknown>,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-  });
-}
-
-/** Emits a patch summary for a completed file-editing item/tool call. */
-export function emitAgentPatchSummaryEvent(params: {
-  runId: string;
-  data: AgentPatchSummaryEventData;
-  sessionKey?: string;
-}) {
-  emitAgentEvent({
-    runId: params.runId,
-    stream: "patch",
+    stream: params.stream,
     data: params.data as unknown as Record<string, unknown>,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
   });

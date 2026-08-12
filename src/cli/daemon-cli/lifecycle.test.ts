@@ -434,7 +434,7 @@ describe("runDaemonRestart health checks", () => {
         json: true,
         stdout: process.stdout,
         state: {},
-        issues: [{ code: "version-mismatch", message: "old service" }],
+        issues: [{ code: "port-mismatch", message: "service port is stale" }],
       });
       await params.postRestartCheck?.({
         json: true,
@@ -513,7 +513,7 @@ describe("runDaemonRestart health checks", () => {
     expect(runServiceRestart).not.toHaveBeenCalled();
   });
 
-  it("repairs stale loaded service definitions from gateway start", async () => {
+  it("repairs loaded service definitions with port drift from gateway start", async () => {
     repairLoadedGatewayServiceForStart.mockResolvedValue({
       result: "started",
       message: "Gateway service definition repaired and started.",
@@ -531,8 +531,8 @@ describe("runDaemonRestart health checks", () => {
         await params.repairLoadedService?.({
           json: true,
           stdout: process.stdout,
-          state: { command: { environment: { OPENCLAW_SERVICE_VERSION: "2026.4.24" } } },
-          issues: [{ code: "version-mismatch", message: "old service" }],
+          state: { command: { environment: { OPENCLAW_GATEWAY_PORT: "18789" } } },
+          issues: [{ code: "port-mismatch", message: "service port is stale" }],
         });
       },
     );
@@ -551,10 +551,10 @@ describe("runDaemonRestart health checks", () => {
     expect(repairParams.service).toBe(service);
     expect(repairParams.json).toBe(true);
     expect(repairParams.state?.command?.environment).toEqual({
-      OPENCLAW_SERVICE_VERSION: "2026.4.24",
+      OPENCLAW_GATEWAY_PORT: "18789",
     });
     expect(repairParams.issues).toHaveLength(1);
-    expect(repairParams.issues?.[0]?.code).toBe("version-mismatch");
+    expect(repairParams.issues?.[0]?.code).toBe("port-mismatch");
   });
 
   it("kills stale gateway pids and retries restart", async () => {

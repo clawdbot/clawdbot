@@ -1,15 +1,16 @@
 // Migrate Hermes tests cover config plugin behavior.
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildHermesMigrationProvider } from "./provider.js";
 import {
-  cleanupTempRoots,
-  makeConfigRuntime,
-  makeContext,
-  makeTempRoot,
-  writeFile,
-} from "./test/provider-helpers.js";
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspace,
+  type TempWorkspace,
+} from "openclaw/plugin-sdk/temp-path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildHermesMigrationProvider } from "./provider.js";
+import { makeConfigRuntime, makeContext, writeFile } from "./test/provider-helpers.js";
+
+let testWorkspace: TempWorkspace;
 
 function itemById<T extends { id: string }>(items: T[], id: string): T | undefined {
   return items.find((item) => item.id === id);
@@ -27,7 +28,7 @@ function modelProviderValues(
 }
 
 async function makeHermesPaths(sourceName = "hermes") {
-  const root = await makeTempRoot();
+  const root = testWorkspace.dir;
   return {
     root,
     source: path.join(root, sourceName),
@@ -37,9 +38,16 @@ async function makeHermesPaths(sourceName = "hermes") {
 }
 
 describe("Hermes migration config mapping", () => {
+  beforeEach(async () => {
+    testWorkspace = await tempWorkspace({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-migrate-hermes-",
+    });
+  });
+
   afterEach(async () => {
     vi.unstubAllEnvs();
-    await cleanupTempRoots();
+    await testWorkspace.cleanup();
   });
 
   it("plans provider, MCP, skill, and memory plugin config as plugin-owned items", async () => {

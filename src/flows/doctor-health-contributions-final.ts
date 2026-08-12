@@ -11,6 +11,7 @@ import {
   runDevicePairingHealth,
   runGatewayDaemonHealth,
   runGatewayServicesHealth,
+  runGitHubProjectHealth,
   runOpenAIOAuthTlsHealth,
   runSecurityHealth,
   runStartupChannelMaintenanceHealth,
@@ -121,6 +122,11 @@ export function resolveFinalDoctorHealthContributions(params: {
       run: runWebFetchProxyHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:github-projects",
+      label: "GitHub projects",
+      run: runGitHubProjectHealth,
+    }),
+    createDoctorHealthContribution({
       id: "doctor:browser",
       label: "Browser",
       healthCheckIds: ["core/doctor/browser", "core/doctor/browser-clawd-profile-residue"],
@@ -205,31 +211,6 @@ export function resolveFinalDoctorHealthContributions(params: {
           }),
         ]
       : []),
-    createDoctorHealthContribution({
-      id: "doctor:skill-curator",
-      label: "Skill curator",
-      healthChecks: {
-        description: "Stalled skill lifecycle curation is reported as a warning.",
-        defaultEnabled: false,
-        async detect() {
-          const { getSkillCuratorDoctorWarning } = await import("../skills/workshop/curator.js");
-          const warning = getSkillCuratorDoctorWarning();
-          return warning
-            ? [
-                {
-                  checkId: "core/doctor/skill-curator",
-                  severity: "warning" as const,
-                  source: "doctor",
-                  message: warning,
-                  target: "skill-curator",
-                  requirement:
-                    "latest sweep succeeds and attempts do not trail success by seven days",
-                },
-              ]
-            : [];
-        },
-      },
-    }),
     createDoctorHealthContribution({
       id: "doctor:skills",
       label: "Skills",

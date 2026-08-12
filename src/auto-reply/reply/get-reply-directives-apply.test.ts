@@ -1,7 +1,7 @@
 // Tests applying parsed directives to get-reply execution options.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
-import { parseInlineDirectives } from "./directive-handling.parse.js";
+import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 import { createFastTestModelSelectionState } from "./model-selection.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -72,7 +72,9 @@ describe("applyInlineDirectiveOverrides", () => {
       modelPolicyRepairConfigPath,
       expected,
     }) => {
-      const directives = parseInlineDirectives("hello /model openai/gpt-5.4 --runtime openclaw");
+      const directives = parseInlineSessionDirectives(
+        "hello /model openai/gpt-5.4 --runtime openclaw",
+      );
       const typing = {
         onReplyStart: async () => {},
         startTypingLoop: async () => {},
@@ -174,7 +176,7 @@ describe("applyInlineDirectiveOverrides", () => {
   );
 
   it("stops a mixed inline turn when its single directive transaction loses", async () => {
-    const directives = parseInlineDirectives("hello /elevated full");
+    const directives = parseInlineSessionDirectives("hello /elevated full");
     const errorText = "Session settings were not applied because the session changed. Retry.";
     mocks.handleDirective.mockImplementation(async (params) => {
       params.persistenceState.outcome = { kind: "rejected", errorText };
@@ -248,7 +250,7 @@ describe("applyInlineDirectiveOverrides", () => {
   it("stops a mixed inline turn when its transaction rejects unsupported thinking", async () => {
     const errorText =
       'Thinking level "ultra" is not supported for openai/gpt-5.6-luna. Use one of: off, low, medium, high, max.';
-    const directives = parseInlineDirectives("/think ultra please solve");
+    const directives = parseInlineSessionDirectives("/think ultra please solve");
     mocks.handleDirective.mockImplementation(async (params) => {
       params.persistenceState.outcome = { kind: "rejected", errorText };
       return { text: errorText };

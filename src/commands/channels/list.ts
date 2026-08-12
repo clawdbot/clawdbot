@@ -5,7 +5,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/ag
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import { isChannelVisibleInConfiguredLists } from "../../channels/plugins/exposure.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
-import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
+import { resolveChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import {
@@ -19,7 +19,7 @@ import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-sna
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { listManifestInstalledChannelIds } from "../channel-setup/discovery.js";
 import { listTrustedChannelPluginCatalogEntries } from "../channel-setup/trusted-catalog.js";
-import { formatChannelAccountLabel, requireValidConfig } from "./shared.js";
+import { formatChannelAccountLabel, requireValidChannelConfig } from "./shared.js";
 
 export type ChannelsListOptions = {
   json?: boolean;
@@ -148,7 +148,7 @@ export async function channelsListCommand(
   opts: ChannelsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const cfg = await requireValidConfig(runtime, { skipPluginValidation: true });
+  const cfg = await requireValidChannelConfig(runtime, { skipPluginValidation: true });
   if (!cfg) {
     return;
   }
@@ -223,7 +223,7 @@ export async function channelsListCommand(
         localAccountIds: accountIds,
         runtimeAccounts,
         resolveLocalSnapshot: (accountId) =>
-          buildChannelAccountSnapshot({ plugin, cfg, accountId }),
+          resolveChannelAccountSnapshot({ plugin, cfg, accountId }),
       });
       for (const row of rows) {
         accountLines.push({
@@ -245,7 +245,7 @@ export async function channelsListCommand(
     // full set of channels they could enable without first running
     // `channels add`. Use the channel's default account so the snapshot
     // can reflect "not configured / not enabled" state.
-    const snapshot = await buildChannelAccountSnapshot({
+    const snapshot = await resolveChannelAccountSnapshot({
       plugin,
       cfg,
       accountId: "default",

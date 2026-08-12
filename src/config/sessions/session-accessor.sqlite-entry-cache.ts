@@ -5,31 +5,36 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import { parseSqliteSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
 
-export type SqliteSessionEntryCacheSnapshot = {
+export type SessionEntryCacheSnapshot = {
   entries: Map<string, SessionEntry>;
   keys: string[];
   listEntries: Pick<ReadonlyMap<string, SessionEntry>, "get">;
 };
 
-type SqliteSessionEntryCache = SqliteSessionEntryCacheSnapshot & {
+type SqliteSessionEntryCache = SessionEntryCacheSnapshot & {
   listProjections: Map<string, SessionEntry>;
   updatedAtByKey: Map<string, number>;
   validityToken: SqliteSessionEntryCacheValidityToken;
 };
 
-type LoadedSessionEntrySnapshot = SqliteSessionEntryCacheSnapshot & {
+type LoadedSessionEntrySnapshot = SessionEntryCacheSnapshot & {
   listProjections: Map<string, SessionEntry>;
   updatedAtByKey: Map<string, number>;
 };
 
 type SqliteSessionEntryCacheValidityToken = {
   dataVersion: number;
-  totalChanges: number;
+  sessionNodesGeneration: number;
+};
+
+type SqliteSessionEntryCacheWriteGeneration = {
+  after: number;
+  before: number;
 };
 
 const MAX_INCREMENTAL_ENTRY_READ_KEYS = 500;
@@ -41,6 +46,7 @@ const MAX_INCREMENTAL_ENTRY_READ_KEYS = 500;
 // structural/unknown writes invalidate. Without both, every read would re-query and re-parse
 // every entry_json document.
 const sessionEntryCaches = new WeakMap<DatabaseSync, SqliteSessionEntryCache>();
+const sessionNodesGenerationTrackerSchemaVersions = new WeakMap<DatabaseSync, number>();
 
 function readDataVersion(database: DatabaseSync): number {
   const row = database.prepare("PRAGMA data_version").get() as { data_version?: unknown };
@@ -50,18 +56,52 @@ function readDataVersion(database: DatabaseSync): number {
   return row.data_version;
 }
 
-function readTotalChanges(database: DatabaseSync): number {
-  const row = database.prepare("SELECT total_changes() AS value").get() as { value?: unknown };
-  if (typeof row.value !== "number") {
-    throw new Error("SQLite did not return a numeric total_changes() value");
+function ensureSessionNodesGenerationTracker(database: DatabaseSync): void {
+  const schemaRow = database.prepare("PRAGMA schema_version").get() as {
+    schema_version?: unknown;
+  };
+  if (typeof schemaRow.schema_version !== "number") {
+    throw new Error("SQLite did not return a numeric PRAGMA schema_version");
   }
-  return row.value;
+  const trackedSchemaVersion = sessionNodesGenerationTrackerSchemaVersions.get(database);
+  if (trackedSchemaVersion === schemaRow.schema_version) {
+    return;
+  }
+  // sqlite-allow-raw -- TEMP triggers are the connection-local ownership boundary: they
+  // observe unpublished raw DML. A main-schema change bumps the generation before reinstalling
+  // them, so dropping/recreating session_nodes cannot make an old snapshot look current.
+  database.exec(`
+    CREATE TEMP TABLE IF NOT EXISTS openclaw_session_nodes_cache_generation (id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1), generation INTEGER NOT NULL) STRICT;
+    INSERT OR IGNORE INTO openclaw_session_nodes_cache_generation (id, generation) VALUES (1, 0);
+    ${trackedSchemaVersion === undefined ? "" : "UPDATE openclaw_session_nodes_cache_generation SET generation = generation + 1 WHERE id = 1;"}
+    DROP TRIGGER IF EXISTS openclaw_session_nodes_cache_generation_insert;
+    DROP TRIGGER IF EXISTS openclaw_session_nodes_cache_generation_update;
+    DROP TRIGGER IF EXISTS openclaw_session_nodes_cache_generation_delete;
+    CREATE TEMP TRIGGER openclaw_session_nodes_cache_generation_insert
+      AFTER INSERT ON main.session_nodes BEGIN UPDATE openclaw_session_nodes_cache_generation SET generation = generation + 1 WHERE id = 1; END;
+    CREATE TEMP TRIGGER openclaw_session_nodes_cache_generation_update
+      AFTER UPDATE ON main.session_nodes BEGIN UPDATE openclaw_session_nodes_cache_generation SET generation = generation + 1 WHERE id = 1; END;
+    CREATE TEMP TRIGGER openclaw_session_nodes_cache_generation_delete
+      AFTER DELETE ON main.session_nodes BEGIN UPDATE openclaw_session_nodes_cache_generation SET generation = generation + 1 WHERE id = 1; END;
+  `);
+  sessionNodesGenerationTrackerSchemaVersions.set(database, schemaRow.schema_version);
+}
+
+function readSessionNodesGeneration(database: DatabaseSync): number {
+  ensureSessionNodesGenerationTracker(database);
+  const row = database
+    .prepare("SELECT generation FROM temp.openclaw_session_nodes_cache_generation WHERE id = 1")
+    .get() as { generation?: unknown };
+  if (typeof row.generation !== "number") {
+    throw new Error("SQLite session_nodes cache generation is unavailable");
+  }
+  return row.generation;
 }
 
 function readCacheValidityToken(database: DatabaseSync): SqliteSessionEntryCacheValidityToken {
   return {
     dataVersion: readDataVersion(database),
-    totalChanges: readTotalChanges(database),
+    sessionNodesGeneration: readSessionNodesGeneration(database),
   };
 }
 
@@ -69,7 +109,24 @@ function cacheValidityTokensEqual(
   left: SqliteSessionEntryCacheValidityToken,
   right: SqliteSessionEntryCacheValidityToken,
 ): boolean {
-  return left.dataVersion === right.dataVersion && left.totalChanges === right.totalChanges;
+  return (
+    left.dataVersion === right.dataVersion &&
+    left.sessionNodesGeneration === right.sessionNodesGeneration
+  );
+}
+
+/** Bracket one accessor-owned row write so its publication cannot hide earlier raw DML. */
+export function trackSessionEntryCacheWrite(
+  database: OpenClawAgentDatabase,
+  write: () => void,
+): SqliteSessionEntryCacheWriteGeneration | undefined {
+  const before = sessionEntryCaches.has(database.db)
+    ? readSessionNodesGeneration(database.db)
+    : undefined;
+  write();
+  return before === undefined
+    ? undefined
+    : { before, after: readSessionNodesGeneration(database.db) };
 }
 
 function createListProjection(entry: SessionEntry): SessionEntry {
@@ -115,7 +172,7 @@ function loadSessionEntrySnapshot(database: SessionEntryCacheDatabase): LoadedSe
   ).rows;
   const entries = new Map<string, SessionEntry>();
   for (const row of rows) {
-    const entry = parseSqliteSessionEntryJson(row);
+    const entry = parseSessionEntryJson(row);
     if (!entry) {
       continue;
     }
@@ -174,7 +231,7 @@ function incrementallyRevalidateSessionEntrySnapshot(
         .where("session_key", "in", changedKeys),
     ).rows;
     for (const row of changedRows) {
-      const entry = parseSqliteSessionEntryJson(row);
+      const entry = parseSessionEntryJson(row);
       if (entry) {
         entries.set(row.session_key, entry);
       }
@@ -190,10 +247,10 @@ function incrementallyRevalidateSessionEntrySnapshot(
   };
 }
 
-export function readSqliteSessionEntryCache(
+export function readSessionEntryCache(
   database: SessionEntryCacheDatabase,
   options: { cache: boolean; latest?: boolean },
-): SqliteSessionEntryCacheSnapshot {
+): SessionEntryCacheSnapshot {
   if (!options.cache || options.latest || database.db.isTransaction) {
     return loadSessionEntrySnapshot(database);
   }
@@ -205,8 +262,8 @@ export function readSqliteSessionEntryCache(
   if (cached && cached.validityToken.dataVersion === validityToken.dataVersion) {
     // updated_at is entry-controlled, not a rowversion. Other connections can rewrite entry_json
     // without advancing it, so data_version changes must fully reload or same-ms rewrites go stale.
-    // Tracked single-row upserts patch their row but retain this old token; unrelated local writes
-    // and any other same-connection changes are still discovered by this incremental diff.
+    // The TEMP generation changes only for session_nodes DML, including raw same-connection
+    // writers. Unrelated transcript-table writes therefore stay on the O(1) cache-hit path.
     const revalidated = incrementallyRevalidateSessionEntrySnapshot(
       database,
       cached,
@@ -265,8 +322,9 @@ function publishSqliteSessionEntryCacheUpsert(
     session_key: string;
     updated_at: number;
   },
+  writeGeneration?: SqliteSessionEntryCacheWriteGeneration,
 ): void {
-  const entry = parseSqliteSessionEntryJson({
+  const entry = parseSessionEntryJson({
     current_session_id: row.current_session_id,
     entry_json: row.entry_json,
     updated_at: row.updated_at,
@@ -275,11 +333,17 @@ function publishSqliteSessionEntryCacheUpsert(
     invalidateTrackedCache(database);
     return;
   }
+  if (!writeGeneration) {
+    invalidateTrackedCache(database);
+    return;
+  }
   publishTrackedCacheUpdate(database, () => {
     const cached = sessionEntryCaches.get(database.db);
     if (!cached) {
       return;
     }
+    const generationIsContinuous =
+      cached.validityToken.sessionNodesGeneration === writeGeneration.before;
     const entries = new Map(cached.entries);
     entries.set(row.session_key, entry);
     const listProjections = new Map(cached.listProjections);
@@ -287,21 +351,25 @@ function publishSqliteSessionEntryCacheUpsert(
     const updatedAtByKey = new Map(cached.updatedAtByKey);
     const knownKey = updatedAtByKey.has(row.session_key);
     updatedAtByKey.set(row.session_key, row.updated_at);
-    // Patch only the authoritative row but retain the old validity token. The next read
-    // must still reconcile any other local total_changes, while a changed data_version
-    // forces a full reload; advancing either here could mask an earlier unknown write.
+    // Advance only across the bracketed row write. A raw write before/after this bracket leaves
+    // a generation gap, while the retained data_version still exposes external commits.
     sessionEntryCaches.set(database.db, {
       entries,
       keys: knownKey ? cached.keys : [...cached.keys, row.session_key].toSorted(),
       listEntries: createLazyListProjections(entries, listProjections),
       listProjections,
       updatedAtByKey,
-      validityToken: cached.validityToken,
+      validityToken: generationIsContinuous
+        ? {
+            ...cached.validityToken,
+            sessionNodesGeneration: writeGeneration.after,
+          }
+        : cached.validityToken,
     });
   });
 }
 
-export function publishSqliteSessionEntryCacheInvalidation(
+export function publishSessionEntryCacheInvalidation(
   database: OpenClawAgentDatabase,
   row?: {
     current_session_id: string;
@@ -309,9 +377,10 @@ export function publishSqliteSessionEntryCacheInvalidation(
     session_key: string;
     updated_at: number;
   },
+  writeGeneration?: SqliteSessionEntryCacheWriteGeneration,
 ): void {
   if (row) {
-    publishSqliteSessionEntryCacheUpsert(database, row);
+    publishSqliteSessionEntryCacheUpsert(database, row, writeGeneration);
     return;
   }
   invalidateTrackedCache(database);

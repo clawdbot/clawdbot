@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createCliJsonlStreamingParser } from "../../agents/cli-output.js";
+import { createCliJsonlStreamingParser } from "../../agents/cli-output-stream.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {

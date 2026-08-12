@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { publishSessionEntryCacheInvalidation } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { resolveAllAgentSessionStoreCandidateTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -176,6 +177,8 @@ function applyReservedIncognitoKeyRenames(
     updateSessionKeyColumns(database.db, rename);
   }
   rewriteSessionEntryJsonReferences(database, new Map(renames.map((item) => [item.from, item.to])));
+  // Key and lineage columns reshape the cached map even when no entry JSON needs rewriting.
+  publishSessionEntryCacheInvalidation(database);
 }
 
 function legacyIncognitoSessionKey(sessionKey: string): string {

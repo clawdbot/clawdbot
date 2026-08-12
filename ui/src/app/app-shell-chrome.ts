@@ -1,3 +1,5 @@
+import { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
+import type { GatewaySessionRow } from "../api/types.ts";
 import { isSettingsNavigationRoute } from "../app-navigation.ts";
 import { routeIdFromPath, type RouteId } from "../app-route-paths.ts";
 import {
@@ -13,6 +15,7 @@ import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   CUSTODIAN_PANEL_TOGGLE_EVENT,
+  DESKTOP_PANEL_TOGGLE_EVENT,
   isTerminalPanelShortcut,
   TERMINAL_PANEL_TOGGLE_EVENT,
   type PanelToggleElement,
@@ -21,6 +24,7 @@ import type { BoardFace } from "../lib/board/settings.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
+import { findUiSessionRow } from "../lib/sessions/route-navigation.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
@@ -52,13 +56,27 @@ export function isBrowserPanelAvailable(
   );
 }
 
+export function isDesktopPanelAvailable(
+  snapshot: ApplicationContext["gateway"]["snapshot"],
+  session: GatewaySessionRow | undefined,
+): boolean {
+  return (
+    isCloudWorkerPlacementState(session?.placement?.state) &&
+    snapshot.phase === "connected" &&
+    hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
+    isGatewayMethodAdvertised(snapshot, "worker.desktop.observe") === true
+  );
+}
+
 export interface ShellChromeHost extends HTMLElement {
   readonly context: ApplicationContext<RouteId> | undefined;
+  readonly activeSessionKey: string;
   readonly onboardingMode: boolean;
   readonly updateComplete: Promise<boolean>;
   readonly commandPaletteElement: OptionalCustomElement;
   readonly terminalPanelElement: OptionalCustomElement;
   readonly browserPanelElement: OptionalCustomElement;
+  readonly desktopPanelElement: OptionalCustomElement;
   readonly custodianPanelElement: OptionalCustomElement;
   readonly execApprovalElement: OptionalCustomElement;
   readonly commandPalette: CommandPaletteElement | undefined;
@@ -103,6 +121,7 @@ export class ShellChromeOwner {
     window.addEventListener("openclaw:native-navigate", this.handleNativeNavigate);
     window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
+    window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleDeferredDesktopToggle);
     window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleDeferredCustodianToggle);
   }
 
@@ -123,6 +142,7 @@ export class ShellChromeOwner {
     window.removeEventListener("openclaw:native-navigate", this.handleNativeNavigate);
     window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
+    window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleDeferredDesktopToggle);
     window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleDeferredCustodianToggle);
   }
 
@@ -483,6 +503,20 @@ export class ShellChromeOwner {
     if (snapshot && isBrowserPanelAvailable(snapshot)) {
       this.deliverPanelEventAfterLoad(host.browserPanelElement, event);
     }
+  };
+
+  readonly handleDeferredDesktopToggle = (event: Event): void => {
+    const host = this.host;
+    const context = host.context;
+    const session = context ? findUiSessionRow(context, host.activeSessionKey) : undefined;
+    if (!context || !isDesktopPanelAvailable(context.gateway.snapshot, session)) {
+      event.stopImmediatePropagation();
+      return;
+    }
+    if (isOptionalElementDefined(host.desktopPanelElement)) {
+      return;
+    }
+    this.deliverPanelEventAfterLoad(host.desktopPanelElement, event);
   };
 
   readonly handleDeferredCustodianToggle = (event: Event): void => {

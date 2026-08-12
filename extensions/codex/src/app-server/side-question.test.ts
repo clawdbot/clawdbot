@@ -32,11 +32,6 @@ const isCodexAppServerNativeAuthProfileMock = vi.fn();
 const getSharedCodexAppServerClientMock = vi.fn();
 const refreshCodexAppServerAuthTokensMock = vi.fn();
 const createOpenClawCodingToolsMock = vi.fn();
-let sideQuestionToolParams: unknown;
-const createOpenClawCodingToolsForSideQuestionMock = vi.fn((params: unknown, options: unknown) => {
-  sideQuestionToolParams = params;
-  return createOpenClawCodingToolsMock(options);
-});
 const toolExecuteMock = vi.fn();
 const handleCodexAppServerApprovalRequestMock = vi.fn();
 const resolveCodexProviderWebSearchSupportForClientMock = vi.fn();
@@ -100,9 +95,8 @@ vi.mock("./provider-capabilities.js", () => ({
     resolveCodexProviderWebSearchSupportForClientMock(...args),
 }));
 
-vi.mock("openclaw/plugin-sdk/agent-harness-tool-authority-runtime", () => ({
-  createOpenClawCodingToolsForAgentHarnessSideQuestion: (params: unknown, options: unknown) =>
-    createOpenClawCodingToolsForSideQuestionMock(params, options),
+vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
+  createOpenClawCodingTools: (...args: unknown[]) => createOpenClawCodingToolsMock(...args),
 }));
 
 const { runCodexAppServerSideQuestion: runCodexAppServerSideQuestionImpl } =
@@ -115,17 +109,9 @@ const bindingStore: CodexAppServerBindingStore = {
 
 function runCodexAppServerSideQuestion(
   params: Parameters<typeof runCodexAppServerSideQuestionImpl>[0],
-  options: Omit<
-    Parameters<typeof runCodexAppServerSideQuestionImpl>[1],
-    "agentHarnessCodingToolsFactory" | "bindingStore"
-  > = {},
+  options: Omit<Parameters<typeof runCodexAppServerSideQuestionImpl>[1], "bindingStore"> = {},
 ) {
-  return runCodexAppServerSideQuestionImpl(params, {
-    ...options,
-    agentHarnessCodingToolsFactory: (attributionParams, toolOptions) =>
-      createOpenClawCodingToolsForSideQuestionMock(attributionParams, toolOptions),
-    bindingStore,
-  });
+  return runCodexAppServerSideQuestionImpl(params, { ...options, bindingStore });
 }
 
 function createFakeClient() {
@@ -259,7 +245,7 @@ function threadResult(threadId: string) {
       status: { type: "idle" },
       path: null,
       cwd: "/tmp/workspace",
-      cliVersion: "0.146.1",
+      cliVersion: "0.147.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -337,7 +323,19 @@ function nativeCommandItem(
   };
 }
 
-function sideParams(overrides: Partial<Parameters<typeof runCodexAppServerSideQuestion>[0]> = {}) {
+type SideQuestionParams = Parameters<typeof runCodexAppServerSideQuestion>[0];
+
+const TEST_HOST_CAPABILITIES: SideQuestionParams["hostCapabilities"] = Object.freeze({
+  kind: "agent-harness-host-capability",
+  version: 1,
+  assertActive: () => {},
+  bindToolSurface: (tools) => tools,
+  runBeforeToolCall: async (request) => ({ blocked: false, params: request.params }),
+  requestApproval: async () => undefined,
+  waitForApproval: async () => undefined,
+});
+
+function sideParams(overrides: Partial<SideQuestionParams> = {}): SideQuestionParams {
   const authProfileId = Object.hasOwn(overrides, "authProfileId")
     ? overrides.authProfileId
     : "openai:work";
@@ -397,7 +395,8 @@ function sideParams(overrides: Partial<Parameters<typeof runCodexAppServerSideQu
       modelRegistry: {} as never,
     },
     ...overrides,
-  } satisfies Parameters<typeof runCodexAppServerSideQuestion>[0];
+    hostCapabilities: overrides.hostCapabilities ?? TEST_HOST_CAPABILITIES,
+  };
 }
 
 function platformPreparedRuntimeAuth(resolvedApiKey?: string) {
@@ -488,8 +487,6 @@ describe("runCodexAppServerSideQuestion", () => {
     getSharedCodexAppServerClientMock.mockReset();
     refreshCodexAppServerAuthTokensMock.mockReset();
     createOpenClawCodingToolsMock.mockReset();
-    createOpenClawCodingToolsForSideQuestionMock.mockClear();
-    sideQuestionToolParams = undefined;
     toolExecuteMock.mockReset();
     handleCodexAppServerApprovalRequestMock.mockReset();
     resolveCodexProviderWebSearchSupportForClientMock.mockReset();
@@ -552,34 +549,33 @@ describe("runCodexAppServerSideQuestion", () => {
   it("forks an ephemeral side thread and returns the completed assistant text", async () => {
     const client = createFakeClient();
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
-    const params = sideParams({
-      messageChannel: "discord",
-      messageProvider: "discord-voice",
-      chatId: "discord-native-room",
-      chatType: "channel",
-      sessionKey: "agent:main:conversation",
-      sandboxSessionKey: "agent:main:runtime-policy",
-      messageActionTurnCapability: "turn-capability-1",
-      currentChannelId: "voice-room",
-      agentAccountId: "account-1",
-      messageTo: "channel-1",
-      messageThreadId: "thread-1",
-      groupId: "group-1",
-      groupChannel: "#ops",
-      groupSpace: "workspace-1",
-      spawnedBy: "agent:main:parent",
-      senderId: "sender-1",
-      senderName: "Rosita",
-      senderUsername: "rosita",
-      senderE164: "+15550001",
-      senderIsOwner: true,
-    });
 
-    const result = await runCodexAppServerSideQuestion(params);
+    const result = await runCodexAppServerSideQuestion(
+      sideParams({
+        messageChannel: "discord",
+        messageProvider: "discord-voice",
+        chatId: "discord-native-room",
+        chatType: "channel",
+        sessionKey: "agent:main:conversation",
+        sandboxSessionKey: "agent:main:runtime-policy",
+        messageActionTurnCapability: "turn-capability-1",
+        currentChannelId: "voice-room",
+        agentAccountId: "account-1",
+        messageTo: "channel-1",
+        messageThreadId: "thread-1",
+        groupId: "group-1",
+        groupChannel: "#ops",
+        groupSpace: "workspace-1",
+        spawnedBy: "agent:main:parent",
+        senderId: "sender-1",
+        senderName: "Rosita",
+        senderUsername: "rosita",
+        senderE164: "+15550001",
+        senderIsOwner: true,
+      }),
+    );
 
     expect(result).toEqual({ text: "Side answer." });
-    expect(sideQuestionToolParams).toBe(params);
-    expect(params).not.toHaveProperty("attribution");
     expect(mockCall(getSharedCodexAppServerClientMock)[0]).toMatchObject({
       preparedAuth: {
         kind: "profile",
@@ -2246,6 +2242,62 @@ describe("runCodexAppServerSideQuestion", () => {
       success: true,
       contentItems: [{ type: "inputText", text: "tool output" }],
     });
+  });
+
+  it("binds /btw tools and retained bound callbacks fail after capability closure", async () => {
+    let active = true;
+    let retainedExecute: ((...args: never[]) => Promise<unknown>) | undefined;
+    const bindToolSurface = vi.fn((tools: Array<{ execute?: (...args: never[]) => unknown }>) =>
+      tools.map((tool) => {
+        const execute = async (...args: never[]) => {
+          if (!active) {
+            throw new Error("agent harness host capability is no longer active");
+          }
+          return await tool.execute?.(...args);
+        };
+        retainedExecute = execute;
+        return { ...tool, execute };
+      }),
+    );
+    const client = createFakeClient();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "thread/fork") {
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        setTimeout(() => {
+          client.emit(turnCompleted("side-thread", "turn-1", "Bound answer."));
+        }, 0);
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          hostCapabilities: {
+            ...TEST_HOST_CAPABILITIES,
+            bindToolSurface: bindToolSurface as never,
+          },
+        }),
+      ),
+    ).resolves.toEqual({ text: "Bound answer." });
+    expect(bindToolSurface).toHaveBeenCalledTimes(1);
+    expect(bindToolSurface).toHaveBeenCalledWith(expect.any(Array), {
+      cwd: expect.any(String),
+    });
+    active = false;
+    const copiedExecute = retainedExecute;
+    await expect(copiedExecute?.()).rejects.toThrow("no longer active");
+    expect(toolExecuteMock).not.toHaveBeenCalled();
   });
 
   it("omits computer control from side threads without a compaction owner", async () => {

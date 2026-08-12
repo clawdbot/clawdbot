@@ -36,7 +36,6 @@ import type { StuckSessionRecoveryOutcome } from "./diagnostic-session-recovery.
 import {
   diagnosticSessionStates,
   getDiagnosticSessionState,
-  getDiagnosticSessionStateCountForTest,
   peekDiagnosticSessionState,
   pruneDiagnosticSessionStates,
   resetDiagnosticSessionStateForTest,
@@ -173,12 +172,12 @@ describe("diagnostic session state pruning", () => {
 
   it("evicts stale idle session states", () => {
     getDiagnosticSessionState({ sessionId: "stale-1" });
-    expect(getDiagnosticSessionStateCountForTest()).toBe(1);
+    expect(diagnosticSessionStates.size).toBe(1);
 
     vi.advanceTimersByTime(31 * 60 * 1000);
     getDiagnosticSessionState({ sessionId: "fresh-1" });
 
-    expect(getDiagnosticSessionStateCountForTest()).toBe(1);
+    expect(diagnosticSessionStates.size).toBe(1);
   });
 
   it("caps tracked session states to a bounded max", () => {
@@ -194,7 +193,7 @@ describe("diagnostic session state pruning", () => {
     }
     pruneDiagnosticSessionStates(now + 2002, true);
 
-    expect(getDiagnosticSessionStateCountForTest()).toBe(2000);
+    expect(diagnosticSessionStates.size).toBe(2000);
   });
 
   it("reuses keyed session state when later looked up by sessionId", () => {
@@ -206,7 +205,7 @@ describe("diagnostic session state pruning", () => {
 
     expect(bySessionId).toBe(keyed);
     expect(bySessionId.sessionKey).toBe("agent:main:demo-channel:channel:c1");
-    expect(getDiagnosticSessionStateCountForTest()).toBe(1);
+    expect(diagnosticSessionStates.size).toBe(1);
   });
 
   it("canonicalizes sessionId-only state when the sessionKey becomes known", () => {
@@ -221,7 +220,7 @@ describe("diagnostic session state pruning", () => {
     expect(diagnosticSessionStates.has("s1")).toBe(false);
     expect(diagnosticSessionStates.get(sessionKey)).toBe(keyed);
     expect(getDiagnosticSessionState({ sessionKey })).toBe(keyed);
-    expect(getDiagnosticSessionStateCountForTest()).toBe(1);
+    expect(diagnosticSessionStates.size).toBe(1);
   });
 
   it("merges split sessionId and sessionKey state without leaving stale queued work", () => {
@@ -240,13 +239,13 @@ describe("diagnostic session state pruning", () => {
     expect(merged.queueDepth).toBe(2);
     expect(merged.state).toBe("processing");
     expect(diagnosticSessionStates.has("s1")).toBe(false);
-    expect(getDiagnosticSessionStateCountForTest()).toBe(1);
+    expect(diagnosticSessionStates.size).toBe(1);
 
     logSessionStateChange({ sessionId: "s1", sessionKey, state: "idle", reason: "run_completed" });
     logSessionStateChange({ sessionKey, state: "idle", reason: "message_completed" });
 
     expect(getDiagnosticSessionState({ sessionKey }).queueDepth).toBe(0);
-    expect(getDiagnosticSessionStateCountForTest()).toBe(1);
+    expect(diagnosticSessionStates.size).toBe(1);
   });
 });
 
@@ -1044,6 +1043,132 @@ describe("stuck session diagnostics threshold", () => {
       { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
       ["ageMs", "stateGeneration"],
     );
+  });
+
+  it("recovers repeated request attempts despite fresh mechanical activity", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn(() => new Promise<never>(() => {}));
+    const stuckSessionWarnMs = 30_000;
+    const stuckSessionAbortMs = 90_000;
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        { diagnostics: { enabled: true } },
+        {
+          recoverStuckSession,
+          testTimings: { stuckSessionWarnMs, stuckSessionAbortMs },
+        },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main", runId: "run-1" });
+      markDiagnosticModelStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        provider: "mock",
+        model: "retrying-model",
+        observationUnit: "request",
+      });
+
+      for (let attempt = 2; attempt <= 6; attempt += 1) {
+        vi.advanceTimersByTime(30_000);
+        logSessionStateChange({
+          sessionId: "s1",
+          sessionKey: "main",
+          state: "processing",
+          reason: "run_started",
+        });
+        markDiagnosticModelStartedForTest({
+          sessionId: "s1",
+          sessionKey: "main",
+          runId: "run-1",
+          provider: "mock",
+          model: "retrying-model",
+          observationUnit: "request",
+        });
+      }
+    } finally {
+      unsubscribe();
+    }
+
+    expectRecordFields(
+      requireRecord(
+        events.find((event) => event.type === "session.stalled"),
+        "stalled event",
+      ),
+      {
+        classification: "stalled_agent_run",
+        reason: "repeated_model_requests_without_progress",
+        repeatedRequestNoProgressAgeMs: stuckSessionAbortMs,
+      },
+    );
+    expect(recoverStuckSession).toHaveBeenCalledTimes(1);
+    expectRecoveryCall(
+      recoverStuckSession,
+      { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
+      ["ageMs", "stateGeneration"],
+    );
+  });
+
+  it("does not recover repeated requests after semantic output resets the clock", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const stuckSessionAbortMs = 90_000;
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        { diagnostics: { enabled: true } },
+        {
+          recoverStuckSession,
+          testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs },
+        },
+      );
+      const ref = { sessionId: "s1", sessionKey: "main", runId: "run-1" };
+      logSessionStateChange({ ...ref, state: "processing" });
+      markDiagnosticEmbeddedRunStarted(ref);
+      markDiagnosticModelStartedForTest({
+        ...ref,
+        provider: "mock",
+        model: "retrying-model",
+        observationUnit: "request",
+      });
+      vi.advanceTimersByTime(30_000);
+      markDiagnosticModelStartedForTest({
+        ...ref,
+        provider: "mock",
+        model: "retrying-model",
+        observationUnit: "request",
+      });
+      markDiagnosticRunProgressForTest({
+        ...ref,
+        reason: "assistant:progress",
+        progressKind: "semantic",
+      });
+
+      for (let elapsedMs = 0; elapsedMs < stuckSessionAbortMs; elapsedMs += 30_000) {
+        vi.advanceTimersByTime(30_000);
+        markDiagnosticRunProgressForTest({
+          ...ref,
+          reason: "model_call:stream_progress",
+          progressKind: "liveness",
+        });
+      }
+    } finally {
+      unsubscribe();
+    }
+
+    expect(
+      events.some(
+        (event) =>
+          event.type === "session.stalled" &&
+          event.reason === "repeated_model_requests_without_progress",
+      ),
+    ).toBe(false);
+    expect(recoverStuckSession).not.toHaveBeenCalled();
   });
 
   it("reports silent model calls as long-running before the abort threshold", async () => {
@@ -2143,7 +2268,7 @@ describe("stuck session diagnostics threshold", () => {
     }
 
     expect(events).toStrictEqual([]);
-    expect(getDiagnosticSessionStateCountForTest()).toBe(0);
+    expect(diagnosticSessionStates.size).toBe(0);
   });
 
   it("checks memory pressure every tick without recording idle samples", () => {

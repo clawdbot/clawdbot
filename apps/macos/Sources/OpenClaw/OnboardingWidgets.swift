@@ -1,5 +1,4 @@
 import OpenClawChatUI
-import OpenClawIPC
 import SwiftUI
 
 /// Onboarding hero mascot with the openclaw.ai hero treatment: the animated
@@ -43,8 +42,6 @@ extension OnboardingView {
         case connection
         case cli
         case ai
-        case permissions
-        case chat
         case ready
     }
 
@@ -58,7 +55,6 @@ extension OnboardingView {
         var aiBusy = false
         var aiFailed = false
         var remoteProbeState: RemoteOnboardingProbeState = .idle
-        var allPermissionsGranted = false
     }
 
     /// The hero mascot mirrors what setup is doing: curious while choosing,
@@ -73,9 +69,7 @@ extension OnboardingView {
             aiPhase: self.aiSetup.phase,
             aiBusy: self.aiSetup.isBusy,
             aiFailed: Self.aiSetupLooksFailed(self.aiSetup),
-            remoteProbeState: self.remoteProbeState,
-            allPermissionsGranted: Capability.importanceOrdered
-                .allSatisfy { self.permissionMonitor.status[$0]?.isGranted == true }))
+            remoteProbeState: self.remoteProbeState))
     }
 
     var mascotAccessory: OpenClawMascotAccessory {
@@ -87,8 +81,6 @@ extension OnboardingView {
         case self.connectionPageIndex: .connection
         case self.cliPageIndex: .cli
         case self.aiPageIndex: .ai
-        case self.permissionsPageIndex: .permissions
-        case self.onboardingChatPageIndex: .chat
         case self.readyPageIndex: .ready
         default: .welcome
         }
@@ -137,10 +129,6 @@ extension OnboardingView {
             } else {
                 .curious
             }
-        case .permissions:
-            snapshot.allPermissionsGranted ? .happy : .curious
-        case .chat:
-            .attentive
         case .ready:
             .celebrating
         }
@@ -149,7 +137,7 @@ extension OnboardingView {
     static func mascotAccessory(for page: MascotPage) -> OpenClawMascotAccessory {
         switch page {
         case .ready: .gradCap
-        case .welcome, .connection, .cli, .ai, .permissions, .chat: .none
+        case .welcome, .connection, .cli, .ai: .none
         }
     }
 }

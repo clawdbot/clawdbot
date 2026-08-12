@@ -52,7 +52,7 @@ const mockMaintainConfigBackups = vi.hoisted(() =>
 );
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: mockLoadPluginManifestRegistry,
+  loadPluginManifestRegistryCore: mockLoadPluginManifestRegistry,
 }));
 
 vi.mock("../plugins/plugin-registry.js", async (importOriginal) => {

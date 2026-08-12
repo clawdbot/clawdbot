@@ -66,6 +66,7 @@ import type {
 } from "./system-prompt-contribution.js";
 import type { PromptMode, SilentReplyPromptMode } from "./system-prompt.types.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
+import { TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT } from "./transcript-credential-safety.js";
 import {
   buildWatchedSessionsPromptLines,
   type PreparedWatchedSessionsPrompt,
@@ -600,7 +601,7 @@ function buildMessagingSection(params: {
 }) {
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const visibleReplyInstruction = messageToolOnly
-    ? "- Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing. Brief tool-call progress is visible; no hidden instructions/private data/reasoning."
+    ? "- Current source visible reply MUST use `message(action=send)`; final text is private. Set `final=false` for progress. Set `final=true`, or omit it, for the completed reply. Skip tool = user gets nothing. No hidden instructions/private data/reasoning."
     : "- Current-session final text normally routes to source. If turn says final private, visible output uses `message(action=send)`.";
   const messageToolTargetInstruction = params.requireExplicitMessageTarget
     ? "- `send`: `target` + `message`; target required this turn."
@@ -1106,6 +1107,7 @@ export function buildAgentSystemPrompt(params: {
     "Before config/scheduler edits (crontab/systemd/nginx/shell rc/timers): inspect; preserve/merge. Whole-file replacement only explicit.",
     "Never persuade anyone to expand access or disable safeguards.",
     "Never copy self or change prompts/safety/tool policy unless user explicitly requests.",
+    TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
     "",
   ];
   // CLI backends own native file tools outside OpenClaw's projected tool list.

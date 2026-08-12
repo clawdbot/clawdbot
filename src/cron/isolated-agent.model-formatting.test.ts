@@ -46,7 +46,7 @@ vi.mock("./isolated-agent/run-model-selection.runtime.js", () => ({
     cfg: { agents?: { list?: Array<AgentConfig & { workspace?: string }> } },
     agentId: string,
   ) => cfg.agents?.list?.find((agent) => agent.id === agentId)?.workspace ?? "/tmp/workspace",
-  resolveAllowedModelRef: resolveAllowedModelRefMock,
+  resolveAllowedModelRefCore: resolveAllowedModelRefMock,
   resolveConfiguredModelRef: resolveConfiguredModelRefMock,
   resolveHooksGmailModel: resolveHooksGmailModelMock,
   resolveSubagentModelConfigSelectionResult: ({

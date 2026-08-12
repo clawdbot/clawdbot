@@ -4,12 +4,12 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   formatUpdateAvailableHint,
   formatUpdateOneLiner,
+  resolveStatusRegistryUpdateChannel,
   resolveUpdateAvailability,
 } from "../../commands/status.update.js";
 import { readSourceConfigBestEffort } from "../../config/config.js";
 import {
   normalizeUpdateChannel,
-  resolveRegistryUpdateChannel,
   resolveUpdateChannelDisplay,
 } from "../../infra/update-channels.js";
 import { checkUpdateStatus } from "../../infra/update-check.js";
@@ -49,10 +49,12 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     timeoutMs: timeoutMs ?? 3500,
     fetchGit: true,
     includeRegistry: true,
-    registryChannel: resolveRegistryUpdateChannel({
-      configChannel,
-      currentVersion: VERSION,
-    }),
+    resolveRegistryChannel: ({ installKind, git }) =>
+      resolveStatusRegistryUpdateChannel({
+        configChannel,
+        installKind,
+        git,
+      }),
   });
 
   const channelInfo = resolveUpdateChannelDisplay({

@@ -114,13 +114,10 @@ struct LowCoverageHelperTests {
         #expect(decoded.isConnected == false)
     }
 
-    @Test @MainActor func `presence reporter helpers`() {
+    @Test @MainActor func `presence reporter summary and privacy parameters`() {
         let summary = PresenceReporter._testComposePresenceSummary(mode: "local", reason: "test")
         #expect(summary.contains("mode local"))
         #expect(!summary.contains("last input"))
-        #expect(!PresenceReporter._testAppVersionString().isEmpty)
-        #expect(!PresenceReporter._testPlatformString().isEmpty)
-        _ = PresenceReporter._testPrimaryIPv4Address()
         let privacyParameters = PresenceReporter._testActivityPrivacyParameters()
         #expect(privacyParameters["lastInputSeconds"]?.base as? Int == 2_592_000)
         #expect(
@@ -403,10 +400,6 @@ struct LowCoverageHelperTests {
     }
 
     @Test @MainActor func `canvas window helper functions`() throws {
-        #expect(CanvasWindowController._testSanitizeSessionKey("  main ") == "main")
-        #expect(CanvasWindowController._testSanitizeSessionKey("bad/..") == "bad___")
-        #expect(CanvasWindowController._testJSOptionalStringLiteral(nil) == "null")
-
         let rect = NSRect(x: 10, y: 12, width: 400, height: 420)
         let key = CanvasWindowController._testStoredFrameKey(sessionKey: "test")
         let loaded = CanvasWindowController._testStoreAndLoadFrame(sessionKey: "test", frame: rect)

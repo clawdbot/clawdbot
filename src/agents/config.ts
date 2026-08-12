@@ -101,7 +101,7 @@ const pkg = JSON.parse(readFileSync(getPackageJsonPath(), "utf-8")) as PackageJs
 const openClawConfigName: string | undefined = pkg.openclawConfig?.name;
 export const APP_NAME: string = openClawConfigName || "openclaw";
 export const CONFIG_DIR_NAME: string = pkg.openclawConfig?.configDir || ".openclaw";
-export const VERSION: string = pkg.version || "0.0.0";
+export const PACKAGE_MANIFEST_VERSION: string = pkg.version || "0.0.0";
 
 const ENV_AGENT_DIR = `${APP_NAME.toUpperCase()}_AGENT_DIR`;
 

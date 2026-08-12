@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { auditHandlers, testApi } from "./audit.js";
+import { auditHandlers } from "./audit.js";
 
 const { inspectExecutionIdentityRun, listAuditEvents } = vi.hoisted(() => ({
   inspectExecutionIdentityRun: vi.fn(),
@@ -178,28 +178,41 @@ describe("audit gateway methods", () => {
     expect(result.events?.[0]).not.toHaveProperty("runId");
   });
 
-  it("projects a store-validated channel-sender identity", () => {
-    expect(
-      testApi.mapAuditActivityEvent({
-        schemaVersion: 1,
-        eventId: "event-message-2",
-        sequence: 12,
-        sourceSequence: 4,
-        occurredAt: 102,
-        kind: "message",
-        action: "message.inbound.processed",
-        status: "succeeded",
-        actorType: "channel_sender",
-        actorId: accountRef,
-        direction: "inbound",
-        channel: "telegram",
-        conversationKind: "direct",
-        outcome: "completed",
-        redaction: "metadata_only",
-      }),
-    ).toMatchObject({
-      eventType: "inbound_message",
-      actor: { type: "channel_sender", id: accountRef },
+  it("projects a store-validated channel-sender identity", async () => {
+    listAuditEvents.mockReturnValue({
+      events: [
+        {
+          schemaVersion: 1,
+          eventId: "event-message-2",
+          sequence: 12,
+          sourceSequence: 4,
+          occurredAt: 102,
+          kind: "message",
+          action: "message.inbound.processed",
+          status: "succeeded",
+          actorType: "channel_sender",
+          actorId: accountRef,
+          direction: "inbound",
+          channel: "telegram",
+          conversationKind: "direct",
+          outcome: "completed",
+          redaction: "metadata_only",
+        },
+      ],
+    });
+
+    const respond = await runAuditHandler("audit.activity.list", {
+      kind: "message",
+      direction: "inbound",
+    });
+
+    expect(respond).toHaveBeenCalledWith(true, {
+      events: [
+        expect.objectContaining({
+          eventType: "inbound_message",
+          actor: { type: "channel_sender", id: accountRef },
+        }),
+      ],
     });
   });
 

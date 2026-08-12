@@ -141,9 +141,15 @@ export async function runQaFlowSuiteStandard(
       enabledPluginIds,
       allowUnhealthyStartup: gatewayRuntimeOptions?.allowUnhealthyStartup,
       forwardHostHome: gatewayRuntimeOptions?.forwardHostHome,
-      mutateConfig: gatewayConfigPatch
-        ? (cfg) => applyQaMergePatch(cfg, gatewayConfigPatch) as OpenClawConfig
-        : undefined,
+      mutateConfig:
+        gatewayConfigPatch || params?.mutateConfig
+          ? (cfg) => {
+              const patchedConfig = gatewayConfigPatch
+                ? (applyQaMergePatch(cfg, gatewayConfigPatch) as OpenClawConfig)
+                : cfg;
+              return params?.mutateConfig ? params.mutateConfig(patchedConfig) : patchedConfig;
+            }
+          : undefined,
       // The gateway owns forced runtime, sandbox args, staged mock models, and provider keys.
       runtimeEnvPatch: mergeQaRuntimeEnvPatches(
         transport.createRuntimeEnvPatch?.(),

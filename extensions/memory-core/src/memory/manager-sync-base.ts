@@ -86,6 +86,7 @@ type MemoryReindexRetryState = {
   memoryFullRetryDirty: boolean;
   sessionsDirty: boolean;
   sessionsFullRetryDirty: boolean;
+  sessionsReconcileDirty: boolean;
   sessionsDirtyFiles: Set<string>;
 };
 
@@ -154,6 +155,9 @@ export abstract class MemoryManagerSyncBase {
   // Failed full reindexes can start with no per-file dirty set. Keep a
   // one-shot all-sessions retry marker so the next non-force sync cannot skip.
   protected sessionsFullRetryDirty = false;
+  // A corpus reconciliation deletes stale indexed paths while leaving unchanged
+  // live sessions untouched. Keep it distinct from a failed full reindex retry.
+  protected sessionsReconcileDirty = false;
   protected sessionsDirtyFiles = new Set<string>();
   protected sessionPendingFiles = new Set<string>();
   protected sessionPendingTargets = new Map<string, MemorySessionSyncTarget>();
@@ -206,6 +210,7 @@ export abstract class MemoryManagerSyncBase {
       memoryFullRetryDirty: this.memoryFullRetryDirty,
       sessionsDirty: this.sessionsDirty,
       sessionsFullRetryDirty: this.sessionsFullRetryDirty,
+      sessionsReconcileDirty: this.sessionsReconcileDirty,
       sessionsDirtyFiles: new Set(this.sessionsDirtyFiles),
     };
   }
@@ -214,11 +219,13 @@ export abstract class MemoryManagerSyncBase {
     this.dirty = snapshot.dirty || this.dirty;
     this.memoryFullRetryDirty = snapshot.memoryFullRetryDirty || this.memoryFullRetryDirty;
     this.sessionsFullRetryDirty = snapshot.sessionsFullRetryDirty || this.sessionsFullRetryDirty;
+    this.sessionsReconcileDirty = snapshot.sessionsReconcileDirty || this.sessionsReconcileDirty;
     this.sessionsDirtyFiles = new Set([...snapshot.sessionsDirtyFiles, ...this.sessionsDirtyFiles]);
     this.sessionsDirty =
       snapshot.sessionsDirty ||
       this.sessionsDirty ||
       this.sessionsFullRetryDirty ||
+      this.sessionsReconcileDirty ||
       this.sessionsDirtyFiles.size > 0;
   }
 
@@ -236,6 +243,7 @@ export abstract class MemoryManagerSyncBase {
   protected clearSessionRetryState(): void {
     this.sessionsDirty = false;
     this.sessionsFullRetryDirty = false;
+    this.sessionsReconcileDirty = false;
     this.sessionsDirtyFiles.clear();
   }
 
@@ -245,7 +253,10 @@ export abstract class MemoryManagerSyncBase {
   }
 
   protected refreshSessionDirtyFlag(): void {
-    this.sessionsDirty = this.sessionsFullRetryDirty || this.sessionsDirtyFiles.size > 0;
+    this.sessionsDirty =
+      this.sessionsFullRetryDirty ||
+      this.sessionsReconcileDirty ||
+      this.sessionsDirtyFiles.size > 0;
   }
 
   protected shouldDeferSourceWideBatch(): boolean {

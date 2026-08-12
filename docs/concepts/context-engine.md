@@ -166,13 +166,12 @@ export default function register(api) {
       return { ok: true, compacted: true };
     },
 
-    async commitTurn({ advancementKey, messages, prePromptMessageCount }) {
+    async commitTurn({ advancementKey, messages }) {
       // Atomically store the accepted turn and advancementKey. Return
       // "duplicate" when that exact key was committed by an earlier retry.
       return await commitAcceptedTurn({
         advancementKey,
         messages,
-        prePromptMessageCount,
       });
     },
   }));
@@ -230,6 +229,10 @@ For durable admitted turns, declare both transcript semantics:
 and implement `commitTurn(...)` as one atomic, idempotent write keyed by
 `advancementKey`. Return `{ status: "committed" }` for the first write and
 `{ status: "duplicate" }` when a host retry presents an already-committed key.
+The `messages` payload contains only the inclusive range from the admitted user
+entry through the accepted terminal entry. Engines that need the earlier
+transcript during bootstrap or rebuild should read it through the transcript
+cursor API, `readSessionTranscriptVisibleMessageDelta(...)`.
 Pre-turn transcript reads during bootstrap, maintenance, assembly, and retries
 then see the exact transcript prefix before the admitted user message. The host
 calls `commitTurn` only for the accepted successful turn; failed or aborted

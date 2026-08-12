@@ -4,6 +4,7 @@
  * It selects active or requested sessions, renders recent trajectory events,
  * and can follow newly appended SQLite trajectory rows.
  */
+import { normalizeOptionalString as toOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
@@ -55,32 +56,12 @@ const DEFAULT_TAIL_COUNT = 80;
 const SESSION_KEY_PAD = 30;
 const EVENT_TYPE_PAD = 16;
 const FOLLOW_INTERVAL_MS = 1_000;
-let followIntervalMsForTests: number | undefined;
-
-/** Overrides the follow polling interval for tests. */
-function setSessionsTailFollowIntervalMsForTests(intervalMs?: number): void {
-  followIntervalMsForTests = intervalMs;
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.sessionsTailTestApi")] = {
-    setSessionsTailFollowIntervalMsForTests,
-  };
-}
-
-function resolveFollowIntervalMs(): number {
-  return followIntervalMsForTests ?? FOLLOW_INTERVAL_MS;
-}
 
 function parseTailCount(value: string | number | undefined): number | null {
   if (value === undefined) {
     return DEFAULT_TAIL_COUNT;
   }
   return parseStrictNonNegativeInteger(value) ?? null;
-}
-
-function toOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function formatTimestamp(ts: string): string {
@@ -295,7 +276,7 @@ async function followSelections(
           );
         }
       }
-    }, resolveFollowIntervalMs());
+    }, FOLLOW_INTERVAL_MS);
 
     const stop = () => {
       clearInterval(interval);

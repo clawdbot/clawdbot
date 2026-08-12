@@ -24,10 +24,9 @@ import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 import { createCronExecutionId } from "../run-id.js";
-import { hasScheduledNextRunAtMs } from "../service/jobs.js";
+import { hasScheduledNextRunAtMs } from "../service/jobs-scheduling.js";
 import type { CronJob } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
-import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
 
 type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
 
@@ -36,27 +35,6 @@ export const DIRECT_CRON_DELIVERY_COMPLETION_RETENTION = {
   maxAgeMs: 24 * 60 * 60_000,
   maxEntries: 2_000,
 } as const satisfies DeliveryQueueCompletionRetention;
-
-/** Deletes or retires ephemeral direct-delivery cron sessions for delete-after-run jobs. */
-export async function cleanupDirectCronSession(params: {
-  job: CronJob;
-  agentSessionKey: string;
-  sessionId: string;
-  lifecycleRevision: string;
-  sessionUpdatedAt: number;
-  beforeSessionDelete?: () => void;
-  retireReason: string;
-}): Promise<void> {
-  await cleanupCronRunSessionAfterRun({
-    job: params.job,
-    agentSessionKey: params.agentSessionKey,
-    sessionId: params.sessionId,
-    lifecycleRevision: params.lifecycleRevision,
-    sessionUpdatedAt: params.sessionUpdatedAt,
-    beforeDelete: params.beforeSessionDelete,
-    reason: params.retireReason,
-  });
-}
 
 export function normalizeDeliveryTarget(channel: string, to: string): string {
   const toTrimmed = to.trim();
@@ -124,14 +102,6 @@ const deliverySubagentRegistryRuntimeLoader = createLazyImportLoader(
   () => import("./delivery-subagent-registry.runtime.js"),
 );
 
-async function loadDeliveryLoggerRuntime(): Promise<typeof import("./delivery-logger.runtime.js")> {
-  return await deliveryLoggerRuntimeLoader.load();
-}
-
-async function loadTtsRuntime(): Promise<typeof import("../../tts/tts.runtime.js")> {
-  return await ttsRuntimeLoader.load();
-}
-
 export async function loadDeliverySubagentRegistryRuntime(): Promise<
   typeof import("./delivery-subagent-registry.runtime.js")
 > {
@@ -139,17 +109,17 @@ export async function loadDeliverySubagentRegistryRuntime(): Promise<
 }
 
 export async function logCronDeliveryWarn(message: string): Promise<void> {
-  const { logWarn } = await loadDeliveryLoggerRuntime();
+  const { logWarn } = await deliveryLoggerRuntimeLoader.load();
   logWarn(message);
 }
 
 export async function logCronDeliveryError(message: string): Promise<void> {
-  const { logError } = await loadDeliveryLoggerRuntime();
+  const { logError } = await deliveryLoggerRuntimeLoader.load();
   logError(message);
 }
 
 export function logCronDeliveryErrorDeferred(message: string): void {
-  void loadDeliveryLoggerRuntime().then(({ logError }) => {
+  void deliveryLoggerRuntimeLoader.load().then(({ logError }) => {
     logError(message);
   });
 }
@@ -191,7 +161,7 @@ export async function maybeApplyTtsToCronPayloads(params: {
   ) {
     return params.payloads;
   }
-  const { maybeApplyTtsToPayload } = await loadTtsRuntime();
+  const { maybeApplyTtsToPayload } = await ttsRuntimeLoader.load();
   return await Promise.all(
     params.payloads.map((payload) =>
       maybeApplyTtsToPayload({

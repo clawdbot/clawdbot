@@ -6,8 +6,8 @@ import {
 } from "../auto-reply/reply/strip-inbound-meta.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
 import {
-  readSqliteTranscriptEventRows,
-  readSqliteTranscriptSnapshot,
+  readTranscriptEventRows,
+  readTranscriptSnapshot,
   type SqliteTranscriptSnapshotRow,
 } from "../config/sessions/session-accessor.sqlite-read.js";
 import { appendTranscriptEventsInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
@@ -219,13 +219,13 @@ describe("doctor SQLite session transcript label migration", () => {
   it("detects and idempotently rewrites legacy labels in user events", async () => {
     const databaseOptions = { agentId: AGENT_ID, env: state.env };
     const database = seedLegacyLabelTranscript(databaseOptions);
-    const before = readSqliteTranscriptSnapshot(database, SESSION_ID);
+    const before = readTranscriptSnapshot(database, SESSION_ID);
     const assistantJson = findEventJson(before.events, before.rows, "assistant");
     const midLineJson = findEventJson(before.events, before.rows, "mid-line-user");
 
     await runTranscriptLabelHealth(state, false);
 
-    expect(readSqliteTranscriptSnapshot(database, SESSION_ID).rows).toEqual(before.rows);
+    expect(readTranscriptSnapshot(database, SESSION_ID).rows).toEqual(before.rows);
     expect(note).toHaveBeenCalledWith(
       '- Found 1 session with legacy inbound-context labels.\n- Run "openclaw doctor --fix" to rewrite them.',
       "Session transcript labels",
@@ -234,7 +234,7 @@ describe("doctor SQLite session transcript label migration", () => {
     note.mockClear();
     await runTranscriptLabelHealth(state, true);
 
-    const repaired = readSqliteTranscriptSnapshot(database, SESSION_ID);
+    const repaired = readTranscriptSnapshot(database, SESSION_ID);
     const repairedContent = findMessageContent(repaired.events, "legacy-user");
     expect(typeof repairedContent).toBe("string");
     expect(repairedContent).toContain("Conversation info:");
@@ -280,7 +280,7 @@ describe("doctor SQLite session transcript label migration", () => {
     const afterFirstRepair = repaired.rows;
     await runTranscriptLabelHealth(state, true);
 
-    expect(readSqliteTranscriptSnapshot(database, SESSION_ID).rows).toEqual(afterFirstRepair);
+    expect(readTranscriptSnapshot(database, SESSION_ID).rows).toEqual(afterFirstRepair);
     expect(note).not.toHaveBeenCalled();
   });
 
@@ -299,7 +299,7 @@ describe("doctor SQLite session transcript label migration", () => {
     ]);
     await runTranscriptLabelHealth(state, true);
 
-    const repaired = readSqliteTranscriptSnapshot(database, SESSION_ID);
+    const repaired = readTranscriptSnapshot(database, SESSION_ID);
     const repairedContent = findMessageContent(repaired.events, "active-memory-user");
     expect(typeof repairedContent).toBe("string");
     expect(repairedContent).toContain("Context:\n<active_memory_plugin>");
@@ -324,7 +324,7 @@ describe("doctor SQLite session transcript label migration", () => {
     ]);
     await runTranscriptLabelHealth(state, true);
 
-    const repaired = readSqliteTranscriptSnapshot(database, SESSION_ID);
+    const repaired = readTranscriptSnapshot(database, SESSION_ID);
     const repairedContent = findMessageContent(repaired.events, "crlf-active-memory-user");
     expect(typeof repairedContent).toBe("string");
     expect(repairedContent).toContain("Context:\r\n<active_memory_plugin>");
@@ -358,7 +358,7 @@ describe("doctor SQLite session transcript label migration", () => {
     note.mockClear();
     await runTranscriptLabelHealth(state, true, cfg);
 
-    const repaired = readSqliteTranscriptSnapshot(database, SESSION_ID);
+    const repaired = readTranscriptSnapshot(database, SESSION_ID);
     const repairedContent = findMessageContent(repaired.events, "legacy-user");
     expect(repairedContent).toContain("Conversation info:");
     expect(repairedContent).not.toContain("Conversation info (untrusted metadata):");
@@ -391,18 +391,18 @@ describe("doctor SQLite session transcript label migration", () => {
     const database = seedMessageTranscript(databaseOptions, [
       { id: "user-prose", content: antiCorruptionContent },
     ]);
-    const before = readSqliteTranscriptSnapshot(database, SESSION_ID);
+    const before = readTranscriptSnapshot(database, SESSION_ID);
 
     await runTranscriptLabelHealth(state, false);
 
     expect(note).not.toHaveBeenCalled();
 
-    const after = readSqliteTranscriptSnapshot(database, SESSION_ID);
+    const after = readTranscriptSnapshot(database, SESSION_ID);
     expect(after.rows).toEqual(before.rows);
 
     await runTranscriptLabelHealth(state, true);
 
-    const final = readSqliteTranscriptSnapshot(database, SESSION_ID);
+    const final = readTranscriptSnapshot(database, SESSION_ID);
     const userContent = findMessageContent(final.events, "user-prose");
 
     expect(userContent).toContain("Foo (untrusted metadata): this is not a fence");
@@ -432,7 +432,7 @@ describe("doctor SQLite session transcript label migration", () => {
     ]);
     await runTranscriptLabelHealth(state, true);
 
-    const repaired = readSqliteTranscriptSnapshot(database, SESSION_ID);
+    const repaired = readTranscriptSnapshot(database, SESSION_ID);
     const content = findMessageContent(repaired.events, "assistant-echo");
     expect(typeof content).toBe("string");
     // Migrated to the marked form so the marker-only strippers recognize and remove it.
@@ -465,7 +465,7 @@ describe("doctor SQLite session transcript label migration", () => {
           "SELECT seq, created_at FROM transcript_events WHERE session_id = ? ORDER BY seq ASC",
         )
         .all(SESSION_ID) as Array<{ created_at: number; seq: number }>;
-    const before = readSqliteTranscriptSnapshot(database, SESSION_ID);
+    const before = readTranscriptSnapshot(database, SESSION_ID);
     const beforeSeqs = before.rows.map((row) => row.seq);
     const beforeMetadata = readRowMetadata();
 
@@ -488,7 +488,7 @@ describe("doctor SQLite session transcript label migration", () => {
 
     await runTranscriptLabelHealth(state, true);
 
-    const after = readSqliteTranscriptSnapshot(database, SESSION_ID);
+    const after = readTranscriptSnapshot(database, SESSION_ID);
     const afterSeqs = after.rows.map((row) => row.seq);
 
     expect(afterSeqs).toEqual(beforeSeqs);
@@ -554,13 +554,13 @@ describe("doctor SQLite session transcript label migration", () => {
     const database = seedMessageTranscript(databaseOptions, [
       { id: "unfenced-test", content: unfencedContent },
     ]);
-    const before = readSqliteTranscriptSnapshot(database, SESSION_ID);
+    const before = readTranscriptSnapshot(database, SESSION_ID);
 
     await runTranscriptLabelHealth(state, false);
 
     expect(note).not.toHaveBeenCalled();
 
-    const after = readSqliteTranscriptSnapshot(database, SESSION_ID);
+    const after = readTranscriptSnapshot(database, SESSION_ID);
     expect(after.rows).toEqual(before.rows);
   });
 
@@ -587,7 +587,7 @@ describe("doctor SQLite session transcript label migration", () => {
     ]);
     await runTranscriptLabelHealth(state, true);
 
-    const repaired = readSqliteTranscriptSnapshot(database, SESSION_ID);
+    const repaired = readTranscriptSnapshot(database, SESSION_ID);
     const content = findMessageContent(repaired.events, "fenced-test");
 
     expect(content).toContain(`Thread starter: ${INBOUND_CONTEXT_MARKER}`);
@@ -623,7 +623,7 @@ describe("doctor SQLite session transcript label migration", () => {
       expect.anything(),
     );
 
-    const after = readSqliteTranscriptSnapshot(database, SESSION_ID);
+    const after = readTranscriptSnapshot(database, SESSION_ID);
     const content = findMessageContent(after.events, "replied-test");
 
     // The oldest `Replied message` label is rewritten to the lineage-canonical target, NOT to a bare
@@ -644,13 +644,13 @@ describe("doctor SQLite session transcript label migration", () => {
     const database = seedMessageTranscript(databaseOptions, [
       { id: "unfenced-replied", content: unfencedContent },
     ]);
-    const before = readSqliteTranscriptSnapshot(database, SESSION_ID);
+    const before = readTranscriptSnapshot(database, SESSION_ID);
 
     await runTranscriptLabelHealth(state, false);
 
     expect(note).not.toHaveBeenCalled();
 
-    const after = readSqliteTranscriptSnapshot(database, SESSION_ID);
+    const after = readTranscriptSnapshot(database, SESSION_ID);
     expect(after.rows).toEqual(before.rows);
   });
 
@@ -697,7 +697,7 @@ describe("doctor SQLite session transcript label migration", () => {
     await runTranscriptLabelHealth(state, true);
 
     // The clean session was repaired.
-    const cleanRepaired = readSqliteTranscriptSnapshot(database, SESSION_ID);
+    const cleanRepaired = readTranscriptSnapshot(database, SESSION_ID);
     const cleanContent = findMessageContent(cleanRepaired.events, "legacy-user");
     expect(cleanContent).toContain("Conversation info:");
     expect(cleanContent).not.toContain("Conversation info (untrusted metadata):");
@@ -714,8 +714,8 @@ describe("doctor SQLite session transcript label migration", () => {
     );
 
     // The corrupt session was rolled back: legacy label survives, malformed row untouched.
-    // Read raw rows without parsing: readSqliteTranscriptSnapshot would throw on the malformed row.
-    const corruptRows = readSqliteTranscriptEventRows(database, CORRUPT_SESSION_ID);
+    // Read raw rows without parsing: readTranscriptSnapshot would throw on the malformed row.
+    const corruptRows = readTranscriptEventRows(database, CORRUPT_SESSION_ID);
     const corruptLegacyJson = corruptRows.find((row) =>
       row.eventJson.includes("corrupt-legacy-user"),
     );

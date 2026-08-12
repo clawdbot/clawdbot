@@ -55,7 +55,6 @@ import type {
 import {
   diagnosticSessionStates,
   getDiagnosticSessionState,
-  getDiagnosticSessionStateCountForTest as getDiagnosticSessionStateCountForTestImpl,
   pruneDiagnosticSessionStates,
   resetDiagnosticSessionStateForTest,
   type SessionRef,
@@ -573,6 +572,10 @@ function isActiveAbortRecoveryEligible(params: {
   stuckSessionAbortMs: number;
 }): boolean {
   return (
+    (params.classification?.eventType === "session.stalled" &&
+      params.classification.classification === "stalled_agent_run" &&
+      params.activity?.hasActiveEmbeddedRun === true &&
+      (params.activity.repeatedRequestNoProgressAgeMs ?? 0) >= params.stuckSessionAbortMs) ||
     isStalledEmbeddedRunRecoveryEligible(params) ||
     isBlockedToolCallRecoveryEligible(params) ||
     isStalledModelCallRecoveryEligible(params)
@@ -958,6 +961,9 @@ function sessionAttentionFields(params: {
     ...(params.activity.activeToolAgeMs !== undefined
       ? { activeToolAgeMs: params.activity.activeToolAgeMs }
       : {}),
+    ...(params.activity.repeatedRequestNoProgressAgeMs !== undefined
+      ? { repeatedRequestNoProgressAgeMs: params.activity.repeatedRequestNoProgressAgeMs }
+      : {}),
     ...(terminalProgressStale ? { terminalProgressStale: true } : {}),
   };
 }
@@ -978,6 +984,11 @@ function formatSessionActivityLogFields(activity: DiagnosticSessionActivitySnaps
   }
   if (activity.activeToolAgeMs !== undefined) {
     fields.push(`activeToolAge=${Math.round(activity.activeToolAgeMs / 1000)}s`);
+  }
+  if (activity.repeatedRequestNoProgressAgeMs !== undefined) {
+    fields.push(
+      `repeatedRequestNoProgressAge=${Math.round(activity.repeatedRequestNoProgressAgeMs / 1000)}s`,
+    );
   }
   if (isTerminalDiagnosticProgressReason(activity.lastProgressReason)) {
     fields.push("terminalProgressStale=true");
@@ -1313,13 +1324,17 @@ export function startDiagnosticHeartbeat(
         activity,
         staleMs: stuckSessionWarnMs,
       });
+      const repeatedRequestAttention =
+        state.state === "processing" &&
+        (activity.repeatedRequestNoProgressAgeMs ?? 0) > stuckSessionWarnMs;
       if (
         (state.state === "processing" && ageMs > stuckSessionWarnMs) ||
+        repeatedRequestAttention ||
         idleQueuedRecoverableStall
       ) {
         const attentionAgeMs = idleQueuedRecoverableStall
           ? (activity.lastProgressAgeMs ?? ageMs)
-          : ageMs;
+          : Math.max(ageMs, activity.repeatedRequestNoProgressAgeMs ?? 0);
         const classification = logSessionAttention({
           sessionId: state.sessionId,
           sessionKey: state.sessionKey,
@@ -1377,7 +1392,7 @@ export function stopDiagnosticHeartbeat() {
 }
 
 export function getDiagnosticSessionStateCountForTest(): number {
-  return getDiagnosticSessionStateCountForTestImpl();
+  return diagnosticSessionStates.size;
 }
 
 export function resetDiagnosticStateForTest(): void {

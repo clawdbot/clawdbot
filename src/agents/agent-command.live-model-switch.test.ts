@@ -4,7 +4,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
-import * as agentRunRegistry from "../infra/agent-run-registry.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import {
   deliveryContextFromSession,
@@ -27,7 +26,6 @@ import {
   resolveTestModelAliasFromPair,
   resolveTestModelRefFromString,
 } from "./agent-command.live-model-switch.test-helpers.js";
-import { createAgentExecutionAttribution } from "./agent-execution-attribution.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -99,6 +97,7 @@ const state = vi.hoisted(() => ({
   resolveSupportedThinkingLevelMock: vi.fn(({ level }: { level?: string }) => level),
   resolveThinkingDefaultMock: vi.fn((_args: unknown) => "low"),
   loadManifestModelCatalogMock: vi.fn(() => []),
+  loadProviderScopedThinkingCatalogMock: vi.fn((_params: unknown) => undefined),
   loadPreparedModelCatalogSnapshotMock: vi.fn(
     async (): Promise<ModelCatalogSnapshot> => ({
       entries: [],
@@ -120,28 +119,20 @@ const state = vi.hoisted(() => ({
   resolvedSessionKeyMock: undefined as string | undefined,
   trajectoryRecorderParamsMock: vi.fn(),
   enqueueExecutionIdentityContextAtAdmissionMock: vi.fn(),
-  executionIdentityCounter: 0,
 }));
 
 vi.mock("./model-fallback-runner.js", () => ({
   runWithModelFallback: (params: unknown) => state.runWithModelFallbackMock(params),
 }));
 
-vi.mock("../audit/execution-identity-admission.js", () => ({
-  createExecutionIdentityAdmissionToken: (runId: string) => {
-    const sequence = ++state.executionIdentityCounter;
-    return {
-      tokenVersion: 1,
-      contextId: `context-${sequence}`,
-      executionId: `execution-${sequence}`,
-      runId,
-      createdAt: sequence,
-    };
-  },
-  enqueueExecutionIdentityContextAtAdmission: (...args: unknown[]) =>
-    state.enqueueExecutionIdentityContextAtAdmissionMock(...args),
-  parseExecutionIdentityAdmissionToken: (token: unknown) => token,
-}));
+vi.mock("../audit/execution-identity-admission.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../audit/execution-identity-admission.js")>();
+  return {
+    ...actual,
+    enqueueExecutionIdentityContextAtAdmission: (...args: unknown[]) =>
+      state.enqueueExecutionIdentityContextAtAdmissionMock(...args),
+  };
+});
 
 vi.mock("./command/attempt-execution.runtime.js", () => ({
   buildAcpResult: (...args: unknown[]) => state.buildAcpResultMock(...args),
@@ -171,7 +162,7 @@ vi.mock("./command/attempt-execution.shared.js", async () => {
   );
   return {
     ...actual,
-    persistSessionEntry: (...args: unknown[]) => state.persistSessionEntryMock(...args),
+    persistAgentSession: (...args: unknown[]) => state.persistSessionEntryMock(...args),
   };
 });
 
@@ -253,7 +244,7 @@ vi.mock("./command/types.js", () => ({}));
 
 // Recovery ownership has dedicated store-backed coverage. This command suite
 // uses an intentionally synthetic session resolver with no durable store path.
-vi.mock("./main-session-recovery-store.js", () => ({
+vi.mock("./main-session-recovery/main-session-recovery-store.js", () => ({
   claimMainSessionRecoveryOwner: vi.fn(async () => ({ kind: "not_required" })),
   inspectMainSessionRecoveryRequired: vi.fn(async () => ({ kind: "not_required" })),
   releaseMainSessionRecoveryOwner: vi.fn(async () => undefined),
@@ -388,13 +379,14 @@ vi.mock("../infra/agent-events.js", () => ({
   registerAgentEventLifecycleRotationHandler: vi.fn(),
   withAgentRunLifecycleGeneration: (_generation: string, run: () => unknown) => run(),
 }));
-vi.mock("../infra/agent-run-registry.js", async () => ({
-  ...(await vi.importActual<typeof import("../infra/agent-run-registry.js")>(
-    "../infra/agent-run-registry.js",
-  )),
-  clearAgentRunContext: (...args: unknown[]) => state.clearAgentRunContextMock(...args),
-  registerAgentRunContext: (...args: unknown[]) => state.registerAgentRunContextMock(...args),
-}));
+vi.mock("../infra/agent-run-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/agent-run-registry.js")>();
+  return {
+    ...actual,
+    clearAgentRunContext: (...args: unknown[]) => state.clearAgentRunContextMock(...args),
+    registerAgentRunContext: (...args: unknown[]) => state.registerAgentRunContextMock(...args),
+  };
+});
 
 vi.mock("../infra/outbound/session-context.js", () => ({
   buildOutboundSessionContext: () => ({}),
@@ -568,6 +560,11 @@ vi.mock("./model-catalog.js", () => ({
 }));
 
 vi.mock("./model-catalog.runtime.js", () => ({
+  // The scoped thinking catalog hydrates from the same runtime snapshot the test controls.
+  loadProviderScopedThinkingCatalog: async (params: unknown) => {
+    state.loadProviderScopedThinkingCatalogMock(params);
+    return (await state.loadPreparedModelCatalogSnapshotMock()).entries;
+  },
   loadPreparedModelCatalogSnapshot: state.loadPreparedModelCatalogSnapshotMock,
 }));
 
@@ -681,15 +678,11 @@ vi.mock("../acp/control-plane/manager.js", () => ({
 
 let agentCommand: typeof import("./agent-command.js").agentCommand;
 let agentCommandFromSystem: typeof import("./agent-command.js").agentCommandFromSystem;
-let agentCommandFromIngress: typeof import("./agent-command.js").agentCommandFromIngress;
-let agentCommandTesting: typeof import("./agent-command.js").testing;
 
 beforeAll(async () => {
   const mod = await import("./agent-command.js");
   agentCommand ??= mod.agentCommand;
   agentCommandFromSystem ??= mod.agentCommandFromSystem;
-  agentCommandFromIngress ??= mod.agentCommandFromIngress;
-  agentCommandTesting ??= mod.testing;
 });
 
 type FallbackRunnerParams = {
@@ -768,6 +761,16 @@ function setupSingleAttemptFallback() {
 function setupSuccessfulAttempt(provider = "openai", model = "gpt-5.4"): void {
   setupSingleAttemptFallback();
   state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult(provider, model));
+}
+
+function setupAdmittedSuccessfulAttempt(provider = "openai", model = "gpt-5.4"): void {
+  setupSingleAttemptFallback();
+  state.runAgentAttemptMock.mockImplementation(
+    async (params: { preparedRunAdmission: { admit: (kind: "embedded") => Promise<unknown> } }) => {
+      await params.preparedRunAdmission.admit("embedded");
+      return makeSuccessResult(provider, model);
+    },
+  );
 }
 
 function setupAcpSession(): void {
@@ -1047,7 +1050,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   });
 
   afterEach(() => {
-    agentRunRegistry.resetAgentRunRegistryForTest();
     vi.restoreAllMocks();
   });
 
@@ -1102,21 +1104,11 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   });
 
   it("keeps collection off by default without blocking local execution", async () => {
-    setupSuccessfulAttempt();
+    setupAdmittedSuccessfulAttempt();
 
     await runBasicAgentCommand();
 
-    expect(state.enqueueExecutionIdentityContextAtAdmissionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
-      }),
-      expect.objectContaining({
-        enabled: false,
-        contextId: expect.any(String),
-        executionId: expect.any(String),
-        now: expect.any(Number),
-      }),
-    );
+    expect(state.enqueueExecutionIdentityContextAtAdmissionMock).not.toHaveBeenCalled();
     expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(1);
   });
 
@@ -1125,7 +1117,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       ...state.defaultRuntimeConfig,
       logging: { audit: { executionIdentity: true } },
     };
-    setupSuccessfulAttempt();
+    setupAdmittedSuccessfulAttempt();
 
     await runBasicAgentCommand();
     await runSystemAgentCommand();
@@ -1135,24 +1127,14 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       expect.objectContaining({
         ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
       }),
-      expect.objectContaining({
-        enabled: true,
-        contextId: expect.any(String),
-        executionId: expect.any(String),
-        now: expect.any(Number),
-      }),
+      expect.objectContaining({ enabled: true }),
     );
     expect(state.enqueueExecutionIdentityContextAtAdmissionMock).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         ingress: { kind: "system", boundary: "gateway.boot", state: "present" },
       }),
-      expect.objectContaining({
-        enabled: true,
-        contextId: expect.any(String),
-        executionId: expect.any(String),
-        now: expect.any(Number),
-      }),
+      expect.objectContaining({ enabled: true }),
     );
   });
 
@@ -1165,7 +1147,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       logging: { audit: { executionIdentity: true } },
     };
     state.enqueueExecutionIdentityContextAtAdmissionMock.mockReturnValue(undefined);
-    setupSuccessfulAttempt();
+    setupAdmittedSuccessfulAttempt();
 
     await run();
 
@@ -1473,6 +1455,41 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       expect.any(String),
       "post-restart-generation",
     );
+  });
+
+  it("preserves bounded delivery evidence when strict post-turn delivery throws", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+    const secret = ["sk", "strict-delivery-secret-value"].join("-");
+    state.deliverAgentCommandResultMock.mockImplementation(async (params: unknown) => {
+      (
+        params as {
+          onDeliveryResult?: (result: { deliveryStatus: Record<string, unknown> }) => void;
+        }
+      ).onDeliveryResult?.({
+        deliveryStatus: {
+          status: "failed",
+          errorMessage: `Authorization: Bearer ${secret}`,
+          target: "discord:dm:private",
+        },
+      });
+      throw new Error("strict delivery failed");
+    });
+
+    await expect(runDiscordDelivery()).rejects.toThrow("strict delivery failed");
+
+    const lifecycleError = state.emitAgentEventMock.mock.calls
+      .map((call) => call[0] as { stream?: string; data?: Record<string, unknown> })
+      .find((event) => event.stream === "lifecycle" && event.data?.phase === "error");
+    expect(lifecycleError?.data?.terminalDelivery).toEqual({
+      status: "failed",
+      resultCount: 0,
+    });
+    for (const field of ["stopReason", "terminalReceipt", "terminalReply"]) {
+      expect(lifecycleError?.data).not.toHaveProperty(field);
+    }
+    expect(JSON.stringify(lifecycleError)).not.toContain(secret);
+    expect(JSON.stringify(lifecycleError)).not.toContain("discord:dm:private");
   });
 
   it("preserves restart ownership when an aborted attempt resolves normally", async () => {
@@ -2205,23 +2222,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expectRecordFields(mockCallArg(state.deliverAgentCommandResultMock), {
       expectedSessionIdForFreshDelivery: "session-1",
     });
-  });
-
-  it("scopes explicit-agent sentinel store keys before command routing", () => {
-    expect(
-      agentCommandTesting.resolveExplicitAgentCommandSessionKey({
-        rawExplicitSessionKey: "global",
-        agentIdOverride: "work",
-        cfg: {},
-      }),
-    ).toBe("agent:work:global");
-    expect(
-      agentCommandTesting.resolveExplicitAgentCommandSessionKey({
-        rawExplicitSessionKey: "main",
-        agentIdOverride: "work",
-        cfg: {},
-      }),
-    ).toBe("agent:work:main");
   });
 
   it("persists explicit overrides even when ingress skips the initial touch", async () => {
@@ -3095,9 +3095,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
   });
 
-  it("downgrades a rejected best-effort target to session-only before the model run", async () => {
+  it("preserves rejected best-effort delivery intent through the model run", async () => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+    setupBareStoredSession();
     state.resolveAgentDeliveryPlanWithSessionRouteMock.mockResolvedValueOnce({
       baseDelivery: {},
       resolvedChannel: "discord",
@@ -3118,8 +3119,12 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     expect(state.runAgentAttemptMock).toHaveBeenCalled();
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
-      expect.objectContaining({ opts: expect.objectContaining({ deliver: false }) }),
+      expect.objectContaining({ opts: expect.objectContaining({ deliver: true }) }),
     );
+    const pendingEntries = state.persistSessionEntryMock.mock.calls
+      .map((call) => (call[0] as { entry?: SessionEntry }).entry)
+      .filter((entry): entry is SessionEntry => entry?.pendingFinalDelivery !== undefined);
+    expect(pendingEntries).toEqual([]);
   });
 
   it("clears a pre-existing transport-only pending delivery after an empty delivered run", async () => {
@@ -3523,11 +3528,15 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       allowModelOverride: true,
     });
 
-    expect(state.loadPreparedModelCatalogSnapshotMock).toHaveBeenCalledWith({
-      config: state.runtimeConfigMock,
-      agentId: "default",
-      workspaceDir: "/tmp/workspace",
-    });
+    expect(state.loadProviderScopedThinkingCatalogMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: state.runtimeConfigMock,
+        provider: "ollama",
+        model: "minimax-m3:cloud",
+        agentId: "default",
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
     const thinkingArgs = requireRecord(
       mockCallArg(state.isThinkingLevelSupportedMock),
       "thinking args",
@@ -4529,126 +4538,21 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
   it("keeps session provenance for internal ACP turns", async () => {
     setupAcpSession();
-    const attribution = createAgentExecutionAttribution({
-      runId: "session-1",
-      lifecycleGeneration: "test-generation",
-      sessionKey: "agent:main:main",
-      sessionId: "session-1",
-      agentId: "main",
-    });
 
     await agentCommand({
       message: "internal ACP turn",
       sessionKey: "agent:main:main",
       sessionEffects: "internal",
-      executionAttribution: attribution,
     });
 
     expect(state.registerAgentRunContextMock).toHaveBeenCalledWith(
       "session-1",
       expect.objectContaining({
-        attribution,
         sessionKey: "agent:main:main",
         sessionId: "session-1",
         isControlUiVisible: false,
       }),
     );
-  });
-
-  it("drops caller-supplied attribution at the public ingress boundary", async () => {
-    setupAcpSession();
-    const forgedAttribution = createAgentExecutionAttribution({
-      runId: "forged-run",
-      lifecycleGeneration: "forged-generation",
-      sessionKey: "agent:main:forged",
-      sessionId: "forged-session",
-      agentId: "forged-agent",
-    });
-
-    await agentCommandFromIngress({
-      message: "public ingress ACP turn",
-      sessionKey: "agent:main:main",
-      sessionEffects: "internal",
-      allowModelOverride: false,
-      executionAttribution: forgedAttribution,
-    } as Parameters<typeof agentCommandFromIngress>[0] & {
-      executionAttribution: typeof forgedAttribution;
-    });
-
-    expect(state.registerAgentRunContextMock).toHaveBeenCalledWith(
-      "session-1",
-      expect.not.objectContaining({ attribution: forgedAttribution }),
-    );
-  });
-
-  it("rejects a colliding public ACP run id before recording execution identity", async () => {
-    setupAcpSession();
-    const runId = "session-1";
-    agentRunRegistry.claimAgentRunContext(runId, {
-      attribution: createAgentExecutionAttribution({
-        runId,
-        lifecycleGeneration: "test-generation",
-      }),
-      lifecycleGeneration: "test-generation",
-    });
-
-    await expect(
-      agentCommandFromIngress({
-        message: "colliding public ACP turn",
-        sessionKey: "agent:main:main",
-        runId,
-        allowModelOverride: false,
-      }),
-    ).rejects.toThrow("Agent run ID is already bound to different execution attribution.");
-
-    expect(state.enqueueExecutionIdentityContextAtAdmissionMock).not.toHaveBeenCalled();
-    expect(state.registerAgentRunContextMock).not.toHaveBeenCalled();
-    expect(state.acpRunTurnMock).not.toHaveBeenCalled();
-  });
-
-  it("atomically rejects concurrent cross-session ACP admissions sharing a run id", async () => {
-    setupAcpSession();
-    const runId = "concurrent-cross-session-run";
-    agentRunRegistry.claimAgentRunContext(runId, {
-      lifecycleGeneration: "test-generation",
-    });
-    let releaseFirst!: () => void;
-    const firstBlocked = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
-    let markFirstStarted!: () => void;
-    const firstStarted = new Promise<void>((resolve) => {
-      markFirstStarted = resolve;
-    });
-    state.acpRunTurnMock.mockImplementationOnce(async (params: unknown) => {
-      markFirstStarted();
-      await firstBlocked;
-      const onEvent = (params as { onEvent?: (event: unknown) => void }).onEvent;
-      onEvent?.({ type: "done", stopReason: "end_turn" });
-    });
-
-    const first = agentCommandFromIngress({
-      message: "first public ACP turn",
-      sessionKey: "agent:main:first-session",
-      runId,
-      allowModelOverride: false,
-    });
-    await firstStarted;
-
-    await expect(
-      agentCommandFromIngress({
-        message: "second public ACP turn",
-        sessionKey: "agent:main:second-session",
-        runId,
-        allowModelOverride: false,
-      }),
-    ).rejects.toThrow("Agent run ID is already bound to different execution attribution.");
-
-    expect(state.enqueueExecutionIdentityContextAtAdmissionMock).toHaveBeenCalledTimes(1);
-    expect(state.acpRunTurnMock).toHaveBeenCalledTimes(1);
-
-    releaseFirst();
-    await first;
   });
 
   it("allows manual ACP spawn turns when ACP dispatch is disabled", async () => {

@@ -1,8 +1,8 @@
-import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 /** Builds the static and plugin-derived registry of secret migration targets. */
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { loadChannelSecretContractApiForRecord } from "./channel-contract-api.js";
+import { listOfficialExternalChannelSecretTargetRegistryEntries } from "./official-external-channel-secret-contract.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
 const SECRET_INPUT_SHAPE = "secret_input"; // pragma: allowlist secret
@@ -84,24 +84,6 @@ function listPluginConfigSecretTargetRegistryEntries(
     }
   }
   return entries.toSorted((left, right) => left.id.localeCompare(right.id));
-}
-
-function listSourceBundledPluginConfigContractRecords(): Array<
-  Pick<PluginManifestRecord, "id" | "configContracts">
-> {
-  return listBundledPluginMetadata({
-    includeChannelConfigs: false,
-    includeSyntheticChannelConfigs: false,
-  }).flatMap((metadata) =>
-    metadata.manifest.configContracts
-      ? [
-          {
-            id: metadata.manifest.id,
-            configContracts: metadata.manifest.configContracts,
-          },
-        ]
-      : [],
-  );
 }
 
 function listChannelSecretTargetRegistryEntries(
@@ -467,8 +449,8 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
   preferPersisted?: boolean;
 }): SecretTargetRegistryEntry[] {
   const plugins = resolvePluginMetadataSnapshot({
-    config: {},
     env: params.env,
+    allowWorkspaceScopedCurrent: true,
     ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
   }).plugins;
   const channelPlugins = plugins.filter((record) => record.channels.length > 0);
@@ -478,15 +460,22 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
   // manifest-scoped — web-provider contract + sensitive hint, or declared
   // secretInput paths — so a non-bundled origin cannot widen target paths
   // beyond its own declared contracts.
-  return [
+  const entries = [
     ...CORE_SECRET_TARGET_REGISTRY,
     ...listPluginWebProviderSecretTargetRegistryEntries(plugins),
-    ...listPluginConfigSecretTargetRegistryEntries([
-      ...plugins,
-      ...listSourceBundledPluginConfigContractRecords(),
-    ]),
+    ...listPluginConfigSecretTargetRegistryEntries(plugins),
     ...listChannelSecretTargetRegistryEntries(channelPlugins),
+    ...listOfficialExternalChannelSecretTargetRegistryEntries(),
   ];
+  const seen = new Set<string>();
+  return entries.filter((entry) => {
+    const key = `${entry.configFile}:${entry.pathPattern}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 /** Returns only core-owned secret target registry entries. */

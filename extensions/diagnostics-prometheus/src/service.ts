@@ -992,6 +992,7 @@ function createMetricsHandler(store: PrometheusMetricStore): OpenClawPluginHttpR
     res.statusCode = 200;
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
+    res.setHeader("Content-Length", String(Buffer.byteLength(body)));
     if (req.method === "HEAD") {
       res.end();
       return true;

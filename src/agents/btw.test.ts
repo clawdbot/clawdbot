@@ -9,8 +9,6 @@ import {
   mintSecretSentinel,
   resolveSecretSentinel,
 } from "../secrets/sentinel.js";
-import { createAgentExecutionAttribution } from "./agent-execution-attribution.js";
-import { resolveAgentHarnessSideQuestionExecutionAttribution } from "./harness/side-question-execution-attribution.js";
 import type { AgentHarness } from "./harness/types.js";
 import type { AgentRuntimeAuthPlan } from "./runtime-plan/types.js";
 
@@ -43,6 +41,7 @@ const prepareCliRunContextMock = vi.fn();
 const executePreparedCliRunMock = vi.fn();
 const diagDebugMock = vi.fn();
 const ensureSelectedAgentHarnessPluginMock = vi.fn();
+const createAgentHarnessHostCapabilitiesMock = vi.fn();
 const loadTranscriptEventsMock = vi.fn();
 const shouldPreferExplicitConfigApiKeyAuthMock = vi.fn((..._args: unknown[]) => false);
 const hasUsableCustomProviderApiKeyMock = vi.fn((..._args: unknown[]) => false);
@@ -138,7 +137,7 @@ vi.mock("./model-auth.js", () => ({
   ensureAuthProfileStore: (...args: unknown[]) => ensureAuthProfileStoreMock(...args),
   ensureAuthProfileStoreWithoutExternalProfiles: (...args: unknown[]) =>
     ensureAuthProfileStoreWithoutExternalProfilesMock(...args),
-  getApiKeyForModel: (...args: unknown[]) => getApiKeyForModelMock(...args),
+  getApiKeyForModelCore: (...args: unknown[]) => getApiKeyForModelMock(...args),
   hasUsableCustomProviderApiKey: (...args: unknown[]) => hasUsableCustomProviderApiKeyMock(...args),
   requireApiKey: (...args: unknown[]) => requireApiKeyMock(...args),
   resolveProviderEntryApiKeyProfileReference: (params: unknown) =>
@@ -203,6 +202,21 @@ vi.mock("./harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: (...args: unknown[]) =>
     ensureSelectedAgentHarnessPluginMock(...args),
 }));
+
+vi.mock("./harness/host-capability.js", async () => {
+  const actual = await vi.importActual<typeof import("./harness/host-capability.js")>(
+    "./harness/host-capability.js",
+  );
+  return {
+    ...actual,
+    createAgentHarnessHostCapabilities: (
+      params: Parameters<typeof actual.createAgentHarnessHostCapabilities>[0],
+    ) => {
+      createAgentHarnessHostCapabilitiesMock(params);
+      return actual.createAgentHarnessHostCapabilities(params);
+    },
+  };
+});
 
 vi.mock("./embedded-agent-runner/runs.js", () => ({
   getActiveEmbeddedRunSnapshot: (...args: unknown[]) => getActiveEmbeddedRunSnapshotMock(...args),
@@ -611,6 +625,7 @@ describe("runBtwSideQuestion", () => {
     executePreparedCliRunMock.mockReset();
     diagDebugMock.mockReset();
     ensureSelectedAgentHarnessPluginMock.mockReset();
+    createAgentHarnessHostCapabilitiesMock.mockReset();
     loadTranscriptEventsMock.mockReset();
     shouldPreferExplicitConfigApiKeyAuthMock.mockReset();
     shouldPreferExplicitConfigApiKeyAuthMock.mockReturnValue(false);
@@ -796,13 +811,6 @@ describe("runBtwSideQuestion", () => {
     const codexSideQuestionMock = registerCodexSideQuestionHarness({
       supports,
     });
-    const attribution = createAgentExecutionAttribution({
-      runId: "run-btw-codex",
-      lifecycleGeneration: "generation-1",
-      sessionKey: DEFAULT_SESSION_KEY,
-      sessionId: "session-1",
-      agentId: "main",
-    });
     resolveModelWithRegistryMock.mockReturnValue({
       provider: "openai",
       id: "gpt-5.5",
@@ -838,7 +846,6 @@ describe("runBtwSideQuestion", () => {
     });
 
     const result = await runSideQuestion({
-      attribution,
       provider: "openai",
       model: "gpt-5.5",
       sessionKey: DEFAULT_SESSION_KEY,
@@ -856,13 +863,6 @@ describe("runBtwSideQuestion", () => {
 
     expect(result).toEqual({ text: "Codex side answer." });
     expect(codexSideQuestionMock).toHaveBeenCalledTimes(1);
-    const sideQuestionParams = mockArg(codexSideQuestionMock, 0, 0) as Parameters<
-      typeof resolveAgentHarnessSideQuestionExecutionAttribution
-    >[0];
-    expect(sideQuestionParams).not.toHaveProperty("attribution");
-    expect(resolveAgentHarnessSideQuestionExecutionAttribution(sideQuestionParams)).toBe(
-      attribution,
-    );
     expect(codexSideQuestionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai",
@@ -1215,10 +1215,20 @@ describe("runBtwSideQuestion", () => {
         agentHarnessId: "codex",
         modelSelectionLocked: true,
       }),
+      authorityRunId: "btw-side-authority",
+      opts: { runId: "parent-correlation" },
     });
 
     expect(result).toEqual({ text: "Locked Codex answer." });
     expect(codexSideQuestionMock).toHaveBeenCalledOnce();
+    expect(mockArg(codexSideQuestionMock, 0, 0)).toMatchObject({
+      opts: { runId: "btw-side-authority" },
+    });
+    expect(createAgentHarnessHostCapabilitiesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attempt: expect.objectContaining({ runId: "btw-side-authority" }),
+      }),
+    );
     expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledWith(
       expect.objectContaining({ agentHarnessId: "codex" }),
     );
@@ -1227,6 +1237,26 @@ describe("runBtwSideQuestion", () => {
     );
     expect(streamSimpleMock).not.toHaveBeenCalled();
     expect(executePreparedCliRunMock).not.toHaveBeenCalled();
+  });
+
+  it("uses registry ownership rather than declared harness metadata for BTW approvals", async () => {
+    registerAgentHarness(
+      {
+        id: "spoofed",
+        label: "Spoofed BTW harness",
+        pluginId: "codex",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: vi.fn(),
+        runSideQuestion: vi.fn().mockResolvedValue({ text: "Registry-owned answer." }),
+      },
+      { ownerPluginId: "actual-owner" },
+    );
+
+    await expect(runSideQuestion()).resolves.toEqual({ text: "Registry-owned answer." });
+
+    expect(createAgentHarnessHostCapabilitiesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginId: "actual-owner" }),
+    );
   });
 
   it("reselects the Codex hook after resolving legacy openai-codex route state", async () => {
@@ -1483,16 +1513,8 @@ describe("runBtwSideQuestion", () => {
 
   it("runs CLI-runtime alias BTW as an ephemeral CLI side question", async () => {
     const { cleanup, prepared } = mockCliOutput({ text: "CLI side answer." });
-    const attribution = createAgentExecutionAttribution({
-      runId: "run-btw-cli",
-      lifecycleGeneration: "generation-1",
-      sessionKey: DEFAULT_SESSION_KEY,
-      sessionId: "session-1",
-      agentId: "main",
-    });
 
     const result = await runSideQuestion({
-      attribution,
       cfg: {
         agents: {
           defaults: {
@@ -1504,6 +1526,8 @@ describe("runBtwSideQuestion", () => {
       } as never,
       model: "claude-opus-4-7",
       sessionKey: DEFAULT_SESSION_KEY,
+      authorityRunId: "btw-cli-authority",
+      opts: { runId: "parent-correlation" },
     });
 
     expect(result).toEqual({ text: "CLI side answer." });
@@ -1516,13 +1540,12 @@ describe("runBtwSideQuestion", () => {
       cliSessionId?: string;
       extraSystemPrompt?: string;
       prompt?: string;
-      attribution?: unknown;
     };
-    expect(prepareParams.attribution).toBe(attribution);
     expect(prepareParams.executionMode).toBe("side-question");
     expect(prepareParams.provider).toBe("claude-cli");
     expect(prepareParams.model).toBe("claude-opus-4-7");
     expect(prepareParams.disableTools).toBe(true);
+    expect(prepareParams).toMatchObject({ runId: "btw-cli-authority" });
     expect(prepareParams.cliSessionId).toBeUndefined();
     expect(prepareParams.extraSystemPrompt).toContain("Answer only the side question");
     expect(prepareParams.prompt).toContain("<conversation_history>");

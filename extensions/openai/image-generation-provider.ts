@@ -35,6 +35,7 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import { filterStringRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   canonicalizeCodexResponsesBaseUrl,
@@ -447,16 +448,7 @@ function hasChatGPTImageRouteConfig(cfg: OpenClawConfig | undefined): boolean {
 function resolveConfiguredOpenAIImageHeaders(
   cfg: OpenClawConfig | undefined,
 ): Record<string, string> | undefined {
-  const headers = cfg?.models?.providers?.openai?.headers;
-  if (!headers) {
-    return undefined;
-  }
-  const stringHeaders = Object.fromEntries(
-    Object.entries(headers).filter(
-      (entry): entry is [string, string] => typeof entry[1] === "string",
-    ),
-  );
-  return Object.keys(stringHeaders).length > 0 ? stringHeaders : undefined;
+  return filterStringRecord(cfg?.models?.providers?.openai?.headers);
 }
 
 function forceOpenAIImageApiKeyAuth(cfg: OpenClawConfig | undefined): OpenClawConfig | undefined {

@@ -562,9 +562,10 @@ async function resolveProviderExecutionAuth(params: {
       providerConfig,
     };
   };
-  const { isProviderAuthError, requireApiKey, resolveApiKeyForProvider } = await loadModelAuth();
+  const { isProviderAuthError, requireApiKey, resolveApiKeyForProviderCore } =
+    await loadModelAuth();
   try {
-    const auth = await resolveApiKeyForProvider({
+    const auth = await resolveApiKeyForProviderCore({
       provider: params.providerId,
       cfg: params.cfg,
       profileId: params.entry.profile,

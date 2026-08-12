@@ -179,7 +179,7 @@ vi.mock("./nodes-cli/rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./nodes-cli/rpc.js")>("./nodes-cli/rpc.js");
   return {
     ...actual,
-    resolveNodeId: vi.fn(async () => "node-1"),
+    resolveCliNodeId: vi.fn(async () => "node-1"),
   };
 });
 

@@ -2,7 +2,7 @@
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   JsonFileReadError,
   createAsyncLock,
@@ -47,13 +47,13 @@ describe("json file helpers", () => {
       expected: null,
     },
   ])("$name", async ({ setup, expected }) => {
-    await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-json-files-" }, async (base) => {
       await expect(readJsonFile(await setup(base))).resolves.toEqual(expected);
     });
   });
 
   it("reads durable json strictly while allowing missing files", async () => {
-    await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-json-files-" }, async (base) => {
       const validPath = path.join(base, "valid.json");
       const invalidPath = path.join(base, "invalid.json");
       const missingPath = path.join(base, "missing.json");
@@ -74,7 +74,7 @@ describe("json file helpers", () => {
   });
 
   it("writes json atomically with pretty formatting and optional trailing newline", async () => {
-    await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-json-files-" }, async (base) => {
       const filePath = path.join(base, "nested", "config.json");
 
       await writeJsonAtomic(
@@ -93,7 +93,7 @@ describe("json file helpers", () => {
     { input: "hello", expected: "hello\n" },
     { input: "hello\n", expected: "hello\n" },
   ])("writes text atomically for %j", async ({ input, expected }) => {
-    await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-json-files-" }, async (base) => {
       const filePath = path.join(base, "nested", "note.txt");
       await writeTextAtomic(filePath, input, { trailingNewline: true });
       await expect(fsPromises.readFile(filePath, "utf8")).resolves.toBe(expected);
@@ -101,7 +101,7 @@ describe("json file helpers", () => {
   });
 
   it("can skip durable fsync work for hot state writes", async () => {
-    await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-json-files-" }, async (base) => {
       const filePath = path.join(base, "state.json");
 
       // fs-safe 0.5.2 opens pinned descriptors even for non-durable writes, so
@@ -115,7 +115,7 @@ describe("json file helpers", () => {
   });
 
   it("preserves text when Windows rename reports EPERM", async () => {
-    await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-json-files-" }, async (base) => {
       const filePath = path.join(base, "state.json");
       await fsPromises.writeFile(filePath, "old", "utf8");
 
@@ -131,7 +131,7 @@ describe("json file helpers", () => {
   });
 
   it("stages the atomic temp with a caller-provided prefix (#56827)", async () => {
-    await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-json-files-" }, async (base) => {
       const filePath = path.join(base, "sessions.json");
       // Spy without mocking: rename is still performed, but we capture the staged
       // temp path (its source) to confirm the prefix is applied.
@@ -154,7 +154,7 @@ describe("json file helpers", () => {
   });
 
   it("refuses Windows copy fallback through symlink destinations", async () => {
-    await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-json-files-" }, async (base) => {
       const filePath = path.join(base, "state.json");
       const outsidePath = path.join(base, "outside.json");
       await fsPromises.writeFile(outsidePath, "outside", "utf8");

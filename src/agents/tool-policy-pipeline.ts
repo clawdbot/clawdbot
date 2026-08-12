@@ -11,7 +11,7 @@ import {
   analyzeAllowlistByToolType,
   buildPluginToolGroups,
   expandPolicyWithPluginGroups,
-  normalizeToolName,
+  normalizeToolPolicyName,
   type DeclaredToolAllowlistContext,
   type ToolPolicyLike,
 } from "./tool-policy.js";
@@ -144,7 +144,7 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
   const coreToolNames = new Set(
     params.tools
       .filter((tool) => !params.toolMeta(tool))
-      .map((tool) => normalizeToolName(tool.name))
+      .map((tool) => normalizeToolPolicyName(tool.name))
       .filter(Boolean),
   );
 
@@ -171,7 +171,7 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
       if (resolved.unknownAllowlist.length > 0) {
         const unavailableCoreWarningAllowlist = new Set(
           (step.suppressUnavailableCoreToolWarningAllowlist ?? []).map((entry) =>
-            normalizeToolName(entry),
+            normalizeToolPolicyName(entry),
           ),
         );
         const gatedCoreEntries = resolved.unknownAllowlist.filter((entry) =>

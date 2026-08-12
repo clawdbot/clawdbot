@@ -384,7 +384,7 @@ function resolvePlanTargetAgainstEntries(
 /**
  * Resolves a plan-capable secret target by owning config document and concrete path.
  */
-export function resolveSecretPlanTargetByPath(params: {
+export function resolveSecretPlanTargetByPathCore(params: {
   configFile: SecretTargetConfigFile;
   pathSegments: string[];
 }): ResolvedPlanTarget | null {

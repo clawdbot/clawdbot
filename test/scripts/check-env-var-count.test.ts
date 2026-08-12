@@ -8,7 +8,7 @@ import {
   isCountedSourcePath,
   main,
   parseBudget,
-} from "../../scripts/check-env-var-count.mjs";
+} from "../../scripts/check-env-var-count.mts";
 
 const tempDirs: string[] = [];
 

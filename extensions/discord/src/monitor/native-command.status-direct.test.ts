@@ -82,13 +82,25 @@ function createConfig(params?: { requireMention?: boolean }): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-async function createStatusCommand(cfg: OpenClawConfig) {
+async function createStatusCommand(cfg: OpenClawConfig, pluginExecute?: ReturnType<typeof vi.fn>) {
   return createDiscordNativeCommand({
     command: {
       name: "status",
       description: "Status",
       acceptsArgs: false,
-    },
+      ...(pluginExecute
+        ? {
+            requireAuth: true,
+            prepareDispatch: () => ({
+              kind: "plugin" as const,
+              invocation: {
+                runtime: { execute: pluginExecute },
+                selection: Object.freeze({}),
+              },
+            }),
+          }
+        : {}),
+    } as never,
     cfg,
     discordConfig: cfg.channels?.discord ?? {},
     accountId: "default",
@@ -182,8 +194,6 @@ describe("discord native /status", () => {
       fileName: "status.png",
     });
     nativeCommandRuntime.dispatchChannelInboundTurn = dispatchChannelInboundTurnForTest;
-    nativeCommandRuntime.matchPluginCommand = (() =>
-      null) as typeof import("openclaw/plugin-sdk/plugin-runtime").matchPluginCommand;
     setDefaultRouteState();
   });
 
@@ -206,20 +216,8 @@ describe("discord native /status", () => {
 
   it("prioritizes direct status replies over matching plugin commands", async () => {
     const executePluginCommand = vi.fn(async () => ({ text: "plugin status" }));
-    nativeCommandRuntime.matchPluginCommand = (() => ({
-      command: {
-        name: "status",
-        description: "Plugin status",
-        pluginId: "status-plugin",
-        acceptsArgs: false,
-        handler: async () => ({ text: "plugin status" }),
-      },
-      args: undefined,
-    })) as typeof import("openclaw/plugin-sdk/plugin-runtime").matchPluginCommand;
-    nativeCommandRuntime.executePluginCommand =
-      executePluginCommand as typeof import("openclaw/plugin-sdk/plugin-runtime").executePluginCommand;
     const cfg = createConfig();
-    const command = await createStatusCommand(cfg);
+    const command = await createStatusCommand(cfg, executePluginCommand);
     const interaction = createInteraction();
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);

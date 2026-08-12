@@ -365,17 +365,6 @@ export const PLUGIN_COMPAT_RECORDS = [
     tests: ["src/plugins/status.test.ts", "src/plugins/config-state.test.ts"],
   },
   {
-    code: "bundled-plugin-vitest-defaults",
-    status: "active",
-    owner: "config",
-    introduced: "2026-04-24",
-    replacement: "explicit test plugin config fixtures",
-    docsPath: "/plugins/architecture",
-    surfaces: ["Vitest plugin defaults", "bundled provider tests"],
-    diagnostics: ["test-only compatibility path"],
-    tests: ["src/plugins/config-state.test.ts"],
-  },
-  {
     code: "activation-agent-harness-hint",
     status: "active",
     owner: "plugin-execution",

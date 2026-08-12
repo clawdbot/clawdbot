@@ -2299,7 +2299,10 @@ describe("legacy migrate sandbox scope aliases", () => {
             fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
           },
           models: {
-            "anthropic/claude-opus-4-7": { alias: "Opus" },
+            "anthropic/claude-opus-4-7": {
+              alias: "Opus",
+              agentRuntime: { id: "auto", mode: "strict" },
+            },
           },
         },
         list: [
@@ -2327,7 +2330,7 @@ describe("legacy migrate sandbox scope aliases", () => {
       models: {
         "anthropic/claude-opus-4-7": {
           alias: "Opus",
-          agentRuntime: { id: "claude-cli" },
+          agentRuntime: { id: "claude-cli", mode: "strict" },
         },
         "anthropic/claude-sonnet-4-6": {
           agentRuntime: { id: "claude-cli" },
@@ -3661,6 +3664,77 @@ describe("legacy model compat migrate", () => {
     expect(res.config?.models?.providers?.google?.models?.[0]?.id).toBe("gemini-3.1-pro-preview");
     expect(res.config?.models?.providers?.myproxy?.models?.[0]?.id).toBe(canonical);
     expect(res.config?.models?.providers?.openai?.models?.[0]?.id).toBe("gpt-5.5");
+  });
+
+  it("canonicalizes persisted OpenAI GPT-5.6 aliases without affecting GitHub Copilot", () => {
+    const legacy = "openai/gpt-5.6";
+    const canonical = "openai/gpt-5.6-sol";
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          model: {
+            primary: `${legacy}@openai:work`,
+            fallbacks: [legacy, "github-copilot/gpt-5.6"],
+          },
+          modelPolicy: { allow: [legacy, "github-copilot/gpt-5.6"] },
+          models: {
+            [legacy]: {
+              alias: "GPT",
+              agentRuntime: { id: "openclaw" },
+              params: { temperature: 0.2, nested: { fromAlias: true } },
+            },
+            [canonical]: {
+              params: { serviceTier: "priority", nested: { fromCanonical: true } },
+            },
+            "github-copilot/gpt-5.6": { alias: "Copilot GPT" },
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            models: [
+              { id: "gpt-5.6", name: "GPT alias", maxTokens: 64_000 },
+              { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", contextWindow: 1_050_000 },
+            ],
+          },
+          "github-copilot": { models: [{ id: "gpt-5.6", name: "Copilot GPT" }] },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults).toMatchObject({
+      model: {
+        primary: `${canonical}@openai:work`,
+        fallbacks: [canonical, "github-copilot/gpt-5.6"],
+      },
+      modelPolicy: { allow: [canonical, "github-copilot/gpt-5.6"] },
+      models: {
+        [canonical]: {
+          alias: "GPT",
+          agentRuntime: { id: "openclaw" },
+          params: {
+            serviceTier: "priority",
+            temperature: 0.2,
+            nested: { fromAlias: true, fromCanonical: true },
+          },
+        },
+        "github-copilot/gpt-5.6": { alias: "Copilot GPT" },
+      },
+    });
+    expect(res.config?.agents?.defaults?.models).not.toHaveProperty(legacy);
+    expect(res.config?.models?.providers?.openai?.models).toEqual([
+      {
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        contextWindow: 1_050_000,
+        maxTokens: 64_000,
+      },
+    ]);
+    expect(res.config?.models?.providers?.["github-copilot"]?.models).toEqual([
+      { id: "gpt-5.6", name: "Copilot GPT" },
+    ]);
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
   });
 
   it("merges provider catalog rows that normalize to an explicitly canonical id", () => {

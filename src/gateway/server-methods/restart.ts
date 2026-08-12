@@ -5,7 +5,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import {
   createSafeGatewayRestartPreflight,
-  requestSafeGatewayRestart,
+  scheduleSafeGatewayRestart,
 } from "../../infra/restart-coordinator.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { requestGatewayRestartWithSignalAdmission } from "../../infra/restart.js";
@@ -155,13 +155,15 @@ export const restartHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const result = requestSafeGatewayRestart({
+    const result = scheduleSafeGatewayRestart({
       reason,
       delayMs: 0,
       skipDeferral: normalizeSkipDeferral(params.skipDeferral),
     });
     respond(true, result);
   },
+  // Deprecated compatibility preview for shipped read-only clients. This is
+  // restart-specific information, not the atomic fence owned by suspend.prepare.
   "gateway.restart.preflight": async ({ respond }) => {
     respond(true, createSafeGatewayRestartPreflight());
   },

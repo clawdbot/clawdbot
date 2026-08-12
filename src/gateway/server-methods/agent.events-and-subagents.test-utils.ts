@@ -294,7 +294,6 @@ describe("gateway agent handler", () => {
     );
 
     const callArgs = await waitForAgentCommandCall<{
-      executionAttribution?: Record<string, unknown>;
       sessionEffects?: string;
       suppressPromptPersistence?: boolean;
     }>();
@@ -302,72 +301,10 @@ describe("gateway agent handler", () => {
     expect(callArgs.suppressPromptPersistence).toBe(true);
     expect(mocks.updateSessionStore).not.toHaveBeenCalled();
     expect(context.addChatRun).not.toHaveBeenCalled();
-    const runContext = mockCallArg(mocks.registerAgentRunContext, 0, 1) as {
-      attribution: Record<string, unknown>;
-    };
-    expect(runContext).toEqual({
-      attribution: expect.objectContaining({
-        runId: "test-backend-internal-effects",
-        contextId: expect.any(String),
-        executionId: expect.any(String),
-        createdAt: expect.any(Number),
-        lifecycleGeneration: "test-generation",
-        sessionKey: "agent:main:main",
-        sessionId: "existing-session-id",
-        agentId: "main",
-      }),
-      sessionKey: "agent:main:main",
-      sessionId: "existing-session-id",
-      agentId: "main",
+    expect(mocks.registerAgentRunContext).toHaveBeenCalledWith("test-backend-internal-effects", {
       isControlUiVisible: false,
       lifecycleGeneration: "test-generation",
     });
-    expect(Object.isFrozen(runContext.attribution)).toBe(true);
-    expect(callArgs.executionAttribution).toBe(runContext.attribution);
-  });
-
-  it("preserves the admitted idempotency key exactly in execution attribution", async () => {
-    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
-    mocks.registerAgentRunContext.mockClear();
-    const runId = " padded-agent-run ";
-
-    await invokeAgent({
-      message: "preserve exact run identity",
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      idempotencyKey: runId,
-    });
-
-    await waitForAgentCommandCall();
-    expect(mockCallArg(mocks.registerAgentRunContext, 0, 0)).toBe(runId);
-    expect(mockCallArg(mocks.registerAgentRunContext, 0, 1)).toMatchObject({
-      attribution: { runId },
-    });
-  });
-
-  it("rejects blank idempotency keys before registering run state", async () => {
-    const context = makeContext();
-    const respond = vi.fn();
-    mocks.registerAgentRunContext.mockClear();
-    mocks.agentCommand.mockClear();
-
-    await invokeAgent(
-      {
-        message: "reject blank run identity",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        idempotencyKey: " \t ",
-      },
-      { context, respond },
-    );
-
-    expectRespondError(respond, {
-      code: ErrorCodes.INVALID_REQUEST,
-      message: "idempotencyKey must not be blank",
-    });
-    expect(context.chatAbortControllers.size).toBe(0);
-    expect(mocks.registerAgentRunContext).not.toHaveBeenCalled();
-    expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
 
   it("allows backend internal runs without a persisted session row", async () => {
@@ -665,27 +602,10 @@ describe("gateway agent handler", () => {
     expect(context.broadcastToConnIds).not.toHaveBeenCalled();
     expect(mocks.getLatestSubagentRunByChildSessionKey).not.toHaveBeenCalled();
     expect(mocks.replaceSubagentRunAfterSteer).not.toHaveBeenCalled();
-    const runContext = mockCallArg(mocks.registerAgentRunContext, 0, 1) as {
-      attribution: Record<string, unknown>;
-    };
-    expect(runContext).toEqual({
-      attribution: expect.objectContaining({
-        runId: "test-stateless-model-run",
-        contextId: expect.any(String),
-        executionId: expect.any(String),
-        createdAt: expect.any(Number),
-        lifecycleGeneration: "test-generation",
-        sessionKey: "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000",
-        sessionId: "model-run-123e4567-e89b-12d3-a456-426614174000",
-        agentId: "main",
-      }),
-      sessionKey: "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000",
-      sessionId: "model-run-123e4567-e89b-12d3-a456-426614174000",
-      agentId: "main",
+    expect(mocks.registerAgentRunContext).toHaveBeenCalledWith("test-stateless-model-run", {
       isControlUiVisible: false,
       lifecycleGeneration: "test-generation",
     });
-    expect(Object.isFrozen(runContext.attribution)).toBe(true);
   });
 
   it("respects explicit bestEffortDeliver=false for main session runs", async () => {
@@ -737,7 +657,7 @@ describe("gateway agent handler", () => {
     expectStringFieldContains(error, "message", "requires target");
   });
 
-  it("downgrades to session-only when bestEffortDeliver=true and no external channel is configured", async () => {
+  it("preserves requested delivery when best effort has no external channel", async () => {
     mocks.agentCommand.mockClear();
     primeMainAgentRun();
     const respond = vi.fn();
@@ -767,7 +687,7 @@ describe("gateway agent handler", () => {
       },
     );
 
-    await waitForAgentCommandCall();
+    const callArgs = await waitForAgentCommandCall<{ deliver?: boolean; channel?: string }>();
     const accepted = respond.mock.calls.find(
       (call: unknown[]) =>
         call[0] === true && (call[1] as Record<string, unknown>)?.status === "accepted",
@@ -777,9 +697,10 @@ describe("gateway agent handler", () => {
     });
     const rejected = respond.mock.calls.find((call: unknown[]) => call[0] === false);
     expect(rejected).toBeUndefined();
+    expect(callArgs).toMatchObject({ deliver: true, channel: "webchat" });
     expect(logInfo).toHaveBeenCalledTimes(1);
     expect(mockCallArg(logInfo)).toContain(
-      "agent delivery downgraded to session-only (bestEffortDeliver)",
+      "agent delivery unresolved (bestEffortDeliver); final delivery will report",
     );
   });
 

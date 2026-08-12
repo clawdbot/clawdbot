@@ -28,7 +28,7 @@ import { resolvePluginRegistryLoadCacheKey } from "./loader-cache.js";
 import { loadOpenClawPlugins, resolveRuntimePluginRegistry } from "./loader.js";
 import {
   EMPTY_PLUGIN_SCHEMA,
-  makeTempDir,
+  makePluginLoaderTempDir,
   type PluginLoadConfig,
   useNoBundledPlugins,
   writePlugin,
@@ -53,7 +53,7 @@ import {
   globalAfterEach0,
   globalAfterAll1,
 } from "./loader.test-harness.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
@@ -432,7 +432,7 @@ describe("loadOpenClawPlugins", () => {
         allow: [plugin.id],
       },
     };
-    const manifestRegistry = loadPluginManifestRegistry({ config });
+    const manifestRegistry = loadPluginManifestRegistryCore({ config });
     fs.rmSync(path.join(plugin.dir, "openclaw.plugin.json"));
 
     const registry = loadOpenClawPlugins({
@@ -507,7 +507,7 @@ describe("loadOpenClawPlugins", () => {
 
   it("loads installed plugin packages discovered from persisted install records", () => {
     useNoBundledPlugins();
-    const stateDir = makeTempDir();
+    const stateDir = makePluginLoaderTempDir();
     const plugin = writePlugin({
       id: "installed-record-plugin",
       body: `module.exports = { id: "installed-record-plugin", register() {} };`,
@@ -545,7 +545,7 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("disables bundled plugins by default", () => {
-    const bundledDir = makeTempDir();
+    const bundledDir = makePluginLoaderTempDir();
     writePlugin({
       id: "bundled",
       body: `module.exports = { id: "bundled", register() {} };`,
@@ -568,7 +568,7 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("loads bundled plugins with plugin-sdk imports from a package dist root", () => {
-    const packageRoot = makeTempDir();
+    const packageRoot = makePluginLoaderTempDir();
     const bundledDir = path.join(packageRoot, "dist", "extensions");
     const pluginRoot = path.join(bundledDir, "discord");
     fs.mkdirSync(path.join(packageRoot, "dist", "plugin-sdk"), { recursive: true });
@@ -695,7 +695,7 @@ describe("loadOpenClawPlugins", () => {
 
   it("loads multiple manifestless standalone files from one configured directory", () => {
     useNoBundledPlugins();
-    const pluginDir = makeTempDir();
+    const pluginDir = makePluginLoaderTempDir();
     const alpha = path.join(pluginDir, "alpha.cjs");
     const beta = path.join(pluginDir, "beta.cjs");
     fs.writeFileSync(alpha, `module.exports = { id: "alpha", register() {} };`, "utf-8");
@@ -1188,7 +1188,7 @@ describe("loadOpenClawPlugins", () => {
           filename: "allowed-scoped-only.cjs",
           body: `module.exports = { id: "allowed-scoped-only", register() {} };`,
         });
-        const skippedMarker = path.join(makeTempDir(), "skipped-loaded.txt");
+        const skippedMarker = path.join(makePluginLoaderTempDir(), "skipped-loaded.txt");
         const skipped = writePlugin({
           id: "skipped-scoped-only",
           filename: "skipped-scoped-only.cjs",
@@ -1215,7 +1215,7 @@ describe("loadOpenClawPlugins", () => {
       label: "can build a manifest-only snapshot without importing plugin modules",
       run: () => {
         useNoBundledPlugins();
-        const importedMarker = path.join(makeTempDir(), "manifest-only-imported.txt");
+        const importedMarker = path.join(makePluginLoaderTempDir(), "manifest-only-imported.txt");
         const plugin = writePlugin({
           id: "manifest-only-plugin",
           filename: "manifest-only-plugin.cjs",
@@ -1247,7 +1247,10 @@ describe("loadOpenClawPlugins", () => {
       label: "includes manifest-owned surfaces in manifest-only snapshots",
       run: () => {
         useNoBundledPlugins();
-        const importedMarker = path.join(makeTempDir(), "manifest-surfaces-imported.txt");
+        const importedMarker = path.join(
+          makePluginLoaderTempDir(),
+          "manifest-surfaces-imported.txt",
+        );
         const plugin = writePlugin({
           id: "manifest-surfaces-plugin",
           filename: "manifest-surfaces-plugin.cjs",
@@ -1398,7 +1401,7 @@ describe("loadOpenClawPlugins", () => {
           reenterFnMarker,
           (options: Parameters<typeof loadOpenClawPlugins>[0]) => loadOpenClawPlugins(options),
         );
-        const pluginDir = makeTempDir();
+        const pluginDir = makePluginLoaderTempDir();
         const pluginFile = path.join(pluginDir, "reentrant-snapshot.cjs");
         const nestedOptions = {
           cache: false,
@@ -1477,7 +1480,7 @@ describe("loadOpenClawPlugins", () => {
           (options: Parameters<typeof resolveRuntimePluginRegistry>[0]) =>
             resolveRuntimePluginRegistry(options),
         );
-        const pluginDir = makeTempDir();
+        const pluginDir = makePluginLoaderTempDir();
         const pluginFile = path.join(pluginDir, "runtime-registry-reentry.cjs");
         const nestedOptions = {
           cache: false,
@@ -1632,7 +1635,7 @@ describe("loadOpenClawPlugins", () => {
     const discovery = await import("./discovery.js");
     const manifestRegistry = await import("./manifest-registry.js");
     const discoverySpy = vi.spyOn(discovery, "discoverOpenClawPlugins");
-    const manifestSpy = vi.spyOn(manifestRegistry, "loadPluginManifestRegistry");
+    const manifestSpy = vi.spyOn(manifestRegistry, "loadPluginManifestRegistryCore");
 
     const registry = loadOpenClawPlugins({
       cache: false,
@@ -1769,7 +1772,7 @@ describe("loadOpenClawPlugins", () => {
 
     loadOpenClawPlugins({
       cache: false,
-      workspaceDir: makeTempDir(),
+      workspaceDir: makePluginLoaderTempDir(),
       config: {
         plugins: {
           allow: [],
@@ -1853,7 +1856,7 @@ describe("loadOpenClawPlugins", () => {
 
     const manifestRegistry = await import("./manifest-registry.js");
     const manifestSpy = vi
-      .spyOn(manifestRegistry, "loadPluginManifestRegistry")
+      .spyOn(manifestRegistry, "loadPluginManifestRegistryCore")
       .mockImplementation(() => {
         throw new Error("corrupt plugin manifest");
       });

@@ -10,6 +10,8 @@ export type CloudWorkerProfileConfig = {
 };
 
 export type CloudWorkersConfig = {
+  /** Experimental Labs gate for the cloud-worker desktop observer. */
+  desktop?: boolean;
   /** Named opt-in worker profiles. Omit or leave empty to disable cloud workers. */
   profiles?: Record<string, CloudWorkerProfileConfig>;
 };

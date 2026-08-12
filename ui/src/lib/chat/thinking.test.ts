@@ -51,7 +51,12 @@ describe("chat thinking helpers", () => {
       },
     });
 
-    expect(state.currentOverride).toBe("ultra");
+    expect(state.selection).toEqual({
+      kind: "unanchored",
+      source: "override",
+      value: "ultra",
+      displayLabel: "Ultra",
+    });
     expect(state.options.map((option) => option.value)).toEqual(["max"]);
   });
 
@@ -102,14 +107,14 @@ describe("chat thinking helpers", () => {
       thinkingDefault: "medium",
     };
     const inherited = resolveChatThinkingSelectState({
-      catalog: [{ provider: "openai", id: "gpt-5.6-sol", reasoning: true }],
+      catalog: [{ provider: "openai", id: "gpt-5.6-sol", name: "GPT-5.6 Sol", reasoning: true }],
       defaults,
       sessionKey: "new-session:main",
       session: { key: "new-session:main", kind: "direct", updatedAt: null },
       sessionsResult: null,
     });
     const explicit = resolveChatThinkingSelectState({
-      catalog: [{ provider: "openai", id: "gpt-5.6-sol", reasoning: true }],
+      catalog: [{ provider: "openai", id: "gpt-5.6-sol", name: "GPT-5.6 Sol", reasoning: true }],
       defaults,
       sessionKey: "new-session:main",
       session: {

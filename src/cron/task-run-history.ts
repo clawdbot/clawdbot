@@ -7,7 +7,12 @@ import { uniqueValues } from "@openclaw/normalization-core/string-normalization"
 import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "../tasks/task-registry.store.sqlite.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import type { CronRunLogEntry } from "./run-log-types.js";
-import { cronTaskRecordStoreKey, cronTaskRecordToRunLogEntry } from "./task-run-detail.js";
+import {
+  cronTaskRecordStoreKey,
+  cronTaskRecordToRunLogEntry,
+  isCronDeliveryStatus,
+  isCronRunStatus,
+} from "./task-run-detail.js";
 import type { CronDeliveryStatus, CronRunStatus } from "./types.js";
 
 type CronRunHistorySortDir = "asc" | "desc";
@@ -61,19 +66,6 @@ function normalizeStatuses(options: ReadCronTaskRunHistoryPageOptions): CronRunS
     }
   }
   return isCronRunStatus(options.status) ? [options.status] : null;
-}
-
-function isCronRunStatus(value: unknown): value is CronRunStatus {
-  return value === "ok" || value === "error" || value === "skipped";
-}
-
-function isCronDeliveryStatus(value: unknown): value is CronDeliveryStatus {
-  return (
-    value === "delivered" ||
-    value === "not-delivered" ||
-    value === "unknown" ||
-    value === "not-requested"
-  );
 }
 
 function normalizeDeliveryStatuses(

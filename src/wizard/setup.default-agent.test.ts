@@ -22,19 +22,23 @@ vi.mock("./navigation-prompter.js", () => ({
   ) => await run(prompter),
 }));
 
-vi.mock("./setup.shared.js", () => ({
-  readSetupConfigFileSnapshot: mocks.readSnapshot,
-  readValidSetupConfigFile: vi.fn(),
-  requireRiskAcknowledgement: async ({ config }: { config: OpenClawConfig }) => config,
-  resolveQuickstartGatewayDefaults: () => ({
-    hasExisting: false,
-    port: 18789,
-    bind: "loopback",
-    authMode: "token",
-    tailscaleMode: "off",
-  }),
-  writeWizardConfigFile: mocks.writeConfig,
-}));
+vi.mock("./setup.shared.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./setup.shared.js")>();
+  return {
+    ...actual,
+    readSetupConfigFileSnapshot: mocks.readSnapshot,
+    readValidSetupConfigFile: vi.fn(),
+    requireRiskAcknowledgement: async ({ config }: { config: OpenClawConfig }) => config,
+    resolveQuickstartGatewayDefaults: () => ({
+      hasExisting: false,
+      port: 18789,
+      bind: "loopback",
+      authMode: "token",
+      tailscaleMode: "off",
+    }),
+    writeWizardConfigFile: mocks.writeConfig,
+  };
+});
 
 vi.mock("./setup.migration-import.js", () => ({
   detectSetupMigrationSources: vi.fn(async () => []),

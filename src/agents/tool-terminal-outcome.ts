@@ -4,10 +4,28 @@ import {
   peekAdjustedParamsForToolCall,
   peekPreExecutionBlockedToolCall,
 } from "./agent-tools.before-tool-call.state.js";
+import { extractApplyPatchTargets } from "./apply-patch-targets.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
 import { createToolErrorState } from "./tool-error-state.js";
 import type { ToolErrorSummary } from "./tool-error-summary.js";
+import type { FileTarget } from "./tool-mutation.js";
 import { buildToolMutationState } from "./tool-mutation.js";
+
+function extractPatchFileTargets(
+  toolName: string,
+  args: Record<string, unknown> | undefined,
+): FileTarget[] | undefined {
+  if (toolName.trim().toLowerCase() !== "apply_patch") {
+    return undefined;
+  }
+  const targets = extractApplyPatchTargets(args);
+  if (targets.some((target) => target.kind === "delete" || target.kind === "move")) {
+    return undefined;
+  }
+  const paths = targets.map((target) => target.path.trim().toLowerCase()).filter(Boolean);
+  const uniquePaths = [...new Set(paths)];
+  return uniquePaths.length > 0 ? uniquePaths.map<FileTarget>((path) => ({ path })) : undefined;
+}
 
 /** Build one attempt-scoped facts-in/state-out terminal observer for every harness. */
 export function createToolTerminalObserver(
@@ -31,11 +49,14 @@ export function createToolTerminalObserver(
     const mutation =
       observation.nativeMutation ??
       buildToolMutationState(observation.toolName, executedArguments, observation.meta);
+    const fileTargets =
+      extractPatchFileTargets(observation.toolName, executedArguments) ??
+      (mutation.fileTarget ? [mutation.fileTarget] : undefined);
 
     let lastToolError: ToolErrorSummary | undefined;
     if (observation.outcome === "failure") {
       const mutatingAction = executionStarted && mutation.mutatingAction;
-      lastToolError = errors.recordFailure({
+      const failure: ToolErrorSummary = {
         toolName: observation.toolName,
         ...(observation.meta ? { meta: observation.meta } : {}),
         ...observation.failure,
@@ -43,15 +64,25 @@ export function createToolTerminalObserver(
         ...(mutatingAction && mutation.actionFingerprint
           ? { actionFingerprint: mutation.actionFingerprint }
           : {}),
-        ...(mutatingAction && mutation.fileTarget ? { fileTarget: mutation.fileTarget } : {}),
-      });
+      };
+      for (const fileTarget of (mutatingAction ? fileTargets : undefined) ?? [undefined]) {
+        lastToolError = errors.recordFailure({
+          ...failure,
+          ...(fileTarget ? { fileTarget } : {}),
+        });
+      }
     } else {
-      lastToolError = errors.recordSuccess({
+      const success = {
         toolName: observation.toolName,
         ...(observation.meta ? { meta: observation.meta } : {}),
         ...(mutation.actionFingerprint ? { actionFingerprint: mutation.actionFingerprint } : {}),
-        ...(mutation.fileTarget ? { fileTarget: mutation.fileTarget } : {}),
-      });
+      };
+      for (const fileTarget of fileTargets ?? [undefined]) {
+        lastToolError = errors.recordSuccess({
+          ...success,
+          ...(fileTarget ? { fileTarget } : {}),
+        });
+      }
     }
 
     return {

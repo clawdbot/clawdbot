@@ -25,7 +25,10 @@ const {
 } = vi.hoisted(() => {
   const trackedTabCleanupMockLocal = vi.fn();
   return {
-    startTrackedBrowserTabCleanupTimerMock: vi.fn(() => trackedTabCleanupMockLocal),
+    startTrackedBrowserTabCleanupTimerMock: vi.fn(
+      (_params: { getResolvedBrowserConfig?: () => unknown; onWarn: (message: string) => void }) =>
+        trackedTabCleanupMockLocal,
+    ),
     stopKnownBrowserProfilesMock: vi.fn(async () => {}),
     trackedTabCleanupMock: trackedTabCleanupMockLocal,
   };
@@ -54,6 +57,26 @@ beforeEach(() => {
 });
 
 describe("browser unhandled rejection lifecycle", () => {
+  it("binds periodic cleanup to the current runtime config", async () => {
+    const firstResolved = { profiles: {}, marker: "first" } as never;
+    const secondResolved = { profiles: {}, marker: "second" } as never;
+    const state = await createBrowserRuntimeState({
+      resolved: firstResolved,
+      port: 18791,
+      onWarn: vi.fn(),
+    });
+    const cleanupParams = startTrackedBrowserTabCleanupTimerMock.mock.calls[0]?.[0];
+    expect(cleanupParams?.getResolvedBrowserConfig?.()).toBe(firstResolved);
+    state.resolved = secondResolved;
+    expect(cleanupParams?.getResolvedBrowserConfig?.()).toBe(secondResolved);
+    await stopBrowserRuntime({
+      current: state,
+      getState: () => state,
+      clearState: vi.fn(),
+      onWarn: vi.fn(),
+    });
+  });
+
   it("matches direct and nested Playwright dialog-race protocol errors", async () => {
     const state = await createBrowserRuntimeState({
       resolved: { profiles: {} } as never,

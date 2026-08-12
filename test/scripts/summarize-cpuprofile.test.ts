@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseArgs, shouldPrintHelp } from "../../scripts/perf/summarize-cpuprofile.mjs";
+import { parseArgs, shouldPrintHelp } from "../../scripts/perf/summarize-cpuprofile.mts";
 
 describe("scripts/perf/summarize-cpuprofile.mjs", () => {
   it("parses split and inline positive limit flags", () => {

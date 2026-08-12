@@ -14,7 +14,6 @@ import { startLocalOtlpReceiver } from "./otel-test-support.js";
 
 const execFileAsync = promisify(execFile);
 const PACKAGE_NAME = "@openclaw/diagnostics-otel";
-const PACKAGE_VERSION = "2026.7.2";
 
 type MutableConfig = {
   diagnostics?: unknown;
@@ -163,20 +162,23 @@ async function packPlugin(repoRoot: string, scratch: string) {
   if (!tarballName) {
     throw new Error("diagnostics-otel pack did not produce a tarball");
   }
-  return path.join(outputDir, tarballName);
+  const manifest = JSON.parse(await readFile(path.join(stagingDir, "package.json"), "utf8")) as {
+    version?: unknown;
+  };
+  if (typeof manifest.version !== "string" || !manifest.version.trim()) {
+    throw new Error("diagnostics-otel package version is missing");
+  }
+  return {
+    tarball: path.join(outputDir, tarballName),
+    version: manifest.version.trim(),
+  };
 }
 
-async function startRegistry(repoRoot: string, scratch: string, tarball: string) {
+async function startRegistry(repoRoot: string, scratch: string, tarball: string, version: string) {
   const portFile = path.join(scratch, "registry-port");
   const child = spawn(
     process.execPath,
-    [
-      "scripts/e2e/lib/plugins/npm-registry-server.mjs",
-      portFile,
-      PACKAGE_NAME,
-      PACKAGE_VERSION,
-      tarball,
-    ],
+    ["scripts/e2e/lib/plugins/npm-registry-server.mjs", portFile, PACKAGE_NAME, version, tarball],
     {
       cwd: repoRoot,
       env: {
@@ -259,6 +261,7 @@ async function installAndConfigure(params: {
   envTraceEndpoint: string;
   mockBaseUrl: string;
   nodeOptions?: string;
+  packageVersion: string;
   registryBaseUrl: string;
   repoRoot: string;
   sampleRate?: number;
@@ -289,7 +292,7 @@ async function installAndConfigure(params: {
       ...(params.nodeOptions ? { OPENCLAW_OTEL_PRELOADED: "1" } : {}),
     },
   });
-  const spec = `npm:${PACKAGE_NAME}@${PACKAGE_VERSION}`;
+  const spec = `npm:${PACKAGE_NAME}@${params.packageVersion}`;
   await gateway.runCli(["plugins", "install", spec, "--force"]);
   const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
   if (!stateDir) {
@@ -301,10 +304,10 @@ async function installAndConfigure(params: {
   });
   expect(records["diagnostics-otel"]).toMatchObject({
     source: "npm",
-    spec: `${PACKAGE_NAME}@${PACKAGE_VERSION}`,
-    version: PACKAGE_VERSION,
+    spec: `${PACKAGE_NAME}@${params.packageVersion}`,
+    version: params.packageVersion,
     resolvedName: PACKAGE_NAME,
-    resolvedVersion: PACKAGE_VERSION,
+    resolvedVersion: params.packageVersion,
   });
   expect(records["diagnostics-otel"]?.installPath).toContain("diagnostics-otel");
   expect(records["diagnostics-otel"]?.integrity).toMatch(/^sha512-/u);
@@ -342,13 +345,14 @@ describe("managed diagnostics-otel install runtime", () => {
     let mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
     let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
     try {
-      const tarball = await packPlugin(repoRoot, scratch);
-      registry = await startRegistry(repoRoot, scratch, tarball);
+      const packed = await packPlugin(repoRoot, scratch);
+      registry = await startRegistry(repoRoot, scratch, packed.tarball, packed.version);
       mock = await startQaMockOpenAiServer();
       gateway = await installAndConfigure({
         configTraceEndpoint: configured.baseUrl,
         envTraceEndpoint: envOnly.baseUrl,
         mockBaseUrl: mock.baseUrl,
+        packageVersion: packed.version,
         registryBaseUrl: registry.baseUrl,
         repoRoot,
         sampleRate: 0,
@@ -427,8 +431,8 @@ describe("managed diagnostics-otel install runtime", () => {
     let mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
     let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
     try {
-      const tarball = await packPlugin(repoRoot, scratch);
-      registry = await startRegistry(repoRoot, scratch, tarball);
+      const packed = await packPlugin(repoRoot, scratch);
+      registry = await startRegistry(repoRoot, scratch, packed.tarball, packed.version);
       mock = await startQaMockOpenAiServer();
       const preloadRoot = path.join(scratch, `otel-preload-${randomUUID()}`);
       const preloadModules = path.join(preloadRoot, "node_modules", "@opentelemetry");
@@ -458,6 +462,7 @@ describe("managed diagnostics-otel install runtime", () => {
         envTraceEndpoint: receiver.baseUrl,
         mockBaseUrl: mock.baseUrl,
         nodeOptions: `--import=${pathToFileURL(preloadPath).href}`,
+        packageVersion: packed.version,
         registryBaseUrl: registry.baseUrl,
         repoRoot,
       });

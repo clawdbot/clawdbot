@@ -51,7 +51,7 @@ export type AgentHarnessToolSurfaceRuntime = {
   toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor | undefined;
 };
 
-export function createAgentHarnessToolSurfaceRuntime(params: {
+export function createAgentHarnessToolSurfaceRuntimeCore(params: {
   abortSignal?: AbortSignal;
   agentId?: string;
   config?: OpenClawConfig;

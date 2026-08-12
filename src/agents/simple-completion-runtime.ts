@@ -35,8 +35,8 @@ import {
   applySecretRefHeaderSentinels,
   applyLocalNoAuthHeaderOverride,
   formatMissingAuthError,
-  getApiKeyForModel,
-  resolveApiKeyForProvider,
+  getApiKeyForModelCore,
+  resolveApiKeyForProviderCore,
   type ResolvedProviderAuth,
 } from "./model-auth.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
@@ -294,7 +294,7 @@ export async function prepareSimpleCompletionModel(params: {
     : undefined;
   try {
     auth = resolvesAuthBeforePhysicalRoute
-      ? await resolveApiKeyForProvider({
+      ? await resolveApiKeyForProviderCore({
           provider: initialModel.provider,
           cfg: params.cfg,
           agentDir: params.agentDir,
@@ -306,7 +306,7 @@ export async function prepareSimpleCompletionModel(params: {
           modelId: initialModel.id,
           secretSentinels: true,
         })
-      : await getApiKeyForModel({
+      : await getApiKeyForModelCore({
           model: initialModel,
           cfg: params.cfg,
           agentDir: params.agentDir,
@@ -396,7 +396,7 @@ export async function prepareSimpleCompletionModel(params: {
             ),
         })) ?? initialModel;
       if (resolvesAuthBeforePhysicalRoute) {
-        auth = await getApiKeyForModel({
+        auth = await getApiKeyForModelCore({
           model: resolvedModel,
           cfg: params.cfg,
           agentDir: params.agentDir,

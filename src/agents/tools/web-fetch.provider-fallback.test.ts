@@ -25,7 +25,7 @@ vi.mock("../../secrets/runtime-state.js", () => ({
   getActiveSecretsRuntimeConfigSnapshot: () => runtimeState.activeSecretsRuntimeSnapshot,
 }));
 vi.mock("../../secrets/runtime-web-tools-state.js", () => ({
-  getActiveRuntimeWebToolsMetadata: () => runtimeState.activeRuntimeWebToolsMetadata,
+  getActiveRuntimeWebToolsMetadataFromState: () => runtimeState.activeRuntimeWebToolsMetadata,
 }));
 
 describe("web_fetch provider fallback normalization", () => {

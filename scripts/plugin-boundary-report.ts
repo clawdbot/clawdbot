@@ -41,6 +41,7 @@ type CompatDebtRecord = {
   owner: string;
   status: PluginCompatRecord["status"];
   removeAfter?: string;
+  removalGate?: PluginCompatRecord["removalGate"];
   replacement: string;
   docsPath: string;
   surfaces: readonly string[];
@@ -55,6 +56,7 @@ type RemovalPendingDebtRecord = {
   owner: string;
   status: "removal-pending";
   removeAfter?: string;
+  removalGate?: PluginCompatRecord["removalGate"];
   blocker: string;
   readerFiles: string[];
   dueForReview: boolean;
@@ -422,6 +424,7 @@ function collectCompatDebt(
         owner: record.owner,
         status: record.status,
         removeAfter: record.removeAfter,
+        removalGate: record.removalGate,
         replacement: record.replacement as string,
         docsPath: record.docsPath,
         surfaces: record.surfaces,
@@ -433,7 +436,7 @@ function collectCompatDebt(
     })
     .toSorted(
       (left, right) =>
-        (left.removeAfter ?? "").localeCompare(right.removeAfter ?? "") ||
+        formatRemovalGate(left).localeCompare(formatRemovalGate(right)) ||
         left.owner.localeCompare(right.owner) ||
         left.code.localeCompare(right.code),
     );
@@ -452,6 +455,7 @@ function collectRemovalPendingDebt(
         owner: record.owner,
         status: "removal-pending" as const,
         removeAfter: record.removeAfter,
+        removalGate: record.removalGate,
         blocker: record.replacement ?? "no removal blocker documented",
         readerFiles: references.codeReferenceFiles,
         dueForReview: record.removeAfter
@@ -461,7 +465,7 @@ function collectRemovalPendingDebt(
     })
     .toSorted(
       (left, right) =>
-        (left.removeAfter ?? "").localeCompare(right.removeAfter ?? "") ||
+        formatRemovalGate(left).localeCompare(formatRemovalGate(right)) ||
         left.owner.localeCompare(right.owner) ||
         left.code.localeCompare(right.code),
     );
@@ -532,6 +536,12 @@ function countByOwner(records: readonly CompatDebtRecord[]): Record<string, numb
   return Object.fromEntries(
     Object.entries(counts).toSorted(([left], [right]) => left.localeCompare(right)),
   );
+}
+
+function formatRemovalGate(
+  record: Pick<PluginCompatRecord, "removeAfter" | "removalGate">,
+): string {
+  return record.removeAfter ?? record.removalGate ?? "no-date";
 }
 
 function resolveMemoryHostImplementation(
@@ -651,7 +661,7 @@ function renderSummaryText(summary: BoundaryReportSummary): string {
   );
   for (const record of summary.compat.removalPending) {
     lines.push(
-      `  removal-pending ${record.removeAfter ?? "no-date"} ${record.code} due=${record.dueForReview} blocker=${record.blocker} readerRefs=${record.readerCount} readers=${record.readerSample.join(",") || "none"}`,
+      `  removal-pending ${formatRemovalGate(record)} ${record.code} due=${record.dueForReview} blocker=${record.blocker} readerRefs=${record.readerCount} readers=${record.readerSample.join(",") || "none"}`,
     );
   }
   lines.push(
@@ -681,12 +691,12 @@ function renderText(report: BoundaryReport, owner?: string): string {
   );
   for (const record of report.compat.records) {
     lines.push(
-      `  ${record.removeAfter ?? "no-date"} ${record.code} owner=${record.owner} codeRefs=${record.codeReferenceFiles.length} docRefs=${record.docReferenceFiles.length}`,
+      `  ${formatRemovalGate(record)} ${record.code} owner=${record.owner} codeRefs=${record.codeReferenceFiles.length} docRefs=${record.docReferenceFiles.length}`,
     );
   }
   for (const record of report.compat.removalPending) {
     lines.push(
-      `  removal-pending ${record.removeAfter ?? "no-date"} ${record.code} due=${record.dueForReview} blocker=${record.blocker} readerRefs=${record.readerFiles.length}`,
+      `  removal-pending ${formatRemovalGate(record)} ${record.code} due=${record.dueForReview} blocker=${record.blocker} readerRefs=${record.readerFiles.length}`,
     );
     for (const reader of record.readerFiles) {
       lines.push(`    reader ${reader}`);

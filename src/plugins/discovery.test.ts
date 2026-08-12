@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import * as pluginHardlinkPolicy from "./hardlink-policy.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import type { PackageManifest } from "./manifest.js";
 import { resolvePackageSetupSource } from "./package-entry-resolution.js";
 import { listBuiltRuntimeEntryCandidates } from "./package-entrypoints.js";
@@ -940,7 +940,7 @@ describe("discoverOpenClawPlugins", () => {
     const discovery = await discoverWithStateDir(stateDir, {});
     expectCandidateIds(discovery.candidates, { includes: ["pack/one", "pack/two"] });
 
-    const registry = loadPluginManifestRegistry({ discovery, installRecords: {} });
+    const registry = loadPluginManifestRegistryCore({ discovery, installRecords: {} });
     expect(registry.plugins.map((plugin) => plugin.id).toSorted()).toEqual([
       "pack/one",
       "pack/two",
@@ -1645,7 +1645,7 @@ describe("discoverOpenClawPlugins", () => {
     }
 
     const discovery = await discoverWithStateDir(stateDir, {});
-    const registry = loadPluginManifestRegistry({ discovery, installRecords: {} });
+    const registry = loadPluginManifestRegistryCore({ discovery, installRecords: {} });
 
     expect(registry.diagnostics).toEqual([
       expect.objectContaining({ level: "error", pluginId: "first-nameless" }),
@@ -1668,7 +1668,7 @@ describe("discoverOpenClawPlugins", () => {
     }
 
     const discovery = await discoverWithStateDir(stateDir, {});
-    const registry = loadPluginManifestRegistry({ discovery, installRecords: {} });
+    const registry = loadPluginManifestRegistryCore({ discovery, installRecords: {} });
 
     expect(discovery.candidates.map((candidate) => candidate.idHint)).toEqual([
       "first-malformed-manifest",
@@ -1696,7 +1696,7 @@ describe("discoverOpenClawPlugins", () => {
     writePluginEntry(path.join(pluginDir, "index.js"));
 
     const discovery = await discoverWithStateDir(stateDir, {});
-    const registry = loadPluginManifestRegistry({ discovery, installRecords: {} });
+    const registry = loadPluginManifestRegistryCore({ discovery, installRecords: {} });
 
     expect(discovery.candidates).toEqual([
       expect.objectContaining({ idHint: "metadata-plugin-owner" }),
@@ -1729,7 +1729,7 @@ describe("discoverOpenClawPlugins", () => {
       writePluginEntry(path.join(pluginDir, "index.js"));
 
       const discovery = await discoverWithStateDir(stateDir, {});
-      const registry = loadPluginManifestRegistry({ discovery, installRecords: {} });
+      const registry = loadPluginManifestRegistryCore({ discovery, installRecords: {} });
 
       expect(discovery.candidates).toEqual([
         expect.objectContaining({
@@ -1772,7 +1772,7 @@ describe("discoverOpenClawPlugins", () => {
     }
 
     const discovery = await discoverWithStateDir(stateDir, {});
-    const registry = loadPluginManifestRegistry({ discovery, installRecords: {} });
+    const registry = loadPluginManifestRegistryCore({ discovery, installRecords: {} });
     const errors = registry.diagnostics.filter((diagnostic) =>
       diagnostic.message.includes("openclaw.extensions[1]"),
     );

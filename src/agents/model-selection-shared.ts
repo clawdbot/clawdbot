@@ -501,7 +501,7 @@ function resolveExactConfiguredProviderRef(
 }
 
 /** Normalize a configured allowlist entry into the canonical provider/model key. */
-export function resolveAllowlistModelKey(
+function resolveAllowlistModelKey(
   params: {
     cfg?: OpenClawConfig;
     raw: string;

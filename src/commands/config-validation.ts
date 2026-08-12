@@ -57,7 +57,7 @@ export async function requireValidConfigFileSnapshot(
 }
 
 /** Read and return a valid OpenClaw config, or null after reporting validation errors. */
-export async function requireValidConfigSnapshot(
+export async function requireValidConfig(
   runtime: RuntimeEnv,
   opts?: { includeCompatibilityAdvisory?: boolean; skipPluginValidation?: boolean },
 ): Promise<OpenClawConfig | null> {

@@ -1,6 +1,12 @@
 // Normalization core tests cover shared error coercion and formatting behavior.
 import { describe, expect, it } from "vitest";
-import { formatErrorMessage, stringifyNonErrorCause, toErrorObject } from "./error-coercion.js";
+import {
+  coerceErrorMessage,
+  formatErrorMessage,
+  stringifyNonErrorCause,
+  toErrorObject,
+  toStringifiedError,
+} from "./error-coercion.js";
 
 const keepText = (text: string): string => text;
 const format = (value: unknown): string => formatErrorMessage(value, { redact: keepText });
@@ -55,6 +61,29 @@ describe("toErrorObject", () => {
 
     expect(error).toMatchObject({ message: "request failed", code: "EPIPE", status: 500 });
     expect(error.cause).toBe(value);
+  });
+});
+
+describe("toStringifiedError", () => {
+  it("preserves Error identity and stringifies every other value", () => {
+    const error = new Error("boom");
+    const objectError = toStringifiedError({ ok: true });
+
+    expect(toStringifiedError(error)).toBe(error);
+    expect(toStringifiedError("failure")).toMatchObject({ message: "failure" });
+    expect(objectError).toMatchObject({ message: "[object Object]" });
+    expect(objectError).not.toHaveProperty("cause");
+    expect(objectError).not.toHaveProperty("ok");
+    expect(toStringifiedError(null)).toMatchObject({ message: "null" });
+  });
+});
+
+describe("coerceErrorMessage", () => {
+  it("preserves Error messages exactly and stringifies other values", () => {
+    expect(coerceErrorMessage(new Error(""))).toBe("");
+    expect(coerceErrorMessage(new Error(" boom "))).toBe(" boom ");
+    expect(coerceErrorMessage("failure")).toBe("failure");
+    expect(coerceErrorMessage(null)).toBe("null");
   });
 });
 

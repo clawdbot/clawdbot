@@ -12,6 +12,7 @@ import {
   normalizeReasoningProgressLine,
   sanitizeProgressStatusText,
 } from "./progress-draft-status-text.js";
+import { settleProgressVisibilityCallbackResult } from "./progress-visibility.js";
 import {
   createChannelProgressDraftGate,
   type AgentPlanStep,
@@ -58,7 +59,10 @@ export function createChannelProgressDraftCompositor(params: {
   mode: ChannelProgressDraftMode;
   active: boolean;
   seed: string;
-  update: (text: string, options?: ChannelProgressDraftUpdateOptions) => Promise<void> | void;
+  update: (
+    text: string,
+    options?: ChannelProgressDraftUpdateOptions,
+  ) => Promise<boolean | void> | boolean | void;
   deleteCurrent?: () => Promise<void> | void;
   tryNativeUpdate?: (text: string) => Promise<boolean> | boolean;
   /** Publish when structured lines change even if the rendered text does not. */
@@ -126,6 +130,7 @@ export function createChannelProgressDraftCompositor(params: {
   let finalReplyStarted = false;
   let finalReplyDelivered = false;
   let preambleExpiryTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastStartRendered = false;
 
   const mergeReasoningProgress = (text?: string, options?: { snapshot?: boolean }): string => {
     if (!text) {
@@ -195,6 +200,7 @@ export function createChannelProgressDraftCompositor(params: {
     narrationText = "";
     planSteps = undefined;
     planExplanation = "";
+    lastStartRendered = false;
   };
 
   const publish = async (options?: { flush?: boolean }): Promise<boolean> => {
@@ -203,9 +209,15 @@ export function createChannelProgressDraftCompositor(params: {
     if (!text || (text === lastRenderedText && !linesChanged)) {
       return false;
     }
+    const observed = await settleProgressVisibilityCallbackResult(
+      params.update(text, { ...options, lines: [...lines] }),
+    );
+    if (!observed.visible) {
+      return false;
+    }
+    // Only accepted renders become the dedupe baseline; pending sends remain retryable.
     lastRenderedText = text;
     lastRenderedLines = lines;
-    await params.update(text, { ...options, lines: [...lines] });
     return true;
   };
 
@@ -242,7 +254,7 @@ export function createChannelProgressDraftCompositor(params: {
 
   const gate = createChannelProgressDraftGate({
     onStart: async () => {
-      await render({ flush: true });
+      lastStartRendered = await render({ flush: true });
       schedulePreambleExpiryRefresh();
     },
     setTimeoutFn,
@@ -323,13 +335,15 @@ export function createChannelProgressDraftCompositor(params: {
           maxLines: resolveChannelProgressDraftMaxLines(params.entry),
         })
       : lines;
-    if (shouldStoreLine && nextLines === lines) {
+    const lineChanged = nextLines !== lines;
+    const hasUnconfirmedRender = formatDraftText(nextLines) !== lastRenderedText;
+    if (shouldStoreLine && !lineChanged && !hasUnconfirmedRender) {
       return false;
     }
     // A work line lands between reasoning bursts: commit the current thinking
     // line so the next thought appends as its own line, interleaved with tools
     // in arrival order, instead of replacing the prior thought.
-    if (shouldStoreLine) {
+    if (shouldStoreLine && lineChanged) {
       reasoningRawText = "";
       lastReasoningLine = undefined;
     }
@@ -350,11 +364,14 @@ export function createChannelProgressDraftCompositor(params: {
     }
     if (options?.startImmediately || params.shouldStartNow?.(line)) {
       const alreadyStarted = gate.hasStarted;
+      if (!alreadyStarted) {
+        lastStartRendered = false;
+      }
       await gate.startNow();
       if (!gate.hasStarted) {
         return false;
       }
-      return alreadyStarted ? await render() : true;
+      return alreadyStarted ? await render() : lastStartRendered;
     }
     const alreadyStarted = gate.hasStarted;
     const progressActive = await gate.noteWork();
@@ -384,7 +401,7 @@ export function createChannelProgressDraftCompositor(params: {
       return gate.hasStarted;
     },
     get isVisible() {
-      return gate.hasStarted && !finalReplyStarted && !finalReplyDelivered;
+      return Boolean(lastRenderedText) && !finalReplyStarted && !finalReplyDelivered;
     },
     get hasStatusHeadline() {
       return Boolean(resolveStatusText());
@@ -444,8 +461,15 @@ export function createChannelProgressDraftCompositor(params: {
         return false;
       }
       if (options?.startImmediately) {
+        const alreadyStarted = gate.hasStarted;
+        if (!alreadyStarted) {
+          lastStartRendered = false;
+        }
         await gate.startNow();
-        return gate.hasStarted ? await render({ flush: true }) : false;
+        if (!gate.hasStarted) {
+          return false;
+        }
+        return alreadyStarted ? await render({ flush: true }) : lastStartRendered;
       }
       const alreadyStarted = gate.hasStarted;
       const progressActive = await gate.noteWork();
@@ -484,14 +508,14 @@ export function createChannelProgressDraftCompositor(params: {
         return true;
       }
       const alreadyStarted = gate.hasStarted;
+      if (!alreadyStarted) {
+        lastStartRendered = false;
+      }
       await gate.startNow();
       if (!gate.hasStarted) {
         return false;
       }
-      if (alreadyStarted) {
-        await render();
-      }
-      return true;
+      return alreadyStarted ? await render() : lastStartRendered;
     },
     async pushPreambleHeadline(text?: string, options?: { itemId?: string }) {
       if (!params.active || params.mode !== "progress" || progressSuppressed) {
@@ -656,16 +680,14 @@ export function createChannelProgressDraftCompositor(params: {
         lastIdLessCommentaryBare = bareNormalized;
       }
       const alreadyStarted = gate.hasStarted;
+      if (!alreadyStarted) {
+        lastStartRendered = false;
+      }
       await gate.startNow();
       if (!gate.hasStarted) {
         return false;
       }
-      if (alreadyStarted) {
-        await render();
-      }
-      // True means the sanitized commentary was accepted into the visible
-      // lane. A first item renders inside gate.onStart, not this call site.
-      return true;
+      return alreadyStarted ? await render() : lastStartRendered;
     },
   };
 }

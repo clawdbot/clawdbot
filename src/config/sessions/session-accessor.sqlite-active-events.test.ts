@@ -13,6 +13,7 @@ import {
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptActiveLeafEvents,
   readSessionTranscriptActiveStats,
+  readSessionTranscriptBoundedContextMessageTailPage,
   readSessionTranscriptBoundedMessageTailPage,
   readSessionTranscriptMessageAnchorPage,
   readSessionTranscriptMessageEventById,
@@ -26,6 +27,7 @@ import {
   reconcileSessionTranscriptIndexes,
   startSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcile,
+  waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
 
 const queuedSessionWrite = vi.hoisted(() => vi.fn());
@@ -454,6 +456,50 @@ describe("SQLite active transcript event projection", () => {
     ).toEqual([]);
   });
 
+  it("resolves one session before unrelated projection repair completes", async () => {
+    const secondScope = { ...scope, sessionId: "session-slow", sessionKey: "agent:main:slow" };
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        { eventId: "target", parentId: null, message: { role: "user", content: "target" } },
+      ],
+      touchSessionEntry: false,
+    });
+    await persistSessionTranscriptTurn(secondScope, {
+      messages: Array.from({ length: 5_000 }, (_, index) => ({
+        eventId: `slow-${index}`,
+        parentId: index === 0 ? null : `slow-${index - 1}`,
+        message: { role: "toolResult", content: "slow" },
+      })),
+      touchSessionEntry: false,
+    });
+    const databaseOptions = { agentId: scope.agentId, env: scope.env };
+    const database = openOpenClawAgentDatabase(databaseOptions);
+    const markDirty = database.db.prepare(
+      "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
+    );
+    markDirty.run(scope.sessionId);
+    markDirty.run(secondScope.sessionId);
+
+    startSessionTranscriptIndexReconcile({
+      ...databaseOptions,
+      preferredSessionId: scope.sessionId,
+    });
+    let allReconciled = false;
+    const allReconciliation = waitForSessionTranscriptIndexReconcile(databaseOptions).then(() => {
+      allReconciled = true;
+    });
+
+    await waitForSessionTranscriptProjection(scope);
+
+    expect(allReconciled).toBe(false);
+    expect(
+      database.db
+        .prepare("SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?")
+        .get(scope.sessionId),
+    ).toEqual({ needs_rebuild: 0 });
+    await allReconciliation;
+  }, 30_000);
+
   it("keeps projection state and rows on one snapshot during a concurrent append", async () => {
     await persistSessionTranscriptTurn(scope, {
       messages: [
@@ -827,5 +873,40 @@ describe("SQLite active transcript event projection", () => {
     await reconciliation;
     expect(order).toEqual(["event-loop-responsive", "live-write", "reconciled"]);
     expect(readSessionTranscriptMessageEventCount(scope)).toBe(100_001);
+
+    await appendTranscriptEvent(scope, {
+      type: "compaction",
+      id: "large-context-boundary",
+      parentId: "m100001",
+      timestamp: "2026-08-11T00:00:00.000Z",
+      summary: "bounded large-history summary",
+      firstKeptEntryId: "m1",
+      tokensBefore: 100_000,
+    });
+    await persistSessionTranscriptTurn(scope, {
+      messages: Array.from({ length: 40 }, (_, index) => ({
+        eventId: `post-boundary-${index}`,
+        parentId: index === 0 ? "large-context-boundary" : `post-boundary-${index - 1}`,
+        message: {
+          role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+          content: `post-boundary ${index}`,
+        },
+      })),
+      touchSessionEntry: false,
+    });
+
+    const contextPage = readSessionTranscriptBoundedContextMessageTailPage(scope, {
+      maxBytes: 1024 * 1024,
+      maxMessages: 40,
+      maxScannedMessages: 4096,
+    });
+    expect(contextPage).toMatchObject({
+      authoritative: true,
+      contextSummary: { text: "bounded large-history summary" },
+      empty: false,
+    });
+    expect(contextPage.events).toHaveLength(40);
+    expect(contextPage.events.at(0)?.event).toMatchObject({ id: "post-boundary-0" });
+    expect(contextPage.events.at(-1)?.event).toMatchObject({ id: "post-boundary-39" });
   }, 60_000);
 });

@@ -1,9 +1,6 @@
 // Control UI view renders agents panels status files screen content.
-import { applyPreviewTheme } from "@create-markdown/preview";
-import DOMPurify from "dompurify";
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import { marked } from "marked";
 import type {
   AgentFileEntry,
   AgentsFilesListResult,
@@ -15,6 +12,7 @@ import type {
 import { renderCronJobsPagination } from "../../components/cron-jobs-pagination.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
+import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import "../../components/modal-dialog.ts";
 import type { OpenClawModalDialog } from "../../components/modal-dialog.ts";
 import "../../components/tooltip.ts";
@@ -428,9 +426,7 @@ export function renderAgentFiles(params: {
   const draft = active ? (params.agentFileDrafts[active] ?? baseContent) : "";
   const isDirty = active ? draft !== baseContent : false;
   const previewHtml = activeEntry
-    ? applyPreviewTheme(marked.parse(draft, { gfm: true, breaks: true }) as string, {
-        sanitize: (h: string) => DOMPurify.sanitize(h),
-      })
+    ? toSanitizedMarkdownHtml(draft, { codeBlockChrome: "none", mode: "document" })
     : "";
   const draftByteSize = formatBytes(new TextEncoder().encode(draft).length);
   const draftWordCount = countWords(draft);

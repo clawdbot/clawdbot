@@ -1,4 +1,5 @@
 // Discord tests cover listeners plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 let DiscordMessageListener: typeof import("./listeners.js").DiscordMessageListener;
@@ -26,14 +27,6 @@ function firstErrorMessage(logger: ReturnType<typeof createLogger>): string {
 
 function fakeEvent(channelId: string) {
   return { channel_id: channelId } as never;
-}
-
-function createDeferred() {
-  let resolve: (() => void) | undefined;
-  const promise = new Promise<void>((r) => {
-    resolve = r;
-  });
-  return { promise, resolve };
 }
 
 async function flushAsyncWork() {
@@ -64,8 +57,8 @@ describe("DiscordMessageListener", () => {
 
   it("runs handlers for the same channel concurrently (no per-channel serialization)", async () => {
     const order: string[] = [];
-    const deferredA = createDeferred();
-    const deferredB = createDeferred();
+    const deferredA = createDeferred<void>();
+    const deferredB = createDeferred<void>();
     let callCount = 0;
     const handler = vi.fn(async () => {
       callCount += 1;
@@ -102,8 +95,8 @@ describe("DiscordMessageListener", () => {
   });
 
   it("runs handlers for different channels in parallel", async () => {
-    const deferredA = createDeferred();
-    const deferredB = createDeferred();
+    const deferredA = createDeferred<void>();
+    const deferredB = createDeferred<void>();
     const order: string[] = [];
     const handler = vi.fn(async (data: { channel_id: string }) => {
       order.push(`start:${data.channel_id}`);
@@ -161,7 +154,7 @@ describe("DiscordMessageListener", () => {
 
 describe("DiscordInteractionListener", () => {
   it("returns immediately without awaiting Discord interaction handling", async () => {
-    const handlerDone = createDeferred();
+    const handlerDone = createDeferred<void>();
     const handleInteraction = vi.fn(async () => {
       await handlerDone.promise;
     });

@@ -7,7 +7,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { SandboxConfig } from "./sandbox/types.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
-import { normalizeToolList, normalizeToolName, type ToolPolicyLike } from "./tool-policy.js";
+import { normalizeToolList, normalizeToolPolicyName, type ToolPolicyLike } from "./tool-policy.js";
 
 // Emits bounded audit logs when tool allow/deny policies remove or block tools.
 // Sanitizing here keeps logs single-line and safe for arbitrary tool names.
@@ -225,7 +225,7 @@ export function auditSandboxToolPolicyBlock(params: {
   policy?: ToolPolicyLike;
   mode: SandboxConfig["mode"];
 }): void {
-  const normalizedToolName = normalizeToolName(params.toolName);
+  const normalizedToolName = normalizeToolPolicyName(params.toolName);
   if (!normalizedToolName) {
     return;
   }

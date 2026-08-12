@@ -4,12 +4,16 @@ import { CONFIG_DIR_NAME, getAgentDir } from "../../agents/config.js";
 import type { ResourceDiagnostic } from "../../agents/sessions/diagnostics.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "../../agents/sessions/source-info.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
-import { addIgnoreRules, toPosixPath, type IgnoreMatcher } from "../../shared/ignore-rules.js";
+import {
+  addIgnoreRules,
+  normalizeNativePathSeparators,
+  type IgnoreMatcher,
+} from "../../shared/ignore-rules.js";
 // Session skill helpers resolve skills attached to a session and its transcript state.
 import { expandTildePath } from "../../shared/tilde-path.js";
 import { getArchivedSkillFiles } from "../workshop/curator.js";
-import { parseFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
-import { formatSkillsForPrompt as formatSkillContractForPrompt } from "./skill-contract.js";
+import { parseSkillFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
+import { formatSkillsForPromptCore } from "./skill-contract.js";
 import { computeSkillPromptVersion } from "./skill-version.js";
 
 /** Max name length per spec */
@@ -137,7 +141,7 @@ function loadSkillsFromDirInternal(
         }
       }
 
-      const relPath = toPosixPath(relative(root, fullPath));
+      const relPath = normalizeNativePathSeparators(relative(root, fullPath));
       if (!isFile || ig.ignores(relPath)) {
         continue;
       }
@@ -176,7 +180,7 @@ function loadSkillsFromDirInternal(
         }
       }
 
-      const relPath = toPosixPath(relative(root, fullPath));
+      const relPath = normalizeNativePathSeparators(relative(root, fullPath));
       const ignorePath = isDirectory ? `${relPath}/` : relPath;
       if (ig.ignores(ignorePath)) {
         continue;
@@ -215,7 +219,7 @@ function loadSkillFromFile(
 
   try {
     const rawContent = readFileSync(filePath, "utf-8");
-    const frontmatter = parseFrontmatter(rawContent);
+    const frontmatter = parseSkillFrontmatter(rawContent);
     const invocation = resolveSkillInvocationPolicy(frontmatter);
     const skillDir = dirname(filePath);
     const parentDirName = basename(skillDir);
@@ -270,7 +274,7 @@ function loadSkillFromFile(
  */
 export function formatSkillsForPrompt(skills: Skill[]): string {
   const visibleSkills = skills.filter((s) => !s.disableModelInvocation);
-  return formatSkillContractForPrompt(visibleSkills);
+  return formatSkillsForPromptCore(visibleSkills);
 }
 
 interface LoadSkillsOptions {

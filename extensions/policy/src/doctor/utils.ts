@@ -33,7 +33,7 @@ export function readStringList(
   return readPolicyStringArray(policy, path, options) ?? [];
 }
 
-export function readString(policy: unknown, path: readonly string[]): string | undefined {
+export function readPolicyPathString(policy: unknown, path: readonly string[]): string | undefined {
   let current: unknown = policy;
   for (const part of path) {
     if (!isRecord(current)) {

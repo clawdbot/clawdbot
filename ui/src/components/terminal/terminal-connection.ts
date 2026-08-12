@@ -57,14 +57,22 @@ type TerminalExitInfo = {
   error?: string;
 };
 
+type TerminalReplay = {
+  data: string;
+  newlyObservedFrom: number;
+  mode: "initial" | "recovery";
+  signal: AbortSignal;
+};
+
 type SessionSink = {
   onData: (data: string) => void;
-  /** Clears emulator state before replaying the authoritative ring snapshot. */
-  onReplay?: (data: string, newlyObservedFrom: number) => void;
+  /** Replays a ring snapshot into a fresh sink or replaces a gapped live sink. */
+  onReplay: (replay: TerminalReplay) => void | Promise<void>;
   onExit: (info: TerminalExitInfo) => void;
 };
 
 type StreamState = {
+  abort: AbortController;
   sink: SessionSink;
   seqMode: "unknown" | "offset" | "counter";
   expectedSeq: number | null;
@@ -175,7 +183,7 @@ export class TerminalConnection {
             if (stream.recovering) {
               this.bufferEarly(payload.sessionId, { kind: "exit", info });
             } else {
-              this.deliverExit(payload.sessionId, stream.sink, info);
+              this.deliverExit(payload.sessionId, stream, info);
             }
           } else {
             this.bufferEarly(payload.sessionId, { kind: "exit", info });
@@ -208,7 +216,13 @@ export class TerminalConnection {
       }
       throw new TerminalOpenTimeoutError(error);
     }
-    this.adoptSession(result.sessionId, sink, { seqMode: "unknown", expectedSeq: 0 });
+    const stream = this.setStream(result.sessionId, sink, {
+      seqMode: "unknown",
+      expectedSeq: 0,
+      recovering: false,
+    });
+    this.flushPending(result.sessionId, stream);
+    this.scheduleLivenessCheck();
     return result;
   }
 
@@ -219,17 +233,35 @@ export class TerminalConnection {
     );
     const offset =
       typeof result.seq === "number" && Number.isSafeInteger(result.seq) ? result.seq : null;
-    this.adoptSession(
-      sessionId,
-      sink,
-      offset !== null
-        ? { seqMode: "offset", expectedSeq: offset }
-        : { seqMode: "counter", expectedSeq: null },
-      result.buffer,
-      // Old protocol-4 replies have no snapshot high-water. Preserve raced
-      // counter frames because they may have been emitted after the snapshot.
-      offset ?? undefined,
-    );
+    const stream = this.setStream(sessionId, sink, {
+      seqMode: offset === null ? "counter" : "offset",
+      expectedSeq: offset,
+      recovering: true,
+    });
+    const signal = stream.abort.signal;
+    try {
+      await sink.onReplay({
+        data: result.buffer,
+        newlyObservedFrom: result.buffer.length,
+        mode: "initial",
+        signal,
+      });
+    } catch (error) {
+      if (!signal.aborted) {
+        this.removeStream(sessionId);
+        this.pending.delete(sessionId);
+        this.maybeUnsubscribe();
+      }
+      throw error;
+    }
+    if (signal.aborted) {
+      return result;
+    }
+    stream.recovering = false;
+    // Old protocol-4 replies have no snapshot high-water. Preserve raced
+    // counter frames because they may have been emitted after the snapshot.
+    this.flushPending(sessionId, stream, offset ?? undefined, true);
+    this.scheduleLivenessCheck();
     return result;
   }
 
@@ -250,28 +282,6 @@ export class TerminalConnection {
       this.maybeUnsubscribe();
       throw err;
     }
-  }
-
-  /** Registers a sink, then flushes events that raced after open/attach. */
-  private adoptSession(
-    sessionId: string,
-    sink: SessionSink,
-    baseline: Pick<StreamState, "seqMode" | "expectedSeq">,
-    replay?: string,
-    coveredThroughSeq?: number,
-  ): void {
-    const stream: StreamState = { sink, ...baseline, recovering: false };
-    this.streams.set(sessionId, stream);
-    this.lastTerminalActivityAtMs = Date.now();
-    if (replay !== undefined) {
-      if (sink.onReplay) {
-        sink.onReplay(replay, replay.length);
-      } else {
-        sink.onData(replay);
-      }
-    }
-    this.flushPending(sessionId, stream, coveredThroughSeq, replay !== undefined);
-    this.scheduleLivenessCheck();
   }
 
   /** Validates one frame's arithmetic continuity before exposing its bytes. */
@@ -324,10 +334,11 @@ export class TerminalConnection {
       return;
     }
     stream.recovering = true;
+    const signal = stream.abort.signal;
     void this.client
       .request<TerminalAttachResult>("terminal.attach", { sessionId })
-      .then((result) => {
-        if (this.streams.get(sessionId) !== stream) {
+      .then(async (result) => {
+        if (signal.aborted) {
           return;
         }
         const offset =
@@ -345,14 +356,6 @@ export class TerminalConnection {
         const previouslyObservedThrough = stream.expectedSeq;
         stream.seqMode = "offset";
         stream.expectedSeq = offset;
-        if (!stream.sink.onReplay) {
-          // Recovery must replace emulator state. Appending a full ring replay
-          // would duplicate bytes already rendered before the detected gap.
-          stream.recovering = false;
-          this.pending.delete(sessionId);
-          this.forceReconnect("terminal replay reset unavailable");
-          return;
-        }
         // The ring may include both bytes already delivered and the gap's
         // missing suffix. Preserve that boundary so response-producing
         // emulators do not answer historical control queries twice.
@@ -361,12 +364,20 @@ export class TerminalConnection {
           typeof previouslyObservedThrough === "number"
             ? Math.max(0, Math.min(result.buffer.length, previouslyObservedThrough - replayStart))
             : 0;
-        stream.sink.onReplay(result.buffer, newlyObservedFrom);
+        await stream.sink.onReplay({
+          data: result.buffer,
+          newlyObservedFrom,
+          mode: "recovery",
+          signal,
+        });
+        if (signal.aborted) {
+          return;
+        }
         stream.recovering = false;
         this.flushPending(sessionId, stream, offset, true);
       })
       .catch(() => {
-        if (this.streams.get(sessionId) !== stream) {
+        if (signal.aborted) {
           return;
         }
         const queued = this.pending.get(sessionId)?.drain();
@@ -380,7 +391,7 @@ export class TerminalConnection {
             if (event.kind === "data") {
               stream.sink.onData(event.data);
             } else {
-              this.deliverExit(sessionId, stream.sink, event.info);
+              this.deliverExit(sessionId, stream, event.info);
               break;
             }
           }
@@ -428,17 +439,34 @@ export class TerminalConnection {
       } else if (stream.recovering) {
         this.bufferEarly(sessionId, event);
       } else {
-        this.deliverExit(sessionId, stream.sink, event.info);
+        this.deliverExit(sessionId, stream, event.info);
       }
     }
   }
 
   /** Own cleanup: replayed exits can arrive before the caller records the session id. */
-  private deliverExit(sessionId: string, sink: SessionSink, info: TerminalExitInfo): void {
-    sink.onExit(info);
-    this.streams.delete(sessionId);
+  private deliverExit(sessionId: string, stream: StreamState, info: TerminalExitInfo): void {
+    this.removeStream(sessionId);
+    stream.sink.onExit(info);
     this.pending.delete(sessionId);
     this.maybeUnsubscribe();
+  }
+
+  private setStream(
+    sessionId: string,
+    sink: SessionSink,
+    state: Pick<StreamState, "seqMode" | "expectedSeq" | "recovering">,
+  ): StreamState {
+    this.removeStream(sessionId);
+    const stream = { abort: new AbortController(), sink, ...state };
+    this.streams.set(sessionId, stream);
+    this.lastTerminalActivityAtMs = Date.now();
+    return stream;
+  }
+
+  private removeStream(sessionId: string): void {
+    this.streams.get(sessionId)?.abort.abort();
+    this.streams.delete(sessionId);
   }
 
   private bufferEarly(sessionId: string, event: PendingEvent): void {
@@ -550,7 +578,7 @@ export class TerminalConnection {
 
   /** Closes a session server-side and drops its local stream state. */
   async close(sessionId: string): Promise<void> {
-    this.streams.delete(sessionId);
+    this.removeStream(sessionId);
     this.pending.delete(sessionId);
     await this.client.request("terminal.close", { sessionId }).catch(() => undefined);
     // terminal.exit precedes the close response and can otherwise be buffered.
@@ -563,6 +591,9 @@ export class TerminalConnection {
   }
 
   dispose(): void {
+    for (const stream of this.streams.values()) {
+      stream.abort.abort();
+    }
     this.streams.clear();
     this.pending.clear();
     this.stopLiveness();

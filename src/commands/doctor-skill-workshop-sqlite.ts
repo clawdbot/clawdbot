@@ -7,6 +7,7 @@ import {
 } from "../agents/agent-scope.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isMissingPathError } from "../infra/errors.js";
 import { removePathWithinRoot } from "../infra/fs-safe-remove.js";
 import { pathExists, root, type Root } from "../infra/fs-safe.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
@@ -35,11 +36,6 @@ type MigrationResult = {
   detected: number;
   migrated: number;
 };
-
-function isNotFoundError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException).code;
-  return code === "not-found" || code === "ENOENT";
-}
 
 async function readJson(rootDir: Root, relativePath: string, maxBytes: number): Promise<unknown> {
   const read = await rootDir.read(relativePath, {
@@ -107,7 +103,7 @@ async function readLegacyRollback(
     }
     return rollback.value;
   } catch (error) {
-    if (isNotFoundError(error)) {
+    if (isMissingPathError(error)) {
       return undefined;
     }
     throw error;
@@ -240,7 +236,7 @@ export async function migrateLegacySkillWorkshopProposals(params: {
       });
       migrated += 1;
     } catch (error) {
-      if (isNotFoundError(error)) {
+      if (isMissingPathError(error)) {
         if (await readSkillProposal(proposalId, { env }, {}, { reconcile: false })) {
           continue;
         }
@@ -250,7 +246,7 @@ export async function migrateLegacySkillWorkshopProposals(params: {
   }
   await removePathWithinRoot({ rootDir: stateDir, relativePath: MANIFEST_PATH }).catch(
     (error: unknown) => {
-      if (!isNotFoundError(error)) {
+      if (!isMissingPathError(error)) {
         warnings.push(`Failed to remove legacy Skill Workshop proposal index: ${String(error)}`);
       }
     },

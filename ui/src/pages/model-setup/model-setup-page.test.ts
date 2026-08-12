@@ -5,7 +5,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
-import { createRuntimeConfigCapability } from "../../lib/config/index.ts";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import {
   createApplicationContextProvider,
   type ApplicationContextProvider,
@@ -107,6 +107,7 @@ function createContext() {
     client,
     request,
     runtimeConfig,
+    snapshot,
     context: {
       gateway,
       basePath: "/openclaw",
@@ -504,6 +505,199 @@ describe("ModelSetupPage catalog icons", () => {
     runtimeConfig.dispose();
   });
 
+  it("owns the complete wizard action between draft flush and authoritative refresh", async () => {
+    const { context, client, request, runtimeConfig } = createContext();
+    const order: string[] = [];
+    let config: Record<string, unknown> = { pending: false };
+    let hash = "hash-1";
+    request.mockImplementation(async (method: string, params?: unknown) => {
+      order.push(method);
+      if (method === "config.get") {
+        return {
+          config,
+          sourceConfig: config,
+          raw: JSON.stringify(config),
+          hash,
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method === "config.set") {
+        config = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
+        hash = "hash-2";
+        return { hash };
+      }
+      if (method === "openclaw.setup.auth.start") {
+        return { sessionId: "wizard-session", done: false, status: "running" };
+      }
+      if (method === "wizard.next") {
+        config = { ...config, configuredModel: "provider/model" };
+        hash = "hash-3";
+        return { done: true, status: "done" };
+      }
+      if (method === "openclaw.setup.detect") {
+        return {
+          ...detection,
+          configuredModel: "provider/model",
+          setupComplete: true,
+        };
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    await runtimeConfig.ensureLoaded();
+    order.length = 0;
+    runtimeConfig.patchForm(["pending"], true);
+    const { page } = await mountPage(context, {
+      state: {
+        phase: "ready",
+        result: {
+          ...detection,
+          authOptions: [{ id: "provider-auth", label: "Provider", kind: "oauth", featured: true }],
+        },
+      },
+      client,
+      firstRun: false,
+    });
+
+    page.querySelector<HTMLButtonElement>('[data-auth-choice="provider-auth"] button')?.click();
+
+    await vi.waitFor(() => {
+      expect(order).toEqual([
+        "config.set",
+        "openclaw.setup.auth.start",
+        "wizard.next",
+        "config.get",
+        "openclaw.setup.detect",
+      ]);
+      expect(page.textContent).toContain("Connection verified");
+    });
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-3");
+    runtimeConfig.dispose();
+  });
+
+  it("drops a queued wizard action when setup access changes before dispatch", async () => {
+    const { context, client, request, runtimeConfig, snapshot } = createContext();
+    let releaseConfigSet: ((value: { hash: string }) => void) | undefined;
+    request.mockImplementation(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          config: {},
+          sourceConfig: {},
+          raw: "{}",
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method === "config.set") {
+        return await new Promise<{ hash: string }>((resolve) => {
+          releaseConfigSet = resolve;
+        });
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    await runtimeConfig.ensureLoaded();
+    runtimeConfig.patchForm(["pending"], true);
+    const { page } = await mountPage(context, {
+      state: {
+        phase: "ready",
+        result: {
+          ...detection,
+          authOptions: [{ id: "provider-auth", label: "Provider", kind: "oauth", featured: true }],
+        },
+      },
+      client,
+      firstRun: false,
+    });
+
+    page.querySelector<HTMLButtonElement>('[data-auth-choice="provider-auth"] button')?.click();
+    await vi.waitFor(() => expect(releaseConfigSet).toBeTypeOf("function"));
+    snapshot.hello.auth.scopes = ["operator.read"];
+    releaseConfigSet?.({ hash: "hash-2" });
+
+    await vi.waitFor(() => expect(page.textContent).toContain("Model setup request failed."));
+    expect(request).not.toHaveBeenCalledWith(
+      "openclaw.setup.auth.start",
+      expect.anything(),
+      expect.anything(),
+    );
+    runtimeConfig.dispose();
+  });
+
+  it("keeps autonomous gateway progress inside the wizard mutation lane", async () => {
+    const { context, client, request, runtimeConfig } = createContext();
+    const order: string[] = [];
+    let nextCount = 0;
+    let releaseProgress: ((value: unknown) => void) | undefined;
+    request.mockImplementation(async (method: string) => {
+      if (method === "config.get") {
+        order.push("config.get");
+        return {
+          config: {},
+          sourceConfig: {},
+          raw: "{}",
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      order.push(method);
+      if (method === "openclaw.setup.auth.start") {
+        return { sessionId: "wizard-session", done: false, status: "running" };
+      }
+      if (method === "wizard.next" && nextCount++ === 0) {
+        return {
+          done: false,
+          status: "running",
+          step: { id: "download", type: "progress", message: "Downloading", executor: "gateway" },
+        };
+      }
+      if (method === "wizard.next") {
+        return await new Promise((resolve) => {
+          releaseProgress = resolve;
+        });
+      }
+      if (method === "wizard.cancel") {
+        return {};
+      }
+      if (method === "openclaw.setup.detect") {
+        return { ...detection, configuredModel: "provider/model", setupComplete: true };
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    await runtimeConfig.ensureLoaded();
+    order.length = 0;
+    const { page } = await mountPage(context, {
+      state: {
+        phase: "ready",
+        result: {
+          ...detection,
+          authOptions: [{ id: "provider-auth", label: "Provider", kind: "oauth", featured: true }],
+        },
+      },
+      client,
+      firstRun: false,
+    });
+    page.querySelector<HTMLButtonElement>('[data-auth-choice="provider-auth"] button')?.click();
+    await vi.waitFor(() => expect(releaseProgress).toBeTypeOf("function"));
+
+    const competingMutation = runtimeConfig.runExternalMutation(async () => {
+      order.push("competing-mutation");
+    });
+    await Promise.resolve();
+    expect(order).not.toContain("competing-mutation");
+
+    page.querySelector<HTMLButtonElement>("openclaw-modal-dialog .btn")?.click();
+    await page.updateComplete;
+    await Promise.resolve();
+    expect(order).not.toContain("competing-mutation");
+
+    releaseProgress?.({ done: true, status: "done" });
+    await competingMutation;
+    expect(order.indexOf("competing-mutation")).toBeGreaterThan(order.indexOf("config.get"));
+    runtimeConfig.dispose();
+  });
+
   it("does not activate a stale candidate through a replacement connection", async () => {
     const { context: baseContext, client } = createContext();
     const replacementRequest = vi.fn();
@@ -596,5 +790,58 @@ describe("ModelSetupPage catalog icons", () => {
       expect(page.textContent).toContain("Connection verified");
       expect(page.textContent).toContain("config.get failed after model commit");
     });
+  });
+
+  it("coordinates wizard requests and keeps an authoritative refresh warning visible", async () => {
+    const { context: baseContext, client, request } = createContext();
+    const runExternalMutation = vi.fn(
+      async (task: (client: GatewayBrowserClient) => Promise<unknown>) => ({
+        ok: true as const,
+        value: await task(client),
+        refresh: { ok: false as const, error: "config.get failed after wizard commit" },
+      }),
+    );
+    const context = {
+      ...baseContext,
+      runtimeConfig: {
+        ...baseContext.runtimeConfig,
+        runExternalMutation,
+      },
+    } as ApplicationContext;
+    request.mockImplementation(async (method: string) => {
+      if (method === "openclaw.setup.auth.start") {
+        return { sessionId: "wizard-session", done: false, status: "running" };
+      }
+      if (method === "wizard.next") {
+        return {
+          done: false,
+          status: "running",
+          step: { id: "token", type: "text", message: "Paste token" },
+        };
+      }
+      return {};
+    });
+    const { page } = await mountPage(context, {
+      state: {
+        phase: "ready",
+        result: {
+          ...detection,
+          authOptions: [{ id: "provider-auth", label: "Provider", kind: "oauth", featured: true }],
+        },
+      },
+      client,
+      firstRun: false,
+    });
+
+    page.querySelector<HTMLButtonElement>('[data-auth-choice="provider-auth"] button')?.click();
+
+    await vi.waitFor(() => {
+      expect(runExternalMutation).toHaveBeenCalledTimes(1);
+      expect(page.textContent).toContain("config.get failed after wizard commit");
+      expect(page.textContent).toContain("Paste token");
+    });
+    page.querySelector<HTMLButtonElement>("openclaw-modal-dialog .btn")?.click();
+    await page.updateComplete;
+    expect(page.textContent).toContain("config.get failed after wizard commit");
   });
 });

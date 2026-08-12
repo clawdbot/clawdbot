@@ -1,6 +1,7 @@
 // Doctor runtime check tests cover runtime-backed doctor checks.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { GATEWAY_HEALTH_RATE_LIMITED_MESSAGE } from "../commands/gateway-health-auth-diagnostic.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 
 const mocks = vi.hoisted(() => ({
@@ -13,7 +14,7 @@ const mocks = vi.hoisted(() => ({
   probeGatewayStatus: vi.fn(),
   readGatewayServiceState: vi.fn(),
   resolveGatewayService: vi.fn(() => ({ label: "openclaw-gateway" })),
-  resolvePluginProviders: vi.fn((): Array<Record<string, unknown>> => []),
+  resolvePluginProvidersCore: vi.fn((): Array<Record<string, unknown>> => []),
   resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
 }));
 
@@ -26,6 +27,7 @@ vi.mock("../agents/model-catalog.js", () => ({
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalog: mocks.loadModelCatalog,
 }));
 
@@ -65,7 +67,7 @@ vi.mock("../plugins/provider-discovery.js", async (importOriginal) => ({
 }));
 
 vi.mock("../plugins/providers.runtime.js", () => ({
-  resolvePluginProviders: mocks.resolvePluginProviders,
+  resolvePluginProvidersCore: mocks.resolvePluginProvidersCore,
 }));
 
 const {
@@ -119,7 +121,7 @@ describe("doctor runtime tool schema checks", () => {
       runtime: { status: "running" },
     });
     mocks.resolveGatewayService.mockClear();
-    mocks.resolvePluginProviders.mockReset().mockReturnValue([]);
+    mocks.resolvePluginProvidersCore.mockReset().mockReturnValue([]);
     mocks.resolveDefaultModelForAgent.mockClear();
   });
 
@@ -591,6 +593,25 @@ describe("doctor gateway runtime checks", () => {
     });
   });
 
+  it("reports temporary Gateway authentication lockouts with wait-and-retry guidance", async () => {
+    mocks.probeGatewayStatus.mockResolvedValueOnce({
+      ok: false,
+      error: "connect failed",
+      connectFailure: { kind: "rate-limited", detailCode: "AUTH_RATE_LIMITED" },
+    });
+
+    await expect(
+      collectGatewayHealthFindings({ cfg: { gateway: { mode: "local" } } }),
+    ).resolves.toContainEqual({
+      checkId: "core/doctor/gateway-health",
+      severity: "warning",
+      message: GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
+      path: "gateway.mode",
+      target: "http://127.0.0.1:5829",
+      fixHint: "Wait for the temporary authentication lockout to expire, then rerun doctor.",
+    });
+  });
+
   it("redacts sensitive remote gateway URLs from health finding targets", async () => {
     mocks.buildGatewayProbeConnectionDetails.mockResolvedValueOnce({
       url: "wss://user:pass@gateway.example.test/rpc?token=secret&safe=value",
@@ -648,7 +669,7 @@ describe("doctor gateway runtime checks", () => {
 
 describe("doctor provider catalog projection checks", () => {
   beforeEach(() => {
-    mocks.resolvePluginProviders.mockReset().mockReturnValue([]);
+    mocks.resolvePluginProvidersCore.mockReset().mockReturnValue([]);
   });
 
   it("reports provider catalog rows that fail unified text projection", async () => {
@@ -668,7 +689,7 @@ describe("doctor provider catalog projection checks", () => {
         },
       },
     );
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -696,7 +717,7 @@ describe("doctor provider catalog projection checks", () => {
   it("loads full provider registrations for static catalog validation", async () => {
     await collectProviderCatalogProjectionFindings({});
 
-    expect(mocks.resolvePluginProviders).toHaveBeenCalledWith(
+    expect(mocks.resolvePluginProvidersCore).toHaveBeenCalledWith(
       expect.not.objectContaining({
         discoveryEntriesOnly: true,
       }),
@@ -704,7 +725,7 @@ describe("doctor provider catalog projection checks", () => {
   });
 
   it("reports provider catalog model rows with invalid ids", async () => {
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -739,7 +760,7 @@ describe("doctor provider catalog projection checks", () => {
   });
 
   it("reports whitespace-only provider catalog model ids", async () => {
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -774,7 +795,7 @@ describe("doctor provider catalog projection checks", () => {
   });
 
   it("reports provider catalog model rows with invalid names", async () => {
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -807,7 +828,7 @@ describe("doctor provider catalog projection checks", () => {
   });
 
   it("reports provider catalog model lists with invalid shapes", async () => {
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -846,7 +867,7 @@ describe("doctor provider catalog projection checks", () => {
         throw new Error("model iterator failed");
       },
     });
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -880,7 +901,7 @@ describe("doctor provider catalog projection checks", () => {
   });
 
   it("reports provider catalog results without provider containers", async () => {
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -906,7 +927,7 @@ describe("doctor provider catalog projection checks", () => {
   });
 
   it("reports invalid multi-provider catalog keys", async () => {
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -940,7 +961,7 @@ describe("doctor provider catalog projection checks", () => {
   });
 
   it("reports falsy non-empty provider catalog results", async () => {
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -966,7 +987,7 @@ describe("doctor provider catalog projection checks", () => {
   });
 
   it("reports invalid provider catalog orders without aborting doctor", async () => {
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -1011,7 +1032,7 @@ describe("doctor provider catalog projection checks", () => {
   });
 
   it("validates static catalog rows when live catalog order access fails", async () => {
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -1048,7 +1069,7 @@ describe("doctor provider catalog projection checks", () => {
   });
 
   it("reports static catalog hook access failures without aborting doctor", async () => {
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -1077,7 +1098,7 @@ describe("doctor provider catalog projection checks", () => {
   });
 
   it("reports static catalog hooks with non-function run values", async () => {
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -1111,7 +1132,7 @@ describe("doctor provider catalog projection checks", () => {
       {},
     );
     revoke();
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
@@ -1139,7 +1160,7 @@ describe("doctor provider catalog projection checks", () => {
   });
 
   it("reports present but invalid single-provider catalog branches", async () => {
-    mocks.resolvePluginProviders.mockReturnValueOnce([
+    mocks.resolvePluginProvidersCore.mockReturnValueOnce([
       {
         id: "mockplugin",
         pluginId: "mockplugin",
