@@ -34,8 +34,6 @@ type InternalReplySessionOptions = {
   onReplyAdmissionWaitChange?: (waiting: boolean) => void;
   /** Receives terminal queue-cap outcomes without widening the public reply API. */
   onFollowupQueueDisposition?: (disposition: FollowupQueueDisposition) => void;
-  /** Route session that owns channel-scoped system events for a child or thread dispatch. */
-  systemEventSessionKey?: string;
   /** Overrides persisted queue mode for this reply only. */
   queueModeOverride?: QueueMode;
   /** Dispatch-owned operation used to defer hooks until durable run admission. */

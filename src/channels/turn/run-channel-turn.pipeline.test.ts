@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { getReplySystemEventSessionKey } from "../../auto-reply/reply/system-event-session-key.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -236,7 +237,7 @@ describe("channel turn pipeline", () => {
     const dispatchSessionKey = `${routeSessionKey}:thread:123.456`;
     const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (params) => {
       expect(params.ctx).not.toHaveProperty("SystemEventSessionKey");
-      expect(params.replyOptions).toMatchObject({ systemEventSessionKey: routeSessionKey });
+      expect(getReplySystemEventSessionKey({ ...params.replyOptions })).toBe(routeSessionKey);
       await params.dispatcherOptions.deliver({ text: "reply" }, { kind: "final" });
       return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
     }) as DispatchReplyWithBufferedBlockDispatcher;

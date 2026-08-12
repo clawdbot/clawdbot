@@ -41,6 +41,7 @@ import {
   type SourceReplyDeliveryRuntimeOptions,
 } from "./source-reply-delivery-runtime.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
+import { withReplySystemEventSessionKey } from "./system-event-session-key.js";
 import { resolveTypingMode } from "./typing-mode.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
@@ -3648,7 +3649,7 @@ describe("runPreparedReply media-only handling", () => {
 
     await runPrepared({
       ctx: createInboundBody("report queued reactions"),
-      opts: { systemEventSessionKey: "agent:main:slack:channel:c123" },
+      opts: withReplySystemEventSessionKey({}, "agent:main:slack:channel:c123"),
       provider: "",
       model: "",
       resolvedThinkLevel: "off",

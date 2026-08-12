@@ -49,6 +49,7 @@ import {
   resolveRoutedDeliveryThreadId,
 } from "./routed-delivery-thread.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
+import { getReplySystemEventSessionKey } from "./system-event-session-key.js";
 
 export async function prepareReplyRunAdmission(context: PreparedReplyRunContext) {
   const {
@@ -132,7 +133,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   const drainedSystemEventBlocks: string[] = [];
   const rebuildPromptBodies = async () => {
     if (!useFastReplyRuntime) {
-      const routeSystemEventSessionKey = normalizeOptionalString(opts?.systemEventSessionKey);
+      const routeSystemEventSessionKey = normalizeOptionalString(
+        getReplySystemEventSessionKey(opts),
+      );
       const systemEventSessionKeys =
         routeSystemEventSessionKey && routeSystemEventSessionKey !== sessionKey
           ? [routeSystemEventSessionKey, sessionKey]

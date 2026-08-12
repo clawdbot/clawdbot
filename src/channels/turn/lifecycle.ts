@@ -4,6 +4,7 @@ import { suppressPendingFinalDelivery } from "../../auto-reply/reply/dispatch-fr
 import type { DispatchFromConfigResult } from "../../auto-reply/reply/dispatch-from-config.types.js";
 import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import { runWithSessionInitConflictRetry } from "../../auto-reply/reply/session-init-conflict-retry.js";
+import { withReplySystemEventSessionKey } from "../../auto-reply/reply/system-event-session-key.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   deriveInboundMessageHookContext,
@@ -115,14 +116,15 @@ function resolveAssembledReplyPipeline(
     params.turnAdoptionLifecycle ?? params.replyOptions?.turnAdoptionLifecycle;
   const systemEventSessionKey =
     params.routeSessionKey !== params.ctxPayload.SessionKey ? params.routeSessionKey : undefined;
-  const replyOptions =
-    turnAdoptionLifecycle || systemEventSessionKey
-      ? {
-          ...params.replyOptions,
-          ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
-          ...(systemEventSessionKey ? { systemEventSessionKey } : {}),
-        }
-      : params.replyOptions;
+  const baseReplyOptions = turnAdoptionLifecycle
+    ? {
+        ...params.replyOptions,
+        turnAdoptionLifecycle,
+      }
+    : params.replyOptions;
+  const replyOptions = systemEventSessionKey
+    ? withReplySystemEventSessionKey(baseReplyOptions ?? {}, systemEventSessionKey)
+    : baseReplyOptions;
   if (!params.replyPipeline) {
     return {
       dispatcherOptions: params.dispatcherOptions,
