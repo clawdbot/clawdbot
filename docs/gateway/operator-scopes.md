@@ -168,10 +168,11 @@ can approve, reject, rotate, revoke, or remove only its own device entry.
 
 ## Node pairing approvals
 
-Legacy `node.pair.*` methods use a separate Gateway-owned node pairing store.
-WS nodes use device pairing (`role: node`) instead, but the same approval
-vocabulary applies. See [Gateway pairing](/gateway/pairing) for how the two
-stores relate.
+Node pairing has two layers, both persisted on the canonical paired-device
+record: device pairing (`role: node`) gates the `connect` handshake, while
+`node.pair.*` capability approval controls which declared commands a connected
+node may expose. See [Gateway pairing](/gateway/pairing) for how the two layers
+relate.
 
 `node.pair.approve` derives extra required scopes from the pending request's
 command list:
