@@ -1123,16 +1123,34 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           if (plugin?.gateway?.stopAccount) {
             try {
               const account = plugin.config.resolveAccount(cfg, id);
-              await plugin.gateway.stopAccount({
-                cfg,
-                accountId: id,
-                account,
-                runtime,
-                abortSignal: abort?.signal ?? new AbortController().signal,
-                log,
-                getStatus: () => getRuntime(channelId, id),
-                setStatus: (next) => setRuntime(channelId, id, next),
-              });
+              // A plugin stopAccount that never settles must not wedge every
+              // stop-driven flow (health monitor sweeps, thaw recovery, reload).
+              // Bound it like the task teardown below; the timed-out path flows
+              // into the existing recoveryStopTimedOut two-call restart contract.
+              const stopAccountAttempt = plugin.gateway
+                .stopAccount({
+                  cfg,
+                  accountId: id,
+                  account,
+                  runtime,
+                  abortSignal: abort?.signal ?? new AbortController().signal,
+                  log,
+                  getStatus: () => getRuntime(channelId, id),
+                  setStatus: (next) => setRuntime(channelId, id, next),
+                })
+                .catch((error: unknown) => {
+                  outcome = { status: "rejected", error };
+                  log.warn?.(`[${id}] stopAccount failed: ${formatErrorMessage(error)}`);
+                });
+              const stopAccountSettled = await waitForChannelStopGracefully(
+                stopAccountAttempt,
+                CHANNEL_STOP_ABORT_TIMEOUT_MS,
+              );
+              if (!stopAccountSettled) {
+                log.warn?.(
+                  `[${id}] stopAccount exceeded ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms; continuing stop`,
+                );
+              }
             } catch (error) {
               outcome = { status: "rejected", error };
               log.warn?.(`[${id}] stopAccount failed: ${formatErrorMessage(error)}`);

@@ -930,6 +930,31 @@ describe("server-channels auto restart", () => {
     expect(account?.restartPending).toBe(false);
   });
 
+  it("bounds a hung stopAccount so a host-thaw restart still completes", async () => {
+    const stopAccount = vi.fn(async () => {
+      // A pathological plugin stop that never settles must not wedge recovery.
+      await new Promise<void>(() => {});
+    });
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount, stopAccount }));
+    const manager = createManager();
+    await manager.startChannels();
+    await vi.waitFor(() => expect(startAccount).toHaveBeenCalledTimes(1));
+
+    const restartTask = manager.restartRunningChannels();
+    await vi.advanceTimersByTimeAsync(11_000);
+    await restartTask;
+
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(stopAccount).toHaveBeenCalledTimes(1);
+    expect(startAccount.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(account?.running).toBe(true);
+  });
+
   it("does not auto-restart a channel task exit marked as terminal disconnect", async () => {
     const lifecycleAtHandoff: Array<ChannelAccountSnapshot["lifecycle"]> = [];
     const startAccount = vi.fn(
