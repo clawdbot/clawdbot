@@ -10,14 +10,14 @@ export type RfbProbeResult =
   | { kind: "unreachable" }
   | { kind: "timeout" };
 
-export type ParsedRfbVersion = {
+type ParsedRfbVersion = {
   kind: "rfb";
   minor: number;
   reply: Buffer;
 };
 
 /** Parses the fixed-width RFB ProtocolVersion banner without socket state. */
-export function parseRfbVersionBanner(
+function parseRfbVersionBanner(
   buffer: Buffer,
 ): ParsedRfbVersion | { kind: "not-rfb"; banner: string } {
   const banner = buffer.subarray(0, RFB_BANNER_BYTES).toString("ascii");
@@ -36,12 +36,12 @@ export function parseRfbVersionBanner(
   };
 }
 
-export type ParsedRfbSecurity =
+type ParsedRfbSecurity =
   | { kind: "complete"; securityTypes: number[]; bytesConsumed: number }
   | { kind: "incomplete"; requiredBytes: number };
 
 /** Parses the post-version RFB security offer from a standalone buffer. */
-export function parseRfbSecurityTypes(buffer: Buffer, protocolMinor: number): ParsedRfbSecurity {
+function parseRfbSecurityTypes(buffer: Buffer, protocolMinor: number): ParsedRfbSecurity {
   if (protocolMinor < RFB_37_MINOR) {
     if (buffer.length < 4) {
       return { kind: "incomplete", requiredBytes: 4 };
