@@ -408,8 +408,8 @@ export async function materializeSubagentAttachments(params: {
   mountPathHint?: string;
   /** Required when a lower-trust sandbox can concurrently mutate this workspace. */
   sandboxFsBridge?: SandboxFsBridge;
-  /** Bridge-resolved container path for the target workspace. */
-  sandboxWorkspaceDir?: string;
+  /** Bridge-resolved container path for the attachment receipt parent. */
+  sandboxAttachmentsRootDir?: string;
   /** Strictly persists the cleanup owner before the first receipt mutation. */
   claimCleanupOwner: (claim: SubagentAttachmentCleanupClaim) => void;
 }): Promise<MaterializeSubagentAttachmentsResult | null> {
@@ -434,14 +434,14 @@ export async function materializeSubagentAttachments(params: {
   try {
     let workspaceRoot: Awaited<ReturnType<typeof root>> | undefined;
     if (params.sandboxFsBridge) {
-      if (!params.sandboxWorkspaceDir) {
-        throw new Error("sandbox attachment staging requires a resolved workspace path");
+      if (!params.sandboxAttachmentsRootDir) {
+        throw new Error("sandbox attachment staging requires a resolved attachment root");
       }
       // The requester can replace every host pathname below this workspace.
       // Derive registry metadata lexically and let the confined bridge perform
       // the first mutation, including creation of a missing workspace.
       workspaceRootDir = path.resolve(childWorkspaceDir);
-      sandboxDir = path.posix.join(params.sandboxWorkspaceDir, relDir);
+      sandboxDir = path.posix.join(params.sandboxAttachmentsRootDir, attachmentId);
     } else {
       try {
         // An existing configured workspace may itself be a symlink. Let fs-safe pin

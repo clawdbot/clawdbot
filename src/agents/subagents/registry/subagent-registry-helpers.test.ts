@@ -285,12 +285,16 @@ describe("safeRemoveAttachmentsDir", () => {
       backendId: "ssh",
       runtimeId: "runtime-main",
       configLabel: "worker@example.test",
+      workspaceMutationVisibility: "runtime-local" as const,
     };
     const resolveSandbox = vi.fn(
       async () =>
         ({
           ...sandboxIdentity,
-          backend: { configLabel: sandboxIdentity.configLabel },
+          backend: {
+            configLabel: sandboxIdentity.configLabel,
+            capabilities: { workspaceMutationVisibility: "runtime-local" },
+          },
           fsBridge: { remove },
         }) as never,
     );
@@ -328,6 +332,123 @@ describe("safeRemoveAttachmentsDir", () => {
     }
   });
 
+  it("revalidates a shared-host attachment mapping before cleanup", async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachments-shared-"));
+    const attachmentsDir = path.join(rootDir, ".openclaw", "attachments", ATTACHMENT_ID);
+    const sandboxDir = `/workspace/.openclaw/attachments/${ATTACHMENT_ID}`;
+    await fs.mkdir(attachmentsDir, { recursive: true });
+    const remove = vi.fn(async () => {
+      await fs.rm(attachmentsDir, { recursive: true, force: true });
+    });
+    const fsBridge = {
+      resolvePath: vi.fn(() => ({
+        hostPath: attachmentsDir,
+        relativePath: `.openclaw/attachments/${ATTACHMENT_ID}`,
+        containerPath: sandboxDir,
+      })),
+      remove,
+    };
+    const createIngress = vi.fn();
+    try {
+      await expect(
+        safeRemoveAttachmentsDir(
+          createRunEntry({
+            attachmentsDir,
+            attachmentsRootDir: rootDir,
+            attachmentsSandboxSessionKey: "agent:main:main",
+            attachmentsSandboxAgentId: "main",
+            attachmentsSandboxWorkspaceDir: rootDir,
+            attachmentsSandboxIdentity: {
+              backendId: "docker",
+              runtimeId: "sandbox-main",
+              configLabel: "openclaw-sandbox:latest",
+              workspaceMutationVisibility: "shared-host",
+            },
+            attachmentsSandboxDir: sandboxDir,
+          }),
+          {
+            config: {},
+            resolveSandbox: vi.fn(
+              async () =>
+                ({
+                  backendId: "docker",
+                  runtimeId: "sandbox-main",
+                  backend: {
+                    configLabel: "openclaw-sandbox:latest",
+                    capabilities: { workspaceMutationVisibility: "shared-host" },
+                  },
+                  fsBridge,
+                }) as never,
+            ),
+            createIngress,
+          },
+        ),
+      ).resolves.toBe(true);
+      expect(createIngress).not.toHaveBeenCalled();
+      expect(remove).toHaveBeenCalledWith({
+        filePath: sandboxDir,
+        recursive: true,
+        force: true,
+      });
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("retains shared-host cleanup ownership after a mount remap", async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachments-remap-"));
+    const attachmentsDir = path.join(rootDir, ".openclaw", "attachments", ATTACHMENT_ID);
+    const sandboxDir = `/workspace/.openclaw/attachments/${ATTACHMENT_ID}`;
+    await fs.mkdir(attachmentsDir, { recursive: true });
+    const remove = vi.fn();
+    try {
+      await expect(
+        safeRemoveAttachmentsDir(
+          createRunEntry({
+            attachmentsDir,
+            attachmentsRootDir: rootDir,
+            attachmentsSandboxSessionKey: "agent:main:main",
+            attachmentsSandboxAgentId: "main",
+            attachmentsSandboxWorkspaceDir: rootDir,
+            attachmentsSandboxIdentity: {
+              backendId: "docker",
+              runtimeId: "sandbox-main",
+              configLabel: "openclaw-sandbox:latest",
+              workspaceMutationVisibility: "shared-host",
+            },
+            attachmentsSandboxDir: sandboxDir,
+          }),
+          {
+            config: {},
+            resolveSandbox: vi.fn(
+              async () =>
+                ({
+                  backendId: "docker",
+                  runtimeId: "sandbox-main",
+                  backend: {
+                    configLabel: "openclaw-sandbox:latest",
+                    capabilities: { workspaceMutationVisibility: "shared-host" },
+                  },
+                  fsBridge: {
+                    resolvePath: () => ({
+                      hostPath: path.join(rootDir, "remapped", ATTACHMENT_ID),
+                      relativePath: "",
+                      containerPath: sandboxDir,
+                    }),
+                    remove,
+                  },
+                }) as never,
+            ),
+          },
+        ),
+      ).resolves.toBe(false);
+      expect(remove).not.toHaveBeenCalled();
+      await expect(fs.access(attachmentsDir)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("retains cleanup ownership when the sandbox runtime identity changed", async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachments-runtime-"));
     const attachmentsDir = path.join(rootDir, ".openclaw", "attachments", ATTACHMENT_ID);
@@ -346,6 +467,7 @@ describe("safeRemoveAttachmentsDir", () => {
               backendId: "ssh",
               runtimeId: "runtime-main",
               configLabel: "old-target@example.test",
+              workspaceMutationVisibility: "runtime-local",
             },
             attachmentsSandboxDir: `/workspace/.openclaw/attachments/${ATTACHMENT_ID}`,
           }),
@@ -356,7 +478,10 @@ describe("safeRemoveAttachmentsDir", () => {
                 ({
                   backendId: "ssh",
                   runtimeId: "runtime-main",
-                  backend: { configLabel: "new-target@example.test" },
+                  backend: {
+                    configLabel: "new-target@example.test",
+                    capabilities: { workspaceMutationVisibility: "runtime-local" },
+                  },
                   fsBridge: { remove },
                 }) as never,
             ),

@@ -148,6 +148,7 @@ export async function spawnSubagentDirect(
       requesterOrigin,
       incognito,
       childSessionKey,
+      requesterRuntimeSandboxed,
       childRuntimeSandboxed,
       targetAgentDir,
       modelPlan: plan,
@@ -288,6 +289,10 @@ export async function spawnSubagentDirect(
           targetAgentId,
           childSessionKey,
           workspaceDir: attachmentBoundary.workspaceDir,
+          requesterSandboxed: requesterRuntimeSandboxed,
+          requesterAgentId,
+          requesterSessionKey: requesterInternalKey,
+          requesterWorkspaceDir: toolSpawnMetadata.workspaceDir,
         });
       } catch (error) {
         await cleanupCreatedSession(threadBindingReady);
@@ -298,10 +303,6 @@ export async function spawnSubagentDirect(
         };
       }
     }
-
-    const attachmentSandboxTargetDir = attachmentBoundary.sandboxFsBridge?.resolvePath({
-      filePath: attachmentBoundary.workspaceDir ?? attachmentBoundary.sandboxWorkspaceDir ?? "",
-    }).containerPath;
 
     const deliverInitialChildRunDirectly =
       requestThreadBinding && spawnMode === "session" && hasBoundThreadDeliveryOrigin;
@@ -410,17 +411,11 @@ export async function spawnSubagentDirect(
             : undefined,
         attachmentsDir: attachmentAbsDir,
         attachmentsRootDir: attachmentRootDir,
-        attachmentsSandboxSessionKey: attachmentBoundary.sandboxFsBridge
-          ? childSessionKey
-          : undefined,
-        attachmentsSandboxAgentId: attachmentBoundary.sandboxFsBridge ? targetAgentId : undefined,
-        attachmentsSandboxWorkspaceDir: attachmentBoundary.sandboxFsBridge
-          ? attachmentBoundary.sandboxWorkspaceDir
-          : undefined,
-        attachmentsSandboxIdentity: attachmentBoundary.sandboxIdentity,
-        attachmentsSandboxDir: attachmentBoundary.sandboxFsBridge
-          ? attachmentSandboxDir
-          : undefined,
+        attachmentsSandboxSessionKey: attachmentBoundary.sandboxOwner?.sessionKey,
+        attachmentsSandboxAgentId: attachmentBoundary.sandboxOwner?.agentId,
+        attachmentsSandboxWorkspaceDir: attachmentBoundary.sandboxOwner?.workspaceDir,
+        attachmentsSandboxIdentity: attachmentBoundary.sandboxOwner?.identity,
+        attachmentsSandboxDir: attachmentBoundary.sandboxOwner ? attachmentSandboxDir : undefined,
         retainAttachmentsOnKeep: retainOnSessionKeep,
       };
     }
@@ -448,7 +443,7 @@ export async function spawnSubagentDirect(
       attachments: params.attachments,
       mountPathHint,
       sandboxFsBridge: attachmentBoundary.sandboxFsBridge,
-      sandboxWorkspaceDir: attachmentSandboxTargetDir,
+      sandboxAttachmentsRootDir: attachmentBoundary.sandboxAttachmentsRootDir,
       claimCleanupOwner: applyAttachmentClaim,
     });
     if (materializedAttachments && materializedAttachments.status !== "ok") {

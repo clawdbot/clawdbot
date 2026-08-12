@@ -19,6 +19,7 @@ import {
   createSandboxWorkspaceIngressFsBridge,
   resolveSandboxContext,
 } from "../../sandbox/context.js";
+import { resolveSandboxHostPathViaExistingAncestor } from "../../sandbox/host-paths.js";
 import { removeSubagentAttachmentsDir } from "../spawn/subagent-attachments.js";
 import { getDeliveryAttemptCount, getDeliveryLastError } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
@@ -220,13 +221,28 @@ export async function safeRemoveAttachmentsDir(
         !sandbox ||
         sandbox.backendId !== identity.backendId ||
         sandbox.runtimeId !== identity.runtimeId ||
-        sandbox.backend?.configLabel?.trim() !== identity.configLabel
+        sandbox.backend?.configLabel?.trim() !== identity.configLabel ||
+        sandbox.backend?.capabilities?.workspaceMutationVisibility !==
+          identity.workspaceMutationVisibility
       ) {
         return false;
       }
-      sandboxFsBridge = sandbox
-        ? (options?.createIngress ?? createSandboxWorkspaceIngressFsBridge)(sandbox)
-        : undefined;
+      if (identity.workspaceMutationVisibility === "shared-host") {
+        if (sandbox.backend?.createFsBridge || !sandbox.fsBridge || !entry.attachmentsSandboxDir) {
+          return false;
+        }
+        const resolved = sandbox.fsBridge.resolvePath({ filePath: entry.attachmentsSandboxDir });
+        if (
+          !resolved.hostPath ||
+          resolveSandboxHostPathViaExistingAncestor(resolved.hostPath) !==
+            resolveSandboxHostPathViaExistingAncestor(entry.attachmentsDir)
+        ) {
+          return false;
+        }
+        sandboxFsBridge = sandbox.fsBridge;
+      } else {
+        sandboxFsBridge = (options?.createIngress ?? createSandboxWorkspaceIngressFsBridge)(sandbox);
+      }
     } catch {
       return false;
     }

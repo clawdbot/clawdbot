@@ -289,6 +289,7 @@ describe("spawnSubagentDirect filename validation", () => {
           backendId: "ssh",
           runtimeId: "runtime-main",
           configLabel: "worker@example.test",
+          workspaceMutationVisibility: "runtime-local",
         },
         attachmentsSandboxDir: expect.stringContaining("/.openclaw/attachments/"),
         launchCleanupPending: true,
@@ -382,7 +383,7 @@ describe("spawnSubagentDirect filename validation", () => {
     );
   });
 
-  it("uses the requester bridge for a writable bind with a read-only shadow", async () => {
+  it("uses the requester pinned bridge for a writable cross-agent bind", async () => {
     const bindRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), `openclaw-subagent-bind-attachments-${process.pid}-${Date.now()}-`),
     );
@@ -393,12 +394,7 @@ describe("spawnSubagentDirect filename validation", () => {
           sandbox: {
             mode: "all",
             workspaceAccess: "rw",
-            docker: {
-              binds: [
-                `${bindRoot}:/mnt/shared:rw`,
-                `${path.join(bindRoot, "readonly")}:/mnt/shared/readonly:ro`,
-              ],
-            },
+            docker: { binds: [`${bindRoot}:/mnt/shared:rw`] },
           },
         },
         list: [
@@ -412,14 +408,19 @@ describe("spawnSubagentDirect filename validation", () => {
       },
     });
     const bridgeCalls: string[] = [];
+    const toHostPath = (filePath: string) =>
+      filePath.startsWith("/mnt/shared")
+        ? path.join(bindRoot, path.relative("/mnt/shared", filePath))
+        : filePath;
     const bridge = {
-      resolvePath: ({ filePath }: { filePath: string }) => {
-        bridgeCalls.push(`resolve:${filePath}`);
-        return { hostPath: filePath, relativePath: "", containerPath: filePath };
-      },
+      resolvePath: ({ filePath }: { filePath: string }) => ({
+        hostPath: toHostPath(filePath),
+        relativePath: "",
+        containerPath: filePath,
+      }),
       mkdirp: async ({ filePath }: { filePath: string }) => {
         bridgeCalls.push(`mkdir:${filePath}`);
-        await fs.promises.mkdir(filePath, { recursive: true, mode: 0o700 });
+        await fs.promises.mkdir(toHostPath(filePath), { recursive: true, mode: 0o700 });
       },
       createFileExclusive: async ({
         filePath,
@@ -429,14 +430,45 @@ describe("spawnSubagentDirect filename validation", () => {
         data: Buffer | string;
       }) => {
         bridgeCalls.push(`create:${filePath}`);
-        await fs.promises.writeFile(filePath, data, { flag: "wx", mode: 0o600 });
+        await fs.promises.writeFile(toHostPath(filePath), data, { flag: "wx", mode: 0o600 });
         return "created" as const;
       },
       remove: async ({ filePath }: { filePath: string }) => {
-        await fs.promises.rm(filePath, { recursive: true, force: true });
+        await fs.promises.rm(toHostPath(filePath), { recursive: true, force: true });
       },
     };
-    const resolveSandboxContext = vi.fn(async () => runtimeLocalSandbox(bridge));
+    const resolveSandboxContext = vi.fn(async ({ agentId }: { agentId?: string }) => {
+      if (agentId === "worker") {
+        return {
+          backendId: "docker",
+          runtimeId: "worker-ro",
+          backend: {
+            configLabel: "openclaw-sandbox:latest",
+            capabilities: { workspaceMutationVisibility: "shared-host" },
+          },
+          workspaceDir: workerWorkspaceDir,
+          agentWorkspaceDir: workerWorkspaceDir,
+          workspaceAccess: "ro",
+          containerWorkdir: "/workspace",
+          docker: { binds: [] },
+        };
+      }
+      return {
+        backendId: "docker",
+        runtimeId: "requester-rw",
+        backend: {
+          configLabel: "openclaw-sandbox:latest",
+          capabilities: { workspaceMutationVisibility: "shared-host" },
+        },
+        workspaceDir: workspaceDirOverride,
+        agentWorkspaceDir: workspaceDirOverride,
+        workspaceAccess: "rw",
+        containerWorkdir: "/workspace",
+        docker: { binds: [`${bindRoot}:/mnt/shared:rw`] },
+        fsBridge: bridge,
+      };
+    });
+    const registerSubagentRunMock = vi.fn();
     const sandboxedSpawnModule = await loadSubagentSpawnModuleForTest({
       callGatewayMock,
       getRuntimeConfig: () => configOverride,
@@ -444,6 +476,7 @@ describe("spawnSubagentDirect filename validation", () => {
       workspaceDir: workspaceDirOverride,
       resolveSandboxRuntimeStatus: () => ({ sandboxed: true, agentId: "main" }) as never,
       resolveSandboxContext,
+      registerSubagentRunMock,
     });
 
     try {
@@ -457,9 +490,21 @@ describe("spawnSubagentDirect filename validation", () => {
       );
 
       expect(result.status).toBe("accepted");
-      expect(resolveSandboxContext).toHaveBeenCalled();
-      expect(bridgeCalls.some((call) => call === `resolve:${workerWorkspaceDir}`)).toBe(true);
-      expect(bridgeCalls.some((call) => call.startsWith(`mkdir:${workerWorkspaceDir}`))).toBe(true);
+      expect(
+        bridgeCalls.some((call) =>
+          call.startsWith("mkdir:/mnt/shared/worker/.openclaw/attachments/"),
+        ),
+      ).toBe(true);
+      expect(registerSubagentRunMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attachmentsSandboxSessionKey: "agent:main:main",
+          attachmentsSandboxAgentId: "main",
+          attachmentsSandboxWorkspaceDir: workspaceDirOverride,
+          attachmentsSandboxIdentity: expect.objectContaining({
+            workspaceMutationVisibility: "shared-host",
+          }),
+        }),
+      );
     } finally {
       fs.rmSync(bindRoot, { recursive: true, force: true });
     }
@@ -734,9 +779,17 @@ describe("spawnSubagentDirect filename validation", () => {
       workspaceDir: workspaceDirOverride,
       resolveSandboxRuntimeStatus: () => ({ sandboxed: true, agentId: "main" }) as never,
       resolveSandboxContext: async () => ({
-        backend: { capabilities: { workspaceMutationVisibility: "shared-host" } },
+        backendId: "docker",
+        runtimeId: "sandbox-readonly",
+        backend: {
+          configLabel: "openclaw-sandbox:latest",
+          capabilities: { workspaceMutationVisibility: "shared-host" },
+        },
         workspaceDir: sandboxWorkspaceDir,
         agentWorkspaceDir: workspaceDirOverride,
+        workspaceAccess: "ro",
+        containerWorkdir: sandboxWorkspaceDir,
+        docker: { binds: [] },
       }),
       createSandboxWorkspaceIngressFsBridge: createIngress,
     });
@@ -753,6 +806,143 @@ describe("spawnSubagentDirect filename validation", () => {
     expect(createIngress).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(sandboxWorkspaceDir, ".openclaw", "attachments"))).toBe(true);
     expect(fs.existsSync(path.join(workspaceDirOverride, ".openclaw", "attachments"))).toBe(false);
+  });
+
+  it("stages a writable shared workspace through the pinned sandbox bridge", async () => {
+    configOverride = createSubagentSpawnTestConfig(workspaceDirOverride, {
+      agents: {
+        defaults: {
+          workspace: workspaceDirOverride,
+          sandbox: { mode: "all", workspaceAccess: "rw" },
+        },
+      },
+    });
+    const bridgeCalls: string[] = [];
+    const bridge = {
+      resolvePath: ({ filePath }: { filePath: string }) => ({
+        hostPath: filePath,
+        relativePath: path.relative(workspaceDirOverride, filePath),
+        containerPath: filePath,
+      }),
+      mkdirp: async ({ filePath }: { filePath: string }) => {
+        bridgeCalls.push("mkdir");
+        await fs.promises.mkdir(filePath, { recursive: true, mode: 0o700 });
+      },
+      createFileExclusive: async ({
+        filePath,
+        data,
+      }: {
+        filePath: string;
+        data: Buffer | string;
+      }) => {
+        bridgeCalls.push(`create:${path.basename(filePath)}`);
+        await fs.promises.writeFile(filePath, data, { flag: "wx", mode: 0o600 });
+        return "created" as const;
+      },
+      remove: async ({ filePath }: { filePath: string }) => {
+        await fs.promises.rm(filePath, { recursive: true, force: true });
+      },
+    };
+    const registerSubagentRunMock = vi.fn();
+    const sandboxedSpawnModule = await loadSubagentSpawnModuleForTest({
+      callGatewayMock,
+      getRuntimeConfig: () => configOverride,
+      updateSessionStoreMock,
+      workspaceDir: workspaceDirOverride,
+      resolveSandboxRuntimeStatus: () => ({ sandboxed: true, agentId: "main" }) as never,
+      resolveSandboxContext: async () => ({
+        backendId: "docker",
+        runtimeId: "sandbox-rw",
+        backend: {
+          configLabel: "openclaw-sandbox:latest",
+          capabilities: { workspaceMutationVisibility: "shared-host" },
+        },
+        workspaceDir: workspaceDirOverride,
+        agentWorkspaceDir: workspaceDirOverride,
+        workspaceAccess: "rw",
+        containerWorkdir: workspaceDirOverride,
+        docker: { binds: [] },
+        fsBridge: bridge,
+      }),
+      createSandboxWorkspaceIngressFsBridge: () => {
+        throw new Error("shared-host staging must use the effective pinned bridge");
+      },
+      registerSubagentRunMock,
+    });
+
+    const result = await sandboxedSpawnModule.spawnSubagentDirect(
+      {
+        task: "test",
+        attachments: [{ name: "SKILL.md", content: validContent, encoding: "base64" }],
+      },
+      ctx,
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(bridgeCalls).toContain("mkdir");
+    expect(bridgeCalls).toContain("create:SKILL.md");
+    expect(registerSubagentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachmentsSandboxIdentity: {
+          backendId: "docker",
+          runtimeId: "sandbox-rw",
+          configLabel: "openclaw-sandbox:latest",
+          workspaceMutationVisibility: "shared-host",
+        },
+        attachmentsSandboxDir: expect.stringContaining("/.openclaw/attachments/"),
+      }),
+    );
+  });
+
+  it("rejects writable shared staging when the backend bridge is not pinned", async () => {
+    configOverride = createSubagentSpawnTestConfig(workspaceDirOverride, {
+      agents: {
+        defaults: {
+          workspace: workspaceDirOverride,
+          sandbox: { mode: "all", workspaceAccess: "rw" },
+        },
+      },
+    });
+    const registerSubagentRunMock = vi.fn();
+    const mutate = vi.fn();
+    const sandboxedSpawnModule = await loadSubagentSpawnModuleForTest({
+      callGatewayMock,
+      getRuntimeConfig: () => configOverride,
+      updateSessionStoreMock,
+      workspaceDir: workspaceDirOverride,
+      resolveSandboxRuntimeStatus: () => ({ sandboxed: true, agentId: "main" }) as never,
+      resolveSandboxContext: async () => ({
+        backendId: "mxc",
+        runtimeId: "sandbox-rw",
+        backend: {
+          configLabel: "mxc-process",
+          capabilities: { workspaceMutationVisibility: "shared-host" },
+          createFsBridge: vi.fn(),
+        },
+        workspaceDir: workspaceDirOverride,
+        agentWorkspaceDir: workspaceDirOverride,
+        workspaceAccess: "rw",
+        containerWorkdir: workspaceDirOverride,
+        docker: { binds: [] },
+        fsBridge: { resolvePath: vi.fn(), mkdirp: mutate, createFileExclusive: mutate },
+      }),
+      registerSubagentRunMock,
+    });
+
+    const result = await sandboxedSpawnModule.spawnSubagentDirect(
+      {
+        task: "test",
+        attachments: [{ name: "SKILL.md", content: validContent, encoding: "base64" }],
+      },
+      ctx,
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("descriptor-relative ingress bridge"),
+    });
+    expect(registerSubagentRunMock).not.toHaveBeenCalled();
+    expect(mutate).not.toHaveBeenCalled();
   });
 
   it("does not mutate the receipt path when the durable cleanup claim fails", async () => {

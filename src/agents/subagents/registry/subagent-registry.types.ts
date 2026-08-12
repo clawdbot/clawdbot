@@ -286,6 +286,7 @@ export type SubagentRunRecord = {
     backendId: string;
     runtimeId: string;
     configLabel: string;
+    workspaceMutationVisibility: "shared-host" | "runtime-local";
   };
   /** Exact container path used for bridge-owned attachment cleanup. */
   attachmentsSandboxDir?: string;
