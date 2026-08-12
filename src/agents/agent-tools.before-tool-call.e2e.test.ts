@@ -49,7 +49,8 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
-import { createWriteTool } from "./sessions/index.js";
+import { createReadTool, createWriteTool } from "./sessions/index.js";
+import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -536,6 +537,75 @@ describe("before_tool_call loop detection behavior", () => {
         toolName: "exec",
       });
     });
+  });
+
+  it("warns on same-target changed-write churn while preserving execution and read escape", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-same-target-churn-"));
+    const sessionId = "same-target-write-churn-session";
+    const runId = "same-target-write-churn-run";
+    const loopDetectionContext = {
+      ...enabledLoopDetectionContext,
+      cwd: tmpDir,
+      sessionId,
+      runId,
+    };
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey: "main", runId });
+    const writeTool = wrapToolWithBeforeToolCallHook(
+      createWriteTool(tmpDir) as unknown as AnyAgentTool,
+      loopDetectionContext,
+    );
+    const readTool = wrapToolWithBeforeToolCallHook(
+      createReadTool(tmpDir) as unknown as AnyAgentTool,
+      loopDetectionContext,
+    );
+
+    try {
+      for (let index = 0; index < TOOL_LOOP_WARNING_THRESHOLD; index += 1) {
+        await expectUnblockedToolExecution(writeTool, `same-target-write-${index}`, {
+          path: "draft.md",
+          content: `synthetic revision ${index}`,
+        });
+      }
+
+      await withToolLoopEvents(async (emitted) => {
+        await expectUnblockedToolExecution(writeTool, "same-target-write-warning", {
+          path: "notes/../draft.md",
+          content: "synthetic next revision",
+        });
+        expect(emitted.at(-1)).toMatchObject({
+          type: "tool.loop",
+          level: "warning",
+          action: "warn",
+          detector: "argument_churn",
+          toolName: "write",
+          count: TOOL_LOOP_WARNING_THRESHOLD,
+        });
+      });
+      expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey: "main" })).toMatchObject(
+        {
+          lastProgressReason: "tool_loop:argument_churn",
+        },
+      );
+      await expect(fs.readFile(path.join(tmpDir, "draft.md"), "utf8")).resolves.toBe(
+        "synthetic next revision",
+      );
+
+      await expectUnblockedToolExecution(readTool, "same-target-write-readback", {
+        path: "draft.md",
+      });
+      await withToolLoopEvents(async (emitted) => {
+        await expectUnblockedToolExecution(writeTool, "same-target-write-after-read", {
+          path: "draft.md",
+          content: "verified revision",
+        });
+        expect(emitted).toHaveLength(0);
+      });
+      await expect(fs.readFile(path.join(tmpDir, "draft.md"), "utf8")).resolves.toBe(
+        "verified revision",
+      );
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("warns on non-strict same-tool argument churn while preserving tool execution", async () => {

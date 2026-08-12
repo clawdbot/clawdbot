@@ -603,6 +603,7 @@ export async function reconcileLoopCallExecutionParams(args: {
       toolParams: args.toolParams,
       toolCallId: args.toolCallId,
       runId: args.ctx.runId,
+      cwd: args.ctx.cwd ?? args.ctx.workspaceDir,
       warningThreshold: resolveToolLoopWarningThreshold(),
     });
     markDiagnosticArgumentChurnObservation({
@@ -635,7 +636,7 @@ export async function recordLoopOutcome(args: {
   let recordedOutcome: ToolOutcomeObservation | undefined;
   try {
     const {
-      getArgumentChurnNoProgressStreak,
+      getToolArgumentChurnStreak,
       getDiagnosticSessionState,
       markDiagnosticArgumentChurnObservation,
       recordToolCallOutcome,
@@ -652,13 +653,15 @@ export async function recordLoopOutcome(args: {
       error: args.error,
       config: args.ctx.loopDetection,
       ...(args.ctx.runId && { runId: args.ctx.runId }),
+      cwd: args.ctx.cwd ?? args.ctx.workspaceDir,
     });
     const churnContinues =
       record !== undefined &&
-      getArgumentChurnNoProgressStreak(
-        (sessionState.toolCallHistory ?? []).filter((call) => call.runId === record.runId),
-        record.toolName,
-        record.argsHash,
+      getToolArgumentChurnStreak(
+        (sessionState.toolCallHistory ?? []).filter(
+          (call) => call.runId === record.runId && call !== record,
+        ),
+        record,
       ).count > 0;
     markDiagnosticArgumentChurnObservation({
       sessionKey: args.ctx.sessionKey,

@@ -28,6 +28,11 @@ type ToolLoopBatchAdmission = InternalBeforeToolBatchResult & {
   releaseSkippedCalls?: (toolCallIds: readonly string[]) => void;
 };
 
+function toolLoopScope(ctx: HookContext) {
+  const cwd = ctx.cwd ?? ctx.workspaceDir;
+  return ctx.runId || cwd ? { runId: ctx.runId, cwd } : undefined;
+}
+
 async function evaluateToolLoopCall(
   call: ToolLoopCall,
   ctx: HookContext,
@@ -50,7 +55,7 @@ async function evaluateToolLoopCall(
     toolName,
     call.params,
     ctx.loopDetection,
-    ctx.runId ? { runId: ctx.runId } : undefined,
+    toolLoopScope(ctx),
   );
   if (!result.stuck) {
     return undefined;
@@ -108,7 +113,7 @@ async function recordToolLoopCall(call: ToolLoopCall, ctx: HookContext): Promise
     call.params,
     call.toolCallId,
     ctx.loopDetection,
-    ctx.runId ? { runId: ctx.runId } : undefined,
+    toolLoopScope(ctx),
   );
 }
 
@@ -159,7 +164,7 @@ export async function admitToolCallBatch(
       call.args,
       call.toolCall.id,
       ctx.loopDetection,
-      ctx.runId ? { runId: ctx.runId } : undefined,
+      toolLoopScope(ctx),
     );
     const projectedCall = state.toolCallHistory?.at(-1);
     if (projectedCall) {
@@ -231,13 +236,14 @@ export async function admitToolCallBatch(
       readyCall.args,
       readyCall.toolCallId,
       ctx.loopDetection,
-      ctx.runId ? { runId: ctx.runId } : undefined,
+      toolLoopScope(ctx),
     );
     const churn = reconcileToolCallExecutionParams(sessionState, {
       toolName: admitted.toolName,
       toolParams: readyCall.args,
       toolCallId: readyCall.toolCallId,
       runId: ctx.runId,
+      cwd: ctx.cwd ?? ctx.workspaceDir,
       warningThreshold,
     });
     markDiagnosticArgumentChurnObservation({

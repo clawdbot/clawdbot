@@ -16,12 +16,12 @@ import { isPlainObject } from "../utils.js";
 import { isMessagingToolSendAction } from "./embedded-agent-messaging.js";
 import {
   buildArgumentChurnWarning,
-  getArgumentChurnNoProgressStreak,
+  getToolArgumentChurnStreak,
 } from "./tool-loop-argument-churn.js";
 import { isKnownPollToolCall } from "./tool-loop-call-kind.js";
 import { getNoProgressStreak } from "./tool-loop-no-progress.js";
 import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
-import { isWriteNoProgressOutcome } from "./tool-loop-write-outcome.js";
+import { hashWriteMutationTarget, isWriteNoProgressOutcome } from "./tool-loop-write-outcome.js";
 
 const log = createSubsystemLogger("agents/loop-detection");
 
@@ -78,9 +78,7 @@ type ResolvedLoopDetectionConfig = {
   };
 };
 
-type ToolLoopDetectionScope = {
-  runId?: string;
-};
+type ToolLoopDetectionScope = { runId?: string; cwd?: string };
 
 function selectHistoryForScope(
   history: readonly ToolCallRecord[],
@@ -329,6 +327,12 @@ function hashToolOutcome(
   if (toolName === "write" && isWriteNoProgressOutcome(details)) {
     return { resultHash: digestStable({ status: "unchanged" }), noProgress: true };
   }
+  if (toolName === "write" && details.changed === true) {
+    return {
+      resultHash: digestStable({ details, text }),
+      outcomeKind: "write-mutation",
+    };
+  }
   if (isKnownPollToolCall(toolName, params) && toolName === "process" && isPlainObject(params)) {
     const action = params.action;
     if (action === "poll") {
@@ -523,7 +527,12 @@ export function detectToolCallLoop(
   const unknownToolStreak = getUnknownToolRepeatStreak(history, toolName);
   const noProgress = getNoProgressStreak(history, toolName, currentHash);
   const noProgressStreak = noProgress.count;
-  const argumentChurn = getArgumentChurnNoProgressStreak(history, toolName, currentHash);
+  const argumentChurn = getToolArgumentChurnStreak(history, {
+    toolName,
+    argsHash: currentHash,
+    mutationTargetHash: hashWriteMutationTarget(toolName, params, scope?.cwd),
+    timestamp: Date.now(),
+  });
   const knownPollTool = isKnownPollToolCall(toolName, params);
   const pingPong = getPingPongStreak(history, currentHash);
   const argumentChurnLivenessSignal =
@@ -694,6 +703,7 @@ export function recordToolCall(
   state.toolCallHistory.push({
     toolName,
     argsHash: hashToolCall(toolName, params),
+    mutationTargetHash: hashWriteMutationTarget(toolName, params, scope?.cwd),
     toolCallId,
     ...(runId && { runId }),
     timestamp: Date.now(),
@@ -717,6 +727,7 @@ export function recordToolCallOutcome(
     error?: unknown;
     config?: ToolLoopDetectionConfig;
     runId?: string;
+    cwd?: string;
   },
 ): ToolCallRecord | undefined {
   const resolvedConfig = resolveLoopDetectionConfig(params.config);
@@ -767,6 +778,7 @@ export function recordToolCallOutcome(
     const record: ToolCallRecord = {
       toolName: params.toolName,
       argsHash,
+      mutationTargetHash: hashWriteMutationTarget(params.toolName, params.toolParams, params.cwd),
       toolCallId: params.toolCallId,
       ...(runId && { runId }),
       outcomeKind: outcome.outcomeKind,
