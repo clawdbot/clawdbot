@@ -2,6 +2,7 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { decodeResumeHandoff } from "../../../../src/shared/resume-handoff.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
@@ -27,6 +28,105 @@ function desktopHello(methods: string[], scopes: string[]): GatewayHelloOk {
 }
 
 describe("chat pane terminal action", () => {
+  it.each(["session", "owner", "target", "client", "reconnect"] as const)(
+    "closes terminal continuation after a %s ownership change",
+    async (change) => {
+      const client = { gatewayUrl: "wss://gateway.example/control" } as GatewayBrowserClient;
+      const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+      const row = {
+        key: "bare-session",
+        agentId: "row-agent",
+        kind: "direct",
+        updatedAt: 0,
+      } satisfies GatewaySessionRow;
+      const replacementRow = { ...row, key: "other-session" };
+      const container = document.createElement("div");
+      const paint = (selected: GatewaySessionRow) =>
+        render(
+          pane.renderPaneHeader(
+            createSessionWorkspaceProps(state),
+            createBackgroundTasksProps(state),
+            selected,
+            false,
+            undefined,
+            false,
+          ),
+          container,
+        );
+
+      await pane.handleHeaderSessionAction({ kind: "continue-in-terminal" }, row);
+      paint(row);
+      const command =
+        container.querySelector(".continue-in-terminal-dialog .login-gate__command code")
+          ?.textContent ?? "";
+      expect(command).toMatch(/^openclaw resume --handoff [A-Za-z0-9_-]+$/u);
+      expect(decodeResumeHandoff(command.slice("openclaw resume --handoff ".length))).toEqual({
+        version: 1,
+        sessionKey: "agent:row-agent:bare-session",
+        gatewayUrl: "wss://gateway.example/control",
+      });
+
+      if (change === "owner") {
+        paint({ ...row, agentId: "other-agent" });
+      } else if (change === "target") {
+        pane.context.gateway.connection.gatewayUrl = "wss://other.example/control";
+        paint(row);
+        pane.context.gateway.connection.gatewayUrl = "ws://example.test";
+      } else if (change === "client") {
+        pane.context.gateway.snapshot.client = {
+          gatewayUrl: "wss://replacement.example/control",
+        } as GatewayBrowserClient;
+        paint(row);
+        pane.context.gateway.snapshot.client = client;
+      } else if (change === "reconnect") {
+        pane.connectionGeneration += 1;
+        paint(row);
+        pane.connectionGeneration -= 1;
+      } else {
+        paint(replacementRow);
+      }
+
+      expect(container.querySelector("openclaw-modal-dialog")).toBeNull();
+      paint(row);
+      expect(container.querySelector("openclaw-modal-dialog")).toBeNull();
+    },
+  );
+
+  it("disables terminal continuation with query-specific guidance", () => {
+    const client = {
+      gatewayUrl: "wss://gateway.example/control?route=alpha",
+    } as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const row = {
+      key: "main",
+      agentId: "alpha",
+      kind: "direct",
+      updatedAt: 0,
+    } satisfies GatewaySessionRow;
+    const container = document.createElement("div");
+
+    render(
+      pane.renderPaneHeader(
+        createSessionWorkspaceProps(state),
+        createBackgroundTasksProps(state),
+        row,
+        false,
+        undefined,
+        false,
+      ),
+      container,
+    );
+
+    const menu = container.querySelector<
+      HTMLElement & {
+        actionDisabledReasons: Record<string, string>;
+      }
+    >("openclaw-chat-header-session-menu");
+    expect(menu?.actionDisabledReasons["continue-in-terminal"]).toBe(
+      "Query-routed Gateway URLs cannot create credential-free continuation commands because authentication and stored device scope are not query-aware. Use a manually authenticated CLI target or a queryless configured Gateway URL.",
+    );
+  });
+
   it("renders only when available and opens the terminal dock", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });

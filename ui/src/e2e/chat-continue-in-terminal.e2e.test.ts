@@ -64,9 +64,10 @@ suite.define(() => {
           origin: pageUrl.origin,
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        await page.getByText("Ready for terminal continuation.").waitFor({ timeout: 10_000 });
+        const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+        await activePane.getByText("Ready for terminal continuation.").waitFor({ timeout: 10_000 });
 
-        const menuTrigger = page.getByRole("button", {
+        const menuTrigger = activePane.getByRole("button", {
           name: "Actions for Terminal continuation",
         });
         await menuTrigger.click();
