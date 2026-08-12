@@ -65,6 +65,9 @@ export type TraceNormalizer = (event: TraceEvent) => TraceEvent;
  */
 export type DeliveryTraceInStep =
   | { kind: "reply-start" }
+  | { kind: "assistant-start" }
+  | { kind: "reasoning"; text: string }
+  | { kind: "reasoning-end" }
   | { kind: "partial"; text: string }
   | { kind: "block-final"; text: string }
   | { kind: "tool-progress"; name: string; phase: "start" | "result" }
