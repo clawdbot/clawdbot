@@ -578,7 +578,10 @@ function renderClawHubDetailDialog(props: SkillsProps) {
                         }
                       }}
                     >
-                      ${activeClawHubMutation(props, props.clawhubDetailSlug ?? "")
+                      ${activeClawHubMutation(
+                        props,
+                        props.clawhubDetailInstallRef ?? props.clawhubDetailSlug ?? "",
+                      )
                         ? t("skillsPage.installing")
                         : t("skillsPage.installNamed", { name: detail.skill.displayName })}
                     </button>
