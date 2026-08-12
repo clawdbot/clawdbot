@@ -461,6 +461,42 @@ function inspectExecutionIdentityStorage(gateway: Awaited<ReturnType<typeof star
   }
 }
 
+function inspectPersistedSessionCreator(
+  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
+  sessionKey: string,
+) {
+  const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
+  const agentId = sessionKey.split(":")[1];
+  if (!stateDir || !agentId) {
+    throw new Error("QA Gateway did not expose the session creator database owner");
+  }
+  const database = new DatabaseSync(
+    path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite"),
+    { readOnly: true },
+  );
+  try {
+    const row = database
+      .prepare(
+        "SELECT created_actor_type, created_actor_id, entry_json FROM session_nodes WHERE session_key = ?",
+      )
+      .get(sessionKey) as
+      | { created_actor_id: string | null; created_actor_type: string | null; entry_json: string }
+      | undefined;
+    if (!row) {
+      throw new Error(`persisted session creator row is missing: ${sessionKey}`);
+    }
+    const entry = parseJson(row.entry_json, `persisted session ${sessionKey}`);
+    const actor = isRecord(entry) && isRecord(entry.createdActor) ? entry.createdActor : undefined;
+    return {
+      id: row.created_actor_id,
+      labelPersisted: actor ? Object.hasOwn(actor, "label") : false,
+      type: row.created_actor_type,
+    };
+  } finally {
+    database.close();
+  }
+}
+
 async function runLocalTurn(
   gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
   message: string,
@@ -714,14 +750,28 @@ async function runProof(options: ProducerOptions): Promise<string> {
     if (profilelessSession?.createdActor !== undefined) {
       throw new Error("profileless Gateway session fabricated a human creator");
     }
+    const profilelessCreator = inspectPersistedSessionCreator(gateway, profilelessSessionKey);
+    if (
+      profilelessCreator.type !== null ||
+      profilelessCreator.id !== null ||
+      profilelessCreator.labelPersisted
+    ) {
+      throw new Error("profileless Gateway session persisted a fabricated creator");
+    }
     if (
       profiledSession?.createdActor?.type !== "human" ||
       !profiledSession.createdActor.id ||
-      profiledSession.createdActor.label !== undefined
+      profiledSession.createdActor.label !== "Operator"
     ) {
-      throw new Error(
-        "profiled Gateway session did not retain only its authenticated human creator id",
-      );
+      throw new Error("profiled Gateway session lost its current profile display projection");
+    }
+    const profiledCreator = inspectPersistedSessionCreator(gateway, profiledSessionKey);
+    if (
+      profiledCreator.type !== "human" ||
+      profiledCreator.id !== profiledSession.createdActor.id ||
+      profiledCreator.labelPersisted
+    ) {
+      throw new Error("profiled Gateway session did not persist only its authenticated profile id");
     }
 
     const repeatedRunId = `identity-repeated-${randomUUID()}`;
