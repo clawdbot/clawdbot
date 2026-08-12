@@ -1,3 +1,4 @@
+import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   CodexAppServerApprovalPolicySource,
   CodexAppServerCommandSource,
@@ -53,7 +54,6 @@ import {
   normalizeCodexServiceTier,
   normalizeHeaders,
   normalizePositiveNumber,
-  normalizeStringList,
   readBooleanEnv,
   readNonEmptyString,
   readNumberEnv,
@@ -120,7 +120,7 @@ export function resolveCodexAppServerRuntimeOptions(
   }
   const args = resolveArgs(config.args, env.OPENCLAW_CODEX_APP_SERVER_ARGS);
   const headers = normalizeHeaders(config.headers);
-  const clearEnv = normalizeStringList(config.clearEnv);
+  const clearEnv = normalizeTrimmedStringList(config.clearEnv);
   const authToken = normalizeCodexAppServerSecretInput({
     value: config.authToken,
     path: "plugins.entries.codex.config.appServer.authToken",

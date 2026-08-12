@@ -1,16 +1,11 @@
 import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  listAgentIds,
-  listAgentEntries,
-  resolveAgentConfig,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { listAgentIds, listAgentEntries, resolveAgentConfig } from "../agents/agent-scope.js";
 import { resolveModelRefFromString, type ModelRef } from "../agents/model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-  resolveHeartbeatPrompt as resolveHeartbeatPromptText,
+  resolveHeartbeatPromptCore as resolveHeartbeatPromptText,
   resolveHeartbeatPromptForResponseTool,
 } from "../auto-reply/heartbeat.js";
 import { resolveDefaultModel } from "../auto-reply/reply/directive-handling.defaults.js";
@@ -26,6 +21,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { readStoredDeviceIdentityReadOnly } from "./device-identity-store.js";
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
 import { resolveActiveHoursTimezone } from "./heartbeat-active-hours.js";
+import { resolveAmbientHeartbeatAgentId } from "./heartbeat-agent-resolution.js";
 import { resolveHeartbeatIntervalMs } from "./heartbeat-summary.js";
 import type { HeartbeatWakeSource } from "./heartbeat-wake.js";
 
@@ -52,7 +48,10 @@ export function resolveHeartbeatTimeoutOverrideSeconds(
     typeof agentDefaultTimeoutSeconds === "number" &&
     Number.isFinite(agentDefaultTimeoutSeconds)
   ) {
-    return Math.max(1, Math.floor(agentDefaultTimeoutSeconds));
+    // Preserve the unlimited sentinel consumed by resolveAgentTimeoutMs.
+    return agentDefaultTimeoutSeconds === 0
+      ? 0
+      : Math.max(1, Math.floor(agentDefaultTimeoutSeconds));
   }
   // The wake dispatcher awaits heartbeat turns serially. Keep unset heartbeat
   // timeouts tied to the cadence instead of the 48h built-in agent default.
@@ -68,10 +67,6 @@ type HeartbeatAgent = {
   agentId: string;
   heartbeat?: HeartbeatConfig;
 };
-
-export function canHeartbeatDeliverCommitments(heartbeat?: HeartbeatConfig): boolean {
-  return (normalizeOptionalString(heartbeat?.target) ?? "none") !== "none";
-}
 
 type ActiveHoursSchedule = {
   start?: string;
@@ -151,11 +146,6 @@ function resolveHeartbeatConfig(
   return { ...defaults, ...overrides };
 }
 
-export function resolveAmbientHeartbeatAgentId(cfg: OpenClawConfig): string {
-  const configured = normalizeOptionalString(cfg.agents?.defaults?.heartbeat?.agentId);
-  return normalizeAgentId(configured ?? resolveDefaultAgentId(cfg));
-}
-
 function omitExplicitHeartbeatDestination(heartbeat: HeartbeatConfig | undefined) {
   if (!heartbeat) {
     return undefined;
@@ -214,7 +204,7 @@ function resolveHeartbeatPromptRaw(cfg: OpenClawConfig, heartbeat?: HeartbeatCon
   return heartbeat?.prompt ?? cfg.agents?.defaults?.heartbeat?.prompt;
 }
 
-export function resolveHeartbeatPrompt(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
+export function resolveConfiguredHeartbeatPrompt(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
   return resolveHeartbeatPromptText(resolveHeartbeatPromptRaw(cfg, heartbeat));
 }
 
@@ -325,3 +315,4 @@ export function resolveHeartbeatTypingIntervalSeconds(cfg: OpenClawConfig) {
   const configured = cfg.agents?.defaults?.typingIntervalSeconds;
   return typeof configured === "number" && configured > 0 ? configured : undefined;
 }
+export { resolveAmbientHeartbeatAgentId } from "./heartbeat-agent-resolution.js";

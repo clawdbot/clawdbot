@@ -59,7 +59,7 @@ export type MonitorDiscordOpts = {
 
 const DEFAULT_DISCORD_MEDIA_MAX_MB = 100;
 
-type DiscordVoiceManager = import("../voice/manager.js").DiscordVoiceManager;
+type DiscordVoiceManager = import("../voice/voice-runtime.js").DiscordVoiceManager;
 
 function logDiscordStartupPhase(
   params: Omit<Parameters<typeof logDiscordStartupPhaseBase>[0], "isVerbose">,
@@ -249,9 +249,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     runtime,
     nativeEnabled,
     nativeSkillsEnabled,
+    voiceEnabled,
     listSkillCommandsForAgents: discordProviderRuntime.listSkillCommandsForAgents,
     listNativeCommandSpecsForConfig: discordProviderRuntime.listNativeCommandSpecsForConfig,
-    getPluginCommandSpecs: discordProviderRuntime.getPluginCommandSpecs,
   });
   const voiceManagerRef: { current: DiscordVoiceManager | null } = { current: null };
   const threadBindings = threadBindingsEnabled

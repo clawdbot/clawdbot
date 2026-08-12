@@ -1,12 +1,16 @@
 import "./prepared-model-runtime.test-harness.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
   activateStandalonePreparedModelRuntime,
+  getPreparedModelRuntimeSnapshot,
   markPreparedModelRuntimeSnapshotsStale,
   prepareModelRuntimeSnapshot,
   publishPreparedModelRuntimeSnapshot,
+  rejectPendingPreparedModelRuntimeReplacement,
+  registerPreparedModelRuntimePublicationListener,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 import {
@@ -33,9 +37,106 @@ describe("prepared model runtime snapshots", () => {
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
   });
 
+  it("publishes invalidation before the replacement generation", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const events: string[] = [];
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      events.push(event.phase);
+    });
+
+    await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
+    unregister();
+    await refreshPreparedModelRuntimeSnapshots({});
+
+    expect(events).toEqual(["invalidated", "published"]);
+  });
+
+  it("makes the replacement owner readable before announcing publication", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const initialConfig = {};
+    const replacementConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
+    await refreshPreparedModelRuntimeSnapshots(initialConfig, { gatewayLifecycle: true });
+    let publishedOwner: ReturnType<typeof getPreparedModelRuntimeSnapshot>;
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      if (event.phase === "published") {
+        publishedOwner = getPreparedModelRuntimeSnapshot({
+          agentId: "default",
+          agentDir: "/tmp/unused-agent",
+          inheritedAuthDir: "/tmp/unused-agent",
+          config: replacementConfig,
+        });
+      }
+    });
+
+    await refreshPreparedModelRuntimeSnapshots(replacementConfig);
+    unregister();
+
+    expect(publishedOwner).toMatchObject({ config: replacementConfig });
+  });
+
+  it("announces invalidation from the direct stale owner boundary", async () => {
+    mocks.configuredAgentIds = ["default"];
+    await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
+    const events: string[] = [];
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      events.push(event.phase);
+    });
+
+    markPreparedModelRuntimeSnapshotsStale("test direct reload stale edge", {
+      waitForReplacement: true,
+    });
+    unregister();
+
+    expect(events).toEqual(["invalidated"]);
+  });
+
+  it("terminates direct invalidation when no replacement owns it", async () => {
+    mocks.configuredAgentIds = ["default"];
+    await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
+    const events: Array<{ phase: string; error?: Error }> = [];
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      events.push(event);
+    });
+
+    markPreparedModelRuntimeSnapshotsStale("direct invalidation has no replacement");
+    unregister();
+
+    expect(events).toEqual([
+      { phase: "invalidated" },
+      {
+        phase: "failed",
+        error: expect.objectContaining({ message: "direct invalidation has no replacement" }),
+      },
+    ]);
+  });
+
+  it("announces a failed replacement so lifecycle readers do not wait indefinitely", async () => {
+    mocks.configuredAgentIds = ["default"];
+    await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
+    const events: Array<{ phase: string; error?: Error }> = [];
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      events.push(event);
+    });
+    const replacementError = new Error("replacement aborted");
+
+    const gateId = markPreparedModelRuntimeSnapshotsStale("test failed reload", {
+      waitForReplacement: true,
+    });
+    rejectPendingPreparedModelRuntimeReplacement(gateId, replacementError);
+    unregister();
+
+    expect(events).toEqual([
+      { phase: "invalidated" },
+      { phase: "failed", error: replacementError },
+    ]);
+  });
+
   it("does not let a read-only draft replace a configured gateway owner", async () => {
     mocks.configuredAgentIds = ["default"];
-    const configured = { agents: { defaults: { model: "openai/gpt-5.5" } } };
+    const configured = retainLegacyDefaultAgentId(
+      { agents: { defaults: { model: "openai/gpt-5.5" }, entries: { default: {} } } },
+      "default",
+    );
     await refreshPreparedModelRuntimeSnapshots(configured, {
       gatewayLifecycle: true,
       defaultWorkspaceDir: "/tmp/gateway-launch-workspace",
@@ -77,6 +178,22 @@ describe("prepared model runtime snapshots", () => {
     await expect(prepareModelRuntimeSnapshot(input)).rejects.toThrow(
       "prepared model runtime owner was not published",
     );
+  });
+
+  it("publishes a static turn generation without live catalog discovery", async () => {
+    const lease = await acquireAgentRunPreparedModelRuntime(
+      {
+        config: {},
+        agentId: "default",
+        agentDir: "/tmp/static-run-agent",
+        workspaceDir: "/tmp/static-run-workspace",
+      },
+      { catalogMode: "static" },
+    );
+
+    expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
+    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
+    lease.release();
   });
 
   it("retains only the latest idle direct-run owner", async () => {
@@ -437,7 +554,7 @@ describe("prepared model runtime snapshots", () => {
 
   it("reuses the configured owner at canonical gateway run admission", async () => {
     mocks.configuredAgentIds = ["default"];
-    const config = {};
+    const config = retainLegacyDefaultAgentId({ agents: { entries: { default: {} } } }, "default");
     await refreshPreparedModelRuntimeSnapshots(config, {
       gatewayLifecycle: true,
       defaultWorkspaceDir: "/tmp/gateway-launch-workspace",
@@ -448,7 +565,6 @@ describe("prepared model runtime snapshots", () => {
       config,
       agentDir: "/tmp/unused-agent",
       inheritedAuthDir: "/tmp/unused-agent",
-      workspaceDir: "/tmp/gateway-launch-workspace",
     });
 
     expect(lease.snapshot.workspaceDir).toBe("/tmp/gateway-launch-workspace");
@@ -459,7 +575,6 @@ describe("prepared model runtime snapshots", () => {
         config,
         agentDir: "/tmp/unused-agent",
         inheritedAuthDir: "/tmp/unused-agent",
-        workspaceDir: "/tmp/gateway-launch-workspace",
       }),
     ).resolves.toBe(lease.snapshot);
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
@@ -660,7 +775,7 @@ describe("prepared model runtime snapshots", () => {
       refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true, catalogMode: "static" }),
     ).resolves.toBeUndefined();
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledOnce();
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(2);
     expect(mocks.discoverAuthStorage).toHaveBeenCalledOnce();
     expect(mocks.discoverModels).toHaveBeenCalledOnce();
   });

@@ -9,7 +9,15 @@ vi.mock("./bundled-discovery-state.js", () => ({ readBundledDiscoveryMode }));
 
 describe("withBundledPluginEnablementCompat", () => {
   beforeEach(() => {
+    readBundledDiscoveryMode.mockClear();
     readBundledDiscoveryMode.mockReturnValue("allowlist");
+  });
+
+  it("returns unchanged config for an empty plugin list without reading upgrade state", () => {
+    const config = { plugins: { allow: ["openai"] } } satisfies OpenClawConfig;
+
+    expect(withBundledPluginEnablementCompat({ config, pluginIds: [] })).toBe(config);
+    expect(readBundledDiscoveryMode).not.toHaveBeenCalled();
   });
 
   it("honors bundledDiscovery compat before plugin allowlists", () => {

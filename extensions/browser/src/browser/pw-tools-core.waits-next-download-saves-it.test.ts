@@ -14,7 +14,9 @@ const tmpDirMocks = vi.hoisted(() => ({
   resolvePreferredOpenClawTmpDir: vi.fn(() => "/tmp/openclaw"),
 }));
 const chromeMocks = vi.hoisted(() => ({
-  getChromeWebSocketUrl: vi.fn(async () => "ws://127.0.0.1/devtools/browser/mock"),
+  getChromeWebSocketEndpoint: vi.fn(async () => ({
+    url: "ws://127.0.0.1/devtools/browser/mock",
+  })),
 }));
 const clientFetchMocks = vi.hoisted(() => ({
   resolveBrowserRateLimitMessage: vi.fn(() => undefined),

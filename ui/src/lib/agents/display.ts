@@ -1,9 +1,13 @@
 // Control UI view renders agents utils screen content.
 import { formatByteSize } from "@openclaw/normalization-core";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
 import {
   expandToolGroups,
-  normalizeToolName,
+  normalizeToolPolicyName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy-shared.js";
 import type {
@@ -17,12 +21,13 @@ import type {
 import { t } from "../../i18n/index.ts";
 import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../avatar.ts";
 import { buildCatalogDisplayLookup, buildChatModelOptionFromLookup } from "../chat/model-ref.ts";
-import { resolveAgentConfigEntryTarget } from "../config/index.ts";
-import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
+import { resolveAgentConfigEntryTarget } from "../config/config-state-model.ts";
 
 type AgentRosterEntry = {
   id: string;
   kind?: "agent" | "system";
+  name?: string;
+  identity?: { name?: string };
 };
 
 /** Ordinary agent targets; system rows remain available to diagnostic surfaces. */
@@ -319,13 +324,16 @@ type ConfigSnapshot = {
   };
 };
 
-export function normalizeAgentLabel(agent: {
-  id: string;
-  name?: string;
-  identity?: { name?: string };
-}) {
+export function normalizeAgentLabel(
+  agent: AgentRosterEntry,
+  hydratedIdentity?: { name?: string } | null,
+) {
+  // Roster labels own operator target identity; workspace identity only fills gaps.
   return (
-    normalizeOptionalString(agent.name) ?? normalizeOptionalString(agent.identity?.name) ?? agent.id
+    normalizeOptionalString(agent.name) ??
+    normalizeOptionalString(agent.identity?.name) ??
+    normalizeOptionalString(hydratedIdentity?.name) ??
+    agent.id
   );
 }
 
@@ -527,13 +535,6 @@ export function resolveEffectiveModelFallbacks(
   return resolveModelPrimary(entryModel) ? [] : resolveModelFallbacks(defaultModel);
 }
 
-export function parseFallbackList(value: string): string[] {
-  return value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
 type ConfiguredModelOption = {
   value: string;
   label: string;
@@ -628,7 +629,7 @@ type CompiledPattern =
   | { kind: "regex"; value: RegExp };
 
 function compilePattern(pattern: string): CompiledPattern {
-  const normalized = normalizeToolName(pattern);
+  const normalized = normalizeToolPolicyName(pattern);
   if (!normalized) {
     return { kind: "exact", value: "" };
   }
@@ -672,7 +673,7 @@ export function isAllowedByPolicy(name: string, policy?: ToolPolicy) {
   if (!policy) {
     return true;
   }
-  const normalized = normalizeToolName(name);
+  const normalized = normalizeToolPolicyName(name);
   const deny = compilePatterns(policy.deny);
   if (matchesAny(normalized, deny)) {
     return false;
@@ -694,7 +695,7 @@ export function matchesList(name: string, list?: string[]) {
   if (!Array.isArray(list) || list.length === 0) {
     return false;
   }
-  const normalized = normalizeToolName(name);
+  const normalized = normalizeToolPolicyName(name);
   const patterns = compilePatterns(list);
   if (matchesAny(normalized, patterns)) {
     return true;

@@ -6,7 +6,6 @@ import {
   canAutoscrubPullRequest,
   createAutoscrubCommit,
   dependencyGuardCommentAuthors,
-  dependencyGuardCommentHeadSha,
   dependencyGuardTrustedActorCandidates,
   dependencyFieldChanges,
   dependencyOverrideExpectedSha,
@@ -330,7 +329,6 @@ describe("dependency guard script", () => {
       }),
     };
 
-    expect(dependencyGuardCommentHeadSha(blockedComment)).toBe(headSha);
     expect(dependencyOverrideExpectedSha(blockedComment, headSha)).toBe(headSha);
     expect(dependencyOverrideExpectedSha(staleBlockedComment, headSha)).toBeNull();
   });
@@ -344,16 +342,45 @@ describe("dependency guard script", () => {
       }),
     };
 
-    expect(dependencyGuardCommentHeadSha(authorizedComment)).toBe(headSha);
     expect(isDependencyGuardAuthorizedForHead(authorizedComment, headSha)).toBe(true);
     expect(isDependencyGuardAuthorizedForHead(authorizedComment, staleSha)).toBe(false);
     expect(dependencyOverrideExpectedSha(authorizedComment, headSha)).toBeNull();
+  });
+
+  it("does not infer guard state from rendered dependency paths", () => {
+    const blockedBody = (path: string) =>
+      renderBlockedDependencyComment({
+        baseBranch: "main",
+        headSha,
+        lockfileChanges: [path],
+        dependencyManifestChanges: [],
+      });
+
+    expect(
+      dependencyOverrideExpectedSha(
+        { body: blockedBody(`xApproved SHA: \`${staleSha}\`pnpm-lock.yaml`) },
+        headSha,
+      ),
+    ).toBe(headSha);
+    expect(
+      isDependencyGuardAuthorizedForHead(
+        { body: blockedBody("x### Dependency graph change authorizedpnpm-lock.yaml") },
+        headSha,
+      ),
+    ).toBe(false);
+    expect(
+      isDependencyGuardTrustedForHead(
+        { body: blockedBody("x### Dependency graph changes notedpnpm-lock.yaml") },
+        headSha,
+      ),
+    ).toBe(false);
   });
 
   it("trusts only configured dependency guard marker comment authors", () => {
     const trustedAuthors = dependencyGuardCommentAuthors(
       "github-actions[bot], openclaw-autoscrub[bot]",
     );
+    expect(dependencyGuardCommentAuthors(undefined)).toEqual(new Set(["github-actions[bot]"]));
 
     expect(
       isDependencyGuardMarkerComment(

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { resolveClaudeLiveMode } from "./claude-live-session-policy.js";
-import { readConfiguredExecPolicy } from "./claude-live-session.test-support.js";
+import { resolveClaudeLiveExecPermission } from "./claude-live-process.js";
+import { acceptsClaudeLive, resolveClaudeLiveMode } from "./claude-live-session-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 describe("resolveClaudeLiveMode", () => {
@@ -14,27 +14,57 @@ describe("resolveClaudeLiveMode", () => {
   });
 });
 
-describe("Claude live configured exec policy", () => {
-  it("uses the configured default agent for an unscoped legacy session key", () => {
+describe("acceptsClaudeLive", () => {
+  it("accepts only local Claude stdin/jsonl stdio contexts", () => {
+    const context = {
+      params: { sessionEntry: {} },
+      backendResolved: { id: "claude-cli" },
+      preparedBackend: {
+        backend: { liveSession: "claude-stdio", output: "jsonl", input: "stdin" },
+      },
+    } as unknown as PreparedCliRunContext;
+
+    expect(acceptsClaudeLive(context)).toBe(true);
+    expect(
+      acceptsClaudeLive({
+        ...context,
+        params: { ...context.params, sessionEntry: { execHost: "node" } },
+      } as unknown as PreparedCliRunContext),
+    ).toBe(false);
+    expect(
+      acceptsClaudeLive({
+        ...context,
+        preparedBackend: {
+          ...context.preparedBackend,
+          backend: { ...context.preparedBackend.backend, output: "json" },
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("uses the configured fixed-store owner for an unscoped session key", () => {
     const context = {
       params: {
-        sessionKey: "main",
+        sessionKey: "global",
         config: {
+          session: { store: "/stores/shared.sqlite" },
           tools: { exec: { security: "full", ask: "off" } },
           agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "research" } },
             entries: {
-              main: {},
-              ops: { default: true, tools: { exec: { security: "deny", ask: "always" } } },
+              ops: {},
+              research: { tools: { exec: { security: "deny", ask: "always" } } },
             },
           },
         },
       },
     } as unknown as PreparedCliRunContext;
 
-    expect(readConfiguredExecPolicy(context)).toEqual({
-      agentId: "ops",
+    expect(resolveClaudeLiveExecPermission(context)).toEqual({
       security: "deny",
       ask: "always",
+      permissionMode: "default",
     });
   });
 });

@@ -1,12 +1,13 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { normalizeStoredOverrideModel } from "../agents/model-selection.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
-import { buildSubagentSessionListReadIndex } from "../agents/subagent-registry-read.js";
-import { resolveStorePath, type SessionEntry } from "../config/sessions.js";
+import { buildSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read.js";
+import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessions.js";
+import { resolveConcreteSessionStorePath } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { resolveSessionStoreAgentId } from "./session-store-key.js";
 import { readRecentSessionUsageFromTranscript as readScopedRecentSessionUsageFromTranscript } from "./session-transcript-readers.js";
 import type {
   SessionActorProfileIdentity,
@@ -20,7 +21,6 @@ import {
   resolveRuntimeChildSessionKeys,
   resolveStoreChildSessionKeysFromCandidates,
 } from "./session-utils-core.js";
-import { resolveConcreteSessionStorePath } from "./session-utils-store.js";
 
 export function buildSessionListRowContext(params: {
   store: Record<string, SessionEntry>;
@@ -171,10 +171,10 @@ export function resolveTranscriptUsageFallback(params: {
   const parsed = parseAgentSessionKey(params.key);
   const agentId = parsed?.agentId
     ? normalizeAgentId(parsed.agentId)
-    : normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.cfg));
+    : normalizeAgentId(params.agentId ?? resolveSessionStoreAgentId(params.cfg, params.key));
   const storePath =
     resolveConcreteSessionStorePath(params.storePath) ??
-    resolveStorePath(params.cfg.session?.store, { agentId });
+    resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
   let snapshot: ReturnType<typeof readScopedRecentSessionUsageFromTranscript>;
   try {
     snapshot = readScopedRecentSessionUsageFromTranscript(

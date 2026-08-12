@@ -3,7 +3,7 @@
 // canonical key; `openclaw doctor --fix` repairs shipped `nativeBaseUrl` and
 // `/v1/inference` values here so no request-time compat remap is needed.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor";
+import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const PROVIDER_PATH = "models.providers.deepinfra";

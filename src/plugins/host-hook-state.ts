@@ -1,5 +1,6 @@
 // Tracks host hook state and scheduled turn identifiers.
 import { randomUUID } from "node:crypto";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions.js";
 import {
@@ -276,6 +277,7 @@ export function getPluginSessionExtensionStateSync(params: {
 export async function patchPluginSessionExtension(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  agentId?: string;
   pluginId: string;
   namespace: string;
   value?: PluginJsonValue;
@@ -317,7 +319,11 @@ export async function patchPluginSessionExtension(params: {
   }
   const slotKey = normalizedSlotKey?.ok === true ? normalizedSlotKey.key : undefined;
   const updated = await updateResolvedSessionEntry(
-    { cfg: params.cfg, sessionKey: params.sessionKey },
+    {
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+    },
     (entry, context) => {
       params.assertCurrent?.();
       const entryRecord = entry as unknown as Record<string, unknown>;
@@ -462,10 +468,6 @@ function collectPluginSessionExtensionProjections(params: {
     }
   }
   return projections;
-}
-
-function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  return Boolean(value && typeof (value as { then?: unknown }).then === "function");
 }
 
 function discardUnexpectedPromiseProjection(value: PromiseLike<unknown>): void {

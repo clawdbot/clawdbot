@@ -140,6 +140,7 @@ than Telegram-visible behavior`. Use this manifest shape and do not create
    pass `--link-preview false` to `start`. The runner injects that setting into
    the isolated SUT config before Gateway startup. Do not edit the generated
    config or restart the Gateway to apply it.
+   To prove fixed pacing between streamed blocks, pass `--human-delay-fixed-ms <milliseconds>` to `start`.
    When the proof must show an in-place streamed edit, also pass
    `--mock-response-chunk-delay-ms 1200` and use a mock response long enough
    for the first chunk to clear the preview debounce. Capture both the initial
@@ -156,7 +157,7 @@ than Telegram-visible behavior`. Use this manifest shape and do not create
    `--sut-lane`/`--sut-repo-root` during `start`.
 
    ```bash
-   node scripts/mantis/build-telegram-desktop-proof-evidence.mjs \
+   node --import tsx scripts/mantis/build-telegram-desktop-proof-evidence.mts \
      --output-dir "$MANTIS_OUTPUT_DIR" \
      --baseline-repo-root "$GITHUB_WORKSPACE" \
      --baseline-output-dir <baseline-session-output-dir> \

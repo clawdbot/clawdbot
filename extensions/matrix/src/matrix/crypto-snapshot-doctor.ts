@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
-import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor";
+import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
   MATRIX_IDB_SNAPSHOT_FILENAME,
   openMatrixIdbSnapshotStoreOptions,

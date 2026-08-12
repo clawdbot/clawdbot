@@ -176,6 +176,7 @@ function resolveSubmittedModelRef(params: {
 
 function buildDiscordModelPickerSelectionCommand(params: {
   modelRef: string;
+  runtime?: string;
 }): { command: ChatCommandDefinition; args: CommandArgs; prompt: string } | null {
   const commandDefinition =
     findCommandByNativeName("model", "discord") ??
@@ -187,7 +188,7 @@ function buildDiscordModelPickerSelectionCommand(params: {
     values: {
       model: params.modelRef,
     },
-    raw: params.modelRef,
+    raw: params.runtime ? `${params.modelRef} --runtime ${params.runtime}` : params.modelRef,
   };
   return {
     command: commandDefinition,
@@ -204,7 +205,8 @@ function listDiscordModelPickerProviderModels(
   if (!modelSet) {
     return [];
   }
-  return [...modelSet].toSorted();
+  // Legacy index callbacks depend on JavaScript's original UTF-16 code-unit ordering.
+  return [...modelSet].toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 }
 
 function resolveDiscordModelPickerModelRefByToken(
@@ -285,21 +287,13 @@ function resolveDiscordModelPickerSubmissionRuntime(params: {
   data: Awaited<ReturnType<typeof loadDiscordModelPickerData>>;
   provider: string;
   parsedRuntime?: string;
-  currentRuntime?: string;
 }): string | undefined {
-  return (
-    resolveDiscordModelPickerRuntimeForProvider({
-      data: params.data,
-      provider: params.provider,
-      runtime: params.parsedRuntime,
-      allowResetRuntime: true,
-    }) ??
-    resolveDiscordModelPickerRuntimeForProvider({
-      data: params.data,
-      provider: params.provider,
-      runtime: params.currentRuntime,
-    })
-  );
+  return resolveDiscordModelPickerRuntimeForProvider({
+    data: params.data,
+    provider: params.provider,
+    runtime: params.parsedRuntime,
+    allowResetRuntime: true,
+  });
 }
 
 async function handleDiscordModelPickerInteraction(params: {
@@ -602,10 +596,10 @@ async function handleDiscordModelPickerInteraction(params: {
         parsed,
         selectedProvider: parsedModelRef.provider,
       }),
-      currentRuntime,
     });
     const selectionCommand = buildDiscordModelPickerSelectionCommand({
       modelRef: resolvedModelRef,
+      runtime: selectedRuntime,
     });
     if (!selectionCommand) {
       await showNotice("Sorry, /model is unavailable right now.");
@@ -628,11 +622,7 @@ async function handleDiscordModelPickerInteraction(params: {
       threadBindings: ctx.threadBindings,
       route,
       resolvedModelRef,
-      selectedProvider: parsedModelRef.provider,
-      selectedModel: parsedModelRef.model,
       selectedRuntime,
-      defaultProvider: pickerData.resolvedDefault.provider,
-      defaultModel: pickerData.resolvedDefault.model,
       preferenceScope,
       settleMs: ctx.postApplySettleMs ?? 250,
       resolveCurrentModel: (currentRoute) =>
@@ -640,6 +630,11 @@ async function handleDiscordModelPickerInteraction(params: {
           cfg,
           route: currentRoute,
           data: pickerData,
+        }),
+      resolveCurrentRuntime: (currentRoute) =>
+        resolveDiscordModelPickerCurrentRuntime({
+          cfg,
+          route: currentRoute,
         }),
     });
 

@@ -228,8 +228,25 @@ export type ChannelOutboundAdapter = {
     payload: ReplyPayload;
     results: readonly OutboundDeliveryResult[];
   }) => Promise<void> | void;
+  /** Adopt a provider-created thread for later payloads in the same durable batch. */
+  adoptTargetFromDelivery?: (params: {
+    cfg: OpenClawConfig;
+    target: ChannelOutboundTargetRef;
+    result: OutboundDeliveryResult;
+  }) => { threadId: string | number } | null | undefined;
   /** Channel-advertised presentation features and limits used by core adaptation. */
   presentationCapabilities?: ChannelPresentationCapabilities;
+  /**
+   * Account- and formatting-aware capability resolution; takes precedence over
+   * the static declaration. Formatting is the delivery's outbound formatting
+   * options, so capabilities that only apply to one text funnel (for example
+   * rich tables on the markdown path) can turn off for HTML-mode sends.
+   */
+  resolvePresentationCapabilities?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    formatting?: OutboundDeliveryFormattingOptions;
+  }) => ChannelPresentationCapabilities;
   deliveryCapabilities?: ChannelDeliveryCapabilities;
   /** Render an adapted portable presentation into channel-native payload data. */
   renderPresentation?: (params: {

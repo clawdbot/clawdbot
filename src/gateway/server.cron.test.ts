@@ -11,6 +11,7 @@ import { resetConfigRuntimeState } from "../config/config.js";
 import { loadCronStore, saveCronStore } from "../cron/store.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import { peekSystemEvents } from "../infra/system-events.js";
+import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "../tasks/task-registry.store.sqlite.js";
 import { getGatewayProcessInstanceId } from "./process-instance.js";
 import type { GatewayCronState } from "./server-cron.js";
 import {
@@ -31,7 +32,11 @@ const fetchWithSsrFGuardMock = vi.hoisted(() =>
   })),
 );
 
-const sendFailureNotificationAnnounceMock = vi.hoisted(() => vi.fn(async () => undefined));
+const sendFailureNotificationAnnounceMock = vi.hoisted(() =>
+  vi.fn<typeof import("../cron/delivery.js").sendFailureNotificationAnnounce>(
+    async () => undefined,
+  ),
+);
 const closeTrackedBrowserTabsForSessionsMock = vi.hoisted(() => vi.fn(async () => 0));
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
@@ -49,10 +54,7 @@ vi.mock("../cron/delivery.js", async () => {
   const actual = await vi.importActual<typeof import("../cron/delivery.js")>("../cron/delivery.js");
   return {
     ...actual,
-    sendFailureNotificationAnnounce: (...args: unknown[]) =>
-      (
-        sendFailureNotificationAnnounceMock as unknown as (...innerArgs: unknown[]) => Promise<void>
-      )(...args),
+    sendFailureNotificationAnnounce: sendFailureNotificationAnnounceMock,
   };
 });
 
@@ -390,7 +392,7 @@ function expectFailureAnnounceCall(params: {
   if (!call) {
     throw new Error("expected failure announcement call");
   }
-  const args = call as unknown as [unknown, unknown, string, string, unknown, string];
+  const args = call;
   expect(typeof args[2]).toBe("string");
   expect(args[3]).toBe(params.jobId);
   expect(args[4]).toEqual({
@@ -400,14 +402,15 @@ function expectFailureAnnounceCall(params: {
     sessionKey: params.sessionKey,
     ...(params.inheritSessionThread === false ? { inheritSessionThread: false } : {}),
   });
+  const payload = expectDefined(args[5], "failure reply payload");
   if (params.includeRunStarted) {
-    const lines = args[5].split("\n");
+    const lines = expectDefined(payload.text, "failure reply text").split("\n");
     expect(lines).toEqual([
-      params.message,
+      ...params.message.split("\n"),
       expect.stringMatching(/^Run started: \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})? \S+$/),
     ]);
   } else {
-    expect(args[5]).toBe(params.message);
+    expect(payload).toEqual({ text: params.message });
   }
 }
 
@@ -1468,6 +1471,23 @@ describe("gateway server cron", () => {
         expect.objectContaining({ jobId: writerJobId }),
       );
 
+      const removeWriter = await directCronReq(cronState, "cron.remove", { id: writerJobId });
+      expect(removeWriter.ok).toBe(true);
+      expect(
+        listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
+          runtime: "cron",
+          sourceId: writerJobId,
+        }),
+      ).toEqual([expect.objectContaining({ agentId: "writer" })]);
+      const retainedWriterRuns = await directCronReq(cronState, "cron.runs", {
+        scope: "all",
+        agentId: "writer",
+      });
+      expect(retainedWriterRuns.payload).toMatchObject({
+        entries: [expect.objectContaining({ jobId: writerJobId })],
+        total: 1,
+      });
+
       const statusRes = await directCronReq(cronState, "cron.status", {});
       expect(statusRes.ok).toBe(true);
       const statusPayload = statusRes.payload as
@@ -2042,7 +2062,9 @@ describe("gateway server cron", () => {
         jobId,
         channel: "last",
         sessionKey: "agent:main:telegram:direct:123:thread:99",
-        message: '⚠️ Automation "primary delivery fallback" failed: unknown error',
+        message:
+          '⚠️ Automation "primary delivery fallback" failed\n' +
+          "Check automation history for details.",
         includeRunStarted: true,
       });
     } finally {
@@ -2101,7 +2123,7 @@ describe("gateway server cron", () => {
         to: "#alerts",
         sessionKey: undefined,
         inheritSessionThread: false,
-        message: '⚠️ Automation "channel fd no mode" failed: unknown error',
+        message: '⚠️ Automation "channel fd no mode" failed\nCheck automation history for details.',
         includeRunStarted: true,
       });
       expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
@@ -2154,7 +2176,9 @@ describe("gateway server cron", () => {
         jobId,
         channel: "last",
         sessionKey: "agent:avery:feishu:direct:ou_founder",
-        message: '⚠️ Automation "session target failure fallback" failed: unknown error',
+        message:
+          '⚠️ Automation "session target failure fallback" failed\n' +
+          "Check automation history for details.",
         includeRunStarted: true,
       });
     } finally {

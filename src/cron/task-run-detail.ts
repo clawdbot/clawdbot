@@ -1,11 +1,19 @@
 /** Read-side cron codec between task-ledger detail and the stable run-history wire shape.
  * Deliberately free of agent/runtime imports so history reads stay dependency-light;
  * the event->entry write codec lives in task-run-event-codec.ts. */
+import {
+  asSafeIntegerInRange,
+  MAX_DATE_TIMESTAMP_MS,
+} from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  FAILOVER_REASONS,
+  type FailoverReason,
+} from "../../packages/gateway-protocol/src/failover-reasons.js";
 import { isCronTimeoutErrorText } from "./execution-error-constants.js";
-import { normalizeCronRunDiagnostics } from "./run-diagnostics-normalize.js";
+import { normalizeCronRunDiagnosticsCore } from "./run-diagnostics-normalize.js";
 
-type FailoverReason = import("../agents/embedded-agent-helpers/types.js").FailoverReason;
 type JsonValue = import("../tasks/task-registry.types.js").JsonValue;
 type TaskRecord = import("../tasks/task-registry.types.js").TaskRecord;
 type TaskStatus = import("../tasks/task-registry.types.js").TaskStatus;
@@ -14,36 +22,43 @@ type CronDeliveryStatus = import("./types.js").CronDeliveryStatus;
 type CronRunStatus = import("./types.js").CronRunStatus;
 
 const CRON_TASK_DETAIL_KIND = "cron-run";
-const CRON_FAILOVER_REASONS = new Set<FailoverReason>([
-  "auth",
-  "auth_permanent",
-  "format",
-  "rate_limit",
-  "overloaded",
-  "billing",
-  "server_error",
-  "timeout",
-  "tls_certificate",
-  "model_not_found",
-  "session_expired",
-  "context_overflow",
-  "empty_response",
-  "no_error_details",
-  "unclassified",
-  "unknown",
-]);
+const CRON_FAILOVER_REASONS = new Set(FAILOVER_REASONS);
 
 function toJsonValue(value: unknown): JsonValue | undefined {
   const serialized = JSON.stringify(value);
   return serialized === undefined ? undefined : (JSON.parse(serialized) as JsonValue);
 }
 
-function isJsonObject(value: JsonValue | undefined): value is { [key: string]: JsonValue } {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
+function isJsonObject(value: unknown): value is { [key: string]: JsonValue } {
+  return isRecord(value);
 }
 
-function isCronRunStatus(value: unknown): value is CronRunStatus {
+function normalizeTimestamp(value: unknown): number | undefined {
+  return asSafeIntegerInRange(value, { min: 0, max: MAX_DATE_TIMESTAMP_MS });
+}
+
+export function isCronRunStatus(value: unknown): value is CronRunStatus {
   return value === "ok" || value === "error" || value === "skipped";
+}
+
+export function isCronDeliveryStatus(value: unknown): value is CronDeliveryStatus {
+  return ["delivered", "not-delivered", "unknown", "not-requested"].includes(
+    value as CronDeliveryStatus,
+  );
+}
+
+function normalizeUsage(value: unknown): CronRunLogEntry["usage"] {
+  if (!isJsonObject(value)) {
+    return undefined;
+  }
+  const usage = {
+    input_tokens: asSafeIntegerInRange(value.input_tokens, { min: 0 }),
+    output_tokens: asSafeIntegerInRange(value.output_tokens, { min: 0 }),
+    total_tokens: asSafeIntegerInRange(value.total_tokens, { min: 0 }),
+    cache_read_tokens: asSafeIntegerInRange(value.cache_read_tokens, { min: 0 }),
+    cache_write_tokens: asSafeIntegerInRange(value.cache_write_tokens, { min: 0 }),
+  };
+  return Object.values(usage).some((tokenCount) => tokenCount !== undefined) ? usage : undefined;
 }
 
 function normalizeCronRunLogErrorReason(value: unknown): FailoverReason | undefined {
@@ -68,17 +83,14 @@ export function parseCronRunLogEntryObject(
   if (typeof entryObj.jobId !== "string" || entryObj.jobId.trim().length === 0) {
     return null;
   }
-  if (typeof entryObj.ts !== "number" || !Number.isFinite(entryObj.ts)) {
+  const ts = normalizeTimestamp(entryObj.ts);
+  if (ts === undefined) {
     return null;
   }
   if (jobId && entryObj.jobId !== jobId) {
     return null;
   }
 
-  const usage =
-    entryObj.usage && typeof entryObj.usage === "object"
-      ? (entryObj.usage as Record<string, unknown>)
-      : undefined;
   const normalizedError = typeof entryObj.error === "string" ? entryObj.error : undefined;
   const normalizedProvider =
     typeof entryObj.provider === "string" && entryObj.provider.trim()
@@ -86,43 +98,28 @@ export function parseCronRunLogEntryObject(
       : undefined;
   // Diagnostics are redacted at authoring; this read/migration path only normalizes stored shape.
   const entry: CronRunLogEntry = {
-    ts: entryObj.ts,
+    ts,
     jobId: entryObj.jobId,
     action: "finished",
-    status: entryObj.status,
+    status: isCronRunStatus(entryObj.status) ? entryObj.status : undefined,
     error: normalizedError,
     errorReason: normalizeCronRunLogErrorReason(entryObj.errorReason) ?? undefined,
-    summary: entryObj.summary,
+    summary: typeof entryObj.summary === "string" ? entryObj.summary : undefined,
     runId: typeof entryObj.runId === "string" && entryObj.runId.trim() ? entryObj.runId : undefined,
-    diagnostics: normalizeCronRunDiagnostics(entryObj.diagnostics),
-    runAtMs: entryObj.runAtMs,
-    durationMs: entryObj.durationMs,
-    nextRunAtMs: entryObj.nextRunAtMs,
+    diagnostics: normalizeCronRunDiagnosticsCore(entryObj.diagnostics),
+    runAtMs: normalizeTimestamp(entryObj.runAtMs),
+    durationMs: asSafeIntegerInRange(entryObj.durationMs, { min: 0 }),
+    nextRunAtMs: normalizeTimestamp(entryObj.nextRunAtMs),
     triggerFired: entryObj.triggerFired === true ? true : undefined,
     model: typeof entryObj.model === "string" && entryObj.model.trim() ? entryObj.model : undefined,
     provider: normalizedProvider,
-    usage: usage
-      ? {
-          input_tokens: typeof usage.input_tokens === "number" ? usage.input_tokens : undefined,
-          output_tokens: typeof usage.output_tokens === "number" ? usage.output_tokens : undefined,
-          total_tokens: typeof usage.total_tokens === "number" ? usage.total_tokens : undefined,
-          cache_read_tokens:
-            typeof usage.cache_read_tokens === "number" ? usage.cache_read_tokens : undefined,
-          cache_write_tokens:
-            typeof usage.cache_write_tokens === "number" ? usage.cache_write_tokens : undefined,
-        }
-      : undefined,
+    usage: normalizeUsage(entryObj.usage),
   };
   if (typeof entryObj.delivered === "boolean") {
     entry.delivered = entryObj.delivered;
   }
-  if (
-    entryObj.deliveryStatus === "delivered" ||
-    entryObj.deliveryStatus === "not-delivered" ||
-    entryObj.deliveryStatus === "unknown" ||
-    entryObj.deliveryStatus === "not-requested"
-  ) {
-    entry.deliveryStatus = entryObj.deliveryStatus as CronDeliveryStatus;
+  if (isCronDeliveryStatus(entryObj.deliveryStatus)) {
+    entry.deliveryStatus = entryObj.deliveryStatus;
   }
   if (typeof entryObj.deliveryError === "string") {
     entry.deliveryError = entryObj.deliveryError;
@@ -136,12 +133,7 @@ export function parseCronRunLogEntryObject(
       status?: unknown;
       error?: unknown;
     };
-    if (
-      failureNotificationDelivery.status === "delivered" ||
-      failureNotificationDelivery.status === "not-delivered" ||
-      failureNotificationDelivery.status === "unknown" ||
-      failureNotificationDelivery.status === "not-requested"
-    ) {
+    if (isCronDeliveryStatus(failureNotificationDelivery.status)) {
       entry.failureNotificationDelivery = {
         status: failureNotificationDelivery.status,
         ...(typeof failureNotificationDelivery.delivered === "boolean"
@@ -153,7 +145,7 @@ export function parseCronRunLogEntryObject(
       };
     }
   }
-  if (entryObj.delivery && typeof entryObj.delivery === "object") {
+  if (isJsonObject(entryObj.delivery)) {
     entry.delivery = entryObj.delivery;
   }
   if (typeof entryObj.sessionId === "string" && entryObj.sessionId.trim()) {

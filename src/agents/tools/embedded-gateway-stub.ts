@@ -3,6 +3,7 @@
  *
  * Implements only the Gateway calls needed by session tools and rejects unsupported methods.
  */
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeFastMode, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionsListParams,
@@ -79,7 +80,7 @@ interface EmbeddedGatewayRuntime {
     store: unknown;
     opts: SessionsListParams;
   }) => Promise<SessionsListResult>;
-  loadCombinedSessionStoreForGateway: (
+  loadCombinedSessionStoreForGatewayCore: (
     cfg: OpenClawConfig,
     opts?: { agentId?: string; projection?: "full" | "list" },
   ) => {
@@ -88,6 +89,7 @@ interface EmbeddedGatewayRuntime {
   };
   resolveSessionKeyFromResolveParams: (opts: {
     cfg: OpenClawConfig;
+    client: null;
     p: SessionsResolveParams;
   }) => Promise<SessionsResolveResult>;
   loadSessionEntry: (
@@ -144,7 +146,7 @@ function readChatHistoryMessageSeq(message: unknown): number | undefined {
     return undefined;
   }
   const seq = (metadata as Record<string, unknown>).seq;
-  return typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0 ? seq : undefined;
+  return asPositiveSafeInteger(seq);
 }
 
 function resolveChatHistoryNextOffset(params: {
@@ -198,7 +200,7 @@ async function handleSessionsList(params: Record<string, unknown>) {
   const rt = await getRuntime();
   const cfg = rt.getRuntimeConfig();
   const opts = params as SessionsListParams;
-  const { storePath, store } = rt.loadCombinedSessionStoreForGateway(cfg, {
+  const { storePath, store } = rt.loadCombinedSessionStoreForGatewayCore(cfg, {
     agentId: opts.agentId,
     projection: "list",
   });
@@ -215,6 +217,7 @@ async function handleSessionsResolve(params: Record<string, unknown>) {
   const cfg = rt.getRuntimeConfig();
   const resolved = await rt.resolveSessionKeyFromResolveParams({
     cfg,
+    client: null,
     p: params as SessionsResolveParams,
   });
   if (!resolved.ok) {
@@ -223,7 +226,10 @@ async function handleSessionsResolve(params: Record<string, unknown>) {
   if ("missing" in resolved) {
     return { ok: false };
   }
-  return { ok: true, key: resolved.key };
+  if ("ambiguous" in resolved) {
+    return { ok: false, candidates: resolved.candidates };
+  }
+  return { ok: true, key: resolved.key, agentId: resolved.agentId };
 }
 
 async function handleSessionsSearch(params: Record<string, unknown>) {
@@ -258,9 +264,11 @@ async function handleSessionsSearch(params: Record<string, unknown>) {
   );
   const agentIds = new Set(
     sessionKeys?.map((sessionKey) =>
-      requestedAgentId && (sessionKey === "global" || sessionKey === "unknown")
-        ? requestedAgentId
-        : rt.resolveSessionAgentId({ sessionKey, config: cfg }),
+      rt.resolveSessionAgentId({
+        sessionKey,
+        config: cfg,
+        ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+      }),
     ),
   );
   if (

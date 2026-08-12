@@ -201,6 +201,13 @@ vi.mock("../agents/auth-profiles.js", () => ({
     seedTestAuthProfile(params);
     return { version: 1, profiles: readTestAuthProfileStore(params.agentDir).profiles };
   },
+  upsertAuthProfileWithLockOrThrow: async (params: {
+    profileId: string;
+    credential: StoredAuthProfile;
+    agentDir?: string;
+  }) => {
+    seedTestAuthProfile(params);
+  },
 }));
 
 function normalizeText(value: unknown): string {
@@ -538,7 +545,7 @@ async function createDefaultProviderPlugins(): Promise<ProviderPlugin[]> {
       envVar: "OPENCODE_API_KEY",
       promptMessage: "Enter OpenCode API key",
       profileIds: ["opencode:default", "opencode-go:default"],
-      defaultModel: "opencode/claude-opus-4-6",
+      defaultModel: "opencode/claude-opus-5",
       expectedProviders: ["opencode", "opencode-go"],
       noteMessage: "OpenCode uses one API key across the Zen and Go catalogs.",
       noteTitle: "OpenCode",
@@ -552,7 +559,7 @@ async function createDefaultProviderPlugins(): Promise<ProviderPlugin[]> {
       envVar: "OPENCODE_API_KEY",
       promptMessage: "Enter OpenCode API key",
       profileIds: ["opencode-go:default", "opencode:default"],
-      defaultModel: "opencode-go/kimi-k2.6",
+      defaultModel: "opencode-go/deepseek-v4-pro",
       expectedProviders: ["opencode", "opencode-go"],
       noteMessage: "OpenCode uses one API key across the Zen and Go catalogs.",
       noteTitle: "OpenCode",
@@ -1176,7 +1183,7 @@ describe("applyAuthChoice", () => {
         token: "sk-opencode-zen-test",
         promptMessage: "Enter OpenCode API key",
         existingPrimary: "anthropic/claude-opus-4-5",
-        expectedOverride: "opencode/claude-opus-4-6",
+        expectedOverride: "opencode/claude-opus-5",
         profileId: "opencode:default",
         profileProvider: "opencode",
         extraProfileId: "opencode-go:default",

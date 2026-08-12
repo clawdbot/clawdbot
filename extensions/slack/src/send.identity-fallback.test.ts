@@ -104,10 +104,6 @@ describe("sendMessageSlack customize-scope fallback", () => {
     { target: "channel:companychat", expected: "companychat" },
     { target: "#companychat", expected: "companychat" },
     { target: "#c08gqh53ejm", expected: "c08gqh53ejm" },
-    {
-      target: "team:T123:channel:C08GQH53EJM",
-      expected: "team:T123:channel:C08GQH53EJM",
-    },
   ])("resolves API target $target as $expected", async ({ target, expected }) => {
     const client = createSlackSendTestClient();
     vi.mocked(client.chat.postMessage).mockResolvedValueOnce({ ts: "171234.567" });

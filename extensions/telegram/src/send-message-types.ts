@@ -49,7 +49,19 @@ export type TelegramSendOpts = {
   forceDocument?: boolean;
   /** Persist each concrete platform send before any later chunk can fail. */
   onDeliveryResult?: (result: TelegramSendResult) => Promise<void> | void;
+  /** @internal Refresh durable custody immediately before Telegram Bot API I/O. */
+  onPlatformSendDispatch?: () => Promise<void>;
 };
+
+export type TelegramApiCallOpts = Pick<
+  TelegramSendOpts,
+  "cfg" | "token" | "accountId" | "verbose" | "api" | "retry" | "gatewayClientScopes"
+>;
+
+export type TelegramThreadedSendOpts = TelegramApiCallOpts &
+  Pick<TelegramSendOpts, "replyToMessageId" | "messageThreadId">;
+
+export type TelegramMessageActionOpts = TelegramApiCallOpts & { notify?: boolean };
 
 export type TelegramSendMessageParams = Parameters<TelegramApi["sendMessage"]>[2];
 
@@ -63,20 +75,13 @@ export type TelegramSendResult = {
   };
 };
 
-export type TelegramLocationSendOpts = Pick<
-  TelegramSendOpts,
-  | "cfg"
-  | "token"
-  | "accountId"
-  | "verbose"
-  | "api"
-  | "retry"
-  | "gatewayClientScopes"
-  | "replyToMessageId"
-  | "messageThreadId"
-  | "buttons"
-  | "quoteText"
-  | "promptContextProjectionPlan"
-  | "silent"
-  | "onDeliveryResult"
->;
+export type TelegramLocationSendOpts = TelegramThreadedSendOpts &
+  Pick<
+    TelegramSendOpts,
+    | "buttons"
+    | "quoteText"
+    | "promptContextProjectionPlan"
+    | "silent"
+    | "onDeliveryResult"
+    | "onPlatformSendDispatch"
+  >;

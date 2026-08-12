@@ -1,16 +1,12 @@
 // Parallels Phase Runner tests cover bounded in-memory phase log tails.
 import { afterEach, expect, it, vi } from "vitest";
 import { PhaseRunner } from "../../scripts/e2e/parallels/phase-runner.ts";
-import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { createTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempRoots: string[] = [];
-
-function makeTempRoot() {
-  return makeTempDir(tempRoots, "openclaw-parallels-phase-runner-");
-}
+const tempRoots = createTempDirTracker();
 
 afterEach(() => {
-  cleanupTempDirs(tempRoots);
+  tempRoots.cleanup();
   vi.restoreAllMocks();
 });
 
@@ -33,7 +29,7 @@ it("keeps the truncated phase tail UTF-8 safe when the byte cut splits a charact
   // 134 bytes total; the retained window starts one byte into the 4-byte
   // emoji, so a byte-naive decode would emit replacement characters.
   const tail = await captureFailedPhaseTail(
-    new PhaseRunner(makeTempRoot(), 128),
+    new PhaseRunner(tempRoots.make("openclaw-parallels-phase-runner-"), 128),
     `${"x".repeat(50)}😀${"y".repeat(79)}`,
   );
 

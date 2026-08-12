@@ -7,10 +7,34 @@ import {
   hasBuildArtifactAffectingChange,
   hasPromptSnapshotAffectingChange,
   hasQaSmokeAffectingChange,
-} from "../../scripts/lib/ci-changed-node-test-plan.mjs";
+  hasSqliteSessionLifecycleAffectingChange,
+} from "../../scripts/lib/ci-changed-node-test-plan.mts";
+import { hasImportGraphImpactOnTargets } from "../../scripts/test-projects.test-support.mts";
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
+import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
 
 describe("CI changed Node test plan", () => {
+  it("routes Control UI style changes through source-scanning policy tests", () => {
+    const shards = createChangedNodeTestShards(["ui/src/styles/chat/layout.css"]);
+    const targets = shards?.flatMap((shard) => shard.targets ?? []) ?? [];
+
+    expect(targets).toEqual([
+      "ui/src/styles/base-theme-tokens.node.test.ts",
+      "ui/src/styles/cursor-policy.node.test.ts",
+    ]);
+  });
+
+  it("routes cron alert sanitization changes through alert policy suites", () => {
+    const shards = createChangedNodeTestShards(["src/cron/failure-notification-text.ts"]);
+    const targets = shards?.flatMap((shard) => shard.targets ?? []) ?? [];
+
+    expect(targets).toEqual([
+      "src/cron/service.stream-trigger.test.ts",
+      "src/cron/service.stream-validation.test.ts",
+      "src/cron/service/timer.timeout-watchdog.test.ts",
+    ]);
+  });
+
   it("routes a focused source change into one targeted job", () => {
     expect(createChangedNodeTestShards(["src/agents/live-model-filter.ts"])).toEqual([
       {
@@ -54,10 +78,15 @@ describe("CI changed Node test plan", () => {
     expect(hasBuildArtifactAffectingChange(["src/agents/foo.test.ts", "test/helpers/x.ts"])).toBe(
       false,
     );
+    expect(
+      hasBuildArtifactAffectingChange([
+        "src/gateway/server.auth.control-ui.trusted-proxy.suite.ts",
+      ]),
+    ).toBe(false);
     expect(hasBuildArtifactAffectingChange(["src/agents/foo.ts"])).toBe(true);
     // Build-input classification: only sources and the build pipeline can
     // change dist bytes; repo scripts, workflows, and qa scenarios cannot.
-    expect(hasBuildArtifactAffectingChange(["scripts/build-all.mjs"])).toBe(true);
+    expect(hasBuildArtifactAffectingChange(["scripts/build-all.mts"])).toBe(true);
     expect(hasBuildArtifactAffectingChange(["tsconfig.json"])).toBe(true);
     expect(hasBuildArtifactAffectingChange(["scripts/run-vitest.mjs"])).toBe(false);
     expect(hasBuildArtifactAffectingChange([".github/workflows/ci.yml"])).toBe(false);
@@ -75,7 +104,7 @@ describe("CI changed Node test plan", () => {
     // The QA lane's own orchestration must not be able to skip the lane.
     expect(hasQaSmokeAffectingChange([".github/workflows/ci.yml"])).toBe(true);
     expect(hasQaSmokeAffectingChange([".github/actions/setup-node-env/action.yml"])).toBe(true);
-    expect(hasQaSmokeAffectingChange(["scripts/lib/ci-changed-node-test-plan.mjs"])).toBe(true);
+    expect(hasQaSmokeAffectingChange(["scripts/lib/ci-changed-node-test-plan.mts"])).toBe(true);
     expect(hasQaSmokeAffectingChange([".github/workflows/labeler.yml"])).toBe(false);
     // Deleted source files cannot be graphed; fail safe to running QA smoke.
     expect(hasQaSmokeAffectingChange(["src/infra/definitely-deleted-module.ts"])).toBe(true);
@@ -98,7 +127,7 @@ describe("CI changed Node test plan", () => {
     expect(hasPromptSnapshotAffectingChange(["packages/llm-core/src/index.ts"])).toBe(true);
     // The gate's own orchestration must not be able to skip the gated lane.
     expect(hasPromptSnapshotAffectingChange([".github/workflows/ci.yml"])).toBe(true);
-    expect(hasPromptSnapshotAffectingChange(["scripts/lib/ci-changed-node-test-plan.mjs"])).toBe(
+    expect(hasPromptSnapshotAffectingChange(["scripts/lib/ci-changed-node-test-plan.mts"])).toBe(
       true,
     );
     // Outside the surface and the generator graph -> the lane may skip.
@@ -112,8 +141,66 @@ describe("CI changed Node test plan", () => {
     expect(hasPromptSnapshotAffectingChange(["src/infra/definitely-deleted-module.ts"])).toBe(true);
   });
 
+  it("classifies SQLite session lifecycle impact by owner and import graph", () => {
+    expect(
+      hasSqliteSessionLifecycleAffectingChange([
+        "src/agents/embedded-agent-runner/run/attempt-session-runtime-prepare.ts",
+      ]),
+    ).toBe(true);
+    expect(
+      hasSqliteSessionLifecycleAffectingChange(["src/gateway/server-methods/sessions.ts"]),
+    ).toBe(true);
+    expect(
+      hasSqliteSessionLifecycleAffectingChange(["src/sessions/session-lifecycle-admission.ts"]),
+    ).toBe(true);
+    expect(hasSqliteSessionLifecycleAffectingChange(["src/config/sessions.ts"])).toBe(true);
+    expect(
+      hasSqliteSessionLifecycleAffectingChange([
+        "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
+      ]),
+    ).toBe(true);
+    expect(
+      hasSqliteSessionLifecycleAffectingChange([
+        "packages/media-understanding-common/src/provider-id.ts",
+      ]),
+    ).toBe(false);
+    expect(hasSqliteSessionLifecycleAffectingChange(["src/agents/model-auth.ts"])).toBe(false);
+    expect(hasSqliteSessionLifecycleAffectingChange(["extensions/discord/src/index.ts"])).toBe(
+      false,
+    );
+    expect(
+      hasSqliteSessionLifecycleAffectingChange([
+        "src/config/sessions/session-registry-maintenance.test.ts",
+      ]),
+    ).toBe(false);
+    expect(
+      hasSqliteSessionLifecycleAffectingChange(["src/infra/definitely-deleted-module.ts"]),
+    ).toBe(false);
+    expect(
+      hasSqliteSessionLifecycleAffectingChange([
+        "src/agents/embedded-agent-runner/run/deleted-session-runtime.ts",
+      ]),
+    ).toBe(true);
+  });
+
   it("fails safe to the full plan for broad changes", () => {
     expect(createChangedNodeTestShards(["package.json"])).toBeNull();
+  });
+
+  it("keeps minimal-gateway boot coverage reachable from gateway startup changes", () => {
+    // A gateway startup stall must fail in the gateway lane; the boot smoke is
+    // selected purely through the import graph, so a rename or an import shape
+    // the graph walker cannot see would silently drop it from targeted plans
+    // and the stall would first surface on unrelated ui-e2e PRs again.
+    const bootSmoke = "src/gateway/server-startup-minimal-boot.test.ts";
+    expect(isGatewayServerTestFile(bootSmoke)).toBe(true);
+    expect(
+      hasImportGraphImpactOnTargets(
+        ["src/gateway/server-startup-bootstrap.ts"],
+        [bootSmoke],
+        process.cwd(),
+      ),
+    ).toBe(true);
   });
 
   it("fails safe whenever a diff deletes source files", () => {

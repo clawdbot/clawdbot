@@ -7,7 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { extractAgentReplyTexts } from "../scripts/e2e/lib/agent-turn-output.mjs";
-import { terminateManagedChild } from "../scripts/lib/managed-child-process.mjs";
+import { terminateManagedChild } from "../scripts/lib/managed-child-process.mts";
 import { readPersistedAuthProfileStoreRaw } from "../src/agents/auth-profiles/sqlite.js";
 import { isLiveTestEnabled } from "../src/agents/live-test-helpers.js";
 import {
@@ -241,7 +241,7 @@ describeLive("fresh OpenAI onboarding live", () => {
           agents?: { defaults?: { model?: { primary?: string }; workspace?: string } };
           gateway?: { mode?: string; auth?: { mode?: string; token?: string } };
         };
-        expect(config.agents?.defaults?.model?.primary).toBe("openai/gpt-5.6");
+        expect(config.agents?.defaults?.model?.primary).toBe("openai/gpt-5.6-sol");
         expect(config.agents?.defaults?.workspace).toBe(
           path.join(state.home, ".openclaw", "workspace"),
         );

@@ -1,4 +1,4 @@
-import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 
 type CallbackLogger = {
   warn(message: string): void;
@@ -6,13 +6,13 @@ type CallbackLogger = {
 
 /** Contains failures from untracked subscriber presentation and telemetry callbacks. */
 export function runBestEffortCallback(params: {
-  callback: () => void | Promise<void>;
+  callback: () => unknown;
   label: string;
   log: CallbackLogger;
 }): void {
   try {
     const result = params.callback();
-    if (isPromiseLike<void>(result)) {
+    if (isPromiseLike(result)) {
       void Promise.resolve(result).catch((error: unknown) => {
         params.log.warn(`${params.label} callback failed: ${String(error)}`);
       });

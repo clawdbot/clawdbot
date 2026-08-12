@@ -7,7 +7,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type {
   SubagentCompletionToolHandoffRegistration,
   TrustedSubagentCompletionHandoff,
-} from "../agents/subagent-announce-handoff.js";
+} from "../agents/subagents/announce/subagent-announce-handoff.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 
 const SUBAGENT_COMPLETION_TOOL_HANDOFF_TTL_MS = 5 * 60 * 1000;

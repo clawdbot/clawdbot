@@ -19,7 +19,7 @@ import {
   runProviderPluginAuthMethodUnpersisted,
 } from "../plugins/provider-auth-choice.js";
 import { resolveManifestProviderAuthChoice } from "../plugins/provider-auth-choices.js";
-import { resolvePluginProviders } from "../plugins/providers.runtime.js";
+import { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -107,7 +107,7 @@ export async function buildTestPlan(params: {
         error: `${choice.choiceLabel} is disabled (${sourceEnableResult.reason ?? "blocked"}).`,
       };
     }
-    const providers = (params.deps.resolvePluginProviders ?? resolvePluginProviders)({
+    const providers = (params.deps.resolvePluginProviders ?? resolvePluginProvidersCore)({
       config: enableResult.config,
       workspaceDir: params.pluginWorkspaceDir,
       mode: "setup",
@@ -242,11 +242,12 @@ export async function buildTestPlan(params: {
         provider: route.provider,
         model: route.model,
         modelRef: route.modelLabel,
-        config: route.runConfig,
+        config: cfg,
+        executionConfig: route.runConfig,
         agentId: "openclaw",
         routeAgentId: route.agentId,
         agentDir: route.agentDir,
-        ...(route.runner === "embedded"
+        ...(route.runner === "embedded" && route.agentHarnessRuntimeOverride
           ? { agentHarnessRuntimeOverride: route.agentHarnessRuntimeOverride }
           : {}),
         ...(route.authProfileId ? { authProfileId: route.authProfileId } : {}),
@@ -415,7 +416,7 @@ export async function buildTestPlan(params: {
           error: `${choice.choiceLabel} is disabled (${sourceEnableResult.reason ?? "blocked"}).`,
         };
       }
-      const providers = (params.deps.resolvePluginProviders ?? resolvePluginProviders)({
+      const providers = (params.deps.resolvePluginProviders ?? resolvePluginProvidersCore)({
         config: enableResult.config,
         workspaceDir: params.pluginWorkspaceDir,
         mode: "setup",

@@ -1,6 +1,6 @@
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
@@ -12,14 +12,16 @@ import {
   getSubagentSessionStartedAt,
   isSubagentRunLive,
   resolveSubagentSessionStatus,
-} from "../agents/subagent-registry-read.js";
-import { resolveQueueSettings } from "../auto-reply/reply/queue/settings.js";
+} from "../agents/subagents/registry/subagent-registry-read.js";
+import { resolveQueueSettingsCore } from "../auto-reply/reply/queue/settings.js";
 import { resolveEffectiveResponseUsage } from "../auto-reply/thinking.js";
 import {
   buildGroupDisplayName,
   buildGroupDisplayTitle,
   resolveFreshSessionTotalTokens,
   resolveSessionGoalDisplayState,
+  SESSION_TOTAL_TOKENS_VERSION,
+  type InternalSessionEntry,
   type SessionEntry,
 } from "../config/sessions.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
@@ -28,12 +30,15 @@ import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.j
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
-import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
-import { getUserProfileListItem } from "../state/user-profiles.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
+import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
-import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
+import { sessionClassificationForRow } from "./session-classification.js";
+import {
+  resolveSessionStoreAgentId,
+  resolveStoredSessionKeyForAgentStore,
+} from "./session-store-key.js";
 import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 import type {
   SessionActorProfileIdentity,
@@ -61,7 +66,6 @@ import {
 } from "./session-utils-projection.js";
 import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-store.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
-import { formatUserProfileAvatarPath } from "./user-profiles-http-path.js";
 
 /** Adds current durable human profile display data without persisting rename-prone metadata. */
 export function projectSessionActor(
@@ -77,21 +81,14 @@ export function projectSessionActor(
   }
   let identity = userProfileIdentityById.get(id);
   if (!userProfileIdentityById.has(id)) {
-    try {
-      const profile = getUserProfileListItem(id);
-      const label = normalizeOptionalString(profile.displayName);
-      identity = {
-        ...(label ? { label } : {}),
-        ...(profile.hasAvatar
-          ? {
-              avatarUrl: `${formatUserProfileAvatarPath(profile.id)}?v=${profile.updatedAt}`,
-            }
-          : {}),
-      };
-    } catch {
-      // Human actors can also be channel sender ids; only profile ids resolve here.
-      identity = undefined;
-    }
+    const display = resolveCurrentUserProfileDisplay(id);
+    identity =
+      display.kind === "unresolved"
+        ? undefined
+        : {
+            ...(display.label ? { label: display.label } : {}),
+            ...(display.hasUploadedAvatar ? { avatarUrl: display.avatarUrl } : {}),
+          };
     userProfileIdentityById.set(id, identity);
   }
   return { type: actor.type, id, ...identity };
@@ -164,7 +161,7 @@ export function buildGatewaySessionRow(params: {
     // titles leaks account names into the sidebar while the generated title is pending.
     (isDashboardSession ? undefined : originLabel);
   const sessionAgentId = normalizeAgentId(
-    parsedAgent?.agentId ?? params.agentId ?? resolveDefaultAgentId(cfg),
+    parsedAgent?.agentId ?? params.agentId ?? resolveSessionStoreAgentId(cfg, key),
   );
   const skipTranscriptUsage = params.skipTranscriptUsageFallback === true;
   const rowContext = params.rowContext;
@@ -235,7 +232,7 @@ export function buildGatewaySessionRow(params: {
   );
   const runtimeModelPresent =
     Boolean(entry?.model?.trim()) || Boolean(entry?.modelProvider?.trim());
-  const freshSessionTotalTokens = resolveNonNegativeNumber(resolveFreshSessionTotalTokens(entry));
+  const freshSessionTotalTokens = asNonNegativeFiniteNumber(resolveFreshSessionTotalTokens(entry));
   const needsTranscriptTotalTokens = freshSessionTotalTokens === undefined;
   const needsTranscriptContextTokens = resolvePositiveNumber(entry?.contextTokens) === undefined;
   const needsTranscriptEstimatedCostUsd =
@@ -280,7 +277,7 @@ export function buildGatewaySessionRow(params: {
     : resolvedModelIdentity;
   const { provider: modelProvider, model } = modelIdentity;
   const totalTokens =
-    freshSessionTotalTokens ?? resolveNonNegativeNumber(transcriptUsage?.totalTokens);
+    freshSessionTotalTokens ?? asNonNegativeFiniteNumber(transcriptUsage?.totalTokens);
   const totalTokensFresh =
     freshSessionTotalTokens !== undefined ||
     (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0)
@@ -292,6 +289,7 @@ export function buildGatewaySessionRow(params: {
           goal: entry.goal,
           totalTokens,
           totalTokensFresh,
+          totalTokensVersion: totalTokensFresh ? SESSION_TOTAL_TOKENS_VERSION : undefined,
         },
         now,
         // Session listing is read-only; stale goal baselines are adopted only
@@ -331,14 +329,14 @@ export function buildGatewaySessionRow(params: {
     sessionKey: key,
   });
   const estimatedCostUsd = lightweight
-    ? resolveNonNegativeNumber(entry?.estimatedCostUsd)
+    ? asNonNegativeFiniteNumber(entry?.estimatedCostUsd)
     : (resolveEstimatedSessionCostUsd({
         cfg,
         provider: rowModelProvider,
         model: rowModel,
         entry,
         rowContext: params.rowContext,
-      }) ?? resolveNonNegativeNumber(transcriptUsage?.estimatedCostUsd));
+      }) ?? asNonNegativeFiniteNumber(transcriptUsage?.estimatedCostUsd));
   const contextTokens = lightweight
     ? (resolvePositiveNumber(entry?.contextTokens) ??
       resolvePositiveNumber(
@@ -431,6 +429,7 @@ export function buildGatewaySessionRow(params: {
     label: entry?.label,
     category: entry?.category,
     boardFace: entry?.boardFace,
+    ...sessionClassificationForRow(cfg, key, sessionAgentId, entry),
     displayName,
     derivedTitle,
     lastMessagePreview,
@@ -446,7 +445,6 @@ export function buildGatewaySessionRow(params: {
     archivedBy: projectSessionActor(entry?.archivedBy, rowContext?.userProfileIdentityById),
     pinned: entry?.pinnedAt !== undefined,
     pinnedAt: entry?.pinnedAt,
-    icon: entry?.icon,
     unread: deriveSessionUnread(entry),
     lastReadAt: entry?.lastReadAt,
     agentStatus,
@@ -465,6 +463,10 @@ export function buildGatewaySessionRow(params: {
     sessionId: entry?.sessionId,
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
+    restartRecoveryStatus: (entry as InternalSessionEntry | undefined)?.mainRestartRecovery
+      ?.tombstone
+      ? "tombstoned"
+      : undefined,
     thinkingLevel: thinkingProjection.thinkingLevel,
     thinkingLevels: thinkingProjection.thinkingLevels,
     thinkingOptions: thinkingProjection.thinkingOptions,
@@ -487,7 +489,7 @@ export function buildGatewaySessionRow(params: {
     estimatedCostUsd,
     status: subagentRun ? subagentStatus : entry?.status,
     lastRunError: entry?.lastRunError,
-    hasAutomation: sessionHasAutomation(key, cfg) ? true : undefined,
+    hasAutomation: sessionHasAutomation(key, cfg, sessionAgentId) ? true : undefined,
     subagentRunState,
     hasActiveSubagentRun: subagentRun ? liveSubagentRunActive : undefined,
     startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,
@@ -503,7 +505,7 @@ export function buildGatewaySessionRow(params: {
       channel,
     ),
     queueMode: entry?.queueMode,
-    effectiveQueueMode: resolveQueueSettings({
+    effectiveQueueMode: resolveQueueSettingsCore({
       cfg,
       channel: INTERNAL_MESSAGE_CHANNEL,
       sessionEntry: entry,

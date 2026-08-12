@@ -139,12 +139,28 @@ runs:
         # disk here, this gate binds cooperating code, not hostile code: the
         # enforced trust boundary is the fork/dispatch runner gate in ci.yml,
         # and same-repo PR authors already hold repository write access.
-        # Explicit true (not on-change) because the allocated-byte heuristic
-        # can miss a fingerprint refresh whose reinstall keeps disk usage
-        # stable, permanently stranding consumers on a stale marker. The action
-        # skips commit after failed/cancelled steps, so a broken install cannot
-        # seed this key.
-        commit: ${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'true' || 'false' }}
+        # Warm validated snapshots stay read-only so asynchronous publication
+        # does not perpetually chase no-op commits. The canonical writer records
+        # the action's allocation baseline below; after any real capture and
+        # store pruning, preflight forces a verified delta before this action's
+        # post phase. The action also skips commit after failed/cancelled steps.
+        commit: ${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'on-change' || 'false' }}
+
+    - name: Record sticky disk allocation baseline
+      if: inputs.sticky-disk == 'true' && inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request'
+      shell: bash
+      run: |
+        set -euo pipefail
+        sticky_root=/var/tmp/openclaw-node-deps
+        initial_usage_bytes="$(df -B1 --output=used "$sticky_root" | tail -n1 | tr -d '[:space:]')"
+        if [[ ! "$initial_usage_bytes" =~ ^[0-9]+$ ]] || [[ "$initial_usage_bytes" -le 0 ]]; then
+          echo "::error::Could not record sticky disk allocation baseline"
+          exit 1
+        fi
+        rebuild_signal="${RUNNER_TEMP:?}/openclaw-sticky-deps-rebuilt"
+        rm -f "$rebuild_signal"
+        echo "OPENCLAW_STICKY_INITIAL_USAGE_BYTES=$initial_usage_bytes" >> "$GITHUB_ENV"
+        echo "OPENCLAW_STICKY_REBUILD_SIGNAL=$rebuild_signal" >> "$GITHUB_ENV"
 
     - name: Restore and save Vitest transform cache
       if: inputs.vitest-fs-cache == 'true' && inputs.save-vitest-fs-cache == 'true' && runner.os != 'Windows'
@@ -154,23 +170,23 @@ runs:
         # Blacksmith transparently accelerates the upstream Actions cache API.
         # The scheduled/dispatch warmer writes one immutable protected archive;
         # all CI shards restore it into isolated runner-local directories.
-        key: ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', '!**/node_modules/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
+        key: ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', '!**/node_modules/**') }}-
+          ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**') }}-
 
     - name: Restore Vitest transform cache
       if: inputs.vitest-fs-cache == 'true' && inputs.save-vitest-fs-cache != 'true' && runner.os != 'Windows'
       uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
       with:
         path: /var/tmp/openclaw-vitest-fs-cache
-        key: ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', '!**/node_modules/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
+        key: ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', '!**/node_modules/**') }}-
+          ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**') }}-
 
     - name: Configure Vitest transform cache
       if: inputs.vitest-fs-cache == 'true' && runner.os != 'Windows'
       env:
-        CACHE_GENERATION: ${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', '!**/node_modules/**') }}
+        CACHE_GENERATION: ${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**') }}
         CACHE_WRITER: ${{ inputs.save-vitest-fs-cache == 'true' && '1' || '0' }}
       shell: bash
       run: |
@@ -462,7 +478,7 @@ runs:
           # publishes the fingerprint; read-only clones are discarded at job
           # end, so capturing there would only burn shard wall clock.
           if [ "$STICKY_DISK" = "true" ] && [ "$STICKY_WRITER" = "true" ]; then
-            bash "$GITHUB_ACTION_PATH/sticky-importers.sh" capture "$STICKY_ROOT" "$GITHUB_WORKSPACE" "$OPENCLAW_STICKY_DEPS_FINGERPRINT"
+            bash "$GITHUB_ACTION_PATH/sticky-importers.sh" capture "$STICKY_ROOT" "$GITHUB_WORKSPACE" "$OPENCLAW_STICKY_DEPS_FINGERPRINT" "${OPENCLAW_STICKY_REBUILD_SIGNAL:?}"
           fi
         fi
 
@@ -482,7 +498,7 @@ runs:
         path: .artifacts/build-all-cache
         # Exact keys deduplicate concurrent jobs. Coarse restore supplies the
         # newest declaration groups; build-all rehashes every group's inputs.
-        key: ${{ github.repository }}-build-all-v1-${{ inputs.build-all-cache-scope }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'tsconfig*.json', 'tsdown*.config.ts', 'scripts/build-all.mjs', 'scripts/tsdown-build.mjs', 'scripts/lib/tsdown-*.mjs', 'scripts/lib/plugin-sdk-*', 'scripts/lib/bundled-plugin-*', 'scripts/lib/optional-bundled-clusters.mjs', 'src/**', 'packages/**', 'extensions/**') }}
+        key: ${{ github.repository }}-build-all-v1-${{ inputs.build-all-cache-scope }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'tsconfig*.json', 'tsdown*.config.ts', 'scripts/build-all.mts', 'scripts/tsdown-build.mts', 'scripts/lib/tsdown-*.mts', 'scripts/lib/plugin-sdk-*', 'scripts/lib/bundled-plugin-*', 'scripts/lib/optional-bundled-clusters.mjs', 'src/**', 'packages/**', 'extensions/**') }}
         restore-keys: |
           ${{ github.repository }}-build-all-v1-${{ inputs.build-all-cache-scope }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
 

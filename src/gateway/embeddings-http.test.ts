@@ -10,6 +10,7 @@ import {
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { createConfigIO, resetConfigRuntimeState } from "../config/config.js";
 import type {
@@ -18,10 +19,9 @@ import type {
 } from "../plugins/memory-embedding-providers.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
-import { createDeferred } from "../test-utils/deferred.js";
 import { startOpenAiCompatGatewayServer } from "./openai-compatible-http.test-helpers.js";
 import {
-  getFreePort,
+  getGatewayTestPort,
   installGatewayTestHooks,
   resetTestPluginRegistry,
   setTestPluginRegistry,
@@ -172,7 +172,7 @@ beforeAll(async () => {
     },
   };
   ({ startGatewayServer } = await import("./server.js"));
-  enabledPort = await getFreePort();
+  enabledPort = await getGatewayTestPort();
   enabledServer = await startOpenAiCompatGatewayServer({
     startGatewayServer,
     port: enabledPort,
@@ -409,8 +409,16 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
 
   it("rejects explicit unknown agent ids", async () => {
     try {
-      testState.agentsConfig = { entries: { main: {}, beta: {} } };
+      testState.agentsConfig = { ownership: "explicit", entries: { main: {}, beta: {} } };
       resetConfigRuntimeState();
+
+      const missing = await postEmbeddings({ model: "openclaw", input: "hello" });
+      expect(missing.status).toBe(400);
+      const missingJson = (await missing.json()) as {
+        error?: { type?: string; message?: string };
+      };
+      expect(missingJson.error?.type).toBe("invalid_request_error");
+      expect(missingJson.error?.message).toContain("has no explicit owner");
 
       const header = await postEmbeddings(
         { model: "openclaw/default", input: "hello" },
@@ -598,7 +606,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
   });
 
   it("rejects x-openclaw-model for trusted write-only callers", async () => {
-    const port = await getFreePort();
+    const port = await getGatewayTestPort();
     const server = await startOpenAiCompatGatewayServer({
       startGatewayServer,
       port,

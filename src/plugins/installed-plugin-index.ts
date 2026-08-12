@@ -21,7 +21,10 @@ import {
   type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index-types.js";
-import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
+import {
+  loadPluginManifestRegistryCore,
+  type PluginManifestRegistry,
+} from "./manifest-registry.js";
 
 export {
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
@@ -66,7 +69,7 @@ function buildInstalledPluginIndex(
         env,
         installRecords,
       }));
-  const registry = loadPluginManifestRegistry({
+  const registry = loadPluginManifestRegistryCore({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env,

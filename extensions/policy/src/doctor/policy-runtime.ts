@@ -6,7 +6,10 @@ import {
 } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import type { HealthCheckContext, HealthFinding } from "openclaw/plugin-sdk/health";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { EXEC_APPROVALS_POLICY_DOCUMENT_NAME } from "../exec-approvals-uri.js";
 import type { PolicyAuthProfileEvidence } from "../policy-state.js";
 import { CHECK_IDS } from "./check-ids.js";
@@ -15,6 +18,8 @@ import {
   SUPPORTED_AUTH_PROFILE_MODES,
 } from "./policy-constants.js";
 import { readPolicyStringArray } from "./utils.js";
+
+export const normalizePolicyChannelId: (value: string) => string = normalizeLowercaseStringOrEmpty;
 
 const loadFsPromisesModule = createLazyRuntimeModule(() => import("node:fs/promises"));
 
@@ -285,10 +290,6 @@ export function authProfileHasMetadata(
   return SUPPORTED_AUTH_PROFILE_MODES.includes(
     profile.mode as (typeof SUPPORTED_AUTH_PROFILE_MODES)[number],
   );
-}
-
-export function normalizePolicyChannelId(value: string): string {
-  return value.trim().toLowerCase();
 }
 
 export function execApprovalsDisplayName(): string {

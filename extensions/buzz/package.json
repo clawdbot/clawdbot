@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/buzz",
-  "version": "2026.7.2",
+  "version": "2026.8.1",
   "description": "Connect OpenClaw agents to Buzz rooms",
   "repository": {
     "type": "git",
@@ -16,7 +16,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.7.2"
+    "openclaw": ">=2026.8.1"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -24,13 +24,18 @@
     }
   },
   "openclaw": {
-    "extensions": ["./index.ts"],
+    "extensions": [
+      "./index.ts"
+    ],
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "buzz",
       "configuredState": {
         "env": {
-          "allOf": ["BUZZ_RELAY_URL", "BUZZ_PRIVATE_KEY"]
+          "allOf": [
+            "BUZZ_RELAY_URL",
+            "BUZZ_PRIVATE_KEY"
+          ]
         }
       },
       "label": "Buzz",
@@ -42,9 +47,32 @@
       "order": 56,
       "setup": {
         "fields": [
-          { "key": "relayUrl", "kind": "string", "cli": { "flags": "--relay-url <url>", "description": "Buzz relay WebSocket URL" } },
-          { "key": "privateKey", "kind": "string", "sensitive": true, "cli": { "flags": "--private-key <key>", "description": "Buzz bot Nostr private key" } },
-          { "key": "useEnv", "kind": "boolean", "cli": { "flags": "--use-env", "description": "Use BUZZ_PRIVATE_KEY with the supplied relay URL" } }
+          {
+            "key": "relayUrl",
+            "kind": "string",
+            "cli": {
+              "flags": "--relay-url <url>",
+              "description": "Buzz relay WebSocket URL"
+            }
+          },
+          {
+            "key": "privateKey",
+            "kind": "string",
+            "sensitive": true,
+            "cli": {
+              "flags": "--private-key <key>",
+              "description": "Buzz bot Nostr private key"
+            }
+          },
+          {
+            "key": "useEnv",
+            "kind": "boolean",
+            "cli": {
+              "flags": "--use-env",
+              "description": "Use BUZZ_PRIVATE_KEY with the supplied relay URL"
+            },
+            "envVars": ["BUZZ_PRIVATE_KEY"]
+          }
         ]
       }
     },
@@ -55,10 +83,10 @@
       "minHostVersion": ">=2026.7.2"
     },
     "compat": {
-      "pluginApi": ">=2026.7.2"
+      "pluginApi": ">=2026.8.1"
     },
     "build": {
-      "openclawVersion": "2026.7.2"
+      "openclawVersion": "2026.8.1"
     },
     "release": {
       "publishToClawHub": true,

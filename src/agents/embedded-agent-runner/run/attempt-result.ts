@@ -16,13 +16,13 @@ import { log } from "../logger.js";
 import type { PromptCacheBreak, PromptCacheChange } from "../prompt-cache-observability.js";
 import { observeReplayMetadata, replayMetadataFromState } from "../replay-state.js";
 import { finalizeEmbeddedAttempt } from "./attempt-finalize.js";
-import { shouldRunLlmOutputHooksForAttempt } from "./attempt.run-decisions.js";
+import { shouldRunLlmOutputHooksForAttempt } from "./attempt-run-decisions.js";
 import {
   buildAttemptReplayMetadata,
   hasAttemptTerminalState,
-  resolveSilentToolResultReplyPayload,
-  shouldTreatEmptyAssistantReplyAsSilent,
-} from "./incomplete-turn.js";
+} from "./attempt-terminal-evidence.js";
+import { shouldTreatEmptyAssistantReplyAsSilent } from "./incomplete-turn-recovery.js";
+import { resolveSilentToolResultReplyPayload } from "./incomplete-turn-resolution.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -33,6 +33,26 @@ type EmbeddedAttemptSubscription = ReturnType<typeof subscribeEmbeddedAgentSessi
 type CacheTrace = ReturnType<typeof createCacheTrace>;
 type HookRunner = ReturnType<typeof getGlobalHookRunner>;
 
+/** Keeps presentation state sticky while retry attempts replace their result object. */
+export function createMcpAttemptCarryover() {
+  let latestMcpAppChannelView: EmbeddedRunAttemptResult["latestMcpAppChannelView"];
+  let latestMcpConnectAction: EmbeddedRunAttemptResult["latestMcpConnectAction"];
+  return {
+    apply(
+      attempt: Pick<EmbeddedRunAttemptResult, "latestMcpAppChannelView" | "latestMcpConnectAction">,
+    ): void {
+      latestMcpAppChannelView = attempt.latestMcpAppChannelView ?? latestMcpAppChannelView;
+      attempt.latestMcpAppChannelView = latestMcpAppChannelView;
+      latestMcpConnectAction = attempt.latestMcpConnectAction ?? latestMcpConnectAction;
+      attempt.latestMcpConnectAction = latestMcpConnectAction;
+    },
+  };
+}
+
+export type EmbeddedRunAttemptWithReceiptEvidence = EmbeddedRunAttemptResult & {
+  successfulNestedToolNames?: string[];
+};
+
 export type EmbeddedAttemptClientToolCallSlot = {
   toolCallId: string;
   name: string;
@@ -41,7 +61,7 @@ export type EmbeddedAttemptClientToolCallSlot = {
 };
 
 type EmbeddedAttemptResultState = Pick<
-  EmbeddedRunAttemptResult,
+  EmbeddedRunAttemptWithReceiptEvidence,
   | "terminal"
   | "preflightRecovery"
   | "sessionIdUsed"
@@ -53,6 +73,7 @@ type EmbeddedAttemptResultState = Pick<
   | "lastAssistant"
   | "currentAttemptAssistant"
   | "currentAttemptCompletedAssistant"
+  | "successfulNestedToolNames"
   | "attemptUsage"
   | "promptCache"
   | "contextBudgetStatus"
@@ -94,7 +115,7 @@ function normalizeEmbeddedAttemptToolMetas(
         toolName: string;
         meta?: string;
         replaySafe?: boolean;
-        isError?: true;
+        isError?: boolean;
         asyncStarted?: boolean;
         asyncTaskRunId?: string;
         asyncTaskId?: string;
@@ -106,8 +127,8 @@ function normalizeEmbeddedAttemptToolMetas(
         meta: entry.meta,
         replaySafe: entry.replaySafe === true,
       };
-      if (entry.isError === true) {
-        normalized.isError = true;
+      if (typeof entry.isError === "boolean") {
+        normalized.isError = entry.isError;
       }
       if (entry.asyncStarted === true) {
         normalized.asyncStarted = true;
@@ -142,7 +163,7 @@ function hasVisiblePendingToolMediaReply(
 /** Runs output hooks, classifies terminal effects, and returns the finalized attempt result. */
 export function completeEmbeddedAttemptResult(
   input: CompleteEmbeddedAttemptResultInput,
-): EmbeddedRunAttemptResult {
+): EmbeddedRunAttemptWithReceiptEvidence {
   const { attempt, state, subscription } = input;
   const terminal = projectAgentRunAttemptTerminal(state.terminal);
   const {
@@ -158,6 +179,7 @@ export function completeEmbeddedAttemptResult(
     getLastCompactionTokensAfter,
     getLastToolError,
     getLatestMcpAppChannelView,
+    getLatestMcpConnectAction,
     getMessagingToolSentMediaUrls,
     getMessagingToolSentTargets,
     getMessagingToolSentTexts,
@@ -372,7 +394,7 @@ export function completeEmbeddedAttemptResult(
       terminal: state.terminal,
     },
   });
-  const result: EmbeddedRunAttemptResult = {
+  const result: EmbeddedRunAttemptWithReceiptEvidence = {
     ...state,
     replayMetadata,
     currentAttemptReplayMetadata,
@@ -383,8 +405,10 @@ export function completeEmbeddedAttemptResult(
     bootstrapPromptWarningSignature: input.bootstrapPromptWarning.signature,
     assistantTexts,
     latestMcpAppChannelView: getLatestMcpAppChannelView(),
+    latestMcpConnectAction: getLatestMcpConnectAction(),
     lastAssistantTextMessageIndex: getLastAssistantTextMessageIndex(),
     toolMetas: toolMetasNormalized,
+    successfulNestedToolNames: state.successfulNestedToolNames,
     acceptedSessionSpawns,
     lastToolError,
     didSendViaMessagingTool: didSendViaMessagingTool(),

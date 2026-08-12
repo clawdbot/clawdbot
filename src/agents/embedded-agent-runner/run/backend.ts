@@ -5,11 +5,8 @@ import {
   runAgentHarnessAttempt,
   runAgentHarnessSettledTurnFinalization,
 } from "../../harness/selection.js";
-import type {
-  AgentHarness,
-  AgentHarnessSettledTurnFinalizationResult,
-} from "../../harness/types.js";
-import { settleRequesterAfterSessionSpawns } from "../../subagent-registry.js";
+import type { AgentHarness } from "../../harness/types.js";
+import { settleRequesterAfterSessionSpawns } from "../../subagents/registry/subagent-registry.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 /**
@@ -28,6 +25,7 @@ export async function runEmbeddedAttemptWithBackend(
     // Settle before dispatch can replace the successful result with a late abort.
     settleRequesterAfterSessionSpawns({
       requesterSessionKey: params.sessionKey,
+      requesterAgentId: params.agentId,
       requesterTurnRunId: params.runId,
       requesterYielded: result.yieldDetected === true,
       acceptedSessionSpawns: result.acceptedSessionSpawns,
@@ -41,6 +39,6 @@ export async function runEmbeddedSettledTurnFinalizationWithBackend(
   params: EmbeddedRunAttemptParams,
   settledAttempt: EmbeddedRunAttemptResult,
   harness: AgentHarness,
-): Promise<AgentHarnessSettledTurnFinalizationResult> {
+) {
   return runAgentHarnessSettledTurnFinalization(params, settledAttempt, harness);
 }

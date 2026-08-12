@@ -6,7 +6,9 @@ import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { t } from "../../i18n/index.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
 import {
   addCronJob,
@@ -286,6 +288,51 @@ class CronPage extends OpenClawLightDomElement {
     this.requestCronUpdate();
   }
 
+  private async removeJob(job: CronJob) {
+    const context = this.context;
+    const cronState = this.cron;
+    const connectionScope = this.gateway.capture();
+    const hadAdminAccess = this.canManageCron;
+    const selectedJob = cronState.cronJobs.find(
+      (entry) => entry.id === job.id && entry.updatedAtMs === job.updatedAtMs,
+    );
+    if (!connectionScope || !hadAdminAccess || !selectedJob) {
+      return;
+    }
+    const selectedJobId = selectedJob.id;
+    const selectedJobRevision = selectedJob.updatedAtMs;
+    const selectedJobName = selectedJob.name;
+    const confirmed = await showConfirmDialog({
+      title: t("cron.actions.removeConfirmTitle", { name: selectedJobName }),
+      message: t("cron.actions.removeConfirmMessage"),
+      confirmLabel: t("cron.actions.remove"),
+      danger: true,
+    });
+    const currentJob = cronState.cronJobs.find((entry) => entry.id === selectedJobId);
+    // The modal yields while every owner can rotate. Reject stale decisions so
+    // an old row can never delete a replacement task on a new page or Gateway.
+    if (
+      !confirmed ||
+      this.context !== context ||
+      this.cron !== cronState ||
+      !this.gateway.isCurrent(connectionScope) ||
+      !this.canManageCron ||
+      !currentJob ||
+      currentJob.updatedAtMs !== selectedJobRevision
+    ) {
+      return;
+    }
+    await this.runCronTask(async (current) => {
+      await removeCronJob(current, currentJob);
+      // Removing the selected task drops the panel back to overview;
+      // the runs scope must follow or recent activity stays empty.
+      if (current.cronRunsScope === "job" && current.cronRunsJobId === null) {
+        updateCronRunsFilter(current, { cronRunsScope: "all" });
+        await loadCronRuns(current, null);
+      }
+    });
+  }
+
   private closePanel() {
     cancelCronEdit(this.cron);
     this.cron.cronCreateOpen = false;
@@ -426,16 +473,7 @@ class CronPage extends OpenClawLightDomElement {
             }),
           onRun: (job, mode) =>
             this.runCronAdminTask((cronState) => runCronJob(cronState, job.id, mode ?? "force")),
-          onRemove: (job) =>
-            this.runCronAdminTask(async (cronState) => {
-              await removeCronJob(cronState, job);
-              // Removing the selected task drops the panel back to overview;
-              // the runs scope must follow or recent activity stays empty.
-              if (cronState.cronRunsScope === "job" && cronState.cronRunsJobId === null) {
-                updateCronRunsFilter(cronState, { cronRunsScope: "all" });
-                await loadCronRuns(cronState, null);
-              }
-            }),
+          onRemove: (job) => void this.removeJob(job),
           onLoadMoreJobs: () =>
             void this.runCronTask((cronState) =>
               loadCronJobsPage(cronState, { append: true, tableFilters: true }),

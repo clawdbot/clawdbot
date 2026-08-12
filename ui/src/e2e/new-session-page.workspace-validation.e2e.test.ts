@@ -1,6 +1,10 @@
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
+  waitForControlUiGatewayReady,
+  waitForControlUiGatewayReconnecting,
+} from "../test-helpers/control-ui-e2e-readiness.ts";
+import {
   SOURCE_REPO,
   TARGET_REPO,
   WORKSPACE,
@@ -42,6 +46,14 @@ function branchList(name = "main") {
   };
 }
 
+function deviceEnvironment(nodeId: string) {
+  return {
+    id: `node:${nodeId}`,
+    type: "node",
+    status: "available",
+  };
+}
+
 async function withNewSessionPage(
   options: BrowserContextOptions,
   run: (page: Page) => Promise<void>,
@@ -72,8 +84,9 @@ async function chooseCustomFolder(page: Page, gateway: MockGateway) {
 async function reconnectForBranchRediscovery(page: Page, gateway: MockGateway) {
   const branchRequests = (await gateway.getRequests("worktrees.branches")).length;
   await gateway.setOnline(false);
-  await page.locator(".sidebar-identity-card__subtitle").waitFor({ timeout: 10_000 });
+  await waitForControlUiGatewayReconnecting(page);
   await gateway.setOnline(true);
+  await waitForControlUiGatewayReady(page);
   await expect
     .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
     .toBe(branchRequests + 1);
@@ -102,8 +115,9 @@ suite.define(() => {
       const branchRequests = (await gateway.getRequests("worktrees.branches")).length;
       await gateway.deferNext("worktrees.branches");
       await gateway.setOnline(false);
-      await page.locator(".sidebar-identity-card__subtitle").waitFor({ timeout: 10_000 });
+      await waitForControlUiGatewayReconnecting(page);
       await gateway.setOnline(true);
+      await waitForControlUiGatewayReady(page);
       await expect
         .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
         .toBe(branchRequests + 1);
@@ -120,7 +134,7 @@ suite.define(() => {
       await page.keyboard.press("Escape");
 
       await page.locator(".new-session-page__message").fill("keep this task isolated");
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         agentId: "main",
@@ -171,7 +185,7 @@ suite.define(() => {
       expect(await place.getByRole("button", { name: "Worktree" }).count()).toBe(0);
       await page.keyboard.press("Escape");
       await page.locator(".new-session-page__message").fill("continue directly");
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({ cwd: TARGET_REPO, message: "continue directly" });
       expect(create.params).not.toHaveProperty("worktree");
@@ -204,7 +218,7 @@ suite.define(() => {
 
       await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
       await page.locator(".new-session-page__message").fill("do not run directly");
-      const start = page.getByRole("button", { name: "Start thread" });
+      const start = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => start.isDisabled()).toBe(true);
       await trigger.click();
       const worktree = place.getByRole("button", { name: "Worktree" });
@@ -259,7 +273,7 @@ suite.define(() => {
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
       await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
       await page.locator(".new-session-page__message").fill("do not run directly");
-      const start = page.getByRole("button", { name: "Start thread" });
+      const start = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => start.isDisabled()).toBe(true);
       await trigger.click();
       const cloud = place.getByRole("button", { name: "Cloud · aws" });
@@ -289,12 +303,17 @@ suite.define(() => {
               },
             ],
           },
+          "environments.list": {
+            environments: [deviceEnvironment("old-device")],
+            profiles: [],
+          },
           "worktrees.branches": branchList(),
           "sessions.create": { key: "agent:main:validated-device" },
         },
       });
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("node.list");
+      await gateway.waitForRequest("environments.list");
       const placeSelect = page.locator("wa-popover.new-session-page__place-popover");
       await page.locator("#new-session-place-trigger").click();
       await placeSelect.getByRole("button", { name: "Old device" }).click();
@@ -303,9 +322,10 @@ suite.define(() => {
       const nodeRequestsBefore = (await gateway.getRequests("node.list")).length;
 
       await gateway.setOnline(false);
-      await page.locator(".sidebar-identity-card__subtitle").waitFor({ timeout: 10_000 });
+      await waitForControlUiGatewayReconnecting(page);
       await gateway.deferNext("node.list");
       await gateway.setOnline(true);
+      await waitForControlUiGatewayReady(page);
       await expect
         .poll(async () => (await gateway.getRequests("node.list")).length)
         .toBe(nodeRequestsBefore + 1);
@@ -336,12 +356,17 @@ suite.define(() => {
               },
             ],
           },
+          "environments.list": {
+            environments: [deviceEnvironment("old-device")],
+            profiles: [],
+          },
           "worktrees.branches": branchList("alpha"),
         },
       });
       await page.goto(`${suite.server.baseUrl}new`);
       await page.getByRole("heading", { name: "Original agent" }).waitFor();
       await gateway.waitForRequest("node.list");
+      await gateway.waitForRequest("environments.list");
       await gateway.waitForRequest("worktrees.branches");
 
       const message = page.locator(".new-session-page__message");
@@ -372,9 +397,14 @@ suite.define(() => {
           },
         ],
       });
+      await gateway.setMethodResponse("environments.list", {
+        environments: [deviceEnvironment("new-device")],
+        profiles: [],
+      });
       await gateway.setMethodResponse("worktrees.branches", branchList("beta"));
       const socketsBefore = await gateway.getSocketCount();
       const nodesBefore = (await gateway.getRequests("node.list")).length;
+      const environmentsBefore = (await gateway.getRequests("environments.list")).length;
       const branchesBefore = (await gateway.getRequests("worktrees.branches")).length;
 
       await replaceGatewayClient(page);
@@ -383,6 +413,9 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("node.list")).length)
         .toBe(nodesBefore + 1);
+      await expect
+        .poll(async () => (await gateway.getRequests("environments.list")).length)
+        .toBe(environmentsBefore + 1);
       await expect
         .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
         .toBe(branchesBefore + 1);
@@ -456,8 +489,9 @@ suite.define(() => {
         } else {
           const agentRequestsBefore = (await gateway.getRequests("agents.list")).length;
           await gateway.setOnline(false);
-          await page.locator(".sidebar-identity-card__subtitle").waitFor({ timeout: 10_000 });
+          await waitForControlUiGatewayReconnecting(page);
           await gateway.setOnline(true);
+          await waitForControlUiGatewayReady(page);
           await expect
             .poll(async () => (await gateway.getRequests("agents.list")).length)
             .toBe(agentRequestsBefore + 1);
@@ -467,7 +501,7 @@ suite.define(() => {
         await expect.poll(() => start.isDisabled()).toBe(true);
         await page
           .getByText(
-            "The Gateway changed while this thread was starting. Check recent threads before starting this task again.",
+            "The Gateway changed while this session was starting. Check recent sessions before starting this task again.",
           )
           .waitFor();
         expect(new URL(page.url()).pathname).toBe("/new");
@@ -533,7 +567,7 @@ suite.define(() => {
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
       await pollLocatorText(folderLabel).toBe("openclaw");
       await page.locator(".new-session-page__message").fill("retarget this draft");
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
 
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({

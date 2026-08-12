@@ -20,7 +20,7 @@ const catalogMocks = vi.hoisted(() => ({
 }));
 
 const manifestRegistryMocks = vi.hoisted(() => ({
-  loadPluginManifestRegistry: vi.fn(() => ({ plugins: [], diagnostics: [] })),
+  loadPluginManifestRegistryCore: vi.fn(() => ({ plugins: [], diagnostics: [] })),
 }));
 
 function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
@@ -515,14 +515,9 @@ vi.mock("../plugins/manifest-registry.js", async () => {
   );
   return {
     ...actual,
-    loadPluginManifestRegistry: manifestRegistryMocks.loadPluginManifestRegistry,
+    loadPluginManifestRegistryCore: manifestRegistryMocks.loadPluginManifestRegistryCore,
   };
 });
-
-vi.mock("../plugin-sdk/matrix-deps.js", () => ({
-  ensureMatrixSdkInstalled: vi.fn(async () => {}),
-  isMatrixSdkAvailable: vi.fn(() => true),
-}));
 
 vi.mock("../channels/plugins/bundled.js", () => ({
   getBundledChannelSetupPlugin: (channel: string) =>
@@ -610,8 +605,8 @@ describe("setupChannels", () => {
     setMinimalOnboardingRegistryForTests();
     catalogMocks.listChannelPluginCatalogEntries.mockReset();
     catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([]);
-    manifestRegistryMocks.loadPluginManifestRegistry.mockReset();
-    manifestRegistryMocks.loadPluginManifestRegistry.mockReturnValue({
+    manifestRegistryMocks.loadPluginManifestRegistryCore.mockReset();
+    manifestRegistryMocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [],
       diagnostics: [],
     });

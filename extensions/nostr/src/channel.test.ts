@@ -5,7 +5,7 @@ import {
   runSetupWizardConfigure,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { nostrPlugin } from "./channel.js";
 import { normalizePubkey } from "./nostr-key-utils.js";
@@ -18,6 +18,21 @@ import {
   createConfiguredNostrCfg,
 } from "./test-fixtures.js";
 import { listNostrAccountIds, resolveDefaultNostrAccountId, resolveNostrAccount } from "./types.js";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
+describe("nostr target classification", () => {
+  it("accepts only valid direct-message public keys", () => {
+    expect(nostrPlugin.messaging?.inferTargetChatType?.({ to: TEST_HEX_PUBLIC_KEY })).toBe(
+      "direct",
+    );
+    expect(
+      nostrPlugin.messaging?.inferTargetChatType?.({ to: "not-a-public-key" }),
+    ).toBeUndefined();
+  });
+});
 
 function normalizeNostrTestEntry(entry: string): string {
   return entry
@@ -422,6 +437,7 @@ describe("nostr unresolved SecretRef privateKey", () => {
   it.each(unresolvedSecretRefPrivateKeyCases)(
     "$name does not treat unresolved SecretRef privateKey as configured",
     ({ assert }) => {
+      vi.stubEnv("NOSTR_PRIVATE_KEY", TEST_HEX_PRIVATE_KEY);
       assert(createUnresolvedNostrPrivateKeyCfg());
     },
   );
@@ -496,6 +512,16 @@ describe("nostr account helpers", () => {
       expect(account.publicKey).toBe("");
       expect(account.relays).toContain("wss://relay.damus.io");
       expect(account.relays).toContain("wss://nos.lol");
+    });
+
+    it("resolves the default account private key from NOSTR_PRIVATE_KEY", () => {
+      vi.stubEnv("NOSTR_PRIVATE_KEY", TEST_HEX_PRIVATE_KEY);
+
+      const account = resolveNostrAccount({ cfg: { channels: { nostr: { enabled: true } } } });
+
+      expect(account.configured).toBe(true);
+      expect(account.privateKey).toBe(TEST_HEX_PRIVATE_KEY);
+      expect(account.publicKey).toMatch(/^[0-9a-f]{64}$/);
     });
 
     it("handles disabled channel", () => {

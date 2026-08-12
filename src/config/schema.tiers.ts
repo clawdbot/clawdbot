@@ -3,7 +3,7 @@ import { asSchemaObject, type ConfigJsonSchemaObject } from "./schema.shared.js"
 
 const ROOT_TIER_PATHS = `
 accessGroups acp agents approvals attachments auth bindings broadcast browser channels
-cloudWorkers commands cron diagnostics discovery env gateway hooks logging mcp memory messages
+cloudWorkers commands cron desktop diagnostics discovery env gateway hooks logging mcp memory messages
 meta models nodeHost plugins proxy secrets security session skills surfaces talk tools transcripts
 tts ui update wizard
 `
@@ -33,7 +33,7 @@ agents.defaults.subagents.model agents.defaults.subagents.model.primary
 agents.defaults.sandbox.ssh.workspaceRoot
 agents.defaults.sandbox.workspaceRoot
 agents.defaults.thinkingDefault agents.defaults.userTimezone agents.defaults.voiceModel.primary
-agents.defaults.workspace agents.entries.*.default agents.entries.*.groupChat.mentionPatterns
+agents.defaults.workspace agents.entries.*.groupChat.mentionPatterns
 agents.entries.*.groupChat.unmentionedInbound agents.entries.*.identity
 agents.entries.*.memory.search.enabled agents.entries.*.memory.search.provider
 agents.entries.*.memory.search.rememberAcrossConversations agents.entries.*.memory.search.model
@@ -132,8 +132,7 @@ hooks.mappings.*.agentId hooks.mappings.*.model hooks.token
 mcp.apps.enabled mcp.servers.*.args mcp.servers.*.auth mcp.servers.*.command
 mcp.servers.*.cwd mcp.servers.*.enabled mcp.servers.*.env mcp.servers.*.headers
 mcp.servers.*.oauth.authProfileId mcp.servers.*.transport mcp.servers.*.url
-memory.qmd.scope.default memory.qmd.scope.rules.*.action memory.search.enabled
-memory.search.model memory.search.provider memory.search.rememberAcrossConversations
+memory.search.enabled memory.search.model memory.search.provider memory.search.rememberAcrossConversations
 memory.search.remote.apiKey
 memory.search.sources models.providers.*.api models.providers.*.apiKey
 models.providers.*.auth models.providers.*.baseUrl models.providers.*.models.*.id

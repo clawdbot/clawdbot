@@ -1,5 +1,9 @@
 // Control UI component renders the command palette.
 import { consume } from "@lit/context";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
@@ -9,12 +13,12 @@ import { t } from "../i18n/index.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { getVisibleSessionRows } from "../lib/sessions/index.ts";
-import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../lib/string-coerce.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { isCommandPaletteShortcut } from "./command-palette-contract.ts";
 import { icons, type IconName } from "./icons.ts";
 import "./modal-dialog.ts";
+import { DESKTOP_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 
 type PaletteItem = {
   id: string;
@@ -31,7 +35,7 @@ const SESSION_SEARCH_LIMIT = 10;
 const SESSION_SEARCH_MAX_PAGES = 4;
 const SESSION_SEARCH_PAGE_SIZE = 50;
 
-function getPaletteBaseItems(): PaletteItem[] {
+function getPaletteBaseItems(desktopAvailable: boolean): PaletteItem[] {
   return [
     {
       id: "nav-new-session",
@@ -97,11 +101,22 @@ function getPaletteBaseItems(): PaletteItem[] {
       action: "/verbose full",
       description: t("palette.descriptions.verboseMode"),
     },
+    ...(desktopAvailable
+      ? [
+          {
+            id: "panel-desktop",
+            label: t("palette.items.desktop"),
+            icon: "monitor" as const,
+            category: "navigation" as const,
+            action: "panel:desktop",
+          },
+        ]
+      : []),
   ];
 }
 
-function getPaletteItemsInternal(): PaletteItem[] {
-  return getPaletteBaseItems();
+function getPaletteItemsInternal(desktopAvailable: boolean): PaletteItem[] {
+  return getPaletteBaseItems(desktopAvailable);
 }
 
 type CommandPaletteProps = {
@@ -115,6 +130,7 @@ type CommandPaletteProps = {
   onNavigate: (routeId: RouteId) => void;
   onSelectSession?: (sessionKey: string) => void;
   onSlashCommand?: (command: string) => void;
+  desktopAvailable: boolean;
   onInputRef: (element: Element | undefined) => void;
 };
 
@@ -122,8 +138,9 @@ function filteredItems(
   query: string,
   includeSlashCommands = true,
   sessionItems: readonly PaletteItem[] = [],
+  desktopAvailable = false,
 ): PaletteItem[] {
-  const items = getPaletteItemsInternal().filter(
+  const items = getPaletteItemsInternal(desktopAvailable).filter(
     (item) => includeSlashCommands || item.category !== "search",
   );
   if (!query) {
@@ -159,6 +176,8 @@ function selectItem(item: PaletteItem, props: CommandPaletteProps) {
     props.onNavigate(item.action.slice(4) as RouteId);
   } else if (item.action.startsWith(SESSION_ACTION_PREFIX)) {
     props.onSelectSession?.(item.action.slice(SESSION_ACTION_PREFIX.length));
+  } else if (item.action === "panel:desktop") {
+    window.dispatchEvent(new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
   } else {
     props.onSlashCommand?.(item.action);
   }
@@ -177,7 +196,12 @@ function scrollActiveIntoView() {
 }
 
 function handleKeydown(e: KeyboardEvent, props: CommandPaletteProps) {
-  const items = filteredItems(props.query, Boolean(props.onSlashCommand), props.sessionItems);
+  const items = filteredItems(
+    props.query,
+    Boolean(props.onSlashCommand),
+    props.sessionItems,
+    props.desktopAvailable,
+  );
   if (items.length === 0 && (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter")) {
     return;
   }
@@ -242,7 +266,12 @@ function renderCommandPalette(props: CommandPaletteProps) {
   if (!props.open) {
     return nothing;
   }
-  const items = filteredItems(props.query, Boolean(props.onSlashCommand), props.sessionItems);
+  const items = filteredItems(
+    props.query,
+    Boolean(props.onSlashCommand),
+    props.sessionItems,
+    props.desktopAvailable,
+  );
   const grouped = groupItems(items);
   const activeItem = items[props.activeIndex];
   const activeOptionId = activeItem ? getOptionId(activeItem) : nothing;
@@ -333,6 +362,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onNavigate?: (routeId: RouteId) => void;
   @property({ attribute: false }) onSelectSession?: (sessionKey: string) => void;
   @property({ attribute: false }) onSlashCommand?: (command: string) => void;
+  @property({ attribute: false }) desktopAvailable = false;
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext<RouteId>;
   @state() private open = false;
@@ -543,6 +573,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       query: this.query,
       activeIndex: this.activeIndex,
       sessionItems: this.sessionItems,
+      desktopAvailable: this.desktopAvailable,
       onToggle: this.togglePalette,
       onQueryChange: (query) => {
         this.query = query;

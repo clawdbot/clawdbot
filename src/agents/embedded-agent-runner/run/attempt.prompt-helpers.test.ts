@@ -31,19 +31,21 @@ const hostHookStateMocks = vi.hoisted(() => ({
   drainPluginNextTurnInjectionContext: vi.fn(),
 }));
 
-vi.mock("../../image-generation-task-status.js", () => imageGenerationTaskStatusMocks);
-vi.mock("../../music-generation-task-status.js", () => musicGenerationTaskStatusMocks);
-vi.mock("../../video-generation-task-status.js", () => videoGenerationTaskStatusMocks);
+vi.mock("../../media-generation-task-status.js", () => ({
+  ...imageGenerationTaskStatusMocks,
+  ...musicGenerationTaskStatusMocks,
+  ...videoGenerationTaskStatusMocks,
+}));
 vi.mock("../../../plugins/host-hook-state.js", () => hostHookStateMocks);
 
-import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-skip.js";
 import {
   forgetPromptBuildDrainCacheForRun,
   mergeOrphanedTrailingUserPrompt,
   resolveAttemptMediaTaskSystemPromptAddition,
   resolvePromptBuildHookResult,
   shouldInjectHeartbeatPrompt,
-} from "./attempt.prompt-helpers.js";
+} from "./attempt-prompt-helpers.js";
+import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-submit.js";
 
 function hasLoneSurrogate(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
@@ -64,7 +66,7 @@ function hasLoneSurrogate(value: string): boolean {
 }
 
 describe("shouldInjectHeartbeatPrompt", () => {
-  it("keeps global heartbeat guidance out of commitment-only runs", () => {
+  it("injects global heartbeat guidance for heartbeat runs", () => {
     const heartbeatParams = {
       config: {},
       agentId: "main",
@@ -74,12 +76,6 @@ describe("shouldInjectHeartbeatPrompt", () => {
     };
 
     expect(shouldInjectHeartbeatPrompt(heartbeatParams)).toBe(true);
-    expect(
-      shouldInjectHeartbeatPrompt({
-        ...heartbeatParams,
-        bootstrapContextRunKind: "commitment-only",
-      }),
-    ).toBe(false);
   });
 });
 
@@ -132,13 +128,13 @@ describe("resolveAttemptMediaTaskSystemPromptAddition", () => {
 
     expect(
       imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession,
-    ).toHaveBeenCalledWith("agent:main:discord:direct:123");
+    ).toHaveBeenCalledWith("agent:main:discord:direct:123", undefined);
     expect(
       videoGenerationTaskStatusMocks.buildActiveVideoGenerationTaskPromptContextForSession,
-    ).toHaveBeenCalledWith("agent:main:discord:direct:123");
+    ).toHaveBeenCalledWith("agent:main:discord:direct:123", undefined);
     expect(
       musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession,
-    ).toHaveBeenCalledWith("agent:main:discord:direct:123");
+    ).toHaveBeenCalledWith("agent:main:discord:direct:123", undefined);
     expect(result).toBe("Image task hint\n\nActive task hint\n\nMusic task hint");
   });
 
@@ -285,44 +281,6 @@ describe("resolvePromptBuildHookResult drain cache", () => {
     expect(result.toolsAllow).toEqual([]);
     expect(runBeforePromptBuild).toHaveBeenCalledOnce();
     forgetPromptBuildDrainCacheForRun("tools-allow-run");
-  });
-
-  it("does not drain global injections or heartbeat contributions for commitment-only runs", async () => {
-    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockReset();
-    const runAgentTurnPrepare = vi.fn(async () => ({ prependContext: "turn policy" }));
-    const runHeartbeatPromptContribution = vi.fn(async () => ({
-      prependContext: "global heartbeat policy",
-    }));
-    const hookRunner = {
-      hasHooks: vi.fn(
-        (hookName: string) =>
-          hookName === "agent_turn_prepare" || hookName === "heartbeat_prompt_contribution",
-      ),
-      runAgentTurnPrepare,
-      runHeartbeatPromptContribution,
-      runBeforePromptBuild: vi.fn(async () => undefined),
-    };
-
-    const result = await resolvePromptBuildHookResult({
-      config: {},
-      prompt: "due commitment",
-      messages: [],
-      hookCtx: {
-        runId: "commitment-only-run",
-        trigger: "heartbeat",
-        sessionKey: "agent:main:telegram:direct:123",
-      },
-      hookRunner,
-      bootstrapContextRunKind: "commitment-only",
-    });
-
-    expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).not.toHaveBeenCalled();
-    expect(runAgentTurnPrepare).toHaveBeenCalledWith(
-      expect.objectContaining({ queuedInjections: [] }),
-      expect.any(Object),
-    );
-    expect(runHeartbeatPromptContribution).not.toHaveBeenCalled();
-    expect(result.prependContext).toBe("turn policy");
   });
 
   it("drains plugin next-turn injections at most once per runId across retry attempts", async () => {

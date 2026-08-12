@@ -1,4 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   CronJob,
@@ -24,7 +26,6 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../gateway-errors.ts";
-import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../string-coerce.ts";
 import { parseCronEveryMs } from "./decimal.ts";
 import { loadCronFailingCount } from "./scope.ts";
 
@@ -182,6 +183,7 @@ export type CronState = {
   cronJobsReloadPending: boolean;
   cronJobsReloadPendingTableFilters: boolean;
   cronJobs: CronJob[];
+  cronJobsSnapshotRevision: string | null;
   cronJobsTotal: number;
   cronJobsHasMore: boolean;
   cronJobsNextOffset: number | null;
@@ -239,6 +241,7 @@ export function createInitialCronState(
     cronJobsReloadPending: false,
     cronJobsReloadPendingTableFilters: false,
     cronJobs: [],
+    cronJobsSnapshotRevision: null,
     cronJobsTotal: 0,
     cronJobsHasMore: false,
     cronJobsNextOffset: null,
@@ -500,7 +503,7 @@ async function withCronBusy(
   }
 }
 
-function normalizeCronPageMeta(params: {
+function normalizeCronRunsPageMeta(params: {
   totalRaw: unknown;
   offsetRaw: unknown;
   nextOffsetRaw: unknown;
@@ -526,6 +529,66 @@ function normalizeCronPageMeta(params: {
         ? offset + params.pageCount
         : null;
   return { total, hasMore, nextOffset };
+}
+
+type CanonicalCronJobsPage = {
+  jobs: CronJob[];
+  snapshotRevision: string;
+  total: number;
+  offset: number;
+  limit: number;
+  hasMore: boolean;
+  nextOffset: number | null;
+};
+
+function readCanonicalCronJobsPage(value: unknown, requestedLimit: number): CanonicalCronJobsPage {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.jobs) ||
+    typeof value.snapshotRevision !== "string" ||
+    value.snapshotRevision.length === 0 ||
+    typeof value.total !== "number" ||
+    !Number.isSafeInteger(value.total) ||
+    value.total < 0 ||
+    typeof value.offset !== "number" ||
+    !Number.isSafeInteger(value.offset) ||
+    value.offset < 0 ||
+    typeof value.limit !== "number" ||
+    !Number.isSafeInteger(value.limit) ||
+    value.limit < 1 ||
+    value.limit > requestedLimit ||
+    value.jobs.length > value.limit ||
+    typeof value.hasMore !== "boolean" ||
+    (value.nextOffset !== null &&
+      (typeof value.nextOffset !== "number" ||
+        !Number.isSafeInteger(value.nextOffset) ||
+        value.nextOffset < 0))
+  ) {
+    throw new Error("cron.list returned an invalid inventory page");
+  }
+  return value as CanonicalCronJobsPage;
+}
+
+function assertCanonicalCronJobsCursor(page: CanonicalCronJobsPage, requestedOffset: number) {
+  const nextOffset = requestedOffset + page.jobs.length;
+  if (
+    page.offset !== requestedOffset ||
+    !Number.isSafeInteger(nextOffset) ||
+    nextOffset > page.total ||
+    (page.hasMore
+      ? page.nextOffset !== nextOffset || nextOffset <= requestedOffset || nextOffset >= page.total
+      : page.nextOffset !== null || nextOffset !== page.total)
+  ) {
+    throw new Error("cron.list returned an invalid inventory page");
+  }
+}
+
+function queueCronJobsSnapshotRecovery(state: CronState, tableFilters: boolean) {
+  if (state.cronJobsReloadPending) {
+    return;
+  }
+  state.cronJobsReloadPending = true;
+  state.cronJobsReloadPendingTableFilters = tableFilters;
 }
 
 async function drainPendingCronJobsReload(state: CronState) {
@@ -581,19 +644,25 @@ export async function loadCronJobsPage(
       sortBy: state.cronJobsSortBy,
       sortDir: state.cronJobsSortDir,
     });
-    const rawJobs = Array.isArray(res.jobs) ? res.jobs : [];
-    const jobs = rawJobs.filter(hasCronJobPayload);
-    state.cronJobs = append ? [...state.cronJobs, ...jobs] : jobs;
-    const meta = normalizeCronPageMeta({
-      totalRaw: res.total,
-      offsetRaw: res.offset,
-      nextOffsetRaw: res.nextOffset,
-      hasMoreRaw: res.hasMore,
-      pageCount: rawJobs.length,
-    });
-    state.cronJobsTotal = Math.max(meta.total, state.cronJobs.length);
-    state.cronJobsHasMore = meta.hasMore;
-    state.cronJobsNextOffset = meta.nextOffset;
+    const page = readCanonicalCronJobsPage(res, state.cronJobsLimit);
+    if (
+      append &&
+      (page.snapshotRevision !== state.cronJobsSnapshotRevision ||
+        page.total !== state.cronJobsTotal)
+    ) {
+      // A changed snapshot can move rows behind the append boundary. Preserve
+      // the coherent table and let one serialized page-zero reload recover it.
+      queueCronJobsSnapshotRecovery(state, opts?.tableFilters === true);
+      return;
+    }
+    assertCanonicalCronJobsCursor(page, offset);
+    const jobs = page.jobs.filter(hasCronJobPayload);
+    const nextJobs = append ? [...state.cronJobs, ...jobs] : jobs;
+    state.cronJobs = nextJobs;
+    state.cronJobsSnapshotRevision = page.snapshotRevision;
+    state.cronJobsTotal = page.total;
+    state.cronJobsHasMore = page.hasMore;
+    state.cronJobsNextOffset = page.nextOffset;
     if (
       state.cronEditingJobId &&
       !state.cronJobs.some((job) => job.id === state.cronEditingJobId)
@@ -1308,7 +1377,7 @@ export async function loadCronRuns(
     }
     const entries = Array.isArray(res.entries) ? res.entries : [];
     state.cronRuns = append ? [...state.cronRuns, ...entries] : entries;
-    const meta = normalizeCronPageMeta({
+    const meta = normalizeCronRunsPageMeta({
       totalRaw: res.total,
       offsetRaw: res.offset,
       nextOffsetRaw: res.nextOffset,

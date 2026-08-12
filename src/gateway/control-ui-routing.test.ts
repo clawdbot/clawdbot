@@ -250,6 +250,18 @@ describe("classifyControlUiRequest", () => {
         expected: { kind: "not-control-ui" as const },
       },
       {
+        name: "keeps the device join root outside the SPA catch-all",
+        pathname: "/j",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "keeps device join codes outside the SPA catch-all",
+        pathname: `/j/${"a".repeat(22)}`,
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
         name: "keeps the OpenAI-compatible API root outside the SPA catch-all",
         pathname: "/v1",
         method: "GET",
@@ -302,6 +314,24 @@ describe("classifyControlUiRequest", () => {
         pathname: "/__openclaw__/mcp-app/other",
         method: "GET",
         expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "keeps worker admission outside the SPA catch-all",
+        pathname: "/__openclaw__/worker",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "keeps worker admission descendants outside the SPA catch-all",
+        pathname: "/__openclaw__/worker/other",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "preserves SPA routes that only resemble worker admission",
+        pathname: "/__openclaw__/workers",
+        method: "GET",
+        expected: { kind: "serve" as const, spaFallback: true },
       },
       {
         name: "keeps health probe descendants outside the SPA catch-all",

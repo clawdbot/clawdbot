@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveLegacyOAuthPath } from "../agents/auth-profiles/legacy-source-diagnostic.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   CONFIG_PATH,
   DEFAULT_GATEWAY_PORT,
@@ -29,7 +29,7 @@ function envWith(overrides: Record<string, string | undefined>): NodeJS.ProcessE
 
 describe("default state directory", () => {
   it("matches filesystem aliases of the default state directory", async () => {
-    await withTempDir({ prefix: "openclaw-default-state-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-default-state-" }, async (root) => {
       const home = path.join(root, "home");
       const defaultStateDir = path.join(home, ".openclaw");
       const stateAlias = path.join(home, "state-alias");
@@ -59,7 +59,7 @@ describe("default install identity", () => {
   });
 
   it("preserves implicit legacy config discovery for the default profile", async () => {
-    await withTempDir({ prefix: "openclaw-default-install-legacy-config-" }, async (home) => {
+    await withTestDir({ prefix: "openclaw-default-install-legacy-config-" }, async (home) => {
       const stateDir = path.join(home, ".openclaw");
       const legacyStateDir = path.join(home, ".clawdbot");
       const legacyConfigPath = path.join(legacyStateDir, "clawdbot.json");
@@ -144,7 +144,7 @@ describe("default install identity", () => {
   });
 
   it("accepts the canonical paths a named profile projects", async () => {
-    await withTempDir({ prefix: "openclaw-profile-install-" }, async (home) => {
+    await withTestDir({ prefix: "openclaw-profile-install-" }, async (home) => {
       const defaultStateDir = path.join(home, ".openclaw");
       const profileStateDir = path.join(home, ".openclaw-work");
       await fs.mkdir(defaultStateDir, { recursive: true });
@@ -322,9 +322,35 @@ describe("oauth paths", () => {
 describe("gateway port resolution", () => {
   it("prefers numeric env values over config", () => {
     expect(
-      resolveGatewayPort({ gateway: { port: 19002 } }, envWith({ OPENCLAW_GATEWAY_PORT: "19001" })),
+      resolveGatewayPort(
+        { gateway: { port: 19002 } },
+        envWith({ OPENCLAW_GATEWAY_PORT: "19001", OPENCLAW_PROFILE: "work" }),
+      ),
     ).toBe(19001);
+    expect(
+      resolveGatewayPort({ gateway: { port: 19002 } }, envWith({ OPENCLAW_PROFILE: "work" })),
+    ).toBe(19002);
   });
+
+  it.each([
+    { profile: "ct2", expected: 45696 },
+    { profile: "p1402", expected: 55636 },
+    { profile: "p2380", expected: 55636 },
+  ])("derives the byte-exact profile port for $profile", ({ profile, expected }) => {
+    const port = resolveGatewayPort({}, envWith({ OPENCLAW_PROFILE: profile }));
+    expect(port).toBe(expected);
+    expect(port).toBeGreaterThanOrEqual(20000);
+    expect(port).toBeLessThan(60000);
+  });
+
+  it.each([undefined, "default", "Default", "../escape"])(
+    "keeps the default port for profile %j",
+    (profile) => {
+      expect(resolveGatewayPort({}, envWith({ OPENCLAW_PROFILE: profile }))).toBe(
+        DEFAULT_GATEWAY_PORT,
+      );
+    },
+  );
 
   it("accepts Compose-style IPv4 host publish values from env", () => {
     expect(
@@ -501,7 +527,7 @@ describe("state + config path candidates", () => {
   });
 
   it("prefers ~/.openclaw when it exists and legacy dir is missing", async () => {
-    await withTempDir({ prefix: "openclaw-state-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-state-" }, async (root) => {
       const newDir = path.join(root, ".openclaw");
       await fs.mkdir(newDir, { recursive: true });
       const resolved = resolveStateDir({} as NodeJS.ProcessEnv, () => root);
@@ -510,7 +536,7 @@ describe("state + config path candidates", () => {
   });
 
   it("falls back to existing legacy state dir when ~/.openclaw is missing", async () => {
-    await withTempDir({ prefix: "openclaw-state-legacy-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-state-legacy-" }, async (root) => {
       const legacyDir = path.join(root, ".clawdbot");
       await fs.mkdir(legacyDir, { recursive: true });
       const resolved = resolveStateDir({} as NodeJS.ProcessEnv, () => root);
@@ -519,7 +545,7 @@ describe("state + config path candidates", () => {
   });
 
   it("CONFIG_PATH prefers existing config when present", async () => {
-    await withTempDir({ prefix: "openclaw-config-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-config-" }, async (root) => {
       const legacyDir = path.join(root, ".openclaw");
       await fs.mkdir(legacyDir, { recursive: true });
       const legacyPath = path.join(legacyDir, "openclaw.json");
@@ -531,7 +557,7 @@ describe("state + config path candidates", () => {
   });
 
   it("respects state dir overrides when config is missing", async () => {
-    await withTempDir({ prefix: "openclaw-config-override-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-config-override-" }, async (root) => {
       const legacyDir = path.join(root, ".openclaw");
       await fs.mkdir(legacyDir, { recursive: true });
       const legacyConfig = path.join(legacyDir, "openclaw.json");

@@ -1,40 +1,32 @@
 // Xai plugin module implements tts behavior.
+import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import {
   assertOkOrThrowProviderError,
-  assertProviderBinaryResponseContent,
   postJsonRequest,
+  readProviderBinaryResponse,
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { asObject, trimToUndefined, type SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
+import { trimToUndefined, type SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import WebSocket, { type RawData } from "ws";
-import { XAI_BASE_URL } from "./api.js";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+import WebSocket from "ws";
+import { XAI_BASE_URL } from "./model-definitions.js";
+import {
+  isValidXaiTtsVoice,
+  normalizeXaiLanguageCode,
+  normalizeXaiTtsBaseUrl,
+} from "./speech-provider-metadata.js";
 import { xaiUserAgentHeaderFor } from "./src/xai-user-agent.js";
-export { XAI_BASE_URL };
 
 const DEFAULT_TTS_MAX_BYTES = 16 * 1024 * 1024;
 const XAI_TTS_VOICE_LIST_TIMEOUT_MS = 30_000;
 const XAI_TTS_VOICE_LIST_MAX_BYTES = 1024 * 1024;
 const XAI_TTS_STREAM_TEXT_DELTA_MAX_CHARS = 15_000;
-export const XAI_TTS_FALLBACK_VOICES = ["ara", "eve", "leo", "rex", "sal"] as const;
-
-export function normalizeXaiTtsBaseUrl(baseUrl?: string): string {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return XAI_BASE_URL;
-  }
-  return trimmed.replace(/\/+$/, "");
-}
-
-export function isValidXaiTtsVoice(voice: string): boolean {
-  return trimToUndefined(voice) !== undefined;
-}
-
 export async function listXaiTtsVoices(params: {
   apiKey: string;
   baseUrl?: string;
@@ -58,12 +50,12 @@ export async function listXaiTtsVoices(params: {
     const payload = await readProviderJsonResponse<unknown>(response, "xAI TTS voices", {
       maxBytes: XAI_TTS_VOICE_LIST_MAX_BYTES,
     });
-    const voices = asObject(payload)?.voices;
+    const voices = asOptionalRecord(payload)?.voices;
     if (!Array.isArray(voices)) {
       throw new Error("xAI TTS voices: malformed JSON response");
     }
     return voices.flatMap((value) => {
-      const voice = asObject(value);
+      const voice = asOptionalRecord(value);
       const id = trimToUndefined(voice?.voice_id);
       if (!id) {
         return [];
@@ -80,20 +72,6 @@ export async function listXaiTtsVoices(params: {
   } finally {
     await release();
   }
-}
-
-export function normalizeXaiLanguageCode(value: unknown): string | undefined {
-  const trimmed = trimToUndefined(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  const normalized = trimmed.toLowerCase();
-  if (normalized === "auto" || /^[a-z]{2,3}(?:-[a-z]{2,4})?$/.test(normalized)) {
-    return normalized;
-  }
-  throw new Error(
-    `xAI language must be "auto" or a BCP-47 tag (e.g. "en", "pt-br", "zh-cn"); got: ${normalized}`,
-  );
 }
 
 type XaiTtsResponseFormat = "mp3" | "wav" | "pcm" | "mulaw" | "alaw";
@@ -157,22 +135,6 @@ function assertXaiNativeTtsStreamEndpoint(baseUrl: string): void {
   if (url.username || url.password || url.port || pathname !== "/v1" || url.search || url.hash) {
     throw new Error(`xAI streaming TTS requires the canonical ${XAI_BASE_URL} base URL`);
   }
-}
-
-function decodeWebSocketTextMessage(data: RawData): string {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (Buffer.isBuffer(data)) {
-    return data.toString("utf8");
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(data).toString("utf8");
-  }
-  throw new Error("xAI TTS stream received unsupported WebSocket message payload");
 }
 
 export async function xaiTTSStream(params: {
@@ -296,7 +258,7 @@ export async function xaiTTSStream(params: {
         },
       });
     } catch (error) {
-      failConnect(error instanceof Error ? error : new Error(String(error)));
+      failConnect(toStringifiedError(error));
       return;
     }
 
@@ -315,7 +277,7 @@ export async function xaiTTSStream(params: {
     });
 
     ws.once("error", (error) => {
-      const normalized = error instanceof Error ? error : new Error(String(error));
+      const normalized = toStringifiedError(error);
       if (connectSettled) {
         failStream(normalized);
         return;
@@ -409,10 +371,10 @@ export async function xaiTTSStream(params: {
           return;
         }
         try {
-          const payload = decodeWebSocketTextMessage(data);
+          const payload = rawDataToString(data);
           handleServerEvent(JSON.parse(payload) as XaiTtsStreamServerEvent);
         } catch (error) {
-          failStream(error instanceof Error ? error : new Error(String(error)));
+          failStream(toStringifiedError(error));
         }
       });
 
@@ -446,7 +408,7 @@ export async function xaiTTSStream(params: {
         }
         ws?.send(JSON.stringify({ type: "text.done" }));
       } catch (error) {
-        failStream(error instanceof Error ? error : new Error(String(error)));
+        failStream(toStringifiedError(error));
       }
 
       resolve({ audioStream: wiredStream, release });
@@ -506,22 +468,13 @@ export async function xaiTTS(params: {
   try {
     await assertOkOrThrowProviderError(response, "xAI TTS API error");
 
-    try {
-      assertProviderBinaryResponseContent(response, "xAI TTS API error", "audio");
-    } catch (error) {
-      // A debug-capture clone can keep the tee open, so waiting for cancel would hang
-      // before the rejected response and its dispatcher can be released.
-      void response.body?.cancel().catch(() => undefined);
-      throw error;
-    }
-    const audio = await readResponseWithLimit(response, maxBytes, {
-      onOverflow: ({ maxBytes: maxBytesLocal }) =>
-        new Error(`xAI TTS audio response exceeds ${maxBytesLocal} bytes`),
-    });
-    if (audio.byteLength === 0) {
-      throw new Error("xAI TTS API error: malformed audio response");
-    }
-    return audio;
+    return Buffer.from(
+      await readProviderBinaryResponse(response, "xAI TTS API error", "audio", {
+        maxBytes,
+        onOverflow: ({ maxBytes: maxBytesLocal }) =>
+          new Error(`xAI TTS audio response exceeds ${maxBytesLocal} bytes`),
+      }),
+    );
   } finally {
     await release();
   }

@@ -122,7 +122,11 @@ function normalizeNpmViewMetadata(value: unknown, spec: string): NpmSpecResoluti
 /** Reads npm registry metadata for a package spec without running package scripts. */
 type NpmMetadataFailureCategory = "metadata-env";
 
-export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?: number }): Promise<
+export async function resolveNpmSpecMetadata(params: {
+  spec: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<
   | {
       ok: true;
       metadata: NpmSpecResolution;
@@ -147,6 +151,8 @@ export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?:
     ],
     {
       timeoutMs: Math.max(params.timeoutMs ?? 60_000, 60_000),
+      signal: params.signal,
+      killProcessTree: true,
       env: createNpmMetadataEnv(),
     },
   );
@@ -191,7 +197,7 @@ export type NpmIntegrityDrift = {
 };
 
 /** Runs a callback in a private temp directory and removes it afterward. */
-export async function withTempDir<T>(
+export async function withInstallWorkspace<T>(
   prefix: string,
   fn: (tmpDir: string) => Promise<T>,
   options?: { rootDir?: string },
@@ -344,6 +350,7 @@ export async function packNpmSpecToArchive(params: {
   spec: string;
   timeoutMs: number;
   cwd: string;
+  signal?: AbortSignal;
 }): Promise<
   | {
       ok: true;
@@ -359,6 +366,8 @@ export async function packNpmSpecToArchive(params: {
     ["npm", "pack", params.spec, "--ignore-scripts", "--json"],
     {
       timeoutMs: Math.max(params.timeoutMs, 300_000),
+      signal: params.signal,
+      killProcessTree: true,
       cwd: params.cwd,
       env: createNpmMetadataEnv({ npmConfigCwd: params.cwd }),
     },
@@ -407,6 +416,7 @@ export async function packNpmSpecToArchive(params: {
 export async function resolveNpmPackArchiveMetadata(params: {
   archivePath: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<
   | {
       ok: true;
@@ -431,6 +441,8 @@ export async function resolveNpmPackArchiveMetadata(params: {
     ["npm", "pack", archivePath, "--ignore-scripts", "--dry-run", "--json"],
     {
       timeoutMs: Math.max(params.timeoutMs ?? archiveMetadataTimeoutMs, archiveMetadataTimeoutMs),
+      signal: params.signal,
+      killProcessTree: true,
       env: createNpmMetadataEnv(),
     },
   );

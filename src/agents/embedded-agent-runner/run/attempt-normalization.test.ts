@@ -1,35 +1,42 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
-import { buildContextEngineCompactionSessionTarget } from "./session-bootstrap.js";
+import { loadAttemptSessionEntryAfterQuotaMaintenance } from "./attempt-transcript-helpers.js";
+import {
+  assertAgentHarnessRunAdmission,
+  buildContextEngineCompactionSessionTarget,
+  resetNoRealConversationTokenSnapshot,
+} from "./session-bootstrap.js";
+import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
 const sessionAccessorMocks = vi.hoisted(() => ({
-  listSessionEntries: vi.fn(() => []),
+  listSessionEntriesCore: vi.fn(() => []),
   loadSessionEntry: vi.fn(),
+  updateSessionEntry: vi.fn(async () => undefined),
 }));
 
 vi.mock("../../../config/sessions/session-accessor.js", () => sessionAccessorMocks);
 
 beforeEach(() => {
-  sessionAccessorMocks.listSessionEntries.mockReset().mockReturnValue([]);
+  sessionAccessorMocks.listSessionEntriesCore.mockReset().mockReturnValue([]);
   sessionAccessorMocks.loadSessionEntry.mockReset();
+  sessionAccessorMocks.updateSessionEntry.mockReset().mockResolvedValue(undefined);
 });
 
 describe("buildContextEngineCompactionSessionTarget", () => {
-  it("uses the marker session id as the fallback compatibility key", () => {
+  it("leaves the key absent when a marker has no stored mapping", () => {
     expect(
       buildContextEngineCompactionSessionTarget({
         sessionFile: "sqlite:main:marker-session:/tmp/sessions.json",
         sessionId: "stale-outer-session",
       }),
-    ).toMatchObject({
+    ).toEqual({
       agentId: "main",
       sessionId: "marker-session",
-      sessionKey: "marker-session",
       storePath: "/tmp/sessions.json",
     });
   });
 
-  it("uses the configured default agent for an unscoped compatibility key", () => {
+  it("uses the configured default agent without inventing a session key", () => {
     expect(
       buildContextEngineCompactionSessionTarget({
         config: {
@@ -39,15 +46,59 @@ describe("buildContextEngineCompactionSessionTarget", () => {
         sessionFile: "compat-session",
         sessionId: "compat-session",
       }),
-    ).toMatchObject({
+    ).toEqual({
       agentId: "worker",
       sessionId: "compat-session",
-      sessionKey: "compat-session",
       storePath: "/tmp/worker/sessions.json",
     });
   });
 
-  it("uses an adopted target session id when no session key is available", () => {
+  it("uses the persisted fixed-store owner for a bare compaction key", () => {
+    expect(
+      buildContextEngineCompactionSessionTarget({
+        config: {
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "ops" } },
+            entries: { ops: {}, research: {} },
+          },
+          session: { store: "/tmp/shared-sessions.json" },
+        },
+        sessionFile: "global",
+        sessionId: "ops-session",
+        sessionKey: "global",
+      }),
+    ).toMatchObject({
+      agentId: "ops",
+      sessionKey: "global",
+      storePath: "/tmp/shared-sessions.json",
+    });
+  });
+
+  it("rejects a partial target that conflicts with the fixed-store owner", () => {
+    expect(() =>
+      buildContextEngineCompactionSessionTarget({
+        config: {
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "ops" } },
+            entries: { ops: {}, research: {} },
+          },
+          session: { store: "/tmp/shared-sessions.json" },
+        },
+        sessionFile: "global",
+        sessionId: "ops-session",
+        sessionKey: "global",
+        sessionTarget: {
+          agentId: "research",
+          sessionId: "ops-session",
+          sessionKey: "global",
+        },
+      }),
+    ).toThrow(/belongs to "ops"/u);
+  });
+
+  it("preserves an adopted session id without inventing a session key", () => {
     expect(
       buildContextEngineCompactionSessionTarget({
         sessionFile: "",
@@ -58,11 +109,111 @@ describe("buildContextEngineCompactionSessionTarget", () => {
           storePath: "/tmp/sessions.json",
         },
       }),
-    ).toMatchObject({
+    ).toEqual({
       agentId: "main",
       sessionId: "adopted-session",
-      sessionKey: "adopted-session",
       storePath: "/tmp/sessions.json",
+    });
+  });
+});
+
+describe("fixed-store session bootstrap", () => {
+  const config = {
+    agents: {
+      ownership: "explicit" as const,
+      defaults: { sessionStore: { agentId: "ops" } },
+      entries: { ops: {}, research: {} },
+    },
+    session: { store: "/tmp/shared-sessions.json" },
+  };
+
+  it("carries the persisted owner into token snapshot resets", async () => {
+    await resetNoRealConversationTokenSnapshot({ config, sessionKey: "global" });
+
+    expect(sessionAccessorMocks.updateSessionEntry).toHaveBeenCalledWith(
+      {
+        agentId: "ops",
+        sessionKey: "global",
+        storePath: "/tmp/shared-sessions.json",
+      },
+      expect.any(Function),
+      expect.objectContaining({ skipMaintenance: true }),
+    );
+  });
+
+  it("carries the persisted owner into harness admission", () => {
+    assertAgentHarnessRunAdmission({
+      config,
+      sessionId: "ops-session",
+      sessionKey: "global",
+    } as never);
+
+    expect(sessionAccessorMocks.loadSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "ops",
+        sessionKey: "global",
+        storePath: "/tmp/shared-sessions.json",
+      }),
+    );
+  });
+
+  it("carries the resolved owner into quota-maintenance reads", async () => {
+    sessionAccessorMocks.loadSessionEntry.mockReturnValueOnce({
+      sessionId: "ops-session",
+      updatedAt: 1,
+    });
+
+    await loadAttemptSessionEntryAfterQuotaMaintenance({
+      agentId: "ops",
+      sessionKey: "global",
+      storePath: "/tmp/shared-sessions.json",
+    });
+
+    expect(sessionAccessorMocks.loadSessionEntry).toHaveBeenCalledWith({
+      agentId: "ops",
+      sessionKey: "global",
+      storePath: "/tmp/shared-sessions.json",
+    });
+  });
+});
+
+describe("createEmbeddedRunSessionPromptState", () => {
+  it("keeps the admitted writer fence private across context-engine target adoption", () => {
+    const state = createEmbeddedRunSessionPromptState({
+      runParams: {
+        agentId: "main",
+        prompt: "hello",
+        runId: "run-b",
+        sessionFile: "agent:main:main",
+        sessionId: "session-before",
+        sessionKey: "agent:main:main",
+        sessionTarget: {
+          agentId: "main",
+          expectedLifecycleRevision: "revision-a",
+          expectedWriterRunId: "run-b",
+          sessionId: "session-before",
+          sessionKey: "agent:main:main",
+          storePath: "/tmp/sessions.json",
+        },
+        timeoutMs: 30_000,
+        workspaceDir: "/tmp",
+      } as never,
+      lifecycleGeneration: "generation-a",
+      resolvedSessionKey: "agent:main:main",
+      sessionAgentId: "main",
+    });
+
+    state.sessionTarget = {
+      agentId: "main",
+      sessionId: "session-after",
+      sessionKey: "agent:main:main",
+      storePath: "/tmp/sessions.json",
+    };
+
+    expect(state.sessionTarget).not.toHaveProperty("expectedWriterRunId");
+    expect(state.sessionWriterFence).toEqual({
+      expectedLifecycleRevision: "revision-a",
+      expectedWriterRunId: "run-b",
     });
   });
 });
@@ -139,7 +290,7 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
       sessionId: "session-before",
       updatedAt: 1,
     });
-    sessionAccessorMocks.listSessionEntries.mockReturnValue([
+    sessionAccessorMocks.listSessionEntriesCore.mockReturnValue([
       {
         sessionKey: "agent:main:other",
         entry: { sessionId: "session-after", updatedAt: 2 },

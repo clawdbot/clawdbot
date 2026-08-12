@@ -1,13 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NODE_DEVICE_APPS_COMMAND } from "../infra/node-commands.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
+import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import type { NodeHostClient } from "./client.js";
 import { listRegisteredNodeHostCapsAndCommands } from "./plugin-node-host.js";
 import { prepareNodeHostRuntime } from "./runtime.js";
 
 const mocks = vi.hoisted(() => ({
   closeMcp: vi.fn(async () => undefined),
+  closeWorkerSupervisor: vi.fn(async () => undefined),
   handleInvoke: vi.fn(async () => undefined),
+  progressStartHeartbeats: vi.fn(),
+  progressWrite: vi.fn(async () => undefined),
 }));
 
 vi.mock("../infra/path-env.js", () => ({
@@ -29,11 +33,15 @@ vi.mock("./mcp.js", () => ({
 
 vi.mock("./node-invoke-progress.js", () => ({
   createNodeInvokeProgressWriter: vi.fn(() => ({
-    startHeartbeats: vi.fn(),
-    write: vi.fn(async () => undefined),
+    startHeartbeats: mocks.progressStartHeartbeats,
+    write: mocks.progressWrite,
     stop: vi.fn(),
     flush: vi.fn(async () => undefined),
   })),
+}));
+
+vi.mock("./node-worker-supervisor.js", () => ({
+  createNodeWorkerSupervisor: vi.fn(() => ({ close: mocks.closeWorkerSupervisor })),
 }));
 
 vi.mock("./plugin-node-host.js", () => ({
@@ -175,8 +183,43 @@ describe("node-host invocation cancellation", () => {
     await runtime.close();
 
     expect(held.signal?.aborted).toBe(true);
+    expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
     held.release();
     await invoking;
+  });
+});
+
+describe("node-host desktop manifest", () => {
+  it("advertises desktop.stream only when the node-local desktop is enabled", async () => {
+    const disabled = await prepareNodeHostRuntime({
+      config: {},
+      env: { PATH: "/usr/bin" },
+      platform: "linux",
+    });
+    expect(disabled.manifest.commands).not.toContain(NODE_DESKTOP_STREAM_COMMAND);
+
+    const enabled = await prepareNodeHostRuntime({
+      config: { desktop: { host: { enabled: true } } },
+      env: { PATH: "/usr/bin" },
+      platform: "linux",
+    });
+    expect(enabled.manifest.commands).toContain(NODE_DESKTOP_STREAM_COMMAND);
+  });
+
+  it("emits desktop statuses without control-channel heartbeats", async () => {
+    const runtime = await startRuntime();
+    await runtime.invoke({ ...frame, command: NODE_DESKTOP_STREAM_COMMAND });
+
+    expect(mocks.progressStartHeartbeats).not.toHaveBeenCalled();
+    const lastCall = mocks.handleInvoke.mock.calls.at(-1) as unknown[] | undefined;
+    const invokeRuntime = lastCall?.[4] as
+      | {
+          emitProgress?: (text: string) => Promise<void>;
+        }
+      | undefined;
+    await invokeRuntime?.emitProgress?.("attached\n");
+    expect(mocks.progressWrite).toHaveBeenCalledWith("attached\n");
+    await runtime.close();
   });
 });
 

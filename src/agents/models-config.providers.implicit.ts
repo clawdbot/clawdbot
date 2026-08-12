@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
@@ -68,6 +69,7 @@ type ImplicitProviderParams = {
   staticCatalogProviderIds?: readonly string[];
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
+  onProviderCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
 };
 
 type ImplicitProviderContext = ImplicitProviderParams & {
@@ -438,6 +440,7 @@ async function resolvePluginImplicitProviders(
         resolveProviderApiKey: resolveCatalogProviderApiKey,
         resolveProviderAuth: (providerId, options) =>
           ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
+        reportCatalogOutcome: ctx.onProviderCatalogOutcome,
         timeoutMs: ctx.providerDiscoveryTimeoutMs ?? resolveLiveProviderCatalogTimeoutMs(ctx.env),
       });
     }
@@ -526,6 +529,10 @@ async function runProviderCatalogWithTimeout(
   } catch (error) {
     const message = formatErrorMessage(error);
     if (message.includes("provider catalog timed out after")) {
+      params.reportCatalogOutcome?.({
+        provider: params.provider.id,
+        status: "unavailable",
+      });
       log.warn(`${message}; skipping provider discovery`);
       return undefined;
     }

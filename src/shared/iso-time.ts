@@ -1,5 +1,5 @@
 const ISO_ABSOLUTE_RE =
-  /^(\d{4})-(\d{2})-(\d{2})(?:[Tt](\d{2}):(\d{2})(?::(\d{2})(\.\d+)?)?(?:[Zz]|[+-]\d{2}:?\d{2})?)?$/;
+  /^([+-]\d{6}|\d{4})-(\d{2})-(\d{2})(?:[Tt](\d{2}):(\d{2})(?::(\d{2})(\.\d+)?)?(?:[Zz]|[+-]\d{2}:?\d{2})?)?$/;
 
 /** Checks the calendar components of the ISO-like forms accepted by existing callers. */
 export function hasValidIsoCalendarComponents(raw: string): boolean {

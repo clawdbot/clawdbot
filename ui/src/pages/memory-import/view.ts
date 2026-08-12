@@ -436,24 +436,26 @@ function renderIntroSection(props: MemoryImportViewProps) {
       `,
     },
     html`
-      ${renderSettingsRow({
-        title: t("memoryImport.agent"),
-        control: html`
-          <openclaw-agent-select
-            class="agent-select--settings"
-            name="memory-import-agent"
-            .options=${props.agents.map((agent) => ({
-              value: agent.id,
-              label: normalizeAgentLabel(agent),
-              agent,
-            }))}
-            .value=${props.selectedAgentId ?? ""}
-            .accessibleLabel=${t("memoryImport.agent")}
-            .disabled=${busy}
-            .onSelect=${props.onSelectAgent}
-          ></openclaw-agent-select>
-        `,
-      })}
+      ${props.agents.length > 1
+        ? renderSettingsRow({
+            title: t("memoryImport.agent"),
+            control: html`
+              <openclaw-agent-select
+                class="agent-select--settings"
+                name="memory-import-agent"
+                .options=${props.agents.map((agent) => ({
+                  value: agent.id,
+                  label: normalizeAgentLabel(agent),
+                  agent,
+                }))}
+                .value=${props.selectedAgentId ?? ""}
+                .accessibleLabel=${t("memoryImport.agent")}
+                .disabled=${busy}
+                .onSelect=${props.onSelectAgent}
+              ></openclaw-agent-select>
+            `,
+          })
+        : nothing}
       ${renderSettingsToggleRow({
         title: t("memoryImport.replaceExisting"),
         description: t("memoryImport.replaceHint"),

@@ -3,7 +3,7 @@ services:
     name: openclaw
     runtime: docker
     plan: starter
-    healthCheckPath: /health
+    healthCheckPath: /startupz
     envVars:
       - key: OPENCLAW_GATEWAY_PORT
         value: "8080"

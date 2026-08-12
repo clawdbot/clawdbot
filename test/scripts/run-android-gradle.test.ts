@@ -5,7 +5,7 @@ import {
   resolveAndroidSdkEnv,
   shouldSkipLinuxArmAndroidGradle,
   splitAndroidGradleArgs,
-} from "../../scripts/run-android-gradle.mjs";
+} from "../../scripts/run-android-gradle.mts";
 
 describe("run-android-gradle", () => {
   it("splits Gradle args from an optional post command", () => {

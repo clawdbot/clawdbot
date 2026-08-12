@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -11,7 +11,6 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { appendSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
 import { sessionsTailCommand } from "./sessions-tail.js";
-import { setSessionsTailFollowIntervalMsForTests } from "./sessions-tail.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
@@ -53,29 +52,12 @@ function runtimeOutput(runtime: RuntimeEnv): string {
     .join("\n");
 }
 
-async function waitForRuntimeOutput(
-  runtime: RuntimeEnv,
-  pattern: string,
-  timeoutMs = 3_000,
-): Promise<void> {
-  const startedAt = Date.now();
-  while (!runtimeOutput(runtime).includes(pattern)) {
-    if (Date.now() - startedAt > timeoutMs) {
-      throw new Error(`Timed out waiting for output containing ${pattern}`);
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 5);
-    });
-  }
-}
-
 describe("sessionsTailCommand", () => {
   let tmpDir: string;
   let storePath: string;
   let previousStateDir: string | undefined;
 
   beforeEach(() => {
-    setSessionsTailFollowIntervalMsForTests(2);
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-tail-"));
     process.env.OPENCLAW_STATE_DIR = path.join(tmpDir, "state");
@@ -88,7 +70,7 @@ describe("sessionsTailCommand", () => {
   });
 
   afterEach(() => {
-    setSessionsTailFollowIntervalMsForTests();
+    vi.useRealTimers();
     if (previousStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -103,7 +85,7 @@ describe("sessionsTailCommand", () => {
     key = sessionKey,
     entry: Partial<SessionEntry> = {},
   ): Promise<void> {
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey: key, storePath },
       {
         sessionId: "session-one",
@@ -150,7 +132,7 @@ describe("sessionsTailCommand", () => {
       }),
     ]);
 
-    await sessionsTailCommand({ store: storePath, sessionKey }, runtime);
+    await sessionsTailCommand({ agent: "main", store: storePath, sessionKey }, runtime);
 
     const output = vi
       .mocked(runtime.log)
@@ -183,7 +165,7 @@ describe("sessionsTailCommand", () => {
       }),
     ]);
 
-    await sessionsTailCommand({ store: storePath, sessionKey, tail: "2" }, runtime);
+    await sessionsTailCommand({ agent: "main", store: storePath, sessionKey, tail: "2" }, runtime);
 
     const output = vi
       .mocked(runtime.log)
@@ -197,7 +179,10 @@ describe("sessionsTailCommand", () => {
   it("rejects tail counts that exceed JavaScript safe integer precision", async () => {
     const runtime = makeRuntime();
 
-    await sessionsTailCommand({ store: storePath, sessionKey, tail: "9007199254740992" }, runtime);
+    await sessionsTailCommand(
+      { agent: "main", store: storePath, sessionKey, tail: "9007199254740992" },
+      runtime,
+    );
 
     expect(runtime.error).toHaveBeenCalledWith(
       "--tail must be a non-negative integer, for example --tail 25.",
@@ -217,7 +202,7 @@ describe("sessionsTailCommand", () => {
       }),
     ]);
 
-    await sessionsTailCommand({ store: storePath, sessionKey }, runtime);
+    await sessionsTailCommand({ agent: "main", store: storePath, sessionKey }, runtime);
 
     const output = runtimeOutput(runtime);
     expect(output).toContain("tool.result");
@@ -248,7 +233,7 @@ describe("sessionsTailCommand", () => {
       }),
     ]);
 
-    await sessionsTailCommand({ store: storePath, sessionKey }, runtime);
+    await sessionsTailCommand({ agent: "main", store: storePath, sessionKey }, runtime);
 
     const output = runtimeOutput(runtime);
     expect(output).toContain("current ok");
@@ -256,6 +241,7 @@ describe("sessionsTailCommand", () => {
   });
 
   it("continues following when SQLite trajectory rows are appended", async () => {
+    vi.useFakeTimers();
     const runtime = makeRuntime();
     await writeSessionEntry();
     appendSqliteTrajectoryRuntimeEvents({ agentId: "main", sessionId: "session-one", storePath }, [
@@ -283,11 +269,11 @@ describe("sessionsTailCommand", () => {
     });
 
     const run = sessionsTailCommand(
-      { store: storePath, sessionKey, tail: "1", follow: true },
+      { agent: "main", store: storePath, sessionKey, tail: "1", follow: true },
       runtime,
     );
     try {
-      await waitForRuntimeOutput(runtime, "sqlite ok");
+      await vi.advanceTimersByTimeAsync(1_000);
     } finally {
       process.emit("SIGTERM", "SIGTERM");
       await run;
@@ -303,7 +289,7 @@ describe("sessionsTailCommand", () => {
     const opsSessionKey = "agent:ops:telegram:direct:owner";
     const opsSessionsDir = path.join(process.env.OPENCLAW_STATE_DIR!, "agents", "ops", "sessions");
     const opsStorePath = path.join(opsSessionsDir, "sessions.json");
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { sessionKey: opsSessionKey, storePath: opsStorePath },
       { sessionId: "ops-session", updatedAt: 3, status: "done" },
     );

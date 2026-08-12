@@ -6,7 +6,14 @@ type GatewayRequestClient = {
 };
 
 export type DevicePairSetup = DevicePairSetupCodeResult;
-export type DevicePairSetupAccess = "full" | "limited";
+export type DevicePairSetupAccess = "full" | "limited" | "node";
+
+export function requestDevicePairJoinSetup(client: GatewayRequestClient) {
+  return client.request<DevicePairSetup>("device.pair.setupCode", {
+    includeQr: false,
+    joinUrl: true,
+  });
+}
 
 type DevicePairSetupState = {
   client: GatewayRequestClient | null;
@@ -16,6 +23,7 @@ type DevicePairSetupState = {
   devicePairSetupError: string | null;
   devicePairSetup: DevicePairSetup | null;
   devicePairSetupAccess: DevicePairSetupAccess;
+  devicePairSetupTimer: ReturnType<typeof setInterval> | null;
 };
 
 type DevicePairSetupOverlayState = DevicePairSetupState & { pendingCount: number };
@@ -31,6 +39,7 @@ export function createDevicePairSetupState(params: {
     devicePairSetupError: null,
     devicePairSetup: null,
     devicePairSetupAccess: "full",
+    devicePairSetupTimer: null,
     pendingCount: 0,
   };
 }
@@ -44,6 +53,32 @@ export function readDevicePairSetupSnapshot(state: DevicePairSetupOverlayState) 
     devicePairSetupAccess: state.devicePairSetupAccess,
     devicePairPendingCount: state.pendingCount,
   };
+}
+
+function stopDevicePairSetupCountdown(state: DevicePairSetupState) {
+  if (state.devicePairSetupTimer) {
+    clearInterval(state.devicePairSetupTimer);
+    state.devicePairSetupTimer = null;
+  }
+}
+
+export function syncDevicePairSetupCountdown(state: DevicePairSetupState, onTick: () => void) {
+  stopDevicePairSetupCountdown(state);
+  const expiresAtMs = state.devicePairSetup?.expiresAtMs;
+  if (
+    state.devicePairSetupAccess !== "node" ||
+    !state.devicePairSetupOpen ||
+    typeof expiresAtMs !== "number" ||
+    expiresAtMs <= Date.now()
+  ) {
+    return;
+  }
+  state.devicePairSetupTimer = setInterval(() => {
+    if (!state.devicePairSetupOpen || expiresAtMs <= Date.now()) {
+      stopDevicePairSetupCountdown(state);
+    }
+    onTick();
+  }, 1_000);
 }
 
 const devicePairSetupRequests = new WeakMap<DevicePairSetupState, object>();
@@ -64,7 +99,11 @@ export async function refreshDevicePairSetup(state: DevicePairSetupState) {
   try {
     const result = await client.request<DevicePairSetup>(
       "device.pair.setupCode",
-      state.devicePairSetupAccess === "limited" ? { bootstrapProfile: "limited" } : {},
+      state.devicePairSetupAccess === "full"
+        ? {}
+        : state.devicePairSetupAccess === "node"
+          ? { bootstrapProfile: "node", includeQr: false }
+          : { bootstrapProfile: "limited" },
     );
     if (
       devicePairSetupRequests.get(state) !== requestToken ||
@@ -74,7 +113,7 @@ export async function refreshDevicePairSetup(state: DevicePairSetupState) {
     ) {
       return;
     }
-    if (result.access === "full" || result.access === "limited") {
+    if (result.access === "full" || result.access === "limited" || result.access === "node") {
       state.devicePairSetupAccess = result.access;
     }
     state.devicePairSetup = result;
@@ -113,6 +152,7 @@ export async function setDevicePairSetupAccess(
 }
 
 export function closeDevicePairSetup(state: DevicePairSetupState) {
+  stopDevicePairSetupCountdown(state);
   devicePairSetupRequests.delete(state);
   state.devicePairSetupOpen = false;
   state.devicePairSetupLoading = false;

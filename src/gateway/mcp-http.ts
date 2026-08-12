@@ -9,6 +9,10 @@ import {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
 import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
+import {
+  createAdmittedGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../agents/tools/gateway-caller-context.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSessionEntryAccessTarget } from "../config/sessions/session-accessor.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -307,6 +311,7 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           cfg,
           sessionKey: requestContext.sessionKey,
           runtimePolicySessionKey: requestContext.runtimePolicySessionKey,
+          runtimePolicyAgentId: requestContext.runtimePolicyAgentId,
           agentId: requestContext.agentId,
           sessionId: requestContext.sessionId,
           runId: requestContext.runId,
@@ -376,47 +381,60 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           const cliCaptureHandle = cliCaptureHandles[messageIndex];
           let response: object | null;
           try {
-            response = await handleMcpJsonRpc({
-              message,
-              tools: scopedTools.tools,
-              toolSchema: scopedTools.toolSchema,
-              hookContext: {
-                agentId: scopedTools.agentId,
-                config: cfg,
-                ...(scopedTools.workspaceDir ? { workspaceDir: scopedTools.workspaceDir } : {}),
-                sessionKey: requestContext.sessionKey,
-                sessionId: requestContext.sessionId,
-                runId: requestContext.runId,
-                approvalReviewerDeviceId: requestContext.approvalReviewerDeviceId,
-                channelId: requestContext.currentChannelId,
-                turnSourceChannel: requestContext.messageProvider,
-                turnSourceTo: requestContext.currentChannelId,
-                turnSourceAccountId: requestContext.accountId,
-                turnSourceThreadId: requestContext.currentThreadTs,
-                loopDetection: resolveToolLoopDetectionConfig({
-                  cfg,
+            const handleRequest = async () =>
+              await handleMcpJsonRpc({
+                message,
+                tools: scopedTools.tools,
+                toolSchema: scopedTools.toolSchema,
+                hookContext: {
                   agentId: scopedTools.agentId,
-                }),
-              },
-              signal: requestAbort.signal,
-              authorizeToolCall,
-              onToolCallPrepared: cliCaptureHandle
-                ? ({ toolName: preparedToolName, args }) => {
-                    updateMcpLoopbackToolCallCapture(cliCaptureHandle, {
-                      toolName: preparedToolName,
-                      args,
-                    });
-                  }
-                : undefined,
-              onToolCallResult: cliCaptureHandle
-                ? (result) => {
-                    recordMcpLoopbackToolCallResult({
-                      captureHandle: cliCaptureHandle,
-                      ...result,
-                    });
-                  }
-                : undefined,
-            });
+                  config: cfg,
+                  ...(scopedTools.workspaceDir ? { workspaceDir: scopedTools.workspaceDir } : {}),
+                  sessionKey: requestContext.sessionKey,
+                  sessionId: requestContext.sessionId,
+                  runId: requestContext.runId,
+                  approvalReviewerDeviceId: requestContext.approvalReviewerDeviceId,
+                  channelId: requestContext.currentChannelId,
+                  turnSourceChannel: requestContext.messageProvider,
+                  turnSourceTo: requestContext.currentChannelId,
+                  turnSourceAccountId: requestContext.accountId,
+                  turnSourceThreadId: requestContext.currentThreadTs,
+                  loopDetection: resolveToolLoopDetectionConfig({
+                    cfg,
+                    agentId: scopedTools.agentId,
+                  }),
+                },
+                signal: requestAbort.signal,
+                authorizeToolCall,
+                onToolCallPrepared: cliCaptureHandle
+                  ? ({ toolName: preparedToolName, args }) => {
+                      updateMcpLoopbackToolCallCapture(cliCaptureHandle, {
+                        toolName: preparedToolName,
+                        args,
+                      });
+                    }
+                  : undefined,
+                onToolCallResult: cliCaptureHandle
+                  ? (result) => {
+                      recordMcpLoopbackToolCallResult({
+                        captureHandle: cliCaptureHandle,
+                        ...result,
+                      });
+                    }
+                  : undefined,
+              });
+            const callerIdentity = activeBoundGrant?.admittedRunContext
+              ? createAdmittedGatewayToolCallerIdentity({
+                  admittedRunContext: activeBoundGrant.admittedRunContext,
+                  agentId: scopedTools.agentId,
+                  sessionKey: requestContext.sessionKey,
+                  turnSourceChannel: requestContext.messageProvider,
+                  turnSourceTo: requestContext.currentChannelId,
+                  turnSourceAccountId: requestContext.accountId,
+                  turnSourceThreadId: requestContext.currentThreadTs,
+                })
+              : undefined;
+            response = await withGatewayToolCallerIdentity(callerIdentity, handleRequest);
           } finally {
             markMcpLoopbackToolCallFinished(cliCaptureHandle);
           }

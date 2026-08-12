@@ -3,7 +3,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { ClawHubTrustErrorCode } from "../infra/clawhub-install-trust.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
-import { satisfiesPluginApiRange } from "../infra/clawhub.js";
 import { unscopedPackageName } from "../infra/install-safe-path.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import { createNpmMetadataEnv, resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
@@ -32,11 +31,12 @@ import {
 } from "./install-channel-specs.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "./install.js";
 import { checkMinHostVersion } from "./min-host-version.js";
-import { resolveTrustedSourceLinkedOfficialNpmSpec } from "./official-external-install-records.js";
+import * as officialInstallRecords from "./official-external-install-records.js";
 import {
   getOfficialExternalPluginCatalogEntry,
   resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
+import { satisfiesPluginApiRange } from "./package-compat.js";
 import { resolvePackagePluginApiRange } from "./package-compat.js";
 
 /** Logger surface used by plugin update flows. */
@@ -126,10 +126,11 @@ export function pluginInstallRecordMayMigrateConfigId(params: {
     resolveNpmSpecPackageName(params.specOverride ?? params.record.spec) ??
     params.record.resolvedName ??
     resolveNpmSpecPackageName(params.record.resolvedSpec);
-  return Boolean(
-    packageName &&
-    packageName !== params.pluginId &&
-    unscopedPackageName(packageName) === params.pluginId,
+  return (
+    (packageName !== undefined &&
+      packageName !== params.pluginId &&
+      unscopedPackageName(packageName) === params.pluginId) ||
+    officialInstallRecords.hasOfficialNpmIdReplacement(params)
   );
 }
 
@@ -620,7 +621,7 @@ export function isTrustedSourceLinkedOfficialNpmUpdate(params: {
   spec: string | undefined;
   record: PluginInstallRecord;
 }): boolean {
-  const officialSpec = resolveTrustedSourceLinkedOfficialNpmSpec(params);
+  const officialSpec = officialInstallRecords.resolveTrustedSourceLinkedOfficialNpmSpec(params);
   const officialPackageName = resolveNpmSpecPackageName(officialSpec);
   const requestedPackageName = resolveNpmSpecPackageName(params.spec);
   return Boolean(officialPackageName && requestedPackageName === officialPackageName);

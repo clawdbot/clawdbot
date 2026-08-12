@@ -28,6 +28,7 @@ import {
 } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { waitForAgentJob } from "../agent-turn/agent-job.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   augmentChatHistoryWithCanvasBlocks,
@@ -39,7 +40,6 @@ import {
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
-import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
@@ -1996,13 +1996,19 @@ describe("projectRecentChatDisplayMessages", () => {
   it.each([
     {
       name: "facts-only",
-      message: { __openclaw: { media: [{ path: "/tmp/openclaw/fact.png" }] } },
-      expectedPath: "/tmp/openclaw/fact.png",
+      message: {
+        __openclaw: { media: [{ path: "/tmp/openclaw/fact.png", contentType: "image/png" }] },
+      },
+      expectedPath: undefined,
     },
     {
       name: "sparse",
-      message: { __openclaw: { media: [{}, { path: "/tmp/openclaw/sparse.png" }] } },
-      expectedPath: "/tmp/openclaw/sparse.png",
+      message: {
+        __openclaw: {
+          media: [{}, { path: "/tmp/openclaw/sparse.png", contentType: "image/png" }],
+        },
+      },
+      expectedPath: undefined,
       expectedIndex: 1,
     },
     {
@@ -2012,8 +2018,12 @@ describe("projectRecentChatDisplayMessages", () => {
     },
     {
       name: "media-only",
-      message: { __openclaw: { media: [{ path: "/tmp/openclaw/media-only.png" }] } },
-      expectedPath: "/tmp/openclaw/media-only.png",
+      message: {
+        __openclaw: {
+          media: [{ path: "/tmp/openclaw/media-only.png", contentType: "image/png" }],
+        },
+      },
+      expectedPath: undefined,
     },
   ])("keeps $name media-only users through canonical display projection", (testCase) => {
     const result = projectRecentChatDisplayMessages([
@@ -4828,6 +4838,43 @@ describe("gateway healthHandlers.health cache freshness", () => {
       includeSensitive: false,
     });
     expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
+  });
+
+  it("refreshes cached health after hot reload removes a runtime account", async () => {
+    const current = createSingleChannelHealthSnapshot({
+      channelId: "discord",
+      label: "Discord",
+      running: true,
+      connected: true,
+    });
+    const cached = {
+      ...current,
+      channels: {
+        discord: {
+          ...current.channels.discord,
+          accounts: {
+            ...current.channels.discord.accounts,
+            work: channelHealthAccount({ accountId: "work", running: true, connected: true }),
+          },
+        },
+      },
+    };
+    const { respond, refreshHealthSnapshot } = await requestHealthSnapshot({
+      cached,
+      fresh: current,
+      runtimeSnapshot: {
+        channels: {},
+        channelAccounts: {
+          discord: { default: { accountId: "default", running: true, connected: true } },
+        },
+      },
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, current, undefined);
   });
 });
 

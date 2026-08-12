@@ -2,6 +2,7 @@
 // Generate Bundled Channel Config Metadata script supports OpenClaw repository automation.
 import fs from "node:fs";
 import path from "node:path";
+import { asFiniteNumber } from "../packages/normalization-core/src/number-coercion.ts";
 import { loadBundledPluginPublicArtifactModuleSync } from "../src/plugins/public-surface-loader.js";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { loadChannelConfigSurfaceModule } from "./load-channel-config-surface.ts";
@@ -157,7 +158,7 @@ function resolveRootAliases(source: BundledPluginSource, channelId: string): str
 function resolveRootOrder(source: BundledPluginSource, channelId: string): number | undefined {
   const channelMeta = resolvePackageChannelMeta(source);
   const order = channelMeta?.id === channelId ? channelMeta.order : undefined;
-  return typeof order === "number" && Number.isFinite(order) ? order : undefined;
+  return asFiniteNumber(order);
 }
 
 function resolveRootConfigurable(source: BundledPluginSource, channelId: string): boolean {

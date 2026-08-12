@@ -4,9 +4,13 @@ import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
 } from "openclaw/plugin-sdk/session-catalog";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeBoundedOptionalString as optionalPiString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { listPiSummaryPage, readPiSessionById } from "./pi-session-store.js";
+import { parsePiSessionTimestampMs } from "./pi-session-timestamp.js";
 
 const LOCAL_HOST_ID = "gateway";
 const DEFAULT_PAGE_LIMIT = 20;
@@ -18,14 +22,6 @@ const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
 const SESSION_ID_PATTERN = /^(?!-)[A-Za-z0-9._:-]{1,256}$/u;
 
 export type PiSessionPage = { sessions: SessionCatalogSession[]; nextCursor?: string };
-
-function optionalPiString(value: unknown, maxLength: number): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed && trimmed.length <= maxLength ? trimmed : undefined;
-}
 
 function boundedLimit(value: unknown, fallback = DEFAULT_PAGE_LIMIT): number {
   if (value === undefined) {
@@ -161,17 +157,6 @@ function textFromContent(content: unknown): string {
     .join("\n");
 }
 
-function timestampMs(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Date.parse(value);
-    return Number.isNaN(parsed) ? undefined : parsed;
-  }
-  return undefined;
-}
-
 function parseListParams(value: unknown): { searchTerm?: string; limit: number; cursor?: string } {
   if (value === undefined || value === null) {
     return { limit: DEFAULT_PAGE_LIMIT };
@@ -236,7 +221,8 @@ function isoTimestamp(
   message: Record<string, unknown>,
   entry: Record<string, unknown>,
 ): string | undefined {
-  const value = timestampMs(message.timestamp) ?? timestampMs(entry.timestamp);
+  const value =
+    parsePiSessionTimestampMs(message.timestamp) ?? parsePiSessionTimestampMs(entry.timestamp);
   if (value === undefined) {
     return undefined;
   }

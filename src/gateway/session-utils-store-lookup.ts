@@ -4,17 +4,17 @@ import {
   isConfiguredSessionStoreAgentId,
   resolveAgentMainSessionKey,
   resolveExistingAgentSessionStoreTargetsSync,
-  resolveStorePath,
+  resolveSessionStorePathCore,
   type SessionEntry,
   type SessionStoreTarget,
 } from "../config/sessions.js";
 import {
   listSessionChildEntriesReadOnly,
-  listSessionEntries as listAccessorSessionEntries,
+  listSessionEntriesCore as listAccessorSessionEntries,
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
   loadExactSessionEntryReadOnly,
+  type SessionEntryListScope,
 } from "../config/sessions/session-accessor.js";
-import type { SessionEntryListScope } from "../config/sessions/session-accessor.types.js";
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -111,7 +111,7 @@ function resolveGatewaySessionStoreCandidates(
   const storeConfig = cfg.session?.store;
   const fallback = {
     agentId,
-    storePath: resolveStorePath(storeConfig, { agentId }),
+    storePath: resolveSessionStorePathCore(storeConfig, { agentId }),
   };
   const discovery = {
     existing: resolveExistingAgentSessionStoreTargetsSync(cfg, agentId),

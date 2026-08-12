@@ -18,20 +18,22 @@ import {
   validateSessionsFilesListParams,
   validateSessionsFilesSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { resolveToCwd as resolveSessionToolPathToCwd } from "../../agents/sessions/tools/path-utils.js";
 import { runGit } from "../../agents/worktrees/git.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
-  readSessionTranscriptVisibleMessageDelta,
+  readSessionTranscriptVisibleMessageDeltaCore,
   resolveTranscriptReadTarget,
   sqliteMessageEventWithSeq,
   toTranscriptReadScope,
   type SessionTranscriptReadScope,
 } from "../session-transcript-readers.js";
-import { loadSessionEntryReadOnly } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import {
   execOpenPath,
   formatOpenPathError,
@@ -144,20 +146,12 @@ function sessionFilesError(type: string, message: string, details?: Record<strin
   });
 }
 
-function normalizePathValue(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
-
 function readPathArg(args: Record<string, unknown>): string | undefined {
   return (
-    normalizePathValue(args.path) ??
-    normalizePathValue(args.file_path) ??
-    normalizePathValue(args.filePath) ??
-    normalizePathValue(args.file)
+    normalizeOptionalString(args.path) ??
+    normalizeOptionalString(args.file_path) ??
+    normalizeOptionalString(args.filePath) ??
+    normalizeOptionalString(args.file)
   );
 }
 
@@ -196,11 +190,11 @@ function addStructuredPatchFiles(files: Map<string, TouchedFile>, changes: unkno
   }
   for (const changeValue of changes) {
     const change = asOptionalObjectRecord(changeValue);
-    addTouchedFile(files, normalizePathValue(change?.path), "modified");
+    addTouchedFile(files, normalizeOptionalString(change?.path), "modified");
     const kind = asOptionalObjectRecord(change?.kind);
     addTouchedFile(
       files,
-      normalizePathValue(kind?.move_path) ?? normalizePathValue(kind?.movePath),
+      normalizeOptionalString(kind?.move_path) ?? normalizeOptionalString(kind?.movePath),
       "modified",
     );
   }
@@ -257,7 +251,7 @@ async function foldSqliteTouchedFiles(
   let maxBytes = TOUCHED_FILES_DELTA_MAX_BYTES;
 
   while (true) {
-    const delta = readSessionTranscriptVisibleMessageDelta(scope, {
+    const delta = readSessionTranscriptVisibleMessageDeltaCore(scope, {
       ...(cursor ? { cursor } : {}),
       maxBytes,
       maxMessages: TOUCHED_FILES_DELTA_MAX_MESSAGES,
@@ -526,22 +520,22 @@ async function toSessionFileEntry(
 }
 
 function loadSessionFileRoot(params: { sessionKey: string; agentId?: string }) {
-  const loaded = loadSessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
+  const loaded = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
   if (!loaded.entry?.sessionId) {
     return { ...loaded, agentId: undefined, root: undefined, fileRoot: undefined };
   }
   const agentId = normalizeAgentId(
-    parseAgentSessionKey(loaded.canonicalKey)?.agentId ??
+    loaded.agentId ??
+      parseAgentSessionKey(loaded.canonicalKey)?.agentId ??
       params.agentId ??
-      parseAgentSessionKey(params.sessionKey)?.agentId ??
-      resolveDefaultAgentId(loaded.cfg),
+      parseAgentSessionKey(params.sessionKey)?.agentId,
   );
-  const spawnedCwd = normalizePathValue(loaded.entry.spawnedCwd);
-  const spawnedWorkspaceDir = normalizePathValue(loaded.entry.spawnedWorkspaceDir);
+  const spawnedCwd = normalizeOptionalString(loaded.entry.spawnedCwd);
+  const spawnedWorkspaceDir = normalizeOptionalString(loaded.entry.spawnedWorkspaceDir);
   const configuredWorkspaceDir =
     spawnedCwd || spawnedWorkspaceDir
       ? undefined
-      : normalizePathValue(resolveAgentWorkspaceDir(loaded.cfg, agentId));
+      : normalizeOptionalString(resolveAgentWorkspaceDir(loaded.cfg, agentId));
   // Keep this cwd precedence aligned with sessions.diff so the advertised
   // checkout state cannot disagree with the panel's fallback result.
   const diffCwd = spawnedCwd ?? spawnedWorkspaceDir ?? configuredWorkspaceDir;
@@ -553,6 +547,24 @@ function loadSessionFileRoot(params: { sessionKey: string; agentId?: string }) {
     fileRoot: resolveFileRoot({ root, spawnedCwd }),
     diffCwd,
   };
+}
+
+/**
+ * Canonical workspace root of a session that lives on this Gateway's own disk.
+ * Workspace identity surfaces must name the same directory the file routes
+ * open, so they read it from here instead of re-deriving the precedence.
+ *
+ * An exec-node session's directory only exists on the remote host, while the
+ * precedence below falls back to the local agent workspace — returning that
+ * would describe the wrong machine. `sessions.files.reveal` refuses the same
+ * case; callers here get "no local root" and their own absent-workspace path.
+ */
+export function resolveLocalSessionWorkspaceRoot(params: {
+  sessionKey: string;
+  agentId?: string;
+}): string | undefined {
+  const loaded = loadSessionFileRoot(params);
+  return loaded.entry?.execNode ? undefined : loaded.root;
 }
 
 function resolveSessionFileCandidates(params: {
@@ -651,7 +663,7 @@ async function buildBrowserResult(params: {
   if (!params.root) {
     return undefined;
   }
-  const search = normalizePathValue(params.search);
+  const search = normalizeOptionalString(params.search);
   const relevance = buildSessionRelevanceMap(params.files, params.root, params.fileRoot);
   if (search) {
     const result = await searchBrowserEntries({
@@ -853,25 +865,61 @@ function respondSessionFileUnsafe(respond: RespondFn, filePath: string) {
   );
 }
 
+function requireSessionFilesAgentId(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId?: string;
+  respond: RespondFn;
+}): string | undefined {
+  const requestedAgent = resolveRequestedSessionAgentId(
+    params.cfg,
+    params.sessionKey,
+    params.agentId,
+  );
+  if (!requestedAgent.ok) {
+    params.respond(false, undefined, requestedAgent.error);
+    return undefined;
+  }
+  return requestedAgent.agentId;
+}
+
 /** Gateway handlers for session files and workspace browsing. */
 export const sessionsFilesHandlers: GatewayRequestHandlers = {
-  "sessions.files.list": async ({ params, respond }) => {
+  "sessions.files.list": async ({ params, respond, context }) => {
     if (
       !assertValidParams(params, validateSessionsFilesListParams, "sessions.files.list", respond)
     ) {
       return;
     }
-    const result = await buildListResult(params);
+    const agentId = requireSessionFilesAgentId({
+      cfg: context.getRuntimeConfig(),
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      respond,
+    });
+    if (!agentId) {
+      return;
+    }
+    const result = await buildListResult({ ...params, agentId });
     respond(true, {
       sessionKey: params.sessionKey,
       ...result,
     });
   },
-  "sessions.files.get": async ({ params, respond }) => {
+  "sessions.files.get": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsFilesGetParams, "sessions.files.get", respond)) {
       return;
     }
-    const result = await findSessionFile(params);
+    const agentId = requireSessionFilesAgentId({
+      cfg: context.getRuntimeConfig(),
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      respond,
+    });
+    if (!agentId) {
+      return;
+    }
+    const result = await findSessionFile({ ...params, agentId });
     if (!result.file || result.file.missing) {
       respondSessionFileNotFound(respond, params.path);
       return;
@@ -885,8 +933,17 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       ...result,
     });
   },
-  "sessions.files.set": async ({ params, respond, sessionMutationAuthorization }) => {
+  "sessions.files.set": async ({ params, respond, context, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsFilesSetParams, "sessions.files.set", respond)) {
+      return;
+    }
+    const agentId = requireSessionFilesAgentId({
+      cfg: context.getRuntimeConfig(),
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      respond,
+    });
+    if (!agentId) {
       return;
     }
     // NUL bytes would make the written file fail decodeUtf8Strict on the next
@@ -916,7 +973,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       respondSessionFileUnsafe(respond, params.path);
       return;
     }
-    const loaded = loadSessionFileRoot(params);
+    const loaded = loadSessionFileRoot({ ...params, agentId });
     if (!loaded.root) {
       respondSessionFileNotFound(respond, params.path);
       return;
@@ -998,7 +1055,16 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const loaded = loadSessionFileRoot({ sessionKey: params.key, agentId: params.agentId });
+    const agentId = requireSessionFilesAgentId({
+      cfg: context.getRuntimeConfig(),
+      sessionKey: params.key,
+      agentId: params.agentId,
+      respond,
+    });
+    if (!agentId) {
+      return;
+    }
+    const loaded = loadSessionFileRoot({ sessionKey: params.key, agentId });
     const workspaceRoot = loaded.root;
     if (!workspaceRoot) {
       respond(true, {

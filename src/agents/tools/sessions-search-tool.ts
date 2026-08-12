@@ -2,7 +2,6 @@
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { callGateway } from "../../gateway/call.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import {
@@ -11,7 +10,6 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
-import { resolveDefaultAgentId } from "../agent-scope-config.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import {
@@ -19,7 +17,17 @@ import {
   SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readPositiveIntegerParam, readStringParam, ToolInputError } from "./common.js";
+import {
+  jsonResult,
+  readPositiveIntegerParam,
+  readToolStringParam,
+  ToolInputError,
+} from "./common.js";
+import {
+  callAgentToolGatewayRequest,
+  type AgentToolGatewayRequestCaller,
+} from "./in-process-gateway.js";
+import { resolveSessionToolTargetAgentId } from "./scoped-session-access.js";
 import {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
@@ -76,7 +84,7 @@ const SessionsSearchOutputSchema = Type.Union([
   ),
 ]);
 
-type GatewayCaller = typeof callGateway;
+type GatewayCaller = AgentToolGatewayRequestCaller;
 
 type GatewaySearchHit = {
   sessionKey?: unknown;
@@ -325,7 +333,7 @@ export function createSessionsSearchTool(opts?: {
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
 }): AnyAgentTool {
-  const gatewayCall = opts?.callGateway ?? callGateway;
+  const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
   return {
     label: "Sessions Search",
     name: "sessions_search",
@@ -335,7 +343,7 @@ export function createSessionsSearchTool(opts?: {
     outputSchema: SessionsSearchOutputSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const query = readStringParam(params, "query")?.trim() ?? "";
+      const query = readToolStringParam(params, "query")?.trim() ?? "";
       if (!query) {
         throw new ToolInputError("query must not be empty");
       }
@@ -348,7 +356,7 @@ export function createSessionsSearchTool(opts?: {
         readPositiveIntegerParam(params, "limit", {
           max: SESSIONS_SEARCH_MAX_LIMIT,
         }) ?? SESSIONS_SEARCH_DEFAULT_LIMIT;
-      const requestedSessionKey = readStringParam(params, "sessionKey");
+      const requestedSessionKey = readToolStringParam(params, "sessionKey");
       const cfg = opts?.config ?? getRuntimeConfig();
       const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
@@ -356,15 +364,38 @@ export function createSessionsSearchTool(opts?: {
           agentSessionKey: opts?.agentSessionKey,
           sandboxed: opts?.sandboxed,
         });
+      const requesterAgentId = resolveSessionAgentId({
+        sessionKey: effectiveRequesterKey,
+        config: cfg,
+        agentId: opts?.agentId,
+      });
 
       let sessionKey: string | undefined;
+      let sessionAgentId: string | undefined;
       if (requestedSessionKey) {
+        const normalizedRequestedKey = requestedSessionKey.trim();
+        const semanticTargetAgentId =
+          normalizedRequestedKey === "current"
+            ? requesterAgentId
+            : normalizedRequestedKey === "main" ||
+                normalizedRequestedKey === "global" ||
+                normalizedRequestedKey === mainKey ||
+                normalizedRequestedKey === alias ||
+                Boolean(parseAgentSessionKey(normalizedRequestedKey))
+              ? resolveSessionToolTargetAgentId({
+                  cfg,
+                  targetSessionKey: normalizedRequestedKey,
+                  requesterAgentId,
+                })
+              : undefined;
         const resolved = await resolveSessionReference({
           sessionKey: requestedSessionKey,
+          keyAgentId: semanticTargetAgentId ?? requesterAgentId,
           alias,
           mainKey,
           requesterInternalKey: effectiveRequesterKey,
           restrictToSpawned,
+          callGateway: gatewayCall,
         });
         if (!resolved.ok) {
           return jsonResult({ status: resolved.status, error: resolved.error });
@@ -373,13 +404,21 @@ export function createSessionsSearchTool(opts?: {
           action: "list",
           resolvedSession: resolved,
           requesterSessionKey: effectiveRequesterKey,
+          requesterAgentId,
           restrictToSpawned,
           visibilitySessionKey: requestedSessionKey,
+          callGateway: gatewayCall,
         });
         if (!visible.ok) {
           return jsonResult({ status: visible.status, error: visible.error });
         }
         sessionKey = visible.key;
+        sessionAgentId = resolveSessionToolTargetAgentId({
+          cfg,
+          targetSessionKey: visible.key,
+          resolvedAgentId: visible.agentId ?? semanticTargetAgentId,
+          requesterAgentId,
+        });
       }
 
       const visibility = resolveEffectiveSessionToolsVisibility({
@@ -387,17 +426,7 @@ export function createSessionsSearchTool(opts?: {
         sandboxed: opts?.sandboxed === true,
       });
       const a2aPolicy = createAgentToAgentPolicy(cfg);
-      const defaultAgentId = resolveDefaultAgentId(cfg);
-      const requesterAgentId =
-        opts?.agentId ?? resolveSessionAgentId({ sessionKey: effectiveRequesterKey, config: cfg });
-      const guard = await createSessionVisibilityGuard({
-        action: "history",
-        defaultAgentId,
-        requesterAgentId,
-        requesterSessionKey: effectiveRequesterKey,
-        visibility,
-        a2aPolicy,
-      });
+      const defaultAgentId = requesterAgentId;
       const rowGuard = createSessionVisibilityRowChecker({
         action: "history",
         defaultAgentId,
@@ -406,10 +435,20 @@ export function createSessionsSearchTool(opts?: {
         visibility,
         a2aPolicy,
       });
+      const directGuard = await createSessionVisibilityGuard({
+        action: "history",
+        defaultAgentId,
+        requesterAgentId,
+        requesterSessionKey: effectiveRequesterKey,
+        visibility,
+        a2aPolicy,
+        callGateway: gatewayCall,
+      });
       if (sessionKey) {
-        const access = !parseAgentSessionKey(sessionKey)
-          ? rowGuard.check({ key: sessionKey, agentId: requesterAgentId })
-          : guard.check(sessionKey);
+        const parsedSessionKey = parseAgentSessionKey(sessionKey);
+        const access = parsedSessionKey
+          ? directGuard.check(sessionKey)
+          : rowGuard.check({ key: sessionKey, agentId: sessionAgentId });
         if (!access.allowed) {
           return jsonResult({ status: access.status, error: access.error });
         }
@@ -420,7 +459,9 @@ export function createSessionsSearchTool(opts?: {
               {
                 key: sessionKey,
                 access: "direct" as const,
-                ...(!parseAgentSessionKey(sessionKey) ? { agentId: requesterAgentId } : {}),
+                ...(!parseAgentSessionKey(sessionKey) && sessionAgentId
+                  ? { agentId: sessionAgentId }
+                  : {}),
               },
             ]
           : await listVisibleSearchSessions({
@@ -491,7 +532,7 @@ export function createSessionsSearchTool(opts?: {
               candidate.access === "row" ||
               (candidate.agentId !== undefined && !parseAgentSessionKey(candidate.key))
                 ? rowGuard.check(candidate)
-                : guard.check(visibilityKey);
+                : directGuard.check(visibilityKey);
             if (!access.allowed) {
               continue;
             }

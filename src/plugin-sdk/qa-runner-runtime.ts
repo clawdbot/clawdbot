@@ -3,7 +3,7 @@ import type { Command } from "commander";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import {
   loadBundledPluginManifestRegistry,
-  loadPluginManifestRegistry,
+  loadPluginManifestRegistryCore,
 } from "../plugins/manifest-registry.js";
 import type { OpenClawConfig } from "./config-contracts.js";
 import {
@@ -93,7 +93,7 @@ type QaRunnerTransportFlowPreparationInput = {
     call: (
       method: string,
       params?: unknown,
-      options?: { expectFinal?: boolean; timeoutMs?: number },
+      options?: { deadlineMs?: number; expectFinal?: boolean; timeoutMs?: number },
     ) => Promise<unknown>;
     restartAfterStateMutation?: (
       mutateState: (context: {
@@ -121,6 +121,7 @@ type QaRunnerTransportAdapterDefinition = {
   requiredPluginIds: readonly string[];
   supportedActions: readonly ("delete" | "edit" | "react" | "thread-create")[];
   assertTransportHealthy?: () => void;
+  describeTransportState?: () => string;
   resetTransport?: () => void | Promise<void>;
   sendInbound: (input: QaBusInboundMessageInput) => Promise<QaBusMessage>;
   sendNativeCommand?: (
@@ -182,6 +183,8 @@ type QaRunnerTransportAdapterDefinition = {
 
 type QaRunnerTransportFactory = {
   id: string;
+  /** Enables module-backed scenarios; every created adapter must implement `prepareFlow`. */
+  supportsModuleFlows?: true;
   /** Each create() call owns isolated runtime state and may run concurrently. */
   isolatesInstances?: boolean;
   matches: (context: { channelId: string; driver: string }) => boolean;
@@ -483,7 +486,9 @@ function listDeclaredQaRunnerPlugins(
 > {
   // Private QA is a source-checkout harness. Its command tree must be derived
   // from repo-owned manifests before Commander pre-action hooks can run.
-  const registry = env ? loadBundledPluginManifestRegistry({ env }) : loadPluginManifestRegistry();
+  const registry = env
+    ? loadBundledPluginManifestRegistry({ env })
+    : loadPluginManifestRegistryCore();
   return registry.plugins
     .filter(
       (
@@ -593,9 +598,13 @@ export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution
         );
       }
       const adapterFactory = registration.adapterFactory;
+      const supportsModuleFlows: unknown = adapterFactory
+        ? Reflect.get(adapterFactory, "supportsModuleFlows")
+        : undefined;
       if (
         adapterFactory &&
         (adapterFactory.id !== runner.commandName ||
+          (supportsModuleFlows !== undefined && supportsModuleFlows !== true) ||
           (adapterFactory.isolatesInstances !== undefined &&
             typeof adapterFactory.isolatesInstances !== "boolean") ||
           typeof adapterFactory.matches !== "function" ||

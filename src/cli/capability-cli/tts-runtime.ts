@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
+import { resolveApiKeyForProviderCore } from "../../agents/model-auth.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
@@ -203,7 +204,7 @@ async function injectTtsAuthProfileApiKey(params: {
   if (ttsProviderConfigHasApiKey(existingProviderConfig?.value)) {
     return params.cfg;
   }
-  const auth = await resolveApiKeyForProvider({
+  const auth = await resolveApiKeyForProviderCore({
     provider: providerId,
     cfg: params.cfg,
     credentialPrecedence: "profile-first",
@@ -399,10 +400,6 @@ function buildTtsConfigWithHydratedProvider(params: {
     tts.providers = providers;
   }
   return tts;
-}
-
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function ttsProviderConfigHasApiKey(value: unknown): boolean {

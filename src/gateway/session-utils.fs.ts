@@ -4,6 +4,12 @@ import fs from "node:fs";
 import readline from "node:readline";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
+  estimateStringChars,
+  estimateTokensFromChars,
+} from "@openclaw/normalization-core/cjk-chars";
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber as resolvePositiveUsageNumber,
   resolveIntegerOption,
   resolveNonNegativeIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
@@ -13,6 +19,7 @@ import {
   hasNonzeroUsage,
   normalizeUsage,
   type ContextUsage,
+  type UsageLike,
 } from "../agents/usage.js";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
@@ -21,9 +28,8 @@ import { selectSessionTranscriptActiveEntries } from "../config/sessions/transcr
 import { readFileWindowFully } from "../infra/file-read.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
+import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import { truncateUtf16Safe } from "../utils.js";
-import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
 import { stripEnvelope } from "./chat-sanitize.js";
@@ -37,39 +43,11 @@ import {
   extractJsonStringFieldPrefix,
   readNonBlankStringPreservingWhitespace,
 } from "./session-transcript-json.js";
+import {
+  attachOpenClawTranscriptMeta,
+  projectTranscriptEntryMessage,
+} from "./session-transcript-message.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
-
-/** Attach OpenClaw metadata to a transcript message without dropping existing metadata. */
-export function attachOpenClawTranscriptMeta(
-  message: unknown,
-  meta: Record<string, unknown>,
-): unknown {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return message;
-  }
-  const record = message as Record<string, unknown>;
-  const existing =
-    record["__openclaw"] &&
-    typeof record["__openclaw"] === "object" &&
-    !Array.isArray(record["__openclaw"])
-      ? (record["__openclaw"] as Record<string, unknown>)
-      : {};
-  return {
-    ...record,
-    __openclaw: {
-      ...existing,
-      ...meta,
-    },
-  };
-}
-
-function readTranscriptMessageIdempotencyKey(message: unknown): string | undefined {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return undefined;
-  }
-  const value = (message as Record<string, unknown>).idempotencyKey;
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
 
 export type ReadRecentSessionMessagesOptions = {
   maxMessages: number;
@@ -467,14 +445,16 @@ function parseRecentTranscriptTailSnapshot(
     const entry = parseTranscriptRecord(line);
     return entry ? [entry] : [];
   });
-  const selected = selectSessionTranscriptActiveEntries({
-    entries,
-    recordOf: (entry) => entry.record,
-    failClosedOnInvalidLeafControl: true,
-  });
+  const selected = projectResetBoundary(
+    selectSessionTranscriptActiveEntries({
+      entries,
+      recordOf: (entry) => entry.record,
+      failClosedOnInvalidLeafControl: true,
+    }),
+  );
   const messages: unknown[] = [];
   for (const entry of selected) {
-    const message = parsedSessionEntryToMessage(entry.record, messages.length + 1);
+    const message = projectTranscriptEntryMessage(entry.record, messages.length + 1);
     if (message) {
       messages.push(message);
     }
@@ -486,7 +466,7 @@ function parseRecentTranscriptTailSnapshot(
 }
 
 function isVisibleTranscriptRecord(record: Record<string, unknown>): boolean {
-  return Boolean(record.message) || record.type === "compaction";
+  return Boolean(record.message) || record.type === "compaction" || record.type === "reset";
 }
 
 function projectResetBoundary(entries: TranscriptRecord[]): TranscriptRecord[] {
@@ -508,7 +488,7 @@ function projectResetBoundary(entries: TranscriptRecord[]): TranscriptRecord[] {
           const role = (record.message as { role?: unknown } | undefined)?.role;
           return role === "user" || role === "assistant";
         });
-  return [...kept, ...entries.slice(boundaryIndex + 1)];
+  return [...kept, ...entries.slice(boundaryIndex)];
 }
 
 function toIndexedEntries(entries: TranscriptRecord[]): IndexedTranscriptEntry[] {
@@ -859,48 +839,8 @@ async function readRecentSessionSnapshotFromPathAsync(
   return parseRecentTranscriptTailSnapshot(lines, maxMessages);
 }
 
-function parsedSessionEntryToMessage(parsed: unknown, seq: number): unknown {
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return null;
-  }
-  const entry = parsed as Record<string, unknown>;
-  if (entry.message) {
-    const recordTimestampMs =
-      typeof entry.timestamp === "string"
-        ? Date.parse(entry.timestamp)
-        : typeof entry.timestamp === "number"
-          ? entry.timestamp
-          : Number.NaN;
-    const idempotencyKey = readTranscriptMessageIdempotencyKey(entry.message);
-    return attachOpenClawTranscriptMeta(entry.message, {
-      ...(typeof entry.id === "string" ? { id: entry.id } : {}),
-      ...(idempotencyKey ? { idempotencyKey } : {}),
-      ...(Number.isFinite(recordTimestampMs) ? { recordTimestampMs } : {}),
-      seq,
-    });
-  }
-
-  // Compaction entries are not "message" records, but they're useful context for debugging.
-  // Emit a lightweight synthetic message that the Web UI can render as a divider.
-  if (entry.type === "compaction") {
-    const ts = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
-    const timestamp = Number.isFinite(ts) ? ts : Date.now();
-    return {
-      role: "system",
-      content: [{ type: "text", text: "Compaction" }],
-      timestamp,
-      __openclaw: {
-        kind: "compaction",
-        id: typeof entry.id === "string" ? entry.id : undefined,
-        seq,
-      },
-    };
-  }
-  return null;
-}
-
 function indexedTranscriptEntryToMessage(entry: IndexedTranscriptEntry): unknown {
-  return parsedSessionEntryToMessage(entry.record, entry.seq);
+  return projectTranscriptEntryMessage(entry.record, entry.seq);
 }
 
 function indexedTranscriptEntryToMessages(entry: IndexedTranscriptEntry): unknown[] {
@@ -967,11 +907,7 @@ function extractTranscriptUsageCost(raw: unknown): number | undefined {
     return undefined;
   }
   const total = (cost as { total?: unknown }).total;
-  return typeof total === "number" && Number.isFinite(total) && total >= 0 ? total : undefined;
-}
-
-function resolvePositiveUsageNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+  return asNonNegativeFiniteNumber(total);
 }
 
 function extractTranscriptContentEstimatedChars(content: unknown): number {
@@ -1078,8 +1014,14 @@ function extractUsageSnapshotFromTranscriptLine(
         : parsed.usage && typeof parsed.usage === "object" && !Array.isArray(parsed.usage)
           ? parsed.usage
           : undefined;
-    const usage = normalizeUsage(usageRaw);
-    const totalTokens = resolvePositiveUsageNumber(deriveSessionTotalTokens({ usage }));
+    const usageRecord = usageRaw as UsageLike | undefined;
+    const usage = normalizeUsage(usageRecord);
+    const api = typeof message.api === "string" ? message.api.trim() : undefined;
+    const legacyCliUsage =
+      api === "cli" && usageRecord !== undefined && usageRecord.contextUsage === undefined;
+    const totalTokens = legacyCliUsage
+      ? undefined
+      : resolvePositiveUsageNumber(deriveSessionTotalTokens({ usage }));
     const costUsd = extractTranscriptUsageCost(usageRaw);
     const modelProvider =
       typeof message.provider === "string"
@@ -1127,7 +1069,9 @@ function extractUsageSnapshotFromTranscriptLine(
     if (typeof usage?.cacheWrite === "number" && Number.isFinite(usage.cacheWrite)) {
       snapshot.cacheWrite = usage.cacheWrite;
     }
-    if (usage?.contextUsage) {
+    if (legacyCliUsage) {
+      snapshot.contextUsage = { state: "unavailable" };
+    } else if (usage?.contextUsage) {
       snapshot.contextUsage = usage.contextUsage;
     }
     if (typeof totalTokens === "number") {
@@ -1198,10 +1142,12 @@ function extractAggregateUsageFromTranscriptLines(
     }
     if (current.contextUsage) {
       snapshot.contextUsage = current.contextUsage;
-    } else {
+    } else if (typeof current.totalTokens === "number") {
       delete snapshot.contextUsage;
     }
     if (current.contextUsage?.state === "unavailable") {
+      // Unavailable invalidates every older total; only a later numeric snapshot
+      // may restore freshness as the forward scan continues.
       delete snapshot.totalTokens;
       delete snapshot.totalTokensFresh;
     } else if (typeof current.totalTokens === "number") {
@@ -1234,6 +1180,7 @@ function extractAggregateUsageFromTranscriptLines(
   }
   if (
     typeof snapshot.totalTokens !== "number" &&
+    snapshot.contextUsage?.state !== "unavailable" &&
     sawEstimatedTranscriptContent &&
     sawEstimateModelIdentity
   ) {
@@ -1246,7 +1193,7 @@ function extractAggregateUsageFromTranscriptLines(
   return snapshot;
 }
 
-export async function readLatestSessionUsageFromTranscriptAsync(
+export async function readLatestSessionUsageFromTranscriptFileAsync(
   sessionId: string,
   storePath: string | undefined,
   sessionFile?: string,
@@ -1315,7 +1262,7 @@ function truncatePreviewText(text: string, maxChars: number): string {
 function extractPreviewText(message: TranscriptPreviewMessage): string | null {
   const role = normalizeLowercaseStringOrEmpty(message.role);
   if (role === "assistant") {
-    const assistantText = extractAssistantVisibleText(message);
+    const assistantText = extractAssistantPhaseText(message);
     if (assistantText) {
       const normalized = stripInlineDirectiveTagsForDisplay(assistantText).text.trim();
       return normalized ? normalized : null;

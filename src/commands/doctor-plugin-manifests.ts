@@ -7,7 +7,7 @@ import { z } from "zod";
 import { note } from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "../utils/zod-parse.js";
@@ -128,7 +128,7 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
     }
   }
 
-  for (const plugin of loadPluginManifestRegistry({
+  for (const plugin of loadPluginManifestRegistryCore({
     ...(params?.config ? { config: params.config } : {}),
     ...(params?.env ? { env: params.env } : {}),
     ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
@@ -182,7 +182,7 @@ export async function maybeRepairLegacyPluginManifestContracts(params: {
   runtime: RuntimeEnv;
   prompter: DoctorPrompter;
   note?: typeof note;
-}): Promise<void> {
+}): Promise<boolean> {
   const migrations = collectLegacyPluginManifestContractMigrations({
     ...(params.config ? { config: params.config } : {}),
     ...(params.env ? { env: params.env } : {}),
@@ -190,7 +190,7 @@ export async function maybeRepairLegacyPluginManifestContracts(params: {
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
   if (migrations.length === 0) {
-    return;
+    return false;
   }
 
   const emitNote = params.note ?? note;
@@ -209,7 +209,7 @@ export async function maybeRepairLegacyPluginManifestContracts(params: {
       initialValue: true,
     }));
   if (!shouldRepair) {
-    return;
+    return false;
   }
 
   const applied: string[] = [];
@@ -227,4 +227,5 @@ export async function maybeRepairLegacyPluginManifestContracts(params: {
   if (applied.length > 0) {
     emitNote(applied.join("\n"), "Doctor changes");
   }
+  return applied.length > 0;
 }

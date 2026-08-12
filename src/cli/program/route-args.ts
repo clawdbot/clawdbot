@@ -1,4 +1,5 @@
 // Route-first argv parsers for commands that can skip full Commander startup.
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isValueToken } from "../../infra/cli-root-options.js";
 import {
   getCommandPositionalsWithRootOptions,
@@ -8,7 +9,7 @@ import {
   hasFlag,
 } from "../argv.js";
 import { parseGatewayPortOption } from "../gateway-port-option.js";
-import { parseStrictPositiveIntOrUndefined } from "./helpers.js";
+import { MODELS_PARENT_BOOLEAN_FLAGS, MODELS_PARENT_VALUE_FLAGS } from "../parent-command-path.js";
 
 type OptionalFlagParse = {
   ok: boolean;
@@ -200,10 +201,7 @@ export function parseGatewayHealthRouteArgs(argv: string[]) {
   if (!url.ok || !token.ok || !password.ok || !timeout.ok || !port.ok) {
     return null;
   }
-  if (
-    timeout.value !== undefined &&
-    parseStrictPositiveIntOrUndefined(timeout.value) === undefined
-  ) {
+  if (timeout.value !== undefined && parseStrictPositiveInteger(timeout.value) === undefined) {
     return null;
   }
   let localPortOverride: number | undefined;
@@ -347,8 +345,32 @@ export function parseModelsListRouteArgs(argv: string[]) {
   };
 }
 
-/** Parse `openclaw models status` probe controls for the route-first status path. */
+function parseModelsRootStatusRouteArgs(argv: string[]) {
+  const positionals = getRoutedCommandPositionals(argv, {
+    commandPath: ["models"],
+    booleanFlags: MODELS_PARENT_BOOLEAN_FLAGS,
+    valueFlags: MODELS_PARENT_VALUE_FLAGS,
+  });
+  if (!positionals || positionals.length !== 0) {
+    return null;
+  }
+  const agent = parseOptionalFlagValue(argv, "--agent");
+  if (!agent.ok) {
+    return null;
+  }
+  return {
+    agent: agent.value,
+    json: hasFlag(argv, "--json") || hasFlag(argv, "--status-json"),
+    plain: hasFlag(argv, "--status-plain"),
+  };
+}
+
+/** Parse both parent aliases and `openclaw models status` through one status owner. */
 export function parseModelsStatusRouteArgs(argv: string[]) {
+  const rootArgs = parseModelsRootStatusRouteArgs(argv);
+  if (rootArgs) {
+    return rootArgs;
+  }
   const positionals = getRoutedCommandPositionals(argv, {
     commandPath: ["models", "status"],
     booleanFlags: ["--json", "--plain", "--check", "--probe"],
@@ -525,7 +547,7 @@ export function parseTasksAuditRouteArgs(argv: string[]) {
   if (rawLimit === null) {
     return null;
   }
-  const limit = rawLimit === undefined ? undefined : parseStrictPositiveIntOrUndefined(rawLimit);
+  const limit = rawLimit === undefined ? undefined : parseStrictPositiveInteger(rawLimit);
   if (rawLimit !== undefined && limit === undefined) {
     return null;
   }

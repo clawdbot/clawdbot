@@ -58,7 +58,7 @@ describe("restart recovery terminal delivery receipt", () => {
     await seedClaim();
     await beginRestartRecoveryTerminalDelivery(scope());
 
-    await expect(beginRestartRecoveryTerminalDelivery(scope())).resolves.toBe("blocked");
+    await expect(beginRestartRecoveryTerminalDelivery(scope())).resolves.toBe("delivery-ambiguous");
   });
 
   it.each([undefined, "done" as const])(
@@ -103,7 +103,7 @@ describe("restart recovery terminal delivery receipt", () => {
       },
     );
 
-    await expect(beginRestartRecoveryTerminalDelivery(scope())).resolves.toBe("blocked");
+    await expect(beginRestartRecoveryTerminalDelivery(scope())).resolves.toBe("already-delivered");
   });
 
   it("clears pending only after a proven non-delivery", async () => {

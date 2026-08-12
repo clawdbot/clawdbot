@@ -1,3 +1,4 @@
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 // Agent model selection staged against the runtime config form, split out of
 // agents-page.ts to keep that page inside the TS LOC ratchet.
 import type { ApplicationContext } from "../../app/context.ts";
@@ -6,8 +7,10 @@ import {
   resolveEffectiveModelFallbacks,
   resolveModelPrimary,
 } from "../../lib/agents/display.ts";
-import { currentConfigObject, type AgentConfigEntryTarget } from "../../lib/config/index.ts";
-import { normalizeStringEntries } from "../../lib/string-coerce.ts";
+import {
+  currentConfigObject,
+  type AgentConfigEntryTarget,
+} from "../../lib/config/config-state-model.ts";
 
 type RuntimeConfig = ApplicationContext["runtimeConfig"];
 

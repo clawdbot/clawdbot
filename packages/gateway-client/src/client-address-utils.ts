@@ -8,7 +8,7 @@ import {
 // under-redacting one leaks a credential.
 export { isSensitiveUrlQueryParamNameForDiagnostics as isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
 
-export function normalizeLowercaseStringOrEmpty(value: unknown): string {
+export function normalizeGatewayErrorText(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 

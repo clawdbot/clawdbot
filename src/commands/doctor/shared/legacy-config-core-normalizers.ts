@@ -19,6 +19,10 @@ import {
 import { hasOwnKey, isRecord } from "./legacy-config-record-shared.js";
 import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadata.js";
 import {
+  modelEntryWithRuntimePolicy,
+  selectedCanonicalModelRefsForRuntimePolicy,
+} from "./legacy-runtime-model-policy.js";
+import {
   legacyRuntimeModelAliasRequiresRuntimePolicy,
   listLegacyRuntimeModelProviderAliases,
   migrateLegacyRuntimeModelRef,
@@ -390,20 +394,6 @@ function runtimeNeedsExplicitModelPolicy(runtime: string | undefined): runtime i
   return Boolean(runtime && runtime !== "codex");
 }
 
-function modelEntryWithRuntimePolicy(entry: unknown, runtime: string): Record<string, unknown> {
-  const base = isRecord(entry) ? { ...entry } : {};
-  const currentRuntime = isRecord(base.agentRuntime)
-    ? normalizeOptionalLowercaseString(base.agentRuntime.id)
-    : undefined;
-  if (!currentRuntime || currentRuntime === "auto") {
-    base.agentRuntime = {
-      ...(isRecord(base.agentRuntime) ? base.agentRuntime : {}),
-      id: runtime,
-    };
-  }
-  return base;
-}
-
 function mergeModelEntryWithRuntimePolicy(
   legacyEntry: unknown,
   currentEntry: unknown,
@@ -411,7 +401,9 @@ function mergeModelEntryWithRuntimePolicy(
   requiresRuntimePolicy = runtimeNeedsExplicitModelPolicy(runtime),
 ): unknown {
   const merged = mergeModelEntry(legacyEntry, currentEntry);
-  return runtime && requiresRuntimePolicy ? modelEntryWithRuntimePolicy(merged, runtime) : merged;
+  return runtime && requiresRuntimePolicy
+    ? modelEntryWithRuntimePolicy(merged, runtime).entry
+    : merged;
 }
 
 function normalizeLegacyRuntimeAllowlistModels(
@@ -485,50 +477,13 @@ function ensureSelectedModelRuntimePolicies(
     }
     const current = next[ref];
     const updated = modelEntryWithRuntimePolicy(current, runtime);
-    if (JSON.stringify(updated) !== JSON.stringify(current ?? {})) {
-      next[ref] = updated;
-      changed = true;
+    if (!updated.changed) {
+      continue;
     }
+    next[ref] = updated.entry;
+    changed = true;
   }
   return { value: next, changed };
-}
-
-function selectedCanonicalModelRefsForRuntimePolicy(
-  rawModel: unknown,
-  provider: string,
-  runtime: string,
-  requiresRuntimePolicy: boolean,
-): SelectedRuntimeRef[] {
-  const refs: SelectedRuntimeRef[] = [];
-  const addRef = (rawRef: unknown) => {
-    if (typeof rawRef !== "string") {
-      return;
-    }
-    const trimmed = rawRef.trim();
-    const slash = trimmed.indexOf("/");
-    if (slash <= 0 || slash >= trimmed.length - 1) {
-      return;
-    }
-    if (normalizeProviderId(trimmed.slice(0, slash)) !== normalizeProviderId(provider)) {
-      return;
-    }
-    refs.push({ ref: trimmed, runtime, requiresRuntimePolicy });
-  };
-
-  if (typeof rawModel === "string") {
-    addRef(rawModel);
-    return refs;
-  }
-  if (!isRecord(rawModel)) {
-    return refs;
-  }
-  addRef(rawModel.primary);
-  if (Array.isArray(rawModel.fallbacks)) {
-    for (const fallback of rawModel.fallbacks) {
-      addRef(fallback);
-    }
-  }
-  return refs;
 }
 
 function normalizeLegacyCodexCliRuntimePinsInModels(
@@ -602,12 +557,14 @@ function normalizeLegacyRuntimeAgentContainer(
   }
 
   if (legacyWholeAgentRuntime) {
-    const selectedRefs = selectedCanonicalModelRefsForRuntimePolicy(
+    const selectedRefs: SelectedRuntimeRef[] = selectedCanonicalModelRefsForRuntimePolicy(
       next.model ?? raw.model,
       legacyWholeAgentRuntime.provider,
-      legacyWholeAgentRuntime.runtime,
-      legacyWholeAgentRuntime.requiresRuntimePolicy,
-    );
+    ).map((ref) => ({
+      ref,
+      runtime: legacyWholeAgentRuntime.runtime,
+      requiresRuntimePolicy: legacyWholeAgentRuntime.requiresRuntimePolicy,
+    }));
     const modelRuntimes = ensureSelectedModelRuntimePolicies(next.models, selectedRefs);
     if (modelRuntimes.changed) {
       next.models = modelRuntimes.value;

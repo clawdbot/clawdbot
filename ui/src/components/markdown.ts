@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Control UI module implements markdown behavior.
 import DOMPurify from "dompurify";
 import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
@@ -5,7 +6,6 @@ import { routeIdFromPath } from "../app-route-paths.ts";
 import { resolveControlUiBasePath } from "../app/browser.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { truncateText } from "../lib/format.ts";
-import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 import { renderAssistantTranscriptPlainTextFallback } from "./markdown-assistant-transcript.ts";
 import { renderMarkdownCodeBlock } from "./markdown-code-blocks.ts";
 import { isHostLocalMarkdownFileHref } from "./markdown-file-links.ts";
@@ -73,6 +73,7 @@ const allowedAttrs = [
   "alt",
   "data-code",
   "data-code-encoding",
+  "data-file-kind",
   "data-file-line",
   "data-file-path",
   "type",
@@ -500,7 +501,10 @@ const markdownParser = createMarkdownParser();
 // wrapper) keeps per-message churn out of the LRU cache.
 function renderSanitizedMarkdown(renderInput: string, renderOptions: MarkdownRenderEnv): string {
   installHooks();
-  const truncated = truncateText(renderInput, MARKDOWN_CHAR_LIMIT);
+  const documentMode = renderOptions.mode === "document";
+  const truncated = documentMode
+    ? { text: renderInput, truncated: false, total: renderInput.length }
+    : truncateText(renderInput, MARKDOWN_CHAR_LIMIT);
   const input = appendMarkdownTruncationNotice(truncated);
   if (isMarkdownBlockArtText(truncated.text)) {
     return DOMPurify.sanitize(
@@ -508,7 +512,7 @@ function renderSanitizedMarkdown(renderInput: string, renderOptions: MarkdownRen
       sanitizeOptions,
     );
   }
-  if (truncated.text.length > MARKDOWN_PARSE_LIMIT) {
+  if (!documentMode && truncated.text.length > MARKDOWN_PARSE_LIMIT) {
     // Large plain-text replies should stay readable without inheriting the
     // capped code-block chrome, while still preserving whitespace for logs
     // and other structured text that commonly trips the parse guard.
@@ -539,7 +543,7 @@ export function toSanitizedMarkdownHtml(
   }
   const renderInput = isMarkdownBlockArtText(rawInput) ? rawInput : input;
   const cacheable = input.length <= MARKDOWN_CACHE_MAX_CHARS;
-  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.fileLinks}\0${renderOptions.interactiveImages}\0${renderInput}`;
+  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.fileLinks}\0${renderOptions.interactiveImages}\0${renderOptions.mode}\0${renderInput}`;
   if (cacheable) {
     const cached = getCachedMarkdown(cacheKey);
     if (cached !== null) {

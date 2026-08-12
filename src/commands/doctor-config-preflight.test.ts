@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyCliProfileEnv } from "../cli/profile.js";
 import { promoteConfigSnapshotToLastKnownGood, readConfigFileSnapshot } from "../config/config.js";
+import { writeConfigHealthStateToStore } from "../config/io.health-state.js";
+import { createConfigHealthFingerprint } from "../config/io.observe-state.js";
 import { withEnvOverride, withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -35,6 +37,36 @@ async function writeLegacyConfig(home: string): Promise<string> {
   await fs.mkdir(path.dirname(legacyPath), { recursive: true });
   await fs.writeFile(legacyPath, '{"gateway":{"mode":"local"}}\n', "utf-8");
   return legacyPath;
+}
+
+async function seedLastKnownGood(
+  home: string,
+  configPath: string,
+  config: Record<string, unknown>,
+): Promise<void> {
+  const raw = `${JSON.stringify(config, null, 2)}\n`;
+  const lastGoodPath = `${configPath}.last-good`;
+  await fs.writeFile(lastGoodPath, raw, "utf-8");
+  const fingerprint = createConfigHealthFingerprint({
+    raw,
+    parsed: config,
+    stat: await fs.stat(lastGoodPath),
+  });
+  writeConfigHealthStateToStore(
+    {
+      env: { ...process.env, HOME: home },
+      homedir: () => home,
+      logger: { warn: () => {} },
+    },
+    {
+      entries: {
+        [configPath]: {
+          lastKnownGood: fingerprint,
+          lastPromotedGood: fingerprint,
+        },
+      },
+    },
+  );
 }
 
 describe("runDoctorConfigPreflight", () => {
@@ -259,6 +291,66 @@ describe("runDoctorConfigPreflight", () => {
       expect(repaired.snapshot.valid).toBe(true);
       expect(repaired.snapshot.config.gateway?.mode).toBe("local");
       expect(await fs.readFile(configPath, "utf-8")).toBe(lastGoodRaw);
+    });
+  });
+
+  it.each([
+    ["localhost", "loopback"],
+    ["0.0.0.0", "lan"],
+  ] as const)(
+    "migrates last-known-good gateway bind %s to %s before restoring",
+    async (legacyBind, canonicalBind) => {
+      await withTempHome(async (home) => {
+        const configPath = await writeOpenClawConfig(home, {
+          gateway: { mode: "local" },
+        });
+        await seedLastKnownGood(home, configPath, {
+          gateway: { mode: "local", bind: legacyBind },
+        });
+        const brokenRaw = '{ "gateway": { "mode": "local" },';
+        await fs.writeFile(configPath, brokenRaw, "utf-8");
+
+        const repaired = await runDoctorConfigPreflight({
+          migrateState: false,
+          migrateLegacyConfig: false,
+          repairPrefixedConfig: true,
+          invalidConfigNote: false,
+        });
+
+        expect(repaired.snapshot.valid).toBe(true);
+        expect(repaired.snapshot.config.gateway?.bind).toBe(canonicalBind);
+        const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+          gateway?: { bind?: string };
+        };
+        expect(persisted.gateway?.bind).toBe(canonicalBind);
+      });
+    },
+  );
+
+  it("preserves the active config when last-known-good cannot converge", async () => {
+    await withTempHome(async (home) => {
+      const configPath = await writeOpenClawConfig(home, {
+        gateway: { mode: "local" },
+      });
+      await seedLastKnownGood(home, configPath, {
+        gateway: { mode: "local", bind: "not-a-bind-mode" },
+      });
+      const brokenRaw = '{ "gateway": { "mode": "local" },';
+      await fs.writeFile(configPath, brokenRaw, "utf-8");
+
+      const failure = await runDoctorConfigPreflight({
+        migrateState: false,
+        migrateLegacyConfig: false,
+        repairPrefixedConfig: true,
+        invalidConfigNote: false,
+      }).then(
+        () => null,
+        (error: unknown) => error,
+      );
+
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toContain("Config could not be parsed or recovered");
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(brokenRaw);
     });
   });
 

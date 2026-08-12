@@ -1,15 +1,14 @@
 // Doctor OAuth sidecar tests cover encrypted sidecar detection and auth repair guidance.
-import { createCipheriv } from "node:crypto";
+import { createCipheriv, hash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/store.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { maybeRepairLegacyOAuthSidecarProfiles } from "./doctor-auth-oauth-sidecar.js";
-import { testing } from "./doctor-auth-oauth-sidecar.test-support.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const states: OpenClawTestState[] = [];
@@ -55,21 +54,19 @@ function writeLegacyAuthProfiles(
 }
 
 function encryptLegacySidecarMaterial(params: {
-  ref: { source: "openclaw-credentials"; provider: "openai-codex"; id: string };
+  ref: { id: string };
   profileId: string;
   provider: string;
   seed: string;
   material: Record<string, string>;
 }) {
   const iv = Buffer.alloc(12, 7);
-  const cipher = createCipheriv("aes-256-gcm", testing.buildLegacyOAuthSecretKey(params.seed), iv);
-  cipher.setAAD(
-    testing.buildLegacyOAuthSecretAad({
-      ref: params.ref,
-      profileId: params.profileId,
-      provider: params.provider,
-    }),
+  const cipher = createCipheriv(
+    "aes-256-gcm",
+    hash("sha256", `openclaw:auth-profile-oauth:${params.seed}`, "buffer"),
+    iv,
   );
+  cipher.setAAD(Buffer.from(`${params.ref.id}\0${params.profileId}\0${params.provider}`, "utf8"));
   const ciphertext = Buffer.concat([
     cipher.update(JSON.stringify(params.material), "utf8"),
     cipher.final(),
@@ -126,17 +123,13 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
         version: 1,
         profileId,
         provider: "openai-codex",
-        encrypted: encryptLegacySidecarMaterial({
-          ref,
-          profileId,
-          provider: "openai-codex",
-          seed,
-          material: {
-            access: "access-token",
-            refresh: "refresh-token",
-            idToken: "id-token",
-          },
-        }),
+        encrypted: {
+          algorithm: "aes-256-gcm",
+          iv: "BwcHBwcHBwcHBwcH",
+          tag: "gSm_Lg58EVO-5wZGQlWHEA",
+          ciphertext:
+            "4qrZ4-zdgUdttB3gTUNORWdtO4gqLiFgTsilUX3-9RZiN2MLkCDdxQXQ2GfeqN1zi1qb9iURwK0sO0TJZfxO3zULMKNlRgUT",
+        },
       },
     );
 
@@ -206,6 +199,80 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
     expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual(auth);
   });
 
+  it("repairs the inherited auth owner after it leaves the explicit roster", async () => {
+    const seed = "retired-owner-sidecar-seed";
+    const state = await makeTestState(seed);
+    const profileId = "openai-codex:retired-owner";
+    const ref = {
+      source: "openclaw-credentials" as const,
+      provider: "openai-codex" as const,
+      id: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    };
+    const authPath = await writeLegacyAuthProfiles(
+      state,
+      {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider: "openai-codex",
+            oauthRef: ref,
+          },
+        },
+      },
+      "retired-ops",
+    );
+    const sidecarPath = await state.writeJson(
+      path.join("credentials", "auth-profiles", `${ref.id}.json`),
+      {
+        version: 1,
+        profileId,
+        provider: "openai-codex",
+        encrypted: encryptLegacySidecarMaterial({
+          ref,
+          profileId,
+          provider: "openai-codex",
+          seed,
+          material: {
+            access: "retired-owner-access",
+            refresh: "retired-owner-refresh",
+          },
+        }),
+      },
+    );
+
+    const result = await maybeRepairLegacyOAuthSidecarProfiles({
+      cfg: {
+        agents: {
+          ownership: "explicit",
+          defaults: { authInheritance: { agentId: "retired-ops" } },
+          entries: { research: {}, writer: {} },
+        },
+      },
+      prompter: makePrompter(true),
+      now: () => 234,
+      env: state.env,
+    });
+
+    expect(result.detected).toEqual([authPath]);
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toEqual([
+      `Migrated 1 legacy Codex OAuth profile in ${authPath} to inline credentials (backup: ${authPath}.oauth-ref.234.bak).`,
+    ]);
+    expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual({
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "retired-owner-access",
+          refresh: "retired-owner-refresh",
+        },
+      },
+    });
+    expect(fs.existsSync(sidecarPath)).toBe(false);
+  });
+
   it("leaves undecryptable legacy sidecars in place and reports re-authentication", async () => {
     const state = await makeTestState("wrong-seed");
     const profileId = "openai-codex:default";
@@ -231,16 +298,12 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
         version: 1,
         profileId,
         provider: "openai-codex",
-        encrypted: encryptLegacySidecarMaterial({
-          ref,
-          profileId,
-          provider: "openai-codex",
-          seed: "right-seed",
-          material: {
-            access: "access-token",
-            refresh: "refresh-token",
-          },
-        }),
+        encrypted: {
+          algorithm: "aes-256-gcm",
+          iv: "BwcHBwcHBwcHBwcH",
+          tag: "ZHGhT2cekYFZCOxu8pP0KA",
+          ciphertext: "OQPDJez2jSRH4FPxFNNkwEw7PDbClF6Ty6T2l4TLGvr6bdJfhK6VA6ccWwC1xlrR4ENA",
+        },
       },
     );
 
@@ -450,16 +513,13 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
         version: 1,
         profileId,
         provider: "openai-codex",
-        encrypted: encryptLegacySidecarMaterial({
-          ref,
-          profileId,
-          provider: "openai-codex",
-          seed,
-          material: {
-            access: "shared-access-token",
-            refresh: "shared-refresh-token",
-          },
-        }),
+        encrypted: {
+          algorithm: "aes-256-gcm",
+          iv: "BwcHBwcHBwcHBwcH",
+          tag: "91XpNgcMQ-AVeo7NDnv11Q",
+          ciphertext:
+            "fVMsIFtJ0LX1ayciusBnyS7KulJU2dCAdkKU4yMLGYTVB-Gq0X_SvUqPTkAX_a1ZBIjGIC6nFH_3HvhWHMIX7Cs",
+        },
       },
     );
 

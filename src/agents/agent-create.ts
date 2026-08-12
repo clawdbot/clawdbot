@@ -43,7 +43,6 @@ type CreateAgentResult =
       reason:
         | "invalid-name"
         | "reserved-id"
-        | "default-conflict"
         | "already-exists"
         | "deletion-pending"
         | "invalid-bindings"
@@ -59,6 +58,8 @@ type CreateAgentEntry = AgentEntryConfig & { id: string };
 type CreateAgentParams = {
   name?: string;
   entry?: CreateAgentEntry;
+  /** Internal authorization for onboarding to materialize the reserved sole `main` agent. */
+  bootstrapMain?: boolean;
   workspace?: string;
   model?: string;
   emoji?: unknown;
@@ -71,7 +72,6 @@ type CreateAgentParams = {
 };
 
 class DuplicateAgentError extends Error {}
-class DefaultAgentConflictError extends Error {}
 class InvalidAgentBindingsError extends Error {}
 
 function createError(
@@ -89,9 +89,7 @@ function hasValidRawAgentIdCharacters(value: string): boolean {
 
 function isInjectedBootstrapMainEntry(entry: CreateAgentEntry | undefined): boolean {
   return (
-    entry?.id === RESERVED_BOOTSTRAP_AGENT_ID &&
-    entry.default === true &&
-    Object.keys(entry).every((key) => key === "id" || key === "default")
+    entry?.id === RESERVED_BOOTSTRAP_AGENT_ID && Object.keys(entry).every((key) => key === "id")
   );
 }
 
@@ -126,7 +124,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
     return createError("invalid-name", `agent name "${rawName}" has no valid id characters`);
   }
   const agentId = normalizeAgentId(rawId);
-  const isBootstrapMain = agentId === RESERVED_BOOTSTRAP_AGENT_ID && params.entry?.default === true;
+  const isBootstrapMain = agentId === RESERVED_BOOTSTRAP_AGENT_ID && params.bootstrapMain === true;
   if (
     (!isBootstrapMain && agentId === RESERVED_BOOTSTRAP_AGENT_ID) ||
     isReservedSystemAgentId(agentId)
@@ -179,15 +177,15 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           const currentEntries = listAgentEntries(currentConfig);
           const existingIndex = findAgentEntryIndex(currentEntries, agentId);
           const existingEntry = currentEntries[existingIndex];
-          const currentDefaults = currentEntries.filter((entry) => entry.default === true);
-          const stagedDefaultMatchesCurrent =
-            existingEntry?.default === true && currentDefaults.length === 1;
           if (
-            params.entry?.default === true &&
+            isBootstrapMain &&
             currentEntries.length > 0 &&
-            !stagedDefaultMatchesCurrent
+            !currentEntries.some(
+              (entry) => normalizeAgentId(entry.id) === RESERVED_BOOTSTRAP_AGENT_ID,
+            )
           ) {
-            throw new DefaultAgentConflictError();
+            // Never inject reserved main into a concurrently authored fleet.
+            throw new DuplicateAgentError();
           }
           if (existingIndex >= 0 && !isBootstrapMain) {
             throw new DuplicateAgentError();
@@ -196,7 +194,9 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           if (
             existingIndex >= 0 &&
             isBootstrapMain &&
-            (!isInjectedBootstrapMainEntry(existingEntry) || context.snapshot.exists)
+            (currentEntries.length !== 1 ||
+              !isInjectedBootstrapMainEntry(existingEntry) ||
+              context.snapshot.exists)
           ) {
             return {
               nextConfig: currentConfig,
@@ -231,17 +231,17 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
                 })
               : currentConfig;
           if (params.entry) {
+            const { default: _retiredDefault, ...stagedEntry } = params.entry;
             const list = listAgentEntries(nextConfig);
             const index = findAgentEntryIndex(list, agentId);
             list[index] = {
               ...list[index],
-              ...params.entry,
+              ...stagedEntry,
               id: agentId,
               name: safeName,
               workspace: workspaceDir,
               agentDir,
               identity,
-              ...(list.length === 1 ? { default: true } : {}),
             };
             const { list: _legacyList, ...agentsConfig } = nextConfig.agents ?? {};
             nextConfig = {
@@ -329,13 +329,6 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
   } catch (error) {
     if (error instanceof DuplicateAgentError) {
       return createError("already-exists", `agent "${agentId}" already exists`, agentId);
-    }
-    if (error instanceof DefaultAgentConflictError) {
-      return createError(
-        "default-conflict",
-        `Cannot create agent "${agentId}" with default=true while a roster already exists. Reassign the default separately.`,
-        agentId,
-      );
     }
     if (error instanceof InvalidAgentBindingsError) {
       return createError("invalid-bindings", error.message, agentId);

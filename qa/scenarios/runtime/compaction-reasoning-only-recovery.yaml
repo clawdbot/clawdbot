@@ -27,6 +27,7 @@ scenario:
     kind: flow
     summary: Reject one reasoning-only overflow-compaction summary, retry it, and verify the recovered summary persists.
     config:
+      requiredProviderMode: mock-openai
       faultMode: reasoning-only-output-once
       faultMarkerPrefix: QA-COMPACTION-REASONING-ONLY-OUTPUT-ONCE
       summaryMarker: QA-COMPACTION-REASONING-RECOVERED-SUMMARY
@@ -39,7 +40,7 @@ flow:
     - name: retries a reasoning-only compaction summary at the compaction owner
       actions:
         - assert:
-            expr: "env.providerMode === 'mock-openai' && env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME === 'openclaw' && Boolean(env.mock)"
+            expr: "env.providerMode === 'mock-openai' && env.runtimeId === 'openclaw' && Boolean(env.mock)"
             message: compaction output recovery requires the mock-openai OpenClaw runtime
         - call: waitForGatewayHealthy
           args:

@@ -1,7 +1,6 @@
 /** Prepares secrets runtime snapshots from config, auth stores, plugins, and env. */
 import { isDeepStrictEqual } from "node:util";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStoreForSecretsRuntime,
@@ -44,11 +43,11 @@ import { mergeProviderAuthRuntimeWarnings } from "./runtime-provider-auth-warnin
 import {
   activateSecretsRuntimeSnapshotState,
   activateSecretsRuntimeSnapshotStateIfCurrent,
-  clearSecretsRuntimeSnapshot as clearSecretsRuntimeSnapshotState,
-  getActiveSecretsRuntimeEnv as getActiveSecretsRuntimeEnvState,
+  clearSecretsRuntimeSnapshotState,
+  getActiveSecretsRuntimeEnvState,
   getActiveSecretsRuntimeRefreshContext,
-  getActiveSecretsRuntimeSnapshot as getActiveSecretsRuntimeSnapshotState,
-  getActiveSecretsRuntimeSnapshotRevision as getActiveSecretsRuntimeSnapshotRevisionState,
+  getActiveSecretsRuntimeSnapshotState,
+  getActiveSecretsRuntimeSnapshotRevisionState,
   getLiveSecretsRuntimeAuthStores,
   getPreparedSecretsRuntimeSnapshotRefreshContext,
   registerSecretsRuntimeStateClearHook,
@@ -57,7 +56,7 @@ import {
   type PreparedSecretsRuntimeSnapshot,
   type SecretsRuntimeRefreshContext,
 } from "./runtime-state.js";
-import { getActiveRuntimeWebToolsMetadata as getActiveRuntimeWebToolsMetadataFromState } from "./runtime-web-tools-state.js";
+import { getActiveRuntimeWebToolsMetadataFromState } from "./runtime-web-tools-state.js";
 import type { RuntimeWebToolsMetadata } from "./runtime-web-tools.types.js";
 
 export type { SecretResolverWarning } from "./runtime-shared.js";
@@ -80,25 +79,10 @@ const loadRuntimeOwnerAssignmentHelpers = createLazyRuntimeModule(
 );
 
 async function resolveLoadablePluginOrigins(params: {
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
+  plugins: Pick<PluginMetadataSnapshot, "plugins">;
 }): Promise<ReadonlyMap<string, PluginOrigin>> {
-  const workspaceDir = resolveAgentWorkspaceDir(
-    params.config,
-    resolveDefaultAgentId(params.config),
-    params.env,
-  );
-  const { listPluginOriginsFromMetadataSnapshot, loadPluginMetadataSnapshot } =
-    await loadRuntimeManifestHelpers();
-  const snapshot =
-    params.pluginMetadataSnapshot ??
-    loadPluginMetadataSnapshot({
-      config: params.config,
-      workspaceDir,
-      env: params.env,
-    });
-  return listPluginOriginsFromMetadataSnapshot(snapshot);
+  const { listPluginOriginsFromMetadataSnapshot } = await loadRuntimeManifestHelpers();
+  return listPluginOriginsFromMetadataSnapshot(params.plugins);
 }
 
 function hasConfiguredPluginEntries(config: OpenClawConfig): boolean {
@@ -190,6 +174,8 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins" | "manifestRegistry">;
   /** Isolate known non-Gateway owners and retain unchanged last-known-good values when possible. */
   allowUnavailableSecretOwners?: boolean;
+  /** Ref keys whose owners must become cold rather than retain last-known-good values. */
+  forceColdRefKeys?: ReadonlySet<string>;
   /** Test override for discovered loadable plugins and their origins. */
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
 }): Promise<PreparedSecretsRuntimeSnapshot> {
@@ -253,18 +239,18 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   } = await loadRuntimePrepareHelpers();
   const { listSecretAssignmentOwners, resolveAndApplySecretAssignments } =
     await loadRuntimeOwnerAssignmentHelpers();
-  const manifestRegistry =
-    params.manifestRegistry ?? params.pluginMetadataSnapshot?.manifestRegistry;
+  let manifestRegistry = params.manifestRegistry ?? params.pluginMetadataSnapshot?.manifestRegistry;
+  if (!manifestRegistry && shouldLoadPluginMetadataForSecrets(sourceConfig)) {
+    const { resolveConfigWidePluginManifestRegistry } = await loadRuntimeManifestHelpers();
+    manifestRegistry = resolveConfigWidePluginManifestRegistry({
+      config: sourceConfig,
+      env: runtimeEnv,
+    });
+  }
   const loadablePluginOrigins =
     params.loadablePluginOrigins ??
-    (shouldLoadPluginMetadataForSecrets(sourceConfig)
-      ? await resolveLoadablePluginOrigins({
-          config: sourceConfig,
-          env: runtimeEnv,
-          pluginMetadataSnapshot:
-            params.pluginMetadataSnapshot ??
-            (manifestRegistry ? { plugins: manifestRegistry.plugins } : undefined),
-        })
+    (manifestRegistry
+      ? await resolveLoadablePluginOrigins({ plugins: manifestRegistry })
       : new Map<string, PluginOrigin>());
   const context = createResolverContext({
     sourceConfig,
@@ -312,6 +298,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
             cache: context.cache,
             manifestRegistry: context.manifestRegistry,
           },
+          forceColdRefKeys: params.forceColdRefKeys,
         })
       : { degradedOwners: [], resolvedValues: new Map<string, unknown>() };
   const assignmentSecretOwners = listSecretAssignmentOwners(
@@ -325,6 +312,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
         resolvedConfig,
         context,
         allowUnavailableSecretOwners: params.allowUnavailableSecretOwners,
+        forceColdRefKeys: params.forceColdRefKeys,
       })
     : {
         metadata: createEmptyRuntimeWebToolsMetadata(),

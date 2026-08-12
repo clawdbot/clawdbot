@@ -13,7 +13,6 @@ import {
 import { formatErrorMessage, formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeGroupActivation } from "openclaw/plugin-sdk/group-activation";
 import {
-  isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "openclaw/plugin-sdk/native-command-config-runtime";
@@ -32,11 +31,13 @@ import {
   createTelegramMessageProcessor,
   resolveTelegramMessageTurnSettings,
 } from "./bot-message.js";
+import { defaultTelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
   ensureTelegramMessageProcessingResult,
   getTelegramSpooledReplayDeferredParticipant,
   isTelegramSpooledReplayUpdate,
+  recordTelegramMessageProcessingResult,
   runWithTelegramUpdateProcessingFrame,
   TelegramSpooledReplayProcessingError,
 } from "./bot-processing-outcome.js";
@@ -62,6 +63,10 @@ import {
   recordTelegramGroupHistoryEntry,
 } from "./group-history-window.js";
 import { registerTelegramOutboundGroupHistoryRecorder } from "./outbound-message-context.js";
+import {
+  prepareTelegramPollAnswerContext,
+  settleTelegramPollAnswerContext,
+} from "./poll-answer-context.js";
 import { formatTelegramRawUpdateForLog } from "./raw-update-log.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramSequentialConstraints } from "./sequential-key.js";
@@ -233,7 +238,29 @@ export function createTelegramBotCore(
     await next();
   });
 
+  // poll_answer omits its chat and topic. Resolve the send-time route before
+  // sequentialize so the vote shares the same lane as ordinary session turns.
+  bot.use(async (ctx, next) => {
+    try {
+      prepareTelegramPollAnswerContext({ update: ctx.update, accountId: account.accountId });
+    } catch (error) {
+      if (isTelegramSpooledReplayUpdate(ctx.update)) {
+        recordTelegramMessageProcessingResult({ kind: "failed-retryable", error });
+        return;
+      }
+      throw error;
+    }
+    await next();
+  });
+
   bot.use(botRuntime.sequentialize(getTelegramSequentialConstraints));
+
+  // A fast vote can know its route before outbound verification finishes. Hold
+  // only that route's sequential lane until registration succeeds or declines it.
+  bot.use(async (ctx, next) => {
+    await settleTelegramPollAnswerContext({ update: ctx.update, accountId: account.accountId });
+    await next();
+  });
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
 
@@ -284,10 +311,6 @@ export function createTelegramBotCore(
     providerId: "telegram",
     providerSetting: telegramCfg.commands?.nativeSkills,
     globalSetting: cfg.commands?.nativeSkills,
-  });
-  const nativeDisabledExplicit = isNativeCommandsExplicitlyDisabled({
-    providerSetting: telegramCfg.commands?.native,
-    globalSetting: cfg.commands?.native,
   });
   const mediaMaxBytes = (opts.mediaMaxMb ?? telegramCfg.mediaMaxMb ?? 100) * 1024 * 1024;
   const logger = getChildLogger({ module: "telegram-auto-reply" });
@@ -375,7 +398,7 @@ export function createTelegramBotCore(
     telegramDeps,
   });
 
-  registerTelegramNativeCommands({
+  const nativeCommandCallbackDispatcher = registerTelegramNativeCommands({
     bot,
     cfg,
     runtime,
@@ -384,12 +407,14 @@ export function createTelegramBotCore(
     mediaMaxBytes,
     nativeEnabled,
     nativeSkillsEnabled,
-    nativeDisabledExplicit,
     resolveGroupPolicy,
     resolveTelegramGroupConfig,
     shouldSkipUpdate,
     opts,
-    telegramDeps,
+    telegramDeps: {
+      ...telegramDeps,
+      sendMessageTelegram: defaultTelegramNativeCommandDeps.sendMessageTelegram,
+    },
   });
 
   registerTelegramHandlers({
@@ -406,9 +431,29 @@ export function createTelegramBotCore(
     resolveGroupRequireMention,
     resolveTelegramGroupConfig,
     shouldSkipUpdate,
-    processMessage,
+    processMessage: async ({
+      ctx,
+      allMedia,
+      storeAllowFrom,
+      turnContext,
+      options,
+      replyMedia,
+      replyChain,
+      promptContext,
+    }) =>
+      await processMessage(
+        ctx,
+        allMedia,
+        storeAllowFrom,
+        turnContext,
+        options,
+        replyMedia,
+        replyChain,
+        promptContext,
+      ),
     logger,
     telegramDeps,
+    nativeCommandCallbackDispatcher,
   });
 
   const originalStop = bot.stop.bind(bot);

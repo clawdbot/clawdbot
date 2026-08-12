@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalString as readStringParam } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveMergedModelProviderConfig,
   resolveMergedModelProviderModels,
@@ -11,7 +12,7 @@ import type {
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
 import { resolveProviderModelRoutes } from "../../plugins/provider-model-routes.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { resolveSessionAgentIds } from "../agent-scope.js";
 import { hasAuthoredProviderRequestParams } from "../model-extra-params.js";
 import { canonicalizeProviderModelId } from "../provider-model-route.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
@@ -94,8 +95,13 @@ export function buildAgentHarnessSupportContext(params: {
       }).get(modelId)
     : undefined;
   const agentId =
-    params.agentId ??
-    (params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined);
+    params.config && (params.agentId?.trim() || params.sessionKey?.trim())
+      ? resolveSessionAgentIds({
+          config: params.config,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+        }).sessionAgentId
+      : params.agentId;
   const hasConfiguredProviderRequestParams = hasAuthoredProviderRequestParams({
     config: params.config,
     provider: params.provider,
@@ -256,10 +262,6 @@ function isSupportedHarness(entry: {
   support: AgentHarnessSupport & { supported: true };
 } {
   return entry.support.supported;
-}
-
-function readStringParam(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function normalizeModelId(provider: string, modelId: string): string {

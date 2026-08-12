@@ -22,6 +22,7 @@ import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import {
+  bindProductionHarnessHostCapabilitiesForTest,
   createParams,
   createResumeHarness,
   createStartedThreadHarness,
@@ -285,6 +286,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const params = createParams(sessionFile, workspaceDir);
     params.trigger = "user";
     params.approvalReviewerDeviceId = "device-tui-reviewer";
+    const closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
 
     const run = runCodexAppServerAttempt(params, {
       nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
@@ -335,6 +337,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     );
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
+    closeHostCapabilities();
     testing.flushPendingCodexNativeHookRelayUnregistersForTests();
   });
 
@@ -360,6 +363,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const params = createParams(sessionFile, workspaceDir);
     params.trigger = "cron";
     params.onAgentEvent = vi.fn();
+    const closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
 
     const run = runCodexAppServerAttempt(params, {
       nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
@@ -394,6 +398,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
+    closeHostCapabilities();
     testing.flushPendingCodexNativeHookRelayUnregistersForTests();
   });
 

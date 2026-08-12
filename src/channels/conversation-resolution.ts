@@ -10,7 +10,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveTargetPrefixedChannel,
-  stripTargetKindPrefix,
+  stripOutboundTargetKindPrefix,
   stripTargetProviderPrefix,
   stripTargetTopicSuffix,
 } from "../infra/outbound/channel-target-prefix.js";
@@ -189,7 +189,7 @@ function resolveFallbackConversationTargetId(params: {
   if (!target) {
     return undefined;
   }
-  const withoutKind = stripTargetKindPrefix(target);
+  const withoutKind = stripOutboundTargetKindPrefix(target);
   const withoutTopic =
     params.preserveExplicitTopicSuffix && /:topic:/iu.test(withoutKind)
       ? withoutKind

@@ -22,7 +22,41 @@ type ReadinessResult = {
 /** Function form used by HTTP readiness endpoints and tests. */
 export type ReadinessChecker = () => ReadinessResult;
 
+export type StartupResult =
+  | { ok: true; status: "started"; uptimeMs: number }
+  | { ok: false; status: "starting"; uptimeMs: number; pendingReason: string }
+  | { ok: false; status: "draining"; uptimeMs: number };
+
+/** Function form used by HTTP startup endpoints and tests. */
+export type StartupChecker = () => StartupResult;
+
+type GatewayStartupStateDeps = {
+  startedAt: number;
+  getStartupPending?: () => boolean;
+  getStartupPendingReason?: () => string | undefined;
+  getGatewayDraining?: () => boolean;
+};
+
 const DEFAULT_READINESS_CACHE_TTL_MS = 1_000;
+
+/** Create a startup checker that excludes downstream channel health. */
+export function createStartupChecker(deps: GatewayStartupStateDeps): StartupChecker {
+  return (): StartupResult => {
+    const uptimeMs = Date.now() - deps.startedAt;
+    if (deps.getStartupPending?.()) {
+      return {
+        ok: false,
+        status: "starting",
+        uptimeMs,
+        pendingReason: deps.getStartupPendingReason?.() ?? "startup-sidecars",
+      };
+    }
+    if (deps.getGatewayDraining?.()) {
+      return { ok: false, status: "draining", uptimeMs };
+    }
+    return { ok: true, status: "started", uptimeMs };
+  };
+}
 
 function shouldIgnoreReadinessFailure(
   accountSnapshot: ChannelAccountSnapshot,
@@ -49,32 +83,31 @@ function shouldIgnoreReadinessFailure(
 }
 
 /** Create a cached readiness checker over channel runtime health. */
-export function createReadinessChecker(deps: {
-  channelManager: ChannelManager;
-  startedAt: number;
-  getStartupPending?: () => boolean;
-  getStartupPendingReason?: () => string | undefined;
-  getGatewayDraining?: () => boolean;
-  getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
-  shouldSkipChannelReadiness?: () => boolean;
-  cacheTtlMs?: number;
-}): ReadinessChecker {
+export function createReadinessChecker(
+  deps: GatewayStartupStateDeps & {
+    channelManager: ChannelManager;
+    getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
+    shouldSkipChannelReadiness?: () => boolean;
+    cacheTtlMs?: number;
+  },
+): ReadinessChecker {
   const { channelManager, startedAt } = deps;
+  const getStartup = createStartupChecker(deps);
   const cacheTtlMs = Math.max(0, deps.cacheTtlMs ?? DEFAULT_READINESS_CACHE_TTL_MS);
   let cachedAt = 0;
   let cachedState: Omit<ReadinessResult, "uptimeMs"> | null = null;
 
   return (): ReadinessResult => {
-    const now = Date.now();
-    const uptimeMs = now - startedAt;
-    if (deps.getStartupPending?.()) {
-      const reason = deps.getStartupPendingReason?.() ?? "startup-sidecars";
+    const startup = getStartup();
+    const uptimeMs = startup.uptimeMs;
+    const now = startedAt + uptimeMs;
+    if (startup.status === "starting") {
       return withEventLoopHealth(
-        { ready: false, failing: [reason], uptimeMs },
+        { ready: false, failing: [startup.pendingReason], uptimeMs },
         deps.getEventLoopHealth,
       );
     }
-    if (deps.getGatewayDraining?.()) {
+    if (startup.status === "draining") {
       return withEventLoopHealth(
         { ready: false, failing: ["gateway-draining"], uptimeMs },
         deps.getEventLoopHealth,

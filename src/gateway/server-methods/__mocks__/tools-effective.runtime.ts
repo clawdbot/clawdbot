@@ -10,7 +10,7 @@ export { getRegisteredAgentHarness } from "../../../agents/harness/registry.js";
 export { resolveReplyToMode } from "../../../auto-reply/reply/reply-threading.js";
 export { resolveRuntimeConfigCacheKey } from "../../../config/config.js";
 export { deliveryContextFromSession } from "../../../utils/delivery-context.shared.js";
-export { loadSessionEntryReadOnly, resolveSessionModelRef } from "../../session-utils.js";
+export { loadGatewaySessionEntryReadOnly, resolveSessionModelRef } from "../../session-utils.js";
 
 export const toolsEffectiveGlobalAgentRuntimeMocks = {
   resolveEffectiveToolInventory: vi.fn(
@@ -51,18 +51,20 @@ export const toolsEffectiveGlobalAgentRuntimeMocks = {
   ),
 };
 
-export const resolveEffectiveToolInventory =
-  toolsEffectiveGlobalAgentRuntimeMocks.resolveEffectiveToolInventory;
-export const resolveEffectiveToolInventoryRuntimeModelContextAsync =
-  toolsEffectiveGlobalAgentRuntimeMocks.resolveEffectiveToolInventoryRuntimeModelContextAsync;
-export const peekSessionMcpRuntime = vi.fn(() => undefined);
-export const resolveSessionMcpConfigSummary = vi.fn(() => ({
-  fingerprint: "mcp:0",
-  serverNames: [] as string[],
-}));
-export const buildBundleMcpToolsFromCatalog = vi.fn(() => []);
-export const applyFinalEffectiveToolPolicy = vi.fn(
-  (params: { bundledTools: unknown[] }) => params.bundledTools,
-);
-export const getActivePluginRegistryVersion = vi.fn(() => 1);
-export const getActivePluginChannelRegistryVersion = vi.fn(() => 1);
+export const toolsEffectiveRuntimeMockModule = {
+  resolveEffectiveToolInventory:
+    toolsEffectiveGlobalAgentRuntimeMocks.resolveEffectiveToolInventory,
+  resolveEffectiveToolInventoryRuntimeModelContextAsync:
+    toolsEffectiveGlobalAgentRuntimeMocks.resolveEffectiveToolInventoryRuntimeModelContextAsync,
+  resolveSessionMcpConfigSummary: vi.fn(() => ({
+    fingerprint: "mcp:0",
+    serverNames: [] as string[],
+  })),
+  buildBundleMcpToolsFromCatalog: vi.fn(() => []),
+  applyFinalEffectiveToolPolicy: vi.fn(
+    (params: { bundledTools: unknown[] }) => params.bundledTools,
+  ),
+  getActivePluginRegistryVersion: vi.fn(() => 1),
+  getActivePluginChannelRegistryVersion: vi.fn(() => 1),
+  peekSessionMcpRuntime: vi.fn(() => undefined),
+};

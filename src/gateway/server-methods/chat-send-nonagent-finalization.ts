@@ -162,7 +162,7 @@ export async function finalizeChatSendNonAgentReplies(params: {
         kind: "btw",
         runId: clientRunId,
         sessionKey,
-        ...(sessionKey === "global" && agentId ? { agentId } : {}),
+        ...(agentId ? { agentId } : {}),
         ...btwResult,
         ts: Date.now(),
       },

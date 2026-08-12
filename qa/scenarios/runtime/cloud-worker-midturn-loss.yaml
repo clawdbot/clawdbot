@@ -1,0 +1,33 @@
+title: Cloud worker mid-turn machine loss
+
+scenario:
+  id: cloud-worker-midturn-loss
+  surface: gateway
+  category: gateway.session-apis
+  coverage:
+    secondary:
+      - gateway.session-apis-sessions-list
+  objective: Prove a static-SSH worker can disappear during a streamed turn without losing or duplicating its already committed transcript prefix, silently hanging the turn, or breaking redispatch context.
+  successCriteria:
+    - A managed-worktree qa-channel session dispatches to a real static-SSH worker through an isolated Gateway.
+    - The mock model persists two assistant/tool-result checkpoints, then pauses during a fifth streamed message.
+    - Killing the proof-owned SSH and worker process tree leaves exactly the four completed checkpoint messages in Gateway history.
+    - The volatile streamed message is absent from durable history while the turn emits a visible chat error and the placement records a bounded terminal reason.
+    - Restarting the static-SSH host and redispatching the same session produces one successful recovery turn whose inference context contains each checkpoint exactly once.
+  docsRefs:
+    - docs/gateway/cloud-workers.md
+    - docs/concepts/qa-e2e-automation.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - src/worker/embedded-agent-transcript.runtime.ts
+    - src/gateway/worker-environments/transcript-commit.ts
+    - src/gateway/worker-environments/worker-turn-launcher.ts
+    - test/e2e/qa-lab/runtime/cloud-worker-midturn-loss-proof.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/cloud-worker-midturn-loss-proof.ts
+    summary: Dispatches a managed-worktree qa-channel session to a proof-owned static-SSH worker, kills its process tree during a streamed message, and verifies the durable cutoff, visible failure, and redispatch context.
+    timeoutMs: 900000
+    args:
+      - --artifact-base
+      - ${outputDir}

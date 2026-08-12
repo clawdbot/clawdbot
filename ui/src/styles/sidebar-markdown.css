@@ -103,14 +103,14 @@
   font-size: 0.88em;
 }
 
-.sidebar-markdown :where(:not(pre) > code) {
+.sidebar-markdown :where(:not(pre, a.markdown-file-link) > code) {
   padding: 0.15em 0.4em;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: rgba(0, 0, 0, 0.12);
 }
 
-:root[data-theme-mode="light"] .sidebar-markdown :where(:not(pre) > code) {
+:root[data-theme-mode="light"] .sidebar-markdown :where(:not(pre, a.markdown-file-link) > code) {
   background: rgba(0, 0, 0, 0.06);
 }
 
@@ -137,7 +137,7 @@
   border: none;
   background: none;
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--control-ui-text-scale));
   line-height: 1.55;
 }
 
@@ -146,7 +146,7 @@
   width: max-content;
   min-width: 100%;
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-variant-ligatures: none;
   letter-spacing: 0;
   line-height: 0.86;
@@ -179,7 +179,7 @@
   margin-top: 0.75em;
   overflow-x: auto;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .sidebar-markdown :where(th, td) {
@@ -192,7 +192,7 @@
 .sidebar-markdown :where(th) {
   background: var(--secondary);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   letter-spacing: 0.03em;
   text-transform: uppercase;
@@ -256,7 +256,7 @@
 
 .sidebar-markdown :where(summary) {
   padding: 8px 12px;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 500;
   user-select: none;
   transition: background var(--duration-fast) ease;

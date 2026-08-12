@@ -4,9 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
+import { prepareAgentRunDispatch } from "../agent-turn/agent-run-admission-phase.js";
+import { createAgentTurnIo } from "../agent-turn/io.js";
 import { resolveAgentRunExpiresAtMs } from "../chat-abort.js";
-import { setGatewayDedupeEntry } from "./agent-job.js";
-import { prepareAgentRunDispatch } from "./agent-run-admission-phase.js";
 import {
   getAgentTestMocks,
   makeContext,
@@ -1654,7 +1655,7 @@ describe("gateway agent handler chat.abort integration", () => {
         agentDedupeKeys: [`agent:${runId}`],
         context,
         client: null,
-        respond: vi.fn(),
+        io: createAgentTurnIo(vi.fn()),
         abortForLifecycleRotation: () => false,
         acquireGatewayWorkAdmission: async () => {
           markAcquireStarted();
@@ -2466,6 +2467,83 @@ describe("gateway agent handler chat.abort integration", () => {
     });
   });
 
+  it("does not dispatch a duplicate sessionless run while its reservation is active", async () => {
+    prime();
+    let finishRun!: (result: {
+      payloads: Array<{ text: string }>;
+      meta: { durationMs: number };
+    }) => void;
+    mocks.agentCommand.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishRun = resolve;
+      }),
+    );
+
+    const context = makeContext();
+    const runId = "idem-sessionless-active-collision";
+    const request = {
+      message: "hi",
+      agentId: "main",
+      sessionId: "sessionless-existing-session",
+      idempotencyKey: runId,
+    };
+    await invokeAgent(request, { context, reqId: runId });
+    expect(context.chatAbortControllers.has(runId)).toBe(false);
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(1);
+
+    const duplicateRespond = vi.fn();
+    await invokeAgent(request, {
+      context,
+      reqId: `${runId}-duplicate`,
+      respond: duplicateRespond,
+    });
+
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(1);
+    expect(duplicateRespond).toHaveBeenCalledWith(
+      true,
+      { runId, status: "in_flight", agentId: "main" },
+      undefined,
+      {
+        cached: true,
+        runId,
+      },
+    );
+
+    finishRun({ payloads: [{ text: "ok" }], meta: { durationMs: 1 } });
+  });
+
+  it("keeps a sessionless run from replacing an active projected run", async () => {
+    prime();
+    const context = makeContext();
+    const runId = "idem-sessionless-projected-collision";
+    const preExisting = {
+      controller: new AbortController(),
+      sessionId: "chat-send-session",
+      sessionKey: "agent:main:main",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+    };
+    context.chatAbortControllers.set(runId, preExisting);
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionId: "sessionless-existing-session",
+        idempotencyKey: runId,
+      },
+      { context, reqId: runId, respond },
+    );
+
+    expect(context.chatAbortControllers.get(runId)).toBe(preExisting);
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(true, { runId, status: "in_flight" }, undefined, {
+      cached: true,
+      runId,
+    });
+  });
+
   it("returns in_flight instead of replaying cached accepted agent replies", async () => {
     prime();
     mocks.agentCommand.mockImplementationOnce(
@@ -2507,7 +2585,7 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(mocks.agentCommand).not.toHaveBeenCalled();
     expect(duplicateRespond).toHaveBeenCalledWith(
       true,
-      { runId, status: "in_flight", sessionKey: "agent:main:main" },
+      { runId, status: "in_flight", sessionKey: "agent:main:main", agentId: "main" },
       undefined,
       {
         cached: true,

@@ -15,16 +15,14 @@ const {
   attachGatewayWsMessageHandlerMock,
   attachWorkerWsMessageHandlerMock,
   broadcastPresenceSnapshotMock,
-  closeTalkRealtimeRelaySessionsForConnectionMock,
-  closeTalkTranscriptionRelaySessionsForConnectionMock,
+  cleanupTalkConnectionMock,
   touchPresenceMock,
   upsertPresenceMock,
 } = vi.hoisted(() => ({
   attachGatewayWsMessageHandlerMock: vi.fn(),
   attachWorkerWsMessageHandlerMock: vi.fn((_params: unknown) => vi.fn()),
   broadcastPresenceSnapshotMock: vi.fn(),
-  closeTalkRealtimeRelaySessionsForConnectionMock: vi.fn(),
-  closeTalkTranscriptionRelaySessionsForConnectionMock: vi.fn(),
+  cleanupTalkConnectionMock: vi.fn(),
   touchPresenceMock: vi.fn(),
   upsertPresenceMock: vi.fn(),
 }));
@@ -42,19 +40,17 @@ vi.mock("../../infra/system-presence.js", () => ({
 vi.mock("./presence-events.js", () => ({
   broadcastPresenceSnapshot: broadcastPresenceSnapshotMock,
 }));
-vi.mock("../talk-realtime-relay.js", () => ({
-  closeTalkRealtimeRelaySessionsForConnection: closeTalkRealtimeRelaySessionsForConnectionMock,
-}));
-vi.mock("../talk-transcription-relay.js", () => ({
-  closeTalkTranscriptionRelaySessionsForConnection:
-    closeTalkTranscriptionRelaySessionsForConnectionMock,
+vi.mock("../talk-session-registry.js", () => ({
+  cleanupTalkConnection: cleanupTalkConnectionMock,
 }));
 
+import { markPublicWorkerIngress } from "./public-worker-ingress-context.js";
 import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 import { resolveSharedGatewaySessionGeneration } from "./ws-shared-generation.js";
 import {
   GATEWAY_WS_CONNECTION_KIND_PROPERTY,
   GATEWAY_WS_PREAUTH_BUDGET_PROPERTY,
+  GATEWAY_WS_WORKER_INGRESS_PROPERTY,
 } from "./ws-types.js";
 
 async function waitForLazyMessageHandler() {
@@ -102,8 +98,7 @@ describe("attachGatewayWsConnectionHandler", () => {
     attachGatewayWsMessageHandlerMock.mockReset();
     attachWorkerWsMessageHandlerMock.mockClear();
     broadcastPresenceSnapshotMock.mockReset();
-    closeTalkRealtimeRelaySessionsForConnectionMock.mockReset();
-    closeTalkTranscriptionRelaySessionsForConnectionMock.mockReset();
+    cleanupTalkConnectionMock.mockReset();
     touchPresenceMock.mockReset();
     upsertPresenceMock.mockReset();
   });
@@ -112,7 +107,7 @@ describe("attachGatewayWsConnectionHandler", () => {
     vi.useRealTimers();
   });
 
-  it("keeps worker sockets off the legacy challenge, plugin surface, and gateway budget", async () => {
+  it("keeps loopback worker sockets off the legacy challenge, plugin surface, and gateway budget", async () => {
     const socket = createGatewayWsTestSocket();
     const previous = {
       socket: { terminate: vi.fn() },
@@ -160,13 +155,44 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(gatewayBudget.release).not.toHaveBeenCalled();
   });
 
+  it("uses the main budget and public admission context for public worker sockets", async () => {
+    const socket = createGatewayWsTestSocket();
+    const gatewayBudget = { release: vi.fn() };
+    const rateLimiter = { check: vi.fn() };
+    Object.assign(socket, {
+      [GATEWAY_WS_CONNECTION_KIND_PROPERTY]: "worker",
+      [GATEWAY_WS_WORKER_INGRESS_PROPERTY]: "public",
+      __openclawPreauthBudgetKey: "203.0.113.10",
+    });
+    markPublicWorkerIngress(socket as never, {
+      clientIp: "203.0.113.10",
+      rateLimiter: rateLimiter as never,
+    });
+
+    await connectTestWs({
+      socket,
+      options: {
+        preauthConnectionBudget: gatewayBudget as never,
+      },
+    });
+
+    const handler = firstAttachedWorkerHandlerParams() as {
+      publicAdmission: { clientIp: string; rateLimiter: unknown };
+      setClient(client: never): boolean;
+    };
+    expect(handler).toMatchObject({
+      publicAdmission: { clientIp: "203.0.113.10", rateLimiter },
+    });
+    expect(handler.setClient({ socket } as never)).toBe(true);
+    expect(gatewayBudget.release).toHaveBeenCalledWith("203.0.113.10");
+  });
+
   it("threads current auth getters into the handshake handler instead of a stale snapshot", async () => {
     const initialAuth = createResolvedGatewayTokenAuth("token-before");
     let currentAuth = initialAuth;
 
     const { passed } = await connectTestWs({
       options: {
-        resolvedAuth: initialAuth,
         getResolvedAuth: () => currentAuth,
       },
     });
@@ -275,7 +301,7 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(socket.ping).toHaveBeenCalledOnce();
   });
 
-  it("releases connection-owned Talk relays when a gateway connection closes", async () => {
+  it("runs connection-owned Talk cleanup when a gateway connection closes", async () => {
     const { passed, socket } = await connectTestWs();
     const handlerParams = passed as {
       connId: string;
@@ -292,13 +318,10 @@ describe("attachGatewayWsConnectionHandler", () => {
 
     socket.emit("close", 1000, Buffer.from("done"));
 
-    expect(closeTalkRealtimeRelaySessionsForConnectionMock).toHaveBeenCalledOnce();
-    expect(closeTalkRealtimeRelaySessionsForConnectionMock).toHaveBeenCalledWith(
+    expect(cleanupTalkConnectionMock).toHaveBeenCalledOnce();
+    expect(cleanupTalkConnectionMock).toHaveBeenCalledWith(
       handlerParams.connId,
-    );
-    expect(closeTalkTranscriptionRelaySessionsForConnectionMock).toHaveBeenCalledOnce();
-    expect(closeTalkTranscriptionRelaySessionsForConnectionMock).toHaveBeenCalledWith(
-      handlerParams.connId,
+      expect.objectContaining({ warn: expect.any(Function) }),
     );
   });
 

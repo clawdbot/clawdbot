@@ -1,6 +1,5 @@
 // Public operation dispatcher. Parsing and mutation helpers live in focused modules.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { createAgent } from "../agents/agent-create.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
@@ -143,8 +142,8 @@ export async function executeSystemAgentOperation(
       return { applied: false };
     }
     case "config-schema": {
-      const { buildConfigSchema, lookupConfigSchema } = await import("../config/schema.js");
-      const response = buildConfigSchema();
+      const { buildConfigSchemaCore, lookupConfigSchema } = await import("../config/schema.js");
+      const response = buildConfigSchemaCore();
       const path = operation.path ?? ".";
       const result = lookupConfigSchema(response, path);
       if (!result) {
@@ -407,8 +406,10 @@ export async function executeSystemAgentOperation(
         runtime,
         opts,
         run: async (ctx) => {
+          const createAgentForOperation =
+            ctx.deps?.createAgent ?? (await import("../agents/agent-create.js")).createAgent;
           const result = await ctx.commit(async () => {
-            return await (ctx.deps?.createAgent ?? createAgent)({
+            return await createAgentForOperation({
               name: operation.agentId,
               ...(operation.workspace ? { workspace: operation.workspace } : {}),
             });
@@ -501,15 +502,19 @@ export async function executeSystemAgentOperation(
         },
       });
     case "open-tui": {
-      const agentId = await resolveTuiAgentId({
+      const overview = await loadOverviewForOperation(opts.deps);
+      const agentId = resolveTuiAgentId({
         requestedAgentId: operation.agentId,
         requestedWorkspace: operation.workspace,
-        deps: opts.deps,
+        overview,
       });
       const session = agentId ? buildAgentMainSessionKey({ agentId }) : undefined;
       const runTui = opts.deps?.runTui ?? (await import("../tui/tui.js")).runTui;
+      // A reachable Gateway owns the state lock, so embedded mode would fail during hatch.
+      // Keep embedded mode only as the no-Gateway fallback for standalone sessions.
+      const useEmbeddedTui = !overview.gateway.reachable;
       const result = await runTui({
-        local: true,
+        local: useEmbeddedTui,
         session,
         deliver: false,
         historyLimit: 200,

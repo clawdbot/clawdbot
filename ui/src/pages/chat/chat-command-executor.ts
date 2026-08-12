@@ -3,6 +3,10 @@
  * Calls gateway RPC methods and returns formatted results.
  */
 
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsListResult,
@@ -41,10 +45,6 @@ import {
   DEFAULT_MAIN_KEY,
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../../lib/string-coerce.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { patchChatCommandSessionSettings, selectedGlobalScope } from "./chat-settings-patches.ts";
 
@@ -818,8 +818,10 @@ async function resolveSteerTarget(
   };
 }
 
-function isActiveSteerSession(session: GatewaySessionRow | undefined): boolean {
-  return Boolean(session && isSessionRunActive(session));
+function isActiveSteerSession(
+  session: GatewaySessionRow | undefined,
+): session is GatewaySessionRow & { activeRunIds: [string] } {
+  return Boolean(session && isSessionRunActive(session) && session.activeRunIds?.length === 1);
 }
 
 type SteerChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
@@ -885,6 +887,10 @@ async function executeSteer(
         message: resolved.message,
         deliver: false,
         queueMode: "steer",
+        expectedRunId: targetSession.activeRunIds[0],
+        ...(targetSession.activeLeafEntryId !== undefined
+          ? { expectedLeafEntryId: targetSession.activeLeafEntryId }
+          : {}),
         idempotencyKey: generateUUID(),
       }),
     );

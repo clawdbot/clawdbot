@@ -1,7 +1,8 @@
-// Verifies fallback cooldown probe decisions and diagnostic records.
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+// Verifies fallback cooldown probe decisions and diagnostic records.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
@@ -38,7 +39,6 @@ const sessionSuspensionMocks = vi.hoisted(() => ({
       onDeferred?.({
         cfg: {},
         sessionId: "test-session",
-        laneId: "main",
         reason: "quota_exhausted",
         failedProvider: "openai",
         failedModel: "gpt-4.1-mini",
@@ -202,12 +202,7 @@ function expectPrimaryProbeSuccess(
   });
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function expectRecordWithFields(
   records: Array<Record<string, unknown>>,
@@ -317,7 +312,7 @@ describe("runWithModelFallback – probe logic", () => {
     reason: "rate_limit" | "billing",
   ) {
     expect(decision).toEqual({
-      type: "suspend_lanes",
+      type: "suspend_session",
       reason,
       leaderCandidate: OPENAI_PROBE_CANDIDATE,
     });
@@ -841,7 +836,7 @@ describe("runWithModelFallback – probe logic", () => {
     );
   });
 
-  it("does not lock lane when fallback candidates remain after suspend_lanes decision", async () => {
+  it("does not suspend the session when fallback candidates remain", async () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
@@ -874,7 +869,7 @@ describe("runWithModelFallback – probe logic", () => {
     expect(sessionSuspensionMocks.suspendSession).not.toHaveBeenCalled();
   });
 
-  it("defers embedded lane suspension only while another candidate remains", async () => {
+  it("defers embedded session suspension only while another candidate remains", async () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
@@ -968,7 +963,7 @@ describe("runWithModelFallback – probe logic", () => {
       return [];
     });
 
-    // Throttle primary probe so billing goes to suspend_lanes
+    // Throttle primary probe so billing records terminal session suspension.
     probeThrottleInternals.lastProbeAttempt.set("openai", NOW - 10_000);
 
     const run = vi.fn().mockResolvedValue("should-not-run");
@@ -985,21 +980,16 @@ describe("runWithModelFallback – probe logic", () => {
 
     expect(sessionSuspensionMocks.suspendSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        laneId: undefined,
         failedProvider: "anthropic",
       }),
     );
     expect(sessionSuspensionMocks.suspendSession).not.toHaveBeenCalledWith(
       expect.objectContaining({ failedProvider: "openai" }),
     );
-    expect(
-      sessionSuspensionMocks.suspendSession.mock.calls.every(
-        ([params]) => params.laneId === undefined,
-      ),
-    ).toBe(true);
+    expect(sessionSuspensionMocks.suspendSession.mock.calls[0]?.[0]).not.toHaveProperty("laneId");
   });
 
-  it("restores a deferred embedded lane when later candidates cannot run", async () => {
+  it("records the final candidate when later candidates cannot run", async () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
@@ -1033,9 +1023,11 @@ describe("runWithModelFallback – probe logic", () => {
     expect(run).toHaveBeenCalledOnce();
     expect(sessionSuspensionMocks.suspendSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        laneId: "main",
         failedProvider: "anthropic",
       }),
+    );
+    expect(sessionSuspensionMocks.suspendSession.mock.calls.at(-1)?.[0]).not.toHaveProperty(
+      "laneId",
     );
   });
 
@@ -1069,9 +1061,11 @@ describe("runWithModelFallback – probe logic", () => {
     expect(run).toHaveBeenCalledOnce();
     expect(sessionSuspensionMocks.suspendSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        laneId: "main",
         failedProvider: "openai",
       }),
+    );
+    expect(sessionSuspensionMocks.suspendSession.mock.calls.at(-1)?.[0]).not.toHaveProperty(
+      "laneId",
     );
   });
 });

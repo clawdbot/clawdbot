@@ -1,12 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type {
   PluginHookSkillArtifact,
   PluginHookSkillChangedEvent,
 } from "../../plugins/hook-types.js";
-import { parseFrontmatter } from "../loading/frontmatter.js";
+import { parseSkillFrontmatter } from "../loading/frontmatter.js";
 
 const SKILL_FILE_CANDIDATES = ["SKILL.md", "skill.md", "skills.md", "SKILL.MD"] as const;
 const EXCLUDED_ROOT_DIRS = new Set([".clawhub", ".clawdhub", ".openclaw"]);
@@ -22,14 +23,6 @@ type SkillTreeFile = {
   sha256: string;
   sizeBytes: number;
 };
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim();
-  return normalized || undefined;
-}
 
 async function collectSkillTreeFiles(skillDir: string, relativeDir = ""): Promise<SkillTreeFile[]> {
   const entries = await fs.readdir(path.join(skillDir, relativeDir), { withFileTypes: true });
@@ -64,7 +57,7 @@ async function collectSkillTreeFiles(skillDir: string, relativeDir = ""): Promis
   return files;
 }
 
-function parseSkillFrontmatter(content: Buffer): {
+function parseSkillArtifactMetadata(content: Buffer): {
   name?: string;
   description?: string;
   declaredVersion?: string;
@@ -74,7 +67,7 @@ function parseSkillFrontmatter(content: Buffer): {
     return {};
   }
   try {
-    const frontmatter = parseFrontmatter(text);
+    const frontmatter = parseSkillFrontmatter(text);
     return {
       name: normalizeOptionalString(frontmatter.name),
       description: normalizeOptionalString(frontmatter.description),
@@ -116,7 +109,7 @@ async function snapshotCommittedSkillArtifact(params: {
     throw new Error(`Skill tree is missing SKILL.md: ${skillDir}`);
   }
   const skillFile = path.join(skillDir, skillFileEntry.path);
-  const frontmatter = parseSkillFrontmatter(await fs.readFile(skillFile));
+  const frontmatter = parseSkillArtifactMetadata(await fs.readFile(skillFile));
   const treeSha256 = sha256Hex(JSON.stringify(files));
   return {
     name: frontmatter.name ?? params.skillKey,
