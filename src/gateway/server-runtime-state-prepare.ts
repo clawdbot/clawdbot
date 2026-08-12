@@ -401,6 +401,7 @@ export async function prepareGatewayKernelState(params: {
     strictTransportSecurityHeader,
     resolvedAuth,
     rateLimiter: authRateLimiter,
+    joinRateLimiter: browserAuthRateLimiter,
     isTerminalEnabled: terminalLaunchPolicy.isEnabled,
     gatewayTls,
     getResolvedAuth,

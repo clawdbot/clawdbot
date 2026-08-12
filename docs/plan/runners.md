@@ -20,7 +20,7 @@ advances a milestone.
 | 1b  | Naming: devices consolidation                              | landed      | #120689          |
 | 1c  | Cleanup: node-pairing → device-pairing merge               | not started | —                |
 | 2   | `openclaw resume` + web Continue in terminal               | in progress | #120664          |
-| 3   | `openclaw connect` one-paste onboarding + `/j/` join route | not started | —                |
+| 3   | `openclaw connect` one-paste onboarding + `/j/` join route | in progress | #122499          |
 | 4   | Picker: grouping, placement, liveness, enrichment          | in progress | #120804, #122531 |
 | 5   | Public worker ingress path                                 | not started | —                |
 | 6   | Node worker provider (device runners)                      | not started | —                |

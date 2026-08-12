@@ -581,6 +581,13 @@ export interface DeviceIdentities {
   updated_at_ms: number;
 }
 
+export interface DevicePairingJoinCodes {
+  created_at_ms: number | null;
+  expires_at_ms: number | null;
+  payload_json: string | null;
+  shortcode: string | null;
+}
+
 export interface DevicePairingPaired {
   approved_at_ms: number;
   approved_scopes_json: string | null;
@@ -1714,6 +1721,7 @@ export interface DB {
   device_auth_tokens: DeviceAuthTokens;
   device_bootstrap_tokens: DeviceBootstrapTokens;
   device_identities: DeviceIdentities;
+  device_pairing_join_codes: DevicePairingJoinCodes;
   device_pairing_paired: DevicePairingPaired;
   device_pairing_pending: DevicePairingPending;
   diagnostic_events: DiagnosticEvents;

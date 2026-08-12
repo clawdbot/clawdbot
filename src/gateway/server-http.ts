@@ -131,6 +131,9 @@ const getSessionHistoryHttpModule = createLazyRuntimeModule(
 const getSessionKillHttpModule = createLazyRuntimeModule(() => import("./session-kill-http.js"));
 const getToolsInvokeHttpModule = createLazyRuntimeModule(() => import("./tools-invoke-http.js"));
 const getUserProfilesHttpModule = createLazyRuntimeModule(() => import("./user-profiles-http.js"));
+const getDevicePairingJoinHttpModule = createLazyRuntimeModule(
+  () => import("./device-pairing-join-http.js"),
+);
 const getPluginNodeCapabilityAuthModule = createLazyRuntimeModule(
   () => import("./server/plugin-node-capability-auth.js"),
 );
@@ -398,6 +401,8 @@ export function createGatewayHttpServer(opts: {
   getResolvedAuth?: () => ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
+  /** Strict limiter for the public join-code exchange, including loopback. */
+  joinRateLimiter?: AuthRateLimiter;
   getReadiness?: ReadinessChecker;
   getStartup?: StartupChecker;
   getRuntimeConfig?: () => OpenClawConfig;
@@ -421,6 +426,7 @@ export function createGatewayHttpServer(opts: {
     resolvePluginNodeCapabilityRoute,
     resolvedAuth,
     rateLimiter,
+    joinRateLimiter,
     getReadiness,
     getStartup,
   } = opts;
@@ -549,6 +555,18 @@ export function createGatewayHttpServer(opts: {
         enabled: boolean,
         run: GatewayHttpRequestStage["run"],
       ) => addRequestStage(name, enabled, run, true);
+
+      addAdmittedStage(
+        "device-pairing-join",
+        scopedRequestPath === "/j" || scopedRequestPath.startsWith("/j/"),
+        async () =>
+          (await getDevicePairingJoinHttpModule()).handleDevicePairingJoinHttpRequest({
+            req,
+            res,
+            clientIp: resolveRequestClientIp(req, trustedProxies, allowRealIpFallback),
+            rateLimiter: joinRateLimiter,
+          }),
+      );
 
       // Before hooks: an operator hooks.path of "/oauth" would otherwise claim
       // this exact GET and 405 every provider redirect. The claim is exact-path

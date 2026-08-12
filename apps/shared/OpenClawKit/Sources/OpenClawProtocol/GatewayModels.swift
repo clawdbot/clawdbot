@@ -17908,17 +17908,20 @@ public struct DevicePairSetupCodeParams: Codable, Sendable {
     public let preferremoteurl: Bool?
     public let includeqr: Bool?
     public let bootstrapprofile: String?
+    public let joinurl: Bool?
 
     public init(
         publicurl: String? = nil,
         preferremoteurl: Bool? = nil,
         includeqr: Bool? = nil,
-        bootstrapprofile: String? = nil)
+        bootstrapprofile: String? = nil,
+        joinurl: Bool? = nil)
     {
         self.publicurl = publicurl
         self.preferremoteurl = preferremoteurl
         self.includeqr = includeqr
         self.bootstrapprofile = bootstrapprofile
+        self.joinurl = joinurl
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -17926,11 +17929,13 @@ public struct DevicePairSetupCodeParams: Codable, Sendable {
         case preferremoteurl = "preferRemoteUrl"
         case includeqr = "includeQr"
         case bootstrapprofile = "bootstrapProfile"
+        case joinurl = "joinUrl"
     }
 }
 
 public struct DevicePairSetupCodeResult: Codable, Sendable {
     public let setupcode: String
+    public let joinurl: String?
     public let qrdataurl: String?
     public let gatewayurl: String
     public let gatewayurls: [String]?
@@ -17942,6 +17947,7 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
 
     public init(
         setupcode: String,
+        joinurl: String? = nil,
         qrdataurl: String? = nil,
         gatewayurl: String,
         gatewayurls: [String]? = nil,
@@ -17952,6 +17958,7 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
         expiresatms: Int? = nil)
     {
         self.setupcode = setupcode
+        self.joinurl = joinurl
         self.qrdataurl = qrdataurl
         self.gatewayurl = gatewayurl
         self.gatewayurls = gatewayurls
@@ -17964,6 +17971,7 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case setupcode = "setupCode"
+        case joinurl = "joinUrl"
         case qrdataurl = "qrDataUrl"
         case gatewayurl = "gatewayUrl"
         case gatewayurls = "gatewayUrls"
