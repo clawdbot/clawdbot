@@ -246,6 +246,9 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
 
   it("blocks hostname navigation when strict SSRF policy is configured", async () => {
     const { pageGoto } = installBrowserMocks();
+    getChromeWebSocketEndpointSpy.mockResolvedValue({
+      url: "ws://127.0.0.1:18792/devtools/browser/ROOT",
+    });
 
     await expect(
       createPageViaPlaywright({

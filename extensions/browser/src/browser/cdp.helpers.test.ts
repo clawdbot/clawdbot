@@ -157,6 +157,42 @@ describe("cdp helpers", () => {
     );
   });
 
+  it("does not turn a strict remote CDP hostname into a private-network grant", async () => {
+    const policy = { dangerouslyAllowPrivateNetwork: false };
+    const scoped = scopeCdpPolicyToConfiguredEndpoint("https://browser.example:9222", policy);
+    const { resolvePinnedHostnameWithPolicy } =
+      await vi.importActual<typeof import("../infra/net/ssrf.js")>("../infra/net/ssrf.js");
+
+    expect(scoped).toBe(policy);
+    await expect(
+      resolvePinnedHostnameWithPolicy("browser.example", {
+        policy: scoped,
+        lookupFn: async () => [{ address: "10.0.0.8", family: 4 }],
+      }),
+    ).rejects.toThrow(/private\/internal\/special-use ip address/i);
+  });
+
+  it("keeps explicit remote CDP hostname grants available", async () => {
+    const policy = {
+      dangerouslyAllowPrivateNetwork: false,
+      allowedHostnames: ["browser.example"],
+    };
+    const scoped = scopeCdpPolicyToConfiguredEndpoint("https://browser.example:9222", policy);
+    const { resolvePinnedHostnameWithPolicy } =
+      await vi.importActual<typeof import("../infra/net/ssrf.js")>("../infra/net/ssrf.js");
+
+    expect(scoped).toEqual({
+      dangerouslyAllowPrivateNetwork: false,
+      allowedHostnames: ["browser.example"],
+    });
+    await expect(
+      resolvePinnedHostnameWithPolicy("browser.example", {
+        policy: scoped,
+        lookupFn: async () => [{ address: "10.0.0.8", family: 4 }],
+      }),
+    ).resolves.toEqual(expect.objectContaining({ addresses: ["10.0.0.8"] }));
+  });
+
   it("blocks a discovered endpoint on another port in strict SSRF mode", async () => {
     const policy = scopeCdpPolicyToConfiguredEndpoint("http://127.0.0.1:9222", {});
     await expect(
@@ -497,13 +533,11 @@ describe("resolveCdpReachabilityTimeouts", () => {
 });
 
 describe("CDP reachability policy", () => {
-  it("allows the selected remote profile CDP host without widening browser navigation policy", async () => {
+  it("keeps the default remote CDP policy strict without widening browser navigation policy", async () => {
     const browserPolicy = {};
     const profile = createProfile({});
 
-    expect(resolveCdpReachabilityPolicy(profile, browserPolicy)).toEqual({
-      allowedHostnames: ["172.29.128.1"],
-    });
+    expect(resolveCdpReachabilityPolicy(profile, browserPolicy)).toBe(browserPolicy);
     expect(browserPolicy).toStrictEqual({});
     await expect(
       assertBrowserNavigationAllowed({

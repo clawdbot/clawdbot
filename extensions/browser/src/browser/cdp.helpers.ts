@@ -24,6 +24,7 @@ import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
 import {
   allowsDiscoveredCdpAuthorityChange,
+  isCdpHostnameTrustedByPolicy,
   withExactHostnamePolicy,
 } from "./ssrf-policy-helpers.js";
 import { normalizeBrowserTimerDelayMs } from "./timer-delay.js";
@@ -81,7 +82,7 @@ export function isDirectCdpWebSocketEndpoint(url: string): boolean {
   /* c8 ignore stop */
 }
 
-/** Restricts discovered CDP endpoints to the configured control-plane host. */
+/** Restrict a trusted CDP endpoint to its configured control-plane host. */
 export function scopeCdpPolicyToConfiguredEndpoint(
   cdpUrl: string,
   ssrfPolicy?: SsrFPolicy,
@@ -89,7 +90,12 @@ export function scopeCdpPolicyToConfiguredEndpoint(
   if (!ssrfPolicy) {
     return undefined;
   }
-  return withExactHostnamePolicy(ssrfPolicy, new URL(cdpUrl).hostname);
+  const hostname = new URL(cdpUrl).hostname;
+  // Never turn an otherwise strict remote hostname into a private-network grant.
+  if (!isLoopbackHost(hostname) && !isCdpHostnameTrustedByPolicy(ssrfPolicy, hostname)) {
+    return ssrfPolicy;
+  }
+  return withExactHostnamePolicy(ssrfPolicy, hostname);
 }
 
 type CdpEndpointSource =

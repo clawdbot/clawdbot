@@ -5,12 +5,12 @@
  * is stricter, so this module scopes the exception to browser control only.
  */
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { matchesHostnameAllowlist, normalizeHostname } from "../sdk-security-runtime.js";
+import { normalizeHostname } from "../sdk-security-runtime.js";
 import { CHROME_MCP_ENDPOINT_FLAGS } from "./chrome-mcp-contracts.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
-import { withExactHostnamePolicy } from "./ssrf-policy-helpers.js";
+import { isCdpHostnameTrustedByPolicy, withExactHostnamePolicy } from "./ssrf-policy-helpers.js";
 
 // Synthetic exact-host CDP policies must retain the operator's original intent;
 // otherwise Chrome MCP cannot distinguish default control-plane scoping from a
@@ -26,14 +26,7 @@ function withCdpControlHostname(
   if (!ssrfPolicy || !cdpHost) {
     return ssrfPolicy;
   }
-  const allowedHostnames = (ssrfPolicy.allowedHostnames ?? [])
-    .map((pattern) => normalizeHostname(pattern))
-    .filter((pattern) => pattern && pattern !== "*" && pattern !== "*.");
-  if (
-    requireAllowlistMatch &&
-    allowedHostnames.length > 0 &&
-    !matchesHostnameAllowlist(cdpHost, allowedHostnames)
-  ) {
+  if (requireAllowlistMatch && !isCdpHostnameTrustedByPolicy(ssrfPolicy, cdpHost)) {
     return ssrfPolicy;
   }
   const scopedPolicy = withExactHostnamePolicy(ssrfPolicy, cdpHost);
