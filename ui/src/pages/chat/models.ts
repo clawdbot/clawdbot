@@ -10,13 +10,24 @@ type ModelCatalogCacheEntry = {
   inFlight?: Promise<ModelCatalogEntry[]>;
 };
 
-const modelCatalogCache = new WeakMap<GatewayBrowserClient, ModelCatalogCacheEntry>();
+const modelCatalogCache = new WeakMap<GatewayBrowserClient, Map<string, ModelCatalogCacheEntry>>();
+
+function modelCatalogCacheFor(client: GatewayBrowserClient): Map<string, ModelCatalogCacheEntry> {
+  let cache = modelCatalogCache.get(client);
+  if (!cache) {
+    cache = new Map();
+    modelCatalogCache.set(client, cache);
+  }
+  return cache;
+}
 
 export async function loadModels(
   client: GatewayBrowserClient,
-  opts?: { refresh?: boolean },
+  opts?: { agentId?: string; refresh?: boolean },
 ): Promise<ModelCatalogEntry[]> {
-  const cached = modelCatalogCache.get(client);
+  const cache = modelCatalogCacheFor(client);
+  const cacheKey = opts?.agentId?.trim() ?? "";
+  const cached = cache.get(cacheKey);
   const now = Date.now();
   if (!opts?.refresh && cached?.models && cached.expiresAt > now) {
     return cached.models;
@@ -28,11 +39,15 @@ export async function loadModels(
   // The cache write happens here, gated on inFlight identity: a refresh call
   // replaces inFlight, so an older request resolving late cannot clobber the
   // fresher result with pre-mutation catalog data.
-  const inFlight: Promise<ModelCatalogEntry[]> = requestModels(client, cached?.models)
+  const inFlight: Promise<ModelCatalogEntry[]> = requestModels(
+    client,
+    cached?.models,
+    cacheKey || undefined,
+  )
     .then((result) => {
-      const latest = modelCatalogCache.get(client);
+      const latest = cache.get(cacheKey);
       if (!latest || latest.inFlight === inFlight) {
-        modelCatalogCache.set(client, {
+        cache.set(cacheKey, {
           expiresAt: result.fresh ? Date.now() + MODEL_CATALOG_CACHE_TTL_MS : 0,
           models: result.models,
         });
@@ -40,12 +55,12 @@ export async function loadModels(
       return result.models;
     })
     .finally(() => {
-      const latest = modelCatalogCache.get(client);
+      const latest = cache.get(cacheKey);
       if (latest?.inFlight === inFlight) {
         delete latest.inFlight;
       }
     });
-  modelCatalogCache.set(client, {
+  cache.set(cacheKey, {
     expiresAt: cached?.expiresAt ?? 0,
     models: cached?.models ?? [],
     inFlight,
@@ -63,10 +78,12 @@ export function applyModelCatalogResult(models: unknown): ModelCatalogEntry[] | 
 async function requestModels(
   client: GatewayBrowserClient,
   fallback: ModelCatalogEntry[] | undefined,
+  agentId: string | undefined,
 ): Promise<{ models: ModelCatalogEntry[]; fresh: boolean }> {
   try {
     const result = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {
       view: "configured",
+      ...(agentId ? { agentId } : {}),
     });
     return { models: result?.models ?? [], fresh: true };
   } catch {

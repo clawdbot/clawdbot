@@ -18,6 +18,7 @@ export class GatewayDrainingError extends Error {
 type GatewayRootWorkAdmission = {
   references: number;
   released: boolean;
+  retiredByReset?: true;
 };
 
 type GatewayWorkAdmissionState = {
@@ -318,6 +319,12 @@ export async function runWithGatewayIndependentRootWorkAdmission<T>(
   }
 }
 
+/** Re-admits preserved work whose inherited root was retired before it could run. */
+export const runWithGatewayRootWorkReadmission = <T>(run: () => Promise<T>): Promise<T> =>
+  GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore()?.retiredByReset
+    ? runWithGatewayIndependentRootWorkAdmission(run)
+    : run();
+
 /**
  * Detaches required follow-up from the current admitted transaction.
  * A live parent synchronously reserves a tracked root even after restart or
@@ -447,6 +454,7 @@ export function resetGatewayWorkAdmission(): void {
   // Retire their ALS records so surviving chains must re-enter admission.
   for (const admission of GATEWAY_WORK_ADMISSION_STATE.activeRootWork) {
     admission.references = 0;
+    admission.retiredByReset = true;
     admission.released = true;
   }
   GATEWAY_WORK_ADMISSION_STATE.activeRootWork.clear();

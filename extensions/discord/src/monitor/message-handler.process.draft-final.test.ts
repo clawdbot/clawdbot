@@ -97,6 +97,23 @@ describe("processDiscordMessage provider preview hook safety", () => {
     expect(createDiscordDraftStream).not.toHaveBeenCalled();
   });
 
+  it("uses an explicit partial preview despite inherited block delivery", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      expect(params?.replyOptions?.disableBlockStreaming).toBe(true);
+      await params?.replyOptions?.onPartialReply?.({ text: "Hello" });
+      await params?.dispatcher.sendFinalReply({ text: "Hello" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+    const ctx = await createAutomaticSourceDeliveryContext({
+      cfg: { agents: { defaults: { blockStreamingDefault: "on" } } },
+      discordConfig: { streaming: { mode: "partial" } },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(createDiscordDraftStream).toHaveBeenCalledTimes(1);
+  });
+
   it("does not re-enter final delivery after message_sending cancellation", async () => {
     registerHooks("message_sending");
     deliverDiscordReply.mockResolvedValueOnce({ visibleReplySent: false });
@@ -222,12 +239,13 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     });
   });
 
-  it("defaults unset Discord preview streaming to progress mode without drafting text-only turns", async () => {
+  it("keeps unset Discord preview streaming off and delivers the final normally", async () => {
     await runSingleChunkFinalScenario({ maxLinesPerMessage: 5 });
     expect(getLastDispatchReplyOptions()?.onPartialReply).toBeUndefined();
-    expect(createDiscordDraftStream).toHaveBeenCalledTimes(1);
+    expect(createDiscordDraftStream).not.toHaveBeenCalled();
     expect(editMessageDiscord).not.toHaveBeenCalled();
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expectFreshFinalText("Hello\nWorld");
   });
 
   it("does not stream Discord tool progress before the initial delay", async () => {
@@ -241,7 +259,7 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     });
 
     const ctx = await createAutomaticSourceDeliveryContext({
-      discordConfig: { maxLinesPerMessage: 5 },
+      discordConfig: { streaming: { mode: "progress" }, maxLinesPerMessage: 5 },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -285,7 +303,7 @@ describe("processDiscordMessage draft streaming final delivery", () => {
 
     const ctx = await createAutomaticSourceDeliveryContext({
       baseSessionKey: BASE_CHANNEL_ROUTE.sessionKey,
-      discordConfig: { maxLinesPerMessage: 5 },
+      discordConfig: { streaming: { mode: "progress" }, maxLinesPerMessage: 5 },
       route: BASE_CHANNEL_ROUTE,
     });
 
@@ -348,7 +366,7 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     });
 
     const ctx = await createAutomaticSourceDeliveryContext({
-      discordConfig: { maxLinesPerMessage: 5 },
+      discordConfig: { streaming: { mode: "progress" }, maxLinesPerMessage: 5 },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -373,7 +391,9 @@ describe("processDiscordMessage draft streaming final delivery", () => {
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
-    const ctx = await createAutomaticSourceDeliveryContext();
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streaming: { mode: "progress" } },
+    });
     await runProcessDiscordMessage(ctx);
   });
 
@@ -413,7 +433,7 @@ describe("processDiscordMessage draft streaming final delivery", () => {
 
   it("declines failed item progress without updating the Discord draft", async () => {
     const draftStream = createMockDraftStreamForTest();
-    let callbackResult: false | void = undefined;
+    let callbackResult: boolean | void = undefined;
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       callbackResult = await params?.replyOptions?.onItemEvent?.({
@@ -428,7 +448,7 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     });
 
     const ctx = await createAutomaticSourceDeliveryContext({
-      discordConfig: { maxLinesPerMessage: 5 },
+      discordConfig: { streaming: { mode: "progress" }, maxLinesPerMessage: 5 },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -453,12 +473,31 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     });
 
     const ctx = await createAutomaticSourceDeliveryContext({
-      discordConfig: { maxLinesPerMessage: 5 },
+      discordConfig: { streaming: { mode: "progress" }, maxLinesPerMessage: 5 },
     });
 
     await runProcessDiscordMessage(ctx);
 
     expect(callbackResult).toBe(false);
+    expect(draftStream.update).not.toHaveBeenCalled();
+  });
+
+  it("suppresses terminal progress callbacks without their terminal phase", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onApprovalEvent?.({ command: "must stay hidden" });
+      await params?.replyOptions?.onCommandOutput?.({ title: "must stay hidden", exitCode: 0 });
+      await params?.replyOptions?.onPatchSummary?.({ summary: "must stay hidden" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streaming: { mode: "progress" } },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
     expect(draftStream.update).not.toHaveBeenCalled();
   });
 
@@ -637,6 +676,12 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     });
 
     const ctx = await createBaseContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: { toolProgress: true },
+        },
+      },
       cfg: {
         channels: {
           discord: {

@@ -8,6 +8,7 @@ import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { assertMinimaxBaseResp, normalizeMinimaxHexAudio } from "./media-provider-runtime.js";
 
 export const DEFAULT_MINIMAX_TTS_BASE_URL = "https://api.minimax.io";
 
@@ -112,24 +113,13 @@ export async function minimaxTTS(params: {
         base_resp?: { status_code?: number; status_msg?: string };
       }>(response, "minimax.tts");
 
-      // Check base_resp for envelope errors (HTTP 200 with non-zero status_code).
-      // Other MiniMax providers (image, video, music, web-search) already check this.
-      // Without this check, quota/billing errors with placeholder audio are silently accepted.
-      if (
-        body.base_resp &&
-        typeof body.base_resp.status_code === "number" &&
-        body.base_resp.status_code !== 0
-      ) {
-        const msg = body.base_resp.status_msg ?? "unknown error";
-        throw new Error(`MiniMax TTS API error (${body.base_resp.status_code}): ${msg}`);
-      }
-
+      assertMinimaxBaseResp(body.base_resp, "MiniMax TTS API error");
       const hexAudio = body?.data?.audio;
       if (!hexAudio) {
         throw new Error("MiniMax TTS API returned no audio data");
       }
 
-      return Buffer.from(hexAudio, "hex");
+      return Buffer.from(normalizeMinimaxHexAudio(hexAudio, "MiniMax TTS API"), "hex");
     } finally {
       await release();
     }

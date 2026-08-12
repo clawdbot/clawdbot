@@ -664,7 +664,7 @@ Current built-in contracts include `agents_list`, `apply_patch`,
 `conversations_list`, `conversations_send`, `conversations_turn`, `edit`,
 `openclaw`, `read`, `screen`,
 `sessions_history`, `sessions_list`, `sessions_search`, `sessions_send`,
-`session_status`, `spawn_task`, `terminal`, `web_fetch`, and `web_search`.
+`session_status`, `suggest_task`, `terminal`, `web_fetch`, and `web_search`.
 Exact passthroughs can reuse their owning protocol schema instead of
 duplicating a model-only contract. For example, the conversation tools expose
 the same Gateway result schemas used by `conversations.list`,
@@ -991,6 +991,9 @@ Each result's `telemetry` field reports: hidden catalog size and a source
 breakdown (`openclaw`/`mcp`/`client` counts), cumulative search/describe/call
 counts for the run's catalog, and the model-visible tool names (`exec`,
 `wait`, and retained direct-only tools).
+The `counterScope` identifies one counter lifetime, changing when a catalog is
+replaced or restored but remaining stable when tools are appended or prompt
+policy narrows that catalog.
 
 The run metadata (`meta.agentMeta` in `openclaw agent --json`, mirrored on the
 `agent exec --json` envelope) adds per-run stats:

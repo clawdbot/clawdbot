@@ -49,6 +49,10 @@ describe("mutable allowlist table helpers", () => {
 
 describe("createRestrictSendersChannelSecurity", () => {
   it("builds dm policy resolution and open-group warnings from one descriptor", () => {
+    const dmRouting = {
+      resolveDmScope: () => "per-peer" as const,
+      resolveDmRoute: () => ({ kind: "core" as const }),
+    };
     const security = createRestrictSendersChannelSecurity<{
       accountId: string;
       allowFrom?: string[];
@@ -65,7 +69,10 @@ describe("createRestrictSendersChannelSecurity", () => {
       groupAllowFromPath: "channels.line.groupAllowFrom",
       mentionGated: false,
       policyPathSuffix: "dmPolicy",
+      dmRouting,
     });
+
+    expect(security.dmRouting).toBe(dmRouting);
 
     expect(
       security.resolveDmPolicy?.({

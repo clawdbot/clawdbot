@@ -119,6 +119,15 @@ export function buildStatusCommandOverviewRows(
     ok: params.ok,
     warn: params.warn,
   });
+  const hostDesktop = params.summary.hostDesktop ?? {
+    enabled: false,
+    state: "disabled" as const,
+    port: 5900,
+  };
+  const hostDesktopValue =
+    hostDesktop.state === "disabled"
+      ? params.muted("disabled")
+      : `${hostDesktop.state} · 127.0.0.1:${hostDesktop.port}${hostDesktop.security ? ` · security ${hostDesktop.security}` : ""}`;
   return buildStatusOverviewRowsFromSurface({
     surface: params.surface,
     decorateOk: params.ok,
@@ -133,6 +142,7 @@ export function buildStatusCommandOverviewRows(
         ? [{ Item: "Update restart", Value: params.updateRestartValue }]
         : []),
       { Item: "Memory", Value: memoryValue },
+      { Item: "Host desktop", Value: hostDesktopValue },
       ...(degradedSecretsValue ? [{ Item: "Degraded secrets", Value: degradedSecretsValue }] : []),
       ...(degradedPluginsValue ? [{ Item: "Degraded plugins", Value: degradedPluginsValue }] : []),
       { Item: "Plugin compatibility", Value: pluginCompatibilityValue },

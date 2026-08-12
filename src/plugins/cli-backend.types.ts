@@ -227,6 +227,13 @@ export type CliBackendToolAvailabilityEnforcement = "execution-args" | "prepare-
 
 export type CliBackendSideQuestionToolMode = "disabled";
 
+type CliBackendExactToolAvailabilityVersionPolicy = Readonly<{
+  /** Inclusive floor for stable package releases. */
+  stableMinimum: string;
+  /** Inclusive floors keyed by the first SemVer prerelease identifier. */
+  prereleaseMinimums?: Readonly<Record<string, string>>;
+}>;
+
 export type CliBackendNormalizeConfigContext = {
   config?: OpenClawConfig;
   backendId: string;
@@ -240,8 +247,22 @@ export type CliBackendRuntimeArtifactPolicy = Readonly<{
   packageName: string;
   /** Only the command itself may be the package entrypoint. */
   entrypoint: "command";
+  /** Supported package release lines when a run requests exact tool availability. */
+  exactToolAvailabilityVersionPolicy?: CliBackendExactToolAvailabilityVersionPolicy;
   /** Canonical basenames allowed when this backend ships a self-contained native build. */
   nativeExecutableNames?: readonly string[];
+}>;
+
+/** Provider-owned protocol requirement for a long-lived CLI session. */
+export type CliBackendLiveSessionRequirement = Readonly<{
+  /** Exact capability the CLI must advertise before streamed output is trusted. */
+  capability: string;
+  /** First published version known to advertise the capability; runtime still feature-detects. */
+  minimumVersion: string;
+  /** Arguments used by setup and Doctor to obtain the installed CLI version. */
+  versionArgs: readonly string[];
+  /** Operator command that installs a compatible CLI version. */
+  updateCommand: string;
 }>;
 
 /** Plugin-owned CLI backend defaults used by the text-only CLI runner. */
@@ -289,6 +310,8 @@ export type CliBackendPlugin = {
   };
   /** Required whenever this backend can become a verified inference owner. */
   runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
+  /** Negotiated protocol capability required by this backend's live-session transport. */
+  liveSessionRequirement?: CliBackendLiveSessionRequirement;
   /**
    * Whether OpenClaw should inject bundle MCP config for this backend.
    *

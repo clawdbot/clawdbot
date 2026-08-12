@@ -9,11 +9,10 @@ import {
 } from "../../state/openclaw-agent-db-registry.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { OpenClawConfig } from "../config.js";
-import { resolveStorePath } from "./paths.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 import { listSessionEntriesReadOnly, replaceSessionEntry } from "./session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import {
-  dedupeSessionStoreTargetsBySqliteTarget,
   resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreCandidateTargetsSync,
   resolveAllAgentSessionStoreTargetsSync,
@@ -104,11 +103,11 @@ describe("resolveSessionStoreTargets", () => {
       expect(targets).toEqual([
         {
           agentId: "main",
-          storePath: resolveStorePath(cfg.session?.store, { agentId: "main", env }),
+          storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: "main", env }),
         },
         {
           agentId: "work",
-          storePath: resolveStorePath(cfg.session?.store, { agentId: "work", env }),
+          storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: "work", env }),
         },
       ]);
     });
@@ -137,23 +136,23 @@ describe("resolveSessionStoreTargets", () => {
       expect(targets).toEqual([
         {
           agentId: "ops",
-          storePath: resolveStorePath(cfg.session?.store, { agentId: "ops", env }),
+          storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: "ops", env }),
         },
         {
           agentId: "review",
-          storePath: resolveStorePath(cfg.session?.store, { agentId: "review", env }),
+          storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: "review", env }),
         },
         {
           agentId: "claude",
-          storePath: resolveStorePath(cfg.session?.store, { agentId: "claude", env }),
+          storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: "claude", env }),
         },
         {
           agentId: "gemini",
-          storePath: resolveStorePath(cfg.session?.store, { agentId: "gemini", env }),
+          storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: "gemini", env }),
         },
         {
           agentId: "opencode",
-          storePath: resolveStorePath(cfg.session?.store, { agentId: "opencode", env }),
+          storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: "opencode", env }),
         },
       ]);
     });
@@ -339,36 +338,6 @@ describe("resolveSessionStoreTargets", () => {
       ).toBe(path.join(home, "shared.worker.2.sqlite"));
     });
   });
-
-  it.runIf(process.platform !== "win32")(
-    "deduplicates aliased SQLite locators by physical identity",
-    async () => {
-      await withTempHome(async (home) => {
-        const stateDir = path.join(home, ".openclaw");
-        const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-        const realDir = path.join(home, "real-stores");
-        const aliasDir = path.join(home, "alias-stores");
-        await fs.mkdir(realDir, { recursive: true });
-        await fs.symlink(realDir, aliasDir, "dir");
-        const diagnostics: string[] = [];
-
-        expect(
-          dedupeSessionStoreTargetsBySqliteTarget(
-            [
-              { agentId: "main", storePath: path.join(realDir, "shared.sqlite") },
-              { agentId: "ops", storePath: path.join(aliasDir, "shared.sqlite") },
-            ],
-            {
-              defaultAgentId: "main",
-              env,
-              onDiagnostic: (diagnostic) => diagnostics.push(diagnostic.message),
-            },
-          ),
-        ).toEqual([{ agentId: "main", storePath: path.join(realDir, "shared.sqlite") }]);
-        expect(diagnostics).toContainEqual(expect.stringContaining('ignored owner(s): "ops"'));
-      });
-    },
-  );
 
   it("retains a shared-store claimant when the physical owner left the roster", async () => {
     await withTempHome(async (home) => {
@@ -734,8 +703,12 @@ describe("resolveExistingAgentSessionStoreTargetsSync", () => {
         agents: { list: [{ id: "main", default: true }] },
         session: { store: storeTemplate },
       };
-      const legacyStorePath = resolveStorePath(storeTemplate, { agentId: "retired-legacy" });
-      const sqliteStorePath = resolveStorePath(storeTemplate, { agentId: "retired-sqlite" });
+      const legacyStorePath = resolveSessionStorePathCore(storeTemplate, {
+        agentId: "retired-legacy",
+      });
+      const sqliteStorePath = resolveSessionStorePathCore(storeTemplate, {
+        agentId: "retired-sqlite",
+      });
       await fs.mkdir(path.dirname(legacyStorePath), { recursive: true });
       await fs.writeFile(
         legacyStorePath,
@@ -1021,7 +994,7 @@ describe("resolveAllAgentSessionStoreCandidateTargetsSync", () => {
     await withTempHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-      const storePath = resolveStorePath(undefined, { agentId: "main", env });
+      const storePath = resolveSessionStorePathCore(undefined, { agentId: "main", env });
 
       expect(
         resolveAllAgentSessionStoreCandidateTargetsSync(

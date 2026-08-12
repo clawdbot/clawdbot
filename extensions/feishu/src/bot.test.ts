@@ -12,7 +12,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { parseMergeForwardContent } from "./bot-content.js";
 import type { FeishuMessageEvent } from "./bot.js";
-import { handleFeishuMessage } from "./bot.js";
+import { handleFeishuMessage, parseFeishuMessageEvent } from "./bot.js";
 import {
   createFeishuTestConfig,
   createFeishuTestEvent,
@@ -2386,6 +2386,28 @@ describe("handleFeishuMessage command authorization", () => {
     expect(context.BodyForAgent).toBe("[message_id: msg-message-id-line]\nou-msgid: hello");
   });
 
+  it("parses direct interactive webhook content through the canonical card parser", () => {
+    const event = createFeishuTestEvent({
+      messageId: "msg-direct-card",
+      messageType: "interactive",
+      content: JSON.stringify({
+        schema: "2.0",
+        header: { title: { tag: "plain_text", content: "Direct task" } },
+        body: {
+          elements: [
+            {
+              tag: "table",
+              columns: [{ name: "status", display_name: "Status" }],
+              rows: [{ status: "Open" }],
+            },
+          ],
+        },
+      }),
+    });
+
+    expect(parseFeishuMessageEvent(event).content).toBe("Direct task\nStatus\nOpen");
+  });
+
   it("expands merge_forward content from API sub-messages", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     const mockGetMerged = vi.fn().mockResolvedValue({
@@ -2403,6 +2425,29 @@ describe("handleFeishuMessage command authorization", () => {
             msg_type: "file",
             body: { content: JSON.stringify({ file_name: "report.pdf" }) },
             create_time: "2000",
+          },
+          {
+            message_id: "sub-card",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                schema: "2.0",
+                header: { title: { tag: "plain_text", content: "Task summary" } },
+                body: {
+                  elements: [
+                    {
+                      tag: "table",
+                      columns: [
+                        { name: "task", display_name: "Task" },
+                        { name: "owner", display_name: "Owner" },
+                      ],
+                      rows: [{ task: "Investigate", owner: { name: "Alice" } }],
+                    },
+                  ],
+                },
+              }),
+            },
+            create_time: "1500",
           },
           {
             message_id: "sub-1",
@@ -2438,12 +2483,19 @@ describe("handleFeishuMessage command authorization", () => {
     await dispatchMessage({ cfg, event });
 
     expect(mockGetMerged).toHaveBeenCalledWith({
+      params: { card_msg_content_type: "user_card_content" },
       path: { message_id: "msg-merge-forward" },
     });
     const context = mockCallArg<{ BodyForAgent?: string }>(mockFinalizeInboundContext, 0, 0);
     expect(context.BodyForAgent).toContain(
-      "[Merged and Forwarded Messages]\n- alpha\n- [File: report.pdf]",
+      "[Merged and Forwarded Messages]\n" +
+        "- alpha\n" +
+        "- Task summary\n" +
+        "Task | Owner\n" +
+        "Investigate | Alice\n" +
+        "- [File: report.pdf]",
     );
+    expect(context.BodyForAgent).not.toContain("[interactive]");
   });
 
   it("does not partially parse malformed merge_forward create_time values", () => {
@@ -2836,6 +2888,73 @@ describe("handleFeishuMessage command authorization", () => {
     expectResolvedRouteCall(0, { kind: "group", id: "oc-group:topic:omt_native_topic" });
     expectResolvedRouteCall(1, { kind: "group", id: "oc-group:topic:omt_native_topic" });
   });
+
+  it.each([
+    {
+      action: "created",
+      scope: "group_topic",
+      expectedPeerId: "oc-group:topic:omt_native_reaction",
+    },
+    {
+      action: "deleted",
+      scope: "group_topic",
+      expectedPeerId: "oc-group:topic:omt_native_reaction",
+    },
+    {
+      action: "created",
+      scope: "group_topic_sender",
+      expectedPeerId: "oc-group:topic:omt_native_reaction:sender:ou-reaction-actor",
+    },
+    {
+      action: "deleted",
+      scope: "group_topic_sender",
+      expectedPeerId: "oc-group:topic:omt_native_reaction:sender:ou-reaction-actor",
+    },
+  ] as const)(
+    "hydrates topic threads from the real message ID for synthetic $action reactions in $scope sessions",
+    async ({ action, scope, expectedPeerId }) => {
+      mockShouldComputeCommandAuthorized.mockReturnValue(false);
+      const reactedMessageId = `om_reacted_${action}_${scope}`;
+      mockGetMessageFeishu.mockResolvedValueOnce({
+        messageId: reactedMessageId,
+        chatId: "oc-group",
+        chatType: "topic_group",
+        content: "reacted message",
+        contentType: "text",
+        threadId: "omt_native_reaction",
+      });
+
+      await dispatchMessage({
+        cfg: createFeishuTestConfig({
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: scope,
+              replyInThread: "enabled",
+            },
+          },
+        }),
+        event: createFeishuTestEvent({
+          messageId: `${reactedMessageId}:reaction:THUMBSUP:synthetic`,
+          senderOpenId: "ou-reaction-actor",
+          chatId: "oc-group",
+          chatType: "topic_group",
+          text:
+            action === "deleted"
+              ? `[removed reaction THUMBSUP from message ${reactedMessageId}]`
+              : `[reacted with THUMBSUP to message ${reactedMessageId}]`,
+          message: {
+            reply_target_message_id: reactedMessageId,
+            typing_target_message_id: reactedMessageId,
+          },
+        }),
+      });
+
+      const getMessageRequest = mockCallArg<{ messageId?: string }>(mockGetMessageFeishu, 0, 0);
+      expect(getMessageRequest.messageId).toBe(reactedMessageId);
+      expectResolvedRouteCall(0, { kind: "group", id: expectedPeerId });
+    },
+  );
 
   it.each([
     {

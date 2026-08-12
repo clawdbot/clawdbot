@@ -1,5 +1,6 @@
+import { modelKey } from "../../agents/model-ref-shared.js";
 import {
-  shouldSuppressBuiltInModel,
+  shouldSuppressBuiltInModelCore,
   shouldSuppressBuiltInModelFromManifest,
 } from "../../agents/model-suppression.js";
 /** Model registry access helpers for `openclaw models list`. */
@@ -12,7 +13,6 @@ import {
   MODEL_AVAILABILITY_UNAVAILABLE_CODE,
   shouldFallbackToAuthHeuristics,
 } from "./list.errors.js";
-import { modelKey } from "./shared.js";
 
 function createAvailabilityUnavailableError(message: string): Error {
   const err = new Error(message);
@@ -72,7 +72,7 @@ function loadAvailableModels(
             baseUrl: model.baseUrl,
             config: cfg,
           })
-        : !shouldSuppressBuiltInModel({
+        : !shouldSuppressBuiltInModelCore({
             provider: model.provider,
             id: model.id,
             baseUrl: model.baseUrl,
@@ -108,7 +108,7 @@ export async function loadModelRegistry(
   });
   const models = registry.getAll().filter((model) =>
     runtimeSuppression
-      ? !shouldSuppressBuiltInModel({
+      ? !shouldSuppressBuiltInModelCore({
           provider: model.provider,
           id: model.id,
           baseUrl: model.baseUrl,

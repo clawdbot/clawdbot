@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramBotDeps } from "./bot-deps.js";
+import type { TelegramMessageProcessorTurnContext } from "./bot-handlers.types.js";
 import {
   buildTelegramMessageContext,
   type BuildTelegramMessageContextParams,
@@ -27,11 +28,11 @@ import {
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
   type TelegramMessageProcessingResult,
-  type TelegramSpooledReplayDeferredParticipant,
 } from "./bot-processing-outcome.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramThreadParams, resolveTelegramStreamMode } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
+import { resolveTelegramDmHistoryLimit } from "./dm-history.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
@@ -58,6 +59,7 @@ type TelegramMessageProcessorDeps = Omit<
   | "options"
   | "cfg"
   | "historyLimit"
+  | "dmHistoryLimit"
   | "dmPolicy"
   | "allowFrom"
   | "groupAllowFrom"
@@ -68,24 +70,9 @@ type TelegramMessageProcessorDeps = Omit<
   opts: Pick<TelegramBotOptions, "token" | "allowFrom" | "groupAllowFrom" | "replyToMode">;
 };
 
-export type TelegramMessageProcessorTurnContext = {
-  cfg: OpenClawConfig;
-  telegramCfg: TelegramAccountConfig;
-  onDispatchStart?: () => Promise<void> | void;
-  /** One-way cancellation from an outer spool owner into an isolated retry attempt. */
-  spooledReplayAbortSignal?: AbortSignal;
-  spooledReplayParticipant?: TelegramSpooledReplayDeferredParticipant;
-  finalizeSpooledReplayResult?: (
-    result: TelegramMessageProcessingResult,
-    phase: "adopted" | "terminal",
-  ) => Promise<TelegramMessageProcessingResult>;
-  completeSpooledReplayAfterIrrevocableAdoption?: (
-    error: unknown,
-  ) => Promise<TelegramMessageProcessingResult> | TelegramMessageProcessingResult;
-};
-
 export function resolveTelegramMessageTurnSettings(params: {
   accountId: string;
+  senderId?: string | number;
   cfg: OpenClawConfig;
   telegramCfg: TelegramAccountConfig;
   opts: Pick<TelegramBotOptions, "allowFrom" | "groupAllowFrom" | "replyToMode">;
@@ -97,6 +84,10 @@ export function resolveTelegramMessageTurnSettings(params: {
     ackReactionScope: params.cfg.messages?.ackReactionScope ?? "group-mentions",
     allowFrom,
     dmPolicy: params.telegramCfg.dmPolicy ?? "pairing",
+    dmHistoryLimit: resolveTelegramDmHistoryLimit({
+      config: params.telegramCfg,
+      senderId: params.senderId,
+    }),
     groupAllowFrom:
       params.opts.groupAllowFrom ??
       params.telegramCfg.groupAllowFrom ??
@@ -177,6 +168,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     const turnTelegramCfg = turnContext.telegramCfg;
     const turnSettings = resolveTelegramMessageTurnSettings({
       accountId: account.accountId,
+      senderId: primaryCtx.message.from?.id,
       cfg: turnCfg,
       telegramCfg: turnTelegramCfg,
       opts,
@@ -206,6 +198,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       cfg: turnCfg,
       account,
       historyLimit: turnSettings.historyLimit,
+      dmHistoryLimit: turnSettings.dmHistoryLimit,
       groupHistories,
       dmPolicy: turnSettings.dmPolicy,
       allowFrom: turnSettings.allowFrom,

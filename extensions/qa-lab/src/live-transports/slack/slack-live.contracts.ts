@@ -195,6 +195,7 @@ export type SlackQaConfigOverrides = {
     verboseDefault?: "off" | "on" | "full";
   };
   replyToMode?: "all" | "off";
+  streamingMode?: "off";
   users?: string[];
 };
 

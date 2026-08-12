@@ -87,7 +87,7 @@ vi.mock("./session-utils.js", () => ({
     agentId: "main",
     store: {},
   }),
-  resolveFreshestSessionEntryFromStoreKeys: () => ({
+  resolveCanonicalSessionEntryFromStoreKeys: () => ({
     sessionId: "session-1",
     sessionFile: "/tmp/session-1.jsonl",
   }),
@@ -113,6 +113,11 @@ vi.mock("./session-transcript-readers.js", () => ({
 vi.mock("./session-history-state.js", () => ({
   buildSessionHistorySnapshot: () => ({
     history: { items: [], nextCursor: null, messages: [] },
+  }),
+  resolveCursorSeq: (_cursor: string | undefined) => undefined,
+  resolveSessionHistoryTailReadOptions: (limit: number) => ({
+    maxMessages: limit * 20 + 20,
+    maxLines: limit * 20 + 20,
   }),
   SessionHistorySseState: {
     fromRawSnapshot: (_params: unknown) => ({

@@ -27,9 +27,10 @@ import {
 import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
 import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
-import { fetchClawHubSkillDetail } from "../../infra/clawhub.js";
+import { fetchClawHubSkillDetail } from "../../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import { updateSkillConfigEntry } from "../../skills/config/mutations.js";
 import { collectSkillBins } from "../../skills/discovery/bins.js";
 import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";
@@ -41,7 +42,7 @@ import {
 } from "../../skills/lifecycle/clawhub.js";
 import { installSkill } from "../../skills/lifecycle/install.js";
 import { installUploadedSkillArchive } from "../../skills/lifecycle/upload-install.js";
-import { loadWorkspaceSkillEntries } from "../../skills/loading/workspace.js";
+import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import {
   collectClawHubVerdictTargets,
@@ -91,20 +92,9 @@ function installClawHubSkillDeduped(params: ClawHubInstallParams): Promise<ClawH
     params.force ?? false,
     params.acknowledgeClawHubRisk ?? false,
   ]);
-  const active = clawHubInstallsInFlight.get(key);
-  if (active) {
-    return active;
-  }
-  const install = installSkillFromClawHub(params);
-  clawHubInstallsInFlight.set(key, install);
-  void install
-    .finally(() => {
-      if (clawHubInstallsInFlight.get(key) === install) {
-        clawHubInstallsInFlight.delete(key);
-      }
-    })
-    .catch(() => undefined);
-  return install;
+  return getOrCreatePromise(clawHubInstallsInFlight, key, () => installSkillFromClawHub(params), {
+    evictOnSettled: true,
+  });
 }
 
 function buildRemoteAwareWorkspaceSkillStatus(resolved: ResolvedSkillsWorkspace) {
@@ -165,11 +155,7 @@ async function forwardSkillWorkshopRevisionToChatSend(
     targetAgentId?: string;
   },
 ): Promise<void> {
-  const { chatHandlers } = await import("./chat.js");
-  const chatSend = chatHandlers["chat.send"];
-  if (!chatSend) {
-    throw new Error("chat.send handler is unavailable");
-  }
+  const { handleChatSend } = await import("./chat-send-handler.js");
   const chatParams = {
     sessionKey: params.sessionKey,
     agentId: params.targetAgentId ?? params.agentId,
@@ -183,7 +169,7 @@ async function forwardSkillWorkshopRevisionToChatSend(
     suppressCommandInterpretation: true,
     idempotencyKey: params.idempotencyKey,
   };
-  await chatSend({
+  await handleChatSend({
     ...opts,
     req: { ...opts.req, method: "chat.send", params: chatParams },
     params: chatParams,
@@ -286,7 +272,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     const workspaceDirs = listAgentWorkspaceDirs(cfg);
     const bins = new Set<string>();
     for (const workspaceDir of workspaceDirs) {
-      const entries = loadWorkspaceSkillEntries(workspaceDir, { config: cfg });
+      const entries = loadWorkspaceSkills(workspaceDir, { config: cfg });
       for (const bin of collectSkillBins(entries)) {
         bins.add(bin);
       }

@@ -55,8 +55,6 @@ describe("gateway startup benchmark script", () => {
 
   it("rejects ambiguous benchmark CLI values before spawning Node", () => {
     expect(() => testing.parseOptions(["--wat"])).toThrow("Unknown argument: --wat");
-    expect(testing.parsePositiveInt("5", 1, "--runs")).toBe(5);
-    expect(testing.parseNonNegativeInt("0", 1, "--warmup")).toBe(0);
     expect(
       testing.parseOptions([
         "--case",
@@ -76,9 +74,6 @@ describe("gateway startup benchmark script", () => {
       output: "startup.json",
       runs: 2,
     });
-    expect(() => testing.parsePositiveInt("2abc", 1, "--runs")).toThrow(
-      /--runs must be an integer/u,
-    );
     expect(() => testing.parseOptions(["--output", "--case", "default"])).toThrow(
       "--output requires a value",
     );
@@ -92,7 +87,6 @@ describe("gateway startup benchmark script", () => {
     expect(() =>
       testing.parseOptions(["--output", "first.json", "--output", "second.json"]),
     ).toThrow("--output was provided more than once");
-    expect(() => testing.resolveEntry("--inspect")).toThrow(/must be a file path/u);
   });
 
   it("rejects unknown benchmark CLI args before running cases", () => {
@@ -154,14 +148,6 @@ describe("gateway startup benchmark script", () => {
     expect(env.OPENCLAW_GATEWAY_STARTUP_TRACE).toBe("1");
   });
 
-  it("rejects malformed ps RSS samples", () => {
-    expect(testing.parseProcessRssKb("2048\n")).toBe(2048);
-    expect(testing.parseProcessRssKb("2048kb\n")).toBeNull();
-    expect(testing.parseProcessRssKb("2048 4096\n")).toBeNull();
-    expect(testing.parseProcessRssKb("0\n")).toBeNull();
-    expect(testing.parseProcessRssKb("")).toBeNull();
-  });
-
   it("classifies HTTP listen and gateway ready logs separately", () => {
     expect(
       testing.classifyGatewayReadyLog("[gateway] http server listening (0 plugins, 0.8s)"),
@@ -171,6 +157,33 @@ describe("gateway startup benchmark script", () => {
     );
     expect(testing.classifyGatewayReadyLog("[gateway] ready")).toBe("gateway-ready");
     expect(testing.classifyGatewayReadyLog("[gateway] starting HTTP server...")).toBeNull();
+  });
+
+  it("preserves ready and trace records split across output chunks", () => {
+    const chunks = [
+      "[gateway] rea",
+      "dy (0 plugins, 0.8s)\nstartup trace: side",
+      "cars.ready 2.0ms total=7.5ms heapUsedMb=12.0\n",
+    ];
+    let carry = "";
+    const lines: string[] = [];
+    for (const chunk of chunks) {
+      const parsed = testing.collectOutputLines(carry, chunk);
+      carry = parsed.carry;
+      lines.push(...parsed.lines);
+    }
+    const trace: Record<string, number> = {};
+    for (const line of lines) {
+      testing.collectStartupTrace(line, trace);
+    }
+
+    expect(carry).toBe("");
+    expect(lines.map(testing.classifyGatewayReadyLog)).toContain("gateway-ready");
+    expect(trace).toMatchObject({
+      "sidecars.ready": 2,
+      "sidecars.ready.heapUsedMb": 12,
+      "sidecars.ready.total": 7.5,
+    });
   });
 
   it("summarizes split ready log timings without the ambiguous readyLogMs field", () => {

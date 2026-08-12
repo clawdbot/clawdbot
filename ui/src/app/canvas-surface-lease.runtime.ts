@@ -1,4 +1,7 @@
 // Loaded after hello so capability renewal does not inflate the startup chunk.
+import { resolveSafeTimeoutDelayMs } from "@openclaw/gateway-client/browser";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+
 const RENEWAL_LEAD_MS = 15_000;
 const MIN_RENEWAL_DELAY_MS = 1_000;
 // Used only when a refresh response omits expiry; an early one-minute refresh
@@ -45,6 +48,7 @@ export function createCanvasSurfaceLease<
   let consecutiveFailures = 0;
   let generation = 0;
   let started = false;
+  const ownsGeneration = (expected: number) => started && generation === expected;
 
   const clearScheduledRenewal = () => {
     if (timer !== null) {
@@ -54,17 +58,24 @@ export function createCanvasSurfaceLease<
   };
 
   const schedule = (delayMs: number, expectedGeneration: number) => {
+    if (!ownsGeneration(expectedGeneration)) {
+      return;
+    }
     clearScheduledRenewal();
-    timer = setTimer(() => {
-      timer = null;
-      if (started && generation === expectedGeneration) {
+    timer = setTimer(
+      () => {
+        if (!ownsGeneration(expectedGeneration)) {
+          return;
+        }
+        timer = null;
         renew(expectedGeneration);
-      }
-    }, delayMs);
+      },
+      resolveSafeTimeoutDelayMs(delayMs, { minMs: MIN_RENEWAL_DELAY_MS }),
+    );
   };
 
   const handleFailure = (expectedGeneration: number) => {
-    if (!started || generation !== expectedGeneration) {
+    if (!ownsGeneration(expectedGeneration)) {
       return;
     }
     consecutiveFailures += 1;
@@ -75,8 +86,7 @@ export function createCanvasSurfaceLease<
   const renew = (expectedGeneration: number) => {
     if (
       inFlight?.generation === expectedGeneration ||
-      !started ||
-      generation !== expectedGeneration ||
+      !ownsGeneration(expectedGeneration) ||
       !currentUrl
     ) {
       return;
@@ -85,7 +95,7 @@ export function createCanvasSurfaceLease<
     const request = Promise.resolve()
       .then(() => params.request("plugin.surface.refresh", { surface: "canvas", observedUrl }))
       .then((response) => {
-        if (!started || generation !== expectedGeneration || currentUrl !== observedUrl) {
+        if (!ownsGeneration(expectedGeneration) || currentUrl !== observedUrl) {
           return;
         }
         const refreshed = parseCanvasSurfaceRefresh(response);
@@ -153,10 +163,10 @@ function parseCanvasSurfaceRefresh(value: unknown): CanvasSurfaceRefresh | undef
     return undefined;
   }
   const urls = response.pluginSurfaceUrls;
-  if (!urls || typeof urls !== "object" || Array.isArray(urls)) {
+  if (!isRecord(urls)) {
     return undefined;
   }
-  const canvasUrl = (urls as Record<string, unknown>).canvas;
+  const canvasUrl = urls.canvas;
   if (typeof canvasUrl !== "string" || !canvasUrl.trim()) {
     return undefined;
   }

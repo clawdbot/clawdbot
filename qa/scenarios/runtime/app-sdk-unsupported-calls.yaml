@@ -1,0 +1,24 @@
+title: Source-internal App SDK preview unsupported call evidence
+
+scenario:
+  id: app-sdk-unsupported-calls
+  surface: app-sdk
+  category: app-sdk.compatibility
+  coverage:
+    primary:
+      - app-sdk.unsupported-calls
+  objective: Verify the source-internal App SDK preview rejects unsupported per-run execution options before dispatching a Gateway request.
+  successCriteria:
+    - Provider-qualified model references are translated into supported provider and model request fields.
+    - Workspace, runtime, environment, and approval overrides are rejected before transport dispatch.
+    - The rejection identifies every unsupported option so callers receive an actionable result.
+  docsRefs:
+    - docs/gateway/external-apps.md
+    - docs/gateway/protocol.md
+  codeRefs:
+    - packages/sdk/src/client.ts
+    - packages/sdk/src/index.test.ts
+  execution:
+    kind: vitest
+    path: packages/sdk/src/index.test.ts
+    summary: Run the preview SDK request-shaping assertions for supported model refs and unsupported per-run options.

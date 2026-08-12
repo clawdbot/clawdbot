@@ -68,6 +68,68 @@ openclaw_live_default_profile_file() {
   printf '%s\n' "$HOME/.profile"
 }
 
+# Live Docker wrappers share these host-side directories. Keep their lifecycle
+# here so every lane uses the same CI ownership and cleanup rules.
+openclaw_live_init_temp_dirs() {
+  TEMP_DIRS=()
+  cleanup_temp_dirs() {
+    if ((${#TEMP_DIRS[@]} > 0)); then
+      rm -rf "${TEMP_DIRS[@]}"
+    fi
+  }
+  trap cleanup_temp_dirs EXIT
+}
+
+openclaw_live_init_cli_tools_dir() {
+  if [[ -n "${OPENCLAW_DOCKER_CLI_TOOLS_DIR:-}" ]]; then
+    CLI_TOOLS_DIR="$OPENCLAW_DOCKER_CLI_TOOLS_DIR"
+  elif openclaw_live_is_ci; then
+    CLI_TOOLS_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-cli-tools.XXXXXX")"
+    TEMP_DIRS+=("$CLI_TOOLS_DIR")
+  else
+    CLI_TOOLS_DIR="$HOME/.cache/openclaw/docker-cli-tools"
+  fi
+  openclaw_live_prepare_bind_dir_for_container_user "$CLI_TOOLS_DIR"
+}
+
+openclaw_live_init_cache_home_dir() {
+  if [[ -n "${OPENCLAW_DOCKER_CACHE_HOME_DIR:-}" ]]; then
+    CACHE_HOME_DIR="$OPENCLAW_DOCKER_CACHE_HOME_DIR"
+  elif openclaw_live_is_ci; then
+    CACHE_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-cache.XXXXXX")"
+    TEMP_DIRS+=("$CACHE_HOME_DIR")
+  else
+    CACHE_HOME_DIR="$HOME/.cache/openclaw/docker-cache"
+  fi
+  openclaw_live_prepare_bind_dir_for_container_user "$CACHE_HOME_DIR"
+}
+
+openclaw_live_init_managed_home() {
+  DOCKER_USER="${OPENCLAW_DOCKER_USER:-node}"
+  DOCKER_HOME_MOUNT=()
+  unset DOCKER_HOME_DIR
+  if openclaw_live_uses_managed_bind_dirs; then
+    DOCKER_USER="$(id -u):$(id -g)"
+    DOCKER_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-home.XXXXXX")"
+    TEMP_DIRS+=("$DOCKER_HOME_DIR")
+    openclaw_live_prepare_bind_dir_for_container_user "$DOCKER_HOME_DIR"
+    DOCKER_HOME_MOUNT=(-v "$DOCKER_HOME_DIR:/home/node")
+  fi
+}
+
+openclaw_live_init_profile_mount() {
+  PROFILE_MOUNT=()
+  PROFILE_STATUS="none"
+  if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
+    if [[ -n "${DOCKER_HOME_DIR:-}" ]]; then
+      openclaw_live_stage_profile_into_home "$DOCKER_HOME_DIR" "$PROFILE_FILE"
+    else
+      PROFILE_MOUNT=(-v "$PROFILE_FILE:/home/node/.profile:ro")
+    fi
+    PROFILE_STATUS="$PROFILE_FILE"
+  fi
+}
+
 openclaw_live_validate_relative_home_path() {
   local value
   value="$(openclaw_live_trim "${1:-}")"
@@ -216,6 +278,68 @@ openclaw_live_join_csv() {
   done
 }
 
+openclaw_live_collect_auth_for_providers() {
+  local providers="${1:-}"
+  local provider_names
+  provider_names="$(openclaw_live_trim "${providers//,/}")"
+  AUTH_DIRS=()
+  AUTH_FILES=()
+  local auth_path
+  if [[ -n "${OPENCLAW_DOCKER_AUTH_DIRS:-}" || -z "$provider_names" ]]; then
+    while IFS= read -r auth_path; do
+      [[ -n "$auth_path" ]] && AUTH_DIRS+=("$auth_path")
+    done < <(openclaw_live_collect_auth_dirs)
+    while IFS= read -r auth_path; do
+      [[ -n "$auth_path" ]] && AUTH_FILES+=("$auth_path")
+    done < <(openclaw_live_collect_auth_files)
+    return
+  fi
+  while IFS= read -r auth_path; do
+    [[ -n "$auth_path" ]] && AUTH_DIRS+=("$auth_path")
+  done < <(openclaw_live_collect_auth_dirs_from_csv "$providers")
+  while IFS= read -r auth_path; do
+    [[ -n "$auth_path" ]] && AUTH_FILES+=("$auth_path")
+  done < <(openclaw_live_collect_auth_files_from_csv "$providers")
+}
+
+openclaw_live_finalize_auth_mounts() {
+  AUTH_DIRS_CSV=""
+  if ((${#AUTH_DIRS[@]} > 0)); then
+    AUTH_DIRS_CSV="$(openclaw_live_join_csv "${AUTH_DIRS[@]}")"
+  fi
+  AUTH_FILES_CSV=""
+  if ((${#AUTH_FILES[@]} > 0)); then
+    AUTH_FILES_CSV="$(openclaw_live_join_csv "${AUTH_FILES[@]}")"
+  fi
+  if [[ -n "${DOCKER_HOME_DIR:-}" ]]; then
+    if ((${#AUTH_DIRS[@]} > 0)); then
+      openclaw_live_stage_auth_into_home "$DOCKER_HOME_DIR" "${AUTH_DIRS[@]}"
+    fi
+    if ((${#AUTH_FILES[@]} > 0)); then
+      openclaw_live_stage_auth_into_home "$DOCKER_HOME_DIR" --files "${AUTH_FILES[@]}"
+    fi
+    DOCKER_AUTH_PRESTAGED=1
+  fi
+
+  EXTERNAL_AUTH_MOUNTS=()
+  local auth_path host_path
+  if ((${#AUTH_DIRS[@]} > 0)); then
+    for auth_path in "${AUTH_DIRS[@]}"; do
+      auth_path="$(openclaw_live_validate_relative_home_path "$auth_path")" || return 1
+      host_path="$HOME/$auth_path"
+      [[ -d "$host_path" ]] && EXTERNAL_AUTH_MOUNTS+=(-v "$host_path:/host-auth/$auth_path:ro")
+    done
+  fi
+  if ((${#AUTH_FILES[@]} > 0)); then
+    for auth_path in "${AUTH_FILES[@]}"; do
+      auth_path="$(openclaw_live_validate_relative_home_path "$auth_path")" || return 1
+      host_path="$HOME/$auth_path"
+      [[ -f "$host_path" ]] && EXTERNAL_AUTH_MOUNTS+=(-v "$host_path:/host-auth-files/$auth_path:ro")
+    done
+  fi
+  return 0
+}
+
 openclaw_live_append_array() {
   local target_array="${1:?target array required}"
   local source_array="${2:?source array required}"
@@ -338,10 +462,12 @@ openclaw_live_init_docker_run_args() {
     return 127
   fi
   quoted_timeout="$(printf '%q' "$timeout_value")"
+  # Provider CLIs can leave orphaned tooling grandchildren; Docker init reaps
+  # them so sequential Vitest process groups can join after teardown.
   if openclaw_live_timeout_supports_kill_after "$timeout_bin"; then
-    eval "${target_array}=(${timeout_bin} --kill-after=30s ${quoted_timeout} docker run)"
+    eval "${target_array}=(${timeout_bin} --kill-after=30s ${quoted_timeout} docker run --init)"
   else
-    eval "${target_array}=(${timeout_bin} ${quoted_timeout} docker run)"
+    eval "${target_array}=(${timeout_bin} ${quoted_timeout} docker run --init)"
   fi
   openclaw_live_docker_run_resource_args resource_args || return $?
   openclaw_live_append_array "$target_array" resource_args

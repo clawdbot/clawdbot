@@ -5,16 +5,14 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import { clearSessionStoreCacheForTest } from "../../../src/config/sessions/store-writer-state.js";
-import {
-  createDeferred,
-  createRunningCronServiceState,
-} from "../../../src/cron/service.test-harness.js";
+import { createRunningCronServiceState } from "../../../src/cron/service.test-harness.js";
 import type { CronServiceDeps } from "../../../src/cron/service/state.js";
 import type { CronJob, CronJobState } from "../../../src/cron/types.js";
 import { resetAgentEventsForTest } from "../../../src/infra/agent-events.js";
 import { waitForActiveTasks } from "../../../src/process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../../src/process/command-queue.test-support.js";
 import { useFrozenTime, useRealTime } from "../../../src/test-utils/frozen-time.js";
+import { createDeferred } from "../promise.js";
 
 const TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1_000;
 
@@ -64,7 +62,7 @@ export function setupCronRegressionFixtures(options?: { prefix?: string; baseTim
   };
 }
 
-export { createDeferred, createRunningCronServiceState };
+export { createRunningCronServiceState };
 
 export function topOfHourOffsetMs(jobId: string) {
   const digest = crypto.createHash("sha256").update(jobId).digest();

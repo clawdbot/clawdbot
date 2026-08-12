@@ -11,6 +11,7 @@ export {
   markSessionDeliveryAttemptStarted,
   markSessionDeliverySettlement,
   releaseSessionDeliveryClaim,
+  SESSION_DELIVERY_QUEUE_NAME,
   SessionDeliveryDeadLetteredError,
   SessionDeliveryDeferredError,
   SessionDeliveryRetryChargedError,

@@ -1,8 +1,9 @@
 /** CLI command for exporting a session transcript as a trajectory artifact. */
 import path from "node:path";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   loadSessionEntryReadOnly,
   resolveSessionTranscriptReadTarget,
@@ -36,10 +37,6 @@ type EncodedExportTrajectoryRequest = {
 
 const ENCODED_EXPORT_REQUEST_RE = /^[A-Za-z0-9_-]{1,65536}$/u;
 
-function readOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
-
 function decodeExportTrajectoryRequest(encoded: string): Partial<ExportTrajectoryCommandOptions> {
   if (!ENCODED_EXPORT_REQUEST_RE.test(encoded)) {
     throw new Error("Encoded trajectory export request is invalid");
@@ -59,23 +56,23 @@ function decodeExportTrajectoryRequest(encoded: string): Partial<ExportTrajector
   }
   const request = decoded as EncodedExportTrajectoryRequest;
   const opts: Partial<ExportTrajectoryCommandOptions> = {};
-  const sessionKey = readOptionalString(request.sessionKey);
+  const sessionKey = readNonBlankString(request.sessionKey);
   if (sessionKey !== undefined) {
     opts.sessionKey = sessionKey;
   }
-  const output = readOptionalString(request.output);
+  const output = readNonBlankString(request.output);
   if (output !== undefined) {
     opts.output = output;
   }
-  const store = readOptionalString(request.store);
+  const store = readNonBlankString(request.store);
   if (store !== undefined) {
     opts.store = store;
   }
-  const agent = readOptionalString(request.agent);
+  const agent = readNonBlankString(request.agent);
   if (agent !== undefined) {
     opts.agent = agent;
   }
-  const workspace = readOptionalString(request.workspace);
+  const workspace = readNonBlankString(request.workspace);
   if (workspace !== undefined) {
     opts.workspace = workspace;
   }
@@ -118,8 +115,8 @@ export async function exportTrajectoryCommand(
   }
   const targetAgentId = resolvedOpts.agent ?? resolveAgentIdFromSessionKey(sessionKey);
   const storePath = resolvedOpts.store
-    ? resolveStorePath(resolvedOpts.store, { agentId: targetAgentId })
-    : resolveStorePath(getRuntimeConfig().session?.store, { agentId: targetAgentId });
+    ? resolveSessionStorePathCore(resolvedOpts.store, { agentId: targetAgentId })
+    : resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId: targetAgentId });
   // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
   const entry = loadSessionEntryReadOnly({
     agentId: targetAgentId,

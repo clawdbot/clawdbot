@@ -8,6 +8,9 @@
     />
     <title>OpenClaw Control</title>
     <meta name="color-scheme" content="dark light" />
+    <!-- These mirror the claw theme's --bg tokens for first paint; runtime theme application keeps them synchronized. -->
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#faf9f7" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1015" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
@@ -199,7 +202,10 @@
         margin-top: 24px;
       }
 
+      /* The fallback renders when the bundle fails to load, so it cannot read
+         base.css tokens; it repeats the cursor policy locally for that reason. */
       .mount-fallback__button {
+        cursor: pointer;
         min-height: 42px;
         border: 1px solid rgba(148, 163, 184, 0.36);
         border-radius: 6px;
@@ -208,6 +214,19 @@
         background: transparent;
         font: inherit;
         font-weight: 700;
+      }
+
+      @media (display-mode: standalone),
+        (display-mode: minimal-ui),
+        (display-mode: window-controls-overlay) {
+        .mount-fallback__button {
+          cursor: default;
+        }
+      }
+
+      html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrome)
+        .mount-fallback__button {
+        cursor: default;
       }
 
       .mount-fallback__button--primary {

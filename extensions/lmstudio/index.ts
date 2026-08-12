@@ -25,6 +25,7 @@ import {
 import {
   normalizeLmstudioConfiguredCatalogEntries,
   normalizeLmstudioProviderConfig,
+  resolveLoadedContextWindow,
   resolveLmstudioInferenceBase,
 } from "./src/models.js";
 import { shouldUseLmstudioSyntheticAuth } from "./src/provider-auth.js";
@@ -82,23 +83,39 @@ async function validateLmstudioNonInteractive(
     return false;
   }
 
-  const availableModels = discovery.models
+  const installedModels = discovery.models
     .filter((model) => model.type === "llm")
+    .map((model) => model.key?.trim())
+    .filter((model): model is string => Boolean(model));
+  const loadedModels = discovery.models
+    .filter(
+      (model) =>
+        model.type === "llm" &&
+        Boolean(model.key?.trim()) &&
+        resolveLoadedContextWindow(model) !== null,
+    )
     .map((model) => model.key?.trim())
     .filter((model): model is string => Boolean(model));
   // Setup matches the requested wire key unchanged. Accepting provider-
   // qualified refs here would permit reset before setup rejects the model.
   const requestedModel = normalizeOptionalSecretInput(ctx.opts.customModelId);
-  if (requestedModel && !availableModels.includes(requestedModel)) {
+  if (requestedModel && !installedModels.includes(requestedModel)) {
     ctx.runtime.error(
-      `LM Studio model ${requestedModel} was not found at ${baseUrl}.\nAvailable models: ${availableModels.join(", ")}`,
+      `LM Studio model ${requestedModel} was not found at ${baseUrl}.\nAvailable models: ${installedModels.join(", ")}`,
     );
     ctx.runtime.exit(1);
     return false;
   }
-  if (availableModels.length === 0) {
+  if (requestedModel && !loadedModels.includes(requestedModel)) {
     ctx.runtime.error(
-      `No LM Studio LLM models were found at ${baseUrl}.\nLoad at least one model in LM Studio (or run lms load), then re-run setup.`,
+      `LM Studio model ${requestedModel} is installed but not loaded at ${baseUrl}.\nLoad that model in LM Studio, then re-run setup.`,
+    );
+    ctx.runtime.exit(1);
+    return false;
+  }
+  if (loadedModels.length === 0) {
+    ctx.runtime.error(
+      `No loaded LM Studio LLM models were found at ${baseUrl}.\nLoad a model in LM Studio (or run lms load <model>), then re-run setup.`,
     );
     ctx.runtime.exit(1);
     return false;
@@ -145,7 +162,7 @@ export default definePluginEntry({
         {
           id: "custom",
           label: LMSTUDIO_PROVIDER_LABEL,
-          hint: "Local/self-hosted LM Studio server",
+          hint: "Connect to a running LM Studio server and use an already loaded model",
           kind: "custom",
           appGuidedSetup: {
             detect: async (ctx) => {
@@ -173,6 +190,8 @@ export default definePluginEntry({
               prompter: ctx.prompter,
               secretInputMode: ctx.secretInputMode,
               allowSecretRefPrompt: ctx.allowSecretRefPrompt,
+              isRemote: ctx.isRemote,
+              signal: ctx.signal,
             });
           },
           validateNonInteractive: validateLmstudioNonInteractive,
@@ -222,7 +241,7 @@ export default definePluginEntry({
         setup: {
           choiceId: PROVIDER_ID,
           choiceLabel: "LM Studio",
-          choiceHint: "Local/self-hosted LM Studio server",
+          choiceHint: "Connect to a running LM Studio server and use an already loaded model",
           groupId: PROVIDER_ID,
           groupLabel: "LM Studio",
           groupHint: "Self-hosted open-weight models",

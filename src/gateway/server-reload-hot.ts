@@ -13,15 +13,20 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import { setGatewaySigusr1RestartPolicy } from "../infra/restart.js";
-import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import type { ChannelKind } from "./config-reload-plan.js";
-import { shouldRefreshContextWindowCache } from "./config-reload-recovery.js";
+import {
+  shouldRefreshContextWindowCache,
+  shouldRewarmProviderAuthState,
+} from "./config-reload-recovery.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
 import { commitHooksConfigReload, resolveHooksConfig } from "./hooks.js";
 import { buildGatewayCronService } from "./server-cron.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
-import { restartGatewayChannels } from "./server-reload-channel-restart.js";
+import {
+  restartGatewayChannels,
+  startGatewayChannelFromActiveRegistry,
+} from "./server-reload-channel-restart.js";
 import {
   GatewayHotReloadCancelledError,
   GatewayHotReloadRecoveryError,
@@ -123,9 +128,14 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     resetDirectoryCache();
 
     const channelsToRestart = new Set(plan.restartChannels);
-    const restartChannelAccounts =
-      plan.restartChannelAccounts ?? new Map<ChannelKind, Set<string>>();
+    const restartChannelAccounts = new Map<ChannelKind, Set<string>>(
+      [...(plan.restartChannelAccounts ?? [])].map(([channel, accountIds]) => [
+        channel,
+        new Set(accountIds),
+      ]),
+    );
     const channelsStoppedBeforePluginReload = new Set<ChannelKind>();
+    const accountsStoppedBeforePluginReload = new Map<ChannelKind, Set<string>>();
     let activePluginChannelsAfterReload: ReadonlySet<ChannelKind> | null = null;
     let pluginReloadAborted = false;
     const isLifecycleReloadAborted = () => isGatewayReloadGenerationAborted(myGeneration);
@@ -327,12 +337,33 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       }
     };
     if (plan.reloadPlugins) {
+      const restartStoppedPluginAccounts = async (reason: string): Promise<string[]> => {
+        const failures: string[] = [];
+        for (const [channel, accountIds] of accountsStoppedBeforePluginReload) {
+          for (const accountId of accountIds) {
+            try {
+              params.logChannels.info(`restarting ${channel} account ${accountId} after ${reason}`);
+              await startGatewayChannelFromActiveRegistry(params, channel, accountId);
+              accountIds.delete(accountId);
+            } catch (err) {
+              failures.push(`${channel}[${accountId}]`);
+              params.logChannels.error(
+                `failed to restart ${channel} account ${accountId} after ${reason}: ${formatErrorMessage(err)}`,
+              );
+            }
+          }
+          if (accountIds.size === 0) {
+            accountsStoppedBeforePluginReload.delete(channel);
+          }
+        }
+        return failures;
+      };
       const restartStoppedPluginChannels = async (reason: string) =>
         await collectChannelOperationFailures({
           channels: [...channelsStoppedBeforePluginReload],
           run: async (channel) => {
             params.logChannels.info(`restarting ${channel} channel after ${reason}`);
-            await runOutsideGatewayRootWorkAdmission(() => params.startChannel(channel));
+            await startGatewayChannelFromActiveRegistry(params, channel);
             channelsStoppedBeforePluginReload.delete(channel);
           },
           onFailure: (channel, err) => {
@@ -341,16 +372,36 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             );
           },
         });
-      const failPluginChannelRollback = (reason: string, failures: ChannelKind[]): never => {
+      const rollbackStoppedPluginTargets = async (reason: string): Promise<string[]> => [
+        ...(await restartStoppedPluginAccounts(reason)),
+        ...(await restartStoppedPluginChannels(reason)),
+      ];
+      const failPluginChannelRollback = (reason: string, failures: string[]): never => {
         const error = new Error(
           `plugin reload cancellation rollback failed for: ${failures.join(", ")}`,
         );
         scheduleRecoveryRestart(`plugin channel rollback after ${reason}`, error);
         throw error;
       };
-      const stopChannelsBeforePluginReplace = async (channels: ReadonlySet<ChannelKind>) => {
+      const stopChannelsBeforePluginReplace = async (
+        channels: ReadonlySet<ChannelKind>,
+        accounts: ReadonlyMap<ChannelKind, ReadonlySet<string>> = new Map(),
+      ) => {
         for (const channel of channels) {
           channelsToRestart.add(channel);
+        }
+        for (const [channel, accountIds] of accounts) {
+          if (channelsToRestart.has(channel)) {
+            continue;
+          }
+          let restartAccountIds = restartChannelAccounts.get(channel);
+          if (!restartAccountIds) {
+            restartAccountIds = new Set();
+            restartChannelAccounts.set(channel, restartAccountIds);
+          }
+          for (const accountId of accountIds) {
+            restartAccountIds.add(accountId);
+          }
         }
         const targets = channelReloadTargets();
         if (targets.size === 0 || shouldSkipChannelRestart) {
@@ -363,7 +414,42 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           pluginReloadAborted = true;
           return;
         }
-        const stopFailures = await collectChannelOperationFailures({
+        const accountStopFailures: string[] = [];
+        for (const [channel, accountIds] of accounts) {
+          if (channelsToRestart.has(channel)) {
+            continue;
+          }
+          for (const accountId of accountIds) {
+            if (isPluginReloadAborted()) {
+              pluginReloadAborted = true;
+              break;
+            }
+            let stoppedAccountIds = accountsStoppedBeforePluginReload.get(channel);
+            if (!stoppedAccountIds) {
+              stoppedAccountIds = new Set();
+              accountsStoppedBeforePluginReload.set(channel, stoppedAccountIds);
+            }
+            if (stoppedAccountIds.has(accountId)) {
+              continue;
+            }
+            stoppedAccountIds.add(accountId);
+            try {
+              params.logChannels.info(
+                `stopping ${channel} account ${accountId} before plugin reload`,
+              );
+              await params.stopChannel(channel, accountId, { manual: false });
+              if (isPluginReloadAborted()) {
+                pluginReloadAborted = true;
+              }
+            } catch (err) {
+              accountStopFailures.push(`${channel}[${accountId}]`);
+              params.logChannels.error(
+                `failed to stop ${channel} account ${accountId} before plugin reload: ${formatErrorMessage(err)}`,
+              );
+            }
+          }
+        }
+        const channelStopFailures = await collectChannelOperationFailures({
           channels: channelsToRestart,
           run: async (channel) => {
             if (isPluginReloadAborted()) {
@@ -393,7 +479,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           if (isLifecycleReloadAborted()) {
             return;
           }
-          const rollbackFailures = await restartStoppedPluginChannels(
+          const rollbackFailures = await rollbackStoppedPluginTargets(
             "cancelled plugin reload pre-stop",
           );
           if (rollbackFailures.length > 0) {
@@ -401,8 +487,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           }
           return;
         }
+        const stopFailures = [...accountStopFailures, ...channelStopFailures];
         if (stopFailures.length > 0) {
-          const rollbackFailures = await restartStoppedPluginChannels(
+          const rollbackFailures = await rollbackStoppedPluginTargets(
             "failed plugin reload pre-stop",
           );
           if (rollbackFailures.length > 0) {
@@ -426,7 +513,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           });
         } catch (err) {
           if (!runtimeCommitted) {
-            const rollbackFailures = await restartStoppedPluginChannels(
+            const rollbackFailures = await rollbackStoppedPluginTargets(
               "failed plugin runtime publication",
             );
             if (rollbackFailures.length > 0) {
@@ -440,7 +527,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         if (pluginReloadResult.cancelled) {
           pluginReloadAborted = true;
           if (!isLifecycleReloadAborted()) {
-            const rollbackFailures = await restartStoppedPluginChannels(
+            const rollbackFailures = await rollbackStoppedPluginTargets(
               "cancelled plugin runtime publication",
             );
             if (rollbackFailures.length > 0) {
@@ -491,7 +578,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     try {
-      await refreshPreparedModelRuntimeSnapshots(nextConfig, { catalogMode: "static" });
+      await refreshPreparedModelRuntimeSnapshots(nextConfig, {
+        catalogMode: "static",
+        allowGatewaySubagentBinding: true,
+      });
     } catch (err) {
       scheduleRecoveryRestart("prepared model runtime reload", err);
       return;
@@ -560,6 +650,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       restartChannelAccounts,
       activePluginChannelsAfterReload,
       channelsStoppedBeforePluginReload,
+      accountsStoppedBeforePluginReload,
       shouldSkipChannelRestart,
       skipChannelRestartLogMessage:
         "skipping channel reload (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
@@ -578,13 +669,15 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         scheduleRecoveryRestart("context window cache reload", err);
       }
     }
-    void warmCurrentProviderAuthStateOffMainThread(nextConfig, {
-      isCancelled: () => !isTransactionCurrent(),
-    }).catch((err: unknown) => {
-      if (isTransactionCurrent()) {
-        params.logReload.warn(`provider auth state rewarm failed: ${String(err)}`);
-      }
-    });
+    if (shouldRewarmProviderAuthState(plan)) {
+      void warmCurrentProviderAuthStateOffMainThread(nextConfig, {
+        isCancelled: () => !isTransactionCurrent(),
+      }).catch((err: unknown) => {
+        if (isTransactionCurrent()) {
+          params.logReload.warn(`provider auth state rewarm failed: ${String(err)}`);
+        }
+      });
+    }
     if (plan.hotReasons.length > 0) {
       params.logReload.info(`config hot reload applied (${plan.hotReasons.join(", ")})`);
     } else if (plan.noopPaths.length > 0) {

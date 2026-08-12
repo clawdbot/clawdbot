@@ -24,6 +24,36 @@
       "translated": "Androidに従う · $systemLanguageTag"
     },
     {
+      "id": "native.android.0eb613765dffd7d5",
+      "source": "Chat failed",
+      "translated": "チャットに失敗しました"
+    },
+    {
+      "id": "native.android.49b641d61b32710e",
+      "source": "Reply to OpenClaw…",
+      "translated": "OpenClawに返信…"
+    },
+    {
+      "id": "native.android.c17863b62b70d822",
+      "source": "Reply",
+      "translated": "返信"
+    },
+    {
+      "id": "native.android.8700c1dee5524079",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.2028e1559e760da1",
+      "source": "You",
+      "translated": "あなた"
+    },
+    {
+      "id": "native.android.38a6e56b90d42b9f",
+      "source": "Chat",
+      "translated": "チャット"
+    },
+    {
       "id": "native.android.2932b1c5134668df",
       "source": "Every ${days}d",
       "translated": "${days}日ごと"
@@ -1259,11 +1289,6 @@
       "translated": "Gateway 接続が変更されました。再接続するには OpenClaw を再起動してください。"
     },
     {
-      "id": "native.android.356609f717b92350",
-      "source": "$preview…",
-      "translated": "$preview…"
-    },
-    {
       "id": "native.android.cc8d2e1456629a59",
       "source": "Home canvas",
       "translated": "ホームキャンバス"
@@ -1564,6 +1589,11 @@
       "translated": "OpenClawスレッド"
     },
     {
+      "id": "native.android.5f06e4d6a59f7a59",
+      "source": "now",
+      "translated": "今"
+    },
+    {
       "id": "native.android.d83f82a1e4a5ed99",
       "source": "Open thread",
       "translated": "スレッドを開く"
@@ -1592,26 +1622,6 @@
       "id": "native.android.8a1c5365c0538908",
       "source": "Main thread",
       "translated": "メインスレッド"
-    },
-    {
-      "id": "native.android.5f06e4d6a59f7a59",
-      "source": "now",
-      "translated": "今"
-    },
-    {
-      "id": "native.android.7e5d256de226152e",
-      "source": "${minutes}m",
-      "translated": "${minutes}分"
-    },
-    {
-      "id": "native.android.c584c22ed959206f",
-      "source": "${hours}h",
-      "translated": "${hours}時間"
-    },
-    {
-      "id": "native.android.28416620013afa41",
-      "source": "${days}d",
-      "translated": "${days}日"
     },
     {
       "id": "native.android.936714892af1b0f9",
@@ -2227,6 +2237,61 @@
       "id": "native.android.7208ffa9589c35cd",
       "source": "Use only on a trusted private network.",
       "translated": "信頼できるプライベートネットワークでのみ使用してください。"
+    },
+    {
+      "id": "native.android.903b94dca2caaa56",
+      "source": "Connected (node offline)",
+      "translated": "接続済み（ノードがオフライン）"
+    },
+    {
+      "id": "native.android.cc51d76c73c98f21",
+      "source": "Connected (operator offline)",
+      "translated": "接続済み（オペレーターがオフライン）"
+    },
+    {
+      "id": "native.android.1312170581219544",
+      "source": "Ready",
+      "translated": "準備完了"
+    },
+    {
+      "id": "native.android.dfa7a374e2c6b10f",
+      "source": "Connecting...",
+      "translated": "接続中..."
+    },
+    {
+      "id": "native.android.530b4ba5717efdd0",
+      "source": "Pairing needed",
+      "translated": "ペアリングが必要です"
+    },
+    {
+      "id": "native.android.bd735f74888467d0",
+      "source": "Authentication needed",
+      "translated": "認証が必要です"
+    },
+    {
+      "id": "native.android.4d6c4830e8297779",
+      "source": "TLS timed out",
+      "translated": "TLS がタイムアウトしました"
+    },
+    {
+      "id": "native.android.724ae153c20bede5",
+      "source": "No TLS endpoint",
+      "translated": "TLS エンドポイントがありません"
+    },
+    {
+      "id": "native.android.7220032e6ee66c7f",
+      "source": "Certificate review needed",
+      "translated": "証明書の確認が必要です"
+    },
+    {
+      "id": "native.android.e7b3a991683cfc5b",
+      "source": "Cannot reach gateway",
+      "translated": "Gateway に到達できません"
+    },
+    {
+      "id": "native.android.b882dd8f5bb2e7a0",
+      "source": "Not connected",
+      "translated": "未接続"
     },
     {
       "id": "native.android.b331b5b54e147e41",
@@ -3769,6 +3834,11 @@
       "translated": "このセッションのダッシュボードを開くには、Gateway に接続してください。"
     },
     {
+      "id": "native.android.a38380662bac2210",
+      "source": "Show Sidebar",
+      "translated": "サイドバーを表示"
+    },
+    {
       "id": "native.android.a5845742daecb4ba",
       "source": "Threads",
       "translated": "スレッド"
@@ -5069,41 +5139,6 @@
       "translated": "常に許可"
     },
     {
-      "id": "native.android.448831898efda6c2",
-      "source": "Connecting...",
-      "translated": "接続中..."
-    },
-    {
-      "id": "native.android.a4f0ff7a2cc989d2",
-      "source": "Pairing needed",
-      "translated": "ペアリングが必要です"
-    },
-    {
-      "id": "native.android.ed5aa7f6cceb466c",
-      "source": "Authentication needed",
-      "translated": "認証が必要です"
-    },
-    {
-      "id": "native.android.3c96aa987f267692",
-      "source": "TLS timed out",
-      "translated": "TLSがタイムアウトしました"
-    },
-    {
-      "id": "native.android.0eef5fbe3a7c83b3",
-      "source": "No TLS endpoint",
-      "translated": "TLSエンドポイントがありません"
-    },
-    {
-      "id": "native.android.0273578a6d9e3a48",
-      "source": "Certificate review needed",
-      "translated": "証明書の確認が必要です"
-    },
-    {
-      "id": "native.android.9256c686d6616406",
-      "source": "Cannot reach gateway",
-      "translated": "Gatewayに接続できません"
-    },
-    {
       "id": "native.android.2df2dec704f91977",
       "source": "About",
       "translated": "情報"
@@ -5934,9 +5969,9 @@
       "translated": "スレッドを開く"
     },
     {
-      "id": "native.android.ede6f2717ca8e267",
-      "source": "Back",
-      "translated": "戻る"
+      "id": "native.android.3d8b4fbefc3bed01",
+      "source": "Show Sidebar",
+      "translated": "サイドバーを表示"
     },
     {
       "id": "native.android.ed7e1e2e97bfdd0a",
@@ -6344,26 +6379,6 @@
       "translated": "${row.title}を開く"
     },
     {
-      "id": "native.android.56bd0ad4eb7d0f2e",
-      "source": "now",
-      "translated": "たった今"
-    },
-    {
-      "id": "native.android.46363d9a775b4f46",
-      "source": "${minutes}m",
-      "translated": "${minutes}分"
-    },
-    {
-      "id": "native.android.4d91d1f25b481ad7",
-      "source": "${hours}h",
-      "translated": "${hours}時間"
-    },
-    {
-      "id": "native.android.0c07416f9575a1e1",
-      "source": "${days}d",
-      "translated": "${days}日"
-    },
-    {
       "id": "native.android.28a1a1acc5a0959f",
       "source": "Main thread",
       "translated": "メインスレッド"
@@ -6407,6 +6422,101 @@
       "id": "native.android.ca180f1e4dd6f138",
       "source": "Not connected",
       "translated": "未接続"
+    },
+    {
+      "id": "native.android.0c2501a6c5ddca09",
+      "source": "Search sessions",
+      "translated": "セッションを検索"
+    },
+    {
+      "id": "native.android.590e8e370944beee",
+      "source": "Clear session search",
+      "translated": "セッション検索をクリア"
+    },
+    {
+      "id": "native.android.5409a13f0c35e1ae",
+      "source": "Working",
+      "translated": "実行中"
+    },
+    {
+      "id": "native.android.ba8628561f3d7c81",
+      "source": "Needs attention",
+      "translated": "対応が必要です"
+    },
+    {
+      "id": "native.android.7371ad8f117e08ff",
+      "source": "Selected",
+      "translated": "選択済み"
+    },
+    {
+      "id": "native.android.30aa827f48f2d6d0",
+      "source": "Pinned",
+      "translated": "ピン留め済み"
+    },
+    {
+      "id": "native.android.4e2f2b168d8402e5",
+      "source": "Home",
+      "translated": "ホーム"
+    },
+    {
+      "id": "native.android.411af820e8607155",
+      "source": "Overview",
+      "translated": "概要"
+    },
+    {
+      "id": "native.android.82ebfe54bfbfd385",
+      "source": "Usage",
+      "translated": "使用状況"
+    },
+    {
+      "id": "native.android.24fff115bd302167",
+      "source": "Automations",
+      "translated": "オートメーション"
+    },
+    {
+      "id": "native.android.cf5241cd358243fd",
+      "source": "Threads",
+      "translated": "スレッド"
+    },
+    {
+      "id": "native.android.aa57a340615c6acc",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.0a6327687ccfbfdb",
+      "source": "Open Settings",
+      "translated": "設定を開く"
+    },
+    {
+      "id": "native.android.a52860ece0b7e03c",
+      "source": "Hide Sidebar",
+      "translated": "サイドバーを非表示"
+    },
+    {
+      "id": "native.android.e2d9151fcb89115a",
+      "source": "Agents",
+      "translated": "エージェント"
+    },
+    {
+      "id": "native.android.8561b4bd41836a1d",
+      "source": "More Agents",
+      "translated": "その他のエージェント"
+    },
+    {
+      "id": "native.android.a96adb01ce2f2dbe",
+      "source": "Pages",
+      "translated": "ページ"
+    },
+    {
+      "id": "native.android.a5eca2d258c332b5",
+      "source": "Recent sessions",
+      "translated": "最近のセッション"
+    },
+    {
+      "id": "native.android.6d00f84c795947ed",
+      "source": "No recent sessions",
+      "translated": "最近のセッションはありません"
     },
     {
       "id": "native.android.7c6f9feb2c16785f",
@@ -7764,21 +7874,6 @@
       "translated": "このメッセージを共有できるアプリがありません"
     },
     {
-      "id": "native.android.9ab1dd78954fc3c2",
-      "source": "Preparing audio…",
-      "translated": "音声を準備中…"
-    },
-    {
-      "id": "native.android.0ee4d153c4e592d3",
-      "source": "Speaking…",
-      "translated": "発話中…"
-    },
-    {
-      "id": "native.android.010f1a1fdd158ba0",
-      "source": "Image",
-      "translated": "画像"
-    },
-    {
       "id": "native.android.71ef7f8dbe2b0dbe",
       "source": "Preview · $domain",
       "translated": "プレビュー · $domain"
@@ -7799,6 +7894,16 @@
       "translated": "利用できるプレビューはありません"
     },
     {
+      "id": "native.android.5d4f893886312f82",
+      "source": "assistant",
+      "translated": "アシスタント"
+    },
+    {
+      "id": "native.android.82e9fe45e93909b6",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
       "id": "native.android.66aef4de5e07438f",
       "source": "Working",
       "translated": "処理中"
@@ -7807,26 +7912,6 @@
       "id": "native.android.6e7be1773c946de3",
       "source": "· $phrase",
       "translated": "· $phrase"
-    },
-    {
-      "id": "native.android.ff4a092a02bd5d17",
-      "source": "Tools",
-      "translated": "ツール"
-    },
-    {
-      "id": "native.android.3788802f6c138c8b",
-      "source": "Running tools...",
-      "translated": "ツールを実行中..."
-    },
-    {
-      "id": "native.android.5f93173e06eda5c0",
-      "source": "${display.emoji} ${display.label}",
-      "translated": "${display.emoji} ${display.label}"
-    },
-    {
-      "id": "native.android.29021f925bf290c7",
-      "source": "... +${toolCalls.size - 6} more",
-      "translated": "... +${toolCalls.size - 6} 件追加"
     },
     {
       "id": "native.android.4367fbf22b9ac649",
@@ -7864,6 +7949,11 @@
       "translated": "ユーザー"
     },
     {
+      "id": "native.android.b3ff30d4e0b3ce58",
+      "source": "You",
+      "translated": "あなた"
+    },
+    {
       "id": "native.android.10d8391dea9f334b",
       "source": "📎 ${attachment.fileName}",
       "translated": "📎 ${attachment.fileName}"
@@ -7877,31 +7967,6 @@
       "id": "native.android.b728b15914267f57",
       "source": "Delete",
       "translated": "削除"
-    },
-    {
-      "id": "native.android.5d4f893886312f82",
-      "source": "assistant",
-      "translated": "アシスタント"
-    },
-    {
-      "id": "native.android.dfbd755eb43b4d26",
-      "source": "OpenClaw · Live",
-      "translated": "OpenClaw · ライブ"
-    },
-    {
-      "id": "native.android.b3ff30d4e0b3ce58",
-      "source": "You",
-      "translated": "あなた"
-    },
-    {
-      "id": "native.android.d29098025118ce4b",
-      "source": "System",
-      "translated": "システム"
-    },
-    {
-      "id": "native.android.82e9fe45e93909b6",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
     },
     {
       "id": "native.android.02b4598277aca860",
@@ -8002,6 +8067,11 @@
       "id": "native.android.b73c79389a8cff07",
       "source": "All",
       "translated": "すべて"
+    },
+    {
+      "id": "native.android.5771a93c0a100be9",
+      "source": "Show Sidebar",
+      "translated": "サイドバーを表示"
     },
     {
       "id": "native.android.4a198e67719b8e83",
@@ -8202,6 +8272,41 @@
       "id": "native.android.0fd6b75cadc0ce75",
       "source": "+${toolCalls.size - 4} more",
       "translated": "+${toolCalls.size - 4} 件追加"
+    },
+    {
+      "id": "native.android.f2da5ffc1adaad58",
+      "source": "+${moreWorkingCount} more working",
+      "translated": "+他${moreWorkingCount}件が作業中"
+    },
+    {
+      "id": "native.android.db391c2712f7340b",
+      "source": "+${diff.added}",
+      "translated": "+${diff.added}"
+    },
+    {
+      "id": "native.android.babb72da2d6270a2",
+      "source": "−${diff.removed}",
+      "translated": "−${diff.removed}"
+    },
+    {
+      "id": "native.android.e58b3c8805c79bd0",
+      "source": "Subagent working",
+      "translated": "サブエージェントが作業中"
+    },
+    {
+      "id": "native.android.bdfea93e16940c82",
+      "source": "Subagent failed",
+      "translated": "サブエージェントが失敗しました"
+    },
+    {
+      "id": "native.android.9fde542e43b4e73b",
+      "source": "Subagent cancelled",
+      "translated": "サブエージェントがキャンセルされました"
+    },
+    {
+      "id": "native.android.0bba48c12caa076a",
+      "source": "Subagent finished",
+      "translated": "サブエージェントが完了しました"
     },
     {
       "id": "native.android.22d747642a3887cd",
@@ -8454,6 +8559,46 @@
       "translated": "他$count件のワーカー"
     },
     {
+      "id": "native.android.87d0e02f15fa721a",
+      "source": "Compacted history",
+      "translated": "圧縮された履歴"
+    },
+    {
+      "id": "native.android.9aa434a3c6f7be9e",
+      "source": "saved $count tokens",
+      "translated": "$count トークンを節約しました"
+    },
+    {
+      "id": "native.android.fda9fe610c7334a7",
+      "source": "Session reset",
+      "translated": "セッションをリセットしました"
+    },
+    {
+      "id": "native.android.34b623e6597690a1",
+      "source": "The earlier conversation was cleared.",
+      "translated": "以前の会話はクリアされました。"
+    },
+    {
+      "id": "native.android.f22f983644b07db4",
+      "source": "System · restart recovery",
+      "translated": "システム · 再起動リカバリー"
+    },
+    {
+      "id": "native.android.5ff88f5e4fb8dc90",
+      "source": "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.",
+      "translated": "Gateway の再起動によりターンが中断されました — エージェントに再開して応答を完了するよう依頼しました。"
+    },
+    {
+      "id": "native.android.7cd27609193d4cbf",
+      "source": "System · gateway restarted",
+      "translated": "システム · Gateway を再起動しました"
+    },
+    {
+      "id": "native.android.72b1f80d8de8404c",
+      "source": "System",
+      "translated": "システム"
+    },
+    {
       "id": "native.android.c32ff602fa622e4b",
       "source": "Done in $duration",
       "translated": "$duration で完了"
@@ -8612,11 +8757,6 @@
       "id": "native.android.fb327cd3030aae44",
       "source": "Finish voice note",
       "translated": "ボイスノートを完了"
-    },
-    {
-      "id": "native.android.e9d238668cb46e71",
-      "source": "Voice note",
-      "translated": "ボイスノート"
     },
     {
       "id": "native.android.64459adde73e63f2",
@@ -16289,46 +16429,6 @@
       "translated": "\\(urlText.prefix(500))…"
     },
     {
-      "id": "native.apple.9dcd64ab340a6c15",
-      "source": "Allow access",
-      "translated": "アクセスを許可"
-    },
-    {
-      "id": "native.apple.933a2ac28d1d2aec",
-      "source": "Choose what your agent can use on this iPhone. Nothing is on until you allow it.",
-      "translated": "このiPhoneでエージェントが使用できる項目を選択してください。許可するまで、どの項目も有効になりません。"
-    },
-    {
-      "id": "native.apple.47114a39f7a71c3b",
-      "source": "You can change any of these later in Settings.",
-      "translated": "これらは後から「設定」でいつでも変更できます。"
-    },
-    {
-      "id": "native.apple.eabf54e2b640a4a1",
-      "source": "Continue",
-      "translated": "続ける"
-    },
-    {
-      "id": "native.apple.5f425282ece878eb",
-      "source": "Limited",
-      "translated": "制限あり"
-    },
-    {
-      "id": "native.apple.c5db9e6eae115f7a",
-      "source": "Allow",
-      "translated": "許可"
-    },
-    {
-      "id": "native.apple.f591e16105268e99",
-      "source": "Open Settings",
-      "translated": "設定を開く"
-    },
-    {
-      "id": "native.apple.12ed416835c36555",
-      "source": "Manage",
-      "translated": "管理"
-    },
-    {
       "id": "native.apple.11687a3d87afd0d7",
       "source": "Home Network",
       "translated": "ホームネットワーク"
@@ -16809,21 +16909,6 @@
       "translated": "設定でオフ"
     },
     {
-      "id": "native.apple.96d65a5563690719",
-      "source": "Notifications",
-      "translated": "通知"
-    },
-    {
-      "id": "native.apple.d290a46515add091",
-      "source": "Camera",
-      "translated": "カメラ"
-    },
-    {
-      "id": "native.apple.0eeedbc8aaafcd2c",
-      "source": "Microphone",
-      "translated": "マイク"
-    },
-    {
       "id": "native.apple.14fadad23dd36e44",
       "source": "Photos",
       "translated": "写真"
@@ -16842,51 +16927,6 @@
       "id": "native.apple.9ed5c19cf1e84490",
       "source": "Reminders",
       "translated": "リマインダー"
-    },
-    {
-      "id": "native.apple.866b9df8afcadf07",
-      "source": "Location",
-      "translated": "位置情報"
-    },
-    {
-      "id": "native.apple.f205ac6778705a7d",
-      "source": "Pairing approvals and replies from your agent.",
-      "translated": "エージェントからのペアリング承認依頼と返信。"
-    },
-    {
-      "id": "native.apple.061a17077ee3be94",
-      "source": "Scan setup codes and take photos on request.",
-      "translated": "セットアップコードをスキャンし、リクエストに応じて写真を撮影します。"
-    },
-    {
-      "id": "native.apple.c735ac6b282765f9",
-      "source": "Talk with your agent using voice.",
-      "translated": "音声を使ってエージェントと会話します。"
-    },
-    {
-      "id": "native.apple.ebe8aadcf512ecdb",
-      "source": "Share recent photos when you ask.",
-      "translated": "依頼に応じて最近の写真を共有します。"
-    },
-    {
-      "id": "native.apple.4c4bc12c0787383c",
-      "source": "Look up and add people you mention.",
-      "translated": "名前が挙がった人を検索して連絡先に追加します。"
-    },
-    {
-      "id": "native.apple.5a4006fbb9b23db1",
-      "source": "Check and add calendar events.",
-      "translated": "カレンダーの予定を確認、追加します。"
-    },
-    {
-      "id": "native.apple.2b2a4f1aab6a12ec",
-      "source": "List, add, and complete reminders.",
-      "translated": "リマインダーの一覧表示、追加、完了を行います。"
-    },
-    {
-      "id": "native.apple.3854ae1f0606bafe",
-      "source": "Answer location and nearby questions.",
-      "translated": "位置情報や周辺に関する質問に回答します。"
     },
     {
       "id": "native.apple.e5f6435b9cb5a2d8",
@@ -17269,9 +17309,9 @@
       "translated": "追加のみ"
     },
     {
-      "id": "native.apple.0b10201d7e452dc4",
-      "source": "Allow",
-      "translated": "許可"
+      "id": "native.apple.856d1960275796ef",
+      "source": "Continue",
+      "translated": "続ける"
     },
     {
       "id": "native.apple.3cb9ed2ae352f95c",
@@ -18684,6 +18724,11 @@
       "translated": "アップデートを確認…"
     },
     {
+      "id": "native.apple.2318ba3118a022eb",
+      "source": "App updates are unavailable while a profile is active.",
+      "translated": "プロファイルがアクティブな間はアプリの更新を利用できません。"
+    },
+    {
       "id": "native.apple.ddec1d4e5e5b43cb",
       "source": "Updates unavailable in this build.",
       "translated": "このビルドではアップデートを利用できません。"
@@ -18747,6 +18792,11 @@
       "id": "native.apple.c8d2fe5403e9df00",
       "source": "Clear",
       "translated": "クリア"
+    },
+    {
+      "id": "native.apple.3b776a593deeab22",
+      "source": "These settings changed outside the app while you were editing: \\(fieldList). Choose which version to keep.",
+      "translated": "編集中にこれらの設定がアプリの外部で変更されました: \\(fieldList)。保持するバージョンを選択してください。"
     },
     {
       "id": "native.apple.9cd2ced909f0952d",
@@ -19874,11 +19924,6 @@
       "translated": "OpenClaw が未設定です"
     },
     {
-      "id": "native.apple.293bf9a6e721036d",
-      "source": "Remote OpenClaw Active",
-      "translated": "リモート OpenClaw が有効です"
-    },
-    {
       "id": "native.apple.a7b0d4e6bf5796c0",
       "source": "OpenClaw Active",
       "translated": "OpenClaw が有効です"
@@ -19889,14 +19934,39 @@
       "translated": "OpenClaw が未設定です — \\(primaryName)"
     },
     {
-      "id": "native.apple.adee4bfd71731d2d",
-      "source": "Remote OpenClaw Active — \\(primaryName)",
-      "translated": "リモート OpenClaw が有効です — \\(primaryName)"
-    },
-    {
       "id": "native.apple.2be6d3dd1a0d2699",
       "source": "OpenClaw Active — \\(primaryName)",
       "translated": "OpenClaw が有効です — \\(primaryName)"
+    },
+    {
+      "id": "native.apple.293bf9a6e721036d",
+      "source": "Remote OpenClaw Active",
+      "translated": "リモート OpenClaw が有効です"
+    },
+    {
+      "id": "native.apple.6d4e4047b0278805",
+      "source": "Remote OpenClaw Active — \\(name)",
+      "translated": "リモート OpenClaw が稼働中 — \\(name)"
+    },
+    {
+      "id": "native.apple.9ca38f6a779263eb",
+      "source": "Remote OpenClaw Connecting",
+      "translated": "リモート OpenClaw に接続中"
+    },
+    {
+      "id": "native.apple.9a0da573f4e61f2f",
+      "source": "Remote OpenClaw Connecting — \\(name)",
+      "translated": "リモート OpenClaw に接続中 — \\(name)"
+    },
+    {
+      "id": "native.apple.6f9a4c4e67ef0bd8",
+      "source": "Remote OpenClaw Needs Attention",
+      "translated": "リモート OpenClaw に対応が必要です"
+    },
+    {
+      "id": "native.apple.4953d4c2dba0f324",
+      "source": "Remote OpenClaw Needs Attention — \\(name)",
+      "translated": "リモート OpenClaw に対応が必要です — \\(name)"
     },
     {
       "id": "native.apple.179c8c2ce733969f",
@@ -20249,6 +20319,11 @@
       "translated": "注: macOS では、Accessibility または Screen Recording を有効にした後、OpenClaw の再起動が必要になる場合があります。"
     },
     {
+      "id": "native.apple.974d1478dd99ffb0",
+      "source": "Login-agent restart is unavailable under a profile.",
+      "translated": "プロファイル使用中はログインエージェントの再起動を利用できません。"
+    },
+    {
       "id": "native.apple.e52d463773aef1e1",
       "source": "Restart OpenClaw",
       "translated": "OpenClaw を再起動"
@@ -20364,11 +20439,6 @@
       "translated": "低下"
     },
     {
-      "id": "native.apple.0397fa643df26663",
-      "source": "Test",
-      "translated": "テスト"
-    },
-    {
       "id": "native.apple.a8af393b84d63ab8",
       "source": "OpenClaw is paused",
       "translated": "OpenClaw は一時停止中です"
@@ -20472,6 +20542,126 @@
       "id": "native.apple.1b8ba1cf6f9dfdc9",
       "source": "missing:\\(hash)",
       "translated": "missing:\\(hash)"
+    },
+    {
+      "id": "native.apple.52b517452a108b59",
+      "source": "Gateway location",
+      "translated": "Gatewayの場所"
+    },
+    {
+      "id": "native.apple.2961fe211d71d35a",
+      "source": "Transport",
+      "translated": "トランスポート"
+    },
+    {
+      "id": "native.apple.3dfb5eefb5f66202",
+      "source": "Gateway URL",
+      "translated": "Gateway URL"
+    },
+    {
+      "id": "native.apple.d771ae993a61fdf7",
+      "source": "SSH target",
+      "translated": "SSHターゲット"
+    },
+    {
+      "id": "native.apple.e817b77dd5751910",
+      "source": "Identity file",
+      "translated": "IDファイル"
+    },
+    {
+      "id": "native.apple.1d7afbe829a31e8d",
+      "source": "SSH host key policy",
+      "translated": "SSHホストキーポリシー"
+    },
+    {
+      "id": "native.apple.ba3cf88d2dadb205",
+      "source": "Gateway token",
+      "translated": "Gatewayトークン"
+    },
+    {
+      "id": "native.apple.83779c40a38ec48e",
+      "source": "Use file version",
+      "translated": "ファイルのバージョンを使用"
+    },
+    {
+      "id": "native.apple.eab4dbc3ca4a9352",
+      "source": "Keep my edits",
+      "translated": "自分の編集内容を保持"
+    },
+    {
+      "id": "native.apple.1f2d7f5633608ce9",
+      "source": "Connected",
+      "translated": "接続済み"
+    },
+    {
+      "id": "native.apple.575daf240b3e88c2",
+      "source": "Connected to your remote Gateway.",
+      "translated": "リモート Gateway に接続しました。"
+    },
+    {
+      "id": "native.apple.24bfbc7bdb1bf0a2",
+      "source": "Connecting…",
+      "translated": "接続中…"
+    },
+    {
+      "id": "native.apple.ace257e298e5bf46",
+      "source": "OpenClaw connecting",
+      "translated": "OpenClaw に接続中"
+    },
+    {
+      "id": "native.apple.083ea354ad2d8e22",
+      "source": "Connecting to your remote Gateway…",
+      "translated": "リモート Gateway に接続中…"
+    },
+    {
+      "id": "native.apple.0129bd7fc497f461",
+      "source": "Disconnected",
+      "translated": "切断済み"
+    },
+    {
+      "id": "native.apple.3117686baaeec464",
+      "source": "Disconnected from your remote Gateway. Open Connection settings to fix it.",
+      "translated": "リモート Gateway から切断されました。接続設定を開いて修正してください。"
+    },
+    {
+      "id": "native.apple.c5f245b99f434c79",
+      "source": "Gateway connection failed.",
+      "translated": "Gateway 接続に失敗しました。"
+    },
+    {
+      "id": "native.apple.412b40dec8b94e09",
+      "source": "Open Connection settings to fix it.",
+      "translated": "接続設定を開いて修正してください。"
+    },
+    {
+      "id": "native.apple.8a9259535246e7cf",
+      "source": "OpenClaw needs attention",
+      "translated": "OpenClaw に対応が必要です"
+    },
+    {
+      "id": "native.apple.0bec3829fd3ff778",
+      "source": "OpenClaw paused",
+      "translated": "OpenClaw が一時停止中"
+    },
+    {
+      "id": "native.apple.af4a1c5f1eca9c8a",
+      "source": "Gateway work is paused; incoming messages will wait.",
+      "translated": "Gateway の処理が一時停止しています。受信メッセージは待機します。"
+    },
+    {
+      "id": "native.apple.682abb7a64cb3a51",
+      "source": "Processing messages through the local Gateway on this Mac.",
+      "translated": "この Mac のローカル Gateway でメッセージを処理しています。"
+    },
+    {
+      "id": "native.apple.18c46b3643479d39",
+      "source": "OpenClaw active",
+      "translated": "OpenClaw が稼働中"
+    },
+    {
+      "id": "native.apple.448e954d678c2fff",
+      "source": "Ready to run after you choose a Gateway connection.",
+      "translated": "Gateway 接続を選択すると実行できます。"
     },
     {
       "id": "native.apple.db0fa6b60bd859f8",
@@ -20669,16 +20859,6 @@
       "translated": "ログイン時に起動"
     },
     {
-      "id": "native.apple.405e74c96498b7c0",
-      "source": "Automatically start OpenClaw after you sign in.",
-      "translated": "サインイン後に OpenClaw を自動的に起動します。"
-    },
-    {
-      "id": "native.apple.8b74758a60f78642",
-      "source": "Move OpenClaw to Applications before enabling launch at login.",
-      "translated": "ログイン時の起動を有効にする前に、OpenClawをアプリケーションに移動してください。"
-    },
-    {
       "id": "native.apple.927819c087ca3520",
       "source": "Show Dock icon",
       "translated": "Dock アイコンを表示"
@@ -20819,29 +20999,14 @@
       "translated": "終了"
     },
     {
-      "id": "native.apple.64e197a4a8b384ef",
-      "source": "OpenClaw paused",
-      "translated": "OpenClaw は一時停止中"
+      "id": "native.apple.2dbff050b62629f4",
+      "source": "Open Connection Settings",
+      "translated": "接続設定を開く"
     },
     {
       "id": "native.apple.7fe6df69d8050832",
       "source": "OpenClaw active",
       "translated": "OpenClaw がアクティブです"
-    },
-    {
-      "id": "native.apple.2f4258fa73e04344",
-      "source": "Processing messages through the local Gateway on this Mac.",
-      "translated": "この Mac 上のローカル Gateway を通じてメッセージを処理しています。"
-    },
-    {
-      "id": "native.apple.82bbee94fd6c9afd",
-      "source": "Connected to a remote Gateway configuration.",
-      "translated": "リモート Gateway 構成に接続されています。"
-    },
-    {
-      "id": "native.apple.57c062682e2a1b08",
-      "source": "Ready to run after you choose a Gateway connection.",
-      "translated": "Gateway 接続を選択すると実行できる状態になります。"
     },
     {
       "id": "native.apple.eac861e2d1da4745",
@@ -21134,6 +21299,21 @@
       "translated": "ログを開く"
     },
     {
+      "id": "native.apple.39f0173209fd7e74",
+      "source": "Launch at login is unavailable while an app profile is active.",
+      "translated": "アプリプロファイルがアクティブな間はログイン時の起動を利用できません。"
+    },
+    {
+      "id": "native.apple.405e74c96498b7c0",
+      "source": "Automatically start OpenClaw after you sign in.",
+      "translated": "サインイン後に OpenClaw を自動的に起動します。"
+    },
+    {
+      "id": "native.apple.8b74758a60f78642",
+      "source": "Move OpenClaw to Applications before enabling launch at login.",
+      "translated": "ログイン時の起動を有効にする前に、OpenClawをアプリケーションに移動してください。"
+    },
+    {
       "id": "native.apple.4d96b20de25a9ddf",
       "source": "probe degraded",
       "translated": "プローブが縮退しています"
@@ -21247,21 +21427,6 @@
       "id": "native.apple.12d83e5f01c98fc0",
       "source": "\\(status.label) presence",
       "translated": "\\(status.label) プレゼンス"
-    },
-    {
-      "id": "native.apple.ee499f632a5076c5",
-      "source": "Android",
-      "translated": "Android"
-    },
-    {
-      "id": "native.apple.57ca2baac54a05fc",
-      "source": "Sparkles",
-      "translated": "Sparkles"
-    },
-    {
-      "id": "native.apple.c9a63d0f5247185d",
-      "source": "Plain",
-      "translated": "Plain"
     },
     {
       "id": "native.apple.3f4378c2de189ec9",
@@ -21719,6 +21884,11 @@
       "translated": "\\(self.label):"
     },
     {
+      "id": "native.apple.5ca13315339f6c15",
+      "source": "Persistent Mac node service unavailable under app profile; runtime node remains available.",
+      "translated": "アプリプロファイル使用中は永続的なMacノードサービスを利用できません。ランタイムノードは引き続き利用可能です。"
+    },
+    {
       "id": "native.apple.800d9fd07f5dde85",
       "source": "Finish",
       "translated": "完了"
@@ -21727,6 +21897,21 @@
       "id": "native.apple.dca2e9174fec56ce",
       "source": "Next",
       "translated": "次へ"
+    },
+    {
+      "id": "native.apple.77671f1903c73f44",
+      "source": " (\\(command) pid \\(pid))",
+      "translated": " (\\(command) pid \\(pid))"
+    },
+    {
+      "id": "native.apple.69779351bd137b5b",
+      "source": "Existing gateway detected",
+      "translated": "既存の Gateway を検出しました"
+    },
+    {
+      "id": "native.apple.ff1e86b4eb896434",
+      "source": "Port \\(port) already in use",
+      "translated": "ポート \\(port) は既に使用されています"
     },
     {
       "id": "native.apple.3db546546fbaf38e",
@@ -21809,26 +21994,6 @@
       "translated": "詳細は上記の各オプションに記載されています。ログインを修正して再試行するか、下記の API キーまたはトークンで接続できます。"
     },
     {
-      "id": "native.apple.a0431b20c0650139",
-      "source": "Need help? Chat with OpenClaw",
-      "translated": "お困りですか？OpenClawとチャット"
-    },
-    {
-      "id": "native.apple.6526ced182e1fe50",
-      "source": "Your AI is ready",
-      "translated": "AI の準備ができました"
-    },
-    {
-      "id": "native.apple.5d8998398be53d6f",
-      "source": "Setup details",
-      "translated": "セットアップの詳細"
-    },
-    {
-      "id": "native.apple.1967fcaeb9e74257",
-      "source": "Copy setup details",
-      "translated": "セットアップの詳細をコピー"
-    },
-    {
       "id": "native.apple.e0458fcb8c0536ea",
       "source": "No usable AI access found on this Gateway",
       "translated": "この Gateway で利用可能な AI アクセスが見つかりませんでした"
@@ -21879,14 +22044,14 @@
       "translated": "ローカルモデルをセットアップ"
     },
     {
-      "id": "native.apple.506a932536c642c2",
-      "source": "Download or prepare a local model on this Gateway.",
-      "translated": "この Gateway でローカルモデルをダウンロードまたは準備します。"
+      "id": "native.apple.780c1aa1c8868cc4",
+      "source": "Connect a local model service, or prepare a model on this Gateway.",
+      "translated": "ローカルモデルサービスを接続するか、この Gateway でモデルを準備します。"
     },
     {
-      "id": "native.apple.d31411a9f3c68c33",
-      "source": "Set up / Download model",
-      "translated": "モデルのセットアップ / ダウンロード"
+      "id": "native.apple.c218bd844ba8a0ac",
+      "source": "Connect / Set up",
+      "translated": "接続 / セットアップ"
     },
     {
       "id": "native.apple.7fc409b6aaa6d3b9",
@@ -21919,9 +22084,9 @@
       "translated": "サインイン"
     },
     {
-      "id": "native.apple.b62dfd708d5cfb14",
-      "source": "The model is downloaded and prepared on this Gateway.",
-      "translated": "モデルはこの Gateway でダウンロードされ、準備されています。"
+      "id": "native.apple.97b24c854f768998",
+      "source": "OpenClaw will detect and verify the prepared model before using it.",
+      "translated": "OpenClaw は使用する前に、準備されたモデルを検出して検証します。"
     },
     {
       "id": "native.apple.869fe436119bb8a6",
@@ -22029,16 +22194,6 @@
       "translated": "そのキーは使用できませんでした"
     },
     {
-      "id": "native.apple.e874bd0fad63f012",
-      "source": "OpenClaw — setup helper",
-      "translated": "OpenClaw — セットアップヘルパー"
-    },
-    {
-      "id": "native.apple.bea852c8622c8214",
-      "source": "Done",
-      "translated": "完了"
-    },
-    {
       "id": "native.apple.f91347240d07008f",
       "source": "Open help…",
       "translated": "ヘルプを開く…"
@@ -22057,26 +22212,6 @@
       "id": "native.apple.65fe24f910ca50cb",
       "source": "Copy error",
       "translated": "エラーをコピー"
-    },
-    {
-      "id": "native.apple.7dee24e5bf088dd5",
-      "source": "\\(incomplete) \\(Self.memoryNoun(incomplete)) could not be imported.",
-      "translated": "\\(incomplete) 件の\\(Self.memoryNoun(incomplete))をインポートできませんでした。"
-    },
-    {
-      "id": "native.apple.84189c39ea5803c6",
-      "source": "The Gateway returned an inconsistent provider plan. Try planning again.",
-      "translated": "Gateway から一貫性のないプロバイダープランが返されました。もう一度プランを作成してください。"
-    },
-    {
-      "id": "native.apple.4c9e75d64cbc5cc2",
-      "source": "The Gateway did not return a usable import plan. Try planning again.",
-      "translated": "Gateway から使用可能なインポートプランが返されませんでした。もう一度プランを作成してください。"
-    },
-    {
-      "id": "native.apple.2070bf43a67680ee",
-      "source": "The Gateway could not plan \\(plan.summary.errors) \\(Self.memoryNoun(plan.summary.errors)). Try again.",
-      "translated": "Gateway は \\(plan.summary.errors) 件の\\(Self.memoryNoun(plan.summary.errors))のプランを作成できませんでした。もう一度お試しください。"
     },
     {
       "id": "native.apple.ba758aa97c24ffe6",
@@ -22129,114 +22264,19 @@
       "translated": "おすすめ"
     },
     {
-      "id": "native.apple.78d1ad73762a7ce8",
+      "id": "native.apple.6ed12b86d399b69d",
+      "source": "Authenticate with your Gateway",
+      "translated": "Gatewayで認証"
+    },
+    {
+      "id": "native.apple.e319780979ae71d1",
       "source": "Connect your AI",
-      "translated": "AI を接続"
+      "translated": "AIを接続"
     },
     {
       "id": "native.apple.c8a2f8dc424fe447",
       "source": "Back",
       "translated": "戻る"
-    },
-    {
-      "id": "native.apple.7ca0977d5f73356d",
-      "source": "Bring your memories along",
-      "translated": "思い出を引き継ぐ"
-    },
-    {
-      "id": "native.apple.b57ee4f83cff23f3",
-      "source": "OpenClaw can bring useful context from AI tools you already use into your new assistant.",
-      "translated": "OpenClaw では、すでに使用している AI ツールから役立つコンテキストを新しいアシスタントに引き継ぐことができます。"
-    },
-    {
-      "id": "native.apple.46cab71d748860b8",
-      "source": "Looking for memories…",
-      "translated": "思い出を検索中…"
-    },
-    {
-      "id": "native.apple.c9e5f1aebe85e201",
-      "source": "Checking supported AI tools on this Mac.",
-      "translated": "この Mac でサポートされている AI ツールを確認しています。"
-    },
-    {
-      "id": "native.apple.77290f36f36f00e5",
-      "source": "No memories to import",
-      "translated": "インポートする思い出はありません"
-    },
-    {
-      "id": "native.apple.e5cca7b9f082ace9",
-      "source": "You can import memories later from the dashboard.",
-      "translated": "思い出は後でダッシュボードからインポートできます。"
-    },
-    {
-      "id": "native.apple.963add2f12fd18cb",
-      "source": "Import memories",
-      "translated": "思い出をインポート"
-    },
-    {
-      "id": "native.apple.9db369e036a38a29",
-      "source": "Importing memories…",
-      "translated": "思い出をインポート中…"
-    },
-    {
-      "id": "native.apple.71b8e38a5e7040ef",
-      "source": "Refresh plan",
-      "translated": "プランを更新"
-    },
-    {
-      "id": "native.apple.e87bec72cb9c9dbf",
-      "source": "Retry pending imports before refreshing the plan.",
-      "translated": "プランを更新する前に、保留中のインポートを再試行してください。"
-    },
-    {
-      "id": "native.apple.f678888102fded6e",
-      "source": "You can skip this and import later from the dashboard’s Memory import page.",
-      "translated": "ここではスキップして、後でダッシュボードの「思い出のインポート」ページからインポートできます。"
-    },
-    {
-      "id": "native.apple.36108528c6acc448",
-      "source": "\\(provider.alreadyImportedCount) already imported",
-      "translated": "\\(provider.alreadyImportedCount) 件はインポート済み"
-    },
-    {
-      "id": "native.apple.9b3444de8c9b2acc",
-      "source": "Imported \\(result.migrated) \\(self.memoryLabel(result.migrated)).",
-      "translated": "\\(result.migrated) 件の\\(self.memoryLabel(result.migrated))をインポートしました。"
-    },
-    {
-      "id": "native.apple.3252fea4dac8669a",
-      "source": "Couldn’t check for memories",
-      "translated": "思い出を確認できませんでした"
-    },
-    {
-      "id": "native.apple.d371deb696de9e6b",
-      "source": "Retry",
-      "translated": "再試行"
-    },
-    {
-      "id": "native.apple.406ae454540725d0",
-      "source": "You can do this later from the dashboard’s Memory import page.",
-      "translated": "後でダッシュボードの「思い出のインポート」ページから実行できます。"
-    },
-    {
-      "id": "native.apple.d1b5d99f67dae42e",
-      "source": "Your memories are ready",
-      "translated": "メモリの準備ができました"
-    },
-    {
-      "id": "native.apple.6dbe5b174271b62a",
-      "source": "Imported \\(imported) \\(self.memoryLabel(imported)) into OpenClaw.",
-      "translated": "\\(imported)件の\\(self.memoryLabel(imported))をOpenClawにインポートしました。"
-    },
-    {
-      "id": "native.apple.d47b887f98e13e24",
-      "source": "\\(result.migrated) imported",
-      "translated": "\\(result.migrated)件をインポートしました"
-    },
-    {
-      "id": "native.apple.6ac3d513f0ec5da7",
-      "source": "You can manage imported memories anytime from the dashboard.",
-      "translated": "インポートしたメモリは、ダッシュボードからいつでも管理できます。"
     },
     {
       "id": "native.apple.ea8beaeecef15e54",
@@ -22322,21 +22362,6 @@
       "id": "native.apple.d54084b48f40aa0a",
       "source": "OK — OpenClaw won’t start anything yet. Pick Local or Remote later in Settings → General.",
       "translated": "OK — OpenClaw はまだ何も開始しません。後で Settings → General で Local または Remote を選択してください。"
-    },
-    {
-      "id": "native.apple.8d9eb247d41a0ca7",
-      "source": "Existing gateway detected",
-      "translated": "既存の gateway が検出されました"
-    },
-    {
-      "id": "native.apple.335bb6b21095d15a",
-      "source": "Port \\(probe.port) already in use",
-      "translated": "ポート \\(probe.port) はすでに使用されています"
-    },
-    {
-      "id": "native.apple.de453cb637c46670",
-      "source": " (\\(probe.command) pid \\(probe.pid))",
-      "translated": "（\\(probe.command) pid \\(probe.pid)）"
     },
     {
       "id": "native.apple.9ab228a4cb7d4403",
@@ -22494,16 +22519,6 @@
       "translated": " · ssh \\(parsed.port)"
     },
     {
-      "id": "native.apple.4bad86566d023a64",
-      "source": "Grant permissions",
-      "translated": "権限を付与"
-    },
-    {
-      "id": "native.apple.ce0d1241d7417406",
-      "source": "These macOS permissions let OpenClaw automate apps and capture context on this Mac. Status updates automatically.",
-      "translated": "これらの macOS 権限により、OpenClaw はこの Mac 上のアプリを自動操作し、コンテキストを取得できます。ステータスは自動的に更新されます。"
-    },
-    {
       "id": "native.apple.42af85cdf91d0264",
       "source": "Getting things ready",
       "translated": "準備中"
@@ -22554,6 +22569,11 @@
       "translated": "Gateway が起動しませんでした"
     },
     {
+      "id": "native.apple.f0b128f895130fef",
+      "source": "OpenClaw installation failed",
+      "translated": "OpenClaw のインストールに失敗しました"
+    },
+    {
       "id": "native.apple.f36edc58238aa8ce",
       "source": "Try again",
       "translated": "もう一度試す"
@@ -22564,11 +22584,6 @@
       "translated": "すべて設定完了です！"
     },
     {
-      "id": "native.apple.9f73f753266a9fa2",
-      "source": "Finish opens the chat — say hi to your new agent.",
-      "translated": "Finish でチャットが開きます — 新しいエージェントにあいさつしてみましょう。"
-    },
-    {
       "id": "native.apple.678dee9dedd72ce4",
       "source": "Configure later",
       "translated": "後で設定"
@@ -22577,16 +22592,6 @@
       "id": "native.apple.f87bc67e676d1289",
       "source": "Pick Local or Remote in Settings → General whenever you’re ready.",
       "translated": "準備ができたら、Settings → General で Local または Remote を選択してください。"
-    },
-    {
-      "id": "native.apple.2eb061cd9d5f19fe",
-      "source": "Remote gateway checklist",
-      "translated": "リモート Gateway チェックリスト"
-    },
-    {
-      "id": "native.apple.952e85bfb2d4b4f5",
-      "source": "On your gateway host: install/update the `openclaw` package and make sure credentials exist\n(typically `~/.openclaw/credentials/oauth.json`). Then connect again if needed.",
-      "translated": "Gateway ホスト上で: `openclaw` パッケージをインストール/更新し、認証情報が存在することを確認してください\n（通常は `~/.openclaw/credentials/oauth.json`）。必要に応じて再度接続してください。"
     },
     {
       "id": "native.apple.4e5ccb411db3e80f",
@@ -22652,36 +22657,6 @@
       "id": "native.apple.e54dfc2913c56f6f",
       "source": "Launch at login",
       "translated": "ログイン時に起動"
-    },
-    {
-      "id": "native.apple.040f2884f928f376",
-      "source": "Skills included",
-      "translated": "含まれる Skills"
-    },
-    {
-      "id": "native.apple.e38ea89bafb6b75d",
-      "source": "Refresh",
-      "translated": "更新"
-    },
-    {
-      "id": "native.apple.38fc7e2b80c4e0fa",
-      "source": "Couldn’t load skills from the Gateway.",
-      "translated": "Gateway から Skills を読み込めませんでした。"
-    },
-    {
-      "id": "native.apple.3b06694a81edc126",
-      "source": "Make sure the Gateway is running and connected, then hit Refresh (or open Settings → Skills).",
-      "translated": "Gateway が実行中で接続されていることを確認してから、更新を押してください（または設定 → Skills を開いてください）。"
-    },
-    {
-      "id": "native.apple.b6de2a51e5fb8397",
-      "source": "Details: \\(error)",
-      "translated": "詳細: \\(error)"
-    },
-    {
-      "id": "native.apple.b82621bc28d4c6e3",
-      "source": "No skills reported yet.",
-      "translated": "まだ Skills は報告されていません。"
     },
     {
       "id": "native.apple.048e9cc88fb7af55",
@@ -23464,14 +23439,14 @@
       "translated": "このデバイスにはペアリングの承認が必要です"
     },
     {
-      "id": "native.apple.b52cb4aae7ca6573",
-      "source": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`.",
-      "translated": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+      "id": "native.apple.90b00f3f5418b439",
+      "source": "Paste the token configured on the gateway host. On the gateway host, run `openclaw gateway auth-token --show` in an interactive terminal, then paste its output.",
+      "translated": "Gatewayホストで設定されたトークンを貼り付けてください。Gatewayホストで、対話型ターミナルで `openclaw gateway auth-token --show` を実行し、その出力を貼り付けてください。"
     },
     {
-      "id": "native.apple.bbb87d21ce8a291e",
-      "source": "Check `gateway.auth.token` or `OPENCLAW_GATEWAY_TOKEN` on the gateway host and try again.",
-      "translated": "Gateway ホストで `gateway.auth.token` または `OPENCLAW_GATEWAY_TOKEN` を確認して、もう一度お試しください。"
+      "id": "native.apple.b79d3c42bd5438d5",
+      "source": "On the gateway host, run `openclaw gateway auth-token --show` in an interactive terminal, then replace the token and try again.",
+      "translated": "Gatewayホストで、対話型ターミナルで `openclaw gateway auth-token --show` を実行し、トークンを置き換えてから再試行してください。"
     },
     {
       "id": "native.apple.c26f61d639591f81",
@@ -23494,14 +23469,14 @@
       "translated": "Approve this device from an already-paired OpenClaw client. In your OpenClaw chat, run `/pair approve`, then click **Check connection** again."
     },
     {
-      "id": "native.apple.e73170e4ab1dbe8f",
-      "source": "This gateway requires an auth token from the gateway host.",
-      "translated": "この Gateway には Gateway ホストからの認証トークンが必要です。"
+      "id": "native.apple.a1cb5542806f0ec9",
+      "source": "This gateway requires an auth token. Run openclaw gateway auth-token --show on the gateway host.",
+      "translated": "このGatewayには認証トークンが必要です。Gatewayホストで openclaw gateway auth-token --show を実行してください。"
     },
     {
-      "id": "native.apple.e3f983b8c517da29",
-      "source": "Gateway token mismatch. Check gateway.auth.token or OPENCLAW_GATEWAY_TOKEN on the gateway host.",
-      "translated": "Gateway トークンが一致しません。Gateway ホストで gateway.auth.token または OPENCLAW_GATEWAY_TOKEN を確認してください。"
+      "id": "native.apple.e12c96574b97ed4a",
+      "source": "Gateway token mismatch. Run openclaw gateway auth-token --show on the gateway host.",
+      "translated": "Gatewayトークンが一致しません。Gatewayホストで openclaw gateway auth-token --show を実行してください。"
     },
     {
       "id": "native.apple.cd96754a96e5aa35",
@@ -23939,6 +23914,11 @@
       "translated": "セットアップが必要"
     },
     {
+      "id": "native.apple.5bea2c67b8d4ccf9",
+      "source": "Bundled",
+      "translated": "同梱"
+    },
+    {
       "id": "native.apple.1b2cab26853b1074",
       "source": "Managed",
       "translated": "管理対象"
@@ -24042,11 +24022,6 @@
       "id": "native.apple.6b59063df92d2991",
       "source": "Skill enabled",
       "translated": "Skill は有効です"
-    },
-    {
-      "id": "native.apple.5bea2c67b8d4ccf9",
-      "source": "Bundled",
-      "translated": "同梱"
     },
     {
       "id": "native.apple.4b27b3be5f3f1f66",
@@ -26079,6 +26054,11 @@
       "translated": "削除"
     },
     {
+      "id": "native.apple.d5a544f5ba642c60",
+      "source": "+%1$lld more working",
+      "translated": "+他%1$lld件が作業中"
+    },
+    {
       "id": "native.apple.946b677d8dbf0f37",
       "source": "Hide talk transcript",
       "translated": "会話の文字起こしを非表示"
@@ -26147,6 +26127,46 @@
       "id": "native.apple.0149100bb5c8b985",
       "source": "Message",
       "translated": "Message"
+    },
+    {
+      "id": "native.apple.041f2ed87f1797a0",
+      "source": "System · restart recovery",
+      "translated": "システム · 再起動リカバリー"
+    },
+    {
+      "id": "native.apple.0eaa9e1136018332",
+      "source": "System · gateway restarted",
+      "translated": "システム · Gateway を再起動しました"
+    },
+    {
+      "id": "native.apple.25ffcf5fcb1645d3",
+      "source": "System",
+      "translated": "システム"
+    },
+    {
+      "id": "native.apple.55c9f51c550018a9",
+      "source": "Compacted history",
+      "translated": "圧縮された履歴"
+    },
+    {
+      "id": "native.apple.28264f2dcf55651b",
+      "source": "Session reset",
+      "translated": "セッションをリセットしました"
+    },
+    {
+      "id": "native.apple.6410db19dcb02d59",
+      "source": "saved %@ tokens",
+      "translated": "%@ トークンを節約しました"
+    },
+    {
+      "id": "native.apple.0b97fe0abe7ea144",
+      "source": "The earlier conversation was cleared.",
+      "translated": "以前の会話はクリアされました。"
+    },
+    {
+      "id": "native.apple.4efcef39bcaea3d1",
+      "source": "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.",
+      "translated": "Gateway の再起動によりターンが中断されました — エージェントに再開して応答を完了するよう依頼しました。"
     },
     {
       "id": "native.apple.5824df4efbf6c977",

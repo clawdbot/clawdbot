@@ -112,6 +112,14 @@ export function createDiscordMessageRunQueue(
       const cleanupSkipped = async () => {
         try {
           await cleanupSkippedDiscordQueuedMessage({ job });
+        } catch (error) {
+          // Durable release is best-effort during shutdown. One failed claim
+          // must not strand the remaining accepted jobs or their pending tasks.
+          try {
+            params.runtime.error(danger(`discord queued message cleanup failed: ${String(error)}`));
+          } catch {
+            // Error reporting must not interrupt the remaining cleanup owners.
+          }
         } finally {
           settlePending();
         }
@@ -121,7 +129,9 @@ export function createDiscordMessageRunQueue(
         return;
       }
       skippedCleanup.add(cleanupSkipped);
-      runQueue.enqueue(job.queueKey, async ({ lifecycleSignal }) => {
+      // Core reply admission owns session serialization. A transport event key
+      // lets later Discord messages reach active-run steering while this run continues.
+      runQueue.enqueue(job.payload.message.id, async ({ lifecycleSignal }) => {
         // Once the task starts, normal process/commit handling owns cleanup.
         // Leaving it in skippedCleanup would double-release replay state.
         skippedCleanup.delete(cleanupSkipped);

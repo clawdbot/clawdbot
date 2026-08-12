@@ -140,8 +140,11 @@ export function registerMemoryCli(
           let operationFailed = false;
           try {
             const agentId = resolveCliAgentId(opts.agent);
-            const vector = await embeddings.embed(normalizeRecallQuery(query, recallMaxChars));
             const limit = parsePositiveIntegerOption(opts.limit, "--limit");
+            const vector = await embeddings.embed(
+              agentId,
+              normalizeRecallQuery(query, recallMaxChars),
+            );
             const results = await db.search(agentId, vector, limit, 0.3);
             const output = results.map((r) => ({
               id: r.entry.id,

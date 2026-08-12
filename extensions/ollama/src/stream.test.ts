@@ -13,7 +13,11 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
-import { buildAssistantMessage, createOllamaStreamFn, isOllamaCompatProvider } from "./stream.js";
+import {
+  buildAssistantMessage,
+  createOllamaStreamFn,
+  isOllamaCompatProvider,
+} from "./stream-api.js";
 
 function makeOllamaResponse(params: {
   content?: string;
@@ -325,9 +329,7 @@ describe("createOllamaStreamFn thinking events", () => {
     };
     expect(done.reason).toBe("length");
     expect(done.message?.stopReason).toBe("length");
-    expect(done.message?.content).toEqual([
-      expect.objectContaining({ type: "toolCall", name: "read" }),
-    ]);
+    expect(done.message?.content).toEqual([]);
   });
 
   it("uses generic stream timeout for Ollama request timeout", async () => {
@@ -693,5 +695,108 @@ describe("createOllamaStreamFn thinking events", () => {
       reason: "aborted",
       error: { stopReason: "aborted" },
     });
+  });
+
+  it("uses CJK-aware fallback usage while preserving missing cache provenance", async () => {
+    const events = await streamOllamaEvents(
+      [
+        {
+          model: "qwen3.5",
+          created_at: "2026-01-01T00:00:00Z",
+          message: { role: "assistant", content: "你好世界测试" },
+          done: false,
+        },
+        {
+          model: "qwen3.5",
+          created_at: "2026-01-01T00:00:01Z",
+          message: { role: "assistant", content: "" },
+          done: true,
+          done_reason: "stop",
+        },
+      ],
+      {},
+      { messages: [{ role: "user", content: "这是一个测试用的句子呢" }] } as never,
+    );
+
+    const done = events.find((event) => event.type === "done") as {
+      message?: {
+        usage?: {
+          input?: number;
+          output?: number;
+          cacheRead?: number;
+          cacheWrite?: number;
+          cacheTelemetry?: { state: string };
+        };
+      };
+    };
+    expect(done?.message?.usage).toMatchObject({
+      input: 12,
+      output: 6,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cacheTelemetry: { state: "unavailable" },
+    });
+  });
+
+  it("keeps provider usage authoritative over the CJK fallback", async () => {
+    const events = await streamOllamaEvents(
+      [
+        {
+          model: "qwen3.5",
+          created_at: "2026-01-01T00:00:00Z",
+          message: { role: "assistant", content: "你好世界测试" },
+          done: false,
+        },
+        {
+          model: "qwen3.5",
+          created_at: "2026-01-01T00:00:01Z",
+          message: { role: "assistant", content: "" },
+          done: true,
+          done_reason: "stop",
+          prompt_eval_count: 77,
+          eval_count: 19,
+        },
+      ],
+      {},
+      { messages: [{ role: "user", content: "这是一个测试用的句子呢" }] } as never,
+    );
+
+    const done = events.find((event) => event.type === "done") as {
+      message?: { usage?: { input?: number; output?: number; cacheTelemetry?: { state: string } } };
+    };
+    expect(done?.message?.usage).toMatchObject({
+      input: 77,
+      output: 19,
+      cacheTelemetry: { state: "unavailable" },
+    });
+  });
+
+  it("keeps the existing fallback estimate for ASCII-only usage", async () => {
+    const events = await streamOllamaEvents(
+      [
+        {
+          model: "qwen3.5",
+          created_at: "2026-01-01T00:00:00Z",
+          message: { role: "assistant", content: "Hello world" },
+          done: false,
+        },
+        {
+          model: "qwen3.5",
+          created_at: "2026-01-01T00:00:01Z",
+          message: { role: "assistant", content: "" },
+          done: true,
+          done_reason: "stop",
+        },
+      ],
+      {},
+      {
+        messages: [{ role: "user", content: "The quick brown fox jumps over the lazy dog" }],
+      } as never,
+    );
+
+    const done = events.find((event) => event.type === "done") as {
+      message?: { usage?: { input?: number; output?: number } };
+    };
+    expect(done?.message?.usage).toMatchObject({ input: 11, output: 3 });
   });
 });

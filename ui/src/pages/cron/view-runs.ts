@@ -8,7 +8,7 @@ import type { CronDeliveryStatus, CronRunsStatusValue, CronSortDir } from "../..
 import { icon } from "../../components/icons.ts";
 import "../../components/web-awesome.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
-import { t } from "../../i18n/index.ts";
+import { i18n, t } from "../../i18n/index.ts";
 import {
   formatDurationCompact,
   formatDurationHuman,
@@ -16,6 +16,7 @@ import {
   formatMs,
   formatTokens,
 } from "../../lib/format.ts";
+import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 
 // Leaf contract: the slice of the cron view props this module needs. Keeping
@@ -90,6 +91,16 @@ function renderFilterDropdown(params: {
   onToggle: (value: string, checked: boolean) => void;
   onClear: () => void;
 }) {
+  const selectedLabels = params.options
+    .filter((option) => params.selected.includes(option.value))
+    .map((option) => option.label);
+  const accessibleSummary =
+    selectedLabels.length > 2
+      ? `${params.summary} (${new Intl.ListFormat(i18n.getLocale(), {
+          style: "long",
+          type: "conjunction",
+        }).format(selectedLabels)})`
+      : params.summary;
   return html`
     <div class="cron-filter-dropdown" data-filter=${params.id}>
       <wa-dropdown
@@ -115,7 +126,7 @@ function renderFilterDropdown(params: {
             ? "active"
             : ""}"
           title=${params.title}
-          aria-label=${params.title}
+          aria-label=${`${params.title} ${accessibleSummary}`}
         >
           <span>${params.summary}</span>
           ${icon("chevronDown")}
@@ -159,6 +170,8 @@ export function renderRunsSection(props: CronRunsSectionProps) {
     .map((option) => option.label);
   const statusSummary = summarizeSelection(selectedStatusLabels, t("cron.runs.allStatuses"));
   const deliverySummary = summarizeSelection(selectedDeliveryLabels, t("cron.runs.allDelivery"));
+  // The sort select's .value binding commits before its options exist;
+  // selected attributes preserve non-first values.
   return html`
     <div class="cron-runs">
       <div class="cron-run-filters">
@@ -216,8 +229,12 @@ export function renderRunsSection(props: CronRunsSectionProps) {
               cronRunsSortDir: (e.target as HTMLSelectElement).value as CronSortDir,
             })}
         >
-          <option value="desc">${t("cron.runs.newestFirst")}</option>
-          <option value="asc">${t("cron.runs.oldestFirst")}</option>
+          <option value="desc" ?selected=${props.runsSortDir === "desc"}>
+            ${t("cron.runs.newestFirst")}
+          </option>
+          <option value="asc" ?selected=${props.runsSortDir === "asc"}>
+            ${t("cron.runs.oldestFirst")}
+          </option>
         </select>
       </div>
       ${runs.length === 0
@@ -326,7 +343,7 @@ function renderRun(
             : nothing}
           <div class="muted">
             ${typeof entry.durationMs === "number" && Number.isFinite(entry.durationMs)
-              ? (formatDurationCompact(entry.durationMs, { spaced: true }) ??
+              ? (formatDurationCompact(entry.durationMs) ??
                 formatDurationHuman(entry.durationMs, t("common.na")))
               : t("common.na")}
           </div>
@@ -339,14 +356,7 @@ function renderRun(
                   class="session-link"
                   href=${chatUrl}
                   @click=${(e: MouseEvent) => {
-                    if (
-                      e.defaultPrevented ||
-                      e.button !== 0 ||
-                      e.metaKey ||
-                      e.ctrlKey ||
-                      e.shiftKey ||
-                      e.altKey
-                    ) {
+                    if (!shouldHandleNavigationClick(e)) {
                       return;
                     }
                     if (onNavigateToChat && entry.sessionKey) {

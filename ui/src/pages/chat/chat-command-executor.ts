@@ -10,6 +10,7 @@ import type {
   ModelCatalogEntry,
   SessionsListResult,
 } from "../../api/types.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import {
   getSlashCommandCategoryLabel,
@@ -32,6 +33,7 @@ import {
   resolveThinkingLevelInput,
 } from "../../lib/chat/thinking.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
+import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
@@ -44,10 +46,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "../../lib/string-coerce.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import {
-  patchChatCommandSessionSettings as patchSession,
-  selectedGlobalScope,
-} from "./chat-settings-patches.ts";
+import { patchChatCommandSessionSettings, selectedGlobalScope } from "./chat-settings-patches.ts";
 
 type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */
@@ -68,13 +67,55 @@ type SlashCommandResult = {
 
 type SlashCommandContext = {
   sessions: SessionCapability;
+  sessionAccessSnapshot: Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase">;
+  readSessionAccessSnapshot?: () => Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase">;
+  isCurrent?: () => boolean;
   chatModelCatalog?: ModelCatalogEntry[];
   modelCatalog?: ModelCatalogEntry[];
   sessionsResult?: SessionsListResult | null;
   sessionsResultAgentId?: string | null;
   defaultAgentId?: string;
   agentId?: string;
+  ownsModelOverride?: () => boolean;
 };
+
+function assertCurrentSlashCommand(context: SlashCommandContext): void {
+  if (context.isCurrent?.() === false) {
+    throw new Error("The Gateway connection changed. Retry the command.");
+  }
+}
+
+function requireSessionMutationAccess(
+  context: SlashCommandContext,
+  request: Parameters<typeof readSessionMethodAccess>[1],
+): void {
+  assertCurrentSlashCommand(context);
+  const access = readSessionMethodAccess(
+    context.readSessionAccessSnapshot?.() ?? context.sessionAccessSnapshot,
+    request,
+  );
+  if (!access.allowed) {
+    throw new Error(access.reason);
+  }
+}
+
+async function patchSession(
+  context: SlashCommandContext,
+  sessionKey: string,
+  patch: Parameters<typeof patchChatCommandSessionSettings>[2],
+  options?: Parameters<typeof patchChatCommandSessionSettings>[3],
+) {
+  const params = {
+    key: sessionKey,
+    ...selectedGlobalScope(sessionKey, context),
+    ...patch,
+  };
+  requireSessionMutationAccess(context, {
+    method: "sessions.patch",
+    params,
+  });
+  return await patchChatCommandSessionSettings(context, sessionKey, patch, options);
+}
 
 function normalizeVerboseLevel(raw?: string | null): "off" | "on" | "full" | undefined {
   if (!raw) {
@@ -172,10 +213,12 @@ async function executeCompact(
   context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   try {
-    const result = await context.sessions.compact(
-      sessionKey,
-      selectedGlobalScope(sessionKey, context),
-    );
+    const options = selectedGlobalScope(sessionKey, context);
+    requireSessionMutationAccess(context, {
+      method: "sessions.compact",
+      requiredScope: "operator.admin",
+    });
+    const result = await context.sessions.compact(sessionKey, options);
     if (result?.ok !== true) {
       const reason = typeof result?.reason === "string" ? result.reason.trim() : "";
       return {
@@ -261,35 +304,48 @@ async function executeModel(
 
   try {
     const requestedModel = args.trim();
-    const [patched, resolvedModelCatalog] = await Promise.all([
-      patchSession(context, sessionKey, {
+    const resolvedModelCatalog = modelCatalog
+      ? Promise.resolve(modelCatalog)
+      : loadModelCatalog(client, { allowFailure: true });
+    let resolvedOverride: ChatModelOverride | null = null;
+    await patchSession(
+      context,
+      sessionKey,
+      {
         model: requestedModel,
-      }),
-      modelCatalog
-        ? Promise.resolve(modelCatalog)
-        : loadModelCatalog(client, { allowFailure: true }),
-    ]);
-    const resolvedModel = patched.resolved?.model ?? requestedModel;
-    let resolvedValue = resolvePreferredServerChatModelValue(
-      resolvedModel,
-      patched.resolved?.modelProvider,
-      resolvedModelCatalog,
+      },
+      {
+        deferModelOverride: true,
+        ownsModelOverride: context.ownsModelOverride,
+        reconcile: async (result) => {
+          const resolvedModel = result.resolved?.model ?? requestedModel;
+          let resolvedValue = resolvePreferredServerChatModelValue(
+            resolvedModel,
+            result.resolved?.modelProvider,
+            await resolvedModelCatalog,
+          );
+          const requestedOverride = createChatModelOverride(requestedModel);
+          const resolvedProvider = result.resolved?.modelProvider?.trim();
+          if (
+            requestedOverride?.kind === "qualified" &&
+            resolvedProvider &&
+            resolvedValue &&
+            !resolvedValue.toLowerCase().startsWith(`${resolvedProvider.toLowerCase()}/`) &&
+            requestedOverride.value.toLowerCase().endsWith(`/${resolvedModel.trim().toLowerCase()}`)
+          ) {
+            resolvedValue = requestedOverride.value;
+          }
+          resolvedOverride = createChatModelOverride(resolvedValue);
+          if (context.ownsModelOverride?.() !== false) {
+            context.sessions.setModelOverride(sessionKey, resolvedOverride?.value ?? null);
+          }
+        },
+      },
     );
-    const requestedOverride = createChatModelOverride(requestedModel);
-    const resolvedProvider = patched.resolved?.modelProvider?.trim();
-    if (
-      requestedOverride?.kind === "qualified" &&
-      resolvedProvider &&
-      resolvedValue &&
-      !resolvedValue.toLowerCase().startsWith(`${resolvedProvider.toLowerCase()}/`) &&
-      requestedOverride.value.toLowerCase().endsWith(`/${resolvedModel.trim().toLowerCase()}`)
-    ) {
-      resolvedValue = requestedOverride.value;
-    }
     return {
       content: t("chat.commandResults.model.set", { model: `\`${requestedModel}\`` }),
       action: "refresh",
-      sessionPatch: { modelOverride: createChatModelOverride(resolvedValue) },
+      sessionPatch: { modelOverride: resolvedOverride },
     };
   } catch (err) {
     return {
@@ -762,8 +818,10 @@ async function resolveSteerTarget(
   };
 }
 
-function isActiveSteerSession(session: GatewaySessionRow | undefined): boolean {
-  return Boolean(session && isSessionRunActive(session));
+function isActiveSteerSession(
+  session: GatewaySessionRow | undefined,
+): session is GatewaySessionRow & { activeRunIds: [string] } {
+  return Boolean(session && isSessionRunActive(session) && session.activeRunIds?.length === 1);
 }
 
 type SteerChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
@@ -821,6 +879,7 @@ async function executeSteer(
         content: t("chat.commandResults.steer.noActiveRun"),
       };
     }
+    assertCurrentSlashCommand(context);
     const ackStatus = normalizeSteerChatSendAckStatus(
       await client.request("chat.send", {
         sessionKey: resolved.key,
@@ -828,6 +887,10 @@ async function executeSteer(
         message: resolved.message,
         deliver: false,
         queueMode: "steer",
+        expectedRunId: targetSession.activeRunIds[0],
+        ...(targetSession.activeLeafEntryId !== undefined
+          ? { expectedLeafEntryId: targetSession.activeLeafEntryId }
+          : {}),
         idempotencyKey: generateUUID(),
       }),
     );
@@ -863,6 +926,7 @@ async function executeRedirect(
           resolved.error === "empty" ? t("chat.commandResults.redirect.usage") : resolved.error,
       };
     }
+    assertCurrentSlashCommand(context);
     const resp = await context.sessions.steer(
       resolved.key,
       resolved.message,

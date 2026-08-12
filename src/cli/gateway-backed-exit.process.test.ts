@@ -1,10 +1,11 @@
 // Process coverage for one-shot Gateway CLI output followed by clean exit.
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -15,8 +16,10 @@ import {
   sendMinimalGatewayConnectChallenge,
   sendMinimalGatewayResponse,
 } from "../gateway/minimal-gateway.test-helpers.js";
+import { getFreePort } from "../test-utils/ports.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const execFileAsync = promisify(execFile);
 const activeChildren = new Set<ChildProcessWithoutNullStreams>();
 const activeServers = new Set<WebSocketServer>();
 
@@ -30,6 +33,7 @@ afterEach(async () => {
       }
     }),
   );
+  activeChildren.clear();
   await Promise.all(Array.from(activeServers, closeMinimalGatewayServer));
   activeServers.clear();
 });
@@ -73,6 +77,104 @@ async function startCronListGateway(token: string): Promise<{ url: string }> {
   await once(wss, "listening");
   const address = wss.address() as AddressInfo;
   return { url: `ws://127.0.0.1:${address.port}` };
+}
+
+async function startRateLimitedGateway(): Promise<{ url: string }> {
+  const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  activeServers.add(wss);
+  wss.on("connection", (ws) => {
+    sendMinimalGatewayConnectChallenge(ws);
+    ws.on("message", (data) => {
+      const frame = parseMinimalGatewayRequestFrame(data);
+      if (frame.type !== "req" || !frame.id || frame.method !== "connect") {
+        return;
+      }
+      const message = "unauthorized: too many failed authentication attempts (retry later)";
+      ws.send(
+        JSON.stringify({
+          type: "res",
+          id: frame.id,
+          ok: false,
+          error: {
+            code: "INVALID_REQUEST",
+            message,
+            retryable: true,
+            retryAfterMs: 60_000,
+            details: {
+              code: "AUTH_RATE_LIMITED",
+              authReason: "rate_limited",
+              recommendedNextStep: "wait_then_retry",
+            },
+          },
+        }),
+        () => ws.close(1008, message),
+      );
+    });
+  });
+  await once(wss, "listening");
+  const address = wss.address() as AddressInfo;
+  return { url: `ws://127.0.0.1:${address.port}` };
+}
+
+async function runIsolatedGatewayCli(params: {
+  args: string[];
+  root: string;
+  stateDir: string;
+  configPath: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<{
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+}> {
+  try {
+    const result = await execFileAsync(
+      process.execPath,
+      ["--import", "tsx", "src/entry.ts", ...params.args],
+      {
+        cwd: path.resolve("."),
+        env: {
+          ...process.env,
+          HOME: params.root,
+          USERPROFILE: params.root,
+          NODE_DISABLE_COMPILE_CACHE: "1",
+          NODE_ENV: undefined,
+          NODE_OPTIONS: undefined,
+          OPENCLAW_CONFIG_PATH: params.configPath,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_GATEWAY_PASSWORD: undefined,
+          OPENCLAW_GATEWAY_TOKEN: undefined,
+          OPENCLAW_GATEWAY_URL: undefined,
+          OPENCLAW_HOME: params.root,
+          OPENCLAW_NO_RESPAWN: "1",
+          OPENCLAW_STATE_DIR: params.stateDir,
+          VITEST: undefined,
+          ...params.env,
+        },
+        encoding: "utf8",
+        killSignal: "SIGKILL",
+        timeout: 20_000,
+      },
+    );
+    return { code: 0, signal: null, stdout: result.stdout, stderr: result.stderr };
+  } catch (error) {
+    const failure = error as Error & {
+      code?: number | string;
+      signal?: NodeJS.Signals;
+      stdout?: string;
+      stderr?: string;
+    };
+    if (typeof failure.code !== "number") {
+      throw error;
+    }
+    return {
+      code: failure.code,
+      signal: failure.signal ?? null,
+      stdout: failure.stdout ?? "",
+      stderr: failure.stderr ?? "",
+    };
+  }
 }
 
 describe("gateway-backed CLI process exit", () => {
@@ -162,4 +264,69 @@ describe("gateway-backed CLI process exit", () => {
     expect(stderr).toBe("");
     expect(JSON.parse(stdout)).toMatchObject({ jobs: [], total: 0 });
   }, 20_000);
+
+  it("keeps gateway auth failures machine-readable through the real health entry point", async () => {
+    const root = tempDirs.make("openclaw-gateway-auth-json-");
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const port = await getFreePort();
+    await fs.mkdir(stateDir, { recursive: true });
+
+    const result = await runIsolatedGatewayCli({
+      args: ["health", "--json", "--timeout", "250"],
+      root,
+      stateDir,
+      configPath,
+      env: { OPENCLAW_GATEWAY_PORT: String(port) },
+    });
+
+    expect(result, result.stderr).toMatchObject({ code: 1, signal: null, stderr: "" });
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      error: {
+        type: "gateway_credentials_required",
+        message: expect.stringContaining("requires"),
+      },
+    });
+  }, 30_000);
+
+  it("preserves pre-hello rate-limit details through the real health entry point", async () => {
+    const root = tempDirs.make("openclaw-gateway-rate-limit-json-");
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const gateway = await startRateLimitedGateway();
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        gateway: {
+          mode: "remote",
+          remote: { url: gateway.url, token: "test-token" },
+        },
+      }),
+    );
+
+    const result = await runIsolatedGatewayCli({
+      args: ["health", "--json", "--timeout", "2000"],
+      root,
+      stateDir,
+      configPath,
+    });
+
+    expect(result, result.stderr).toMatchObject({ code: 1, signal: null, stderr: "" });
+    expect(JSON.parse(result.stdout)).toEqual({
+      ok: false,
+      error: {
+        type: "gateway_request_error",
+        code: "AUTH_RATE_LIMITED",
+        message:
+          "Gateway authentication is temporarily rate-limited. Wait for the temporary lockout to expire, then retry.",
+        retryable: true,
+        retryAfterMs: 60_000,
+      },
+      gateway: { reachable: true },
+    });
+    expect(result.stdout).not.toContain("gateway.remote.token");
+    expect(result.stdout).not.toContain("devices rotate");
+  }, 30_000);
 });

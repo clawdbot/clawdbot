@@ -1,6 +1,7 @@
 // Control UI tests cover plugin catalog browsing and lifecycle mutations.
 import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { PluginsSearchResult } from "../../../../packages/gateway-protocol/src/schema/plugins.ts";
@@ -206,12 +207,7 @@ function readOnlyConnectResponse() {
   };
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected object value");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-object-value");
 
 function requestParams(request: MockGatewayRequest): Record<string, unknown> {
   return requireRecord(request.params);
@@ -405,8 +401,10 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await workboardCard.getByRole("button", { name: "Enable", exact: true }).waitFor();
       await captureScreenshot(page, "01-installed-desktop.png");
 
-      // Rows open a detail overlay; close it before continuing.
-      await workboardCard.click();
+      // The row's primary action is a real named button, so keyboard users can inspect plugins.
+      const detailsButton = workboardCard.getByRole("button", { name: "Workboard", exact: true });
+      await detailsButton.focus();
+      await page.keyboard.press("Enter");
       const detail = page.locator(".plugins-detail");
       await detail.waitFor({ state: "visible" });
       expect(await detail.textContent()).toContain("Workboard");

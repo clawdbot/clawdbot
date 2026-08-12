@@ -849,9 +849,20 @@ function buildOpenClawChromeLaunchArgs(params: {
   return args;
 }
 
-async function canOpenWebSocket(url: string, timeoutMs: number): Promise<boolean> {
+type ChromeCdpEndpointPin = NonNullable<Awaited<ReturnType<typeof assertCdpEndpointAllowed>>>;
+
+export type ChromeWebSocketEndpoint = {
+  url: string;
+  lookup?: ChromeCdpEndpointPin["lookup"];
+};
+
+async function canOpenWebSocket(
+  url: string,
+  timeoutMs: number,
+  lookup?: ChromeCdpEndpointPin["lookup"],
+): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
-    const ws = openCdpWebSocket(url, { handshakeTimeoutMs: timeoutMs });
+    const ws = openCdpWebSocket(url, { handshakeTimeoutMs: timeoutMs, lookup });
     ws.once("open", () => {
       ws.close();
       resolve(true);
@@ -868,10 +879,10 @@ export async function isChromeReachable(
   ssrfPolicy?: SsrFPolicy,
 ): Promise<boolean> {
   try {
-    await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
+    const configuredPin = await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
     if (isDirectCdpWebSocketEndpoint(cdpUrl)) {
       // Handshake-ready direct WS endpoint — probe via WS handshake.
-      return await canOpenWebSocket(cdpUrl, timeoutMs);
+      return await canOpenWebSocket(cdpUrl, timeoutMs, configuredPin?.lookup);
     }
     // Either an http(s) discovery URL or a bare ws/wss root. Try
     // /json/version discovery first. For bare ws/wss URLs, fall back to a
@@ -886,7 +897,7 @@ export async function isChromeReachable(
       return true;
     }
     if (isWebSocketUrl(cdpUrl)) {
-      return await canOpenWebSocket(cdpUrl, timeoutMs);
+      return await canOpenWebSocket(cdpUrl, timeoutMs, configuredPin?.lookup);
     }
     return false;
   } catch {
@@ -906,18 +917,18 @@ async function fetchChromeVersion(
   }
 }
 
-/** Resolve a usable Chrome DevTools WebSocket URL from a CDP endpoint. */
-export async function getChromeWebSocketUrl(
+/** Resolve a usable Chrome DevTools WebSocket endpoint from a CDP endpoint. */
+export async function getChromeWebSocketEndpoint(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
   ssrfPolicy?: SsrFPolicy,
-): Promise<string | null> {
-  await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
+): Promise<ChromeWebSocketEndpoint | null> {
+  const configuredPin = await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
   const cdpControlPolicy = scopeCdpPolicyToConfiguredEndpoint(cdpUrl, ssrfPolicy);
   if (isDirectCdpWebSocketEndpoint(cdpUrl)) {
     // Handshake-ready direct WebSocket endpoint — the cdpUrl is already
     // the WebSocket URL.
-    return cdpUrl;
+    return { url: cdpUrl, lookup: configuredPin?.lookup };
   }
   // Either an http(s) endpoint or a bare ws/wss root; discover the
   // actual WebSocket URL via /json/version. Normalise the scheme so
@@ -934,16 +945,16 @@ export async function getChromeWebSocketUrl(
     // The SSRF check on cdpUrl was already performed at the start of this
     // function, so we can return it directly.
     if (isWebSocketUrl(cdpUrl)) {
-      return cdpUrl;
+      return { url: cdpUrl, lookup: configuredPin?.lookup };
     }
     return null;
   }
   const normalizedWsUrl = normalizeCdpWsUrl(wsUrl, discoveryUrl);
-  await assertCdpEndpointAllowed(normalizedWsUrl, cdpControlPolicy, {
+  const discoveredPin = await assertCdpEndpointAllowed(normalizedWsUrl, cdpControlPolicy, {
     source: "discovered",
     configuredUrl: cdpUrl,
   });
-  return normalizedWsUrl;
+  return { url: normalizedWsUrl, lookup: discoveredPin?.lookup };
 }
 
 /** Return true when a Chrome CDP endpoint has a healthy WebSocket command path. */
@@ -1355,13 +1366,13 @@ export async function isChromeCdpOwnedByPid(
   ssrfPolicy?: SsrFPolicy,
 ): Promise<boolean> {
   try {
-    const wsUrl = await getChromeWebSocketUrl(cdpUrl, timeoutMs, ssrfPolicy);
-    if (!wsUrl) {
+    const endpoint = await getChromeWebSocketEndpoint(cdpUrl, timeoutMs, ssrfPolicy);
+    if (!endpoint) {
       return false;
     }
     let owned = false;
     await withCdpSocket(
-      wsUrl,
+      endpoint.url,
       async (send) => {
         owned = cdpProcessListOwnsBrowser(await send("SystemInfo.getProcessInfo"), pid);
       },
@@ -1369,6 +1380,7 @@ export async function isChromeCdpOwnedByPid(
         commandTimeoutMs: timeoutMs,
         handshakeRetries: 0,
         handshakeTimeoutMs: timeoutMs,
+        lookup: endpoint.lookup,
       },
     );
     return owned;
@@ -1387,15 +1399,15 @@ async function requestGracefulChromeClose(
   );
   let commandSent = false;
   try {
-    const wsUrl = await getChromeWebSocketUrl(
+    const endpoint = await getChromeWebSocketEndpoint(
       cdpUrlForPort(running.cdpPort),
       Math.min(commandTimeoutMs, CHROME_STOP_PROBE_TIMEOUT_MS),
     );
-    if (!wsUrl) {
+    if (!endpoint) {
       return false;
     }
     await withCdpSocket(
-      wsUrl,
+      endpoint.url,
       async (send) => {
         // The fixed port can be rebound while this handle remains retained.
         // Never ask a replacement browser to close on behalf of the old child.
@@ -1410,6 +1422,7 @@ async function requestGracefulChromeClose(
         commandTimeoutMs,
         handshakeTimeoutMs: commandTimeoutMs,
         handshakeRetries: 0,
+        lookup: endpoint.lookup,
       },
     );
     return commandSent;

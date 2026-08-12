@@ -3,7 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { validateSessionId } from "./paths.js";
-import type { SessionEntry } from "./types.js";
+import type { PendingTranscriptRepairState, SessionEntry } from "./types.js";
 
 // Persisted stores may contain old or malformed ids; reject path-like ids before use.
 function isSafeSessionId(value: unknown): value is string {
@@ -39,6 +39,7 @@ function normalizeOptionalTimestamp(value: unknown): number | undefined {
 /** Removes retired runtime locator fields before a session entry is persisted or returned. */
 export function projectCanonicalSessionEntryShape(value: Record<string, unknown>): SessionEntry {
   const {
+    icon: _retiredIcon,
     sessionFile: _retiredSessionFile,
     transcriptPath: _retiredTranscriptPath,
     pendingFinalDeliveryCreatedAt,
@@ -86,6 +87,22 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
     canonicalValue.pendingFinalDelivery = pendingFinalDelivery;
   } else {
     delete canonicalValue.pendingFinalDelivery;
+  }
+  const pendingDeliveryNotice = normalizePendingDeliveryNotice(
+    canonicalValue.pendingDeliveryNotice,
+  );
+  if (pendingDeliveryNotice) {
+    canonicalValue.pendingDeliveryNotice = pendingDeliveryNotice;
+  } else {
+    delete canonicalValue.pendingDeliveryNotice;
+  }
+  const pendingTranscriptRepair = normalizePendingTranscriptRepair(
+    canonicalValue.pendingTranscriptRepair,
+  );
+  if (pendingTranscriptRepair) {
+    canonicalValue.pendingTranscriptRepair = pendingTranscriptRepair;
+  } else {
+    delete canonicalValue.pendingTranscriptRepair;
   }
   const reason = normalizeOptionalString(fallbackNoticeReason);
   const fallbackNotice =
@@ -135,16 +152,94 @@ function normalizePendingFinalDelivery(
     return undefined;
   }
   const intentId = normalizeOptionalString(value.intentId);
+  const deliveries = normalizePendingFinalDeliveries(value.deliveries);
   const base = {
     createdAt,
     ...(isRecord(value.context) ? { context: value.context } : {}),
     ...(intentId ? { intentId } : {}),
+    ...(deliveries ? { deliveries } : {}),
   };
   if (value.kind === "transport-only") {
     return { kind: "transport-only", ...base };
   }
   const text = normalizeOptionalString(value.text);
   return value.kind === "replayable" && text ? { kind: "replayable", text, ...base } : undefined;
+}
+
+function normalizePendingFinalDeliveries(
+  value: unknown,
+): NonNullable<NonNullable<SessionEntry["pendingFinalDelivery"]>["deliveries"]> | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const deliveries: NonNullable<NonNullable<SessionEntry["pendingFinalDelivery"]>["deliveries"]> =
+    value.flatMap((item) => {
+      const id = isRecord(item) ? normalizeOptionalString(item.id) : undefined;
+      const state = isRecord(item) ? item.state : undefined;
+      return id &&
+        (state === "prepared" ||
+          state === "queued" ||
+          state === "delivered" ||
+          state === "suppressed" ||
+          state === "unknown")
+        ? [{ id, state }]
+        : [];
+    });
+  return deliveries.length > 0 ? deliveries : undefined;
+}
+
+function normalizePendingDeliveryNotice(
+  value: unknown,
+): SessionEntry["pendingDeliveryNotice"] | undefined {
+  if (!isRecord(value) || !isRecord(value.context)) {
+    return undefined;
+  }
+  const createdAt = normalizeOptionalTimestamp(value.createdAt);
+  const intentId = normalizeOptionalString(value.intentId);
+  return createdAt !== undefined &&
+    intentId &&
+    (value.state === "owed" || value.state === "unresolved")
+    ? { createdAt, context: value.context, intentId, state: value.state }
+    : undefined;
+}
+
+function normalizePendingTranscriptRepair(
+  value: unknown,
+): SessionEntry["pendingTranscriptRepair"] | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined;
+  }
+  const normalized: NonNullable<SessionEntry["pendingTranscriptRepair"]> = [];
+  for (const item of value) {
+    const record = normalizePendingTranscriptRepairRecord(item);
+    if (record) {
+      normalized.push(record);
+    }
+  }
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizePendingTranscriptRepairRecord(
+  value: unknown,
+): PendingTranscriptRepairState | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const id = normalizeOptionalString(value.id);
+  const text = normalizeOptionalString(value.text);
+  const createdAt = normalizeOptionalTimestamp(value.createdAt);
+  if (!id || !text || createdAt === undefined) {
+    return undefined;
+  }
+  const provider = normalizeOptionalString(value.provider);
+  const model = normalizeOptionalString(value.model);
+  return {
+    id,
+    text,
+    ...(provider ? { provider } : {}),
+    ...(model ? { model } : {}),
+    createdAt,
+  };
 }
 
 function normalizeFallbackNotice(value: unknown): SessionEntry["fallbackNotice"] | undefined {

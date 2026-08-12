@@ -7,10 +7,9 @@ import {
   validateSessionDiscussionOpenParams,
   validateSessionDiscussionOpenResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import { getSessionDiscussionProvider } from "../../plugins/session-discussion-registry.js";
 import { hasExplicitSessionName, maybeGenerateSessionTitle } from "../dashboard-session-title.js";
-import { readSessionTitleFieldsFromTranscript } from "../session-transcript-title-reader.js";
+import { formatForLog } from "../ws-log.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
@@ -30,20 +29,7 @@ async function maybeGenerateTitleBeforeDiscussionOpen(params: {
     });
     const { entry } = resolved;
     const sessionId = entry?.sessionId;
-    if (!entry || !sessionId || entry.systemSent === true || hasExplicitSessionName(entry)) {
-      return;
-    }
-    const fields = readSessionTitleFieldsFromTranscript({
-      agentId: resolved.target.agentId,
-      sessionEntry: entry,
-      sessionId,
-      sessionKey: resolved.canonicalKey,
-      storePath: resolved.storePath,
-    });
-    const userMessage = fields.firstUserMessage
-      ? stripInboundMetadata(fields.firstUserMessage).trim()
-      : "";
-    if (!userMessage) {
+    if (!entry || !sessionId || hasExplicitSessionName(entry)) {
       return;
     }
 
@@ -59,13 +45,19 @@ async function maybeGenerateTitleBeforeDiscussionOpen(params: {
       // the open request addresses the session through an alias key.
       sessionKey: resolved.canonicalKey,
       storePath: resolved.storePath,
-      userMessage,
+      userMessage: "",
     }).then(async (attempt) => {
       if (attempt.kind === "in-flight") {
         await attempt.settled.catch(() => {});
         return false;
       }
       return attempt.kind === "persisted";
+    });
+    const observedTitleRequest = titleRequest.catch((error: unknown) => {
+      params.context.logGateway.warn(
+        `dashboard session title generation failed: ${formatForLog(error)}`,
+      );
+      return false;
     });
     let timeout: NodeJS.Timeout | undefined;
     let persisted = false;
@@ -74,7 +66,7 @@ async function maybeGenerateTitleBeforeDiscussionOpen(params: {
     // picks up any title that completes after the timeout.
     try {
       persisted = await Promise.race([
-        titleRequest.catch(() => false),
+        observedTitleRequest,
         new Promise<boolean>((resolve) => {
           timeout = setTimeout(() => resolve(false), DISCUSSION_TITLE_TIMEOUT_MS);
           timeout.unref?.();
@@ -94,8 +86,11 @@ async function maybeGenerateTitleBeforeDiscussionOpen(params: {
         reason: "chat.title",
       });
     }
-  } catch {
+  } catch (error) {
     // Titling is best-effort; provider open remains the authoritative operation.
+    params.context.logGateway.warn(
+      `dashboard session title generation failed: ${formatForLog(error)}`,
+    );
   }
 }
 

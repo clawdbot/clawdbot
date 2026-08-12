@@ -30,12 +30,12 @@ vi.mock("./suite-runtime-agent-session.js", () => ({
 }));
 
 import { QA_CHILD_STDERR_TAIL_BYTES, QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
+import { runQaCli } from "./qa-cli-process.js";
 import {
   findManagedDreamingCronJob,
   listCronJobs,
   readDoctorMemoryStatus,
   runAgentPrompt,
-  runQaCli,
   startAgentRun,
   waitForAgentRun,
   waitForAgentHistoryReply,
@@ -60,6 +60,17 @@ function createMockEmitter() {
 
 function createSpawnedProcess(params: { pid?: number } = {}) {
   const child = createMockEmitter() as MockChildProcess;
+  const emit = child.emit.bind(child);
+  let exited = false;
+  child.emit = (eventName, ...args) => {
+    if (eventName === "exit") {
+      exited = true;
+    } else if (eventName === "close" && !exited) {
+      exited = true;
+      emit("exit", ...args);
+    }
+    return emit(eventName, ...args);
+  };
   child.pid = params.pid;
   child.stdout = createMockEmitter();
   child.stderr = createMockEmitter();
@@ -84,6 +95,49 @@ function firstGatewayCall(
   return gatewayCall.mock.calls[0] as [string, unknown, unknown] | undefined;
 }
 
+const QA_CLI_ENV = {
+  repoRoot: "/repo",
+  gateway: {
+    tempRoot: "/tmp/runtime",
+    runtimeEnv: { PATH: "/usr/bin" },
+  },
+  primaryModel: "openai/gpt-5.6-luna",
+  alternateModel: "openai/gpt-5.6-luna-mini",
+  providerMode: "mock-openai",
+} as unknown as Parameters<typeof runQaCli>[0];
+
+const QA_CLI_JSON_ENV = {
+  ...QA_CLI_ENV,
+  gateway: { tempRoot: "/tmp/runtime", runtimeEnv: {} },
+} as unknown as Parameters<typeof runQaCli>[0];
+
+function startMockQaCli(params: {
+  args: string[];
+  child?: MockChildProcess;
+  env?: Parameters<typeof runQaCli>[0];
+  options?: Parameters<typeof runQaCli>[2];
+}) {
+  const child = params.child ?? createSpawnedProcess();
+  spawnMock.mockReturnValue(child);
+  return {
+    child,
+    pending: runQaCli(params.env ?? QA_CLI_ENV, params.args, params.options),
+  };
+}
+
+function createAgentPromptEnv(gatewayCall: ReturnType<typeof vi.fn>) {
+  return {
+    gateway: { call: gatewayCall },
+    transport: {
+      buildAgentDelivery: vi.fn(() => ({
+        channel: "qa-channel",
+        replyChannel: "reply-channel",
+        replyTo: "reply-target",
+      })),
+    },
+  } as never;
+}
+
 describe("qa suite runtime agent process helpers", () => {
   beforeEach(() => {
     spawnMock.mockReset();
@@ -95,22 +149,7 @@ describe("qa suite runtime agent process helpers", () => {
   });
 
   it("runs the qa cli through the resolved node executable", async () => {
-    const child = createSpawnedProcess();
-    spawnMock.mockReturnValue(child);
-
-    const pending = runQaCli(
-      {
-        repoRoot: "/repo",
-        gateway: {
-          tempRoot: "/tmp/runtime",
-          runtimeEnv: { PATH: "/usr/bin" },
-        },
-        primaryModel: "openai/gpt-5.6-luna",
-        alternateModel: "openai/gpt-5.6-luna-mini",
-        providerMode: "mock-openai",
-      } as never,
-      ["qa", "suite"],
-    );
+    const { child, pending } = startMockQaCli({ args: ["qa", "suite"] });
 
     await waitForSpawnCount(1);
     child.stdout.emit("data", Buffer.from("ok\n"));
@@ -129,23 +168,10 @@ describe("qa suite runtime agent process helpers", () => {
   it("caps oversized qa cli timeout timers", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
-      const child = createSpawnedProcess();
-      spawnMock.mockReturnValue(child);
-
-      const pending = runQaCli(
-        {
-          repoRoot: "/repo",
-          gateway: {
-            tempRoot: "/tmp/runtime",
-            runtimeEnv: { PATH: "/usr/bin" },
-          },
-          primaryModel: "openai/gpt-5.6-luna",
-          alternateModel: "openai/gpt-5.6-luna-mini",
-          providerMode: "mock-openai",
-        } as never,
-        ["qa", "suite"],
-        { timeoutMs: Number.MAX_SAFE_INTEGER },
-      );
+      const { child, pending } = startMockQaCli({
+        args: ["qa", "suite"],
+        options: { timeoutMs: Number.MAX_SAFE_INTEGER },
+      });
 
       await waitForSpawnCount(1);
       expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
@@ -158,37 +184,95 @@ describe("qa suite runtime agent process helpers", () => {
   });
 
   it.runIf(process.platform !== "win32")("kills timed-out qa cli process groups", async () => {
-    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    let processGroupAlive = true;
+    const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      if (pid === -12345 && signal === "SIGKILL") {
+        processGroupAlive = false;
+      }
+      if (pid === -12345 && signal === 0 && !processGroupAlive) {
+        throw Object.assign(new Error("gone"), { code: "ESRCH" });
+      }
+      return true;
+    });
+    vi.useFakeTimers();
     try {
       const child = createSpawnedProcess({ pid: 12345 });
-      spawnMock.mockReturnValue(child);
-
-      const pending = runQaCli(
-        {
-          repoRoot: "/repo",
-          gateway: {
-            tempRoot: "/tmp/runtime",
-            runtimeEnv: { PATH: "/usr/bin" },
-          },
-          primaryModel: "openai/gpt-5.6-luna",
-          alternateModel: "openai/gpt-5.6-luna-mini",
-          providerMode: "mock-openai",
-        } as never,
-        ["qa", "suite"],
-        { timeoutMs: 1 },
+      const { pending } = startMockQaCli({
+        args: ["qa", "suite"],
+        child,
+        options: { timeoutMs: 1 },
+      });
+      const errorPromise = pending.catch((value: unknown) => value);
+      await Promise.resolve();
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      child.stdout.emit(
+        "data",
+        Buffer.from(
+          `stdout-head-marker\n${"x".repeat(QA_CHILD_STDOUT_MAX_BYTES)}\nstdout-tail-marker`,
+        ),
       );
-      const timeoutAssertion = expect(pending).rejects.toThrow(
-        "qa cli timed out: openclaw qa suite",
+      child.stderr.emit(
+        "data",
+        Buffer.from(
+          `stderr-head-marker\n${"x".repeat(QA_CHILD_STDERR_TAIL_BYTES)}\nstderr-tail-marker`,
+        ),
       );
+      await vi.advanceTimersByTimeAsync(1);
+      child.emit("exit", null, "SIGKILL");
+      child.emit("close", null, "SIGKILL");
 
-      await waitForSpawnCount(1);
-      await timeoutAssertion;
+      const error = await errorPromise;
+      expect(error).toMatchObject({ code: "qa_cli_timeout" });
+      const message = error instanceof Error ? error.message : String(error);
+      expect(message).toContain("qa cli timed out: openclaw qa suite");
+      expect(message).toContain("stdout:\n[qa cli stdout truncated to last");
+      expect(message).toContain("stdout-tail-marker");
+      expect(message).not.toContain("stdout-head-marker");
+      expect(message).toContain("stderr:\n[qa cli stderr truncated to last");
+      expect(message).toContain("stderr-tail-marker");
+      expect(message).not.toContain("stderr-head-marker");
       expect(killSpy).toHaveBeenCalledWith(-12345, "SIGKILL");
       expect(child.kill).not.toHaveBeenCalled();
     } finally {
+      vi.useRealTimers();
       killSpy.mockRestore();
     }
   });
+
+  it.runIf(process.platform !== "win32")(
+    "preserves a nonzero qa cli failure when process-group cleanup also fails",
+    async () => {
+      const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+        if (pid === -12345 && signal === "SIGKILL") {
+          throw Object.assign(new Error("cleanup denied"), { code: "EPERM" });
+        }
+        return true;
+      });
+      vi.useFakeTimers();
+      try {
+        const child = createSpawnedProcess({ pid: 12345 });
+        const { pending } = startMockQaCli({ args: ["qa", "suite"], child });
+        const errorPromise = pending.catch((value: unknown) => value);
+        await Promise.resolve();
+        child.stderr.emit("data", Buffer.from("suite failed\n"));
+        child.emit("exit", 7, null);
+        child.emit("close", 7, null);
+        await vi.advanceTimersByTimeAsync(500);
+
+        const error = await errorPromise;
+        expect(error).toBeInstanceOf(AggregateError);
+        expect(error).toMatchObject({ message: "qa cli command and settlement failed" });
+        const failures = error instanceof AggregateError ? error.errors : [];
+        expect(failures).toEqual([
+          expect.objectContaining({ message: "qa cli failed (7): suite failed" }),
+          expect.any(Error),
+        ]);
+      } finally {
+        vi.useRealTimers();
+        killSpy.mockRestore();
+      }
+    },
+  );
 
   it("force-kills timed-out Windows qa cli process trees with taskkill", async () => {
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -199,23 +283,12 @@ describe("qa suite runtime agent process helpers", () => {
     delete process.env.WINDIR;
     try {
       const child = createSpawnedProcess({ pid: 12345 });
-      spawnMock.mockReturnValue(child);
       spawnSyncMock.mockReturnValue({ status: 0 });
-
-      const pending = runQaCli(
-        {
-          repoRoot: "/repo",
-          gateway: {
-            tempRoot: "/tmp/runtime",
-            runtimeEnv: { PATH: "/usr/bin" },
-          },
-          primaryModel: "openai/gpt-5.6-luna",
-          alternateModel: "openai/gpt-5.6-luna-mini",
-          providerMode: "mock-openai",
-        } as never,
-        ["qa", "suite"],
-        { timeoutMs: 1 },
-      );
+      const { pending } = startMockQaCli({
+        args: ["qa", "suite"],
+        child,
+        options: { timeoutMs: 1 },
+      });
       const timeoutAssertion = expect(pending).rejects.toThrow(
         "qa cli timed out: openclaw qa suite",
       );
@@ -250,11 +323,8 @@ describe("qa suite runtime agent process helpers", () => {
   });
 
   it("merges isolated env overrides into qa cli runs", async () => {
-    const child = createSpawnedProcess();
-    spawnMock.mockReturnValue(child);
-
-    const pending = runQaCli(
-      {
+    const { child, pending } = startMockQaCli({
+      env: {
         repoRoot: "/repo",
         gateway: {
           tempRoot: "/tmp/runtime",
@@ -264,14 +334,14 @@ describe("qa suite runtime agent process helpers", () => {
         alternateModel: "openai/gpt-5.6-luna-mini",
         providerMode: "mock-openai",
       } as never,
-      ["openclaw", "-m", "overview"],
-      {
+      args: ["openclaw", "-m", "overview"],
+      options: {
         env: {
           OPENCLAW_STATE_DIR: "/tmp/isolated-state",
           OPENCLAW_CONFIG_PATH: "/tmp/isolated-state/openclaw.json",
         },
       },
-    );
+    });
 
     await waitForSpawnCount(1);
     child.stdout.emit("data", Buffer.from("ok\n"));
@@ -293,23 +363,11 @@ describe("qa suite runtime agent process helpers", () => {
   });
 
   it("parses json qa cli output when requested", async () => {
-    const child = createSpawnedProcess();
-    spawnMock.mockReturnValue(child);
-
-    const pending = runQaCli(
-      {
-        repoRoot: "/repo",
-        gateway: {
-          tempRoot: "/tmp/runtime",
-          runtimeEnv: {},
-        },
-        primaryModel: "openai/gpt-5.6-luna",
-        alternateModel: "openai/gpt-5.6-luna-mini",
-        providerMode: "mock-openai",
-      } as never,
-      ["memory", "search"],
-      { json: true },
-    );
+    const { child, pending } = startMockQaCli({
+      env: QA_CLI_JSON_ENV,
+      args: ["memory", "search"],
+      options: { json: true },
+    });
 
     await waitForSpawnCount(1);
     child.stdout.emit("data", Buffer.from('{"ok":true}\n'));
@@ -318,86 +376,57 @@ describe("qa suite runtime agent process helpers", () => {
     await expect(pending).resolves.toEqual({ ok: true });
   });
 
-  it("parses json qa cli output after colored startup logs", async () => {
-    const child = createSpawnedProcess();
-    spawnMock.mockReturnValue(child);
-
-    const pending = runQaCli(
-      {
-        repoRoot: "/repo",
-        gateway: {
-          tempRoot: "/tmp/runtime",
-          runtimeEnv: {},
-        },
-        primaryModel: "openai/gpt-5.6-luna",
-        alternateModel: "openai/gpt-5.6-luna-mini",
-        providerMode: "mock-openai",
-      } as never,
-      ["memory", "search", "--json"],
-      { json: true },
-    );
-
-    await waitForSpawnCount(1);
-    child.stdout.emit(
-      "data",
-      Buffer.from(
+  it.each([
+    {
+      title: "parses json qa cli output after colored startup logs",
+      stdout:
         '\u001b[35m[plugins]\u001b[39m \u001b[36mcodex loaded plugin package metadata\u001b[39m\n{"results":[{"text":"ORBIT-10"}]}\n',
-      ),
-    );
-    child.emit("close", 0);
-
-    await expect(pending).resolves.toEqual({ results: [{ text: "ORBIT-10" }] });
-  });
-
-  it("parses pretty json qa cli output after startup logs", async () => {
-    const child = createSpawnedProcess();
-    spawnMock.mockReturnValue(child);
-
-    const pending = runQaCli(
-      {
-        repoRoot: "/repo",
-        gateway: {
-          tempRoot: "/tmp/runtime",
-          runtimeEnv: {},
-        },
-        primaryModel: "openai/gpt-5.6-luna",
-        alternateModel: "openai/gpt-5.6-luna-mini",
-        providerMode: "mock-openai",
-      } as never,
-      ["memory", "search", "--json"],
-      { json: true },
-    );
+    },
+    {
+      title: "parses pretty json qa cli output after startup logs",
+      stdout:
+        '[plugins] memory-core loaded plugin package metadata\n{\n  "results": [\n    {\n      "text": "ORBIT-10"\n    }\n  ]\n}\n',
+    },
+    {
+      title: "parses pretty json qa cli output before trailing stdout logs",
+      stdout:
+        '[plugins] memory-core loaded plugin package metadata\n{\n  "results": [\n    {\n      "text": "ORBIT-10"\n    }\n  ]\n}\n[plugins] trailing diagnostic\n',
+    },
+    {
+      title: "ignores diagnostic json fragments before the qa cli payload",
+      stdout:
+        '[plugins] diagnostic context {"ok":true}\n{"results":[{"text":"ORBIT-10"}]}\n[plugins] trailing diagnostic\n',
+    },
+    {
+      title: "ignores leading json diagnostic records before the qa cli payload",
+      stdout:
+        '{"event":"startup-repair"}\n{"results":[{"text":"ORBIT-10"}]}\n[plugins] trailing diagnostic\n',
+    },
+    {
+      title: "ignores trailing json diagnostic records after the qa cli payload",
+      stdout:
+        '[plugins] memory-core loaded plugin package metadata\n{\n  "results": [\n    {\n      "text": "ORBIT-10"\n    }\n  ]\n}\n{"event":"cleanup"}\n',
+    },
+  ])("$title", async ({ stdout }) => {
+    const { child, pending } = startMockQaCli({
+      env: QA_CLI_JSON_ENV,
+      args: ["memory", "search", "--json"],
+      options: { json: true },
+    });
 
     await waitForSpawnCount(1);
-    child.stdout.emit(
-      "data",
-      Buffer.from(
-        '[plugins] memory-core loaded plugin package metadata\n{\n  "results": [\n    {\n      "text": "ORBIT-10"\n    }\n  ]\n}\n',
-      ),
-    );
+    child.stdout.emit("data", Buffer.from(stdout));
     child.emit("close", 0);
 
     await expect(pending).resolves.toEqual({ results: [{ text: "ORBIT-10" }] });
   });
 
   it("waits for stdio close before parsing qa cli stdout", async () => {
-    const child = createSpawnedProcess();
-    spawnMock.mockReturnValue(child);
-
-    const pending = runQaCli(
-      {
-        repoRoot: "/repo",
-        gateway: {
-          tempRoot: "/tmp/runtime",
-          runtimeEnv: {},
-        },
-        primaryModel: "openai/gpt-5.6-luna",
-        alternateModel: "openai/gpt-5.6-luna-mini",
-        providerMode: "mock-openai",
-      } as never,
-      ["memory", "search", "--json"],
-      { json: true },
-    );
+    const { child, pending } = startMockQaCli({
+      env: QA_CLI_JSON_ENV,
+      args: ["memory", "search", "--json"],
+      options: { json: true },
+    });
 
     await waitForSpawnCount(1);
     child.emit("exit", 0);
@@ -407,148 +436,12 @@ describe("qa suite runtime agent process helpers", () => {
     await expect(pending).resolves.toEqual({ results: [{ text: "LATE-STDOUT" }] });
   });
 
-  it("parses pretty json qa cli output before trailing stdout logs", async () => {
-    const child = createSpawnedProcess();
-    spawnMock.mockReturnValue(child);
-
-    const pending = runQaCli(
-      {
-        repoRoot: "/repo",
-        gateway: {
-          tempRoot: "/tmp/runtime",
-          runtimeEnv: {},
-        },
-        primaryModel: "openai/gpt-5.6-luna",
-        alternateModel: "openai/gpt-5.6-luna-mini",
-        providerMode: "mock-openai",
-      } as never,
-      ["memory", "search", "--json"],
-      { json: true },
-    );
-
-    await waitForSpawnCount(1);
-    child.stdout.emit(
-      "data",
-      Buffer.from(
-        '[plugins] memory-core loaded plugin package metadata\n{\n  "results": [\n    {\n      "text": "ORBIT-10"\n    }\n  ]\n}\n[plugins] trailing diagnostic\n',
-      ),
-    );
-    child.emit("close", 0);
-
-    await expect(pending).resolves.toEqual({ results: [{ text: "ORBIT-10" }] });
-  });
-
-  it("ignores diagnostic json fragments before the qa cli payload", async () => {
-    const child = createSpawnedProcess();
-    spawnMock.mockReturnValue(child);
-
-    const pending = runQaCli(
-      {
-        repoRoot: "/repo",
-        gateway: {
-          tempRoot: "/tmp/runtime",
-          runtimeEnv: {},
-        },
-        primaryModel: "openai/gpt-5.6-luna",
-        alternateModel: "openai/gpt-5.6-luna-mini",
-        providerMode: "mock-openai",
-      } as never,
-      ["memory", "search", "--json"],
-      { json: true },
-    );
-
-    await waitForSpawnCount(1);
-    child.stdout.emit(
-      "data",
-      Buffer.from(
-        '[plugins] diagnostic context {"ok":true}\n{"results":[{"text":"ORBIT-10"}]}\n[plugins] trailing diagnostic\n',
-      ),
-    );
-    child.emit("close", 0);
-
-    await expect(pending).resolves.toEqual({ results: [{ text: "ORBIT-10" }] });
-  });
-
-  it("ignores leading json diagnostic records before the qa cli payload", async () => {
-    const child = createSpawnedProcess();
-    spawnMock.mockReturnValue(child);
-
-    const pending = runQaCli(
-      {
-        repoRoot: "/repo",
-        gateway: {
-          tempRoot: "/tmp/runtime",
-          runtimeEnv: {},
-        },
-        primaryModel: "openai/gpt-5.6-luna",
-        alternateModel: "openai/gpt-5.6-luna-mini",
-        providerMode: "mock-openai",
-      } as never,
-      ["memory", "search", "--json"],
-      { json: true },
-    );
-
-    await waitForSpawnCount(1);
-    child.stdout.emit(
-      "data",
-      Buffer.from(
-        '{"event":"startup-repair"}\n{"results":[{"text":"ORBIT-10"}]}\n[plugins] trailing diagnostic\n',
-      ),
-    );
-    child.emit("close", 0);
-
-    await expect(pending).resolves.toEqual({ results: [{ text: "ORBIT-10" }] });
-  });
-
-  it("ignores trailing json diagnostic records after the qa cli payload", async () => {
-    const child = createSpawnedProcess();
-    spawnMock.mockReturnValue(child);
-
-    const pending = runQaCli(
-      {
-        repoRoot: "/repo",
-        gateway: {
-          tempRoot: "/tmp/runtime",
-          runtimeEnv: {},
-        },
-        primaryModel: "openai/gpt-5.6-luna",
-        alternateModel: "openai/gpt-5.6-luna-mini",
-        providerMode: "mock-openai",
-      } as never,
-      ["memory", "search", "--json"],
-      { json: true },
-    );
-
-    await waitForSpawnCount(1);
-    child.stdout.emit(
-      "data",
-      Buffer.from(
-        '[plugins] memory-core loaded plugin package metadata\n{\n  "results": [\n    {\n      "text": "ORBIT-10"\n    }\n  ]\n}\n{"event":"cleanup"}\n',
-      ),
-    );
-    child.emit("close", 0);
-
-    await expect(pending).resolves.toEqual({ results: [{ text: "ORBIT-10" }] });
-  });
-
   it("rejects oversized qa cli stdout instead of parsing truncated output", async () => {
-    const child = createSpawnedProcess();
-    spawnMock.mockReturnValue(child);
-
-    const pending = runQaCli(
-      {
-        repoRoot: "/repo",
-        gateway: {
-          tempRoot: "/tmp/runtime",
-          runtimeEnv: {},
-        },
-        primaryModel: "openai/gpt-5.6-luna",
-        alternateModel: "openai/gpt-5.6-luna-mini",
-        providerMode: "mock-openai",
-      } as never,
-      ["memory", "search", "--json"],
-      { json: true },
-    );
+    const { child, pending } = startMockQaCli({
+      env: QA_CLI_JSON_ENV,
+      args: ["memory", "search", "--json"],
+      options: { json: true },
+    });
 
     await waitForSpawnCount(1);
     child.stdout.emit("data", Buffer.alloc(QA_CHILD_STDOUT_MAX_BYTES + 1, "x"));
@@ -560,23 +453,11 @@ describe("qa suite runtime agent process helpers", () => {
   });
 
   it("keeps only a bounded qa cli stderr tail for failure diagnostics", async () => {
-    const child = createSpawnedProcess();
-    spawnMock.mockReturnValue(child);
-
-    const pending = runQaCli(
-      {
-        repoRoot: "/repo",
-        gateway: {
-          tempRoot: "/tmp/runtime",
-          runtimeEnv: {},
-        },
-        primaryModel: "openai/gpt-5.6-luna",
-        alternateModel: "openai/gpt-5.6-luna-mini",
-        providerMode: "mock-openai",
-      } as never,
-      ["memory", "search", "--json"],
-      { json: true },
-    );
+    const { child, pending } = startMockQaCli({
+      env: QA_CLI_JSON_ENV,
+      args: ["memory", "search", "--json"],
+      options: { json: true },
+    });
 
     await waitForSpawnCount(1);
     child.stderr.emit(
@@ -701,16 +582,7 @@ describe("qa suite runtime agent process helpers", () => {
       .fn()
       .mockResolvedValueOnce({ runId: "run-2" })
       .mockResolvedValueOnce({ status: "error", error: "boom" });
-    const env = {
-      gateway: { call: gatewayCall },
-      transport: {
-        buildAgentDelivery: vi.fn(() => ({
-          channel: "qa-channel",
-          replyChannel: "reply-channel",
-          replyTo: "reply-target",
-        })),
-      },
-    } as never;
+    const env = createAgentPromptEnv(gatewayCall);
 
     await expect(
       runAgentPrompt(env, {
@@ -721,20 +593,13 @@ describe("qa suite runtime agent process helpers", () => {
   });
 
   it("accepts completed agent wait status as a successful terminal run", async () => {
+    const terminalReply = { disposition: "visible" as const, text: "completed reply" };
+    const terminalDelivery = { status: "sent" as const, resultCount: 1 };
     const gatewayCall = vi
       .fn()
       .mockResolvedValueOnce({ runId: "run-completed" })
-      .mockResolvedValueOnce({ status: "completed" });
-    const env = {
-      gateway: { call: gatewayCall },
-      transport: {
-        buildAgentDelivery: vi.fn(() => ({
-          channel: "qa-channel",
-          replyChannel: "reply-channel",
-          replyTo: "reply-target",
-        })),
-      },
-    } as never;
+      .mockResolvedValueOnce({ status: "completed", terminalDelivery, terminalReply });
+    const env = createAgentPromptEnv(gatewayCall);
 
     await expect(
       runAgentPrompt(env, {
@@ -743,7 +608,7 @@ describe("qa suite runtime agent process helpers", () => {
       }),
     ).resolves.toEqual({
       started: { runId: "run-completed" },
-      waited: { status: "completed" },
+      waited: { status: "completed", terminalDelivery, terminalReply },
     });
   });
 
@@ -752,16 +617,7 @@ describe("qa suite runtime agent process helpers", () => {
       .fn()
       .mockResolvedValueOnce({ runId: "run-error-completed" })
       .mockResolvedValueOnce({ status: "error", error: "completed" });
-    const env = {
-      gateway: { call: gatewayCall },
-      transport: {
-        buildAgentDelivery: vi.fn(() => ({
-          channel: "qa-channel",
-          replyChannel: "reply-channel",
-          replyTo: "reply-target",
-        })),
-      },
-    } as never;
+    const env = createAgentPromptEnv(gatewayCall);
 
     await expect(
       runAgentPrompt(env, {
@@ -794,16 +650,7 @@ describe("qa suite runtime agent process helpers", () => {
           successfulToolCallCounts: { web_fetch: 1 },
           finalText: "",
         });
-      const env = {
-        gateway: { call: gatewayCall },
-        transport: {
-          buildAgentDelivery: vi.fn(() => ({
-            channel: "qa-channel",
-            replyChannel: "reply-channel",
-            replyTo: "reply-target",
-          })),
-        },
-      } as never;
+      const env = createAgentPromptEnv(gatewayCall);
 
       const pending = runAgentPrompt(env, {
         sessionKey: "session-transcript-evidence",
@@ -843,16 +690,7 @@ describe("qa suite runtime agent process helpers", () => {
           successfulToolCallCounts: {},
           finalText: "",
         });
-      const env = {
-        gateway: { call: gatewayCall },
-        transport: {
-          buildAgentDelivery: vi.fn(() => ({
-            channel: "qa-channel",
-            replyChannel: "reply-channel",
-            replyTo: "reply-target",
-          })),
-        },
-      } as never;
+      const env = createAgentPromptEnv(gatewayCall);
 
       const pending = runAgentPrompt(env, {
         sessionKey: "session-failed-tool-evidence",

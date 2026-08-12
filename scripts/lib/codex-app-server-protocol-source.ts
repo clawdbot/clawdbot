@@ -2,8 +2,9 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { zstdDecompressSync } from "node:zlib";
 import { expectDefined } from "../../packages/normalization-core/src/expect.js";
-import { resolvePnpmRunner } from "../pnpm-runner.mjs";
+import { resolvePnpmRunner } from "../pnpm-runner.mts";
 import { stageCodexAppServerProtocolArtifacts } from "./codex-app-server-protocol-artifacts.js";
 
 const PROTOCOL_SCHEMA_RELATIVE_PATH = "codex-rs/app-server-protocol/schema";
@@ -20,6 +21,10 @@ export const selectedCodexAppServerJsonSchemas = [
   "v2/TurnStartResponse.json",
 ] as const;
 
+export const codexAppServerSharedDefinitionsSchema = "v2/CodexAppServerProtocolDefinitions.json";
+
+const localDefinitionRefPrefix = "#/definitions/";
+
 type GeneratedCodexAppServerProtocolSource = {
   root: string;
   codexRepo: string;
@@ -34,6 +39,11 @@ type PnpmCommand = {
   env?: NodeJS.ProcessEnv;
   shell: boolean;
   windowsVerbatimArguments?: boolean;
+};
+
+type CargoProtocolFixtureCommand = {
+  args: string[];
+  env: NodeJS.ProcessEnv;
 };
 
 type ResolvePnpmCommandOptions = {
@@ -56,29 +66,39 @@ export function resolveCodexProtocolPnpmCommand(
     nodeExecPath: options.execPath ?? process.execPath,
     platform: options.platform,
     pnpmArgs: args,
-  });
+  }) as PnpmCommand;
   if (command.env === undefined) {
-    const invocation = { ...command };
+    const invocation: PnpmCommand = { ...command };
     delete invocation.env;
     return invocation;
   }
   return command;
 }
 
-export function buildCodexProtocolExportArgs(manifestPath: string, outDir: string): string[] {
-  return [
-    "run",
-    "--manifest-path",
-    manifestPath,
-    "-p",
-    "codex-app-server-protocol",
-    "--bin",
-    "export",
-    "--",
-    "--out",
-    outDir,
-    "--experimental",
-  ];
+export function buildCodexProtocolFixtureCommand(
+  manifestPath: string,
+  outDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): CargoProtocolFixtureCommand {
+  return {
+    args: [
+      "test",
+      "--manifest-path",
+      manifestPath,
+      "-p",
+      "codex-app-server-protocol",
+      "--lib",
+      "schema_fixtures_tests::write_schema_fixtures_from_env",
+      "--",
+      "--exact",
+      "--ignored",
+    ],
+    env: {
+      ...env,
+      CODEX_APP_SERVER_SCHEMA_ROOT: outDir,
+      CODEX_APP_SERVER_SCHEMA_EXPERIMENTAL: "1",
+    },
+  };
 }
 
 export function resolveCodexProtocolMinFreeBytes(env: NodeJS.ProcessEnv = process.env): number {
@@ -161,7 +181,7 @@ export async function generateExperimentalCodexAppServerProtocolSource(
 ): Promise<GeneratedCodexAppServerProtocolSource> {
   const { codexRepo } = await resolveCodexAppServerProtocolSource(repoRoot);
   await validateCodexProtocolSourceVersion({ codexRepo, repoRoot });
-  const root = await fs.mkdtemp(path.join(repoRoot, ".tmp-codex-app-server-protocol-"));
+  const root = await fs.mkdtemp(path.join(repoRoot, "codex-protocol-tmp-"));
   const generatedRoot = path.join(root, "generated");
   const typescriptRoot = path.join(root, "typescript");
   const jsonRoot = path.join(root, "json");
@@ -171,8 +191,12 @@ export async function generateExperimentalCodexAppServerProtocolSource(
   };
 
   try {
-    await assertCodexProtocolGenerationHeadroom({ codexRepo, repoRoot });
-    runCargoProtocolGenerator(codexRepo, buildCodexProtocolExportArgs(manifestPath, generatedRoot));
+    await assertCodexProtocolGenerationHeadroom({ codexRepo, repoRoot: root });
+    runCargoProtocolGenerator(
+      codexRepo,
+      buildCodexProtocolFixtureCommand(manifestPath, generatedRoot),
+    );
+    await materializeCodexProtocolPrecomputedExports(generatedRoot);
     await stageCodexAppServerProtocolArtifacts(generatedRoot, { jsonRoot, typescriptRoot });
     formatGeneratedTypeScript(repoRoot, typescriptRoot);
   } catch (error) {
@@ -187,6 +211,44 @@ export async function generateExperimentalCodexAppServerProtocolSource(
     jsonRoot,
     cleanup,
   };
+}
+
+export async function materializeCodexProtocolPrecomputedExports(root: string): Promise<void> {
+  const archivePath = path.join(root, "precomputed/app-server-exports-experimental.json.zst");
+  const decoded = JSON.parse(
+    zstdDecompressSync(await fs.readFile(archivePath)).toString("utf8"),
+  ) as unknown;
+  if (!isPlainObject(decoded)) {
+    throw new Error("Codex experimental protocol export must be an object");
+  }
+  const artifacts = [
+    ...readCodexProtocolArtifactMap(decoded.typescript, "typescript"),
+    ...readCodexProtocolArtifactMap(decoded.json_schema, "json_schema"),
+  ];
+  await fs.rm(root, { recursive: true, force: true });
+  await Promise.all(
+    artifacts.map(async ([relativePath, content]) => {
+      const targetPath = path.resolve(root, relativePath);
+      const rootPrefix = `${path.resolve(root)}${path.sep}`;
+      if (!targetPath.startsWith(rootPrefix)) {
+        throw new Error(`Codex protocol export path escapes output root: ${relativePath}`);
+      }
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      await fs.writeFile(targetPath, content);
+    }),
+  );
+}
+
+function readCodexProtocolArtifactMap(value: unknown, label: string): Array<[string, string]> {
+  if (!isPlainObject(value)) {
+    throw new Error(`Codex experimental protocol ${label} export must be an object`);
+  }
+  return Object.entries(value).map(([relativePath, content]) => {
+    if (typeof content !== "string") {
+      throw new Error(`Codex experimental protocol ${label} export ${relativePath} must be text`);
+    }
+    return [relativePath, content];
+  });
 }
 
 export function readCargoWorkspacePackageVersion(manifest: string): string | undefined {
@@ -317,16 +379,19 @@ async function resolveExistingStatfsPath(targetPath: string): Promise<string> {
   }
 }
 
-function runCargoProtocolGenerator(codexRepo: string, args: string[]): void {
-  const result = spawnSync("cargo", args, {
+function runCargoProtocolGenerator(codexRepo: string, command: CargoProtocolFixtureCommand): void {
+  const result = spawnSync("cargo", command.args, {
     cwd: codexRepo,
+    env: command.env,
     stdio: "inherit",
   });
   if (result.error) {
     throw new Error(`Failed to start cargo: ${result.error.message}`, { cause: result.error });
   }
   if (result.status !== 0) {
-    throw new Error(`cargo ${args.join(" ")} failed with exit code ${result.status ?? "unknown"}`);
+    throw new Error(
+      `cargo ${command.args.join(" ")} failed with exit code ${result.status ?? "unknown"}`,
+    );
   }
 }
 
@@ -402,6 +467,161 @@ export function normalizeCodexAppServerProtocolJsonText(text: string): string {
 
 export function formatCodexAppServerProtocolJsonText(text: string): string {
   return `${JSON.stringify(canonicalizeCodexAppServerProtocolJson(JSON.parse(text)), null, 2)}\n`;
+}
+
+/**
+ * Factors definitions shared by the selected Codex schemas into one generated
+ * document. Each compact schema remains standard JSON Schema by referencing
+ * that sibling document; consumers can expand it back to the upstream shape.
+ */
+export function compactCodexAppServerProtocolJsonSchemas(
+  schemas: ReadonlyMap<string, unknown>,
+): Map<string, unknown> {
+  const sharedDefinitions: Record<string, unknown> = {};
+  const compacted = new Map<string, unknown>();
+
+  for (const schemaPath of selectedCodexAppServerJsonSchemas) {
+    const schema = schemas.get(schemaPath);
+    if (!isPlainObject(schema)) {
+      throw new Error(`Codex app-server schema ${schemaPath} must be a JSON object`);
+    }
+    const definitions = schema.definitions;
+    if (definitions !== undefined && !isPlainObject(definitions)) {
+      throw new Error(`Codex app-server schema ${schemaPath} definitions must be an object`);
+    }
+    for (const [name, definition] of Object.entries(definitions ?? {})) {
+      const existing = sharedDefinitions[name];
+      if (
+        existing !== undefined &&
+        JSON.stringify(canonicalizeCodexAppServerProtocolJson(existing)) !==
+          JSON.stringify(canonicalizeCodexAppServerProtocolJson(definition))
+      ) {
+        throw new Error(`Codex app-server shared definition ${name} differs across schemas`);
+      }
+      sharedDefinitions[name] = definition;
+    }
+
+    const { definitions: _definitions, ...root } = schema;
+    const relativeBundlePath = path.posix.relative(
+      path.posix.dirname(schemaPath),
+      codexAppServerSharedDefinitionsSchema,
+    );
+    const bundleRefPrefix = `${relativeBundlePath.startsWith(".") ? "" : "./"}${relativeBundlePath}${localDefinitionRefPrefix}`;
+    compacted.set(
+      schemaPath,
+      canonicalizeCodexAppServerProtocolJson(
+        rewriteSchemaRefs(root, localDefinitionRefPrefix, bundleRefPrefix),
+      ),
+    );
+  }
+
+  compacted.set(
+    codexAppServerSharedDefinitionsSchema,
+    canonicalizeCodexAppServerProtocolJson({
+      $schema: "http://json-schema.org/draft-07/schema#",
+      definitions: sharedDefinitions,
+      title: "CodexAppServerProtocolDefinitions",
+      type: "object",
+    }),
+  );
+  return compacted;
+}
+
+/** Reconstructs one compact schema exactly as emitted by the pinned exporter. */
+export function expandCodexAppServerProtocolJsonSchema(params: {
+  schema: unknown;
+  schemaPath: string;
+  sharedSchema: unknown;
+}): unknown {
+  if (!isPlainObject(params.schema) || !isPlainObject(params.sharedSchema)) {
+    throw new Error(`Codex app-server compact schema ${params.schemaPath} must be a JSON object`);
+  }
+  const sharedDefinitions = params.sharedSchema.definitions;
+  if (!isPlainObject(sharedDefinitions)) {
+    throw new Error("Codex app-server shared definitions schema must contain definitions");
+  }
+
+  const relativeBundlePath = path.posix.relative(
+    path.posix.dirname(params.schemaPath),
+    codexAppServerSharedDefinitionsSchema,
+  );
+  const bundleRefPrefix = `${relativeBundlePath.startsWith(".") ? "" : "./"}${relativeBundlePath}${localDefinitionRefPrefix}`;
+  const root = rewriteSchemaRefs(params.schema, bundleRefPrefix, localDefinitionRefPrefix);
+  if (!isPlainObject(root)) {
+    throw new Error(
+      `Codex app-server compact schema ${params.schemaPath} must remain a JSON object`,
+    );
+  }
+  const reachable = collectDefinitionNames(root, localDefinitionRefPrefix);
+  const pending = [...reachable];
+  while (pending.length > 0) {
+    const name = pending.pop();
+    if (name === undefined) {
+      continue;
+    }
+    const definition = sharedDefinitions[name];
+    if (definition === undefined) {
+      throw new Error(`Codex app-server shared definition ${name} is missing`);
+    }
+    for (const dependency of collectDefinitionNames(definition, localDefinitionRefPrefix)) {
+      if (!reachable.has(dependency)) {
+        reachable.add(dependency);
+        pending.push(dependency);
+      }
+    }
+  }
+
+  if (reachable.size === 0) {
+    return canonicalizeCodexAppServerProtocolJson(root);
+  }
+  const definitions = Object.fromEntries(
+    Object.entries(sharedDefinitions).filter(([name]) => reachable.has(name)),
+  );
+  return canonicalizeCodexAppServerProtocolJson({ ...root, definitions });
+}
+
+function rewriteSchemaRefs(value: unknown, fromPrefix: string, toPrefix: string): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => rewriteSchemaRefs(entry, fromPrefix, toPrefix));
+  }
+  if (!isPlainObject(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [
+      key,
+      key === "$ref" && typeof entry === "string" && entry.startsWith(fromPrefix)
+        ? `${toPrefix}${entry.slice(fromPrefix.length)}`
+        : rewriteSchemaRefs(entry, fromPrefix, toPrefix),
+    ]),
+  );
+}
+
+function collectDefinitionNames(
+  value: unknown,
+  refPrefix: string,
+  names = new Set<string>(),
+): Set<string> {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectDefinitionNames(entry, refPrefix, names);
+    }
+    return names;
+  }
+  if (!isPlainObject(value)) {
+    return names;
+  }
+  const reference = value.$ref;
+  if (typeof reference === "string" && reference.startsWith(refPrefix)) {
+    const encodedName = reference.slice(refPrefix.length).split("/", 1)[0];
+    if (encodedName) {
+      names.add(encodedName.replaceAll("~1", "/").replaceAll("~0", "~"));
+    }
+  }
+  for (const entry of Object.values(value)) {
+    collectDefinitionNames(entry, refPrefix, names);
+  }
+  return names;
 }
 
 function sortCodexProtocolJsonArrayByType(items: unknown[]): unknown[] {

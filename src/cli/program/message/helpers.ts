@@ -7,17 +7,25 @@ import {
 } from "../../../channels/plugins/types.public.js";
 import { resolveMessageSecretScope } from "../../../cli/message-secret-scope.js";
 import { messageCommand } from "../../../commands/message.js";
+import { getRuntimeConfig } from "../../../config/config.js";
 import { danger, setVerbose } from "../../../globals.js";
 import { CHANNEL_TARGET_DESCRIPTION } from "../../../infra/outbound/channel-target.js";
 import {
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
 } from "../../../infra/parse-finite-number.js";
+import { withActivatedPluginIds } from "../../../plugins/activation-context.js";
+import {
+  resolveConfiguredChannelPluginIds,
+  resolveDiscoverableScopedChannelPluginIds,
+} from "../../../plugins/channel-plugin-ids.js";
 import { runGlobalGatewayStopSafely } from "../../../plugins/hook-runner-global.js";
+import { loadPluginRegistryHandle } from "../../../plugins/loader.js";
+import type { PluginRegistry } from "../../../plugins/registry-types.js";
+import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { runCommandWithRuntime } from "../../cli-utils.js";
 import { createDefaultDeps } from "../../deps.js";
-import { ensurePluginRegistryLoaded, type PluginRegistryScope } from "../../plugin-registry.js";
 
 /** Shared helpers used by every message subcommand registration. */
 export type MessageCliHelpers = {
@@ -42,10 +50,7 @@ const STRICT_NON_NEGATIVE_INTEGER_OPTIONS = new Map([
   ["deleteDays", "--delete-days"],
 ]);
 
-type MessagePluginLoadOptions = { scope: PluginRegistryScope; onlyChannelIds?: string[] };
-type MessagePluginPreloadPlan =
-  | { preload: true; loadOptions: MessagePluginLoadOptions }
-  | { preload: false };
+type MessagePluginPreloadPlan = { preload: true; channelId?: string } | { preload: false };
 
 function normalizeMessageOptions(opts: Record<string, unknown>): Record<string, unknown> {
   const { account, ...rest } = opts;
@@ -127,9 +132,6 @@ function resolveMessagePluginPreloadPlan(
   opts: Record<string, unknown>,
 ): MessagePluginPreloadPlan {
   const scopedChannel = resolveScopedMessageChannel(opts);
-  const loadOptions = scopedChannel
-    ? { scope: "configured-channels" as const, onlyChannelIds: [scopedChannel] }
-    : { scope: "configured-channels" as const };
   // Gateway-owned actions can execute without loading channel plugins in the CLI process;
   // dry-runs, broadcasts, and local actions need registry metadata before building payloads.
   if (
@@ -137,7 +139,7 @@ function resolveMessagePluginPreloadPlan(
     ACTIONS_REQUIRING_CONFIGURED_CHANNEL_PRELOAD.has(action) ||
     !isGatewayOwnedMessageAction(action, scopedChannel)
   ) {
-    return { preload: true, loadOptions };
+    return { preload: true, ...(scopedChannel ? { channelId: scopedChannel } : {}) };
   }
   return { preload: false };
 }
@@ -163,23 +165,48 @@ export function createMessageCliHelpers(
   const runMessageAction = async (action: string, opts: Record<string, unknown>) => {
     setVerbose(Boolean(opts.verbose));
     let failed = false;
+    let pluginRegistry: PluginRegistry | undefined;
     await runCommandWithRuntime(
       defaultRuntime,
       async () => {
         validateMessageNumericOptions(opts);
+        if (action === "poll" && opts.pollAnonymous === true && opts.pollPublic === true) {
+          throw new Error("--poll-anonymous and --poll-public are mutually exclusive.");
+        }
         const preloadPlan = resolveMessagePluginPreloadPlan(action, opts);
         if (preloadPlan.preload) {
-          ensurePluginRegistryLoaded(preloadPlan.loadOptions);
+          const config = getRuntimeConfig();
+          const pluginIds = preloadPlan.channelId
+            ? resolveDiscoverableScopedChannelPluginIds({
+                config,
+                activationSourceConfig: config,
+                channelIds: [preloadPlan.channelId],
+                env: process.env,
+              })
+            : resolveConfiguredChannelPluginIds({
+                config,
+                activationSourceConfig: config,
+                env: process.env,
+              });
+          const activatedConfig = withActivatedPluginIds({ config, pluginIds }) ?? config;
+          pluginRegistry = loadPluginRegistryHandle({
+            config: activatedConfig,
+            activationSourceConfig: activatedConfig,
+            onlyPluginIds: pluginIds,
+            throwOnLoadError: true,
+          });
         }
         const deps = createDefaultDeps();
-        await messageCommand(
-          {
-            ...normalizeMessageOptions(opts),
-            action,
-          },
-          deps,
-          defaultRuntime,
-        );
+        const run = () =>
+          messageCommand(
+            {
+              ...normalizeMessageOptions(opts),
+              action,
+            },
+            deps,
+            defaultRuntime,
+          );
+        await withPluginRuntimeRegistryScope(pluginRegistry, run);
       },
       (err) => {
         failed = true;
@@ -188,7 +215,7 @@ export function createMessageCliHelpers(
     );
     // Outbound actions may start plugin-side resources; run bounded stop hooks even after failure.
     if (!ACTIONS_WITHOUT_STOP_HOOKS.has(action)) {
-      await runPluginStopHooks();
+      await withPluginRuntimeRegistryScope(pluginRegistry, runPluginStopHooks);
     }
     defaultRuntime.exit(failed ? 1 : 0);
   };

@@ -1,5 +1,5 @@
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
-import { nextWakeAtMs, recomputeNextRunsForMaintenance } from "./jobs.js";
+import { nextWakeAtMs, recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import { emitCronRunFinished } from "./ops-run-preparation.js";
 import { cancelCronRunAdmissionWaiters } from "./run-admission.js";
@@ -9,8 +9,8 @@ import {
   restoreFinalizedStartupRun,
   STARTUP_INTERRUPTED_ERROR,
 } from "./startup-run-repair.js";
-import type { CronServiceState } from "./state.js";
-import { ensureLoaded, persist } from "./store.js";
+import type { CronServiceState, DeferredCronNotifications } from "./state.js";
+import { ensureLoaded, persist, pruneCronJobScratchAfterCommit } from "./store.js";
 import { tryFindCronTaskRunIdForRecovery, tryFindFinalizedCronTaskRun } from "./task-runs.js";
 import { armTimer, runMissedJobs, stopTimer } from "./timer.js";
 
@@ -26,6 +26,7 @@ export async function start(state: CronServiceState) {
   const interruptedRuns: InterruptedStartupRun[] = [];
   const completedJobIdsToDelete = new Set<string>();
   let repairedAnyStartupRun = false;
+  const postPersistNotifications: DeferredCronNotifications = [];
   await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
     if (state.stopped) {
@@ -56,17 +57,24 @@ export async function start(state: CronServiceState) {
             entry: finalized.entry,
             ...(finalized.scriptResult ? { scriptResult: finalized.scriptResult } : {}),
             ...(finalized.triggerEval ? { triggerEval: finalized.triggerEval } : {}),
+            deferredNotifications: postPersistNotifications,
           });
-          // Skip only the old invocation; a distinct overdue replacement
-          // must remain eligible for normal one-shot startup catch-up.
-          if (repaired.replacementAtMs === undefined) {
-            interruptedJobIds.add(job.id);
+          if (repaired) {
+            // Skip only the old invocation; a distinct overdue replacement
+            // must remain eligible for normal one-shot startup catch-up.
+            if (repaired.replacementAtMs === undefined) {
+              interruptedJobIds.add(job.id);
+            }
+            if (repaired.shouldDelete) {
+              completedJobIdsToDelete.add(job.id);
+            }
+            repairedAnyStartupRun = true;
+            continue;
           }
-          if (repaired.shouldDelete) {
-            completedJobIdsToDelete.add(job.id);
-          }
-          repairedAnyStartupRun = true;
-          continue;
+          state.deps.log.warn(
+            { jobId: job.id },
+            "cron: treating invalid finalized startup run as interrupted",
+          );
         }
         const nowMs = state.deps.nowMs();
         const interrupted = markInterruptedStartupRun({
@@ -75,6 +83,7 @@ export async function start(state: CronServiceState) {
           taskRunId,
           runningAtMs,
           nowMs,
+          deferredNotifications: postPersistNotifications,
         });
         if (interrupted.replacementAtMs === undefined) {
           interruptedJobIds.add(job.id);
@@ -87,7 +96,15 @@ export async function start(state: CronServiceState) {
       state.store.jobs = jobs.filter((job) => !completedJobIdsToDelete.has(job.id));
     }
     if (repairedAnyStartupRun || jobs.length > 0) {
-      await persist(state, repairedAnyStartupRun ? undefined : { stateOnly: true });
+      // Recovery notifications describe repaired durable rows, so never
+      // publish them until the startup write has committed successfully.
+      const persisted = await persist(state, {
+        ...(repairedAnyStartupRun ? {} : { stateOnly: true }),
+        postPersistNotifications,
+      });
+      if (persisted) {
+        pruneCronJobScratchAfterCommit(state, completedJobIdsToDelete);
+      }
     }
   });
 
@@ -107,9 +124,15 @@ export async function start(state: CronServiceState) {
     if (state.stopped) {
       return;
     }
-    const changed = recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
+    const postPersistMaintenanceNotifications: DeferredCronNotifications = [];
+    const changed = recomputeNextRunsForMaintenance(state, {
+      recomputeExpired: true,
+      deferredNotifications: postPersistMaintenanceNotifications,
+    });
     if (changed) {
-      await persist(state);
+      await persist(state, {
+        postPersistNotifications: postPersistMaintenanceNotifications,
+      });
     }
     for (const interrupted of interruptedRuns) {
       const job = state.store?.jobs.find((entry) => entry.id === interrupted.jobId);

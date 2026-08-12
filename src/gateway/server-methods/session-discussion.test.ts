@@ -174,7 +174,7 @@ describe("session discussion gateway methods", () => {
         sessionId: "session-1",
         sessionKey,
         storePath,
-        userMessage: "Plan the release",
+        userMessage: "",
       }),
     );
     expect(persistedEntry?.displayName).toBe("Release Planning");
@@ -185,6 +185,26 @@ describe("session discussion gateway methods", () => {
       expect.anything(),
       expect.objectContaining({ sessionKey, agentId: "main", reason: "chat.title" }),
     );
+  });
+
+  it("attempts a title when system prompt state already exists", async () => {
+    const entry: SessionEntry = { sessionId: "session-1", updatedAt: 1, systemSent: true };
+    mockSession(entry);
+    mocks.readSessionTitleFields.mockReturnValue({
+      firstUserMessage: "Plan the release",
+      lastMessagePreview: null,
+    });
+    mocks.updateSessionEntry.mockImplementation(async (_scope, update) => {
+      const patch = await update({ ...entry });
+      return patch ? { ...entry, ...patch } : entry;
+    });
+    const registered = provider();
+    mocks.getProvider.mockReturnValue(registered.value);
+
+    await invoke("session.discussion.open", { sessionKey });
+
+    expect(mocks.maybeGenerateSessionTitle).toHaveBeenCalledOnce();
+    expect(mocks.generateConversationLabelWithFallback).toHaveBeenCalledOnce();
   });
 
   it("titles via the canonical session key when opened through an alias key", async () => {

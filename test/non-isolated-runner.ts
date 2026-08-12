@@ -1,7 +1,7 @@
 // Non-isolated runner helps execute tests without Vitest isolation.
-import fs from "node:fs";
 import path from "node:path";
 import { TestRunner, type RunnerTask, type RunnerTestFile, vi } from "vitest";
+import { resetAgentEventsForTest } from "../src/infra/agent-events.js";
 import { clearNamedPluginRuntimeStoresForTest } from "../src/plugin-sdk/runtime-store-registry.js";
 
 type EvaluatedModuleNode = {
@@ -32,6 +32,7 @@ const DIAGNOSTIC_EVENTS_STATE = Symbol.for("openclaw.diagnosticEvents.state.v1")
 const DIAGNOSTIC_EVENT_LISTENER_PRESENCE = Symbol.for(
   "openclaw.diagnosticEventListenerPresence.v1",
 );
+const SESSION_SUSPENSION_TEST_API = Symbol.for("openclaw.sessionSuspensionTestApi");
 const nativeTimerGlobals = {
   setTimeout: globalThis.setTimeout,
   clearTimeout: globalThis.clearTimeout,
@@ -151,6 +152,10 @@ type DiagnosticEventsStateForTest = {
   asyncQueue?: unknown[];
 };
 
+type SessionSuspensionTestApi = {
+  resetSessionSuspensionStateForTest?: () => void;
+};
+
 function runCleanupActions(actions: CleanupAction[]): unknown {
   let firstError: unknown;
   for (const action of actions) {
@@ -247,6 +252,12 @@ function resetOpenClawGlobalDiagnosticState(): void {
   }
 }
 
+function resetOpenClawSessionSuspensionState(): void {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const api = globalStore[SESSION_SUSPENSION_TEST_API] as SessionSuspensionTestApi | undefined;
+  api?.resetSessionSuspensionStateForTest?.();
+}
+
 const SERIALIZED_RESOLVE_MOCKS = Symbol.for("openclaw.serializedResolveMocks");
 
 // Vitest's BareModuleMocker.resolveMocks has no in-flight guard: pendingIds is
@@ -315,10 +326,6 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     restoreRealTimers();
     restoreNativeTimerGlobals();
     restoreSharedTestHomeAfterEnvUnstub(getSharedTestHome());
-    const orderLogPath = process.env.OPENCLAW_VITEST_FILE_ORDER_LOG?.trim();
-    if (orderLogPath) {
-      fs.appendFileSync(orderLogPath, `START ${file.filepath}\n`);
-    }
   }
 
   override async onBeforeRunTask(test: RunnerTask) {
@@ -340,17 +347,10 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
   // the next file's vi.mock factories silently never applied. The worker loop
   // calls startTests per file, so this hook runs after every file regardless
   // of its collect/run outcome.
-  override onAfterRunFiles(files?: RunnerTestFile[]) {
+  override onAfterRunFiles() {
     super.onAfterRunFiles();
     if (this.config.isolate) {
       return;
-    }
-
-    const orderLogPath = process.env.OPENCLAW_VITEST_FILE_ORDER_LOG?.trim();
-    if (orderLogPath) {
-      for (const file of files ?? []) {
-        fs.appendFileSync(orderLogPath, `END ${file.filepath}\n`);
-      }
     }
 
     // Mirror the missing cleanup from Vitest isolate mode so shared workers do
@@ -363,7 +363,9 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     restoreSharedTestHomeAfterEnvUnstub(testHome);
     vi.clearAllMocks();
     resetOpenClawGlobalRunState();
+    resetAgentEventsForTest();
     resetOpenClawGlobalDiagnosticState();
+    resetOpenClawSessionSuspensionState();
     // Named plugin runtimes intentionally survive duplicate module evaluation in production.
     // Clear their shared slots here so one test file cannot lend a partial runtime to the next.
     clearNamedPluginRuntimeStoresForTest();

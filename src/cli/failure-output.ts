@@ -12,7 +12,16 @@ type FormatCliFailureOptions = {
 };
 
 function hasDebugArg(argv: string[] | undefined): boolean {
-  return Boolean(argv?.some((arg) => arg === "--debug" || arg === "--verbose"));
+  for (const arg of argv ?? []) {
+    // Arguments after the terminator belong to the child, not root stack-trace policy.
+    if (arg === "--") {
+      return false;
+    }
+    if (arg === "--debug" || arg === "--verbose") {
+      return true;
+    }
+  }
+  return false;
 }
 
 function shouldShowStack(argv: string[] | undefined, env: NodeJS.ProcessEnv): boolean {

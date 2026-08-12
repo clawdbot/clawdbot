@@ -87,7 +87,7 @@ import {
   parseTranscriptPage,
   readControlCursor,
   readGatewayParams,
-  readOptionalString,
+  readBoundedOptionalString,
   readPageParams,
   requireBoundThread,
   requireOnlyKeys,
@@ -101,6 +101,8 @@ import {
   openCodexCatalogTerminal,
   requireCatalogEligibleThread,
   resolveLocalCodexTerminalExecutable,
+  startCodexCatalogTerminal,
+  type CodexTerminalConfigSources,
 } from "./session-catalog-terminal.js";
 import { toGenericTranscriptItem } from "./session-catalog-transcript-item.js";
 import type {
@@ -627,6 +629,7 @@ async function listCodexSessionCatalog(params: {
     nodes = (await (params.listNodes?.() ?? params.runtime.nodes.list())).nodes
       .filter(
         (node) =>
+          node.gatewayLocal !== true &&
           node.commands?.includes(CODEX_APP_SERVER_THREADS_LIST_COMMAND) &&
           (!requestedHostIds || requestedHostIds.has(`node:${node.nodeId}`)),
       )
@@ -666,6 +669,7 @@ async function listCodexSessionCatalog(params: {
 /** Builds the node-local read-only Codex app-server catalog command. */
 export function createCodexSessionCatalogNodeHostCommands(
   control: CodexSessionCatalogControl,
+  configSources: CodexTerminalConfigSources,
 ): OpenClawPluginNodeHostCommand[] {
   return [
     {
@@ -712,7 +716,7 @@ export function createCodexSessionCatalogNodeHostCommands(
         }
       },
     },
-    createCodexTerminalNodeHostCommand(control),
+    createCodexTerminalNodeHostCommand(control, configSources),
   ];
 }
 
@@ -727,11 +731,11 @@ function readNodeTranscriptParams(value: unknown): CodexNodeSessionTranscriptPar
     throw new CatalogParamsError("Codex session read parameters must be an object");
   }
   requireOnlyKeys(value, new Set(["threadId", "cursor", "limit"]));
-  const threadId = readOptionalString(value, "threadId", MAX_SESSION_ID_LENGTH);
+  const threadId = readBoundedOptionalString(value, "threadId", MAX_SESSION_ID_LENGTH);
   if (!threadId) {
     throw new CatalogParamsError("threadId is required");
   }
-  const cursor = readOptionalString(value, "cursor", MAX_CURSOR_LENGTH);
+  const cursor = readBoundedOptionalString(value, "cursor", MAX_CURSOR_LENGTH);
   const limit = readBoundedLimit(
     value.limit,
     "limit",
@@ -902,8 +906,6 @@ async function findAdoptedSessionEntry(params: {
   return (await listAdoptedSessionEntries(params)).get(params.threadId);
 }
 
-class CodexAdoptionBindingCleanupError extends AggregateError {}
-
 async function clearCreatedAdoptionBinding(params: {
   bindingStore: CodexAppServerBindingStore;
   identity: ReturnType<typeof sessionBindingIdentity>;
@@ -930,19 +932,22 @@ async function clearCreatedAdoptionBinding(params: {
   try {
     current = await params.bindingStore.read(params.identity);
   } catch (readError) {
-    throw new CodexAdoptionBindingCleanupError(
+    const cleanupFailure = new AggregateError(
       [params.cause, ...(clearError ? [clearError] : []), readError],
       `OpenClaw session creation failed and the Codex binding could not be verified for ${params.sourceThreadId}`,
+      { cause: readError },
     );
+    throw cleanupFailure;
   }
   // Pending state is the cleanup CAS token. Once lifecycle work changes it,
   // that successor owns every tracked native artifact and must survive here.
   if (!matchesPendingSupervisionOwner(current, params.expectedPending)) {
     return;
   }
-  throw new CodexAdoptionBindingCleanupError(
+  throw new AggregateError(
     [params.cause, ...(clearError ? [clearError] : [])],
     `OpenClaw session creation failed and the Codex binding could not be cleared for ${params.sourceThreadId}`,
+    { cause: params.cause },
   );
 }
 
@@ -1433,6 +1438,7 @@ function registerCodexSessionCatalog(params: {
   api: OpenClawPluginApi;
   bindingStore: CodexAppServerBindingStore;
   control: CodexSessionCatalogControl;
+  getPluginConfig: () => unknown;
   getRuntimeConfig: () => OpenClawConfig | undefined;
 }): void {
   const provider: SessionCatalogProvider = {
@@ -1530,7 +1536,15 @@ function registerCodexSessionCatalog(params: {
       openCodexCatalogTerminal({
         api: params.api,
         control: params.control,
+        getPluginConfig: params.getPluginConfig,
+        getRuntimeConfig: params.getRuntimeConfig,
         parseCatalogPage,
+        ...request,
+      }),
+    startTerminalSession: (request) =>
+      startCodexCatalogTerminal({
+        getPluginConfig: params.getPluginConfig,
+        getRuntimeConfig: params.getRuntimeConfig,
         ...request,
       }),
   };

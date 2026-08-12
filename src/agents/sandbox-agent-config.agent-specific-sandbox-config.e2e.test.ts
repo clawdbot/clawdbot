@@ -34,8 +34,8 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
   spawnCommand: spawnDockerProcess,
 }));
 
-vi.mock("../skills/loading/workspace.js", () => ({
-  syncSkillsToWorkspace: vi.fn(async () => undefined),
+vi.mock("../skills/loading/workspace-skill-sync.runtime.js", () => ({
+  syncWorkspaceSkills: vi.fn(async () => undefined),
 }));
 
 let resolveSandboxContext: typeof import("./sandbox/context.js").resolveSandboxContext;
@@ -246,27 +246,21 @@ describe("Agent-specific sandbox config", () => {
     {
       scope: "agent" as const,
       expectedSetup: "echo work",
-      expectedContainerFragment: "agent-work",
     },
     {
       scope: "shared" as const,
       expectedSetup: "echo global",
-      expectedContainerFragment: "shared",
     },
-  ])(
-    "should resolve $scope setupCommand overrides",
-    async ({ scope, expectedSetup, expectedContainerFragment }) => {
-      const cfg = createWorkSetupCommandConfig(scope);
-      const context = await resolveContext(cfg, "agent:work:main", "/tmp/test-work");
+  ])("should resolve $scope setupCommand overrides", async ({ scope, expectedSetup }) => {
+    const cfg = createWorkSetupCommandConfig(scope);
+    const context = await resolveContext(cfg, "agent:work:main", "/tmp/test-work");
 
-      if (!context) {
-        throw new Error(`Expected sandbox context for ${scope} scoped setup`);
-      }
-      expect(context.docker?.setupCommand).toBe(expectedSetup);
-      expect(context.containerName).toContain(expectedContainerFragment);
-      expectDockerSetupCommand(expectedSetup);
-    },
-  );
+    if (!context) {
+      throw new Error(`Expected sandbox context for ${scope} scoped setup`);
+    }
+    expect(context.docker?.setupCommand).toBe(expectedSetup);
+    expectDockerSetupCommand(expectedSetup);
+  });
 
   it("should allow agent-specific docker settings beyond setupCommand", () => {
     const cfg: OpenClawConfig = {

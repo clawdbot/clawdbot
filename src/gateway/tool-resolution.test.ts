@@ -70,6 +70,26 @@ describe("resolveGatewayScopedTools", () => {
     expect(result.tools.some((tool) => tool.name === "message")).toBe(false);
   });
 
+  it("keeps default-agent credentials out of unbound gateway calls", () => {
+    const cfg = {
+      agents: { defaults: { imageModel: { primary: "openai/gpt-5.4-mini" } } },
+    } as OpenClawConfig;
+    const unbound = resolveGatewayScopedTools({
+      cfg,
+      sessionKey: "agent:main:main",
+      surface: "loopback",
+    });
+    const grantBound = resolveGatewayScopedTools({
+      cfg,
+      agentDir: "/agents/cli",
+      sessionKey: "agent:main:main",
+      surface: "loopback",
+    });
+
+    expect(unbound.tools.some((tool) => tool.name === "image")).toBe(false);
+    expect(grantBound.tools.some((tool) => tool.name === "image")).toBe(true);
+  });
+
   it("materializes an executable write tool on the mediated CLI surface", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mediated-write-"));
     try {
@@ -137,9 +157,9 @@ describe("resolveGatewayScopedTools", () => {
       surface: "loopback",
     });
 
-    expect(withoutActions.tools.some((tool) => tool.name === "spawn_task")).toBe(false);
+    expect(withoutActions.tools.some((tool) => tool.name === "suggest_task")).toBe(false);
     expect(withActions.tools.map((tool) => tool.name)).toEqual(
-      expect.arrayContaining(["spawn_task", "dismiss_task"]),
+      expect.arrayContaining(["suggest_task", "dismiss_task"]),
     );
   });
 

@@ -5,7 +5,10 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { handleMarkdownCodeBlockCopy } from "../../../components/markdown-code-blocks.ts";
-import { markdownFileLinkFromEvent } from "../../../components/markdown-file-links.ts";
+import {
+  markdownFileLinkFromEvent,
+  markdownFileLinkFromKeyboardEvent,
+} from "../../../components/markdown-file-links.ts";
 import "../../../components/web-awesome.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
@@ -26,18 +29,22 @@ import type { FileEditorViewHandle } from "./file-editor-view.ts";
 import type { SessionDiffLoader } from "./session-diff-panel.ts";
 
 type DetailUnavailableReason = "not_found" | "oversized" | "not_visible";
-export type DetailFullMessageResult = {
+type DetailFullMessageResult = {
   ok?: boolean;
   message?: unknown;
   unavailableReason?: DetailUnavailableReason;
 };
 
-export type SidebarFullMessageRequest = {
+type SidebarFullMessageRequest = {
   sessionKey: string;
   agentId?: string;
   messageId: string;
   kind: "assistant_message" | "tool_output";
 };
+
+export type SidebarFullMessageLoader = (
+  request: SidebarFullMessageRequest,
+) => Promise<DetailFullMessageResult | null | undefined>;
 
 type MarkdownSidebarContent = {
   kind: "markdown";
@@ -74,6 +81,8 @@ type SessionDiffSidebarContent = {
   kind: "session-diff";
   /** Fetches a fresh sessions.diff snapshot; the panel refetches on refresh. */
   load: SessionDiffLoader;
+  openFile?: (path: string) => void;
+  revealFile?: (path: string) => void;
   rawText?: string | null;
   fullMessageRequest?: SidebarFullMessageRequest;
   unavailableReason?: DetailUnavailableReason | null;
@@ -238,8 +247,12 @@ function absoluteFilePath(content: FileSidebarContent): string | null {
   return `${content.root.replace(/[\\/]+$/, "")}/${content.path.replace(/^[\\/]+/, "")}`;
 }
 
+type FileCopyAction = "path" | "contents";
+type FileCopyFeedback = Partial<Record<FileCopyAction, "copied" | "failed">>;
+const noFileCopyFeedback: FileCopyFeedback = {};
+
 type FileViewControls = {
-  copied: boolean;
+  copyFeedback: FileCopyFeedback;
   currentMatchIndex: number;
   dirty: boolean;
   editorMenuOpen: boolean;
@@ -251,7 +264,7 @@ type FileViewControls = {
   saveNotice: { kind: "conflict" } | { kind: "error"; message: string } | null;
   saving: boolean;
   searchOpen: boolean;
-  onCopyContents: () => void;
+  onCopy: (action: FileCopyAction) => void;
   onDiscard: () => void;
   onEdit: () => void;
   onNextMatch: () => void;
@@ -267,6 +280,31 @@ type FileViewControls = {
   onToggleSearch: () => void;
 };
 
+function renderFileCopyButton(action: FileCopyAction, controls?: FileViewControls) {
+  const feedback = controls?.copyFeedback[action];
+  const label = t(
+    feedback === "failed"
+      ? "common.copyFailed"
+      : feedback === "copied"
+        ? "common.copied"
+        : action === "path"
+          ? "chat.detailPanel.copyPath"
+          : "chat.detailPanel.copyContents",
+  );
+  return html`
+    <openclaw-tooltip .content=${label}>
+      <button
+        class="btn btn--sm sidebar-file-view__action ${feedback === "copied" ? "copied" : ""}"
+        type="button"
+        aria-label=${label}
+        @click=${() => controls?.onCopy(action)}
+      >
+        ${feedback === "copied" ? icons.check : icons.copy}
+      </button>
+    </openclaw-tooltip>
+  `;
+}
+
 function renderFileSidebarContent(
   content: FileSidebarContent,
   onViewRawText: () => void,
@@ -279,16 +317,7 @@ function renderFileSidebarContent(
       <div class="sidebar-file-view__path-bar">
         <div class="sidebar-file-view__path-field">
           <span class="sidebar-file-view__path" title=${content.path}>${content.path}</span>
-          <openclaw-tooltip .content=${t("chat.detailPanel.copyPath")}>
-            <button
-              class="btn btn--sm sidebar-file-view__action"
-              type="button"
-              aria-label=${t("chat.detailPanel.copyPath")}
-              @click=${() => void copyToClipboard(content.path)}
-            >
-              ${icons.copy}
-            </button>
-          </openclaw-tooltip>
+          ${renderFileCopyButton("path", controls)}
         </div>
         ${controls
           ? html`
@@ -359,25 +388,15 @@ function renderFileSidebarContent(
                         onOpenChange: controls.onEditorMenuOpenChange,
                         onOpenEditor: controls.onOpenEditor,
                       })}
-                      <openclaw-tooltip .content=${t("chat.detailPanel.copyContents")}>
-                        <button
-                          class="btn btn--sm sidebar-file-view__action ${controls.copied
-                            ? "copied"
-                            : ""}"
-                          type="button"
-                          aria-label=${controls.copied
-                            ? t("common.copied")
-                            : t("chat.detailPanel.copyContents")}
-                          @click=${controls.onCopyContents}
-                        >
-                          ${controls.copied ? icons.check : icons.copy}
-                        </button>
-                      </openclaw-tooltip>
+                      ${renderFileCopyButton("contents", controls)}
                     `}
               </div>
             `
           : nothing}
       </div>
+      ${Object.values(controls?.copyFeedback ?? {}).includes("failed")
+        ? html`<div class="file-view__save-notice" role="alert">${t("common.copyFailed")}</div>`
+        : nothing}
       ${controls?.searchOpen
         ? html`
             <div class="file-view__search">
@@ -573,7 +592,11 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
             ? content.kind === "file"
               ? renderFileSidebarContent(content, props.onViewRawText, props.fileView)
               : content.kind === "session-diff"
-                ? html`<openclaw-session-diff .loader=${content.load}></openclaw-session-diff>`
+                ? html`<openclaw-session-diff
+                    .loader=${content.load}
+                    .openFile=${content.openFile ?? null}
+                    .revealFile=${content.revealFile ?? null}
+                  ></openclaw-session-diff>`
                 : content.kind === "canvas"
                   ? html`
                       <div class="chat-tool-card__preview" data-kind="canvas">
@@ -672,9 +695,7 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
 
 class ChatDetailPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) content: SidebarContent | null = null;
-  @property({ attribute: false }) loadFullMessage?:
-    | ((request: SidebarFullMessageRequest) => Promise<DetailFullMessageResult | null | undefined>)
-    | null = null;
+  @property({ attribute: false }) loadFullMessage?: SidebarFullMessageLoader | null = null;
   @property() canvasPluginSurfaceUrl: string | null = null;
   @property() embedSandboxMode: EmbedSandboxMode = "scripts";
   @property({ type: Boolean }) allowExternalEmbedUrls = false;
@@ -691,7 +712,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
   @state() private fileSearchQuery = "";
   @state() private fileSearchMatchIndex = 0;
   @state() private fileEditorMenuOpen = false;
-  @state() private fileContentsCopied = false;
+  @state() private fileCopyFeedback = noFileCopyFeedback;
   @state() private fileEditorLoading = false;
   @state() private fileEditing = false;
   @state() private fileDirty = false;
@@ -710,20 +731,22 @@ class ChatDetailPanel extends OpenClawLightDomElement {
   private fileDraftContent: string | null = null;
   private fileSavedContent = "";
   private fileHash = "";
-  private copyFeedbackTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private readonly copyAttempts = new Map<FileCopyAction, number>();
+  private readonly copyFeedbackTimers = new Map<
+    FileCopyAction,
+    ReturnType<typeof globalThis.setTimeout>
+  >();
 
   override connectedCallback() {
     super.connectedCallback();
+    this.fileCopyFeedback = noFileCopyFeedback;
     document.addEventListener("pointerdown", this.handleDocumentPointerDown);
   }
 
   override disconnectedCallback() {
     document.removeEventListener("pointerdown", this.handleDocumentPointerDown);
     this.destroyFileEditor();
-    if (this.copyFeedbackTimer) {
-      globalThis.clearTimeout(this.copyFeedbackTimer);
-      this.copyFeedbackTimer = null;
-    }
+    this.clearFileCopyFeedback();
     super.disconnectedCallback();
   }
 
@@ -739,7 +762,8 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     this.fileSearchQuery = "";
     this.fileSearchMatchIndex = 0;
     this.fileEditorMenuOpen = false;
-    this.fileContentsCopied = false;
+    this.clearFileCopyFeedback();
+    this.fileCopyFeedback = noFileCopyFeedback;
     this.fileOperationVersion += 1;
     this.fileEditing = false;
     this.fileDirty = false;
@@ -766,9 +790,16 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     this.fileDirty = Boolean(restoredDraft);
     this.fileEditorLoading = this.content?.kind === "file";
     this.destroyFileEditor();
-    if (this.copyFeedbackTimer) {
-      globalThis.clearTimeout(this.copyFeedbackTimer);
-      this.copyFeedbackTimer = null;
+  }
+
+  private clearFileCopyFeedback() {
+    for (const timer of this.copyFeedbackTimers.values()) {
+      globalThis.clearTimeout(timer);
+    }
+    this.copyFeedbackTimers.clear();
+    // Keep attempt tokens monotonic so old work cannot become current after reconnection.
+    for (const [action, attempt] of this.copyAttempts) {
+      this.copyAttempts.set(action, attempt + 1);
     }
   }
 
@@ -972,23 +1003,37 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     openEditor(editor, absPath, content.line);
   };
 
-  private readonly copyFileContents = () => {
+  private readonly copyFileValue = (action: FileCopyAction) => {
     const content = this.visibleContent;
     if (content?.kind !== "file") {
       return;
     }
-    void copyToClipboard(content.content).then((copied) => {
-      if (!copied) {
+    const attempt = (this.copyAttempts.get(action) ?? 0) + 1;
+    this.copyAttempts.set(action, attempt);
+    void copyToClipboard(action === "path" ? content.path : content.content).then((copied) => {
+      // A newer copy or file selection owns feedback; stale completions must stay invisible.
+      if (
+        this.copyAttempts.get(action) !== attempt ||
+        this.visibleContent !== content ||
+        !this.isConnected
+      ) {
         return;
       }
-      this.fileContentsCopied = true;
-      if (this.copyFeedbackTimer) {
-        globalThis.clearTimeout(this.copyFeedbackTimer);
-      }
-      this.copyFeedbackTimer = globalThis.setTimeout(() => {
-        this.copyFeedbackTimer = null;
-        this.fileContentsCopied = false;
-      }, 1500);
+      this.fileCopyFeedback = {
+        ...this.fileCopyFeedback,
+        [action]: copied ? "copied" : "failed",
+      };
+      globalThis.clearTimeout(this.copyFeedbackTimers.get(action));
+      this.copyFeedbackTimers.set(
+        action,
+        globalThis.setTimeout(
+          () => {
+            this.copyFeedbackTimers.delete(action);
+            this.fileCopyFeedback = { ...this.fileCopyFeedback, [action]: undefined };
+          },
+          copied ? 1500 : 2000,
+        ),
+      );
     });
   };
 
@@ -1281,6 +1326,13 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     }
   };
 
+  private readonly handlePanelKeyDown = (event: KeyboardEvent) => {
+    const target = markdownFileLinkFromKeyboardEvent(event);
+    if (target) {
+      this.onOpenWorkspaceFile?.(target);
+    }
+  };
+
   override render() {
     const matches = this.fileSearchMatches();
     const currentMatchIndex = matches.length
@@ -1289,14 +1341,20 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     // Markdown previews and file editors need a bounded host wrapper so their
     // inner content can shrink and scroll. Content-sized kinds keep auto height.
     const fillHost =
-      this.visibleContent?.kind === "file" || this.visibleContent?.kind === "markdown";
+      this.visibleContent?.kind === "file" ||
+      this.visibleContent?.kind === "markdown" ||
+      this.visibleContent?.kind === "session-diff";
     return html`
-      <div class=${fillHost ? "sidebar-panel-host--fill" : ""} @click=${this.handlePanelClick}>
+      <div
+        class=${fillHost ? "sidebar-panel-host--fill" : ""}
+        @click=${this.handlePanelClick}
+        @keydown=${this.handlePanelKeyDown}
+      >
         ${renderMarkdownSidebar({
           content: this.visibleContent,
           error: this.error,
           fileView: {
-            copied: this.fileContentsCopied,
+            copyFeedback: this.fileCopyFeedback,
             currentMatchIndex,
             dirty: this.fileDirty,
             editorMenuOpen: this.fileEditorMenuOpen,
@@ -1308,7 +1366,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
             saveNotice: this.fileSaveNotice,
             saving: this.fileSaving,
             searchOpen: this.fileSearchOpen,
-            onCopyContents: this.copyFileContents,
+            onCopy: this.copyFileValue,
             onDiscard: this.discardFileEdits,
             onEdit: this.editFile,
             onNextMatch: () => this.moveFileSearch(1),

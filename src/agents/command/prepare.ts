@@ -1,4 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveSessionStableReplyMode } from "../../auto-reply/reply/session-stable-reply-mode.js";
+import { isSyntheticSourceReplyTurn } from "../../auto-reply/reply/source-reply-delivery-mode.js";
 import {
   formatThinkingLevels,
   normalizeThinkLevel,
@@ -85,7 +87,7 @@ export function normalizeExplicitOverrideInput(raw: string, kind: "provider" | "
   return trimmed;
 }
 
-export function resolveExplicitAgentCommandSessionKey(params: {
+function resolveExplicitAgentCommandSessionKey(params: {
   rawExplicitSessionKey?: string;
   agentIdOverride?: string;
   shouldScopeDefaultAgentKey?: boolean;
@@ -233,7 +235,7 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
   if (explicitRecipientSession?.error) {
     throw explicitRecipientSession.error;
   }
-  const commandOpts = explicitRecipientSession?.sessionKey
+  let commandOpts: AgentCommandOpts = explicitRecipientSession?.sessionKey
     ? {
         ...selectedCommandOpts,
         channel: explicitRecipientSession.channel,
@@ -328,6 +330,27 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
     sessionKey,
     sessionEntry: sessionEntryRaw,
   });
+  if (
+    sessionEntryRaw &&
+    commandOpts.cliSessionBindingFacts === undefined &&
+    isSyntheticSourceReplyTurn({
+      inputProvenance: commandOpts.inputProvenance,
+      isHeartbeat: commandOpts.bootstrapContextRunKind === "heartbeat",
+    })
+  ) {
+    commandOpts = {
+      ...commandOpts,
+      cliSessionBindingFacts: {
+        sourceReplyDeliveryMode: resolveSessionStableReplyMode({
+          cfg,
+          ctx: { CommandAuthorized: false },
+          sessionEntry: sessionEntryRaw,
+          sessionAgentId,
+          sessionKey,
+        }),
+      },
+    };
+  }
   const thinkingLevelsHint = formatThinkingLevels(
     configuredModel.provider,
     configuredModel.model,

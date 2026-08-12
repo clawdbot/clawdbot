@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { buildQaTarget } from "openclaw/plugin-sdk/qa-channel-protocol";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { readQaScenarioExecutionConfig } from "../../scenario-catalog.js";
@@ -286,10 +287,9 @@ export async function createMatrixQaTransportAdapter(
         if (!logicalConversation) {
           continue;
         }
-        const replacedMessageId =
-          event.relatesTo?.relType === "m.replace" && event.relatesTo.eventId
-            ? busMessageIds.get(event.relatesTo.eventId)
-            : undefined;
+        const replacedMessageId = event.replacesEventId
+          ? busMessageIds.get(event.replacesEventId)
+          : undefined;
         if (replacedMessageId) {
           const outbound = await context.messages.editMessage({
             accountId,
@@ -325,7 +325,7 @@ export async function createMatrixQaTransportAdapter(
     }),
   ).catch((error: unknown) => {
     if (!stopped) {
-      pollingError = error instanceof Error ? error : new Error(String(error));
+      pollingError = toStringifiedError(error);
     }
   });
 

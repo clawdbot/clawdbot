@@ -30,16 +30,6 @@ vi.mock("node-llama-cpp", () => ({
 
 import { detectLlamaCppSetup, prepareLlamaCppSetup, runLlamaCppSetup } from "./setup.js";
 
-const { formatLlamaCppDownloadProgress } = (globalThis as Record<PropertyKey, unknown>)[
-  Symbol.for("openclaw.llamaCppSetupTestApi")
-] as {
-  formatLlamaCppDownloadProgress: (params: {
-    downloadedSize: number;
-    totalSize: number;
-    bytesPerSecond: number;
-  }) => string;
-};
-
 const GIB = 1024 ** 3;
 
 let tempRoot: string;
@@ -106,16 +96,6 @@ describe("llama.cpp setup", () => {
     expect(meetsLlamaCppDefaultModelRamFloor(16 * GIB)).toBe(true);
   });
 
-  it("formats percent, decimal GB, and transfer rate", () => {
-    expect(
-      formatLlamaCppDownloadProgress({
-        downloadedSize: 2_100_000_000,
-        totalSize: 5_000_000_000,
-        bytesPerSecond: 38_000_000,
-      }),
-    ).toBe("Downloading Gemma 4 E4B… 42% (2.1/5.0 GB, 38 MB/s)");
-  });
-
   it("returns null when the configured model is not cached", async () => {
     await expect(detectLlamaCppSetup({ config: configWithCache(), env: {} })).resolves.toBeNull();
   });
@@ -125,7 +105,7 @@ describe("llama.cpp setup", () => {
 
     await expect(detectLlamaCppSetup({ config: configWithCache(), env: {} })).resolves.toEqual({
       modelRef: DEFAULT_LLAMA_CPP_MODEL_REF,
-      detail: "gemma-4-e4b-it-q4_k_m (downloaded)",
+      detail: "Ready locally",
     });
     expect(nodeLlamaMocks.createModelDownloader).not.toHaveBeenCalled();
     expect(nodeLlamaMocks.resolveModelFile).toHaveBeenCalledWith(
@@ -157,7 +137,7 @@ describe("llama.cpp setup", () => {
 
     await expect(detectLlamaCppSetup({ config, env: {} })).resolves.toEqual({
       modelRef: "llama-cpp/custom",
-      detail: "custom (downloaded)",
+      detail: "Ready locally",
     });
     expect(nodeLlamaMocks.resolveModelFile).toHaveBeenCalledWith(
       "hf:org/repo/model.gguf#release",
@@ -215,7 +195,7 @@ describe("llama.cpp setup", () => {
 
     expect(ctx.prompter.confirm).not.toHaveBeenCalled();
     expect(ctx.prompter.note).toHaveBeenCalledWith(
-      "This machine has 8 GB RAM; the bundled local model needs 16 GB+. Use Ollama/LM Studio with a smaller model, or a cloud provider.",
+      "This Gateway has 8 GB RAM; the recommended model needs 16 GB+. Use Ollama or LM Studio with a smaller model, configure an existing GGUF, or choose a cloud provider.",
       "Setup skipped",
     );
     expect(nodeLlamaMocks.createModelDownloader).not.toHaveBeenCalled();
@@ -240,7 +220,9 @@ describe("llama.cpp setup", () => {
     await expect(runLlamaCppSetup(ctx)).resolves.toEqual({ profiles: [] });
 
     expect(ctx.prompter.confirm).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining("about 5.0 GB") }),
+      expect.objectContaining({
+        message: expect.stringContaining("run it directly inside this Gateway"),
+      }),
     );
     expect(nodeLlamaMocks.createModelDownloader).not.toHaveBeenCalled();
   });

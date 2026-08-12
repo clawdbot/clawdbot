@@ -8,6 +8,22 @@ import type {
   ChannelDeliveryResult,
 } from "./types.js";
 
+/** Builds a typed non-visible channel outcome without transport identity. */
+export function createSuppressedChannelDeliveryResult(params: {
+  reason: NonNullable<ChannelDeliveryResult["suppression"]>["reason"];
+  cancelReason?: string;
+  metadata?: Record<string, unknown>;
+}): ChannelDeliveryResult {
+  return {
+    visibleReplySent: false,
+    suppression: {
+      reason: params.reason,
+      ...(params.cancelReason ? { cancelReason: params.cancelReason } : {}),
+      ...(params.metadata ? { metadata: params.metadata } : {}),
+    },
+  };
+}
+
 const CHANNEL_PARTIAL_DELIVERY_ERROR_CODE = "CHANNEL_PARTIAL_DELIVERY";
 
 type ChannelPartialDeliveryEnvelope = {

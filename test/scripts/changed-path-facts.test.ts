@@ -41,6 +41,12 @@ describe("changed path facts", () => {
       isTestOnly: true,
       isNativeOnly: false,
     });
+    expect(getChangedPathFacts("src/gateway/server.auth.control-ui.suite.ts")).toMatchObject({
+      surface: "source",
+      isChangedLaneTest: true,
+      isTestOnly: true,
+      isNativeOnly: false,
+    });
     expect(getChangedPathFacts("apps/shared/OpenClawKit/Sources/Foo.swift")).toMatchObject({
       surface: "app",
       isChangedLaneTest: false,

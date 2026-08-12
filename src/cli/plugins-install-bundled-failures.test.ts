@@ -5,7 +5,7 @@ import {
   resetPluginsCliTestState,
   runPluginsCommand,
   runtimeErrors,
-  writeConfigFile,
+  configWriteMock,
 } from "./plugins-cli-test-helpers.js";
 
 const { installManagedPluginSourceMock } = vi.hoisted(() => ({
@@ -43,7 +43,7 @@ describe("plugin install bundled failure propagation", () => {
       }),
     );
     expect(runtimeErrors.at(-1)).toContain("bundled plugin installation failed");
-    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(configWriteMock).not.toHaveBeenCalled();
   });
 
   it("fails when an npm package-not-found bundled fallback fails", async () => {
@@ -87,6 +87,6 @@ describe("plugin install bundled failure propagation", () => {
       }),
     );
     expect(runtimeErrors.at(-1)).toContain("bundled fallback installation failed");
-    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(configWriteMock).not.toHaveBeenCalled();
   });
 });

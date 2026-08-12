@@ -19,9 +19,7 @@ import { resolveAgentAvatarUrlFromSource } from "../agents/identity-avatar-file.
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
-import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { insideGitCheckout } from "../agents/worktrees/git.js";
-import { listThinkingLevelOptions } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import {
@@ -29,11 +27,12 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
+import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import { listGatewayAgentsBasic } from "./agent-list.js";
-import { resolveGatewaySessionThinkingDefault } from "./session-utils-model.js";
+import { resolveGatewayModelThinkingProfile } from "./session-utils-model.js";
 import {
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
@@ -142,12 +141,12 @@ function loadSessionEntryWithMode(
   });
   const storePath = target.storePath;
   const store = target.store;
-  const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(store, target.storeKeys);
-  const legacyKey = freshestMatch?.key !== target.canonicalKey ? freshestMatch?.key : undefined;
+  const canonicalMatch = resolveCanonicalSessionStoreMatchFromStoreKeys(store, target.storeKeys);
+  const legacyKey = canonicalMatch?.key !== target.canonicalKey ? canonicalMatch?.key : undefined;
   const entry =
-    readOnly && opts?.clone !== false && freshestMatch?.entry
-      ? structuredClone(freshestMatch.entry)
-      : freshestMatch?.entry;
+    readOnly && opts?.clone !== false && canonicalMatch?.entry
+      ? structuredClone(canonicalMatch.entry)
+      : canonicalMatch?.entry;
   return {
     cfg,
     storePath,
@@ -159,68 +158,55 @@ function loadSessionEntryWithMode(
   };
 }
 
-export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string; clone?: boolean }) {
+export function loadGatewaySessionEntry(
+  sessionKey: string,
+  opts?: { agentId?: string; clone?: boolean },
+) {
   return loadSessionEntryWithMode(sessionKey, opts, false);
 }
 
-export function loadSessionEntryReadOnly(
+export function loadGatewaySessionEntryReadOnly(
   sessionKey: string,
   opts?: { agentId?: string; clone?: boolean; includeStoreChildEntries?: boolean },
 ) {
   return loadSessionEntryWithMode(sessionKey, opts, true);
 }
 
-/** Returns both the freshest entry and the exact persisted key that owns it. */
-export function resolveFreshestSessionStoreMatchFromStoreKeys(
+/** Returns the one canonical entry and the exact persisted key that owns it. */
+export function resolveCanonicalSessionStoreMatchFromStoreKeys(
   store: Record<string, SessionEntry>,
   storeKeys: string[],
 ): { key: string; entry: SessionEntry } | undefined {
-  let freshest: { key: string; entry: SessionEntry } | undefined;
+  let selected: { key: string; entry: SessionEntry } | undefined;
   for (const key of storeKeys) {
     const entry = store[key];
     if (!entry) {
       continue;
     }
     const match = { key, entry };
-    if (!freshest || (match.entry.updatedAt ?? 0) > (freshest.entry.updatedAt ?? 0)) {
-      freshest = match;
+    if (selected) {
+      throw canonicalSessionKeyMigrationRequiredError(
+        `duplicate rows resolve to canonical session key ${storeKeys[0] ?? key}`,
+      );
     }
+    selected = match;
   }
-  return freshest;
+  if (selected && selected.key !== storeKeys[0]) {
+    throw canonicalSessionKeyMigrationRequiredError(
+      `non-canonical persisted row resolves to session key ${storeKeys[0] ?? selected.key}`,
+    );
+  }
+  return selected;
 }
 
-export function resolveFreshestSessionEntryFromStoreKeys(
+export function resolveCanonicalSessionEntryFromStoreKeys(
   store: Record<string, SessionEntry>,
   storeKeys: string[],
 ): SessionEntry | undefined {
-  return resolveFreshestSessionStoreMatchFromStoreKeys(store, storeKeys)?.entry;
+  return resolveCanonicalSessionStoreMatchFromStoreKeys(store, storeKeys)?.entry;
 }
 
-/**
- * Remove legacy key variants for one canonical session key.
- * Candidates can include aliases (for example, "agent:ops:main" when canonical is "agent:ops:work").
- */
-function pruneLegacyStoreKeys(params: {
-  store: Record<string, unknown>;
-  canonicalKey: string;
-  candidates: Iterable<string>;
-}) {
-  const keysToDelete = new Set<string>();
-  for (const candidate of params.candidates) {
-    const trimmed = normalizeOptionalString(candidate ?? "") ?? "";
-    if (!trimmed) {
-      continue;
-    }
-    if (trimmed !== params.canonicalKey) {
-      keysToDelete.add(trimmed);
-    }
-  }
-  for (const key of keysToDelete) {
-    delete params.store[key];
-  }
-}
-
-export function migrateAndPruneGatewaySessionStoreKey(params: {
+export function resolveCanonicalGatewaySessionStoreKey(params: {
   cfg: OpenClawConfig;
   key: string;
   store: Record<string, SessionEntry>;
@@ -233,21 +219,7 @@ export function migrateAndPruneGatewaySessionStoreKey(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   const primaryKey = target.canonicalKey;
-  const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(
-    params.store,
-    target.storeKeys,
-  );
-  if (freshestMatch) {
-    const currentPrimary = params.store[primaryKey];
-    if (!currentPrimary || (freshestMatch.entry.updatedAt ?? 0) > (currentPrimary.updatedAt ?? 0)) {
-      params.store[primaryKey] = freshestMatch.entry;
-    }
-  }
-  pruneLegacyStoreKeys({
-    store: params.store,
-    canonicalKey: primaryKey,
-    candidates: target.storeKeys,
-  });
+  resolveCanonicalSessionStoreMatchFromStoreKeys(params.store, target.storeKeys);
   return { target, primaryKey, entry: params.store[primaryKey] };
 }
 
@@ -277,18 +249,6 @@ export function isGroupOrChannelDisplaySession(
     parsed?.kind === "group" ||
     parsed?.kind === "channel"
   );
-}
-
-function isStorePathTemplate(store?: string): boolean {
-  return typeof store === "string" && store.includes("{agentId}");
-}
-
-export function resolveConcreteSessionStorePath(storePath: string | undefined): string | undefined {
-  const trimmed = storePath?.trim();
-  if (!trimmed || trimmed === "(multiple)" || isStorePathTemplate(trimmed)) {
-    return undefined;
-  }
-  return trimmed;
 }
 
 function normalizeFallbackList(values: readonly string[]): string[] {
@@ -382,20 +342,15 @@ export function listAgentsForGateway(
       sessionKey,
       acpRuntime: false,
     });
-    const thinkingRuntime = resolveEffectiveAgentRuntime({
+    const agentModelCatalog = options?.modelCatalogByAgentId?.get(id) ?? modelCatalog;
+    const thinkingProfile = resolveGatewayModelThinkingProfile({
       cfg,
-      provider: resolvedModel.provider,
-      modelId: resolvedModel.model,
       agentId: id,
+      provider: resolvedModel.provider,
+      model: resolvedModel.model,
+      modelCatalog: agentModelCatalog,
       sessionKey,
     });
-    const agentModelCatalog = options?.modelCatalogByAgentId?.get(id) ?? modelCatalog;
-    const thinkingLevels = listThinkingLevelOptions(
-      resolvedModel.provider,
-      resolvedModel.model,
-      agentModelCatalog,
-      thinkingRuntime,
-    );
     const workspace = resolveAgentWorkspaceDir(cfg, id);
     // Must mirror the sessions.create worktree preflight: subdirectory workspaces inside a
     // repo are worktree-capable, so the UI toggle and the create path cannot diverge.
@@ -409,16 +364,10 @@ export function listAgentsForGateway(
         workspace,
         workspaceGit,
         agentRuntime,
-        thinkingLevels,
-        thinkingOptions: thinkingLevels.map((level) => level.label),
-        thinkingDefault: resolveGatewaySessionThinkingDefault({
-          cfg,
-          provider: resolvedModel.provider,
-          model: resolvedModel.model,
-          agentId: id,
-          modelCatalog: agentModelCatalog,
-          agentRuntime: thinkingRuntime,
-        }),
+        // Preserve the established serialized projection order for byte-stable responses.
+        thinkingLevels: thinkingProfile.thinkingLevels,
+        thinkingOptions: thinkingProfile.thinkingLevels.map((level) => level.label),
+        thinkingDefault: thinkingProfile.thinkingDefault,
       },
       model ? { model } : {},
     );

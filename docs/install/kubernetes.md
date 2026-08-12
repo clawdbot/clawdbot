@@ -90,6 +90,8 @@ Namespace: openclaw (configurable via OPENCLAW_NAMESPACE)
 └── Secret/openclaw-secrets    # Gateway token + API keys
 ```
 
+The Deployment uses `/startupz` for both startup and traffic-readiness probes, with a five-minute startup budget. Channel failures do not evict a healthy Gateway or Control UI from Service endpoints. `/healthz` remains the liveness probe; use `/readyz` separately when monitoring should include channel-account health.
+
 ## Customization
 
 ### Agent instructions
@@ -103,6 +105,15 @@ Edit the `AGENTS.md` in `scripts/k8s/manifests/configmap.yaml` and redeploy:
 ### Gateway config
 
 Edit `openclaw.json` in `scripts/k8s/manifests/configmap.yaml`. See [Gateway configuration](/gateway/configuration) for the full reference.
+
+The init container seeds `openclaw.json` and workspace `AGENTS.md` only when each file is missing from the PVC. The persisted copy is the source of truth after first boot: changes made through OpenClaw (`onboard`, `channels add`, `doctor --fix`, Control UI) survive pod restarts, and updating the ConfigMap does not overwrite an existing PVC copy. To intentionally reseed a file from an updated ConfigMap, delete the persisted copy and restart:
+
+```bash
+kubectl exec -n openclaw deploy/openclaw -- rm /home/node/.openclaw/openclaw.json
+kubectl rollout restart -n openclaw deploy/openclaw
+```
+
+Deployments created from the previous template applied ConfigMap edits on every pod start (and discarded any config changes made through OpenClaw). If you relied on that flow, use the reseed commands above after ConfigMap edits.
 
 ### Add providers
 
@@ -136,7 +147,8 @@ OPENCLAW_NAMESPACE=my-namespace ./scripts/k8s/deploy.sh
 Edit the `image` field in `scripts/k8s/manifests/deployment.yaml`:
 
 ```yaml
-image: ghcr.io/openclaw/openclaw:slim # primary; official Docker Hub mirror: openclaw/openclaw
+# Bump this immutable versioned tag when upgrading OpenClaw.
+image: ghcr.io/openclaw/openclaw:2026.7.1-2-slim
 ```
 
 ### Expose beyond port-forward
@@ -163,7 +175,23 @@ This applies all manifests and restarts the pod to pick up any config or secret 
 ./scripts/k8s/deploy.sh --delete
 ```
 
-This deletes the namespace and all resources in it, including the PVC.
+For the default `openclaw` namespace, this deletes the namespace and everything in it, including the PVC.
+
+For a custom namespace, `--delete` removes only OpenClaw resources and preserves the namespace and unrelated workloads:
+
+```bash
+OPENCLAW_NAMESPACE=my-namespace ./scripts/k8s/deploy.sh --delete
+```
+
+Use `--delete-resources` to request this scoped teardown explicitly in any namespace. Both scoped modes delete the OpenClaw Deployment, Service, PVC, ConfigMap, and generated Secret. Deleting the PVC removes OpenClaw's claim and access to its persisted data; whether the backing volume and data are deleted depends on the PersistentVolume or StorageClass reclaim policy (`Delete` or `Retain`).
+
+To delete a custom namespace and every workload in it, explicitly opt in:
+
+```bash
+OPENCLAW_NAMESPACE=my-namespace ./scripts/k8s/deploy.sh --delete-namespace
+```
+
+This also deletes unrelated workloads and the PVC.
 
 ## Architecture notes
 

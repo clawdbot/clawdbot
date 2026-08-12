@@ -496,12 +496,38 @@ describe("config plugin validation", () => {
       expectMissingCodexPluginWarning(res.warnings);
     });
 
-    it("warns when automatic gpt-5.6 overrides a provider PI runtime policy", () => {
+    it.each([
+      {
+        title: "warns when automatic gpt-5.6 overrides a provider PI runtime policy",
+        baseUrl: "https://api.openai.com/v1",
+        modelPattern: "openai/gpt-5.6",
+        runtime: "default",
+      },
+      {
+        title: "warns when automatic Spark overrides a provider PI runtime policy",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        modelPattern: "openai/gpt-5.3-codex-spark",
+        runtime: "default",
+      },
+      {
+        title:
+          "still warns when a provider-wide PI policy is overridden by an OpenAI wildcard default",
+        baseUrl: "https://api.openai.com/v1",
+        modelPattern: "openai/*",
+        runtime: "default",
+      },
+      {
+        title: "still warns when an agent model route explicitly selects Codex",
+        baseUrl: "https://api.openai.com/v1",
+        modelPattern: "openai/gpt-5.5",
+        runtime: "codex",
+      },
+    ])("$title", ({ baseUrl, modelPattern, runtime }) => {
       const res = validateWithMissingCodexPlugin({
         models: {
           providers: {
             openai: {
-              baseUrl: "https://api.openai.com/v1",
+              baseUrl,
               models: [],
               agentRuntime: { id: "pi" },
             },
@@ -511,33 +537,7 @@ describe("config plugin validation", () => {
           list: [{ id: "openclaw" }],
           defaults: {
             models: {
-              "openai/gpt-5.6": { agentRuntime: { id: "default" } },
-            },
-          },
-        },
-        plugins: { entries: { codex: {} } },
-      });
-
-      expect(res.ok).toBe(true);
-      expectMissingCodexPluginWarning(res.warnings);
-    });
-
-    it("warns when automatic Spark overrides a provider PI runtime policy", () => {
-      const res = validateWithMissingCodexPlugin({
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://chatgpt.com/backend-api/codex",
-              models: [],
-              agentRuntime: { id: "pi" },
-            },
-          },
-        },
-        agents: {
-          list: [{ id: "openclaw" }],
-          defaults: {
-            models: {
-              "openai/gpt-5.3-codex-spark": { agentRuntime: { id: "default" } },
+              [modelPattern]: { agentRuntime: { id: runtime } },
             },
           },
         },
@@ -1158,32 +1158,6 @@ describe("config plugin validation", () => {
       expectMissingCodexPluginWarning(res.warnings);
     });
 
-    it("still warns when a provider-wide PI policy is overridden by an OpenAI wildcard default", () => {
-      const res = validateWithMissingCodexPlugin({
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              models: [],
-              agentRuntime: { id: "pi" },
-            },
-          },
-        },
-        agents: {
-          list: [{ id: "openclaw" }],
-          defaults: {
-            models: {
-              "openai/*": { agentRuntime: { id: "default" } },
-            },
-          },
-        },
-        plugins: { entries: { codex: {} } },
-      });
-
-      expect(res.ok).toBe(true);
-      expectMissingCodexPluginWarning(res.warnings);
-    });
-
     it("still warns when the missing Codex plugin is explicitly enabled", () => {
       const res = validateWithMissingCodexPlugin({
         models: {
@@ -1221,32 +1195,6 @@ describe("config plugin validation", () => {
                   agentRuntime: { id: "codex" },
                 },
               ],
-            },
-          },
-        },
-        plugins: { entries: { codex: {} } },
-      });
-
-      expect(res.ok).toBe(true);
-      expectMissingCodexPluginWarning(res.warnings);
-    });
-
-    it("still warns when an agent model route explicitly selects Codex", () => {
-      const res = validateWithMissingCodexPlugin({
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              models: [],
-              agentRuntime: { id: "pi" },
-            },
-          },
-        },
-        agents: {
-          list: [{ id: "openclaw" }],
-          defaults: {
-            models: {
-              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
             },
           },
         },
@@ -2185,7 +2133,7 @@ describe("config plugin validation", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("accepts voice-call OpenAI TTS speed, instructions, and baseUrl config fields", () => {
+  it("accepts voice-call OpenAI TTS speakerVoice, speed, instructions, and baseUrl fields", () => {
     const res = validateInSuite({
       agents: { list: [{ id: "openclaw" }] },
       plugins: {
@@ -2198,7 +2146,7 @@ describe("config plugin validation", () => {
                 providers: {
                   openai: {
                     baseUrl: "http://localhost:8880/v1",
-                    voice: "alloy",
+                    speakerVoice: "alloy",
                     speed: 1.5,
                     instructions: "Speak in a cheerful tone",
                   },
@@ -2315,7 +2263,7 @@ describe("config plugin validation", () => {
   it("accepts known plugin ids and valid channel/heartbeat enums", () => {
     const res = validateInSuite({
       agents: {
-        defaults: { heartbeat: { target: "last", directPolicy: "block" } },
+        defaults: { heartbeat: { target: "owner", directPolicy: "block" } },
         list: [{ id: "openclaw", heartbeat: { directPolicy: "allow" } }],
       },
       channels: {

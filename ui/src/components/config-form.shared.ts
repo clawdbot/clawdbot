@@ -1,7 +1,7 @@
+import { isSensitiveConfigPath } from "../../../src/config/sensitive-paths.js";
 import type { ConfigUiHint, ConfigUiHints } from "../api/types.ts";
 // Control UI view renders config form.shared screen content.
 import { t } from "../i18n/index.ts";
-import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 
 export type JsonSchema = {
   type?: string | string[];
@@ -12,12 +12,23 @@ export type JsonSchema = {
   properties?: Record<string, JsonSchema>;
   required?: string[];
   items?: JsonSchema | JsonSchema[];
+  additionalItems?: JsonSchema | boolean;
   additionalProperties?: JsonSchema | boolean;
   enum?: unknown[];
+  enumIncludesNull?: boolean;
   const?: unknown;
   default?: unknown;
+  minimum?: number;
+  maximum?: number;
+  exclusiveMinimum?: number;
+  exclusiveMaximum?: number;
+  multipleOf?: number;
   minLength?: number;
   maxLength?: number;
+  pattern?: string;
+  minItems?: number;
+  maxItems?: number;
+  uniqueItems?: boolean;
   anyOf?: JsonSchema[];
   oneOf?: JsonSchema[];
   allOf?: JsonSchema[];
@@ -34,29 +45,22 @@ export function schemaType(schema: JsonSchema): string | undefined {
   return schema.type;
 }
 
-export function defaultValue(schema?: JsonSchema): unknown {
-  if (!schema) {
-    return "";
-  }
-  if (schema.default !== undefined) {
-    return schema.default;
-  }
-  const type = schemaType(schema);
-  switch (type) {
-    case "object":
-      return {};
-    case "array":
-      return [];
-    case "boolean":
-      return false;
-    case "number":
-    case "integer":
-      return 0;
-    case "string":
-      return "";
-    default:
-      return "";
-  }
+export function configFieldId(path: Array<string | number>, suffix: string): string {
+  const key =
+    path.length === 0
+      ? "root"
+      : path
+          .map((segment) => {
+            const value = String(segment);
+            let encoded = "";
+            for (let index = 0; index < value.length; index += 1) {
+              encoded += value.charCodeAt(index).toString(16).padStart(4, "0");
+            }
+            const type = typeof segment === "number" ? "n" : "s";
+            return `${type}${value.length}-${encoded}`;
+          })
+          .join("_");
+  return `config-field-${key}-${suffix}`;
 }
 
 export function pathKey(path: Array<string | number>): string {
@@ -100,27 +104,6 @@ export function humanize(raw: string) {
     .replace(/^./, (m) => m.toUpperCase());
 }
 
-const SENSITIVE_KEY_WHITELIST_SUFFIXES = [
-  "maxtokens",
-  "maxoutputtokens",
-  "maxinputtokens",
-  "maxcompletiontokens",
-  "contexttokens",
-  "totaltokens",
-  "tokencount",
-  "tokenlimit",
-  "tokenbudget",
-  "passwordfile",
-] as const;
-
-const SENSITIVE_PATTERNS = [
-  /token$/i,
-  /password/i,
-  /secret/i,
-  /api.?key/i,
-  /serviceaccount(?:ref)?$/i,
-];
-
 const ENV_VAR_PLACEHOLDER_PATTERN = /^\$\{[^}]*\}$/;
 
 export function redactedPlaceholder(): string {
@@ -151,12 +134,6 @@ function enterSensitiveScanNode(state: SensitiveScanState, depth: number): boole
 
 function isEnvVarPlaceholder(value: string): boolean {
   return ENV_VAR_PLACEHOLDER_PATTERN.test(value.trim());
-}
-
-export function isSensitiveConfigPath(path: string): boolean {
-  const lowerPath = normalizeLowercaseStringOrEmpty(path);
-  const whitelisted = SENSITIVE_KEY_WHITELIST_SUFFIXES.some((suffix) => lowerPath.endsWith(suffix));
-  return !whitelisted && SENSITIVE_PATTERNS.some((pattern) => pattern.test(path));
 }
 
 function isSensitiveLeafValue(value: unknown): boolean {

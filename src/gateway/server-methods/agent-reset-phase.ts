@@ -10,10 +10,10 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { AGENT_SESSION_RESET_COMMAND_RE } from "../agent-command-policy.js";
+import { setGatewayDedupeEntries } from "../agent-turn/agent-dedupe.js";
+import { clientHasAdminScope } from "../agent-turn/agent-handler-helpers.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { formatForLog } from "../ws-log.js";
-import { setGatewayDedupeEntries } from "./agent-dedupe.js";
-import { clientHasAdminScope } from "./agent-handler-helpers.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import {
   buildBareSessionResetResponse,

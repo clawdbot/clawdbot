@@ -9,14 +9,16 @@ import type {
 } from "../../config/sessions/types.js";
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import type { AcceptedSessionSpawn } from "../accepted-session-spawn.js";
+import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../embedded-agent-messaging.types.js";
+import type { McpConnectAction } from "../mcp-connect-action.js";
 import type { McpAppChannelView } from "../mcp-ui-resource.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { AgentRunTimeoutPhase } from "../run-timeout-attribution.js";
-import type { ContextUsage } from "../usage.js";
+import type { NormalizedUsage } from "../usage.js";
 
 export type BlockReplyFlushContext =
   | {
@@ -33,6 +35,8 @@ export type BlockReplyFlushContext =
       reason: "pre_compaction";
       attemptAccepted: boolean;
     };
+
+type EmbeddedAgentUsage = Omit<NormalizedUsage, "contextUsage">;
 
 export type EmbeddedAgentMeta = {
   sessionId: string;
@@ -57,14 +61,9 @@ export type EmbeddedAgentMeta = {
    * and completion tokens that are useful for billing but noisy as live context.
    */
   promptTokens?: number;
-  usage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    reasoningTokens?: number;
-    total?: number;
-  };
+  usage?: EmbeddedAgentUsage;
+  /** Terminal cumulative usage reserved for turn-level diagnostics. */
+  diagnosticUsage?: EmbeddedAgentUsage;
   /**
    * Usage from the last individual API call (not accumulated across tool-use
    * loops or compaction retries). Used for context-window utilization display
@@ -72,15 +71,7 @@ export type EmbeddedAgentMeta = {
    * sums input tokens from every API call in the run, which overstates the
    * actual context size.
    */
-  lastCallUsage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    contextUsage?: ContextUsage;
-    reasoningTokens?: number;
-    total?: number;
-  };
+  lastCallUsage?: NormalizedUsage;
   contextBudgetStatus?: SessionContextBudgetStatus;
   /**
    * True when code mode owned the model tool surface for this run. Config
@@ -192,6 +183,7 @@ export type EmbeddedAgentRunMeta = {
   providerStarted?: boolean;
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
   terminalReplyKind?: "silent-empty";
+  terminalReply?: AgentRunTerminalReplySnapshot;
   yielded?: boolean;
   error?: {
     kind:
@@ -227,6 +219,7 @@ export type EmbeddedAgentRunMeta = {
 
 export type EmbeddedAgentRunResult = {
   latestMcpAppChannelView?: McpAppChannelView;
+  latestMcpConnectAction?: McpConnectAction;
   payloads?: Array<{
     text?: string;
     mediaUrl?: string;

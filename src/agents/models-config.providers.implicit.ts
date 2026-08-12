@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
@@ -58,6 +59,7 @@ type ImplicitProviderParams = {
   agentDir: string;
   authStore?: AuthProfileStore;
   config?: OpenClawConfig;
+  discoveryAuthConfig?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
@@ -67,6 +69,7 @@ type ImplicitProviderParams = {
   staticCatalogProviderIds?: readonly string[];
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
+  onProviderCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
 };
 
 type ImplicitProviderContext = ImplicitProviderParams & {
@@ -437,6 +440,7 @@ async function resolvePluginImplicitProviders(
         resolveProviderApiKey: resolveCatalogProviderApiKey,
         resolveProviderAuth: (providerId, options) =>
           ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
+        reportCatalogOutcome: ctx.onProviderCatalogOutcome,
         timeoutMs: ctx.providerDiscoveryTimeoutMs ?? resolveLiveProviderCatalogTimeoutMs(ctx.env),
       });
     }
@@ -525,6 +529,10 @@ async function runProviderCatalogWithTimeout(
   } catch (error) {
     const message = formatErrorMessage(error);
     if (message.includes("provider catalog timed out after")) {
+      params.reportCatalogOutcome?.({
+        provider: params.provider.id,
+        status: "unavailable",
+      });
       log.warn(`${message}; skipping provider discovery`);
       return undefined;
     }
@@ -600,15 +608,6 @@ export async function resolveImplicitProviders(
       allowKeychainPrompt: false,
       externalCliProviderIds: params.providerDiscoveryProviderIds,
     }));
-  const context: ImplicitProviderContext = {
-    ...params,
-    get authStore() {
-      return getAuthStore();
-    },
-    env,
-    resolveProviderApiKey: createProviderApiKeyResolver(env, getAuthStore, params.config),
-    resolveProviderAuth: createProviderAuthResolver(env, getAuthStore, params.config),
-  };
   const discoveryPluginIds = resolveProviderDiscoveryFilter({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -618,6 +617,18 @@ export async function resolveImplicitProviders(
       : undefined,
     providerIds: params.providerDiscoveryProviderIds,
   });
+  // The runtime config has already resolved SecretRefs at its owning boundary.
+  // Re-resolving source refs here would execute unrelated file/exec providers on catalog reads.
+  const discoveryAuthConfig = params.discoveryAuthConfig ?? params.config;
+  const context: ImplicitProviderContext = {
+    ...params,
+    get authStore() {
+      return getAuthStore();
+    },
+    env,
+    resolveProviderApiKey: createProviderApiKeyResolver(env, getAuthStore, discoveryAuthConfig),
+    resolveProviderAuth: createProviderAuthResolver(env, getAuthStore, discoveryAuthConfig),
+  };
   const preparedStaticEntries = params.preparedStaticProviderCatalog
     ? params.preparedStaticProviderCatalog.entries.filter(
         ({ provider }) =>

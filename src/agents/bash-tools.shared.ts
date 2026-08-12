@@ -14,6 +14,11 @@ import type {
 const CHUNK_LIMIT = 8 * 1024;
 
 /** Sandbox metadata needed to map host workspaces into container exec calls. */
+type BashSandboxWorkdirMount = {
+  hostPath: string;
+  containerPath: string;
+};
+
 export type BashSandboxConfig = {
   containerName: string;
   workspaceDir: string;
@@ -22,6 +27,8 @@ export type BashSandboxConfig = {
   validateWorkdir?: SandboxBackendWorkdirValidator;
   discardPreparedWorkdir?: (workdir: string) => void;
   workdirRoots?: readonly string[];
+  /** Approved read-only skill mounts that may be selected as an exec workdir. */
+  readOnlyWorkspaceSkillMounts?: readonly BashSandboxWorkdirMount[];
   env?: Record<string, string>;
   buildExecSpec?: (params: {
     command: string;
@@ -224,7 +231,7 @@ function stripQuotes(value: string): string {
 }
 
 /** Right-pads a string for aligned plain-text process output. */
-export function pad(str: string, width: number) {
+export function padProcessStatus(str: string, width: number) {
   if (str.length >= width) {
     return str;
   }

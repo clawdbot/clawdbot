@@ -181,12 +181,51 @@ describe("pairing cli", () => {
     }
   });
 
+  it("displays a raw sender id retained by a qualified pending request", async () => {
+    listPairingChannels.mockReturnValueOnce(["slack"]);
+    listChannelPairingRequests.mockResolvedValueOnce([
+      {
+        id: "team:T123:user:U123",
+        code: "ABC123",
+        createdAt: "2026-01-08T00:00:00Z",
+        lastSeenAt: "2026-01-08T00:00:00Z",
+        meta: { senderId: "U123", teamId: "T123" },
+      },
+    ]);
+
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await runPairing(["pairing", "list", "--channel", "slack"]);
+      const output = log.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(output).toContain("U123");
+      expect(output).not.toContain("team:T123:user:U123");
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it("accepts channel as positional for list", async () => {
     listChannelPairingRequests.mockResolvedValueOnce([]);
 
     await runPairing(["pairing", "list", "telegram"]);
 
     expect(listChannelPairingRequests).toHaveBeenCalledWith("telegram");
+  });
+
+  it("rejects conflicting positional and option channels for list", async () => {
+    await expect(
+      runPairing(["pairing", "list", "discord", "--channel", "telegram"]),
+    ).rejects.toThrow(
+      'Conflicting pairing channels: "telegram" and "discord". Pass the channel either positionally or with --channel.',
+    );
+
+    expect(listChannelPairingRequests).not.toHaveBeenCalled();
+  });
+
+  it("accepts matching positional and option channel aliases for list", async () => {
+    await runPairing(["pairing", "list", "imsg", "--channel", "imessage"]);
+
+    expect(listChannelPairingRequests).toHaveBeenCalledWith("imessage");
   });
 
   it("forwards --account for list", async () => {

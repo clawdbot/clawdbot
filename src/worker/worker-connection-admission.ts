@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { Value } from "typebox/value";
 import { WebSocket, type RawData } from "ws";
 import {
@@ -12,11 +13,10 @@ import {
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
-import { rawDataToString } from "../infra/ws.js";
 import {
   WorkerAdmissionError,
   WorkerConnectionInterruptedError,
-  toError,
+  toWorkerConnectionError,
   type WorkerConnectionOptions,
 } from "./worker-connection-contract.js";
 import { closeInvalidWorkerFrame } from "./worker-connection-frames.js";
@@ -113,7 +113,7 @@ export function connectWorkerConnectionAttempt(
 
     socket.on("error", (error) => {
       if (!admitted) {
-        rejectAttempt(new WorkerConnectionInterruptedError(toError(error).message));
+        rejectAttempt(new WorkerConnectionInterruptedError(toWorkerConnectionError(error).message));
       }
     });
     socket.on("open", () => {

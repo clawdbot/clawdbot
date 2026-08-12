@@ -740,11 +740,9 @@ private final class ChatInlineWidgetNavigationDelegate: NSObject, WKNavigationDe
     }
 
     private func matchesExpectedProtectionSpace(_ protectionSpace: URLProtectionSpace) -> Bool {
-        guard let expectedHost = self.resource.url.host,
-              protectionSpace.host.caseInsensitiveCompare(expectedHost) == .orderedSame
-        else { return false }
-        let expectedPort = self.resource.url.port ?? (self.resource.url.scheme?.lowercased() == "https" ? 443 : 80)
-        return protectionSpace.port == expectedPort
+        GatewayTLSAuthority(url: self.resource.url)?.matches(
+            host: protectionSpace.host,
+            port: protectionSpace.port) == true
     }
 }
 

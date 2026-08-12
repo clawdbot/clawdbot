@@ -1,25 +1,36 @@
 name: Docker Release
 
 on:
-  push:
-    tags:
-      - "v*"
-      - "!v*-alpha.*"
-    paths-ignore:
-      - "docs/**"
-      - "**/*.md"
-      - "**/*.mdx"
-      - ".agents/**"
-      - "skills/**"
-  workflow_dispatch:
+  workflow_call:
     inputs:
       tag:
-        description: Existing stable, extended-stable, or beta release tag
+        description: Immutable stable, extended-stable, or beta release tag
         required: true
         type: string
+      release_sha:
+        description: Full immutable commit SHA resolved from tag
+        required: true
+        type: string
+    outputs:
+      version:
+        description: Resolved Docker release version without the v prefix
+        value: ${{ jobs.resolve_release_policy.outputs.version }}
+      include_browser:
+        description: Whether the tagged Docker release includes browser images
+        value: ${{ jobs.create-manifest.outputs.browser_supported }}
+      vcr_source_refs:
+        description: Newline-delimited attestation-verified immutable GHCR source refs
+        value: ${{ jobs.verify-attestations.outputs.vcr_source_refs }}
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: true
+      DOCKERHUB_TOKEN:
+        required: true
 
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && format('docker-release-manual-{0}', inputs.tag) || 'docker-release-publish' }}
+  # Alias promotion checks are read-then-write; serialize every Docker publish
+  # so an older stable run cannot overwrite a newer latest/main promotion.
+  group: docker-release-publish
   cancel-in-progress: false
   queue: max
 
@@ -31,15 +42,15 @@ env:
   DOCKERHUB_IMAGE_NAME: openclaw/openclaw
 
 jobs:
-  validate_manual_backfill:
-    if: github.event_name == 'workflow_dispatch'
+  validate_release_identity:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
-      - name: Validate tag input format
+      - name: Validate immutable tag and SHA inputs
         env:
           RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
         run: |
           set -euo pipefail
           if [[ "${RELEASE_TAG}" == *"-alpha."* ]]; then
@@ -50,16 +61,38 @@ jobs:
             echo "Invalid release tag: ${RELEASE_TAG}"
             exit 1
           fi
+          if [[ ! "${RELEASE_SHA}" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "Release SHA must be a full lowercase commit SHA."
+            exit 1
+          fi
 
-      - name: Checkout selected tag
+      - name: Checkout immutable release tag
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify tag, SHA, and package identity agree
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          set -euo pipefail
+          tag_sha="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          checkout_sha="$(git rev-parse HEAD)"
+          package_version="$(node -p "require('./package.json').version")"
+          if [[ "${tag_sha}" != "${RELEASE_SHA}" || "${checkout_sha}" != "${RELEASE_SHA}" ]]; then
+            echo "Release tag ${RELEASE_TAG} must resolve to supplied SHA ${RELEASE_SHA}; got ${tag_sha}." >&2
+            exit 1
+          fi
+          if [[ "v${package_version}" != "${RELEASE_TAG}" && ! "${RELEASE_TAG}" =~ ^v${package_version}-[1-9][0-9]*$ ]]; then
+            echo "Release tag ${RELEASE_TAG} does not match package.json version ${package_version} or its correction-tag form." >&2
+            exit 1
+          fi
 
   resolve_release_policy:
-    needs: validate_manual_backfill
-    if: ${{ always() && (github.event_name != 'workflow_dispatch' || needs.validate_manual_backfill.result == 'success') }}
+    needs: validate_release_identity
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -78,7 +111,7 @@ jobs:
         id: policy
         shell: bash
         env:
-          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          SOURCE_REF: ${{ format('refs/tags/{0}', inputs.tag) }}
         run: |
           set -euo pipefail
           if [[ "${SOURCE_REF}" != refs/tags/v* ]]; then
@@ -98,20 +131,19 @@ jobs:
             echo "- Channel: ${channel}"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  approve_manual_backfill:
-    name: Approve Docker backfill ${{ inputs.tag }}
-    if: github.event_name == 'workflow_dispatch'
-    needs: [validate_manual_backfill, resolve_release_policy]
-    # WARNING: KEEP MANUAL BACKFILLS GATED BY THE docker-release ENVIRONMENT.
+  approve_docker_publish:
+    name: Approve Docker publication ${{ inputs.tag }}
+    needs: [validate_release_identity, resolve_release_policy]
+    # Docker publication remains protected even though only release orchestration can call it.
     runs-on: ubuntu-24.04
     environment: docker-release
     permissions: {}
     steps:
-      - name: Approve Docker backfill
+      - name: Approve Docker publication
         env:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          echo "Approved immutable Docker image backfill for ${RELEASE_TAG}"
+          echo "Approved immutable Docker image publication for ${RELEASE_TAG}"
 
   validate_publish_config:
     runs-on: ubuntu-24.04
@@ -132,8 +164,8 @@ jobs:
           echo "Docker Hub publishing configured for ${DOCKERHUB_IMAGE}."
 
   resolve_build_provenance:
-    needs: [approve_manual_backfill, resolve_release_policy, validate_publish_config]
-    if: ${{ always() && needs.resolve_release_policy.result == 'success' && needs.validate_publish_config.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
+    needs: [approve_docker_publish, resolve_release_policy, validate_publish_config]
+    if: ${{ always() && needs.approve_docker_publish.result == 'success' && needs.resolve_release_policy.result == 'success' && needs.validate_publish_config.result == 'success' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -144,7 +176,7 @@ jobs:
       - name: Checkout selected source
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.sha }}
+          ref: ${{ inputs.release_sha }}
           fetch-depth: 0
 
       - name: Resolve shared build provenance
@@ -159,8 +191,8 @@ jobs:
   # DO NOT MOVE IT BACK TO BLACKSMITH WITHOUT RE-VALIDATING TAG BUILDS AND BACKFILLS.
   # Build amd64 image. Default and slim tags point to the same slim runtime.
   build-amd64:
-    needs: [approve_manual_backfill, validate_publish_config, resolve_build_provenance]
-    if: ${{ always() && needs.validate_publish_config.result == 'success' && needs.resolve_build_provenance.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
+    needs: [approve_docker_publish, validate_publish_config, resolve_build_provenance]
+    if: ${{ always() && needs.approve_docker_publish.result == 'success' && needs.validate_publish_config.result == 'success' && needs.resolve_build_provenance.result == 'success' }}
     # WARNING: DO NOT REVERT THIS TO A BLACKSMITH RUNNER WITHOUT RE-VALIDATING TAG BACKFILLS.
     runs-on: ubuntu-24.04
     permissions:
@@ -219,7 +251,7 @@ jobs:
         env:
           GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
-          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          SOURCE_REF: ${{ format('refs/tags/{0}', inputs.tag) }}
         run: |
           set -euo pipefail
           tags=()
@@ -259,7 +291,7 @@ jobs:
         env:
           BUILD_TIMESTAMP: ${{ needs.resolve_build_provenance.outputs.built_at }}
           SOURCE_SHA: ${{ needs.resolve_build_provenance.outputs.source_sha }}
-          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          SOURCE_REF: ${{ format('refs/tags/{0}', inputs.tag) }}
         run: |
           set -euo pipefail
           source_sha="${SOURCE_SHA}"
@@ -386,8 +418,8 @@ jobs:
 
   # Build arm64 image. Default and slim tags point to the same slim runtime.
   build-arm64:
-    needs: [approve_manual_backfill, validate_publish_config, resolve_build_provenance]
-    if: ${{ always() && needs.validate_publish_config.result == 'success' && needs.resolve_build_provenance.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
+    needs: [approve_docker_publish, validate_publish_config, resolve_build_provenance]
+    if: ${{ always() && needs.approve_docker_publish.result == 'success' && needs.validate_publish_config.result == 'success' && needs.resolve_build_provenance.result == 'success' }}
     # WARNING: DO NOT REVERT THIS TO A BLACKSMITH RUNNER WITHOUT RE-VALIDATING TAG BACKFILLS.
     runs-on: ubuntu-24.04-arm
     permissions:
@@ -427,7 +459,7 @@ jobs:
         env:
           GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
-          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          SOURCE_REF: ${{ format('refs/tags/{0}', inputs.tag) }}
         run: |
           set -euo pipefail
           tags=()
@@ -467,7 +499,7 @@ jobs:
         env:
           BUILD_TIMESTAMP: ${{ needs.resolve_build_provenance.outputs.built_at }}
           SOURCE_SHA: ${{ needs.resolve_build_provenance.outputs.source_sha }}
-          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          SOURCE_REF: ${{ format('refs/tags/{0}', inputs.tag) }}
         run: |
           set -euo pipefail
           source_sha="${SOURCE_SHA}"
@@ -596,19 +628,21 @@ jobs:
   create-manifest:
     needs:
       [
-        approve_manual_backfill,
+        approve_docker_publish,
         resolve_release_policy,
         validate_publish_config,
         resolve_build_provenance,
         build-amd64,
         build-arm64,
       ]
-    if: ${{ always() && needs.validate_publish_config.result == 'success' && needs.build-amd64.result == 'success' && needs.build-arm64.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
+    if: ${{ always() && needs.approve_docker_publish.result == 'success' && needs.validate_publish_config.result == 'success' && needs.build-amd64.result == 'success' && needs.build-arm64.result == 'success' }}
     # WARNING: DO NOT REVERT THIS TO A BLACKSMITH RUNNER WITHOUT RE-VALIDATING TAG BACKFILLS.
     runs-on: ubuntu-24.04
     permissions:
       packages: write
       contents: read
+    outputs:
+      browser_supported: ${{ steps.tags.outputs.browser_supported }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -636,7 +670,7 @@ jobs:
         env:
           GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
-          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          SOURCE_REF: ${{ format('refs/tags/{0}', inputs.tag) }}
         run: |
           set -euo pipefail
           tags=()
@@ -665,6 +699,11 @@ jobs:
             exit 1
           fi
           {
+            if [[ "${browser_supported}" == "1" ]]; then
+              echo "browser_supported=true"
+            else
+              echo "browser_supported=false"
+            fi
             echo "value<<EOF"
             printf "%s\n" "${tags[@]}" "${slim_tags[@]}"
             echo "EOF"
@@ -683,7 +722,7 @@ jobs:
         shell: bash
         env:
           DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
-          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          SOURCE_REF: ${{ format('refs/tags/{0}', inputs.tag) }}
           TAGS: ${{ steps.tags.outputs.value }}
           BROWSER_TAGS: ${{ steps.tags.outputs.browser }}
           DOCKERHUB_TAGS: ${{ steps.tags.outputs.dockerhub }}
@@ -731,6 +770,8 @@ jobs:
     needs: [resolve_release_policy, resolve_build_provenance, create-manifest]
     if: ${{ always() && needs.create-manifest.result == 'success' }}
     runs-on: ubuntu-24.04
+    outputs:
+      vcr_source_refs: ${{ steps.vcr_source_refs.outputs.value }}
     permissions:
       contents: read
       packages: write
@@ -765,7 +806,7 @@ jobs:
         env:
           GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
-          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          SOURCE_REF: ${{ format('refs/tags/{0}', inputs.tag) }}
         run: |
           set -euo pipefail
           multi_refs=()
@@ -879,8 +920,58 @@ jobs:
             --platform linux/arm64 \
             "${dockerhub_arm64_refs[@]}"
 
+      # Resolve the moving release tags once, then verify the exact immutable
+      # indexes that the VCR publisher will consume. Passing those digest refs
+      # across the job boundary prevents a later tag rewrite from changing the
+      # bytes copied after attestation verification.
+      - name: Resolve and verify immutable VCR source refs
+        id: vcr_source_refs
+        shell: bash
+        env:
+          GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          INCLUDE_BROWSER: ${{ needs.create-manifest.outputs.browser_supported }}
+          VERSION: ${{ needs.resolve_release_policy.outputs.version }}
+        run: |
+          set -euo pipefail
+          aliases=(default slim)
+          tags=("${VERSION}" "${VERSION}-slim")
+          if [[ "${INCLUDE_BROWSER}" == "true" ]]; then
+            aliases+=(browser)
+            tags+=("${VERSION}-browser")
+          fi
+
+          source_refs=()
+          immutable_refs=()
+          for index in "${!aliases[@]}"; do
+            tagged_ref="${GHCR_IMAGE}:${tags[$index]}"
+            descriptor="$(
+              docker buildx imagetools inspect \
+                "${tagged_ref}" \
+                --format '{{json .Manifest}}'
+            )"
+            digest="$(
+              jq -er \
+                '.digest | select(type == "string" and test("^sha256:[a-f0-9]{64}$"))' \
+                <<< "${descriptor}"
+            )"
+            immutable_ref="${GHCR_IMAGE}@${digest}"
+            source_refs+=("${aliases[$index]}=${immutable_ref}")
+            immutable_refs+=("${immutable_ref}")
+          done
+
+          node scripts/verify-docker-attestations.mjs \
+            --platform linux/amd64 \
+            --platform linux/arm64 \
+            "${immutable_refs[@]}"
+
+          {
+            echo "value<<EOF"
+            printf '%s\n' "${source_refs[@]}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
       - name: Promote and verify channel aliases
-        if: ${{ github.event_name != 'workflow_dispatch' && needs.resolve_release_policy.outputs.channel != 'beta' }}
+        if: ${{ needs.resolve_release_policy.outputs.channel != 'beta' }}
         env:
           VERSION: ${{ needs.resolve_release_policy.outputs.version }}
           GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}

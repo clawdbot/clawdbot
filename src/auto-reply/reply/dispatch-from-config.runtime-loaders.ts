@@ -6,11 +6,14 @@ const getReplyFromConfigRuntimeLoader = createLazyImportLoader(
 );
 const abortRuntimeLoader = createLazyImportLoader(() => import("./abort.runtime.js"));
 const fastApproveRuntimeLoader = createLazyImportLoader(() => import("./fast-approve.runtime.js"));
-const runtimePluginsLoader = createLazyImportLoader(
-  () => import("../../plugins/runtime-plugins.runtime.js"),
-);
 const replyMediaPathsRuntimeLoader = createLazyImportLoader(
   () => import("./reply-media-paths.runtime.js"),
+);
+const runtimePluginsLoader = createLazyImportLoader(
+  () => import("../../agents/runtime-plugins.js"),
+);
+const preparedModelRuntimeLoader = createLazyImportLoader(
+  () => import("../../agents/prepared-model-runtime.js"),
 );
 
 export function loadRouteReplyRuntime() {
@@ -29,10 +32,14 @@ export function loadFastApproveRuntime() {
   return fastApproveRuntimeLoader.load();
 }
 
+export function loadReplyMediaPathsRuntime() {
+  return replyMediaPathsRuntimeLoader.load();
+}
+
 export function loadRuntimePlugins() {
   return runtimePluginsLoader.load();
 }
 
-export function loadReplyMediaPathsRuntime() {
-  return replyMediaPathsRuntimeLoader.load();
+export function loadPreparedModelRuntime() {
+  return preparedModelRuntimeLoader.load();
 }

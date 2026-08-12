@@ -1,5 +1,6 @@
 // Resolves the LAN host OpenClaw should advertise to nearby devices.
 import { isRfc1918Ipv4Address } from "@openclaw/net-policy/ip";
+import { normalizeLowercaseStringOrEmpty as normalizeInterfaceName } from "@openclaw/normalization-core/string-coerce";
 import { runCommandWithTimeout as defaultRunCommandWithTimeout } from "../process/exec.js";
 import {
   listExternalInterfaceAddresses,
@@ -10,9 +11,8 @@ import {
 const DEFAULT_ROUTE_HINT_TIMEOUT_MS = 3_000;
 const DEFAULT_ROUTE_HINT_OUTPUT_BYTES = 16 * 1024;
 const WINDOWS_DEFAULT_ROUTE_COMMAND =
-  "Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | " +
-  "Select-Object -Property InterfaceAlias,InterfaceIndex,NextHop,RouteMetric,InterfaceMetric,DestinationPrefix | " +
-  "ConvertTo-Json -Compress";
+  "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' | " +
+  "Select-Object -Property InterfaceAlias,RouteMetric,InterfaceMetric | ConvertTo-Json -Compress";
 
 type AdvertisedLanHostCandidate = {
   interfaceName: string;
@@ -55,10 +55,6 @@ type RankedWindowsRouteRow = {
   interfaceMetric: number;
   order: number;
 };
-
-function normalizeInterfaceName(name: unknown): string {
-  return typeof name === "string" ? name.trim().toLowerCase() : "";
-}
 
 function normalizeMetric(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -227,7 +223,7 @@ async function resolveDefaultRouteHints(params: {
   return [];
 }
 
-export async function resolveAdvertisedLanHost(
+export async function resolveAdvertisedLanHostCore(
   options: ResolveAdvertisedLanHostOptions = {},
 ): Promise<string | null> {
   const candidates = listAdvertisedLanHostCandidates(

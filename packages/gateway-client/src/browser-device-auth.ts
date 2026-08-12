@@ -68,6 +68,7 @@ export class GatewayBrowserDeviceAuthLifecycle {
     trustedDeviceTokenRetry?: boolean;
     preferBootstrapToken?: boolean;
     nonce: string | null;
+    challengeTs?: number | null;
   }): Promise<GatewayBrowserDeviceAuthPlan> {
     const identity = await this.deps.loadIdentity();
     const stored = identity
@@ -109,7 +110,12 @@ export class GatewayBrowserDeviceAuthLifecycle {
         auth: buildGatewayConnectAuth(selectedAuth),
       };
     }
-    const signedAtMs = this.deps.nowMs?.() ?? Date.now();
+    // Undefined is reserved for an explicit no-challenge fallback; a received invalid challenge is null.
+    const signedAtMs =
+      params.challengeTs === undefined ? (this.deps.nowMs?.() ?? Date.now()) : params.challengeTs;
+    if (typeof signedAtMs !== "number" || !Number.isSafeInteger(signedAtMs) || signedAtMs < 0) {
+      throw new Error("gateway connect challenge timestamp invalid");
+    }
     const nonce = params.nonce ?? "";
     const { authBootstrapToken: primary, signatureToken: signed } = selectedAuth;
     let token: string | null = null;
@@ -155,12 +161,18 @@ export class GatewayBrowserDeviceAuthLifecycle {
     if (!token || !plan.identity) {
       return;
     }
+    const role = hello.auth?.role ?? plan.role;
+    const stored = await this.deps.tokenStore.load({
+      clientId: plan.clientId,
+      deviceId: plan.identity.deviceId,
+      role,
+    });
     await this.deps.tokenStore.store({
       clientId: plan.clientId,
       deviceId: plan.identity.deviceId,
-      role: hello.auth?.role ?? plan.role,
+      role,
       token,
-      scopes: hello.auth?.scopes ?? [],
+      scopes: stored?.token === token ? stored.scopes : (hello.auth?.scopes ?? []),
     });
   }
 

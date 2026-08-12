@@ -3,10 +3,8 @@ import type { AddressInfo } from "node:net";
 import type { AssistantMessage, Context, Model } from "@openclaw/ai";
 import { streamOpenAICompletions } from "@openclaw/ai/internal/openai";
 import { describe, expect, it } from "vitest";
-import {
-  classifyAssistantFailoverReason,
-  formatAssistantErrorText,
-} from "./embedded-agent-helpers/errors.js";
+import { classifyAssistantFailoverReason } from "./embedded-agent-helpers/assistant-message-failures.js";
+import { formatAssistantErrorText } from "./embedded-agent-helpers/error-text.js";
 import { resolveFailoverStatus, resolveModelFallbackError } from "./failover-error.js";
 
 const model = {

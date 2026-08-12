@@ -1,14 +1,18 @@
 /**
  * Updates persisted session metadata after agent command runs.
  */
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { setSessionRuntimeModel, type SessionEntry } from "../../config/sessions.js";
-import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  SESSION_TOTAL_TOKENS_VERSION,
+  setSessionRuntimeModel,
+  type SessionEntry,
+} from "../../config/sessions.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { projectSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
 import {
   clearCliSession,
   getCliSessionBinding,
@@ -16,7 +20,7 @@ import {
   setCliSessionId,
 } from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-import { clearMainSessionRecoveryAfterAgentRun } from "../main-session-recovery-clear.js";
+import { clearMainSessionRecoveryAfterAgentRun } from "../main-session-recovery/main-session-recovery-clear.js";
 import { isCliProvider } from "../model-selection.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
 
@@ -208,7 +212,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
       contextTokens,
       promptTokens,
     });
-    const runEstimatedCostUsd = resolveNonNegativeNumber(
+    const runEstimatedCostUsd = asNonNegativeFiniteNumber(
       estimateUsageCost({
         usage,
         cost: resolveModelCostConfig({
@@ -226,6 +230,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
     if (useCompactionSnapshot) {
       next.totalTokens = compactionTokensAfter;
       next.totalTokensFresh = true;
+      next.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
       next.inputTokens = undefined;
       next.outputTokens = undefined;
       next.cacheRead = undefined;
@@ -234,9 +239,11 @@ export async function updateSessionStoreAfterAgentRun(params: {
     } else if (hasUsageTotalTokens) {
       next.totalTokens = totalTokens;
       next.totalTokensFresh = true;
+      next.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
     } else {
       next.totalTokens = undefined;
       next.totalTokensFresh = false;
+      next.totalTokensVersion = undefined;
     }
     if (!useCompactionSnapshot) {
       next.cacheRead = usage.cacheRead ?? 0;
@@ -251,6 +258,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   } else if (compactionTokensAfter !== undefined && !preserveUserFacingRunState) {
     next.totalTokens = compactionTokensAfter;
     next.totalTokensFresh = true;
+    next.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
     next.inputTokens = undefined;
     next.outputTokens = undefined;
     next.cacheRead = undefined;
@@ -264,6 +272,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   ) {
     next.totalTokens = entry.totalTokens;
     next.totalTokensFresh = false;
+    next.totalTokensVersion = undefined;
   }
   if (compactionsThisRun > 0 && !preserveUserFacingRunState) {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
@@ -277,7 +286,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
       }
     : next;
   const maintenanceConfig = resolveMaintenanceConfigFromInput(cfg.session?.maintenance);
-  const persisted = await patchSessionEntry(
+  const persisted = await patchSessionEntryCore(
     {
       storePath,
       sessionKey,
@@ -328,7 +337,8 @@ export async function clearCliSessionInStore(params: {
     return undefined;
   }
 
-  const persisted = await patchSessionEntry(
+  let didClear = false;
+  const persisted = await patchSessionEntryCore(
     {
       storePath,
       sessionKey,
@@ -349,14 +359,16 @@ export async function clearCliSessionInStore(params: {
       const next = { ...currentEntry };
       clearCliSession(next, provider);
       next.updatedAt = Date.now();
+      didClear = true;
       return next;
     },
     { fallbackEntry: entry },
   );
-  if (persisted) {
+  if (persisted && didClear) {
     sessionStore[sessionKey] = persisted;
+    return persisted;
   }
-  return persisted ?? undefined;
+  return undefined;
 }
 
 /** Clears the one-shot fork marker before the resumed CLI process starts. */
@@ -373,7 +385,7 @@ export async function consumeCliSessionForkInStore(params: {
   if (!entry || binding?.sessionId !== expectedCliSessionId || binding.forkNextResume !== true) {
     return undefined;
   }
-  const persisted = await patchSessionEntry(
+  const persisted = await patchSessionEntryCore(
     { storePath, sessionKey },
     (currentEntry) => {
       const currentBinding = currentEntry.cliSessionBindings?.[provider];
@@ -410,7 +422,7 @@ export async function restoreCliSessionForkInStore(params: {
   if (!entry || binding?.sessionId !== expectedCliSessionId || binding.forkNextResume === true) {
     return undefined;
   }
-  const persisted = await patchSessionEntry(
+  const persisted = await patchSessionEntryCore(
     { storePath, sessionKey },
     (currentEntry) => {
       const currentBinding = currentEntry.cliSessionBindings?.[provider];
@@ -453,7 +465,7 @@ export async function persistCliSessionForkSuccessorInStore(params: {
   if (!entry || successorCliSessionId === expectedCliSessionId) {
     return undefined;
   }
-  const persisted = await patchSessionEntry(
+  const persisted = await patchSessionEntryCore(
     { storePath, sessionKey },
     (currentEntry) => {
       const currentBinding = currentEntry.cliSessionBindings?.[provider];
@@ -509,24 +521,26 @@ export async function recordCliCompactionInStore(params: {
       new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, newSessionId]),
     );
   }
-  const tokensAfterCompaction = resolveNonNegativeNumber(params.tokensAfter);
+  const tokensAfterCompaction = asNonNegativeFiniteNumber(params.tokensAfter);
   next.contextBudgetStatus = undefined;
   if (tokensAfterCompaction !== undefined) {
     next.totalTokens = Math.floor(tokensAfterCompaction);
     next.totalTokensFresh = true;
+    next.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
     next.inputTokens = undefined;
     next.outputTokens = undefined;
     next.cacheRead = undefined;
     next.cacheWrite = undefined;
   } else {
     next.totalTokensFresh = false;
+    next.totalTokensVersion = undefined;
     next.inputTokens = undefined;
     next.outputTokens = undefined;
     next.cacheRead = undefined;
     next.cacheWrite = undefined;
   }
 
-  const persisted = await patchSessionEntry(
+  const persisted = await patchSessionEntryCore(
     {
       storePath,
       sessionKey,

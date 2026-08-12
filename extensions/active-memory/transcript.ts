@@ -7,7 +7,7 @@ import {
   type SessionTranscriptTargetParams,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
-  asOptionalRecord as asRecord,
+  asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -176,8 +176,9 @@ async function streamActiveMemoryTranscriptRecords(params: {
 }
 
 function resolveToolResultMessage(value: unknown): Record<string, unknown> | undefined {
-  const record = asRecord(value);
-  const message = asRecord(record?.message) ?? (record?.role === "toolResult" ? record : undefined);
+  const record = asOptionalRecord(value);
+  const message =
+    asOptionalRecord(record?.message) ?? (record?.role === "toolResult" ? record : undefined);
   return message && normalizeOptionalString(message.role) === "toolResult" ? message : undefined;
 }
 
@@ -192,8 +193,8 @@ function extractActiveMemorySearchDebugFromSessionRecord(
   if (toolName !== "memory_search" && toolName !== "memory_recall") {
     return undefined;
   }
-  const details = asRecord(message.details);
-  const debug = asRecord(details?.debug);
+  const details = asOptionalRecord(message.details);
+  const debug = asOptionalRecord(details?.debug);
   const warning = normalizeOptionalString(details?.warning);
   const action = normalizeOptionalString(details?.action);
   const error = normalizeOptionalString(details?.error);
@@ -240,7 +241,7 @@ function hasUnavailableMemoryResultInSessionRecord(
   if (!toolName || !toolsAllow.includes(toolName)) {
     return false;
   }
-  const details = asRecord(message.details);
+  const details = asOptionalRecord(message.details);
   const unavailable = message.isError === true || readStructuredMemoryFailure(details) === true;
   if (unavailable) {
     return true;
@@ -260,7 +261,7 @@ function hasTerminalUnavailableMemoryResultInSessionRecord(
   if (!toolName || !toolsAllow.includes(toolName)) {
     return false;
   }
-  const details = asRecord(message.details);
+  const details = asOptionalRecord(message.details);
   if (details?.disabled === true || details?.unavailable === true) {
     return true;
   }
@@ -325,7 +326,7 @@ function hasUsableMemoryResultInSessionRecord(
   if (hasUnavailableMemoryResultInSessionRecord(value, toolsAllow)) {
     return false;
   }
-  const details = asRecord(message.details);
+  const details = asOptionalRecord(message.details);
   const content = extractTextContent(message.content);
   if (toolName === "memory_search") {
     if (Array.isArray(details?.results)) {
@@ -372,7 +373,7 @@ function hasUsableMemoryResultInSessionRecord(
       return true;
     }
     try {
-      const parsed = asRecord(JSON.parse(content));
+      const parsed = asOptionalRecord(JSON.parse(content));
       return (
         typeof parsed?.expandedSummaryCount === "number" &&
         Number.isFinite(parsed.expandedSummaryCount) &&

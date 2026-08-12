@@ -229,11 +229,11 @@ async function runCommandWithExternalOutput(params: {
     },
   });
   if (deferredError) {
-    throw toErrorObject(deferredError);
+    throw toMantisError(deferredError);
   }
 }
 
-function toErrorObject(error: unknown): Error {
+function toMantisError(error: unknown): Error {
   return error instanceof Error ? error : new Error(formatErrorMessage(error));
 }
 

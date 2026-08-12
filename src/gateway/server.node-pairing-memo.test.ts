@@ -1,8 +1,8 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { requestNodePairing } from "../infra/device-pairing-node.js";
 import { listDevicePairing } from "../infra/device-pairing.js";
-import { requestNodePairing } from "../infra/node-pairing.js";
 import { configureSqliteConnectionPragmas } from "../infra/sqlite-wal.js";
 import {
   closeOpenClawStateDatabaseForTest,

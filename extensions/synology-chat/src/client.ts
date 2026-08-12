@@ -5,18 +5,22 @@
 
 import * as http from "node:http";
 import * as https from "node:https";
+import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
   formatErrorMessage,
   resolvePinnedHostnameWithPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import { z } from "zod";
 
 const MIN_SEND_INTERVAL_MS = 500;
+export const SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT = 2_000;
 /** user_list JSON can be larger than inbound webhook pre-auth payloads. */
 const USER_LIST_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 /** Wall-clock budget for user_list fetch including response body. */
@@ -25,6 +29,42 @@ const USER_LIST_REQUEST_TIMEOUT_MS = 15_000;
 const POST_REQUEST_TIMEOUT_MS = 30_000;
 let lastSendTime = 0;
 let sendQueue: Promise<void> = Promise.resolve();
+
+const UNPROVEN_TRANSPORT_ERROR_BRANCH = "unproven transport error branch";
+
+function nestedTransportErrorCandidates(current: Record<string, unknown>): unknown[] {
+  const aggregateBranches = Array.isArray(current.errors)
+    ? current.errors.map((branch) => branch ?? UNPROVEN_TRANSPORT_ERROR_BRANCH)
+    : [];
+  const wrappers = [current.cause, current.original, current.error, current.reason].filter(
+    (candidate) => candidate !== undefined && candidate !== null,
+  );
+  return [...aggregateBranches, ...wrappers];
+}
+
+function isProvenPreConnectFailure(error: unknown): boolean {
+  let foundPreConnectLeaf = false;
+  for (const candidate of collectErrorGraphCandidates(error, nestedTransportErrorCandidates)) {
+    const classification = classifyTransientNetworkErrorCode(extractErrorCode(candidate));
+    const nested =
+      candidate && typeof candidate === "object"
+        ? nestedTransportErrorCandidates(candidate as Record<string, unknown>)
+        : [];
+    // A webhook POST is safe to replay only when every terminal transport branch
+    // proves it failed before connect; aggregate summary codes cannot hide a reset.
+    if (nested.length > 0) {
+      if (classification === "ambiguous") {
+        return false;
+      }
+      continue;
+    }
+    if (classification !== "pre-connect") {
+      return false;
+    }
+    foundPreConnectLeaf = true;
+  }
+  return foundPreConnectLeaf;
+}
 
 // --- Chat user_id resolution ---
 // Synology Chat uses two different user_id spaces:
@@ -99,23 +139,38 @@ export async function sendMessage(
   userId?: string | number,
   allowInsecureSsl = false,
 ): Promise<boolean> {
+  const chunks = chunkTextForOutbound(text, SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT);
+  for (const chunk of chunks.length > 0 ? chunks : [text]) {
+    if (!(await sendMessageChunk(incomingUrl, chunk, userId, allowInsecureSsl))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+async function sendMessageChunk(
+  incomingUrl: string,
+  text: string,
+  userId?: string | number,
+  allowInsecureSsl = false,
+): Promise<boolean> {
   // Synology Chat API requires user_ids (numeric) to specify the recipient
   // The @mention is optional but user_ids is mandatory
   const body = buildWebhookBody({ text }, userId);
 
-  // Retry with exponential backoff (3 attempts, 300ms base)
+  // A webhook POST is non-idempotent. Retry only when the transport proves the
+  // request never connected; replaying an ambiguous failure can duplicate a message.
   const maxRetries = 3;
   const baseDelay = 300;
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       await waitForSendSlot();
-      const ok = await doPost(incomingUrl, body, allowInsecureSsl);
-      if (ok) {
-        return true;
+      return await doPost(incomingUrl, body, allowInsecureSsl);
+    } catch (error) {
+      if (!isProvenPreConnectFailure(error)) {
+        return false;
       }
-    } catch {
-      // will retry
     }
 
     if (attempt < maxRetries - 1) {
@@ -378,8 +433,25 @@ function doPost(url: string, body: string, allowInsecureSsl = false): Promise<bo
       },
       (res) => {
         response = res;
+        const responseChunks: Buffer[] = [];
+        let responseBytes = 0;
+        res.on("data", (chunk: Buffer) => {
+          responseBytes += chunk.length;
+          if (responseBytes <= USER_LIST_RESPONSE_MAX_BYTES) {
+            responseChunks.push(chunk);
+          } else {
+            responseChunks.length = 0;
+          }
+        });
         res.on("end", () => {
-          finish({ ok: res.statusCode === 200 });
+          const result =
+            responseBytes <= USER_LIST_RESPONSE_MAX_BYTES
+              ? safeParseJsonWithSchema(
+                  ChatUserListResponseSchema.pick({ success: true }),
+                  Buffer.concat(responseChunks).toString("utf8"),
+                )
+              : null;
+          finish({ ok: res.statusCode === 200 && result?.success !== false });
         });
         res.on("error", (error) => finish({ error }));
         res.resume();

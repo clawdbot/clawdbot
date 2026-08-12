@@ -15,7 +15,7 @@ import type {
 } from "../types.js";
 import type { CronServiceState } from "./state.js";
 
-export const MAX_TIMER_DELAY_MS = 60_000;
+export const MAX_CRON_TIMER_DELAY_MS = 60_000;
 
 export const HEARTBEAT_SKIP_DISABLED = "disabled";
 
@@ -58,6 +58,7 @@ export type CronJobRunResult = CronRunOutcome &
   Pick<CronRunTelemetry, "provider"> & {
     deliveryError?: string;
     delivered?: boolean;
+    deliveryAttempted?: boolean;
     startedAt: number;
     endedAt: number;
     nextCheck?: CronNextCheckProposal;

@@ -14,12 +14,12 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  listSessionEntries: (scope?: { storePath?: string; clone?: boolean }) =>
+  listSessionEntriesCore: (scope?: { storePath?: string; clone?: boolean }) =>
     hoisted.listSessionEntriesMock(scope),
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
-  resolveStorePath: (_store?: string, params?: { agentId?: string }) =>
+  resolveSessionStorePathCore: (_store?: string, params?: { agentId?: string }) =>
     `/stores/${params?.agentId ?? "main"}.json`,
 }));
 
@@ -33,7 +33,7 @@ vi.mock("../agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",
 }));
 
-const { resolveSessionKeyForRequest, resolveStoredSessionKeyForSessionId } =
+const { resolveSessionKeyForRequestCore, resolveStoredSessionKeyForSessionId } =
   await import("./session.js");
 
 function mockSessionStores(storesByPath: Record<string, Record<string, SessionEntry>>): void {
@@ -51,7 +51,7 @@ function expectResolvedRequestSession(params: {
   sessionStore: Record<string, SessionEntry>;
   storePath: string;
 }): void {
-  const result = resolveSessionKeyForRequest({
+  const result = resolveSessionKeyForRequestCore({
     cfg: {
       session: {
         store: "/stores/{agentId}.json",
@@ -151,7 +151,7 @@ describe("resolveSessionKeyForRequest", () => {
       "/stores/other.json": otherStore,
     });
 
-    const result = resolveSessionKeyForRequest({
+    const result = resolveSessionKeyForRequestCore({
       cfg: {
         session: {
           store: "/stores/{agentId}.json",

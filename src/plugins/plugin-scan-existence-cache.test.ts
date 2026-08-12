@@ -2,33 +2,20 @@
 // probes hit the filesystem once, across scans the filesystem is re-read (no
 // process-global staleness), and outside a scan it is a plain passthrough.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadBundleManifest, detectBundleManifestFormat } from "./bundle-manifest.js";
 import {
   pluginScanExistsSync,
   withPluginScanExistenceCache,
 } from "./plugin-scan-existence-cache.js";
 
-const tempDirs: string[] = [];
-
-function makeTempDir(prefix: string): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  tempDirs.push(dir);
-  return dir;
-}
-
-afterEach(() => {
-  for (const dir of tempDirs) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-  tempDirs.length = 0;
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("pluginScanExistsSync", () => {
   it("is a plain passthrough outside a scan (no caching)", () => {
-    const dir = makeTempDir("exists-passthrough-");
+    const dir = tempDirs.make("exists-passthrough-");
     const target = path.join(dir, "marker.json");
     fs.writeFileSync(target, "{}");
     const spy = vi.spyOn(fs, "existsSync");
@@ -44,7 +31,7 @@ describe("pluginScanExistsSync", () => {
   });
 
   it("memoizes repeated probes within a single scan pass", () => {
-    const dir = makeTempDir("exists-memoize-");
+    const dir = tempDirs.make("exists-memoize-");
     const target = path.join(dir, "marker.json");
     fs.writeFileSync(target, "{}");
     const spy = vi.spyOn(fs, "existsSync");
@@ -67,7 +54,7 @@ describe("pluginScanExistsSync", () => {
   });
 
   it("does not conflate different paths inside a scan", () => {
-    const dir = makeTempDir("exists-distinct-");
+    const dir = tempDirs.make("exists-distinct-");
     const present = path.join(dir, "present.json");
     const absent = path.join(dir, "absent.json");
     fs.writeFileSync(present, "{}");
@@ -87,7 +74,7 @@ describe("pluginScanExistsSync", () => {
   });
 
   it("re-reads the filesystem across separate scans (no process-global staleness)", () => {
-    const dir = makeTempDir("exists-freshness-");
+    const dir = tempDirs.make("exists-freshness-");
     const target = path.join(dir, "marker.json");
     // First scan sees the path absent.
     withPluginScanExistenceCache(() => {
@@ -120,7 +107,7 @@ describe("bundle manifest scan uses the existence cache", () => {
   }
 
   it("reduces fs.existsSync calls when detect + load run under one scan cache", () => {
-    const root = makeTempDir("claude-bundle-");
+    const root = tempDirs.make("claude-bundle-");
     buildClaudeBundlePlugin(root);
 
     // Run a detect + load pair and count fs.existsSync calls under a spy.

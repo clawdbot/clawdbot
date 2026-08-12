@@ -38,7 +38,7 @@ import {
   buildTextToolResult,
   REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
   resolveModelFromRegistry,
-  resolveMediaToolLocalRoots,
+  resolveMediaToolReferenceAccess,
   resolveModelRuntimeApiKey,
   resolvePromptAndModelOverride,
   resolveRemoteMediaSsrfPolicy,
@@ -56,7 +56,6 @@ import {
 import { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
 import {
   createSandboxBridgeReadFile,
-  resolveSandboxedBridgeMediaPath,
   runWithImageModelFallback,
   type AnyAgentTool,
   type SandboxedBridgeMediaPathConfig,
@@ -530,32 +529,26 @@ export function createPdfTool(options?: {
           return trimmed;
         })();
 
-        const resolvedPathInfo: { resolved: string; rewrittenFrom?: string } = sandboxConfig
-          ? await resolveSandboxedBridgeMediaPath({
-              sandbox: sandboxConfig,
-              mediaPath: resolvedPdf,
-              inboundFallbackDir: "media/inbound",
-            })
-          : {
-              resolved: resolvedPdf.startsWith("file://")
-                ? resolvedPdf.slice("file://".length)
-                : resolvedPdf,
-            };
-        const localRoots = resolveMediaToolLocalRoots(
-          options?.workspaceDir,
-          {
+        const { resolvedPath, localRoots, rewrittenFrom } = await resolveMediaToolReferenceAccess({
+          input: resolvedPdf,
+          isDataUrl: false,
+          workspaceDir: options?.workspaceDir,
+          sandbox: sandboxConfig,
+          rootOptions: {
             workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
           },
-          [resolvedPathInfo.resolved],
-        );
+        });
+        if (resolvedPath === null) {
+          throw new Error("PDF reference resolved without a path.");
+        }
 
         const media = sandboxConfig
-          ? await loadWebMediaRaw(resolvedPathInfo.resolved, {
+          ? await loadWebMediaRaw(resolvedPath, {
               maxBytes,
               sandboxValidated: true,
               readFile: createSandboxBridgeReadFile({ sandbox: sandboxConfig }),
             })
-          : await loadWebMediaRaw(resolvedPathInfo.resolved, {
+          : await loadWebMediaRaw(resolvedPath, {
               maxBytes,
               localRoots,
               ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
@@ -584,10 +577,8 @@ export function createPdfTool(options?: {
           base64,
           buffer: media.buffer,
           filename,
-          resolvedPath: resolvedPathInfo.resolved,
-          ...(resolvedPathInfo.rewrittenFrom
-            ? { rewrittenFrom: resolvedPathInfo.rewrittenFrom }
-            : {}),
+          resolvedPath,
+          ...(rewrittenFrom ? { rewrittenFrom } : {}),
         });
       }
 

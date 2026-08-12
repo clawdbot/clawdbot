@@ -223,6 +223,33 @@ describe("tool-cards", () => {
     );
   });
 
+  it("labels a completed Codex file creation from its recorded operation", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:patch:add",
+          name: "apply_patch",
+          args: {
+            changes: [
+              {
+                path: "src/new.ts",
+                kind: { type: "add" },
+                diff: "export const created = true;\n",
+              },
+            ],
+          },
+          completed: true,
+        },
+        { expanded: false, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-tool-row__verb")?.textContent).toBe("Created");
+    expect(container.querySelector(".chat-tool-row__target")?.textContent).toBe("new.ts");
+  });
+
   it("renders edit and write rows from their result outcome", () => {
     const mutations = [
       {
@@ -239,11 +266,11 @@ describe("tool-cards", () => {
     const states = [
       {
         name: "running",
-        card: { live: true },
+        card: { live: true, liveDiffStat: { added: 12, removed: 3 } },
         runActive: true,
         verb: "running",
         label: "Attempted changes",
-        hasStat: false,
+        hasStat: true,
         failed: false,
       },
       {

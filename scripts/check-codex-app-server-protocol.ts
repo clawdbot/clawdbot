@@ -3,6 +3,9 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  codexAppServerSharedDefinitionsSchema,
+  compactCodexAppServerProtocolJsonSchemas,
+  expandCodexAppServerProtocolJsonSchema,
   generateExperimentalCodexAppServerProtocolSource,
   normalizeCodexAppServerProtocolJsonText,
   selectedCodexAppServerJsonSchemas,
@@ -486,27 +489,62 @@ function relativeTypeScriptImport(fromFile: string, toFile: string): string {
 }
 
 async function compareGeneratedProtocolMirror(sourceJsonRoot: string): Promise<void> {
+  const sourceSchemas = new Map<string, unknown>();
   for (const schema of selectedCodexAppServerJsonSchemas) {
     const sourcePath = path.join(sourceJsonRoot, schema);
-    const targetPath = path.join(generatedRoot, "json", schema);
-    let sourceValue: string;
-    let target: string;
     try {
-      sourceValue = await fs.readFile(sourcePath, "utf8");
+      sourceSchemas.set(schema, JSON.parse(await fs.readFile(sourcePath, "utf8")));
     } catch (error) {
       failures.push(
         `protocol-generated/json/${schema}: missing upstream schema (${String(error)})`,
       );
+    }
+  }
+  if (sourceSchemas.size !== selectedCodexAppServerJsonSchemas.length) {
+    return;
+  }
+
+  const expected = compactCodexAppServerProtocolJsonSchemas(sourceSchemas);
+  const local = new Map<string, unknown>();
+  for (const [schema, expectedValue] of expected) {
+    const targetPath = path.join(generatedRoot, "json", schema);
+    try {
+      const target = await fs.readFile(targetPath, "utf8");
+      local.set(schema, JSON.parse(target));
+      if (normalizeJsonSchema(JSON.stringify(expectedValue)) !== normalizeJsonSchema(target)) {
+        failures.push(`protocol-generated/json/${schema}: differs from compacted source schema`);
+      }
+    } catch (error) {
+      failures.push(`protocol-generated/json/${schema}: missing local schema (${String(error)})`);
+    }
+  }
+
+  const sharedSchema = local.get(codexAppServerSharedDefinitionsSchema);
+  if (sharedSchema === undefined) {
+    return;
+  }
+  for (const schema of selectedCodexAppServerJsonSchemas) {
+    const compactSchema = local.get(schema);
+    const sourceSchema = sourceSchemas.get(schema);
+    if (compactSchema === undefined || sourceSchema === undefined) {
       continue;
     }
     try {
-      target = await fs.readFile(targetPath, "utf8");
+      const expanded = expandCodexAppServerProtocolJsonSchema({
+        schema: compactSchema,
+        schemaPath: schema,
+        sharedSchema,
+      });
+      if (
+        normalizeJsonSchema(JSON.stringify(expanded)) !==
+        normalizeJsonSchema(JSON.stringify(sourceSchema))
+      ) {
+        failures.push(
+          `protocol-generated/json/${schema}: compact schema does not expand to its source schema`,
+        );
+      }
     } catch (error) {
-      failures.push(`protocol-generated/json/${schema}: missing local schema (${String(error)})`);
-      continue;
-    }
-    if (normalizeJsonSchema(sourceValue) !== normalizeJsonSchema(target)) {
-      failures.push(`protocol-generated/json/${schema}: differs from source schema`);
+      failures.push(`protocol-generated/json/${schema}: cannot expand (${String(error)})`);
     }
   }
 }

@@ -1,5 +1,5 @@
 import { createAssistantMessageEventStream } from "@openclaw/llm-core";
-import type { Api, Model, StreamFn } from "@openclaw/llm-core";
+import type { Api, AssistantMessageEventStreamContract, Model, StreamFn } from "@openclaw/llm-core";
 // Simple completion transport tests cover provider-specific stream alias
 // selection before the generic completion helper invokes the LLM layer.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,9 +15,8 @@ const createOpenClawTransportStreamFnForModel = vi.fn();
 const createTransportAwareStreamFnForModel = vi.fn();
 const prepareTransportAwareSimpleModel = vi.fn();
 const resolveTransportAwareSimpleApi = vi.fn();
-const prepareGoogleSimpleCompletionModel = vi.fn((_registry: unknown, model: unknown) => model);
 const inheritManagedTransport = vi.fn((_source: Model, target: Model) => target);
-const pluginStreamFn = vi.fn(() => "plugin-stream-result" as never);
+const pluginStreamFn = vi.fn(() => createAssistantMessageEventStream());
 const TEST_SECRET = "ollama-provider-secret";
 const TEST_SECRET_SENTINEL = "test-secret-sentinel";
 const initialHost = getAiTransportHost();
@@ -33,6 +32,21 @@ vi.mock("./provider-transport-stream.js", () => ({
 let prepareModelForSimpleCompletionImpl: typeof import("./simple-completion-transport.js").prepareModelForSimpleCompletion;
 let apiRegistry: ApiRegistry;
 const SIMPLE_COMPLETION_SOURCE_ID = "test:simple-completion-transport";
+
+function requireSynchronousStream(
+  stream: ReturnType<StreamFn>,
+): AssistantMessageEventStreamContract {
+  if (
+    stream instanceof Promise ||
+    !("push" in stream) ||
+    !("end" in stream) ||
+    typeof stream.push !== "function" ||
+    typeof stream.end !== "function"
+  ) {
+    throw new Error("Expected synchronous assistant event stream");
+  }
+  return stream as AssistantMessageEventStreamContract;
+}
 
 function prepareModelForSimpleCompletion(
   params: Omit<
@@ -75,7 +89,6 @@ describe("prepareModelForSimpleCompletion", () => {
     createTransportAwareStreamFnForModel.mockReset();
     prepareTransportAwareSimpleModel.mockReset();
     resolveTransportAwareSimpleApi.mockReset();
-    prepareGoogleSimpleCompletionModel.mockReset();
     inheritManagedTransport.mockClear();
     createAnthropicVertexStreamFnForModel.mockReturnValue("vertex-stream");
     resolveProviderStreamFn.mockReturnValue(pluginStreamFn);
@@ -85,7 +98,6 @@ describe("prepareModelForSimpleCompletion", () => {
     createTransportAwareStreamFnForModel.mockReturnValue(undefined);
     prepareTransportAwareSimpleModel.mockImplementation((model) => model);
     resolveTransportAwareSimpleApi.mockReturnValue(undefined);
-    prepareGoogleSimpleCompletionModel.mockImplementation((_registry, model) => model);
     configureAiTransportHost({
       plugin: {
         resolveProviderStream: resolveProviderStreamFn,
@@ -95,10 +107,6 @@ describe("prepareModelForSimpleCompletion", () => {
       },
       registerCustomApi: ensureCustomApiRegistered,
       inheritManagedTransport,
-      prepareGoogleSimpleCompletionModel: prepareGoogleSimpleCompletionModel as (
-        registry: ApiRegistry,
-        model: Model,
-      ) => Model,
       resolveSecretSentinel: (value) => value.replaceAll(TEST_SECRET_SENTINEL, TEST_SECRET),
     });
   });
@@ -122,6 +130,7 @@ describe("prepareModelForSimpleCompletion", () => {
       },
       SIMPLE_COMPLETION_SOURCE_ID,
     );
+    resolveProviderStreamFn.mockReturnValueOnce(undefined);
     wrapProviderSimpleCompletionStreamFn.mockImplementationOnce(
       ({ context }) =>
         (
@@ -238,6 +247,123 @@ describe("prepareModelForSimpleCompletion", () => {
     expect(result).toBe(model);
   });
 
+  it("aliases a provider-owned stream while preserving its null auth-header marker", async () => {
+    const builtInStream = vi.fn(() => createAssistantMessageEventStream());
+    apiRegistry.registerApiProvider(
+      {
+        api: "openai-completions",
+        stream: builtInStream,
+        streamSimple: builtInStream,
+      },
+      SIMPLE_COMPLETION_SOURCE_ID,
+    );
+    const model: Model<"openai-completions"> = {
+      id: "qwen3-0.6b",
+      name: "Qwen3 0.6B",
+      api: "openai-completions",
+      provider: "llama-cpp",
+      baseUrl: "local://llama-cpp",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 32768,
+      maxTokens: 2048,
+      headers: { Authorization: null } as never,
+    };
+
+    const result = prepareModelForSimpleCompletion({ model });
+
+    const expectedApi =
+      "openclaw-provider-stream:llama-cpp:qwen3-0.6b:openai-completions:local%3A%2F%2Fllama-cpp";
+    expect(resolveProviderStreamFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "llama-cpp",
+        context: expect.objectContaining({ model }),
+      }),
+    );
+    expect(ensureCustomApiRegistered).toHaveBeenCalledWith(
+      apiRegistry,
+      expectedApi,
+      expect.any(Function),
+    );
+    expect(result).toEqual({ ...model, api: expectedApi });
+    apiRegistry.getApiProvider("openai-completions")?.stream(model, { messages: [] });
+    expect(builtInStream).toHaveBeenCalledOnce();
+    expect(pluginStreamFn).not.toHaveBeenCalled();
+
+    const registeredStream = ensureCustomApiRegistered.mock.calls.at(-1)?.[2] as StreamFn;
+    await registeredStream(result, { messages: [] }, {});
+    expect(pluginStreamFn).toHaveBeenCalledOnce();
+  });
+
+  it("carries the source API into wrappers after provider stream projection", () => {
+    const builtInStream = vi.fn(() => createAssistantMessageEventStream());
+    apiRegistry.registerApiProvider(
+      {
+        api: "openai-responses",
+        stream: builtInStream,
+        streamSimple: builtInStream,
+      },
+      SIMPLE_COMPLETION_SOURCE_ID,
+    );
+    const model: Model<"openai-responses"> = {
+      id: "muse-spark-1.2",
+      name: "Muse Spark 1.2",
+      api: "openai-responses",
+      provider: "meta",
+      baseUrl: "https://api.meta.ai/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 1.25, output: 4.25, cacheRead: 0.15, cacheWrite: 0 },
+      contextWindow: 1_048_576,
+      maxTokens: 131_072,
+    };
+    resolveProviderStreamFn.mockReturnValueOnce(undefined);
+    createTransportAwareStreamFnForModel.mockReturnValueOnce(pluginStreamFn);
+    wrapProviderSimpleCompletionStreamFn.mockImplementationOnce(({ context }) => context.streamFn);
+    ensureCustomApiRegistered.mockImplementation(
+      (registry: ApiRegistry, api: Api, streamFn: StreamFn) => {
+        if (registry.getApiProvider(api)) {
+          return false;
+        }
+        registry.registerApiProvider({
+          api,
+          stream: (runtimeModel, context, options) =>
+            requireSynchronousStream(streamFn(runtimeModel, context, options)),
+          streamSimple: (runtimeModel, context, options) =>
+            requireSynchronousStream(streamFn(runtimeModel, context, options)),
+        });
+        return true;
+      },
+    );
+
+    const result = prepareModelForSimpleCompletion({ model });
+    const dispatchApi =
+      "openclaw-provider-stream:meta:muse-spark-1.2:openai-responses:https%3A%2F%2Fapi.meta.ai%2Fv1";
+
+    expect(wrapProviderSimpleCompletionStreamFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          model: expect.objectContaining({ api: dispatchApi }),
+          sourceApi: "openai-responses",
+        }),
+      }),
+    );
+    expect(result.api).toMatch(/^openclaw-provider-simple:/);
+    const finalStreamFn = apiRegistry.getApiProvider(result.api)?.streamSimple;
+    if (!finalStreamFn) {
+      throw new Error("Expected projected simple completion stream");
+    }
+
+    void finalStreamFn(result, { messages: [] }, {});
+
+    expect(pluginStreamFn).toHaveBeenCalledWith(
+      expect.objectContaining({ api: dispatchApi }),
+      { messages: [] },
+      {},
+    );
+  });
+
   it("uses a custom api alias for Anthropic Vertex simple completions", () => {
     const model: Model<"anthropic-messages"> = {
       id: "claude-sonnet",
@@ -305,10 +431,10 @@ describe("prepareModelForSimpleCompletion", () => {
     });
   });
 
-  it("uses the Google simple-completion sanitizer alias after transport checks pass through", () => {
+  it("routes registered Google simple completions through the provider plugin stream", () => {
     const model: Model<"google-generative-ai"> = {
-      id: "gemini-flash-latest",
-      name: "Gemini Flash Latest",
+      id: "gemma-4-26b-a4b-it",
+      name: "Gemma 4 26B",
       api: "google-generative-ai",
       provider: "google",
       baseUrl: "https://generativelanguage.googleapis.com",
@@ -319,24 +445,47 @@ describe("prepareModelForSimpleCompletion", () => {
       maxTokens: 8192,
       headers: {},
     };
-    prepareGoogleSimpleCompletionModel.mockImplementationOnce((_registry: unknown, m: unknown) => ({
-      ...(m as Model<"google-generative-ai">),
-      api: "openclaw-google-generative-ai-simple",
-    }));
-    resolveProviderStreamFn.mockReturnValueOnce(undefined);
-
+    const googleStream = vi.fn(() => createAssistantMessageEventStream());
+    apiRegistry.registerApiProvider(
+      {
+        api: "google-generative-ai",
+        stream: googleStream,
+        streamSimple: googleStream,
+      },
+      SIMPLE_COMPLETION_SOURCE_ID,
+    );
     const result = prepareModelForSimpleCompletion({ model });
 
-    expect(prepareTransportAwareSimpleModel).toHaveBeenCalledWith(model, { cfg: undefined });
-    expect(prepareGoogleSimpleCompletionModel).toHaveBeenCalledWith(apiRegistry, model);
+    expect(resolveProviderStreamFn).toHaveBeenCalledOnce();
+    expect(prepareTransportAwareSimpleModel).not.toHaveBeenCalled();
     expect(buildTransportAwareSimpleStreamFn).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      ...model,
-      api: "openclaw-google-generative-ai-simple",
-    });
+    expect(result.api).toMatch(/^openclaw-provider-stream:/);
+    const registeredStream = ensureCustomApiRegistered.mock.calls.find(
+      (call) => call[1] === result.api,
+    )?.[2] as StreamFn | undefined;
+    void registeredStream?.(
+      result,
+      { messages: [] },
+      {
+        reasoning: "high",
+        apiKey: "google-key",
+        headers: { "x-test": "value" },
+        signal: new AbortController().signal,
+      },
+    );
+    expect(pluginStreamFn).toHaveBeenCalledWith(
+      expect.objectContaining({ id: model.id }),
+      { messages: [] },
+      expect.objectContaining({
+        reasoning: "high",
+        apiKey: "google-key",
+        headers: { "x-test": "value" },
+        signal: expect.any(AbortSignal),
+      }),
+    );
   });
 
-  it("keeps Google transport-aware models on the transport alias", () => {
+  it("prefers the Google provider plugin over the duplicate transport-aware path", () => {
     const model: Model<"google-generative-ai"> = {
       id: "gemini-flash-latest",
       name: "Gemini Flash Latest",
@@ -351,24 +500,17 @@ describe("prepareModelForSimpleCompletion", () => {
       headers: {},
     };
 
-    const transportModel = {
-      ...model,
-      api: "openclaw-google-generative-ai-transport",
-    };
-    resolveProviderStreamFn.mockReturnValueOnce(undefined);
-    buildTransportAwareSimpleStreamFn.mockReturnValueOnce("google-transport-stream");
-    prepareTransportAwareSimpleModel.mockReturnValueOnce(transportModel);
-
     const result = prepareModelForSimpleCompletion({ model });
 
-    expect(buildTransportAwareSimpleStreamFn).toHaveBeenCalledWith(model, { cfg: undefined });
+    expect(resolveProviderStreamFn).toHaveBeenCalledOnce();
+    expect(buildTransportAwareSimpleStreamFn).not.toHaveBeenCalled();
+    expect(prepareTransportAwareSimpleModel).not.toHaveBeenCalled();
+    expect(result.api).toBe("google-generative-ai");
     expect(ensureCustomApiRegistered).toHaveBeenCalledWith(
       apiRegistry,
-      "openclaw-google-generative-ai-transport",
-      "google-transport-stream",
+      "google-generative-ai",
+      expect.any(Function),
     );
-    expect(prepareGoogleSimpleCompletionModel).not.toHaveBeenCalled();
-    expect(result).toBe(transportModel);
   });
 
   it.each([

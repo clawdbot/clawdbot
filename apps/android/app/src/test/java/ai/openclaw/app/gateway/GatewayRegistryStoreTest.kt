@@ -73,6 +73,38 @@ class GatewayRegistryStoreTest {
   }
 
   @Test
+  fun roundTripPreservesManualGatewayContextPath() {
+    val (prefs, securePrefs) = freshPrefs()
+    val endpoint =
+      GatewayEndpoint.manual(
+        host = "gateway.example",
+        port = 443,
+        tlsEnabled = true,
+        contextPath = "/openclaw-gw",
+      )
+    prefs.gatewayRegistry.upsert(
+      GatewayRegistryEntry(
+        stableId = endpoint.stableId,
+        kind = GatewayRegistryEntryKind.MANUAL,
+        name = endpoint.name,
+        host = endpoint.host,
+        port = endpoint.port,
+        tls = endpoint.tlsEnabled,
+        contextPath = endpoint.contextPath,
+      ),
+    )
+
+    val restored = GatewayRegistryStore(SecurePrefs(RuntimeEnvironment.getApplication(), securePrefs))
+
+    assertEquals(
+      "/openclaw-gw",
+      restored.entries.value
+        .single()
+        .contextPath,
+    )
+  }
+
+  @Test
   fun failedRemovalCommitDoesNotPublishCandidateState() {
     val (_, securePrefs) = freshPrefs()
     val failingCommitPrefs =

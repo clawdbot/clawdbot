@@ -15,7 +15,7 @@ export {
   asToolParamsRecord,
   jsonResult,
   readNumberParam,
-  readStringParam,
+  readToolStringParam as readStringParam,
 } from "../../../../src/agents/tools/common.js";
 export type { AnyAgentTool } from "../../../../src/agents/tools/common.js";
 export {
@@ -51,15 +51,13 @@ export {
   isUsageCountedSessionTranscriptFileName,
   parseUsageCountedSessionIdFromFileName,
 } from "../../../../src/config/sessions/artifacts.js";
+export { materializeSessionArchiveForRead } from "../../../../src/config/sessions/archive-compression.js";
 export { canonicalizeMainSessionAlias } from "../../../../src/config/sessions/main-session.js";
 export {
   listSessionTranscriptInstances,
   type SessionTranscriptInstance,
 } from "../../../../src/config/sessions/session-history.js";
-export {
-  resolveSessionFilePath,
-  resolveSessionTranscriptsDirForAgent,
-} from "../../../../src/config/sessions/paths.js";
+export { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
 export {
   loadTranscriptEventsSync,
   listSessionEntries,
@@ -88,14 +86,7 @@ export function readTranscriptContentRevisionSync(params: {
     stats.lastObservedMutationAtMs ?? "",
   ].join(":");
 }
-export type { SessionSendPolicyConfig } from "../../../../src/config/types.base.js";
-export type {
-  MemoryBackend,
-  MemoryCitationsMode,
-  MemoryQmdConfig,
-  MemoryQmdIndexPath,
-  MemoryQmdSearchMode,
-} from "../../../../src/config/types.memory.js";
+export type { MemoryCitationsMode } from "../../../../src/config/types.memory.js";
 export {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
@@ -172,8 +163,4 @@ export {
   shortenHomePath,
   truncateUtf16Safe,
 } from "../../../../src/utils.js";
-export {
-  materializeWindowsSpawnProgram,
-  resolveWindowsSpawnProgram,
-} from "../../../../src/plugin-sdk/windows-spawn.js";
 export { resolveGlobalSingleton } from "../../../../src/shared/global-singleton.js";

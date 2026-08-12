@@ -86,7 +86,7 @@ export const formatStatusLabel = (status: WorkboardStatus) => t(`workboard.statu
 export const formatPriorityLabel = (priority: WorkboardPriority) =>
   priority.charAt(0).toUpperCase() + priority.slice(1);
 
-export function formatTime(value: number | undefined): string {
+export function formatWorkboardDate(value: number | undefined): string {
   return value ? formatDateMs(value, { month: "short", day: "numeric" }, "") : "";
 }
 
@@ -111,7 +111,7 @@ export function formatAge(value: number | undefined): string {
   if (!value) {
     return "";
   }
-  return formatDurationCompact(Math.max(0, Date.now() - value), { spaced: true }) ?? "0ms";
+  return formatDurationCompact(Math.max(0, Date.now() - value)) ?? "0ms";
 }
 
 export function canMutate(props: WorkboardProps): boolean {

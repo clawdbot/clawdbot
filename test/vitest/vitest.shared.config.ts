@@ -3,24 +3,25 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import acpCorePackageJson from "../../packages/acp-core/package.json" with { type: "json" };
-import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mjs";
+import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mts";
 import privateLocalOnlyPluginSdkSubpaths from "../../scripts/lib/plugin-sdk-private-local-only-subpaths.json" with { type: "json" };
+import { createStateSchemaInlinePlugin } from "../../scripts/lib/state-schema-inline-plugin.mts";
 import {
   detectVitestHostInfo as detectVitestHostInfoImpl,
   isCiLikeEnv,
-  resolveLocalVitestMaxWorkers as resolveLocalVitestMaxWorkersImpl,
   resolveLocalVitestScheduling as resolveLocalVitestSchedulingImpl,
-} from "../../scripts/lib/vitest-local-scheduling.mjs";
+} from "../../scripts/lib/vitest-local-scheduling.mts";
 import type {
   LocalVitestScheduling,
   VitestHostInfo,
-} from "../../scripts/lib/vitest-local-scheduling.mjs";
+} from "../../scripts/lib/vitest-local-scheduling.mts";
 import {
   BUNDLED_PLUGIN_ROOT_DIR,
   BUNDLED_PLUGIN_TEST_GLOB,
 } from "./vitest.bundled-plugin-paths.ts";
 import { loadVitestExperimentalConfig } from "./vitest.performance-config.ts";
 import { shouldPrintVitestThrottle } from "./vitest.system-load.ts";
+import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest.timeouts.ts";
 
 export type OpenClawVitestPool = "forks" | "threads";
 
@@ -30,7 +31,7 @@ export const jsdomOptimizedDeps = {
   optimizer: {
     web: {
       enabled: true,
-      include: ["lit", "lit-html", "@lit/reactive-element", "marked"] as string[],
+      include: ["lit", "lit-html", "@lit/reactive-element"] as string[],
     },
   },
 };
@@ -44,7 +45,7 @@ export function resolveLocalVitestMaxWorkers(
   system: VitestHostInfo = detectVitestHostInfo(),
   pool: OpenClawVitestPool = resolveDefaultVitestPool(env),
 ): number {
-  return resolveLocalVitestMaxWorkersImpl(env, system, pool);
+  return resolveLocalVitestSchedulingImpl(env, system, pool).maxWorkers;
 }
 
 export function resolveLocalVitestScheduling(
@@ -158,6 +159,7 @@ if (!isCI && localScheduling.throttledBySystem && shouldPrintVitestThrottle(proc
 export const sharedVitestConfig = {
   root: repoRoot,
   envDir: false as const,
+  plugins: [createStateSchemaInlinePlugin(repoRoot)],
   resolve: {
     alias: [
       {
@@ -201,6 +203,10 @@ export const sharedVitestConfig = {
         replacement: path.join(repoRoot, "extensions", "matrix", "test-api.ts"),
       },
       {
+        find: "@openclaw/memory-core/api.js",
+        replacement: path.join(repoRoot, "extensions", "memory-core", "api.ts"),
+      },
+      {
         find: "@openclaw/slack/api.js",
         replacement: path.join(repoRoot, "extensions", "slack", "api.ts"),
       },
@@ -219,6 +225,10 @@ export const sharedVitestConfig = {
       {
         find: "@openclaw/gateway-client/timeouts",
         replacement: path.join(repoRoot, "packages", "gateway-client", "src", "timeouts.ts"),
+      },
+      {
+        find: "@openclaw/gateway-client/websocket-data",
+        replacement: path.join(repoRoot, "packages", "gateway-client", "src", "websocket-data.ts"),
       },
       {
         find: "@openclaw/gateway-client",
@@ -449,6 +459,10 @@ export const sharedVitestConfig = {
         ),
       },
       {
+        find: "@openclaw/normalization-core/json-schema",
+        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "json-schema.ts"),
+      },
+      {
         find: "@openclaw/normalization-core/number-coercion",
         replacement: path.join(
           repoRoot,
@@ -466,6 +480,16 @@ export const sharedVitestConfig = {
           "normalization-core",
           "src",
           "phone-presentation.ts",
+        ),
+      },
+      {
+        find: "@openclaw/normalization-core/promise-like",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "promise-like.ts",
         ),
       },
       {
@@ -522,6 +546,7 @@ export const sharedVitestConfig = {
       },
       sourcePackageAlias("markdown-core", "code-spans"),
       sourcePackageAlias("markdown-core", "fences"),
+      sourcePackageAlias("media-core", "attachment-classify"),
       sourcePackageAlias("media-core", "base64"),
       sourcePackageAlias("media-core", "constants"),
       sourcePackageAlias("media-core", "content-length"),
@@ -549,7 +574,7 @@ export const sharedVitestConfig = {
   },
   test: {
     dir: repoRoot,
-    testTimeout: 120_000,
+    testTimeout: DEFAULT_VITEST_TEST_TIMEOUT_MS,
     hookTimeout: isWindows ? 180_000 : 120_000,
     unstubEnvs: true,
     unstubGlobals: true,

@@ -17,8 +17,10 @@ import {
   sendDiscordComponentMessageLazy,
 } from "./outbound-components.js";
 import { createDiscordPayloadSendContext } from "./outbound-send-context.js";
-import { createDiscordSendReceipt } from "./send.receipt.js";
+import { hasDiscordMessageCreateAmbiguity } from "./retry.js";
+import { createDiscordSendReceipt, createDiscordSendReceiptFromResults } from "./send.receipt.js";
 import type { DiscordSendComponents, DiscordSendEmbeds } from "./send.shared.js";
+import type { DiscordSendResult } from "./send.types.js";
 
 type DiscordOutboundPayloadContext = Parameters<
   NonNullable<ChannelOutboundAdapter["sendPayload"]>
@@ -55,6 +57,7 @@ function resolveDiscordDeliveryOptions(
     accountId: ctx.accountId ?? undefined,
     silent: ctx.silent ?? undefined,
     cfg: ctx.cfg,
+    onPlatformSendDispatch: ctx.onPlatformSendDispatch,
   };
 }
 
@@ -105,9 +108,16 @@ export async function sendDiscordOutboundPayload(params: {
       const voiceUrl = expectDefined(mediaUrls.at(0), "non-empty Discord voice media URLs");
       lastResult = await sendContext.sendVoice(sendContext.target, voiceUrl, {
         ...resolveDiscordDeliveryOptions(ctx, sendContext, voiceReply),
+        mediaAccess: ctx.mediaAccess,
+        mediaLocalRoots: ctx.mediaLocalRoots,
+        mediaReadFile: ctx.mediaReadFile,
       });
       deliveredVoice = true;
     } catch (err) {
+      // A lost create response can hide a committed voice; a text retry has a different nonce.
+      if (hasDiscordMessageCreateAmbiguity(err)) {
+        throw err;
+      }
       const supplement = getReplyPayloadTtsSupplement(payload);
       const visibleFallbackText = payload.text?.trim() ? payload.text : undefined;
       const hiddenFallbackText = supplement?.visibleTextAlreadyDelivered
@@ -189,14 +199,39 @@ export async function sendDiscordOutboundPayload(params: {
       });
       return attachChannelToResult("discord", result);
     }
-    return await sendTextMediaPayload({
+    const payloadContext = { ...ctx, payload };
+    const deliveredResults: DiscordSendResult[] = [];
+    let createdThreadId: string | undefined;
+    payloadContext.onDeliveryResult = async (result) => {
+      await ctx.onDeliveryResult?.(result);
+      const threadId = result.receipt?.threadId;
+      if (threadId && payloadContext.threadId == null) {
+        // A forum parent creates its conversation on the first platform send.
+        payloadContext.threadId = threadId;
+        createdThreadId = threadId;
+      }
+      if (createdThreadId && result.channelId && result.receipt) {
+        deliveredResults.push({
+          messageId: result.messageId,
+          channelId: result.channelId,
+          receipt: result.receipt,
+        });
+      }
+    };
+    const result = await sendTextMediaPayload({
       channel: "discord",
-      ctx: {
-        ...ctx,
-        payload,
-      },
+      ctx: payloadContext,
       adapter: params.fallbackAdapter,
     });
+    return createdThreadId
+      ? {
+          ...result,
+          receipt: createDiscordSendReceiptFromResults({
+            results: deliveredResults,
+            threadId: createdThreadId,
+          }),
+        }
+      : result;
   }
 
   const result = await sendPayloadMediaSequenceOrFallback({

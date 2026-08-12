@@ -4,8 +4,8 @@ import type { SessionOrigin } from "../config/sessions/types.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { AgentInternalEvent } from "./internal-events.js";
-import type { RegisterSubagentRunParams } from "./subagent-registry-run-manager.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { RegisterSubagentRunParams } from "./subagents/registry/subagent-registry-run-manager.js";
+import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 
 type GatewayRequest = { method?: string };
 type GatewayResponse<TRequest, TResult> =
@@ -97,11 +97,16 @@ export function createSubagentRunParams(
 }
 
 export type SubagentRunRecordOverrides = Pick<SubagentRunRecord, "runId"> &
-  Partial<Omit<SubagentRunRecord, "delivery">> & {
+  Partial<Omit<SubagentRunRecord, "delivery" | "execution">> & {
     delivery?: unknown;
+    execution?: SubagentRunRecord["execution"];
+    startedAt?: number;
+    endedAt?: number;
+    outcome?: SubagentRunRecord["execution"]["outcome"];
   };
 
 export function createSubagentRunRecord(overrides: SubagentRunRecordOverrides): SubagentRunRecord {
+  const { startedAt, endedAt, outcome, execution, ...record } = overrides;
   return {
     childSessionKey: "agent:main:subagent:child",
     requesterSessionKey: "agent:main:main",
@@ -109,7 +114,12 @@ export function createSubagentRunRecord(overrides: SubagentRunRecordOverrides): 
     task: overrides.runId,
     cleanup: "keep",
     createdAt: Date.now(),
-    ...overrides,
+    ...record,
+    execution:
+      execution ??
+      (typeof endedAt === "number"
+        ? { status: "terminal", startedAt, endedAt, outcome }
+        : { status: "running", startedAt }),
   } as SubagentRunRecord;
 }
 
@@ -189,7 +199,7 @@ export function expectDeliveryPath(
   value: unknown,
   path: "direct" | "none" | "queued" | "steered",
 ): Record<string, unknown> {
-  return expectRecordFields(value, { delivered: true, path }, "delivery");
+  return expectRecordFields(value, { delivered: path !== "queued", path }, "delivery");
 }
 
 export function mockCallArg(

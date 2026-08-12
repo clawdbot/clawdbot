@@ -1,3 +1,4 @@
+import { toStructuredErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { WebSocket } from "ws";
 import type {
   WorkerConnectParams,
@@ -94,6 +95,6 @@ export function resolvePositiveTimeout(value: number | undefined, fallback: numb
   return value;
 }
 
-export function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
+export function toWorkerConnectionError(error: unknown): Error {
+  return toStructuredErrorObject(error);
 }

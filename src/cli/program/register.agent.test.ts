@@ -287,6 +287,17 @@ describe("agent command registration", () => {
     expect(betaFlags).toEqual({ hasFlags: true });
   });
 
+  it("keeps JSON-only agent creation non-interactive", async () => {
+    await runCli(["agents", "add", "alpha", "--json"]);
+
+    const [options, callRuntime, flags] = commandCall(agentsAddCommandMock);
+    expect(options).toEqual(
+      expect.objectContaining({ name: "alpha", json: true, nonInteractive: false }),
+    );
+    expect(callRuntime).toBe(runtime);
+    expect(flags).toEqual({ hasFlags: true });
+  });
+
   it("runs agents list when root agents command is invoked", async () => {
     await runCli(["agents"]);
     expect(agentsListCommandMock).toHaveBeenCalledWith({}, runtime);

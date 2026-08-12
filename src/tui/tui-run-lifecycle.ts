@@ -1,7 +1,7 @@
 // Coordinates active TUI runs, watchdogs, terminal errors, and history refresh.
 import { classifyFailoverReason, isAuthErrorMessage } from "../agents/embedded-agent-helpers.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
-import { asString } from "./tui-formatters.js";
+import { formatPrimitiveString } from "./tui-formatters.js";
 import type { TuiSessionRunCoordinator } from "./tui-session-run-coordinator.js";
 import {
   clearPendingSubmit,
@@ -179,7 +179,7 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
 
   const applyFallbackStepModelUpdate = (event: AgentEvent): boolean => {
     const data = event.data ?? {};
-    if (event.stream !== "lifecycle" || asString(data.phase, "") !== "fallback_step") {
+    if (event.stream !== "lifecycle" || formatPrimitiveString(data.phase, "") !== "fallback_step") {
       return false;
     }
     if (typeof data.fallbackStepToModel !== "string") {
@@ -250,12 +250,20 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
     flushPendingHistoryRefreshIfIdle();
   };
 
-  const reconnectStreamingWatchdog = () => {
+  const reconnectStreamingWatchdog = (historyInFlightRunId?: string | null) => {
     clearStreamingWatchdog();
     const activeRunId = state.activeChatRunId;
     if (!activeRunId) {
       reconnectPendingRunId = null;
       clearStaleStreamingIfNoTrackedRunRemains();
+      return;
+    }
+    if (historyInFlightRunId === null) {
+      runCoordinator.noteFinalizedRun(activeRunId, { displayedFinal: true });
+      state.activeChatRunId = null;
+      clearPendingTerminalLifecycleError(activeRunId);
+      setActivityStatus("idle");
+      flushPendingHistoryRefreshIfIdle();
       return;
     }
     if (!sessionRuns.has(activeRunId)) {
@@ -392,9 +400,7 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
   };
 
   const dispose = () => {
-    runCoordinator.clear();
-    clearStreamingWatchdog();
-    clearPendingTerminalLifecycleErrors();
+    clearTrackedRunState();
   };
 
   return {

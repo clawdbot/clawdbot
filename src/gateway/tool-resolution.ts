@@ -3,6 +3,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { createOpenClawCodingTools } from "../agents/agent-tools.js";
 import { filterToolsByMessageProvider } from "../agents/agent-tools.message-provider-policy.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
 import { nodeExecSchema } from "../agents/bash-tools.schemas.js";
 import {
@@ -25,7 +26,7 @@ import {
   collectExplicitDenylist,
   hasRestrictiveAllowPolicy,
   mergeAlsoAllowPolicy,
-  normalizeToolName,
+  normalizeToolPolicyName,
   replaceWithEffectiveToolAllowlist,
   resolveToolProfilePolicy,
 } from "../agents/tool-policy.js";
@@ -57,6 +58,8 @@ type GatewayScopedToolSurface = "http" | "loopback";
 /** Resolve the tools visible to a gateway caller after agent, channel, and surface policy. */
 export function resolveGatewayScopedTools(params: {
   cfg: OpenClawConfig;
+  authProfileStore?: AuthProfileStore;
+  agentDir?: string;
   sessionKey: string;
   runtimePolicySessionKey?: string;
   agentId?: string;
@@ -76,6 +79,7 @@ export function resolveGatewayScopedTools(params: {
   accountId?: string;
   inboundEventKind?: InboundEventKind;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  sourceReplyOnly?: boolean;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   requireExplicitMessageTarget?: boolean;
   agentTo?: string;
@@ -188,12 +192,21 @@ export function resolveGatewayScopedTools(params: {
   const sandboxPolicy = sandboxRuntime.sandboxed ? sandboxRuntime.toolPolicy : undefined;
   const excludedToolNames = params.excludeToolNames ? Array.from(params.excludeToolNames) : [];
   const mediatedToolNames = new Set(
-    Array.from(params.mediatedToolNames ?? [], (name) => normalizeToolName(name)).filter(Boolean),
+    Array.from(params.mediatedToolNames ?? [], (name) => normalizeToolPolicyName(name)).filter(
+      Boolean,
+    ),
   );
   const gatewayToolsCfg = params.cfg.gateway?.tools;
   const defaultGatewayDeny =
     surface === "http"
-      ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) => !gatewayToolsCfg?.allow?.includes(name))
+      ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter(
+          // Config allow entries may use legacy tool names (e.g. "cron");
+          // normalize both sides so they still lift the matching default deny.
+          (name) =>
+            !gatewayToolsCfg?.allow?.some(
+              (allowed) => normalizeToolPolicyName(allowed) === normalizeToolPolicyName(name),
+            ),
+        )
       : [];
   const ownerOnlyGatewayDeny =
     params.senderIsOwner === false || (surface === "http" && params.senderIsOwner !== true)
@@ -246,6 +259,7 @@ export function resolveGatewayScopedTools(params: {
     agentAccountId: params.accountId,
     inboundEventKind: params.inboundEventKind,
     sourceReplyDeliveryMode,
+    sourceReplyOnly: params.sourceReplyOnly,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     agentTo: params.agentTo,
     agentThreadId: params.agentThreadId,
@@ -263,6 +277,10 @@ export function resolveGatewayScopedTools(params: {
     disablePluginTools: params.disablePluginTools,
     wrapBeforeToolCallHook: false,
     config: params.cfg,
+    agentDir: params.agentDir,
+    authProfileStore: params.authProfileStore,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
     clientCaps: params.clientCaps,
     workspaceDir,
     sandboxed: sandboxRuntime.sandboxed,
@@ -378,7 +396,7 @@ export function resolveGatewayScopedTools(params: {
     // Once a name is server-minted as mediated, only the canonical coding
     // factory may supply it. A policy-filtered tool must not fall back to a
     // coincidentally named Gateway/plugin implementation.
-    ...baseTools.filter((tool) => !mediatedToolNames.has(normalizeToolName(tool.name))),
+    ...baseTools.filter((tool) => !mediatedToolNames.has(normalizeToolPolicyName(tool.name))),
     ...mediatedCodingTools,
   ];
   const allTools = nodeExecDefaults

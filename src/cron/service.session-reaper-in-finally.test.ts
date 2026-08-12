@@ -2,7 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { listSessionEntries, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  listSessionEntriesCore,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import {
   createNoopLogger,
   createCronStoreHarness,
@@ -228,10 +231,12 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       await onTimer(state);
 
       expect([...new Set(resolvedAgentIds)].toSorted()).toEqual(["main", "worker"]);
-      expect(listSessionEntries({ agentId: "main", storePath: sharedStorePath })).toStrictEqual([]);
-      expect(listSessionEntries({ agentId: "worker", storePath: sharedStorePath })).toStrictEqual(
+      expect(listSessionEntriesCore({ agentId: "main", storePath: sharedStorePath })).toStrictEqual(
         [],
       );
+      expect(
+        listSessionEntriesCore({ agentId: "worker", storePath: sharedStorePath }),
+      ).toStrictEqual([]);
       expect(state.running).toBe(false);
     });
   });
@@ -273,7 +278,9 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       await expect(onTimer(state)).resolves.toBeUndefined();
 
       expect([...new Set(resolvedAgentIds)]).toEqual(["ops"]);
-      expect(listSessionEntries({ agentId: "ops", storePath: sessionStorePath })).toStrictEqual([]);
+      expect(listSessionEntriesCore({ agentId: "ops", storePath: sessionStorePath })).toStrictEqual(
+        [],
+      );
     });
   });
 
@@ -311,12 +318,12 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     await withCronServiceStateForTest(state, async () => {
       await onTimer(state);
 
-      expect(listSessionEntries({ agentId: "main", storePath: sessionStorePath })).toStrictEqual(
-        [],
-      );
-      expect(listSessionEntries({ agentId: "worker", storePath: sessionStorePath })).toStrictEqual(
-        [],
-      );
+      expect(
+        listSessionEntriesCore({ agentId: "main", storePath: sessionStorePath }),
+      ).toStrictEqual([]);
+      expect(
+        listSessionEntriesCore({ agentId: "worker", storePath: sessionStorePath }),
+      ).toStrictEqual([]);
     });
   });
 
@@ -350,7 +357,9 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     await withCronServiceStateForTest(state, async () => {
       await onTimer(state);
 
-      expect(listSessionEntries({ agentId: "retired", storePath: sessionStorePath })).toEqual([]);
+      expect(listSessionEntriesCore({ agentId: "retired", storePath: sessionStorePath })).toEqual(
+        [],
+      );
     });
   });
 
@@ -389,7 +398,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       await expect(onTimer(state)).resolves.toBeUndefined();
 
       expect(
-        listSessionEntries({ agentId: "agent-default", storePath: sessionStorePath }),
+        listSessionEntriesCore({ agentId: "agent-default", storePath: sessionStorePath }),
       ).toStrictEqual([]);
       expect(state.running).toBe(false);
     });

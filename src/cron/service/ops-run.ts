@@ -4,7 +4,7 @@ import { CommandLane } from "../../process/lanes.js";
 import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
-import { recomputeNextRunsForMaintenance } from "./jobs.js";
+import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import {
   activatePreparedManualRun,
@@ -20,11 +20,19 @@ import {
 import { clearManualCronJobActive, maybeNotifyManualIsolatedSetupTimeout } from "./ops-shared.js";
 import { releaseQueuedCronRun, runWithCronAdmission } from "./run-admission.js";
 import { mergeManualRunSnapshotAfterReload } from "./startup-run-repair.js";
-import type { CronServiceState, CronWakeMode } from "./state.js";
+import type { CronServiceState, CronWakeMode, DeferredCronNotifications } from "./state.js";
 import { emit } from "./state.js";
-import { ensureLoaded, persistOrRestore, snapshotStoreForRollback } from "./store.js";
+import {
+  ensureLoaded,
+  persistOrRestore,
+  pruneCronJobScratchAfterCommit,
+  snapshotStoreForRollback,
+} from "./store.js";
 import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
-import { resolveCronRunScheduleOwnership } from "./timer-outcomes.js";
+import {
+  resolveCronRunScheduleOwnership,
+  resolveCronRunTriggerOwnership,
+} from "./timer-outcomes.js";
 import {
   applyJobResult,
   applyScriptRunResult,
@@ -160,12 +168,18 @@ async function finishPreparedManualRun(
         currentJob: job,
         activeJobMarker: prepared.activeJobMarker,
       });
+      const triggerOwnership = resolveCronRunTriggerOwnership({
+        admittedJob: prepared.admittedJob,
+        currentJob: job,
+        activeJobMarker: prepared.activeJobMarker,
+      });
       const scheduleMode =
         scheduleOwnership === "stale"
           ? "stale-preserve"
           : mode === "force"
             ? "force-preserve"
             : "advance";
+      const postPersistNotifications: DeferredCronNotifications = [];
 
       let shouldDelete = false;
       if (coreResult.status === "ok" && coreResult.triggerEval?.fired === false) {
@@ -179,7 +193,11 @@ async function finishPreparedManualRun(
             endedAt,
             triggerEval: coreResult.triggerEval,
           },
-          { scheduleMode },
+          {
+            scheduleMode,
+            triggerOwnership,
+            deferredNotifications: postPersistNotifications,
+          },
         );
       } else {
         shouldDelete = applyJobResult(
@@ -196,6 +214,7 @@ async function finishPreparedManualRun(
             scheduleMode: scheduleMode === "force-preserve" ? "preserve" : "advance",
             scheduleOwnership,
             scheduleOwnershipAtMs: prepared.scheduleOwnershipAtMs,
+            deferredNotifications: postPersistNotifications,
           },
         );
         applyTriggerRunResult(
@@ -205,9 +224,9 @@ async function finishPreparedManualRun(
             endedAt,
             triggerEval: coreResult.triggerEval,
           },
-          { scheduleOwnership },
+          { scheduleOwnership, triggerOwnership },
         );
-        applyScriptRunResult(job, coreResult);
+        applyScriptRunResult(job, coreResult, { triggerOwnership });
 
         // Stream payloads are event-owned by their batch. Generic recurring
         // error backoff must not synthesize a later run without that batch.
@@ -279,14 +298,18 @@ async function finishPreparedManualRun(
       });
       recomputeNextRunsForMaintenance(state, {
         recomputeExpired: true,
+        deferredNotifications: postPersistNotifications,
         ...(mode === "force"
           ? {
               preserveExpiredPacedNextRunJobId: jobId,
             }
           : {}),
       });
-      await persistOrRestore(state, rollbackSnapshot);
+      await persistOrRestore(state, rollbackSnapshot, {
+        postPersistNotifications,
+      });
       if (removedJob) {
+        pruneCronJobScratchAfterCommit(state, [removedJob.id]);
         emit(state, { jobId: removedJob.id, action: "removed", job: removedJob });
       }
       finalized = true;
@@ -362,7 +385,12 @@ export async function run(
 }
 
 /** Queues a manual cron run behind the cron command lane and returns an immediate run id. */
-export async function enqueueRun(state: CronServiceState, id: string, mode?: "due" | "force") {
+export async function enqueueRun(
+  state: CronServiceState,
+  id: string,
+  mode?: "due" | "force",
+  opts?: { commitGuard?: () => void },
+) {
   const disposition = await inspectManualRunDisposition(state, id, mode);
   if (!disposition.ok || !("runnable" in disposition && disposition.runnable)) {
     return disposition;
@@ -380,6 +408,7 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
           scheduleOwnershipAtMs,
           terminalTracker,
           owningCronLaneTaskMarker,
+          ...(opts?.commitGuard ? { commitGuard: opts.commitGuard } : {}),
         });
         if (result.ok && "ran" in result && !result.ran) {
           if (result.reason !== "invalid-spec") {

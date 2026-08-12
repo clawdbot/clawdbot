@@ -1,5 +1,6 @@
 // Slack plugin module implements sent thread cache behavior.
 import { createPersistentDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
+import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getOptionalSlackRuntime } from "./runtime.js";
 
 /**
@@ -7,7 +8,6 @@ import { getOptionalSlackRuntime } from "./runtime.js";
  * Used to auto-respond in threads without requiring @mention after the first reply.
  */
 
-const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MAX_ENTRIES = 5000;
 const PERSISTENT_MAX_ENTRIES = 1000;
 const PERSISTENT_NAMESPACE = "slack.thread-participation";
@@ -24,21 +24,19 @@ type SlackThreadParticipationRecord = {
 const SLACK_THREAD_PARTICIPATION_KEY = Symbol.for("openclaw.slackThreadParticipation");
 const threadParticipation = createPersistentDedupeCache<SlackThreadParticipationRecord>({
   globalKey: SLACK_THREAD_PARTICIPATION_KEY,
-  ttlMs: TTL_MS,
+  // Participation remains valid until bounded oldest-entry eviction removes it.
+  ttlMs: 0,
   maxSize: MAX_ENTRIES,
   persistent: {
     namespace: PERSISTENT_NAMESPACE,
     maxEntries: PERSISTENT_MAX_ENTRIES,
     openStore: (options) => getOptionalSlackRuntime()?.state.openKeyedStore(options),
-    logError: (error) => {
-      try {
-        getOptionalSlackRuntime()
-          ?.logging.getChildLogger({ plugin: "slack", feature: "thread-participation-state" })
-          .warn("Slack persistent thread participation state failed", { error: String(error) });
-      } catch {
-        // Best effort only: persistent state must never break Slack message handling.
-      }
-    },
+    logError: createPluginStateErrorReporter(
+      getOptionalSlackRuntime,
+      "slack",
+      "thread-participation-state",
+      "Slack persistent thread participation state failed",
+    ),
   },
 });
 

@@ -41,6 +41,7 @@ internal class WearProxyController(
   private val requestGateway: suspend (method: String, params: JsonObject) -> JsonElement,
   private val isGatewayConnected: () -> Boolean,
   private val gatewayStatusText: () -> String,
+  private val hasOperatorAdminScope: () -> Boolean = { false },
   private val activeAgentId: () -> String? = { null },
   private val activeSessionKey: () -> String? = { null },
   private val selectedModelRef: () -> String? = { null },
@@ -51,7 +52,7 @@ internal class WearProxyController(
   private val connectGateway: suspend () -> Unit = {},
   private val disconnectGateway: suspend () -> Unit = {},
   private val startRealtimeTalk:
-    suspend (nodeId: String, sessionKey: String, attemptId: String, language: String?) -> WearRealtimeTalkSnapshot? = { _, _, _, _ -> null },
+    suspend (nodeId: String, sessionKey: String, attemptId: String, language: String?, attemptScopedAudio: Boolean) -> WearRealtimeTalkSnapshot? = { _, _, _, _, _ -> null },
   private val stopRealtimeTalk: suspend (nodeId: String, attemptId: String) -> WearRealtimeTalkSnapshot? = { _, _ -> null },
 ) {
   suspend fun handle(
@@ -91,7 +92,7 @@ internal class WearProxyController(
     params: JsonObject,
   ): JsonElement {
     if (sourceNodeId.isBlank()) throw WearProxyInvalidRequest("Missing Watch node")
-    params.requireOnly("sessionKey", "attemptId", "language")
+    params.requireOnly("sessionKey", "attemptId", "language", "attemptScopedAudio")
     val sessionKey = params.stringParam("sessionKey", MAX_SESSION_KEY_CHARS)
     val attemptId = params.stringParam("attemptId", MAX_ATTEMPT_ID_CHARS)
     val language =
@@ -100,8 +101,9 @@ internal class WearProxyController(
         ?.lowercase(Locale.ROOT)
         ?.takeIf { value -> value.length == 2 && value.all { it in 'a'..'z' } }
         ?: if ("language" in params) throw WearProxyInvalidRequest("Invalid language") else null
+    val attemptScopedAudio = params.optionalBooleanParam("attemptScopedAudio") ?: false
     val snapshot =
-      startRealtimeTalk(sourceNodeId, sessionKey, attemptId, language)
+      startRealtimeTalk(sourceNodeId, sessionKey, attemptId, language, attemptScopedAudio)
         ?: throw WearProxyGatewayException("action_rejected", "Real-Time Talk is unavailable")
     return WearRealtimeTalkCodec.encode(snapshot)
   }
@@ -127,7 +129,9 @@ internal class WearProxyController(
       put(
         "capabilities",
         buildJsonArray {
-          WearProxyCapability.entries.forEach { capability -> add(JsonPrimitive(capability.wireValue)) }
+          WearProxyCapability.entries
+            .filter { capability -> capability != WearProxyCapability.ModelControls || hasOperatorAdminScope() }
+            .forEach { capability -> add(JsonPrimitive(capability.wireValue)) }
         },
       )
       activeAgentId()?.takeIf(String::isNotBlank)?.let { put("activeAgentId", it.takeCodePoints(MAX_AGENT_ID_CHARS)) }
@@ -578,6 +582,12 @@ private fun JsonObject.optionalIntParam(
   val value = primitive?.takeUnless { it.isString }?.intOrNull
   if (value == null || value !in range) throw WearProxyInvalidRequest("Invalid $name")
   return value
+}
+
+private fun JsonObject.optionalBooleanParam(name: String): Boolean? {
+  if (name !in this) return null
+  return this[name].booleanPrimitiveOrNull()
+    ?: throw WearProxyInvalidRequest("Invalid $name")
 }
 
 private fun JsonElement.asObject(method: String): JsonObject = this as? JsonObject ?: throw WearProxyGatewayException("invalid_response", "$method returned an invalid response")

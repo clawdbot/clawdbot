@@ -3,7 +3,7 @@
  * workspace, and sandbox resolution.
  */
 import fs from "node:fs/promises";
-import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import type { ThinkLevel, ThinkingCatalogEntry } from "../../auto-reply/thinking.js";
 import {
   createDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
@@ -29,20 +29,20 @@ import {
   resolvePreparedRuntimeModelAuth,
 } from "../runtime-plan/resolve-auth.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
-import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { resolveSandboxContext } from "../sandbox.js";
 import {
   classifyCompactionReason,
   formatUnknownCompactionReasonDetail,
 } from "./compact-reasons.js";
 import type { CompactEmbeddedAgentSessionRuntimeParams } from "./compact.types.js";
-import { createCompactionDiagId } from "./compaction-diagnostics.js";
+import { createDirectCompactionDiagId } from "./compaction-diagnostics.js";
 import { resolveEmbeddedCompactionThinkingLevel } from "./compaction-runtime-context.js";
 import {
   prepareCompactionHarnessAuth,
   resolveCompactionRuntimeSelection,
 } from "./compaction-runtime-preparation.js";
 import { log } from "./logger.js";
+import { resolveTieredModel } from "./model-resolution.js";
 import { resolveModelAsync } from "./model.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
@@ -55,7 +55,7 @@ export async function prepareDirectCompactionAttempt(
   params: PreparedCompactEmbeddedAgentSessionParams,
 ) {
   const startedAt = Date.now();
-  const diagId = params.diagId?.trim() || createCompactionDiagId();
+  const diagId = params.diagId?.trim() || createDirectCompactionDiagId();
   const trigger = params.trigger ?? "manual";
   const attempt = params.attempt ?? 1;
   const maxAttempts = params.maxAttempts ?? 1;
@@ -71,11 +71,6 @@ export async function prepareDirectCompactionAttempt(
   const diagnosticCompactionRunId = `${runId}:compaction:${diagId}`;
   let diagnosticModelCallSeq = 0;
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
-  ensureRuntimePluginsLoaded({
-    config: params.config,
-    workspaceDir: resolvedWorkspace,
-    allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-  });
   const earlyAgentIds = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
@@ -87,7 +82,6 @@ export async function prepareDirectCompactionAttempt(
     runtimePolicySessionKey,
     runtimePolicyAgentId,
     boundHarnessRuntime,
-    selectedHarnessRuntime,
     selectedHarnessRuntimeOverride,
     runtimeModelAuth: { plan: reusableRuntimeAuthPlan, authProfileId, modelAuth: initialModelAuth },
     provider,
@@ -112,15 +106,7 @@ export async function prepareDirectCompactionAttempt(
     agentHarnessId: boundHarnessRuntime,
     agentHarnessRuntimeOverride: selectedHarnessRuntimeOverride,
     workspaceDir: resolvedWorkspace,
-  });
-  const thinkLevel = resolveEmbeddedCompactionThinkingLevel({
-    config: params.config,
-    provider,
-    modelId,
-    inheritedLevel: params.thinkLevel,
-    agentId: runtimePolicyAgentId,
-    sessionKey: runtimePolicySessionKey,
-    agentRuntime: selectedHarnessRuntime,
+    pluginRegistry: params.preparedModelRuntime.pluginRegistry!,
   });
   const attemptedThinking = new Set<ThinkLevel>();
   const fail = (reason: string, err?: unknown): EmbeddedAgentCompactResult => {
@@ -150,28 +136,29 @@ export async function prepareDirectCompactionAttempt(
     };
   };
   const preparedModelRuntime = params.preparedModelRuntime;
-  const modelResolutionOptions = {
-    ...preparedModelRuntime.createStores(),
-    preparedModelRuntime,
-    workspaceDir: resolvedWorkspace,
-  };
-  const { model, error, authStorage, modelRegistry } = await resolveModelAsync(
-    runtimeProvider,
+  const { resolution: modelResolution } = await resolveTieredModel({
+    provider: runtimeProvider,
     modelId,
     agentDir,
-    params.config,
-    {
-      ...initialModelAuth,
-      ...modelResolutionOptions,
-    },
-  );
+    config: params.config,
+    workspaceDir: resolvedWorkspace,
+    ...initialModelAuth,
+    preparedModelRuntime,
+  });
+  const { model, error, authStorage, modelRegistry } = modelResolution;
   if (!model) {
     const reason = error ?? `Unknown model: ${runtimeProvider}/${modelId}`;
     return { ok: false as const, result: fail(reason) };
   }
+  const modelResolutionOptions = {
+    authStorage,
+    modelRegistry,
+    preparedModelRuntime,
+    workspaceDir: resolvedWorkspace,
+  };
   // Overrides stay unset when no bound/planned/explicit harness resolved so auth-aware
   // selection can pick the credential-owning harness (codex for ChatGPT OAuth); native
-  // transcript compaction stays gated on selectedHarnessRuntime.
+  // transcript compaction stays gated on the selected prepared harness.
   const {
     runtimeAuthProfileStore,
     runtimeAuthPreparation,
@@ -297,6 +284,40 @@ export async function prepareDirectCompactionAttempt(
     const reason = formatErrorMessage(err);
     return { ok: false as const, result: fail(reason, err) };
   }
+  const runtimeCompat =
+    runtimeModel.compat && typeof runtimeModel.compat === "object"
+      ? (runtimeModel.compat as Record<string, unknown>)
+      : undefined;
+  const thinkingFormat =
+    typeof runtimeCompat?.thinkingFormat === "string" ? runtimeCompat.thinkingFormat : undefined;
+  const supportedReasoningEfforts =
+    runtimeCompat?.supportedReasoningEfforts === null ||
+    (Array.isArray(runtimeCompat?.supportedReasoningEfforts) &&
+      runtimeCompat.supportedReasoningEfforts.every((effort) => typeof effort === "string"))
+      ? (runtimeCompat.supportedReasoningEfforts as readonly string[] | null)
+      : undefined;
+  const thinkingCompat =
+    thinkingFormat !== undefined || supportedReasoningEfforts !== undefined
+      ? { thinkingFormat, supportedReasoningEfforts }
+      : undefined;
+  const thinkingCatalogEntry = {
+    provider: runtimeModel.provider,
+    id: runtimeModel.id,
+    api: runtimeModel.api,
+    reasoning: runtimeModel.reasoning,
+    params: runtimeModel.params,
+    ...(thinkingCompat ? { compat: thinkingCompat } : {}),
+  } satisfies ThinkingCatalogEntry;
+  const thinkLevel = resolveEmbeddedCompactionThinkingLevel({
+    config: params.config,
+    provider: runtimeModel.provider,
+    modelId: runtimeModel.id,
+    inheritedLevel: params.thinkLevel,
+    catalog: [thinkingCatalogEntry],
+    agentId: runtimePolicyAgentId,
+    sessionKey: runtimePolicySessionKey,
+    agentRuntime: preparedHarnessRuntime,
+  });
 
   await fs.mkdir(resolvedWorkspace, { recursive: true });
   const sandboxSessionKey =

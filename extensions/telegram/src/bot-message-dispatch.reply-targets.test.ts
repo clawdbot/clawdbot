@@ -19,7 +19,8 @@ import {
   setupDraftStreams,
 } from "./bot-message-dispatch.test-harness.js";
 import type { TelegramMessageContext } from "./bot-message-dispatch.test-harness.js";
-import { createTelegramMessageCache, resolveTelegramMessageCacheScope } from "./message-cache.js";
+import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
+import { createTelegramMessageCache } from "./message-cache.js";
 import {
   recordOutboundMessageForPromptContext as recordOutboundMessageForPromptContextActual,
   registerTelegramOutboundGroupHistoryRecorder,
@@ -162,6 +163,29 @@ describeTelegramDispatch("dispatchTelegramMessage reply-targets", () => {
       text: "Mode: foreground\nRun: /approve 117ba06d allow-once (or allow-always / deny).",
     }) as { channelData?: unknown };
     expect(deliveredPayload.channelData).toBeUndefined();
+  });
+
+  it("uses an explicit partial preview despite inherited block delivery", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Hello" });
+        await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      cfg: { agents: { defaults: { blockStreamingDefault: "on" } } },
+      telegramCfg: { streaming: { mode: "partial" } },
+    });
+
+    expect(createTelegramDraftStream).toHaveBeenCalled();
+    expect(draftStream.update).toHaveBeenCalledWith("Hello");
   });
 
   it("uses 30-char stream debounce for legacy block stream mode", async () => {

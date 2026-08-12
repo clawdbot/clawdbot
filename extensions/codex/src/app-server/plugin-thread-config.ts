@@ -48,6 +48,7 @@ export type PluginAppPolicyContextEntry = {
   marketplaceName: ResolvedCodexPluginPolicy["marketplaceName"];
   pluginName: string;
   allowDestructiveActions: boolean;
+  allowOpenWorld?: boolean;
   destructiveApprovalMode?: CodexPluginDestructiveApprovalMode;
   mcpServerNames: string[];
 };
@@ -57,6 +58,7 @@ type AccountAppPolicyContextEntry = {
   source: "account";
   appName: string;
   allowDestructiveActions: boolean;
+  allowOpenWorld?: boolean;
   destructiveApprovalMode?: CodexPluginDestructiveApprovalMode;
   mcpServerNames: string[];
 };
@@ -379,6 +381,7 @@ export async function buildCodexPluginThreadConfig(
         marketplaceName: record.policy.marketplaceName,
         pluginName: record.policy.pluginName,
         allowDestructiveActions: record.policy.allowDestructiveActions,
+        allowOpenWorld: true,
         destructiveApprovalMode: record.policy.destructiveApprovalMode,
         mcpServerNames: [...(record.detail?.mcpServers ?? [])].toSorted(),
       };
@@ -425,6 +428,7 @@ export async function buildCodexPluginThreadConfig(
       source: "account",
       appName: app.name,
       allowDestructiveActions: policy.allowDestructiveActions,
+      allowOpenWorld: true,
       destructiveApprovalMode: policy.destructiveApprovalMode,
       mcpServerNames: [],
     };
@@ -509,7 +513,7 @@ function emptyPluginThreadConfig(params: {
   };
 }
 
-function buildDisabledAppsConfigPatch(): JsonObject {
+export function buildDisabledAppsConfigPatch(): JsonObject {
   return {
     apps: {
       _default: {
@@ -551,7 +555,7 @@ export function buildCodexPluginAppsConfigPatchFromPolicyContext(
     apps[appId] = {
       enabled: true,
       destructive_enabled: policy.allowDestructiveActions,
-      open_world_enabled: true,
+      open_world_enabled: policy.allowOpenWorld !== false,
       default_tools_approval_mode: "auto",
       ...(policy.destructiveApprovalMode === "ask" ? { approvals_reviewer: "user" } : {}),
     };
@@ -559,7 +563,7 @@ export function buildCodexPluginAppsConfigPatchFromPolicyContext(
   return { apps };
 }
 
-function buildPluginAppPolicyContext(
+export function buildPluginAppPolicyContext(
   apps: Record<string, CodexAppPolicyContextEntry>,
   pluginAppIds: Record<string, string[]>,
 ): PluginAppPolicyContext {
@@ -711,15 +715,9 @@ function mergeJsonObjects(left: JsonObject, right: JsonObject): JsonObject {
   for (const [key, value] of Object.entries(right)) {
     const existing = merged[key];
     merged[key] =
-      isPlainJsonObject(existing) && isPlainJsonObject(value)
-        ? mergeJsonObjects(existing, value)
-        : value;
+      isJsonObject(existing) && isJsonObject(value) ? mergeJsonObjects(existing, value) : value;
   }
   return merged;
-}
-
-function isPlainJsonObject(value: JsonValue | undefined): value is JsonObject {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function fingerprintJson(value: JsonValue): string {

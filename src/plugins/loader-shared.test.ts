@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { validatePluginConfig } from "./loader-shared.js";
+import { resolvePluginCandidateInstallOwner } from "./candidate-install-owner.js";
+import type { PluginCandidate } from "./discovery.js";
+import {
+  createManifestPluginRecord,
+  createPluginCandidatesFromManifestRegistry,
+  validatePluginConfig,
+} from "./loader-shared.js";
+import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 
 const emptyObjectSchema = {
   type: "object",
@@ -10,6 +18,69 @@ const emptyObjectSchema = {
 function withSchemaKeyword(key: "if" | "then" | "else", value: unknown) {
   return { [key]: value };
 }
+
+const manifestRecord = {
+  id: "example",
+  channels: [],
+  providers: [],
+  cliBackends: [],
+  skills: [],
+  hooks: [],
+  origin: "global",
+  rootDir: "/plugins/example",
+  source: "/plugins/example/index.js",
+  manifestPath: "/plugins/example/openclaw.plugin.json",
+} satisfies PluginManifestRecord;
+
+function createRecordWithBuildVersion(openclawVersion: unknown) {
+  const candidate = {
+    idHint: "example",
+    source: manifestRecord.source,
+    rootDir: manifestRecord.rootDir,
+    origin: manifestRecord.origin,
+    packageManifest: {
+      build: { openclawVersion },
+    } as unknown as NonNullable<PluginCandidate["packageManifest"]>,
+  } satisfies PluginCandidate;
+
+  return createManifestPluginRecord({
+    candidate,
+    manifestRecord,
+    enabled: true,
+    activationState: {
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: true,
+      source: "explicit",
+    },
+  });
+}
+
+describe("createManifestPluginRecord", () => {
+  it("ignores malformed package build version metadata", () => {
+    expect(createRecordWithBuildVersion(" 2026.7.2 ").builtWithOpenClawVersion).toBe("2026.7.2");
+    expect(createRecordWithBuildVersion(42).builtWithOpenClawVersion).toBeUndefined();
+  });
+});
+
+describe("createPluginCandidatesFromManifestRegistry", () => {
+  it("preserves runtime child identity and package ownership", () => {
+    const childRecord = recordPluginManifestInstallOwner(
+      { ...manifestRecord, id: "example/child" },
+      "example",
+    );
+
+    const candidate = createPluginCandidatesFromManifestRegistry({
+      plugins: [childRecord],
+      diagnostics: [],
+    })[0];
+    expect(candidate).toMatchObject({
+      idHint: "example/child",
+      effectivePluginId: "example/child",
+    });
+    expect(resolvePluginCandidateInstallOwner(candidate!)).toBe("example");
+  });
+});
 
 describe("validatePluginConfig empty schema classification", () => {
   it("validates pattern properties instead of requiring empty config", () => {

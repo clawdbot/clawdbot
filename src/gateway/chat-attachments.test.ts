@@ -34,13 +34,17 @@ vi.mock("../media/media-probe.js", () => ({
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  resolveChatAttachmentMaxBytes,
+  resolveChatAttachmentPolicy,
+} from "./chat-attachment-policy.js";
+import {
   type ChatAttachment,
   parseMessageWithAttachments,
   persistInboundImagesForTranscript,
-  resolveChatAttachmentMaxBytes,
   stripImageMediaMarkers,
   UnsupportedAttachmentError,
 } from "./chat-attachments.js";
+import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 
 const PNG_1x1 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
@@ -67,11 +71,15 @@ function pdfAttachment(overrides: Partial<ChatAttachment> = {}): ChatAttachment 
   };
 }
 
-function oversizedPngBase64(): string {
+function pngBase64OfBytes(bytes: number): string {
   const pngHeader = PNG_1x1.slice(0, 64);
-  let base64Length = Math.ceil(((MAX_IMAGE_BYTES + 1) * 4) / 3);
+  let base64Length = Math.ceil((bytes * 4) / 3);
   base64Length += (4 - (base64Length % 4)) % 4;
   return `${pngHeader}${"A".repeat(base64Length - pngHeader.length)}`;
+}
+
+function oversizedPngBase64(): string {
+  return pngBase64OfBytes(MAX_IMAGE_BYTES + 1);
 }
 
 async function parseWithWarnings(
@@ -148,7 +156,7 @@ afterEach(() => {
 });
 
 describe("persistInboundImagesForTranscript", () => {
-  it("preserves mixed image order and appends non-image offloads", async () => {
+  it("preserves original mixed-media order in claim-only transcript facts", async () => {
     saveMediaBufferMock.mockResolvedValueOnce({
       id: "inline",
       path: "/media/inbound/inline.jpg",
@@ -156,39 +164,103 @@ describe("persistInboundImagesForTranscript", () => {
       contentType: "image/jpeg",
     });
 
-    const saved = await persistInboundImagesForTranscript({
-      images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/jpeg" }],
-      imageOrder: ["offloaded", "inline"],
+    const result = await persistInboundImagesForTranscript({
+      images: [
+        {
+          type: "image",
+          data: "aGVsbG8=",
+          mimeType: "image/jpeg",
+          sourceIndex: 1,
+        },
+      ],
       offloadedRefs: [
         {
-          mediaRef: "media://inbound/offloaded",
-          id: "offloaded",
-          path: "/media/inbound/offloaded.png",
-          kind: "image",
-          mimeType: "image/png",
-          label: "offloaded.png",
-          sizeBytes: 2_100_000,
-        },
-        {
-          mediaRef: "media://inbound/report",
-          id: "report",
-          path: "/media/inbound/report.pdf",
-          kind: "document",
-          mimeType: "application/pdf",
-          label: "report.pdf",
+          mediaRef: "https://signed.example/private-video",
+          id: "video",
+          path: "/media/inbound/video.mp4",
+          kind: "video",
+          mimeType: "video/mp4",
+          label: "video.mp4",
           sizeBytes: 100,
+          durationMs: 2_000,
+          sourceIndex: 0,
         },
       ],
       log: { warn: vi.fn() },
       logContext: "test",
     });
 
-    expect(saved.map((entry) => entry.path)).toEqual([
-      "/media/inbound/offloaded.png",
-      "/media/inbound/inline.jpg",
-      "/media/inbound/report.pdf",
+    expect(result.entries.map((entry) => entry.sourceIndex)).toEqual([0, 1]);
+    expect(result.entries.map((entry) => entry.fact)).toEqual([
+      {
+        url: "media://inbound/video",
+        contentType: "video/mp4",
+        kind: "video",
+        fileName: "video.mp4",
+        sizeBytes: 100,
+        durationMs: 2_000,
+        hydrationSuppressed: true,
+      },
+      {
+        url: "media://inbound/inline",
+        contentType: "image/jpeg",
+        kind: "image",
+        sizeBytes: 5,
+      },
     ]);
+    expect(result.omission).toBe("none");
+    const durable = JSON.stringify(result.entries.map((entry) => entry.fact));
+    expect(durable).not.toContain("/media/");
+    expect(durable).not.toContain("signed.example");
+    expect(durable).not.toContain("sourceIndex");
   });
+
+  it("reports an inline image whose durable managed save fails", async () => {
+    saveMediaBufferMock.mockRejectedValueOnce(new Error("disk unavailable"));
+    const warn = vi.fn();
+
+    const result = await persistInboundImagesForTranscript({
+      images: [
+        {
+          type: "image",
+          data: "aGVsbG8=",
+          mimeType: "image/jpeg",
+          sourceIndex: 0,
+        },
+      ],
+      offloadedRefs: [],
+      log: { warn },
+      logContext: "test",
+    });
+
+    expect(result).toEqual({ entries: [], omission: "inline-image-save-failed" });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("disk unavailable"));
+  });
+
+  it.each(["nested/id", String.raw`nested\id`, "bad\0id", ".", "..", "claim?sig", "claim#part"])(
+    "rejects an unsafe saved media id %j before projecting a durable claim",
+    async (id) => {
+      await expect(
+        persistInboundImagesForTranscript({
+          images: [],
+          offloadedRefs: [
+            {
+              mediaRef: "https://signed.example/private",
+              id,
+              path: "/media/inbound/private",
+              kind: "video",
+              mimeType: "video/mp4",
+              label: "private.mp4",
+              sizeBytes: 10,
+              sourceIndex: 0,
+            },
+          ],
+          log: { warn: vi.fn() },
+          logContext: "test",
+        }),
+      ).rejects.toThrow();
+    },
+  );
 });
 
 describe("parseMessageWithAttachments", () => {
@@ -281,8 +353,10 @@ describe("parseMessageWithAttachments", () => {
   it("keeps image inline and offloads non-image side by side", async () => {
     const { parsed } = await parseWithWarnings("x", [pngAttachment(), pdfAttachment()]);
     expectSingleInlinePng(parsed);
+    expect(parsed.images[0]?.sourceIndex).toBe(0);
     expect(parsed.offloadedRefs).toHaveLength(1);
     expect(parsed.offloadedRefs[0]?.mimeType).toBe("application/pdf");
+    expect(parsed.offloadedRefs[0]?.sourceIndex).toBe(1);
     expect(parsed.imageOrder).toEqual(["inline"]);
   });
 
@@ -412,6 +486,39 @@ describe("parseMessageWithAttachments validation errors", () => {
     expect((caught as UnsupportedAttachmentError).name).toBe("UnsupportedAttachmentError");
     expect((caught as UnsupportedAttachmentError).reason).toBe("empty-payload");
     expect(saveMediaBufferMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "an empty string", attachment: { content: "" } },
+    { name: "an empty typed array", attachment: { content: new Uint8Array(0) } },
+    { name: "an empty array buffer", attachment: { content: new ArrayBuffer(0) } },
+    {
+      name: "an empty nested base64 source",
+      attachment: { source: { type: "base64", media_type: "application/pdf", data: "" } },
+    },
+    { name: "whitespace-only content", attachment: { content: "   " } },
+  ])("rejects normalized RPC attachments with $name", async ({ attachment }) => {
+    const normalized = normalizeRpcAttachmentsToChatAttachments([
+      {
+        type: "file",
+        mimeType: "application/pdf",
+        fileName: "empty.pdf",
+        ...attachment,
+      },
+    ]);
+
+    await expectUnsupportedAttachmentReason(normalized, {}, "empty-payload");
+  });
+
+  it("continues to omit RPC attachments without recognized content", () => {
+    expect(
+      normalizeRpcAttachmentsToChatAttachments([
+        { content: undefined },
+        { content: null },
+        { mimeType: "image/png" },
+        { source: { type: "base64", media_type: "application/pdf", data: null } },
+      ]),
+    ).toEqual([]);
   });
 
   it("throws UnsupportedAttachmentError on non-image when acceptNonImage is false", async () => {
@@ -623,29 +730,46 @@ describe("parseMessageWithAttachments validation errors", () => {
   });
 });
 
-describe("resolveChatAttachmentMaxBytes", () => {
+describe("advertised attachment policy matches enforcement", () => {
   const MB = 1024 * 1024;
-  const DEFAULT_BYTES = 20 * MB;
 
-  const cfgWithMediaMaxMb = (value: unknown): OpenClawConfig =>
+  const cfgWithMediaMaxMb = (value: number): OpenClawConfig =>
     ({ agents: { defaults: { mediaMaxMb: value } } }) as unknown as OpenClawConfig;
 
-  it("honours a configured agents.defaults.mediaMaxMb", () => {
-    expect(resolveChatAttachmentMaxBytes(cfgWithMediaMaxMb(10))).toBe(10 * MB);
-    expect(resolveChatAttachmentMaxBytes(cfgWithMediaMaxMb(50))).toBe(50 * MB);
-  });
-
-  it("falls back to DEFAULT_CHAT_ATTACHMENT_MAX_MB when unset", () => {
-    expect(resolveChatAttachmentMaxBytes({} as OpenClawConfig)).toBe(DEFAULT_BYTES);
-    expect(resolveChatAttachmentMaxBytes({ agents: {} } as unknown as OpenClawConfig)).toBe(
-      DEFAULT_BYTES,
+  async function parseImageWithPolicy(cfg: OpenClawConfig, imageBytes: number) {
+    const policy = resolveChatAttachmentPolicy(cfg);
+    const parse = parseMessageWithAttachments(
+      "x",
+      [pngAttachment({ fileName: "big.png", content: pngBase64OfBytes(imageBytes) })],
+      { maxBytes: policy.maxBytes, log: { warn: () => {} } },
     );
+    return { policy, parse };
+  }
+
+  it("rejects images above the advertised maxImageBytes when the config ceiling is the smaller limit", async () => {
+    const { policy, parse } = await parseImageWithPolicy(cfgWithMediaMaxMb(1), 3 * MB);
+    expect(policy.maxImageBytes).toBe(MB);
+    await expect(parse).rejects.toThrow(/exceeds size limit/i);
   });
 
-  it("rejects non-positive, non-finite, or non-number values", () => {
-    for (const bad of [0, -5, Number.NaN, Number.POSITIVE_INFINITY, "50", null, undefined]) {
-      expect(resolveChatAttachmentMaxBytes(cfgWithMediaMaxMb(bad))).toBe(DEFAULT_BYTES);
+  it("accepts images under the advertised maxImageBytes", async () => {
+    const { policy, parse } = await parseImageWithPolicy(cfgWithMediaMaxMb(20), 3 * MB);
+    expect(policy.maxImageBytes).toBe(MAX_IMAGE_BYTES);
+    const parsed = await parse;
+    try {
+      expect(parsed.offloadedRefs).toHaveLength(1);
+    } finally {
+      await cleanupOffloadedRefs(parsed.offloadedRefs);
     }
+  });
+
+  it("rejects images above the advertised maxImageBytes when the hydration cap is the smaller limit", async () => {
+    const { policy, parse } = await parseImageWithPolicy(
+      cfgWithMediaMaxMb(20),
+      MAX_IMAGE_BYTES + 3,
+    );
+    expect(policy.maxImageBytes).toBe(MAX_IMAGE_BYTES);
+    await expect(parse).rejects.toThrow(/image exceeds size limit/i);
   });
 });
 

@@ -6,7 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { SessionEntry } from "../config/sessions.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
-  listSessionEntries,
+  listSessionEntriesCore,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
@@ -86,6 +86,14 @@ vi.mock("./model-catalog.js", () => ({
     state.loadManifestModelCatalogMock(params),
 }));
 
+vi.mock("./model-catalog.runtime.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
+  loadPreparedModelCatalogSnapshot: vi.fn(async () => ({
+    entries: [],
+    routeVariants: [],
+  })),
+}));
+
 vi.mock("./provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: (params: {
     provider: string;
@@ -95,6 +103,10 @@ vi.mock("./provider-model-normalization.runtime.js", () => ({
 
 vi.mock("./harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
+}));
+
+vi.mock("./runtime-plugins.js", () => ({
+  withAgentPluginRegistry: ({ run }: { run: () => unknown }) => run(),
 }));
 
 vi.mock("./workspace.js", () => ({
@@ -292,7 +304,7 @@ function requireStorePath(): string {
 }
 
 function findStoredSessionEntry(sessionKey: string): SessionEntry | undefined {
-  return listSessionEntries({ storePath: requireStorePath() }).find(
+  return listSessionEntriesCore({ storePath: requireStorePath() }).find(
     (candidate) => candidate.sessionKey === sessionKey,
   )?.entry;
 }
@@ -373,12 +385,40 @@ describe("agentCommand compaction transcript rotation", () => {
       providerOverride: "tui-pty-mock",
       modelOverride: "gpt-5.5",
       pluginsEnabled: false,
+      userTurnTranscriptRecorder: { message: { __openclaw: { senderIsOwner: true } } },
     });
     expect(state.normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalledWith(
       expect.objectContaining({ provider: "tui-pty-mock" }),
     );
     expect(state.loadManifestModelCatalogMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [true, "external_user", true],
+    [true, "inter_session", false],
+    [true, "internal_system", false],
+    [false, "external_user", false],
+  ] as const)(
+    "preserves human transcript ownership for %s/%s",
+    async (senderIsOwner, kind, owner) => {
+      const inputProvenance = { kind, sourceTool: "test" };
+      state.runAgentAttemptMock.mockResolvedValueOnce(
+        makeResult({ sessionId: "owned", text: "ok" }),
+      );
+      await agentCommand({
+        message: "remember",
+        sessionId: "owned",
+        senderIsOwner,
+        inputProvenance,
+      });
+      expect(state.runAgentAttemptMock.mock.calls[0]?.[0]).toMatchObject({
+        opts: { senderIsOwner, inputProvenance },
+        userTurnTranscriptRecorder: {
+          message: { provenance: inputProvenance, __openclaw: { senderIsOwner: owner } },
+        },
+      });
+    },
+  );
 
   it("keeps SQLite session state on the rotated successor", async () => {
     const storePath = requireStorePath();
@@ -403,7 +443,7 @@ describe("agentCommand compaction transcript rotation", () => {
     });
 
     const storeAfterRotation = Object.fromEntries(
-      listSessionEntries({ storePath }).map(({ entry, sessionKey }) => [sessionKey, entry]),
+      listSessionEntriesCore({ storePath }).map(({ entry, sessionKey }) => [sessionKey, entry]),
     );
     const entriesAfterRotation = Object.entries(storeAfterRotation);
     expect(entriesAfterRotation).toHaveLength(1);
@@ -788,7 +828,7 @@ describe("agentCommand compaction transcript rotation", () => {
     },
   );
 
-  it("skips post-turn compaction before delivering sendable finals that pending text cannot replay", async () => {
+  it("compacts after persisting transport ownership for finals that text cannot replay", async () => {
     const sessionId = "unrecoverable-media-before-compaction";
     const sessionKey = `agent:main:explicit:${sessionId}`;
     const payloads = [{ mediaUrl: "/tmp/reply.ogg", audioAsVoice: true }];
@@ -805,7 +845,7 @@ describe("agentCommand compaction transcript rotation", () => {
       deliver: true,
     });
 
-    expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
+    expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledOnce();
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
       expect.objectContaining({ payloads }),
@@ -937,7 +977,7 @@ describe("agentCommand compaction transcript rotation", () => {
       sessionId: "rotated-session",
     });
     const persisted = Object.fromEntries(
-      listSessionEntries({ storePath }).map(({ entry, sessionKey: key }) => [key, entry]),
+      listSessionEntriesCore({ storePath }).map(({ entry, sessionKey: key }) => [key, entry]),
     );
     expect(persisted[sessionKey]).toMatchObject({
       sessionId: "rotated-session",

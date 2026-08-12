@@ -116,15 +116,6 @@ DigitalOcean is a straightforward paid VPS path. For cheaper or free options:
 
     Tailscale Serve authenticates Control UI and WebSocket traffic via tailnet identity headers, which assumes the gateway host itself is trusted. HTTP API endpoints still follow the gateway's normal auth mode (token/password) regardless. To require explicit shared-secret credentials over Serve, set `gateway.auth.allowTailscale: false` and use `gateway.auth.mode: "token"` or `"password"`.
 
-    **Option C: Tailnet bind (no Serve)**
-
-    ```bash
-    openclaw config set gateway.bind tailnet
-    openclaw gateway restart
-    ```
-
-    Then open `http://<tailscale-ip>:18789` (token required).
-
   </Step>
 </Steps>
 

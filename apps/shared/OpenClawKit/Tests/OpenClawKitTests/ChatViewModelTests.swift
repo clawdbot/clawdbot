@@ -96,6 +96,33 @@ private func usageEvent(runId: String, outputTokens: Int, seq: Int) -> OpenClawA
         data: ["outputTokens": AnyCodable(outputTokens)])
 }
 
+private func subagentTaskSummary(
+    id: String,
+    status: String,
+    sessionKey: String = "agent:main:main",
+    lastActivity: String? = nil,
+    progressSummary: String? = nil,
+    terminalSummary: String? = nil,
+    diffStat: [String: AnyCodable]? = nil,
+    startedAt: Double = 1000,
+    endedAt: Double? = nil) -> TaskSummary
+{
+    TaskSummary(
+        id: id,
+        runtime: "subagent",
+        status: AnyCodable(status),
+        agentid: "main",
+        sessionkey: sessionKey,
+        childsessionkey: "agent:main:subagent:\(id)",
+        updatedat: AnyCodable(endedAt ?? startedAt),
+        startedat: AnyCodable(startedAt),
+        endedat: endedAt.map(AnyCodable.init),
+        lastactivity: lastActivity,
+        diffstat: diffStat,
+        progresssummary: progressSummary,
+        terminalsummary: terminalSummary)
+}
+
 private func lifecycleSessionEntry(
     key: String,
     updatedAt: Double,
@@ -138,60 +165,13 @@ private func lifecycleSessionEntry(
 private func sessionEntry(
     key: String,
     updatedAt: Double,
+    sessionId: String? = nil,
     displayName: String? = nil,
     label: String? = nil,
     pinned: Bool = false,
     pinnedAt: Double? = nil,
     archived: Bool = false,
-    totalTokens: Int? = nil,
-    totalTokensFresh: Bool? = nil,
-    contextTokens: Int? = nil) -> OpenClawChatSessionEntry
-{
-    OpenClawChatSessionEntry(
-        key: key,
-        kind: nil,
-        displayName: displayName,
-        surface: nil,
-        subject: nil,
-        room: nil,
-        space: nil,
-        updatedAt: updatedAt,
-        sessionId: nil,
-        systemSent: nil,
-        abortedLastRun: nil,
-        thinkingLevel: nil,
-        verboseLevel: nil,
-        inputTokens: nil,
-        outputTokens: nil,
-        totalTokens: totalTokens,
-        totalTokensFresh: totalTokensFresh,
-        modelProvider: nil,
-        model: nil,
-        contextTokens: contextTokens,
-        label: label,
-        pinned: pinned ? true : nil,
-        pinnedAt: pinnedAt ?? (pinned ? updatedAt : nil),
-        archived: archived ? true : nil,
-        archivedAt: archived ? updatedAt : nil)
-}
-
-private func sessionsListResponse(_ sessions: [OpenClawChatSessionEntry]) -> OpenClawChatSessionsListResponse {
-    OpenClawChatSessionsListResponse(
-        ts: nil,
-        path: nil,
-        count: sessions.count,
-        defaults: nil,
-        sessions: sessions)
-}
-
-private func thinkingOption(_ id: String, label: String? = nil) -> OpenClawChatThinkingLevelOption {
-    OpenClawChatThinkingLevelOption(id: id, label: label ?? id)
-}
-
-private func sessionEntry(
-    key: String,
-    updatedAt: Double,
-    model: String?,
+    model: String? = nil,
     modelProvider: String? = nil,
     thinkingLevel: String? = nil,
     thinkingLevels: [OpenClawChatThinkingLevelOption]? = nil,
@@ -207,13 +187,13 @@ private func sessionEntry(
     OpenClawChatSessionEntry(
         key: key,
         kind: nil,
-        displayName: nil,
+        displayName: displayName,
         surface: nil,
         subject: nil,
         room: nil,
         space: nil,
         updatedAt: updatedAt,
-        sessionId: nil,
+        sessionId: sessionId,
         systemSent: nil,
         abortedLastRun: nil,
         thinkingLevel: thinkingLevel,
@@ -228,8 +208,30 @@ private func sessionEntry(
         thinkingLevels: thinkingLevels,
         thinkingOptions: thinkingOptions,
         thinkingDefault: thinkingDefault,
+        label: label,
+        pinned: pinned ? true : nil,
+        pinnedAt: pinnedAt ?? (pinned ? updatedAt : nil),
+        archived: archived ? true : nil,
+        archivedAt: archived ? updatedAt : nil,
         fastMode: fastMode,
         effectiveFastMode: effectiveFastMode)
+}
+
+private func sessionsResponse(
+    _ sessions: [OpenClawChatSessionEntry],
+    ts: Double? = nil,
+    defaults: OpenClawChatSessionsDefaults? = nil) -> OpenClawChatSessionsListResponse
+{
+    OpenClawChatSessionsListResponse(
+        ts: ts,
+        path: nil,
+        count: sessions.count,
+        defaults: defaults,
+        sessions: sessions)
+}
+
+private func thinkingOption(_ id: String, label: String? = nil) -> OpenClawChatThinkingLevelOption {
+    OpenClawChatThinkingLevelOption(id: id, label: label ?? id)
 }
 
 private func modelChoice(
@@ -246,16 +248,37 @@ private func modelChoice(
         reasoning: reasoning)
 }
 
+private func openAIModelPatchResult(
+    _ model: String,
+    thinking: String?,
+    levels: [OpenClawChatThinkingLevelOption]? = nil) -> OpenClawChatModelPatchResult
+{
+    OpenClawChatModelPatchResult(
+        modelProvider: "openai",
+        model: model,
+        thinkingLevel: thinking,
+        thinkingLevels: levels)
+}
+
 private func sessionsResponse(
     _ session: OpenClawChatSessionEntry,
+    ts: Double? = 1,
     defaults: OpenClawChatSessionsDefaults? = nil) -> OpenClawChatSessionsListResponse
 {
-    OpenClawChatSessionsListResponse(
-        ts: 1,
-        path: nil,
-        count: 1,
-        defaults: defaults,
-        sessions: [session])
+    sessionsResponse([session], ts: ts, defaults: defaults)
+}
+
+private func historyPayloadWithoutRunState(
+    sessionKey: String = "main",
+    sessionId: String? = "sess-main",
+    messages: [AnyCodable] = [],
+    thinkingLevel: String = "off") -> OpenClawChatHistoryPayload
+{
+    OpenClawChatHistoryPayload(
+        sessionKey: sessionKey,
+        sessionId: sessionId,
+        messages: messages,
+        thinkingLevel: thinkingLevel)
 }
 
 private func commandChoice(
@@ -669,7 +692,7 @@ private actor TestChatTransportState {
     var listSessionsQueries: [TestSessionListQuery] = []
     var renamedLabelsByKey: [(key: String, label: String)] = []
     var pinnedChanges: [(key: String, pinned: Bool)] = []
-    var archivedChanges: [(key: String, archived: Bool)] = []
+    var archivedChanges: [(key: String, expectedSessionID: String?, archived: Bool)] = []
     var sessionSettingsRouteGeneration: UInt64 = 0
     var capturedSessionSettingsRouteGenerations: [UInt64] = []
 }
@@ -706,6 +729,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     private let swarmEnabledHook: (@Sendable (String) async throws -> Bool)?
     private let listChildSessionsHook: (@Sendable (String) async throws -> [OpenClawChatSessionEntry])?
     private let listQuestionsHook: (@Sendable () async throws -> [QuestionRecord])?
+    private let listTasksHook: (@Sendable (String, String?) async throws -> [TaskSummary])?
     private let getQuestionHook: (@Sendable (String) async throws -> QuestionRecord)?
     private let cancelQuestionHook: (@Sendable (String) async throws -> Void)?
     private let healthResponses: [Bool]
@@ -742,6 +766,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         swarmEnabledHook: (@Sendable (String) async throws -> Bool)? = nil,
         listChildSessionsHook: (@Sendable (String) async throws -> [OpenClawChatSessionEntry])? = nil,
         listQuestionsHook: (@Sendable () async throws -> [QuestionRecord])? = nil,
+        listTasksHook: (@Sendable (String, String?) async throws -> [TaskSummary])? = nil,
         getQuestionHook: (@Sendable (String) async throws -> QuestionRecord)? = nil,
         cancelQuestionHook: (@Sendable (String) async throws -> Void)? = nil,
         healthResponses: [Bool] = [true])
@@ -772,6 +797,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.swarmEnabledHook = swarmEnabledHook
         self.listChildSessionsHook = listChildSessionsHook
         self.listQuestionsHook = listQuestionsHook
+        self.listTasksHook = listTasksHook
         self.getQuestionHook = getQuestionHook
         self.cancelQuestionHook = cancelQuestionHook
         self.healthResponses = healthResponses
@@ -901,6 +927,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
 
     func patchSession(
         key: String,
+        expectedSessionID: String?,
         label: String??,
         category _: String??,
         pinned: Bool?,
@@ -920,7 +947,10 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
             }
         }
         if let archived {
-            await self.state.archivedChangesAppend(key: key, archived: archived)
+            await self.state.archivedChangesAppend(
+                key: key,
+                expectedSessionID: expectedSessionID,
+                archived: archived)
             if let setSessionArchivedHook {
                 try await setSessionArchivedHook(key, archived)
             }
@@ -1073,6 +1103,10 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         try await self.listQuestionsHook?() ?? []
     }
 
+    func listTasks(sessionKey: String, agentID: String?) async throws -> [TaskSummary] {
+        try await self.listTasksHook?(sessionKey, agentID) ?? []
+    }
+
     func getQuestion(id: String) async throws -> QuestionRecord {
         guard let getQuestionHook else {
             throw NSError(
@@ -1189,7 +1223,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         await self.state.pinnedChanges
     }
 
-    func archivedChanges() async -> [(key: String, archived: Bool)] {
+    func archivedChanges() async -> [(key: String, expectedSessionID: String?, archived: Bool)] {
         await self.state.archivedChanges
     }
 
@@ -1323,8 +1357,11 @@ extension TestChatTransportState {
         self.pinnedChanges.append((key: key, pinned: pinned))
     }
 
-    fileprivate func archivedChangesAppend(key: String, archived: Bool) {
-        self.archivedChanges.append((key: key, archived: archived))
+    fileprivate func archivedChangesAppend(key: String, expectedSessionID: String?, archived: Bool) {
+        self.archivedChanges.append((
+            key: key,
+            expectedSessionID: expectedSessionID,
+            archived: archived))
     }
 }
 
@@ -1429,6 +1466,110 @@ private actor SwarmCapabilityScript {
 
 @Suite(.serialized)
 struct ChatViewModelTests {
+    @Test func `bootstrap fills subagent activity from the current session task list`() async throws {
+        let transport = TestChatTransport(
+            historyResponses: [historyPayload()],
+            listTasksHook: { sessionKey, agentID in
+                guard sessionKey == "main", agentID == "main" else { return [] }
+                return [subagentTaskSummary(
+                    id: "listed",
+                    status: "running",
+                    progressSummary: "Restored from task list")]
+            })
+        let viewModel = await MainActor.run {
+            OpenClawChatViewModel(
+                sessionKey: "main",
+                transport: transport,
+                activeAgentId: "main")
+        }
+
+        await MainActor.run { viewModel.load() }
+        try await waitUntil("listed subagent activity") {
+            await MainActor.run { viewModel.subagentActivities.map(\.id) == ["listed"] }
+        }
+
+        #expect(await MainActor.run { viewModel.subagentActivities.first?.snippet } ==
+            "Restored from task list")
+    }
+
+    @Test @MainActor func `subagent task events filter by session and retain terminal activity`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []),
+            activeAgentId: "main")
+        let liveDiff = [
+            "files": AnyCodable(2),
+            "added": AnyCodable(9),
+            "removed": AnyCodable(3),
+        ]
+
+        viewModel.handleTransportEvent(.task(.upserted(subagentTaskSummary(
+            id: "foreign",
+            status: "running",
+            sessionKey: "agent:main:other",
+            lastActivity: "Must stay hidden"))))
+        viewModel.handleTransportEvent(.task(.upserted(subagentTaskSummary(
+            id: "owned",
+            status: "running",
+            lastActivity: "Editing shared chat",
+            diffStat: liveDiff))))
+
+        #expect(viewModel.subagentActivities.map(\.id) == ["owned"])
+        #expect(viewModel.subagentActivities[0].snippet == "Editing shared chat")
+        #expect(viewModel.subagentActivities[0].diffStat == ChatToolDiffStat(
+            files: 2,
+            added: 9,
+            removed: 3))
+
+        viewModel.handleTransportEvent(.task(.upserted(subagentTaskSummary(
+            id: "owned",
+            status: "completed",
+            progressSummary: "Older milestone",
+            terminalSummary: "Finished cleanly",
+            endedAt: Date().timeIntervalSince1970 * 1000))))
+
+        #expect(viewModel.subagentActivities[0].status == .completed)
+        #expect(viewModel.subagentActivities[0].snippet == "Editing shared chat")
+        #expect(viewModel.subagentActivities[0].terminalSummary == "Finished cleanly")
+        #expect(viewModel.subagentActivities[0].diffStat?.added == 9)
+    }
+
+    @Test @MainActor func `tool input delta updates the matching pending edit diff`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        viewModel.sessionId = "run-1"
+        viewModel.handleTransportEvent(.agent(OpenClawAgentEventPayload(
+            runId: "run-1",
+            seq: 1,
+            stream: "tool",
+            ts: 1000,
+            data: [
+                "phase": AnyCodable("start"),
+                "name": AnyCodable("apply_patch"),
+                "toolCallId": AnyCodable("tool-1"),
+                "args": AnyCodable(["patch": "*** Begin Patch"]),
+            ])))
+        viewModel.handleTransportEvent(.agent(OpenClawAgentEventPayload(
+            runId: "run-1",
+            seq: 2,
+            stream: "tool",
+            ts: 1001,
+            data: [
+                "phase": AnyCodable("input_delta"),
+                "name": AnyCodable("apply_patch"),
+                "toolCallId": AnyCodable("tool-1"),
+                "diff": AnyCodable([
+                    "added": AnyCodable(12),
+                    "removed": AnyCodable(4),
+                ]),
+            ])))
+
+        #expect(viewModel.pendingToolCalls.first?.diffStat == ChatToolDiffStat(
+            added: 12,
+            removed: 4))
+    }
+
     @Test @MainActor func `transient Swarm capability failure preserves state and retries until explicit false`() async throws {
         let script = SwarmCapabilityScript([.value(true), .failure, .value(false)])
         var child = sessionEntry(key: "agent:main:child", updatedAt: 1)
@@ -6532,17 +6673,14 @@ struct ChatViewModelTests {
         let recentOlder = now - (5 * 60 * 60 * 1000)
         let stale = now - (26 * 60 * 60 * 1000)
         let history = historyPayload()
-        let sessions = OpenClawChatSessionsListResponse(
-            ts: now,
-            path: nil,
-            count: 4,
-            defaults: nil,
-            sessions: [
+        let sessions = sessionsResponse(
+            [
                 sessionEntry(key: "recent-1", updatedAt: recent),
                 sessionEntry(key: "main", updatedAt: stale),
                 sessionEntry(key: "recent-2", updatedAt: recentOlder),
                 sessionEntry(key: "old-1", updatedAt: stale),
-            ])
+            ],
+            ts: now)
 
         let (_, vm) = await makeViewModel(historyResponses: [history], sessionsResponses: [sessions])
         await MainActor.run { vm.load() }
@@ -6553,25 +6691,20 @@ struct ChatViewModelTests {
     }
 
     @Test func `context usage follows active session switches`() async throws {
-        let sessions = OpenClawChatSessionsListResponse(
-            ts: 1,
-            path: nil,
-            count: 2,
-            defaults: nil,
-            sessions: [
-                sessionEntry(
-                    key: "main",
-                    updatedAt: 2,
-                    totalTokens: 20,
-                    totalTokensFresh: true,
-                    contextTokens: 100),
-                sessionEntry(
-                    key: "other",
-                    updatedAt: 1,
-                    totalTokens: 80,
-                    totalTokensFresh: true,
-                    contextTokens: 100),
-            ])
+        let sessions = sessionsResponse([
+            sessionEntry(
+                key: "main",
+                updatedAt: 2,
+                totalTokens: 20,
+                totalTokensFresh: true,
+                contextTokens: 100),
+            sessionEntry(
+                key: "other",
+                updatedAt: 1,
+                totalTokens: 80,
+                totalTokensFresh: true,
+                contextTokens: 100),
+        ], ts: 1)
         let (_, vm) = await makeViewModel(
             historyResponses: [
                 historyPayload(sessionKey: "main", sessionId: "sess-main"),
@@ -6594,14 +6727,9 @@ struct ChatViewModelTests {
         let now = Date().timeIntervalSince1970 * 1000
         let recent = now - (30 * 60 * 1000)
         let history = historyPayload(sessionKey: "custom", sessionId: "sess-custom")
-        let sessions = OpenClawChatSessionsListResponse(
-            ts: now,
-            path: nil,
-            count: 1,
-            defaults: nil,
-            sessions: [
-                sessionEntry(key: "main", updatedAt: recent),
-            ])
+        let sessions = sessionsResponse(
+            sessionEntry(key: "main", updatedAt: recent),
+            ts: now)
 
         let (_, vm) = await makeViewModel(
             sessionKey: "custom",
@@ -6619,37 +6747,19 @@ struct ChatViewModelTests {
         let recent = now - (30 * 60 * 1000)
         let recentOlder = now - (90 * 60 * 1000)
         let history = historyPayload(sessionKey: "Luke’s MacBook Pro", sessionId: "sess-main")
-        let sessions = OpenClawChatSessionsListResponse(
+        let sessions = sessionsResponse(
+            [
+                sessionEntry(
+                    key: "Luke’s MacBook Pro",
+                    updatedAt: recent,
+                    displayName: "Luke’s MacBook Pro"),
+                sessionEntry(key: "recent-1", updatedAt: recentOlder),
+            ],
             ts: now,
-            path: nil,
-            count: 2,
             defaults: OpenClawChatSessionsDefaults(
                 model: nil,
                 contextTokens: nil,
-                mainSessionKey: "Luke’s MacBook Pro"),
-            sessions: [
-                OpenClawChatSessionEntry(
-                    key: "Luke’s MacBook Pro",
-                    kind: nil,
-                    displayName: "Luke’s MacBook Pro",
-                    surface: nil,
-                    subject: nil,
-                    room: nil,
-                    space: nil,
-                    updatedAt: recent,
-                    sessionId: nil,
-                    systemSent: nil,
-                    abortedLastRun: nil,
-                    thinkingLevel: nil,
-                    verboseLevel: nil,
-                    inputTokens: nil,
-                    outputTokens: nil,
-                    totalTokens: nil,
-                    modelProvider: nil,
-                    model: nil,
-                    contextTokens: nil),
-                sessionEntry(key: "recent-1", updatedAt: recentOlder),
-            ])
+                mainSessionKey: "Luke’s MacBook Pro"))
 
         let (_, vm) = await makeViewModel(
             sessionKey: "Luke’s MacBook Pro",
@@ -6667,56 +6777,22 @@ struct ChatViewModelTests {
         let recent = now - (2 * 60 * 1000)
         let recentOlder = now - (5 * 60 * 1000)
         let history = historyPayload(sessionKey: "agent:main:main", sessionId: "sess-main")
-        let sessions = OpenClawChatSessionsListResponse(
+        let sessions = sessionsResponse(
+            [
+                sessionEntry(
+                    key: "agent:main:onboarding",
+                    updatedAt: recent,
+                    displayName: "Luke’s MacBook Pro"),
+                sessionEntry(
+                    key: "agent:main:main",
+                    updatedAt: recentOlder,
+                    displayName: "Luke’s MacBook Pro"),
+            ],
             ts: now,
-            path: nil,
-            count: 2,
             defaults: OpenClawChatSessionsDefaults(
                 model: nil,
                 contextTokens: nil,
-                mainSessionKey: "agent:main:main"),
-            sessions: [
-                OpenClawChatSessionEntry(
-                    key: "agent:main:onboarding",
-                    kind: nil,
-                    displayName: "Luke’s MacBook Pro",
-                    surface: nil,
-                    subject: nil,
-                    room: nil,
-                    space: nil,
-                    updatedAt: recent,
-                    sessionId: nil,
-                    systemSent: nil,
-                    abortedLastRun: nil,
-                    thinkingLevel: nil,
-                    verboseLevel: nil,
-                    inputTokens: nil,
-                    outputTokens: nil,
-                    totalTokens: nil,
-                    modelProvider: nil,
-                    model: nil,
-                    contextTokens: nil),
-                OpenClawChatSessionEntry(
-                    key: "agent:main:main",
-                    kind: nil,
-                    displayName: "Luke’s MacBook Pro",
-                    surface: nil,
-                    subject: nil,
-                    room: nil,
-                    space: nil,
-                    updatedAt: recentOlder,
-                    sessionId: nil,
-                    systemSent: nil,
-                    abortedLastRun: nil,
-                    thinkingLevel: nil,
-                    verboseLevel: nil,
-                    inputTokens: nil,
-                    outputTokens: nil,
-                    totalTokens: nil,
-                    modelProvider: nil,
-                    model: nil,
-                    contextTokens: nil),
-            ])
+                mainSessionKey: "agent:main:main"))
 
         let (_, vm) = await makeViewModel(
             sessionKey: "agent:main:main",
@@ -6735,17 +6811,13 @@ struct ChatViewModelTests {
                 chatTextMessage(role: "assistant", text: "before new", timestamp: 1),
             ])
         let after = historyPayload(sessionKey: "agent:aiden:ios-new", sessionId: nil, messages: [])
-        let sessions = OpenClawChatSessionsListResponse(
+        let sessions = sessionsResponse(
+            sessionEntry(key: "agent:aiden:main", updatedAt: 1),
             ts: nil,
-            path: nil,
-            count: 1,
             defaults: OpenClawChatSessionsDefaults(
                 model: nil,
                 contextTokens: nil,
-                mainSessionKey: "agent:aiden:main"),
-            sessions: [
-                sessionEntry(key: "agent:aiden:main", updatedAt: 1),
-            ])
+                mainSessionKey: "agent:aiden:main"))
 
         let (transport, vm) = await makeViewModel(
             historyResponses: [before, after],
@@ -7188,14 +7260,10 @@ struct ChatViewModelTests {
     @Test func `bootstraps model selection from session and defaults`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let history = historyPayload()
-        let sessions = OpenClawChatSessionsListResponse(
+        let sessions = sessionsResponse(
+            sessionEntry(key: "main", updatedAt: now, model: "anthropic/claude-opus-4-6"),
             ts: now,
-            path: nil,
-            count: 1,
-            defaults: OpenClawChatSessionsDefaults(model: "openai/gpt-4.1-mini", contextTokens: nil),
-            sessions: [
-                sessionEntry(key: "main", updatedAt: now, model: "anthropic/claude-opus-4-6"),
-            ])
+            defaults: OpenClawChatSessionsDefaults(model: "openai/gpt-4.1-mini", contextTokens: nil))
         let models = [
             modelChoice(id: "anthropic/claude-opus-4-6", name: "Claude Opus 4.6"),
             modelChoice(id: "openai/gpt-4.1-mini", name: "GPT-4.1 mini", provider: "openai"),
@@ -7223,14 +7291,10 @@ struct ChatViewModelTests {
     @Test func `selecting default model patches nil and updates selection`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let history = historyPayload()
-        let sessions = OpenClawChatSessionsListResponse(
+        let sessions = sessionsResponse(
+            sessionEntry(key: "main", updatedAt: now, model: "anthropic/claude-opus-4-6"),
             ts: now,
-            path: nil,
-            count: 1,
-            defaults: OpenClawChatSessionsDefaults(model: "openai/gpt-4.1-mini", contextTokens: nil),
-            sessions: [
-                sessionEntry(key: "main", updatedAt: now, model: "anthropic/claude-opus-4-6"),
-            ])
+            defaults: OpenClawChatSessionsDefaults(model: "openai/gpt-4.1-mini", contextTokens: nil))
         let models = [
             modelChoice(id: "anthropic/claude-opus-4-6", name: "Claude Opus 4.6"),
             modelChoice(id: "openai/gpt-4.1-mini", name: "GPT-4.1 mini", provider: "openai"),
@@ -7264,12 +7328,9 @@ struct ChatViewModelTests {
             modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai"),
             modelChoice(id: "claude-opus-4-6", name: "Claude Opus 4.6"),
         ]
-        let sessions = OpenClawChatSessionsListResponse(
-            ts: now,
-            path: nil,
-            count: 1,
-            defaults: nil,
-            sessions: [sessionEntry(key: "main", updatedAt: now, model: nil)])
+        let sessions = sessionsResponse(
+            sessionEntry(key: "main", updatedAt: now, model: nil),
+            ts: now)
         let (transport, vm) = await makeViewModel(
             historyResponses: [historyPayload()],
             sessionsResponses: [sessions],
@@ -7293,14 +7354,14 @@ struct ChatViewModelTests {
     @Test func `selecting provider qualified model disambiguates duplicate model I ds`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let history = historyPayload()
-        let sessions = OpenClawChatSessionsListResponse(
+        let sessions = sessionsResponse(
+            sessionEntry(
+                key: "main",
+                updatedAt: now,
+                model: "gpt-4.1-mini",
+                modelProvider: "openrouter"),
             ts: now,
-            path: nil,
-            count: 1,
-            defaults: OpenClawChatSessionsDefaults(model: "openrouter/gpt-4.1-mini", contextTokens: nil),
-            sessions: [
-                sessionEntry(key: "main", updatedAt: now, model: "gpt-4.1-mini", modelProvider: "openrouter"),
-            ])
+            defaults: OpenClawChatSessionsDefaults(model: "openrouter/gpt-4.1-mini", contextTokens: nil))
         let models = [
             modelChoice(id: "gpt-4.1-mini", name: "GPT-4.1 mini", provider: "openai"),
             modelChoice(id: "gpt-4.1-mini", name: "GPT-4.1 mini", provider: "openrouter"),
@@ -7326,14 +7387,9 @@ struct ChatViewModelTests {
     @Test func `slash model I ds stay provider qualified in selection and patch`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let history = historyPayload()
-        let sessions = OpenClawChatSessionsListResponse(
-            ts: now,
-            path: nil,
-            count: 1,
-            defaults: nil,
-            sessions: [
-                sessionEntry(key: "agent:main:main", updatedAt: now, model: nil),
-            ])
+        let sessions = sessionsResponse(
+            sessionEntry(key: "agent:main:main", updatedAt: now, model: nil),
+            ts: now)
         let models = [
             modelChoice(
                 id: "openai/gpt-5.4",
@@ -7363,14 +7419,9 @@ struct ChatViewModelTests {
         let modelPickerStore = ChatModelPickerStore(defaults: defaults)
         let now = Date().timeIntervalSince1970 * 1000
         let history = historyPayload()
-        let sessions = OpenClawChatSessionsListResponse(
-            ts: now,
-            path: nil,
-            count: 1,
-            defaults: nil,
-            sessions: [
-                sessionEntry(key: "main", updatedAt: now, model: nil),
-            ])
+        let sessions = sessionsResponse(
+            sessionEntry(key: "main", updatedAt: now, model: nil),
+            ts: now)
         let models = [
             modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai"),
             modelChoice(id: "gpt-5.4-pro", name: "GPT-5.4 Pro", provider: "openai"),
@@ -7420,14 +7471,8 @@ struct ChatViewModelTests {
             sessionsResponses: [sessions],
             modelResponses: [models],
             modelPatchResults: [
-                OpenClawChatModelPatchResult(
-                    modelProvider: "openai",
-                    model: "gpt-first",
-                    thinkingLevel: "high"),
-                OpenClawChatModelPatchResult(
-                    modelProvider: "openai",
-                    model: "gpt-second",
-                    thinkingLevel: "medium"),
+                openAIModelPatchResult("gpt-first", thinking: "high"),
+                openAIModelPatchResult("gpt-second", thinking: "medium"),
             ],
             setSessionModelHook: { model in
                 if model == "openai/gpt-first" {
@@ -7472,11 +7517,10 @@ struct ChatViewModelTests {
             sessionsResponses: [sessions],
             modelResponses: [models],
             modelPatchResults: [
-                OpenClawChatModelPatchResult(
-                    modelProvider: "openai",
-                    model: "gpt-5.6-sol",
-                    thinkingLevel: "high",
-                    thinkingLevels: [thinkingOption("off"), thinkingOption("high"), thinkingOption("ultra")]),
+                openAIModelPatchResult(
+                    "gpt-5.6-sol",
+                    thinking: "high",
+                    levels: [thinkingOption("off"), thinkingOption("high"), thinkingOption("ultra")]),
             ],
             setSessionModelHook: { model in
                 if model == "openai/gpt-5.6-sol" {
@@ -7507,14 +7551,9 @@ struct ChatViewModelTests {
     @Test func `send waits for in flight model patch to finish`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let history = historyPayload()
-        let sessions = OpenClawChatSessionsListResponse(
-            ts: now,
-            path: nil,
-            count: 1,
-            defaults: nil,
-            sessions: [
-                sessionEntry(key: "main", updatedAt: now, model: nil),
-            ])
+        let sessions = sessionsResponse(
+            sessionEntry(key: "main", updatedAt: now, model: nil),
+            ts: now)
         let models = [
             modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai"),
         ]
@@ -7560,14 +7599,9 @@ struct ChatViewModelTests {
     @Test func `failed latest model selection does not replay after older completion finishes`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let history = historyPayload()
-        let sessions = OpenClawChatSessionsListResponse(
-            ts: now,
-            path: nil,
-            count: 1,
-            defaults: nil,
-            sessions: [
-                sessionEntry(key: "main", updatedAt: now, model: nil),
-            ])
+        let sessions = sessionsResponse(
+            sessionEntry(key: "main", updatedAt: now, model: nil),
+            ts: now)
         let models = [
             modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai"),
             modelChoice(id: "gpt-5.4-pro", name: "GPT-5.4 Pro", provider: "openai"),
@@ -7611,14 +7645,9 @@ struct ChatViewModelTests {
     @Test func `failed latest model selection restores earlier success without replay`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let history = historyPayload()
-        let sessions = OpenClawChatSessionsListResponse(
-            ts: now,
-            path: nil,
-            count: 1,
-            defaults: nil,
-            sessions: [
-                sessionEntry(key: "main", updatedAt: now, model: nil),
-            ])
+        let sessions = sessionsResponse(
+            sessionEntry(key: "main", updatedAt: now, model: nil),
+            ts: now)
         let models = [
             modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai"),
             modelChoice(id: "gpt-5.4-pro", name: "GPT-5.4 Pro", provider: "openai"),
@@ -8271,12 +8300,9 @@ struct ChatViewModelTests {
         let bootstrapHistoryGate = SessionSubscribeGate()
         let mainHistoryCount = AsyncCounter()
         let bootstrapHistoryReleasedCount = AsyncCounter()
-        let sessions = OpenClawChatSessionsListResponse(
-            ts: Date().timeIntervalSince1970 * 1000,
-            path: nil,
-            count: 1,
-            defaults: nil,
-            sessions: [sessionEntry(key: "main", updatedAt: Date().timeIntervalSince1970 * 1000)])
+        let sessions = sessionsResponse(
+            sessionEntry(key: "main", updatedAt: Date().timeIntervalSince1970 * 1000),
+            ts: Date().timeIntervalSince1970 * 1000)
         let (transport, vm) = await makeViewModel(
             historyResponses: [
                 historyPayload(
@@ -8777,15 +8803,12 @@ struct ChatViewModelTests {
 
     @Test func `switching sessions ignores late model patch completion from previous session`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
-        let sessions = OpenClawChatSessionsListResponse(
-            ts: now,
-            path: nil,
-            count: 2,
-            defaults: nil,
-            sessions: [
+        let sessions = sessionsResponse(
+            [
                 sessionEntry(key: "main", updatedAt: now, model: nil),
                 sessionEntry(key: "other", updatedAt: now - 1000, model: nil),
-            ])
+            ],
+            ts: now)
         let models = [
             modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai"),
         ]
@@ -8836,14 +8859,9 @@ struct ChatViewModelTests {
     @Test func `late model patch updates captured canonical alias after agent switch`() async throws {
         let patchGate = AsyncGate()
         let now = Date().timeIntervalSince1970 * 1000
-        let sessions = OpenClawChatSessionsListResponse(
-            ts: now,
-            path: nil,
-            count: 1,
-            defaults: nil,
-            sessions: [
-                sessionEntry(key: "agent:alpha:main", updatedAt: now, model: nil),
-            ])
+        let sessions = sessionsResponse(
+            sessionEntry(key: "agent:alpha:main", updatedAt: now, model: nil),
+            ts: now)
         let models = [
             modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai"),
         ]
@@ -8969,14 +8987,8 @@ struct ChatViewModelTests {
             sessionsResponses: [alphaSessions, betaSessions],
             modelResponses: [models, models],
             modelPatchResults: [
-                OpenClawChatModelPatchResult(
-                    modelProvider: "openai",
-                    model: "gpt-alpha",
-                    thinkingLevel: "high"),
-                OpenClawChatModelPatchResult(
-                    modelProvider: "openai",
-                    model: "gpt-beta",
-                    thinkingLevel: "medium"),
+                openAIModelPatchResult("gpt-alpha", thinking: "high"),
+                openAIModelPatchResult("gpt-beta", thinking: "medium"),
             ],
             setSessionModelHook: { model in
                 if model == "openai/gpt-alpha" {
@@ -9113,28 +9125,22 @@ struct ChatViewModelTests {
 
     @Test func `late model completion does not replay current session selection into previous session`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
-        let initialSessions = OpenClawChatSessionsListResponse(
-            ts: now,
-            path: nil,
-            count: 2,
-            defaults: nil,
-            sessions: [
+        let initialSessions = sessionsResponse(
+            [
                 sessionEntry(key: "main", updatedAt: now, model: nil),
                 sessionEntry(key: "other", updatedAt: now - 1000, model: nil),
-            ])
-        let sessionsAfterOtherSelection = OpenClawChatSessionsListResponse(
-            ts: now,
-            path: nil,
-            count: 2,
-            defaults: nil,
-            sessions: [
+            ],
+            ts: now)
+        let sessionsAfterOtherSelection = sessionsResponse(
+            [
                 sessionEntry(
                     key: "main",
                     updatedAt: now,
                     model: "gpt-5.4",
                     modelProvider: "openai"),
                 sessionEntry(key: "other", updatedAt: now - 1000, model: "openai/gpt-5.4-pro"),
-            ])
+            ],
+            ts: now)
         let models = [
             modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai"),
             modelChoice(id: "gpt-5.4-pro", name: "GPT-5.4 Pro", provider: "openai"),
@@ -9197,11 +9203,7 @@ struct ChatViewModelTests {
     }
 
     @Test func `explicit thinking level wins over history and persists changes`() async throws {
-        let history = OpenClawChatHistoryPayload(
-            sessionKey: "main",
-            sessionId: "sess-main",
-            messages: [],
-            thinkingLevel: "off")
+        let history = historyPayloadWithoutRunState()
         let callbackState = await MainActor.run { CallbackBox() }
 
         let (transport, vm) = await makeViewModel(
@@ -9310,16 +9312,8 @@ struct ChatViewModelTests {
             sessionsResponses: [initialSessions],
             modelResponses: [models],
             modelPatchResults: [
-                OpenClawChatModelPatchResult(
-                    modelProvider: "openai",
-                    model: "gpt-5.6-luna",
-                    thinkingLevel: "max",
-                    thinkingLevels: lunaLevels),
-                OpenClawChatModelPatchResult(
-                    modelProvider: "openai",
-                    model: "gpt-5.6-terra",
-                    thinkingLevel: "max",
-                    thinkingLevels: solLevels),
+                openAIModelPatchResult("gpt-5.6-luna", thinking: "max", levels: lunaLevels),
+                openAIModelPatchResult("gpt-5.6-terra", thinking: "max", levels: solLevels),
             ],
             listSessionsHook: { _ in
                 guard await gateNextList.current() > 0 else { return nil }
@@ -9396,10 +9390,7 @@ struct ChatViewModelTests {
             sessionsResponses: [sessions],
             modelResponses: [models],
             modelPatchResults: [
-                OpenClawChatModelPatchResult(
-                    modelProvider: "openai",
-                    model: "legacy-reasoning",
-                    thinkingLevel: nil),
+                openAIModelPatchResult("legacy-reasoning", thinking: nil),
             ],
             initialThinkingLevel: "ultra")
 
@@ -9478,11 +9469,7 @@ struct ChatViewModelTests {
     }
 
     @Test func `server provided thinking levels outside menu are preserved for send`() async throws {
-        let history = OpenClawChatHistoryPayload(
-            sessionKey: "main",
-            sessionId: "sess-main",
-            messages: [],
-            thinkingLevel: "xhigh")
+        let history = historyPayloadWithoutRunState(thinkingLevel: "xhigh")
 
         let (transport, vm) = await makeViewModel(historyResponses: [history])
 
@@ -9544,15 +9531,22 @@ struct ChatViewModelTests {
     }
 
     @Test func `session thinking levels drive picker options`() async throws {
-        let history = OpenClawChatHistoryPayload(
-            sessionKey: "main",
-            sessionId: "sess-main",
-            messages: [],
-            thinkingLevel: "adaptive")
-        let sessions = OpenClawChatSessionsListResponse(
-            ts: 1,
-            path: nil,
-            count: 1,
+        let history = historyPayloadWithoutRunState(thinkingLevel: "adaptive")
+        let sessions = sessionsResponse(
+            sessionEntry(
+                key: "main",
+                updatedAt: 1,
+                sessionId: "sess-main",
+                model: "claude-opus-4-7",
+                modelProvider: "anthropic",
+                thinkingLevel: "adaptive",
+                thinkingLevels: [
+                    thinkingOption("off"),
+                    thinkingOption("adaptive"),
+                    thinkingOption("max", label: "maximum"),
+                ],
+                thinkingOptions: ["off", "adaptive", "maximum"],
+                thinkingDefault: "adaptive"),
             defaults: OpenClawChatSessionsDefaults(
                 modelProvider: "openai",
                 model: "gpt-5.5",
@@ -9564,36 +9558,7 @@ struct ChatViewModelTests {
                     thinkingOption("max", label: "maximum"),
                 ],
                 thinkingOptions: ["off", "low", "xhigh", "maximum"],
-                thinkingDefault: "xhigh"),
-            sessions: [
-                OpenClawChatSessionEntry(
-                    key: "main",
-                    kind: nil,
-                    displayName: nil,
-                    surface: nil,
-                    subject: nil,
-                    room: nil,
-                    space: nil,
-                    updatedAt: 1,
-                    sessionId: "sess-main",
-                    systemSent: nil,
-                    abortedLastRun: nil,
-                    thinkingLevel: "adaptive",
-                    verboseLevel: nil,
-                    inputTokens: nil,
-                    outputTokens: nil,
-                    totalTokens: nil,
-                    modelProvider: "anthropic",
-                    model: "claude-opus-4-7",
-                    contextTokens: nil,
-                    thinkingLevels: [
-                        thinkingOption("off"),
-                        thinkingOption("adaptive"),
-                        thinkingOption("max", label: "maximum"),
-                    ],
-                    thinkingOptions: ["off", "adaptive", "maximum"],
-                    thinkingDefault: "adaptive"),
-            ])
+                thinkingDefault: "xhigh"))
 
         let (_, vm) = await makeViewModel(
             historyResponses: [history],
@@ -10018,41 +9983,16 @@ struct ChatViewModelTests {
     }
 
     @Test func `thinking options fallback and current unsupported level stay visible`() async throws {
-        let history = OpenClawChatHistoryPayload(
-            sessionKey: "main",
+        let history = historyPayloadWithoutRunState(thinkingLevel: "xhigh")
+        let sessions = sessionsResponse(sessionEntry(
+            key: "main",
+            updatedAt: 1,
             sessionId: "sess-main",
-            messages: [],
-            thinkingLevel: "xhigh")
-        let sessions = OpenClawChatSessionsListResponse(
-            ts: 1,
-            path: nil,
-            count: 1,
-            defaults: nil,
-            sessions: [
-                OpenClawChatSessionEntry(
-                    key: "main",
-                    kind: nil,
-                    displayName: nil,
-                    surface: nil,
-                    subject: nil,
-                    room: nil,
-                    space: nil,
-                    updatedAt: 1,
-                    sessionId: "sess-main",
-                    systemSent: nil,
-                    abortedLastRun: nil,
-                    thinkingLevel: "xhigh",
-                    verboseLevel: nil,
-                    inputTokens: nil,
-                    outputTokens: nil,
-                    totalTokens: nil,
-                    modelProvider: "openrouter",
-                    model: "deepseek/deepseek-v4",
-                    contextTokens: nil,
-                    thinkingLevels: nil,
-                    thinkingOptions: ["off", "max"],
-                    thinkingDefault: "max"),
-            ])
+            model: "deepseek/deepseek-v4",
+            modelProvider: "openrouter",
+            thinkingLevel: "xhigh",
+            thinkingOptions: ["off", "max"],
+            thinkingDefault: "max"))
 
         let (_, vm) = await makeViewModel(
             historyResponses: [history],
@@ -10066,15 +10006,17 @@ struct ChatViewModelTests {
     }
 
     @Test func `matching default thinking levels beat legacy row thinking options`() async throws {
-        let history = OpenClawChatHistoryPayload(
-            sessionKey: "main",
-            sessionId: "sess-main",
-            messages: [],
-            thinkingLevel: "adaptive")
-        let sessions = OpenClawChatSessionsListResponse(
-            ts: 1,
-            path: nil,
-            count: 1,
+        let history = historyPayloadWithoutRunState(thinkingLevel: "adaptive")
+        let sessions = sessionsResponse(
+            sessionEntry(
+                key: "main",
+                updatedAt: 1,
+                sessionId: "sess-main",
+                model: "claude-opus-4-7",
+                modelProvider: "anthropic",
+                thinkingLevel: "adaptive",
+                thinkingOptions: ["off"],
+                thinkingDefault: "off"),
             defaults: OpenClawChatSessionsDefaults(
                 modelProvider: "anthropic",
                 model: "claude-opus-4-7",
@@ -10085,32 +10027,7 @@ struct ChatViewModelTests {
                     thinkingOption("max"),
                 ],
                 thinkingOptions: ["off", "adaptive", "max"],
-                thinkingDefault: "adaptive"),
-            sessions: [
-                OpenClawChatSessionEntry(
-                    key: "main",
-                    kind: nil,
-                    displayName: nil,
-                    surface: nil,
-                    subject: nil,
-                    room: nil,
-                    space: nil,
-                    updatedAt: 1,
-                    sessionId: "sess-main",
-                    systemSent: nil,
-                    abortedLastRun: nil,
-                    thinkingLevel: "adaptive",
-                    verboseLevel: nil,
-                    inputTokens: nil,
-                    outputTokens: nil,
-                    totalTokens: nil,
-                    modelProvider: "anthropic",
-                    model: "claude-opus-4-7",
-                    contextTokens: nil,
-                    thinkingLevels: nil,
-                    thinkingOptions: ["off"],
-                    thinkingDefault: "off"),
-            ])
+                thinkingDefault: "adaptive"))
 
         let (_, vm) = await makeViewModel(
             historyResponses: [history],
@@ -10122,15 +10039,15 @@ struct ChatViewModelTests {
     }
 
     @Test func `default thinking levels do not leak to different session model`() async throws {
-        let history = OpenClawChatHistoryPayload(
-            sessionKey: "main",
-            sessionId: "sess-main",
-            messages: [],
-            thinkingLevel: "max")
-        let sessions = OpenClawChatSessionsListResponse(
-            ts: 1,
-            path: nil,
-            count: 1,
+        let history = historyPayloadWithoutRunState(thinkingLevel: "max")
+        let sessions = sessionsResponse(
+            sessionEntry(
+                key: "main",
+                updatedAt: 1,
+                sessionId: "sess-main",
+                model: "gpt-5.4",
+                modelProvider: "openai",
+                thinkingLevel: "max"),
             defaults: OpenClawChatSessionsDefaults(
                 modelProvider: "anthropic",
                 model: "claude-opus-4-7",
@@ -10141,29 +10058,7 @@ struct ChatViewModelTests {
                     thinkingOption("max"),
                 ],
                 thinkingOptions: ["off", "adaptive", "max"],
-                thinkingDefault: "adaptive"),
-            sessions: [
-                OpenClawChatSessionEntry(
-                    key: "main",
-                    kind: nil,
-                    displayName: nil,
-                    surface: nil,
-                    subject: nil,
-                    room: nil,
-                    space: nil,
-                    updatedAt: 1,
-                    sessionId: "sess-main",
-                    systemSent: nil,
-                    abortedLastRun: nil,
-                    thinkingLevel: "max",
-                    verboseLevel: nil,
-                    inputTokens: nil,
-                    outputTokens: nil,
-                    totalTokens: nil,
-                    modelProvider: "openai",
-                    model: "gpt-5.4",
-                    contextTokens: nil),
-            ])
+                thinkingDefault: "adaptive"))
 
         let (_, vm) = await makeViewModel(
             historyResponses: [history],
@@ -10177,11 +10072,7 @@ struct ChatViewModelTests {
     }
 
     @Test func `thinking patches are serialized without replay`() async throws {
-        let history = OpenClawChatHistoryPayload(
-            sessionKey: "main",
-            sessionId: "sess-main",
-            messages: [],
-            thinkingLevel: "off")
+        let history = historyPayloadWithoutRunState()
 
         let (transport, vm) = await makeViewModel(
             historyResponses: [history],
@@ -10259,7 +10150,7 @@ struct ChatViewModelTests {
         let patchStarted = AsyncGate()
         let patchGate = AsyncGate()
         let preferenceChanges = await MainActor.run { OptionalCallbackBox() }
-        let sessions = sessionsListResponse([
+        let sessions = sessionsResponse([
             sessionEntry(key: "main", updatedAt: 2, model: nil, thinkingLevel: "high"),
             sessionEntry(key: "other", updatedAt: 1, model: nil, thinkingLevel: "off"),
         ])
@@ -10299,7 +10190,7 @@ struct ChatViewModelTests {
     @Test func `older pending thinking choice becomes preference fallback`() async throws {
         let firstPatchGate = AsyncGate()
         let callbacks = await MainActor.run { CallbackBox() }
-        let sessions = sessionsListResponse([
+        let sessions = sessionsResponse([
             sessionEntry(key: "main", updatedAt: 2, model: nil, thinkingLevel: "off"),
             sessionEntry(key: "other", updatedAt: 1, model: nil, thinkingLevel: "off"),
         ])
@@ -10500,15 +10391,12 @@ struct ChatViewModelTests {
         let firstPatchGate = AsyncGate()
         let patchCount = AsyncCounter()
         let callbacks = await MainActor.run { CallbackBox() }
-        let sessions = OpenClawChatSessionsListResponse(
-            ts: 1,
-            path: nil,
-            count: 2,
-            defaults: nil,
-            sessions: [
+        let sessions = sessionsResponse(
+            [
                 sessionEntry(key: "main", updatedAt: 2, model: nil, verboseLevel: "off"),
                 sessionEntry(key: "other", updatedAt: 1, model: nil, verboseLevel: "off"),
-            ])
+            ],
+            ts: 1)
         let (_, vm) = await makeViewModel(
             historyResponses: [
                 historyPayload(sessionKey: "main", sessionId: "sess-main"),
@@ -10557,15 +10445,12 @@ struct ChatViewModelTests {
     @Test func `failed verbosity choices restore confirmed preference across sessions`() async throws {
         let firstPatchGate = AsyncGate()
         let callbacks = await MainActor.run { CallbackBox() }
-        let sessions = OpenClawChatSessionsListResponse(
-            ts: 1,
-            path: nil,
-            count: 2,
-            defaults: nil,
-            sessions: [
+        let sessions = sessionsResponse(
+            [
                 sessionEntry(key: "main", updatedAt: 2, model: nil),
                 sessionEntry(key: "other", updatedAt: 1, model: nil),
-            ])
+            ],
+            ts: 1)
         let (_, vm) = await makeViewModel(
             historyResponses: [
                 historyPayload(sessionKey: "main", sessionId: "sess-main"),
@@ -10778,11 +10663,7 @@ struct ChatViewModelTests {
             historyResponses: [historyPayload(sessionId: "sess-main")],
             modelResponses: [models],
             modelPatchResults: [
-                OpenClawChatModelPatchResult(
-                    modelProvider: "openai",
-                    model: "model-b",
-                    thinkingLevel: "off",
-                    thinkingLevels: levels),
+                openAIModelPatchResult("model-b", thinking: "off", levels: levels),
             ],
             setSessionThinkingHook: { _ in
                 throw NSError(
@@ -10842,11 +10723,7 @@ struct ChatViewModelTests {
             historyResponses: [historyPayload(sessionId: "sess-main")],
             modelResponses: [models],
             modelPatchResults: [
-                OpenClawChatModelPatchResult(
-                    modelProvider: "openai",
-                    model: "model-b",
-                    thinkingLevel: "high",
-                    thinkingLevels: levels),
+                openAIModelPatchResult("model-b", thinking: "high", levels: levels),
             ],
             setSessionModelHook: { _ in
                 await modelPatchStarted.open()
@@ -10905,18 +10782,10 @@ struct ChatViewModelTests {
             historyResponses: [historyPayload(sessionId: "sess-main")],
             modelResponses: [models],
             modelPatchResults: [
-                OpenClawChatModelPatchResult(
-                    modelProvider: "openai",
-                    model: "model-b",
-                    thinkingLevel: "off",
-                    thinkingLevels: levels),
+                openAIModelPatchResult("model-b", thinking: "off", levels: levels),
             ],
             thinkingPatchResults: [
-                OpenClawChatModelPatchResult(
-                    modelProvider: "openai",
-                    model: "model-b",
-                    thinkingLevel: "high",
-                    thinkingLevels: levels),
+                openAIModelPatchResult("model-b", thinking: "high", levels: levels),
             ],
             setSessionThinkingHook: { _ in
                 await thinkingPatchStarted.open()
@@ -11041,11 +10910,7 @@ struct ChatViewModelTests {
             historyResponses: [historyPayload(sessionId: "sess-main")],
             sessionsResponses: [sessions],
             thinkingPatchResults: [
-                OpenClawChatModelPatchResult(
-                    modelProvider: "openai",
-                    model: "gpt-sol",
-                    thinkingLevel: "high",
-                    thinkingLevels: levels),
+                openAIModelPatchResult("gpt-sol", thinking: "high", levels: levels),
             ],
             onThinkingLevelChanged: { level in
                 callbackState.values.append(level)
@@ -11081,11 +10946,7 @@ struct ChatViewModelTests {
             sessionsResponses: [sessions],
             modelResponses: [models],
             modelPatchResults: [
-                OpenClawChatModelPatchResult(
-                    modelProvider: "openai",
-                    model: "gpt-luna",
-                    thinkingLevel: "max",
-                    thinkingLevels: lunaLevels),
+                openAIModelPatchResult("gpt-luna", thinking: "max", levels: lunaLevels),
             ],
             setSessionThinkingHook: { _ in
                 throw NSError(
@@ -11141,11 +11002,7 @@ struct ChatViewModelTests {
             sessionsResponses: [initialSessions, refreshedSessions],
             modelResponses: [models],
             modelPatchResults: [
-                OpenClawChatModelPatchResult(
-                    modelProvider: "openai",
-                    model: "model-b",
-                    thinkingLevel: "high",
-                    thinkingLevels: oldLevels),
+                openAIModelPatchResult("model-b", thinking: "high", levels: oldLevels),
             ])
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
@@ -11186,11 +11043,7 @@ struct ChatViewModelTests {
             sessionsResponses: [sessions],
             modelResponses: [models],
             modelPatchResults: [
-                OpenClawChatModelPatchResult(
-                    modelProvider: "openai",
-                    model: "model-b",
-                    thinkingLevel: "high",
-                    thinkingLevels: levels),
+                openAIModelPatchResult("model-b", thinking: "high", levels: levels),
             ],
             setSessionModelHook: { model in
                 guard model == "openai/model-b" else { return }
@@ -11244,11 +11097,7 @@ struct ChatViewModelTests {
             sessionsResponses: [sessions],
             modelResponses: [models],
             modelPatchResults: [
-                OpenClawChatModelPatchResult(
-                    modelProvider: "openai",
-                    model: "model-b",
-                    thinkingLevel: "off",
-                    thinkingLevels: levels),
+                openAIModelPatchResult("model-b", thinking: "off", levels: levels),
             ],
             acquireSessionSettingsRouteLeaseHook: {
                 guard await captureCount.increment() == 1 else { return }
@@ -11287,10 +11136,7 @@ struct ChatViewModelTests {
             sessionsResponses: [sessions],
             modelResponses: [models],
             modelPatchResults: [
-                OpenClawChatModelPatchResult(
-                    modelProvider: "openai",
-                    model: "model-b",
-                    thinkingLevel: "off"),
+                openAIModelPatchResult("model-b", thinking: "off"),
             ],
             setSessionModelHook: { model in
                 guard model == "openai/model-b" else { return }
@@ -11341,11 +11187,7 @@ struct ChatViewModelTests {
             sessionsResponses: [sessions],
             modelResponses: [models],
             modelPatchResults: [
-                OpenClawChatModelPatchResult(
-                    modelProvider: "openai",
-                    model: "model-b",
-                    thinkingLevel: "off",
-                    thinkingLevels: levels),
+                openAIModelPatchResult("model-b", thinking: "off", levels: levels),
             ],
             setSessionModelHook: { model in
                 guard model == "openai/model-b" else { return }
@@ -11386,12 +11228,8 @@ struct ChatViewModelTests {
     @Test func `stale settings lease rolls back an inactive session target`() async throws {
         let modelPatchGate = AsyncGate()
         let modelPatchStarted = AsyncGate()
-        let sessions = OpenClawChatSessionsListResponse(
-            ts: 2,
-            path: nil,
-            count: 2,
-            defaults: nil,
-            sessions: [
+        let sessions = sessionsResponse(
+            [
                 sessionEntry(
                     key: "main",
                     updatedAt: 2,
@@ -11399,7 +11237,8 @@ struct ChatViewModelTests {
                     modelProvider: "openai",
                     thinkingLevel: "off"),
                 sessionEntry(key: "other", updatedAt: 1, model: nil, thinkingLevel: "off"),
-            ])
+            ],
+            ts: 2)
         let models = [
             modelChoice(id: "model-a", name: "A", provider: "openai", reasoning: true),
             modelChoice(id: "model-b", name: "B", provider: "openai", reasoning: true),
@@ -11412,10 +11251,7 @@ struct ChatViewModelTests {
             sessionsResponses: [sessions, sessions],
             modelResponses: [models],
             modelPatchResults: [
-                OpenClawChatModelPatchResult(
-                    modelProvider: "openai",
-                    model: "model-b",
-                    thinkingLevel: "off"),
+                openAIModelPatchResult("model-b", thinking: "off"),
             ],
             setSessionModelHook: { model in
                 guard model == "openai/model-b" else { return }
@@ -11451,7 +11287,7 @@ struct ChatViewModelTests {
         let mainKey = "agent:alpha:main"
         let otherKey = "agent:alpha:other"
         let contract = "per-sender|main|alpha"
-        let sessions = sessionsListResponse([
+        let sessions = sessionsResponse([
             sessionEntry(key: mainKey, updatedAt: 2, model: nil, thinkingLevel: "off"),
             sessionEntry(key: otherKey, updatedAt: 1, model: nil, thinkingLevel: "off"),
         ])
@@ -11494,15 +11330,12 @@ struct ChatViewModelTests {
 
     @Test func `late thinking completion does not replace the current session choice`() async throws {
         let firstPatchGate = AsyncGate()
-        let sessions = OpenClawChatSessionsListResponse(
-            ts: 2,
-            path: nil,
-            count: 2,
-            defaults: nil,
-            sessions: [
+        let sessions = sessionsResponse(
+            [
                 sessionEntry(key: "main", updatedAt: 2, model: nil, thinkingLevel: "off"),
                 sessionEntry(key: "other", updatedAt: 1, model: nil, thinkingLevel: "off"),
-            ])
+            ],
+            ts: 2)
         let (transport, vm) = await makeViewModel(
             historyResponses: [
                 historyPayload(sessionKey: "main", sessionId: "sess-main"),
@@ -11543,7 +11376,7 @@ struct ChatViewModelTests {
         let firstPatchGate = AsyncGate()
         let alphaSessions = sessionsResponse(
             sessionEntry(key: "agent:alpha:main", updatedAt: 1, model: nil, thinkingLevel: "off"))
-        let betaSessions = sessionsListResponse([
+        let betaSessions = sessionsResponse([
             sessionEntry(key: "agent:beta:main", updatedAt: 3, model: nil, thinkingLevel: "high"),
             sessionEntry(key: "agent:beta:other", updatedAt: 2, model: nil, thinkingLevel: "off"),
         ])
@@ -11635,9 +11468,7 @@ struct ChatViewModelTests {
     }
 
     @Test func `strips inbound metadata from history messages`() async throws {
-        let history = OpenClawChatHistoryPayload(
-            sessionKey: "main",
-            sessionId: "sess-main",
+        let history = historyPayloadWithoutRunState(
             messages: [
                 AnyCodable([
                     "role": "user",
@@ -11651,8 +11482,7 @@ struct ChatViewModelTests {
                     """]],
                     "timestamp": Date().timeIntervalSince1970 * 1000,
                 ]),
-            ],
-            thinkingLevel: "off")
+            ])
         let transport = TestChatTransport(historyResponses: [history])
         let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
 
@@ -11661,6 +11491,50 @@ struct ChatViewModelTests {
 
         let sanitized = await MainActor.run { vm.messages.first?.content.first?.text }
         #expect(sanitized == "Hello?")
+    }
+
+    @Test func `history system facts survive sanitation and produce visible rows`() async throws {
+        let history = historyPayloadWithoutRunState(
+            messages: [
+                AnyCodable([
+                    "role": "user",
+                    "content": [["type": "text", "text": "[System] Gateway restarted cleanly."]],
+                    "timestamp": 1,
+                    "provenance": [
+                        "kind": "internal_system",
+                        "sourceTool": "restart-sentinel",
+                    ],
+                ]),
+                AnyCodable([
+                    "role": "system",
+                    "content": [],
+                    "timestamp": 2,
+                    "__openclaw": [
+                        "kind": "compaction",
+                        "id": "compact-history",
+                        "tokensBefore": 20000,
+                        "tokensAfter": 8000,
+                    ],
+                ]),
+            ])
+        let transport = TestChatTransport(historyResponses: [history])
+        let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("system history loaded") { await MainActor.run { vm.messages.count == 2 } }
+
+        let rows = await MainActor.run { ChatTranscriptRow.build(from: vm.messages) }
+        #expect(rows.count == 2)
+        guard let first = rows.first, case let .systemNotice(notice) = first else {
+            Issue.record("Expected a restart notice")
+            return
+        }
+        #expect(notice.body == "Gateway restarted cleanly.")
+        guard let last = rows.last, case let .historyDivider(divider) = last else {
+            Issue.record("Expected a compaction divider")
+            return
+        }
+        #expect(divider.metric == "saved 12k tokens")
     }
 
     @Test func `abort requests do not clear pending until aborted event`() async throws {
@@ -11723,11 +11597,11 @@ struct ChatViewModelSessionManagementTests {
     }
 
     @Test func `pin patches transport and reorders optimistically`() async throws {
-        let initial = sessionsListResponse([
+        let initial = sessionsResponse([
             sessionEntry(key: "agent:main:topic-a", updatedAt: 200),
             sessionEntry(key: "agent:main:topic-b", updatedAt: 100),
         ])
-        let pinned = sessionsListResponse([
+        let pinned = sessionsResponse([
             sessionEntry(key: "agent:main:topic-b", updatedAt: 100, pinned: true, pinnedAt: 300),
             sessionEntry(key: "agent:main:topic-a", updatedAt: 200),
         ])
@@ -11754,12 +11628,12 @@ struct ChatViewModelSessionManagementTests {
     }
 
     @Test func `rename patches label optimistically and reverts on failure`() async throws {
-        let initial = sessionsListResponse([
+        let initial = sessionsResponse([
             sessionEntry(key: "agent:main:topic-a", updatedAt: 200, displayName: "Old name"),
         ])
         // The post-rename refresh must return the renamed row; otherwise the
         // refetch legitimately repaints the old name and races the assertions.
-        let renamed = sessionsListResponse([
+        let renamed = sessionsResponse([
             sessionEntry(
                 key: "agent:main:topic-a",
                 updatedAt: 200,
@@ -11801,11 +11675,15 @@ struct ChatViewModelSessionManagementTests {
     }
 
     @Test func `archive removes the session from the active list`() async throws {
-        let initial = sessionsListResponse([
+        let archivedSession = sessionEntry(
+            key: "agent:main:topic-b",
+            updatedAt: 100,
+            sessionId: "session-topic-b")
+        let initial = sessionsResponse([
             sessionEntry(key: "agent:main:topic-a", updatedAt: 200),
-            sessionEntry(key: "agent:main:topic-b", updatedAt: 100),
+            archivedSession,
         ])
-        let afterArchive = sessionsListResponse([
+        let afterArchive = sessionsResponse([
             sessionEntry(key: "agent:main:topic-a", updatedAt: 200),
         ])
         let (transport, vm) = await makeViewModel(
@@ -11817,11 +11695,14 @@ struct ChatViewModelSessionManagementTests {
             await MainActor.run { vm.sessions.count == 2 }
         }
 
-        await MainActor.run { vm.setSessionArchived(key: "agent:main:topic-b", archived: true) }
+        await MainActor.run { vm.setSessionArchived(archivedSession, archived: true) }
         #expect(await MainActor.run { vm.sessions.map(\.key) } == ["agent:main:topic-a"])
         try await waitUntil("archive patch sent") {
             let changes = await transport.archivedChanges()
-            return changes.count == 1 && changes[0].key == "agent:main:topic-b" && changes[0].archived
+            return changes.count == 1 &&
+                changes[0].key == "agent:main:topic-b" &&
+                changes[0].expectedSessionID == "session-topic-b" &&
+                changes[0].archived
         }
     }
 
@@ -11830,7 +11711,7 @@ struct ChatViewModelSessionManagementTests {
         let (transport, vm) = await makeViewModel(
             historyResponses: [historyPayload()],
             listSessionsHook: { query in
-                query.archived == true ? sessionsListResponse([archivedEntry]) : nil
+                query.archived == true ? sessionsResponse([archivedEntry]) : nil
             })
 
         let archivedRows = await vm.fetchSessionList(search: nil, archived: true)
@@ -11851,18 +11732,27 @@ struct ChatViewModelSessionManagementTests {
                 }
             })
 
-        let restored = await vm.restoreSession(key: "agent:main:old")
+        let restored = await vm.restoreSession(sessionEntry(
+            key: "agent:main:old",
+            updatedAt: 1,
+            sessionId: "session-old",
+            archived: true))
         #expect(restored)
-        let failed = await vm.restoreSession(key: "agent:main:broken")
+        let failed = await vm.restoreSession(sessionEntry(
+            key: "agent:main:broken",
+            updatedAt: 1,
+            sessionId: "session-broken",
+            archived: true))
         #expect(!failed)
         #expect(await MainActor.run { vm.errorText } == "restore failed")
         let changes = await transport.archivedChanges()
         #expect(changes.map(\.key) == ["agent:main:old", "agent:main:broken"])
+        #expect(changes.map(\.expectedSessionID) == ["session-old", "session-broken"])
         #expect(changes.allSatisfy { !$0.archived })
     }
 
     @Test func `fetchSessionList falls back to local filtering when the server is unreachable`() async throws {
-        let cached = sessionsListResponse([
+        let cached = sessionsResponse([
             sessionEntry(key: "agent:main:topic-a", updatedAt: 2, displayName: "Trip planning"),
             sessionEntry(key: "agent:main:topic-b", updatedAt: 1, displayName: "Groceries"),
         ])
