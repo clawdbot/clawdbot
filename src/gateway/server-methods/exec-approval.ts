@@ -24,6 +24,7 @@ import {
   type ExecApprovalRequest,
   type ExecApprovalResolved,
 } from "../../infra/exec-approvals.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   buildSystemRunApprovalBinding,
   buildSystemRunApprovalEnvBinding,
@@ -412,7 +413,16 @@ export function createExecApprovalHandlers(
       if (!decisionPromise) {
         return;
       }
-      const requestEvent: ExecApprovalRequest = buildRequestedApprovalEvent(record);
+      const baseRequestEvent: ExecApprovalRequest = buildRequestedApprovalEvent(record);
+      const resumedFromRunId = requestRunId
+        ? getAgentRunContext(requestRunId)?.resumedFromRunId
+        : undefined;
+      const requestEvent: ExecApprovalRequest = resumedFromRunId
+        ? {
+            ...baseRequestEvent,
+            request: { ...baseRequestEvent.request, resumedFromRunId },
+          }
+        : baseRequestEvent;
       const forwardRequest = opts?.forwarder?.handleRequested.bind(opts.forwarder);
       const iosPushRequest = opts?.iosPushDelivery?.handleRequested?.bind(opts.iosPushDelivery);
       await handlePendingApprovalRequest({

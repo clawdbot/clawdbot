@@ -27,6 +27,85 @@ describe("ACP translator replay helpers", () => {
     ]);
   });
 
+  it("reconstructs transcript tool calls and results between assistant text segments", () => {
+    expect(
+      extractReplayChunks({
+        role: "assistant",
+        content: [
+          { type: "text", text: "Before tool" },
+          {
+            type: "toolCall",
+            id: "call-1",
+            name: "read",
+            arguments: { path: "src/app.ts", line: 12 },
+          },
+        ],
+      }),
+    ).toEqual([
+      { sessionUpdate: "agent_message_chunk", text: "Before tool" },
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "call-1",
+        title: "read: path: src/app.ts, line: 12",
+        status: "in_progress",
+        rawInput: { path: "src/app.ts", line: 12 },
+        kind: "read",
+        locations: [{ path: "src/app.ts", line: 12 }],
+      },
+    ]);
+    expect(
+      extractReplayChunks({
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "read",
+        content: [{ type: "text", text: "FILE:src/app.ts" }],
+        details: { path: "src/app.ts" },
+        isError: false,
+      }),
+    ).toEqual([
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-1",
+        status: "completed",
+        rawOutput: {
+          content: [{ type: "text", text: "FILE:src/app.ts" }],
+          details: { path: "src/app.ts" },
+        },
+        content: [
+          {
+            type: "content",
+            content: { type: "text", text: "FILE:src/app.ts" },
+          },
+        ],
+        locations: [{ path: "src/app.ts" }],
+      },
+    ]);
+  });
+
+  it("preserves string-valued transcript tool output", () => {
+    expect(
+      extractReplayChunks({
+        role: "toolResult",
+        toolCallId: "call-string",
+        content: "plain tool output",
+      }),
+    ).toEqual([
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-string",
+        status: "completed",
+        rawOutput: { content: "plain tool output" },
+        content: [
+          {
+            type: "content",
+            content: { type: "text", text: "plain tool output" },
+          },
+        ],
+        locations: undefined,
+      },
+    ]);
+  });
+
   it("drops unsupported roles, empty text, and non-text content", () => {
     expect(extractReplayChunks({ role: "system", content: "ignore" })).toEqual([]);
     expect(extractReplayChunks({ role: "assistant", content: "" })).toEqual([]);

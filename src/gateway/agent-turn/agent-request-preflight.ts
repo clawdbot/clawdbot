@@ -231,7 +231,8 @@ export function prepareAgentRequestPreflight(params: {
     canUseInternalRuntimeHandoff && isMainSessionRestartRecoveryInputProvenance(inputProvenance);
   if (
     (request.internalExecutionIdentityRetry !== undefined ||
-      request.internalExecutionIdentityRecoveryAttempt !== undefined) &&
+      request.internalExecutionIdentityRecoveryAttempt !== undefined ||
+      request.internalRestartRecoverySourceRunId !== undefined) &&
     !isRestartRecoveryResumeRun
   ) {
     params.io.emitAcceptance([
@@ -239,7 +240,7 @@ export function prepareAgentRequestPreflight(params: {
       undefined,
       errorShape(
         ErrorCodes.INVALID_REQUEST,
-        "internal execution identity recovery fields are reserved for main-session restart recovery.",
+        "internal recovery fields are reserved for main-session restart recovery.",
       ),
     ]);
     return undefined;
@@ -251,6 +252,20 @@ export function prepareAgentRequestPreflight(params: {
       errorShape(
         ErrorCodes.INVALID_REQUEST,
         "forceCodeModeTools is reserved for main-session restart recovery.",
+      ),
+    ]);
+    return undefined;
+  }
+  if (
+    request.internalRestartRecoverySourceRunId !== undefined &&
+    request.internalRestartRecoverySourceRunId === runId
+  ) {
+    params.io.emitAcceptance([
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "restart recovery must use a distinct run id from its source run.",
       ),
     ]);
     return undefined;

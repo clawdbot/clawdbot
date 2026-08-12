@@ -8,6 +8,9 @@ import type {
 } from "./translator.prompt-state.js";
 
 const ACP_GATEWAY_DISCONNECT_GRACE_MS = 5_000;
+const ACP_GATEWAY_ACCEPTED_PROMPT_RECOVERY_GRACE_MS = 60_000;
+
+type DisconnectDeadline = "initial" | "accepted-recovery";
 
 export class AcpTranslatorDisconnects {
   private disconnectTimer: NodeJS.Timeout | null = null;
@@ -43,14 +46,14 @@ export class AcpTranslatorDisconnects {
     this.clearDisconnectTimer();
   }
 
-  handleGatewayReconnect(): void {
+  handleGatewayReconnect(reconnectReady: Promise<unknown> = Promise.resolve()): void {
     this.log("gateway reconnected");
     const disconnectContext = this.activeDisconnectContext;
     this.activeDisconnectContext = null;
     if (!disconnectContext) {
       return;
     }
-    void this.reconcilePendingPrompts(disconnectContext.generation, false);
+    void reconnectReady.then(() => this.reconcilePendingPrompts(disconnectContext.generation));
   }
 
   handleGatewayDisconnect(reason: string): void {
@@ -90,39 +93,37 @@ export class AcpTranslatorDisconnects {
     this.disconnectTimer = null;
   }
 
-  private armDisconnectTimer(disconnectContext: AcpDisconnectContext): void {
-    this.clearDisconnectTimer();
-    this.disconnectTimer = setTimeout(() => {
-      this.disconnectTimer = null;
-      void this.reconcilePendingPrompts(disconnectContext.generation, true);
-    }, ACP_GATEWAY_DISCONNECT_GRACE_MS);
-    this.disconnectTimer.unref?.();
-  }
-
-  private clearPendingDisconnectState(
-    pending: AcpPendingPrompt,
+  private armDisconnectTimer(
     disconnectContext: AcpDisconnectContext,
+    deadline: DisconnectDeadline = "initial",
   ): void {
-    if (pending.disconnectContext !== disconnectContext) {
-      return;
-    }
-    pending.disconnectContext = undefined;
+    this.clearDisconnectTimer();
+    this.disconnectTimer = setTimeout(
+      () => {
+        this.disconnectTimer = null;
+        void this.reconcilePendingPrompts(disconnectContext.generation, deadline);
+      },
+      deadline === "initial"
+        ? ACP_GATEWAY_DISCONNECT_GRACE_MS
+        : ACP_GATEWAY_ACCEPTED_PROMPT_RECOVERY_GRACE_MS - ACP_GATEWAY_DISCONNECT_GRACE_MS,
+    );
+    this.disconnectTimer.unref?.();
   }
 
   private shouldRejectPendingAtDisconnectDeadline(
     pending: AcpPendingPrompt,
     disconnectContext: AcpDisconnectContext,
+    deadline: DisconnectDeadline,
   ): boolean {
     return (
       pending.disconnectContext === disconnectContext &&
-      (!pending.sendAccepted ||
-        this.activeDisconnectContext?.generation === disconnectContext.generation)
+      (!pending.sendAccepted || deadline === "accepted-recovery")
     );
   }
 
   private async reconcilePendingPrompts(
     observedDisconnectGeneration: number,
-    deadlineExpired: boolean,
+    deadline?: DisconnectDeadline,
   ): Promise<void> {
     if (this.pendingPrompts.size === 0) {
       if (this.disconnectGeneration === observedDisconnectGeneration) {
@@ -140,17 +141,24 @@ export class AcpTranslatorDisconnects {
       if (pending.disconnectContext?.generation !== observedDisconnectGeneration) {
         continue;
       }
-      const shouldKeepPending = await this.reconcilePendingPrompt(
-        sessionId,
-        pending,
-        deadlineExpired,
-      );
+      const shouldKeepPending = await this.reconcilePendingPrompt(sessionId, pending, deadline);
       if (shouldKeepPending) {
         keepDisconnectTimer = true;
       }
     }
 
-    if (!keepDisconnectTimer && this.disconnectGeneration === observedDisconnectGeneration) {
+    if (
+      keepDisconnectTimer &&
+      deadline === "initial" &&
+      this.disconnectGeneration === observedDisconnectGeneration
+    ) {
+      const disconnectContext = pendingEntries
+        .map(([, pending]) => pending.disconnectContext)
+        .find((context) => context?.generation === observedDisconnectGeneration);
+      if (disconnectContext) {
+        this.armDisconnectTimer(disconnectContext, "accepted-recovery");
+      }
+    } else if (!keepDisconnectTimer && this.disconnectGeneration === observedDisconnectGeneration) {
       this.clearDisconnectTimer();
     }
   }
@@ -158,26 +166,27 @@ export class AcpTranslatorDisconnects {
   private async reconcilePendingPrompt(
     sessionId: string,
     pending: AcpPendingPrompt,
-    deadlineExpired: boolean,
+    deadline?: DisconnectDeadline,
   ): Promise<boolean> {
     const disconnectContext = pending.disconnectContext;
     if (!disconnectContext) {
       return false;
     }
+    const waitedRunId = pending.idempotencyKey;
     let result: AcpAgentWaitResult | undefined;
     try {
       result = await this.gateway.request(
         "agent.wait",
         {
-          runId: pending.idempotencyKey,
+          runId: waitedRunId,
           timeoutMs: 0,
         },
         { timeoutMs: null },
       );
     } catch (err) {
-      this.log(`agent.wait reconcile failed for ${pending.idempotencyKey}: ${String(err)}`);
-      if (deadlineExpired) {
-        if (this.shouldRejectPendingAtDisconnectDeadline(pending, disconnectContext)) {
+      this.log(`agent.wait reconcile failed for ${waitedRunId}: ${String(err)}`);
+      if (deadline) {
+        if (this.shouldRejectPendingAtDisconnectDeadline(pending, disconnectContext, deadline)) {
           await this.rejectPendingPrompt(
             pending,
             new Error(`Gateway disconnected: ${disconnectContext.reason}`),
@@ -185,13 +194,12 @@ export class AcpTranslatorDisconnects {
           );
           return false;
         }
-        this.clearPendingDisconnectState(pending, disconnectContext);
-        return false;
+        return true;
       }
       return true;
     }
 
-    const currentPending = this.getPendingPrompt(sessionId, pending.idempotencyKey);
+    const currentPending = this.getPendingPrompt(sessionId, waitedRunId);
     if (!currentPending) {
       return false;
     }
@@ -203,8 +211,10 @@ export class AcpTranslatorDisconnects {
       void this.finishPrompt(sessionId, currentPending, "end_turn");
       return false;
     }
-    if (deadlineExpired) {
-      if (this.shouldRejectPendingAtDisconnectDeadline(currentPending, disconnectContext)) {
+    if (deadline) {
+      if (
+        this.shouldRejectPendingAtDisconnectDeadline(currentPending, disconnectContext, deadline)
+      ) {
         const currentDisconnectContext = currentPending.disconnectContext;
         if (!currentDisconnectContext) {
           return false;
@@ -216,8 +226,7 @@ export class AcpTranslatorDisconnects {
         );
         return false;
       }
-      this.clearPendingDisconnectState(currentPending, disconnectContext);
-      return false;
+      return true;
     }
     return true;
   }

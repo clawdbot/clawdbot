@@ -371,10 +371,15 @@ export class AcpTranslatorSessionLifecycle {
       for (const chunk of replayChunks) {
         await this.sessionUpdates.emit({
           sessionId,
-          update: {
-            sessionUpdate: chunk.sessionUpdate,
-            content: { type: "text", text: chunk.text },
-          },
+          update:
+            chunk.sessionUpdate === "user_message_chunk" ||
+            chunk.sessionUpdate === "agent_message_chunk" ||
+            chunk.sessionUpdate === "agent_thought_chunk"
+              ? {
+                  sessionUpdate: chunk.sessionUpdate,
+                  content: { type: "text", text: chunk.text },
+                }
+              : chunk,
         });
       }
     }

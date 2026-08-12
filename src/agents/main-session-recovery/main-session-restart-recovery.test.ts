@@ -2367,6 +2367,7 @@ describe("main-session-restart-recovery", () => {
         sessionId: "main-session",
         updatedAt: cutoff - 10_000,
         status: "running",
+        lifecycleRunId: "interrupted-control-ui-run",
       },
       "agent:main:active-key": {
         sessionId: "active-key-session",
@@ -2437,6 +2438,9 @@ describe("main-session-restart-recovery", () => {
     expect(marked).toEqual({ marked: 1, skipped: 2 });
     let store = readStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
+    expect(store["agent:main:main"]?.restartRecoveryDeliverySourceRunId).toBe(
+      "interrupted-control-ui-run",
+    );
     expect(store["agent:main:active-key"]?.abortedLastRun).toBeUndefined();
     expect(store["agent:main:active-id"]?.abortedLastRun).toBeUndefined();
     expect(store["agent:main:fresh"]?.abortedLastRun).toBeUndefined();
@@ -2451,6 +2455,15 @@ describe("main-session-restart-recovery", () => {
 
     expect(recovered).toEqual({ recovered: 2, failed: 0, skipped: 0 });
     expect(callGateway).toHaveBeenCalledTimes(2);
+    expect(
+      vi
+        .mocked(callGateway)
+        .mock.calls.find(
+          ([request]) =>
+            request.method === "agent" &&
+            (request.params as { sessionKey?: unknown }).sessionKey === "agent:main:main",
+        )?.[0].params,
+    ).toMatchObject({ internalRestartRecoverySourceRunId: "interrupted-control-ui-run" });
     store = readStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
     expect(store["agent:main:already-marked"]?.abortedLastRun).toBe(false);
@@ -3587,6 +3600,7 @@ describe("main-session-restart-recovery", () => {
     expect(dispatchAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         idempotencyKey: "recovery-main",
+        internalRestartRecoverySourceRunId: "source-main",
         sessionKey: "agent:main:main",
       }),
       10_000,

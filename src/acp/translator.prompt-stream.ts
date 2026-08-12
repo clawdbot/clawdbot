@@ -110,7 +110,8 @@ export class AcpTranslatorPromptStream {
       this.pendingPrompts,
       this.approvalRelays,
       (sessionId, runId) => this.getPendingPrompt(sessionId, runId),
-      (sessionKey, runId) => this.findPendingBySessionKey(sessionKey, runId),
+      (sessionKey, runId, resumedFromRunId) =>
+        this.findPendingBySessionKey(sessionKey, runId, resumedFromRunId),
       log,
     );
     this.disconnects = new AcpTranslatorDisconnects(
@@ -127,8 +128,18 @@ export class AcpTranslatorPromptStream {
     this.disconnects.shutdown();
   }
 
-  handleGatewayReconnect(): void {
-    this.disconnects.handleGatewayReconnect();
+  async handleGatewayReconnect(): Promise<void> {
+    const subscriptionReady = Promise.all(
+      [...this.pendingPrompts.values()].map((pending) =>
+        this.gateway
+          .request("sessions.messages.subscribe", { key: pending.sessionKey })
+          .catch((err: unknown) => {
+            this.log(`session message subscription failed for ${pending.sessionKey}: ${String(err)}`);
+          }),
+      ),
+    );
+    this.disconnects.handleGatewayReconnect(subscriptionReady);
+    await subscriptionReady;
   }
 
   handleGatewayDisconnect(reason: string): void {
@@ -144,7 +155,7 @@ export class AcpTranslatorPromptStream {
       this.agentEvents.handleExecApprovalRequestEvent(evt);
       return;
     }
-    if (evt.event === "agent") {
+    if (evt.event === "agent" || evt.event === "session.tool") {
       await this.agentEvents.handleAgentEvent(evt);
     }
   }
@@ -288,7 +299,11 @@ export class AcpTranslatorPromptStream {
         if (this.settlingPromptKeys.has(promptKey)) {
           return;
         }
-        if (isGatewayCloseError(err) && this.getPendingPrompt(params.sessionId, runId)) {
+        const pending = this.pendingPrompts.get(params.sessionId);
+        if (
+          isGatewayCloseError(err) &&
+          (this.getPendingPrompt(params.sessionId, runId) || pending?.resumedRunIds?.has(runId))
+        ) {
           return;
         }
         const error = err instanceof Error ? err : new Error(String(err));
@@ -364,12 +379,13 @@ export class AcpTranslatorPromptStream {
     const sessionKey = payload.sessionKey as string | undefined;
     const state = payload.state as string | undefined;
     const runId = payload.runId as string | undefined;
+    const resumedFromRunId = payload.resumedFromRunId as string | undefined;
     const messageData = payload.message as Record<string, unknown> | undefined;
     if (!sessionKey || !state) {
       return;
     }
 
-    const pending = this.findPendingBySessionKey(sessionKey, runId);
+    const pending = this.findPendingBySessionKey(sessionKey, runId, resumedFromRunId);
     if (!pending) {
       return;
     }
@@ -502,6 +518,7 @@ export class AcpTranslatorPromptStream {
   private findPendingBySessionKey(
     sessionKey: string,
     runId?: string,
+    resumedFromRunId?: string,
   ): AcpPendingPrompt | undefined {
     for (const pending of this.pendingPrompts.values()) {
       if (pending.sessionKey !== sessionKey) {
@@ -511,6 +528,16 @@ export class AcpTranslatorPromptStream {
         continue;
       }
       return pending;
+    }
+    if (runId && resumedFromRunId) {
+      for (const pending of this.pendingPrompts.values()) {
+        if (pending.idempotencyKey !== resumedFromRunId) {
+          continue;
+        }
+        this.reconcilePendingSessionKey(pending, sessionKey);
+        this.adoptResumedRun(pending, runId);
+        return pending;
+      }
     }
     if (runId) {
       for (const pending of this.pendingPrompts.values()) {
@@ -522,6 +549,44 @@ export class AcpTranslatorPromptStream {
       }
     }
     return undefined;
+  }
+
+  private adoptResumedRun(pending: AcpPendingPrompt, runId: string): void {
+    const previousRunId = pending.idempotencyKey;
+    this.log(`prompt run resumed: ${previousRunId} -> ${runId}`);
+    this.agentEvents.clearApprovalRelaysForPrompt(pending.sessionId, previousRunId, {
+      denyActive: true,
+    });
+    pending.resumedRunIds ??= new Set();
+    pending.resumedRunIds.add(previousRunId);
+    pending.idempotencyKey = runId;
+    pending.sendAccepted = true;
+    pending.disconnectContext = undefined;
+    for (const [toolCallId, toolCall] of pending.toolCalls ?? []) {
+      void this.sessionUpdates.emit({
+        sessionId: pending.sessionId,
+        sessionKey: pending.sessionKey,
+        ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
+        runId: previousRunId,
+        record: true,
+        waitForDelivery: false,
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId,
+          status: "failed",
+          locations: toolCall.locations,
+        },
+      });
+    }
+    pending.sentTextLength = 0;
+    pending.sentText = undefined;
+    pending.sentThoughtLength = 0;
+    pending.sentThought = undefined;
+    pending.toolCalls = undefined;
+    const session = this.sessionStore.getSession(pending.sessionId);
+    if (session?.abortController) {
+      this.sessionStore.setActiveRun(pending.sessionId, runId, session.abortController);
+    }
   }
 
   private reconcilePendingSessionKey(pending: AcpPendingPrompt, sessionKey: string): void {

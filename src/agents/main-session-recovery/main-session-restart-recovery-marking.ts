@@ -35,7 +35,14 @@ async function markRecoveryStore(params: {
   plan: (
     entry: SessionEntry,
     sessionKey: string,
-  ) => { replaceRuns?: boolean; resetRuntime?: boolean; runs?: RestartRecoveryRun[] } | undefined;
+  ) =>
+    | {
+        replaceRuns?: boolean;
+        resetRuntime?: boolean;
+        runs?: RestartRecoveryRun[];
+        sourceRunId?: string;
+      }
+    | undefined;
 }) {
   return await applySessionEntryReplacements<{ marked: number; skipped: number }>({
     storePath: params.storePath,
@@ -55,6 +62,9 @@ async function markRecoveryStore(params: {
         }
         if (plan.replaceRuns) {
           entry.restartRecoveryRuns = plan.runs;
+        }
+        if (plan.sourceRunId) {
+          entry.restartRecoveryDeliverySourceRunId = plan.sourceRunId;
         }
         transitionMainSessionRecovery(entry, {
           kind: "mark_interrupted",
@@ -263,7 +273,8 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
         ) {
           return undefined;
         }
-        return {};
+        const sourceRunId = entry.lifecycleRunId?.trim();
+        return sourceRunId ? { sourceRunId } : {};
       },
     });
     result.marked += storeResult.marked;

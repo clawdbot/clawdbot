@@ -11,6 +11,8 @@ type AgentRunContext = {
   agentId?: string;
   /** Owning run's sessionId; stamped onto lifecycle events. */
   sessionId?: string;
+  /** Interrupted run explicitly resumed by this execution. */
+  resumedFromRunId?: string;
   /** Gateway lifecycle generation captured when the run was registered. */
   lifecycleGeneration?: string;
   /** Producer-owned start captured from this run's accepted lifecycle event. */
@@ -172,6 +174,9 @@ export function registerAgentRunContext(
   if (context.sessionId && existing.sessionId !== context.sessionId) {
     existing.sessionId = context.sessionId;
     runIndexChanged = true;
+  }
+  if (context.resumedFromRunId && existing.resumedFromRunId !== context.resumedFromRunId) {
+    existing.resumedFromRunId = context.resumedFromRunId;
   }
   if (context.agentId && existing.agentId !== context.agentId) {
     existing.agentId = context.agentId;

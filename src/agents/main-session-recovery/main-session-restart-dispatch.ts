@@ -363,7 +363,8 @@ export async function resumeMainSession(params: {
     log.warn(`refusing message-tool-only recovery without channel authority: ${params.sessionKey}`);
     return "failed";
   }
-  const recoveryRunId = claimedRunId && claimedRunId !== sourceRunId ? claimedRunId : randomUUID();
+  const recoveryRunId =
+    claimedRunId && (!sourceRunId || claimedRunId !== sourceRunId) ? claimedRunId : randomUUID();
   const reusingRecoveryRunId = recoveryRunId === claimedRunId;
   const dispatchSessionKey = params.canonicalSessionKey ?? params.sessionKey;
   const recoverySessionKeys = Array.from(new Set([dispatchSessionKey, params.sessionKey]));
@@ -465,6 +466,7 @@ export async function resumeMainSession(params: {
         ? { internalExecutionIdentityRetry: params.recoveryAttempt > 1 }
         : {}),
       internalExecutionIdentityRecoveryAttempt: params.recoveryAttempt,
+      ...(sourceRunId ? { internalRestartRecoverySourceRunId: sourceRunId } : {}),
       idempotencyKey: recoveryRunId,
       deliver:
         Boolean(deliveryContext) &&

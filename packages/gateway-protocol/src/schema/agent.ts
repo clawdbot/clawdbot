@@ -57,6 +57,7 @@ const AgentInternalEventSchema = closedObject({
 /** Stream event emitted by the agent runtime over the gateway protocol. */
 export const AgentEventSchema = closedObject({
   runId: NonEmptyString,
+  resumedFromRunId: Type.Optional(NonEmptyString),
   seq: Type.Integer({ minimum: 0 }),
   stream: NonEmptyString,
   ts: Type.Integer({ minimum: 0 }),
@@ -325,6 +326,8 @@ export const AgentParamsSchema = closedObject({
   internalExecutionIdentityRetry: Type.Optional(Type.Boolean()),
   /** Exact durable recovery attempt that owns any post-admission identity bind. */
   internalExecutionIdentityRecoveryAttempt: Type.Optional(Type.Integer({ minimum: 1 })),
+  /** Interrupted run resumed by this internal main-session recovery request. */
+  internalRestartRecoverySourceRunId: Type.Optional(NonEmptyString),
   execApprovalFollowupExpectedSessionId: Type.Optional(NonEmptyString),
   internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
   inputProvenance: Type.Optional(InputProvenanceSchema),

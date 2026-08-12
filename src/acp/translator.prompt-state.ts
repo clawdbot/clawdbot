@@ -10,6 +10,7 @@ export type AcpPendingPrompt = {
   sessionKey: string;
   ledgerSessionId?: string;
   idempotencyKey: string;
+  resumedRunIds?: Set<string>;
   sendAccepted?: boolean;
   disconnectContext?: AcpDisconnectContext;
   resolve: (response: PromptResponse) => void;

@@ -120,8 +120,8 @@ export class AcpGatewayAgent implements Agent {
     this.promptStream.shutdown();
   }
 
-  handleGatewayReconnect(): void {
-    this.promptStream.handleGatewayReconnect();
+  async handleGatewayReconnect(): Promise<void> {
+    await this.promptStream.handleGatewayReconnect();
   }
 
   handleGatewayDisconnect(reason: string): void {

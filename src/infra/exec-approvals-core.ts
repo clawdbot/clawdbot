@@ -198,6 +198,7 @@ export type ExecApprovalRequestPayload = {
   sessionKey?: string | null;
   sessionId?: string | null;
   runId?: string | null;
+  resumedFromRunId?: string;
   toolCallId?: string | null;
   turnSourceChannel?: string | null;
   turnSourceTo?: string | null;

@@ -56,6 +56,8 @@ function createApprovalEvent(params: {
 
 function createApprovalRequestEvent(params: {
   approvalId?: string;
+  runId?: string;
+  resumedFromRunId?: string;
   sessionKey?: string;
   command?: string;
   toolCallId?: string;
@@ -70,6 +72,8 @@ function createApprovalRequestEvent(params: {
       request: {
         command: params.command ?? "echo raw",
         host: "gateway",
+        runId: params.runId,
+        resumedFromRunId: params.resumedFromRunId,
         sessionKey: params.sessionKey ?? SESSION_KEY,
         toolCallId: params.toolCallId,
       },
@@ -281,6 +285,32 @@ describe("ACP translator permission relay", () => {
     await cleanupHarness(harness);
   });
 
+  it("adopts a linked recovery run from its first approval request", async () => {
+    const harness = await createHarness();
+    const recoveryRunId = "restart-recovery-run";
+
+    harness.agent.handleGatewayDisconnect("1006: connection lost");
+    harness.agent.handleGatewayReconnect();
+    await harness.agent.handleGatewayEvent(
+      createApprovalRequestEvent({
+        approvalId: "approval-recovery",
+        runId: recoveryRunId,
+        resumedFromRunId: harness.runId,
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(harness.requestPermission).toHaveBeenCalledTimes(1);
+    });
+    await harness.agent.cancel({ sessionId: SESSION_ID } as CancelNotification);
+    await harness.promptPromise;
+    expect(harness.request).toHaveBeenCalledWith("chat.abort", {
+      sessionKey: SESSION_KEY,
+      runId: recoveryRunId,
+    });
+    harness.sessionStore.clearAllSessionsForTest();
+  });
+
   it("correlates concurrent approvals by a unique execute tool call and fails closed otherwise", async () => {
     const runIds: string[] = [];
     const request = vi.fn(async (method: string, requestParams?: Record<string, unknown>) => {
@@ -338,7 +368,11 @@ describe("ACP translator permission relay", () => {
       }),
     );
     await agent.handleGatewayEvent(
-      createApprovalRequestEvent({ approvalId: "approval-shared", toolCallId: "tool-second" }),
+      createApprovalRequestEvent({
+        approvalId: "approval-shared",
+        runId: expectDefined(runIds[1], "runIds[1] test invariant"),
+        toolCallId: "tool-second",
+      }),
     );
 
     await vi.waitFor(() => {

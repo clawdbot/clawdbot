@@ -35,6 +35,7 @@ export class AcpTranslatorAgentEvents {
     private readonly findPendingBySessionKey: (
       sessionKey: string,
       runId?: string,
+      resumedFromRunId?: string,
     ) => AcpPendingPrompt | undefined,
     private readonly log: (msg: string) => void,
   ) {}
@@ -48,9 +49,12 @@ export class AcpTranslatorAgentEvents {
     const runId = payload.runId as string | undefined;
     const data = payload.data as Record<string, unknown> | undefined;
     const sessionKey = payload.sessionKey as string | undefined;
+    const resumedFromRunId = normalizeOptionalString(payload.resumedFromRunId);
     if (!stream || !data || !sessionKey) {
       return;
     }
+
+    const pending = this.findPendingBySessionKey(sessionKey, runId, resumedFromRunId);
 
     if (stream === "approval") {
       await this.handleApprovalEvent({ sessionKey, runId, data });
@@ -67,7 +71,6 @@ export class AcpTranslatorAgentEvents {
       return;
     }
 
-    const pending = this.findPendingBySessionKey(sessionKey, runId);
     if (!pending) {
       return;
     }
@@ -165,7 +168,12 @@ export class AcpTranslatorAgentEvents {
     if (!sessionKey) {
       return;
     }
-    this.startApprovalRelay({ sessionKey, approvalEvent });
+    this.startApprovalRelay({
+      sessionKey,
+      runId: normalizeOptionalString(request?.runId),
+      resumedFromRunId: normalizeOptionalString(request?.resumedFromRunId),
+      approvalEvent,
+    });
   }
 
   clearApprovalRelaysForPrompt(
@@ -206,6 +214,7 @@ export class AcpTranslatorAgentEvents {
   private startApprovalRelay(params: {
     sessionKey: string;
     runId?: string;
+    resumedFromRunId?: string;
     approvalEvent: GatewayExecApprovalEvent;
   }): void {
     const approvalEvent = params.approvalEvent;
@@ -239,10 +248,15 @@ export class AcpTranslatorAgentEvents {
   private findPendingForApproval(params: {
     sessionKey: string;
     runId?: string;
+    resumedFromRunId?: string;
     approvalEvent: GatewayExecApprovalEvent;
   }): AcpPendingPrompt | undefined {
     if (params.runId) {
-      return this.findPendingBySessionKey(params.sessionKey, params.runId);
+      return this.findPendingBySessionKey(
+        params.sessionKey,
+        params.runId,
+        params.resumedFromRunId,
+      );
     }
     const toolCallId = params.approvalEvent.toolCallId;
     if (!toolCallId) {

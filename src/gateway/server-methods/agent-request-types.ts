@@ -38,6 +38,7 @@ export type AgentRunRequest = {
   internalRuntimeHandoffId?: string;
   internalExecutionIdentityRetry?: boolean;
   internalExecutionIdentityRecoveryAttempt?: number;
+  internalRestartRecoverySourceRunId?: string;
   execApprovalFollowupExpectedSessionId?: string;
   internalEvents?: AgentInternalEvent[];
   suppressPromptPersistence?: boolean;

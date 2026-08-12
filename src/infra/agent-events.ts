@@ -78,6 +78,8 @@ export type AgentEventRuntimePayload = AgentEventPayload & {
   readonly contextClaimId?: string;
   readonly deliverySessionKey?: string;
   readonly projectSessionLifecycle?: boolean;
+  /** Interrupted run explicitly resumed by this trusted execution context. */
+  readonly resumedFromRunId?: string;
 };
 
 type AgentEventState = {
@@ -271,12 +273,14 @@ function enrichAgentEvent(
       ? (ownedLifecycleGeneration ?? currentLifecycleGeneration)
       : ownedLifecycleGeneration;
   const agentId = event.agentId ?? context?.agentId;
+  const resumedFromRunId = context?.resumedFromRunId;
   const enriched: AgentEventRuntimePayload = {
     ...event,
     data,
     sessionKey,
     ...(sessionId ? { sessionId } : {}),
     ...(agentId ? { agentId } : {}),
+    ...(resumedFromRunId ? { resumedFromRunId } : {}),
     seq: nextSeq,
     ts: Date.now(),
   };

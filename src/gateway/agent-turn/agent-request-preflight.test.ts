@@ -381,6 +381,7 @@ describe("agent request restart recovery preflight", () => {
     sourceTool: string,
     internalExecutionIdentityRetry?: boolean,
     internalExecutionIdentityRecoveryAttempt?: number,
+    internalRestartRecoverySourceRunId?: string,
   ) {
     const respond = vi.fn();
     const result = prepareAgentRequestPreflight({
@@ -392,6 +393,9 @@ describe("agent request restart recovery preflight", () => {
         ...(internalExecutionIdentityRetry !== undefined ? { internalExecutionIdentityRetry } : {}),
         ...(internalExecutionIdentityRecoveryAttempt !== undefined
           ? { internalExecutionIdentityRecoveryAttempt }
+          : {}),
+        ...(internalRestartRecoverySourceRunId
+          ? { internalRestartRecoverySourceRunId }
           : {}),
         inputProvenance: {
           kind: "internal_system",
@@ -412,10 +416,36 @@ describe("agent request restart recovery preflight", () => {
   }
 
   it("accepts the Code Mode override only for backend restart recovery", () => {
-    const accepted = runRestartRecoveryPreflight(true, "main_session_restart_recovery", true, 1);
+    const accepted = runRestartRecoveryPreflight(
+      true,
+      "main_session_restart_recovery",
+      true,
+      1,
+      "interrupted-run",
+    );
 
     expect(accepted.result).toBeDefined();
     expect(accepted.respond).not.toHaveBeenCalled();
+  });
+
+  it("rejects restart recovery that reuses its source run id", () => {
+    const rejected = runRestartRecoveryPreflight(
+      true,
+      "main_session_restart_recovery",
+      true,
+      1,
+      "restart-recovery-run",
+    );
+
+    expect(rejected.result).toBeUndefined();
+    expect(rejected.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: "restart recovery must use a distinct run id from its source run.",
+      }),
+    );
   });
 
   it("rejects private execution retry mode outside backend restart recovery", () => {
@@ -427,7 +457,7 @@ describe("agent request restart recovery preflight", () => {
       undefined,
       expect.objectContaining({
         code: "INVALID_REQUEST",
-        message: expect.stringContaining("execution identity recovery fields"),
+        message: expect.stringContaining("internal recovery fields"),
       }),
     );
   });

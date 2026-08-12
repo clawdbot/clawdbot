@@ -168,7 +168,9 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     onHelloOk: () => {
       gatewayConnected = true;
       resolveGatewayReady();
-      agent?.handleGatewayReconnect();
+      void agent?.handleGatewayReconnect().catch((err: unknown) => {
+        process.stderr.write(`openclaw acp: gateway reconnect setup failed: ${String(err)}\n`);
+      });
     },
     onConnectError: (err) => {
       rejectGatewayReady(err);

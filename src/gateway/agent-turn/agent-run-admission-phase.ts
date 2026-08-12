@@ -291,6 +291,9 @@ export async function prepareAgentRunDispatch(params: {
           : {
               sessionKey: params.resolvedSessionKey,
               lifecycleGeneration: params.lifecycleGeneration,
+              ...(params.request.internalRestartRecoverySourceRunId
+                ? { resumedFromRunId: params.request.internalRestartRecoverySourceRunId }
+                : {}),
             },
       );
     }

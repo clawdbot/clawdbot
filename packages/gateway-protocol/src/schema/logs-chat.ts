@@ -167,6 +167,7 @@ export const ChatInjectParamsSchema = closedObject({
 /** Shared event fields preserve stream ordering and route events to the right session. */
 const ChatEventBaseSchema = {
   runId: NonEmptyString,
+  resumedFromRunId: Type.Optional(NonEmptyString),
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
   spawnedBy: Type.Optional(NonEmptyString),

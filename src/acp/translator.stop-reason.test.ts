@@ -56,8 +56,10 @@ async function createDisconnectNoticeHarness(params: { sendAccepted: boolean }) 
     async (_params: Parameters<typeof connection.sessionUpdate>[0]) => {},
   );
   connection.sessionUpdate = sessionUpdate as typeof connection.sessionUpdate;
-  const request = vi.fn(async (method: string) => {
+  let runId: string | undefined;
+  const request = vi.fn(async (method: string, requestParams?: Record<string, unknown>) => {
     if (method === "chat.send") {
+      runId = requestParams?.idempotencyKey as string | undefined;
       if (!params.sendAccepted) {
         throw new Error("gateway closed (1006): connection lost");
       }
@@ -91,6 +93,7 @@ async function createDisconnectNoticeHarness(params: { sendAccepted: boolean }) 
     agent,
     eventLedger,
     promptPromise,
+    runId: requireValue(runId, "chat.send run id"),
     sessionId,
     sessionKey,
     sessionUpdate,
@@ -225,14 +228,228 @@ describe("acp translator stop reason mapping", () => {
     await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
   });
 
-  it("rejects in-flight prompts when the gateway does not reconnect before the grace window", async () => {
+  it("resubscribes pending prompt messages after gateway reconnect", async () => {
+    let resolveSubscription: (() => void) | undefined;
+    const subscriptionReady = new Promise<void>((resolve) => {
+      resolveSubscription = resolve;
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return new Promise<never>(() => {});
+      }
+      if (method === "agent.wait") {
+        return { status: "timeout" };
+      }
+      if (method === "sessions.messages.subscribe") {
+        await subscriptionReady;
+      }
+      return {};
+    }) as GatewayClient["request"];
+    const { agent, sessionId, sessionKey } = createSessionAgentHarness(request);
+    const promptPromise = promptAgent(agent, sessionId);
+    void promptPromise.catch(() => {});
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("chat.send", expect.anything(), {
+        timeoutMs: null,
+      }),
+    );
+
+    agent.handleGatewayDisconnect("1006: connection lost");
+    const reconnectPromise = agent.handleGatewayReconnect();
+
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("sessions.messages.subscribe", { key: sessionKey });
+    });
+    expect(request).not.toHaveBeenCalledWith("agent.wait", expect.anything(), expect.anything());
+    resolveSubscription?.();
+    await reconnectPromise;
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("agent.wait", expect.anything(), { timeoutMs: null });
+    });
+    expect(request).not.toHaveBeenCalledWith("sessions.subscribe", expect.anything());
+  });
+
+  it("adopts an explicitly linked restart-recovery run", async () => {
+    const { agent, promptPromise, runId } = await createPendingPromptHarness();
+    const recoveryRunId = "restart-recovery-run";
+
+    agent.handleGatewayDisconnect("1006: connection lost");
+    agent.handleGatewayReconnect();
+    await agent.handleGatewayEvent(
+      createChatEvent({
+        runId: recoveryRunId,
+        resumedFromRunId: runId,
+        sessionKey: "agent:main:main",
+        seq: 1,
+        state: "final",
+        message: {
+          content: [{ type: "text", text: "continued after restart" }],
+        },
+      }),
+    );
+
+    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+  });
+
+  it("keeps an accepted prompt pending long enough for delayed restart recovery", async () => {
+    vi.useFakeTimers();
+    try {
+      const { agent, promptPromise, runId, sessionKey } = await createDisconnectNoticeHarness({
+        sendAccepted: true,
+      });
+      const settleSpy = observeSettlement(promptPromise);
+
+      agent.handleGatewayDisconnect("1006: connection lost");
+      await vi.advanceTimersByTimeAsync(7_000);
+      expect(settleSpy).not.toHaveBeenCalled();
+
+      agent.handleGatewayReconnect();
+      await agent.handleGatewayEvent(
+        createChatEvent({
+          runId: "restart-recovery-run",
+          resumedFromRunId: runId,
+          sessionKey,
+          seq: 1,
+          state: "final",
+          message: {
+            content: [{ type: "text", text: "continued after delayed restart" }],
+          },
+        }),
+      );
+
+      await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("adopts restart recovery from an agent event before the terminal chat event", async () => {
+    const { agent, promptPromise, runId } = await createPendingPromptHarness();
+    const recoveryRunId = "restart-recovery-run";
+
+    agent.handleGatewayDisconnect("1006: connection lost");
+    agent.handleGatewayReconnect();
+    await agent.handleGatewayEvent({
+      type: "event",
+      event: "agent",
+      payload: {
+        runId: recoveryRunId,
+        resumedFromRunId: runId,
+        sessionKey: "agent:main:main",
+        stream: "lifecycle",
+        data: { phase: "start" },
+      },
+    } as never);
+    await agent.handleGatewayEvent(
+      createChatEvent({
+        runId: recoveryRunId,
+        sessionKey: "agent:main:main",
+        seq: 2,
+        state: "final",
+      }),
+    );
+
+    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+  });
+
+  it("does not reject a pre-ack prompt after its recovery run is adopted", async () => {
+    vi.useFakeTimers();
+    try {
+      const { agent, promptPromise, runId, sessionKey } = await createDisconnectNoticeHarness({
+        sendAccepted: false,
+      });
+      const recoveryRunId = "restart-recovery-run";
+      const settleSpy = observeSettlement(promptPromise);
+
+      agent.handleGatewayDisconnect("1006: connection lost");
+      agent.handleGatewayReconnect();
+      await agent.handleGatewayEvent(
+        createChatEvent({
+          runId: recoveryRunId,
+          resumedFromRunId: runId,
+          sessionKey,
+          seq: 1,
+          state: "delta",
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(settleSpy).not.toHaveBeenCalled();
+      await agent.handleGatewayEvent(
+        createChatEvent({
+          runId: recoveryRunId,
+          sessionKey,
+          seq: 2,
+          state: "final",
+        }),
+      );
+      await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores a stale old-run wait result after recovery adoption", async () => {
+    let runId: string | undefined;
+    let resolveWait: ((result: { status: "ok" }) => void) | undefined;
+    const waitResult = new Promise<{ status: "ok" }>((resolve) => {
+      resolveWait = resolve;
+    });
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "chat.send") {
+        runId = params?.idempotencyKey as string | undefined;
+        return {};
+      }
+      if (method === "agent.wait") {
+        return await waitResult;
+      }
+      return {};
+    }) as GatewayClient["request"];
+    const { agent, sessionId } = createSessionAgentHarness(request);
+    const promptPromise = promptAgent(agent, sessionId);
+    const settleSpy = observeSettlement(promptPromise);
+
+    await vi.waitFor(() => expect(runId).toBeTypeOf("string"));
+    agent.handleGatewayDisconnect("1006: connection lost");
+    agent.handleGatewayReconnect();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("agent.wait", expect.anything(), {
+        timeoutMs: null,
+      }),
+    );
+    const recoveryRunId = "restart-recovery-run";
+    await agent.handleGatewayEvent(
+      createChatEvent({
+        runId: recoveryRunId,
+        resumedFromRunId: requireValue(runId, "chat.send run id"),
+        sessionKey: "agent:main:main",
+        seq: 1,
+        state: "delta",
+      }),
+    );
+    resolveWait?.({ status: "ok" });
+    await Promise.resolve();
+
+    expect(settleSpy).not.toHaveBeenCalled();
+    await agent.handleGatewayEvent(
+      createChatEvent({
+        runId: recoveryRunId,
+        sessionKey: "agent:main:main",
+        seq: 2,
+        state: "final",
+      }),
+    );
+    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+  });
+
+  it("rejects accepted prompts when restart recovery exceeds its grace window", async () => {
     vi.useFakeTimers();
     try {
       const { agent, eventLedger, promptPromise, sessionId, sessionKey, sessionUpdate } =
         await createDisconnectNoticeHarness({ sendAccepted: true });
 
       agent.handleGatewayDisconnect("1006: connection lost");
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(60_000);
 
       await expect(promptPromise).rejects.toThrow("Gateway disconnected: 1006: connection lost");
       const expectedText =
@@ -283,7 +500,7 @@ describe("acp translator stop reason mapping", () => {
       sessionUpdate.mockImplementation(async () => await deliveryBlocked);
 
       agent.handleGatewayDisconnect("1006: connection lost");
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(60_000);
       await vi.waitFor(() => {
         expect(noticeRecordStarted).toBe(true);
         expect(sessionUpdate).toHaveBeenCalledTimes(1);
@@ -489,7 +706,7 @@ describe("acp translator stop reason mapping", () => {
       resolveWait({ status: "timeout" });
       await Promise.resolve();
 
-      await vi.advanceTimersByTimeAsync(4_999);
+      await vi.advanceTimersByTimeAsync(59_999);
       expect(settleSpy).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(1);

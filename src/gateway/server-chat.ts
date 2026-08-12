@@ -1111,20 +1111,28 @@ export function createAgentEventHandler({
     payload: unknown,
     opts?: { agentId?: string; controlUiVisible?: boolean; dropIfSlow?: boolean },
   ) => {
+    const payloadRecord = payload && typeof payload === "object"
+      ? payload as Record<string, unknown>
+      : undefined;
+    const runId = typeof payloadRecord?.runId === "string" ? payloadRecord.runId : undefined;
+    const resumedFromRunId = runId ? getAgentRunContext(runId)?.resumedFromRunId : undefined;
+    const projectedPayload = resumedFromRunId && payloadRecord
+      ? { ...payloadRecord, resumedFromRunId }
+      : payload;
     const deliverySessionKeys = resolveSessionDeliveryKeys(sessionKey, opts?.agentId);
     if (opts?.controlUiVisible ?? true) {
-      broadcast("chat", payload, {
+      broadcast("chat", projectedPayload, {
         dropIfSlow: opts?.dropIfSlow,
         sessionKeys: deliverySessionKeys,
       });
-      sendNodeSessionPayloadForAgent(sessionKey, "chat", payload, opts?.agentId);
+      sendNodeSessionPayloadForAgent(sessionKey, "chat", projectedPayload, opts?.agentId);
       return;
     }
     const recipients = new Set(
       deliverySessionKeys.flatMap((deliveryKey) => [...sessionMessageSubscribers.get(deliveryKey)]),
     );
     if (recipients.size > 0) {
-      broadcastToConnIds("chat", payload, recipients, {
+      broadcastToConnIds("chat", projectedPayload, recipients, {
         dropIfSlow: opts?.dropIfSlow,
         sessionKeys: deliverySessionKeys,
       });
@@ -1418,6 +1426,7 @@ export function createAgentEventHandler({
 
     // Include sessionKey so Control UI can filter tool streams per session.
     const spawnedBy = sessionKey ? resolveSpawnedBy(sessionKey) : null;
+    const resumedFromRunId = runContext?.resumedFromRunId;
     const agentPayload = sessionKey
       ? {
           ...eventForClients,
@@ -1425,10 +1434,12 @@ export function createAgentEventHandler({
           ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
           ...(spawnedBy && { spawnedBy }),
           ...(isHeartbeat !== undefined && { isHeartbeat }),
+          ...(resumedFromRunId ? { resumedFromRunId } : {}),
         }
       : {
           ...eventForClients,
           ...(isHeartbeat !== undefined && { isHeartbeat }),
+          ...(resumedFromRunId ? { resumedFromRunId } : {}),
         };
     const hasSessionMessageSubscribers = sessionKey
       ? resolveSessionDeliveryKeys(sessionKey, sessionAgentId).some(
@@ -1594,7 +1605,12 @@ export function createAgentEventHandler({
       // they can render live pending tool cards without polling history.
       if (isControlUiVisible && sessionKey && !suppressHeartbeatToolEvents) {
         const sessionSubscribers = excludeConnIds(
-          sessionEventSubscribers.getAll(),
+          new Set([
+            ...sessionEventSubscribers.getAll(),
+            ...resolveSessionDeliveryKeys(sessionKey, sessionAgentId).flatMap((deliveryKey) => [
+              ...sessionMessageSubscribers.get(deliveryKey),
+            ]),
+          ]),
           runToolRecipients,
         );
         if (sessionSubscribers.size > 0) {

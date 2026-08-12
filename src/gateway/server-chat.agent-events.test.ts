@@ -1916,6 +1916,38 @@ describe("agent event handler", () => {
     });
   });
 
+  it("mirrors visible tool events to exact session message subscribers", () => {
+    const { broadcastToConnIds, sessionMessageSubscribers, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-1",
+    });
+    sessionMessageSubscribers.subscribe("conn-selected", "session-1");
+    sessionMessageSubscribers.subscribe("conn-other", "session-other");
+    registerAgentRunContext("run-recovery-tool", {
+      sessionKey: "session-1",
+      resumedFromRunId: "run-interrupted",
+      verboseLevel: "off",
+    });
+
+    emitAgentEvent(handler, "run-recovery-tool", "tool", {
+      phase: "start",
+      name: "read",
+      toolCallId: "tool-recovery-1",
+      args: { path: "src/app.ts" },
+    });
+
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    expect(requireMockArg(broadcastToConnIds, 0, 0, "session tool event")).toBe("session.tool");
+    expect(requireMockArg(broadcastToConnIds, 0, 2, "session tool recipients")).toEqual(
+      new Set(["conn-selected"]),
+    );
+    expectRecordFields(requireMockPayload(broadcastToConnIds, 0, 1, "session tool payload"), {
+      runId: "run-recovery-tool",
+      resumedFromRunId: "run-interrupted",
+      sessionKey: "session-1",
+      stream: "tool",
+    });
+  });
+
   it("loads selected-agent global session snapshots for tool events", () => {
     const { broadcastToConnIds, chatRunState, sessionEventSubscribers, handler } = createHarness();
     vi.mocked(loadGatewaySessionRow).mockReturnValue({
