@@ -2,7 +2,7 @@
 // decisions per channel claim. A plugin's GLOBAL fate (dead, enabled, anchored, kept) governs
 // whether it loads; each channel claim's supersession must be recorded individually, or a loaded
 // plugin's replaced claim races first-wins registration over its planned replacement.
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { channelClaimSuppressionKey, isPluginPolicyDisabled } from "./channel-claimant-plugins.js";
 import { collectSupersededChannelClaims } from "./plugin-auto-enable.apply.js";
 import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
@@ -12,6 +12,26 @@ import {
   resetPluginAutoEnableTestState,
 } from "./plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
+
+// Fakes the setup registry the way plugin-auto-enable.core.test.ts does: the probe is a
+// config-gated plugin decision, and executing real setup modules is not this suite's concern.
+const setupRegistryMock = vi.hoisted(() => ({
+  resolvePluginSetupAutoEnableReasons: vi.fn(
+    (params: {
+      config?: { plugins?: { entries?: Record<string, { config?: { fire?: boolean } }> } };
+      pluginIds?: readonly string[];
+    }) =>
+      (params.pluginIds ?? []).includes("acme-sr") &&
+      params.config?.plugins?.entries?.["acme-sr"]?.config?.fire === true
+        ? [{ pluginId: "acme-sr", reason: "acme service configured" }]
+        : [],
+  ),
+}));
+
+vi.mock("../plugins/setup-registry.js", () => ({
+  clearPluginSetupRegistryCache: vi.fn(),
+  resolvePluginSetupAutoEnableReasons: setupRegistryMock.resolvePluginSetupAutoEnableReasons,
+}));
 
 type RegistryPlugins = Parameters<typeof makeRegistry>[0];
 
@@ -333,6 +353,78 @@ describe("capability-backed reciprocal replacements ground on one claim", () => 
 
     expect(suppressed.has(channelClaimSuppressionKey("acme-ra", "rch"))).toBe(false);
     expect(suppressed.has(channelClaimSuppressionKey("acme-rb", "rch"))).toBe(true);
+  });
+});
+
+// #92884 ClawSweeper cycle 38 (P1): the suppression replan skips supported external setup
+// auto-enable probes while the applied pass runs them. A setup-probe-only replacement — no
+// manifest channel claim, so claimant collection never sees it and its probe is its only
+// activation fact — loads through the pass's recorded `enabled: true` write; the replan must
+// re-seat that recorded capability, or the incumbent's superseded claim races first-wins
+// registration over the setup-provided channel. A declined probe records nothing and must not
+// suppress the incumbent on behalf of a replacement the runtime never enabled.
+describe("recorded setup-probe enables keep their supersessions", () => {
+  // Plugin id == channel id (the ordinary naming for channel plugins): the capability
+  // candidate resolves preferOver through the plugin id, so its kill lands in the channel's
+  // own claim group and can supersede the capability-live incumbent.
+  const SETUP_REP: RegistryPlugins[number] = {
+    id: "acme-sr",
+    origin: "global",
+    channels: [],
+    channelConfigs: { "acme-sr": { schema: { type: "object" }, preferOver: ["acme-inc"] } },
+    setupSource: "./setup-api.js",
+  };
+  const CAP_INC: RegistryPlugins[number] = {
+    id: "acme-inc",
+    origin: "global",
+    channels: ["acme-sr"],
+    channelConfigs: { "acme-sr": { schema: { type: "object" } } },
+    // The provider capability keeps the superseded incumbent loaded: suppression — not a
+    // disable write — is what keeps its dead claim from serving the channel.
+    autoEnableWhenConfiguredProviders: ["acme-prov"],
+  };
+
+  const makeAuthoredConfig = (fire: boolean): OpenClawConfig => ({
+    channels: { "acme-sr": { token: "s" } },
+    auth: { profiles: { "acme-prov:default": { provider: "acme-prov", mode: "api_key" } } },
+    plugins: { entries: { "acme-sr": { config: { fire } } } },
+  });
+
+  it("suppresses the incumbent when the applied pass recorded the fired probe", () => {
+    const registry = makeRegistry([CAP_INC, SETUP_REP]);
+    const env = makeIsolatedEnv();
+    const authored = makeAuthoredConfig(true);
+    const applied = applyPluginAutoEnable({ config: authored, env, manifestRegistry: registry });
+
+    // The probe fired: the pass's enable write is the recorded outcome the replan must read,
+    // and the incumbent stays loaded through its provider capability instead of a disable.
+    expect(applied.config.plugins?.entries?.["acme-sr"]?.enabled).toBe(true);
+    expect(applied.config.plugins?.entries?.["acme-inc"]?.enabled).toBe(true);
+
+    const suppressed = collectSupersededChannelClaims({
+      config: applied.config,
+      selectionConfig: authored,
+      env,
+      manifestRegistry: registry,
+    });
+    expect(suppressed.has(channelClaimSuppressionKey("acme-inc", "acme-sr"))).toBe(true);
+  });
+
+  it("does not suppress the incumbent when the probe declined", () => {
+    const registry = makeRegistry([CAP_INC, SETUP_REP]);
+    const env = makeIsolatedEnv();
+    const authored = makeAuthoredConfig(false);
+    const applied = applyPluginAutoEnable({ config: authored, env, manifestRegistry: registry });
+
+    expect(applied.config.plugins?.entries?.["acme-sr"]?.enabled).not.toBe(true);
+
+    const suppressed = collectSupersededChannelClaims({
+      config: applied.config,
+      selectionConfig: authored,
+      env,
+      manifestRegistry: registry,
+    });
+    expect(suppressed.has(channelClaimSuppressionKey("acme-inc", "acme-sr"))).toBe(false);
   });
 });
 

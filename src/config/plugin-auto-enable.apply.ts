@@ -3,7 +3,11 @@ import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
-import { channelClaimSuppressionKey } from "./channel-claimant-plugins.js";
+import { normalizePluginPolicyId } from "../plugins/plugin-policy-id.js";
+import {
+  channelClaimSuppressionKey,
+  resolveFoldedPluginEntry,
+} from "./channel-claimant-plugins.js";
 import { detectPluginAutoEnableCandidates } from "./plugin-auto-enable.detect.js";
 import {
   planPluginAutoEnable,
@@ -260,8 +264,11 @@ export function applyPluginAutoEnable(params: {
  * registrations. `supersede-keep` claims are deliberately NOT suppressed: the manifest contract
  * preserves both explicitly selected plugins and reports duplicate channel/tool diagnostics
  * instead of silently changing the requested plugin set. Probe-less like the validation
- * projection, so runtime suppression and projected ownership can only diverge from the applied
- * pass together.
+ * projection (plugin setup code must not run here), but unlike validation this replan runs
+ * AFTER the applied pass, whose `enabled: true` write for a probe-fired setup plugin is the
+ * recorded probe outcome — those plugins rejoin the plan below as the capability candidates
+ * the pass ranked, so suppression mirrors the applied pass where projected ownership stays
+ * probe-blind and falls back to its predictive tiers.
  */
 export function collectSupersededChannelClaims(params: {
   config: OpenClawConfig;
@@ -283,6 +290,37 @@ export function collectSupersededChannelClaims(params: {
     setupProbes: "skip",
     ...(params.ambientEnvTriggers ? { ambientEnvTriggers: params.ambientEnvTriggers } : {}),
   });
+  // Supported external setup auto-enable probes ran only in the applied pass; a plugin with a
+  // declared runtime setup surface that the completed config enables while the authored
+  // selection config does not was enabled BY that pass (its probe fired — the write is the
+  // recorded outcome). Re-seat it as the same capability candidate the pass planned with, or
+  // its replacement edges vanish here and a claim the pass superseded races first-wins
+  // registration over the setup-provided channel. A declined probe writes nothing, so it can
+  // never suppress an incumbent on a replacement the runtime did not enable.
+  if (params.selectionConfig) {
+    const coveredPolicyIds = new Set(
+      candidates.map((candidate) => normalizePluginPolicyId(candidate.pluginId)),
+    );
+    for (const record of params.manifestRegistry.plugins) {
+      const declaresRuntimeSetupSurface =
+        (record.setup !== undefined || record.setupSource !== undefined) &&
+        record.setup?.requiresRuntime !== false;
+      if (
+        declaresRuntimeSetupSurface &&
+        !coveredPolicyIds.has(normalizePluginPolicyId(record.id)) &&
+        resolveFoldedPluginEntry(params.config, record.id, params.manifestRegistry)?.enabled ===
+          true &&
+        resolveFoldedPluginEntry(params.selectionConfig, record.id, params.manifestRegistry)
+          ?.enabled !== true
+      ) {
+        candidates.push({
+          pluginId: record.id,
+          kind: "setup-auto-enable",
+          reason: "recorded setup activation",
+        });
+      }
+    }
+  }
   const plan = planPluginAutoEnable({
     config: params.config,
     candidates,
