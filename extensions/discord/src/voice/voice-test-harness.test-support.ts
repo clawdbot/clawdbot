@@ -669,7 +669,7 @@ function buildVoiceTestHarness() {
   };
 }
 
-export type DiscordVoiceTestHarness = ReturnType<typeof buildVoiceTestHarness>;
+type DiscordVoiceTestHarness = ReturnType<typeof buildVoiceTestHarness>;
 
 export function defineDiscordVoiceTests(
   register: (harness: DiscordVoiceTestHarness) => void,
