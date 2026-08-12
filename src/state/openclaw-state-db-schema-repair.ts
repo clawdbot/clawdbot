@@ -37,6 +37,7 @@ export function migrateRetiredCommitmentsSchema(
   if (previousVersion >= 7) {
     return false;
   }
+  const hadCommitments = tableExists(db, "commitments");
   // The commitments runtime was removed before v7; retained rows are inert
   // migration debt and have no remaining product owner or export contract.
   db.exec(`
@@ -47,7 +48,7 @@ export function migrateRetiredCommitmentsSchema(
     DROP INDEX IF EXISTS idx_commitments_agent_sent;
     DROP TABLE IF EXISTS commitments;
   `);
-  return true;
+  return hadCommitments;
 }
 
 function hasCanonicalAgentDatabasesPrimaryKey(db: DatabaseSync): boolean {

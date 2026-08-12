@@ -1599,7 +1599,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [
-        "Retired shared state commitments table and indexes",
         "Migrated shared state session watch cursors → provenance column (0 ambient, 0 sentinels removed)",
         "Migrated shared state tables to SQLite STRICT typing (1)",
       ],
@@ -1632,7 +1631,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [
-        "Retired shared state commitments table and indexes",
         "Migrated shared state session watch cursors → provenance column (2 ambient, 5 sentinels removed)",
       ],
       warnings: [],
@@ -2636,7 +2634,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
 
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [
-        "Retired shared state commitments table and indexes",
         "Migrated shared state audit event ledger → versioned message lifecycle schema",
         "Migrated shared state tables to SQLite STRICT typing (3)",
       ],
@@ -2891,7 +2888,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
 
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-      changes: ["Retired shared state commitments table and indexes"],
+      changes: [],
       warnings: [],
     });
     const beforeOpen = new DatabaseSync(databasePath, { readOnly: true });
