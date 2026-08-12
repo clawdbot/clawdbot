@@ -194,6 +194,7 @@ export type TelegramDraftStateSlice = {
   reasoningLane: DraftLaneState;
   lanes: Record<LaneName, DraftLaneState>;
   streamDeliveryEnabled: boolean;
+  shouldSplitPreviewMessages: boolean;
   streamReasoningInProgressDraft: boolean;
   disableBlockStreaming: boolean | undefined;
   durableReasoningPayloadsEnabled: boolean;

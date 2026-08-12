@@ -22,6 +22,7 @@ type TestDraftStream = {
     typeof vi.fn<(preview: TelegramDraftPreview) => Promise<number | undefined>>
   >;
   forceNewMessage: ReturnType<typeof vi.fn<() => void>>;
+  revive: ReturnType<typeof vi.fn<() => void>>;
   rotateToNewMessageDeferringDelete: ReturnType<typeof vi.fn<() => number | undefined>>;
   sendMayHaveLanded: ReturnType<typeof vi.fn<() => boolean>>;
   remainingFinalContent: ReturnType<typeof vi.fn<() => TelegramDraftMessageSnapshot | undefined>>;
@@ -102,6 +103,9 @@ export function createTestDraftStream(params?: {
         messageId = undefined;
       }
     }),
+    revive: vi.fn().mockImplementation(() => {
+      stopped = false;
+    }),
     rotateToNewMessageDeferringDelete: vi.fn().mockImplementation(() => {
       // Mirror forceNewMessage's message-id handling (a sequenced harness swaps
       // ids on the next send; the fixed harness keeps its id unless configured
@@ -169,6 +173,9 @@ export function createSequencedTestDraftStream(startMessageId = 1001): TestDraft
     }),
     forceNewMessage: vi.fn().mockImplementation(() => {
       activeMessageId = undefined;
+    }),
+    revive: vi.fn().mockImplementation(() => {
+      // Revive keeps the current message id so the next update keeps editing.
     }),
     rotateToNewMessageDeferringDelete: vi.fn().mockImplementation(() => {
       const superseded = activeMessageId;
