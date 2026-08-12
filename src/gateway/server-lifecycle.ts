@@ -536,6 +536,7 @@ export async function prepareGatewayLifecycle(params: {
     const { createGatewayCloseHandler, drainActiveSessionsForShutdown } =
       await loadGatewayCloseModule();
     const transport = transportBridge.current();
+    await transport?.portalService.closeAll();
     await createGatewayCloseHandler({
       bonjourStop: runtimeState.bonjourStop,
       tailscaleCleanup: runtimeState.tailscaleCleanup,
