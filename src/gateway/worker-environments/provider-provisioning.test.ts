@@ -77,8 +77,12 @@ describe("worker environment service", () => {
   });
 
   it("holds a node lease ready without entering SSH bootstrap", async () => {
+    support.testState.prepareInstallation = vi.fn(async () => {
+      throw new Error("node leases must not prepare an SSH installation");
+    });
     const workerService = support.createService(
       support.createProvider({
+        provisionBeforeInstallation: true,
         provision: async () => ({
           leaseId: "device-lease-1",
           node: { deviceId: "device-1" },
@@ -97,6 +101,7 @@ describe("worker environment service", () => {
       sharedHost: true,
       ownerEpoch: 1,
     });
+    expect(support.testState.prepareInstallation).not.toHaveBeenCalled();
     expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
     expect(support.testState.store.getCredential(result.environmentId)).toBeUndefined();
   });

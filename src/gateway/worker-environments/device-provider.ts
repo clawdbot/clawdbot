@@ -50,6 +50,7 @@ export function createDeviceWorkerProvider(options: DeviceWorkerProviderOptions)
 
   return {
     id: DEVICE_WORKER_PROVIDER_ID,
+    provisionBeforeInstallation: true,
     provision: async (profile, operationId) => {
       const deviceId = requireDeviceId(profile);
       const [paired, connected] = await Promise.all([

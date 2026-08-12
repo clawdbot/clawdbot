@@ -324,7 +324,11 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     provider = providerFor(record.providerId),
   ) => {
     let installation: WorkerInstallationArtifact | undefined;
-    if (record.state === "requested" && record.destroyRequestedAtMs === null) {
+    if (
+      record.state === "requested" &&
+      record.destroyRequestedAtMs === null &&
+      provider.provisionBeforeInstallation !== true
+    ) {
       try {
         // Fresh requests package before allocation. Once provisioning is durable, provider replay
         // must happen first because the previous response may have been lost after allocation.

@@ -132,6 +132,11 @@ export class WorkerProviderError extends Error {
 export type WorkerProvider = {
   id: string;
   /**
+   * Provision before preparing an installation when the lease transport decides whether an
+   * installation is needed. Defaults to false so SSH providers retain prepare-before-allocation.
+   */
+  provisionBeforeInstallation?: boolean;
+  /**
    * Provision or adopt the lease for this operation id.
    * Repeating the same operation id must be idempotent across gateway restarts.
    */
