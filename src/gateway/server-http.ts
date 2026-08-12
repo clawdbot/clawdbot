@@ -966,7 +966,12 @@ export function attachGatewayUpgradeHandler(opts: {
       const originalWorkerGatewayRoute = originalRequestPath
         ? classifyWorkerGatewayPath(originalRequestPath)
         : "outside";
-      if (originalWorkerGatewayRoute === "worker" && workerIngressEnabled) {
+      if (originalWorkerGatewayRoute === "worker" && !workerIngressEnabled) {
+        writeGatewayUpgradeServiceUnavailable(socket, "Worker websocket ingress unavailable");
+        socket.destroy();
+        return;
+      }
+      if (originalWorkerGatewayRoute === "worker") {
         const rateCheck = publicRateLimiter?.check(
           requestClientIp,
           AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION,
