@@ -199,8 +199,9 @@ function normalizeNodeSignal(signal: string | null): NodeSignal | null {
   if (!signal) {
     return null;
   }
+  const unknownSignalMessage = `child process exited with unknown signal: ${signal}`;
   if (!isNodeSignal(signal)) {
-    throw new Error(`child process exited with unknown signal: ${String(signal)}`);
+    throw new Error(unknownSignalMessage);
   }
   return signal;
 }
