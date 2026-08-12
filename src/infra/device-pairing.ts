@@ -152,7 +152,7 @@ type DevicePairingStateFile = {
   pairedByDeviceId: Record<string, PairedDevice>;
 };
 
-export const PAIRING_PENDING_TTL_MS = 5 * 60 * 1000;
+const PAIRING_PENDING_TTL_MS = 5 * 60 * 1000;
 const OPERATOR_ROLE = "operator";
 const OPERATOR_SCOPE_PREFIX = "operator.";
 const SHARED_GATEWAY_AUTH_ISSUER_KIND = "shared-gateway-auth";

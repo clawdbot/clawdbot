@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
-import { PAIRING_PENDING_TTL_MS } from "../infra/device-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { issueOperatorToken, openTrackedWs } from "./device-authz.test-helpers.js";
 import {
@@ -21,6 +20,7 @@ const FULL_SCOPES = [
   "operator.questions",
   "operator.pairing",
 ];
+const PAIRING_PENDING_TTL_MS = 5 * 60 * 1000;
 
 describe("live device scope upgrade", () => {
   let started: Awaited<ReturnType<typeof startConnectedServerWithClient>>;
