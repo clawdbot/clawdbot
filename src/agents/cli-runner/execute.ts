@@ -6,6 +6,7 @@ import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { compareValidSemver } from "../../infra/semver.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
 import { appendBootstrapPromptWarning } from "../bootstrap-budget.js";
@@ -185,6 +186,7 @@ export async function executePreparedCliRun(
         prompt,
         imagePrompt: params.imagePrompt,
         workspaceDir: context.workspaceDir,
+        localRoots: getAgentScopedMediaLocalRoots(params.config ?? {}, params.agentId),
         images: params.images,
         imageOrder: params.imageOrder,
         media: params.media,
