@@ -54,13 +54,13 @@ decision that the native surface must be isolated. Default tool-profile narrowin
 does not set this flag.
 
 Harnesses with an independently managed native surface can also declare
-`conversationToolPolicyNativeTools` using canonical OpenClaw tool names. A deny
-policy limited to other known OpenClaw tools is then enforced on the OpenClaw
-tool surface without isolating unrelated native tools. Finite allowlists, denies
-that overlap the declared native names, wildcards, groups that include a native
-name, and unknown tool names remain native-surface restrictions. Omit the list
-to retain the conservative behavior where every explicit restriction isolates
-the native surface.
+`conversationToolPolicySafeDenyTools` using canonical OpenClaw tool names. Core
+preserves the native surface only when every expanded deny is a known core tool
+in that audited safe list. Finite allowlists, undeclared or unknown tool names,
+wildcards, and groups containing any undeclared name remain native-surface
+restrictions. Omit the list to retain the conservative behavior where every
+explicit restriction isolates the native surface. Because omissions fail
+closed, new tools cannot silently relax the policy boundary.
 
 Omit the declaration when any native capability can bypass those layers.
 OpenClaw then visibly rejects explicitly restricted turns before invoking the

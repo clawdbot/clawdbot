@@ -788,7 +788,7 @@ function preparePluginHarnessParams(
   const policies = resolvePluginHarnessToolPolicies(
     preparedParams,
     harness.conversationToolPolicySupport === "exact"
-      ? harness.conversationToolPolicyNativeTools
+      ? harness.conversationToolPolicySafeDenyTools
       : undefined,
   );
   return applyPluginHarnessDenyAllToolPolicy(
@@ -868,7 +868,7 @@ function resolvePluginHarnessDenyAllToolPolicyPrompt(
 
 function resolvePluginHarnessToolPolicies(
   params: PluginHarnessToolPolicyContext,
-  nativeToolNames?: readonly string[],
+  safeDenyToolNames?: readonly string[],
 ): ResolvedPluginHarnessToolPolicies {
   const messageProvider = params.messageProvider ?? params.messageChannel;
   const sandboxSessionKey = params.sandboxSessionKey ?? params.sessionKey;
@@ -932,8 +932,8 @@ function resolvePluginHarnessToolPolicies(
     policy.inheritedToolPolicy,
     policy.runtimeToolPolicyForInheritance,
   ];
-  const nativeToolNameSet = nativeToolNames
-    ? new Set(nativeToolNames.map(normalizeToolPolicyName))
+  const safeDenyToolNameSet = safeDenyToolNames
+    ? new Set(safeDenyToolNames.map(normalizeToolPolicyName))
     : undefined;
   return {
     senderPolicy: policy.senderPolicy,
@@ -955,16 +955,16 @@ function resolvePluginHarnessToolPolicies(
       policy.inheritedToolPolicy,
     ],
     toolPolicyRestricted: explicitPolicies.some((explicitPolicy) =>
-      toolPolicyRestrictsHarnessNativeTools(explicitPolicy, nativeToolNameSet),
+      toolPolicyRestrictsHarnessNativeTools(explicitPolicy, safeDenyToolNameSet),
     ),
   };
 }
 
 function toolPolicyRestrictsHarnessNativeTools(
   policy: PluginHarnessToolPolicy | undefined,
-  nativeToolNames: ReadonlySet<string> | undefined,
+  safeDenyToolNames: ReadonlySet<string> | undefined,
 ): boolean {
-  if (!nativeToolNames) {
+  if (!safeDenyToolNames) {
     return toolPolicyRestrictsTools(policy);
   }
   if (!policy || toolPolicyRestrictsTools({ allow: policy.allow })) {
@@ -972,7 +972,7 @@ function toolPolicyRestrictsHarnessNativeTools(
   }
   return expandToolGroups(policy.deny ?? []).some((deniedName) => {
     const normalized = normalizeToolPolicyName(deniedName);
-    return nativeToolNames.has(normalized) || !isKnownCoreToolId(normalized);
+    return !isKnownCoreToolId(normalized) || !safeDenyToolNames.has(normalized);
   });
 }
 

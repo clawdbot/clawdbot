@@ -1298,7 +1298,7 @@ describe("runAgentHarnessAttempt", () => {
     ]);
   });
 
-  it("isolates native tools only when policy can restrict the harness surface", async () => {
+  it("isolates native tools unless every exact deny is explicitly safe", async () => {
     const received: boolean[] = [];
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attempt) => {
       received.push(attempt.pluginHarnessToolPolicyRestricted === true);
@@ -1308,7 +1308,12 @@ describe("runAgentHarnessAttempt", () => {
       id: "codex",
       label: "Codex",
       conversationToolPolicySupport: "exact",
-      conversationToolPolicyNativeTools: ["exec", "update_plan"],
+      conversationToolPolicySafeDenyTools: [
+        "tts",
+        "music_generate",
+        "browser",
+        "unknown_native_tool",
+      ],
       supports: (ctx) =>
         ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
       runAttempt,
@@ -1319,6 +1324,7 @@ describe("runAgentHarnessAttempt", () => {
       { deny: ["tts", "music_generate"] },
       { deny: ["browser"] },
       { deny: ["exec"] },
+      { deny: ["video_generate"] },
       { deny: ["unknown_native_tool"] },
       { deny: ["group:runtime"] },
       { deny: ["*"] },
@@ -1331,7 +1337,7 @@ describe("runAgentHarnessAttempt", () => {
       });
     }
 
-    expect(received).toEqual([false, false, true, true, true, true, true]);
+    expect(received).toEqual([false, false, true, true, true, true, true, true]);
   });
 
   it("marks only explicit restrictive policy layers for plugin harness isolation", async () => {

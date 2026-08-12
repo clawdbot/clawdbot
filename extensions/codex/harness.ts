@@ -17,26 +17,30 @@ import type { CodexSessionCatalogControl } from "./src/session-catalog-types.js"
 // New runtime identity uses the `openai` provider.
 const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai"]);
 const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = Symbol.for("openclaw.codexAppServerClientDisposer");
-const CODEX_NATIVE_TOOL_POLICY_NAMES = [
-  "read",
-  "write",
-  "edit",
-  "apply_patch",
-  "exec",
-  "process",
-  "web_search",
-  "sessions_send",
-  "sessions_spawn",
-  "agents_wait",
-  "agents_list",
-  "subagents",
-  "get_goal",
-  "create_goal",
-  "update_goal",
-  "update_plan",
-  "ask_user",
-  "image",
-  "image_generate",
+// Audited against @openai/codex 0.147.0 (rust-v0.147.0). These exact denies
+// target OpenClaw-owned capabilities with no Codex-native equivalent. Keep the
+// list positive and conservative: an omitted tool isolates the native surface.
+const CODEX_TOOL_POLICY_SAFE_DENY_NAMES = [
+  "web_fetch",
+  "x_search",
+  "memory_search",
+  "memory_get",
+  "browser",
+  "screen",
+  "dashboard",
+  "canvas",
+  "show_widget",
+  "message",
+  "heartbeat_respond",
+  "automations",
+  "gateway",
+  "nodes",
+  "computer",
+  "mobile_ui",
+  "skill_workshop",
+  "music_generate",
+  "video_generate",
+  "tts",
 ] as const;
 const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
   "bootstrap",
@@ -124,7 +128,7 @@ export function createCodexAppServerAgentHarness(options: {
     delegatedExecutionPluginIds: ["voice-call"],
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
     conversationToolPolicySupport: "exact",
-    conversationToolPolicyNativeTools: CODEX_NATIVE_TOOL_POLICY_NAMES,
+    conversationToolPolicySafeDenyTools: CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
     deliveryDefaults: {
       visibleReplies: "message_tool",
     },
