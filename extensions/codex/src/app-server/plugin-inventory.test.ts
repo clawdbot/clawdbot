@@ -858,37 +858,3 @@ describe("Codex plugin inventory", () => {
     ]);
   });
 });
-
-type ConfiguredPlugin = {
-  enabled?: boolean;
-  marketplaceName:
-    | typeof CODEX_PLUGINS_MARKETPLACE_NAME
-    | typeof CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME;
-  pluginName: string;
-};
-
-function pluginConfig(plugins: Record<string, ConfiguredPlugin>) {
-  return { codexPlugins: { enabled: true, plugins } };
-}
-
-function curatedPlugin(pluginName: string, options: { enabled?: boolean } = {}): ConfiguredPlugin {
-  return { marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME, pluginName, ...options };
-}
-
-function workspacePlugin(pluginName: string): ConfiguredPlugin {
-  return { marketplaceName: CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME, pluginName };
-}
-
-async function cachedApps(...apps: v2.AppInfo[]): Promise<CodexAppInventoryCache> {
-  const cache = new CodexAppInventoryCache();
-  await cache.refreshNow({
-    key: "runtime",
-    nowMs: 0,
-    request: async (method, params) => codexAppInventoryResponse(method, apps, params),
-  });
-  return cache;
-}
-
-function activePlugin(id: string, overrides: Partial<v2.PluginSummary> = {}): v2.PluginSummary {
-  return pluginSummary(id, { installed: true, enabled: true, ...overrides });
-}
