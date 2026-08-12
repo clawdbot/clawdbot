@@ -57,20 +57,27 @@ The proxy rewrites `Host` to the local target, so typical development servers su
 
 ## Security model
 
-Each portal uses a separate origin on its own port and binds to the same interfaces as the Gateway. Access requires the token in the portal URL. On the first request, the proxy stores that token in an HttpOnly cookie and removes it from subsequent upstream requests.
+Each portal uses a separate origin on its own port and binds to the same interfaces as the Gateway. Access requires the token in the portal URL. On the first request, the proxy stores that token in an HttpOnly cookie and removes it from subsequent upstream requests. The proxy validates this cookie itself and never forwards it to the application.
+
+Browser cookies are hostname-scoped rather than port-scoped, so the proxy isolates each application's cookie jar with an `oc_portal_<targetPort>_` name prefix. Requests forward only cookies with that portal's prefix and strip it before reaching the application; Gateway cookies, unprefixed cookies, and cookies for other portals are dropped. Application `Set-Cookie` responses receive the prefix, and any `Domain` attribute is removed so the cookie stays host-only.
 
 Portals proxy only the selected local development server. They never serve Gateway data, and every portal ends when the Gateway restarts.
 
 ## Limitations
 
 - The development server must run on the Gateway host. Remote worker support is planned.
-- A reverse proxy, Serve route, or funnel in front of the Gateway does not automatically expose portal ports.
+- A proxy or tunnel in front of the Gateway does not automatically expose portal listener ports. The Control UI detects this and shows a reachable URL with retry guidance instead of mounting a dead iframe.
+- Browser-side cookie code sees the prefixed names in `document.cookie`. Applications that manage cookies in browser code must account for the prefix; unprefixed cookies written directly by browser code are not forwarded to the target.
 
 ## Troubleshooting
 
 ### The portal shows a 502 waiting page
 
 The proxy is ready, but the application is not listening on the selected port. The page retries automatically. Check the background process and confirm that the server honors `PORT`.
+
+### The portal is not reachable from this browser
+
+The Control UI could reach the Gateway but could not reach the portal's separate listener port. This commonly happens when a proxy or tunnel exposes only the main Gateway port. Open the displayed portal URL from a browser on the Gateway host, or expose that portal listener port through the same network path, then select **Retry**.
 
 ### Close a portal
 

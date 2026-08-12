@@ -1,10 +1,15 @@
 /* @vitest-environment jsdom */
 
 import type { PortalListResult, PortalSummary } from "@openclaw/gateway-protocol";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { resolvePortalUrl } from "./portal-url.ts";
+
+const probePortalReachable = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
+
+vi.mock("./portal-reachability.ts", () => ({ probePortalReachable }));
+
 import "./portals-page.ts";
 
 type PortalsPageTestElement = HTMLElement & {
@@ -81,6 +86,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+beforeEach(() => {
+  probePortalReachable.mockReset().mockResolvedValue(true);
+});
+
 describe("PortalsPage", () => {
   it("renders the portal list and applies full replacement events", async () => {
     const source = createContext(["portal.list", "portal.close"], async (method) => {
@@ -106,6 +115,9 @@ describe("PortalsPage", () => {
     expect(frame?.getAttribute("sandbox")).toBe(
       "allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts",
     );
+    expect(probePortalReachable).toHaveBeenCalledWith(
+      "https://gateway.example.test:43123/app?openclaw_portal=secret-token",
+    );
 
     source.emitPortals([]);
 
@@ -113,6 +125,36 @@ describe("PortalsPage", () => {
       expect(page.querySelector(".portals-rail__item")).toBeNull();
       expect(page.textContent).toContain("Ask the agent to start a portal:");
     });
+  });
+
+  it("shows an unreachable notice without mounting the iframe and retries", async () => {
+    probePortalReachable.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const source = createContext(["portal.list", "portal.close"], async (method) => {
+      if (method === "portal.list") {
+        return { portals: [portal] } satisfies PortalListResult;
+      }
+      return { closed: true };
+    });
+    const page = await mountPage(source.context);
+
+    await vi.waitFor(() => {
+      expect(page.textContent).toContain("Portal not reachable from this browser");
+    });
+    expect(page.querySelector("iframe")).toBeNull();
+
+    page.querySelector<HTMLButtonElement>(".portals-preview__close")?.click();
+    await vi.waitFor(() => {
+      expect(source.request).toHaveBeenCalledWith("portal.close", { id: portal.id });
+    });
+
+    const retry = [...page.querySelectorAll("button")].find(
+      (button) => button.textContent?.trim() === "Retry",
+    );
+    expect(retry).toBeDefined();
+    retry?.click();
+
+    await vi.waitFor(() => expect(page.querySelector("iframe")).not.toBeNull());
+    expect(probePortalReachable).toHaveBeenCalledTimes(2);
   });
 
   it("shows the empty prompts and an unsupported note without calling the method", async () => {

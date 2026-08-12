@@ -18,11 +18,17 @@ import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gatew
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { probePortalReachable } from "./portal-reachability.ts";
 import { resolvePortalUrl } from "./portal-url.ts";
 import "./portals.css";
 
 const PORTAL_FRAME_SANDBOX =
   "allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts";
+
+type PortalProbeState = {
+  key: string;
+  status: "probing" | "reachable" | "unreachable";
+};
 
 class PortalsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -34,9 +40,12 @@ class PortalsPage extends OpenClawLightDomElement {
   @state() private loaded = false;
   @state() private error: string | null = null;
   @state() private closingPortalId: string | null = null;
+  @state() private portalProbeState: PortalProbeState | null = null;
 
   private requestGeneration = 0;
   private portalSetRevision = 0;
+  private portalProbeGeneration = 0;
+  private readonly portalProbeCache = new Map<string, boolean>();
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
     invalidateRequests: () => this.resetGatewayState(),
@@ -62,6 +71,7 @@ class PortalsPage extends OpenClawLightDomElement {
   );
 
   override disconnectedCallback() {
+    this.portalProbeGeneration += 1;
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
@@ -83,16 +93,66 @@ class PortalsPage extends OpenClawLightDomElement {
     this.loaded = false;
     this.error = null;
     this.closingPortalId = null;
+    this.portalProbeGeneration += 1;
+    this.portalProbeCache.clear();
+    this.portalProbeState = null;
   }
 
   private applyPortalSet(portals: readonly PortalSummary[]) {
     this.portalSetRevision += 1;
     this.portals = [...portals];
-    this.selectedPortalId = portals.some((portal) => portal.id === this.selectedPortalId)
+    const previousPortalId = this.selectedPortalId;
+    const selectedPortalId = portals.some((portal) => portal.id === previousPortalId)
       ? this.selectedPortalId
       : (portals[0]?.id ?? null);
+    this.selectedPortalId = selectedPortalId;
     this.loaded = true;
     this.error = null;
+    const selectedPortal = portals.find((portal) => portal.id === selectedPortalId);
+    if (selectedPortal) {
+      this.ensurePortalProbe(selectedPortal, selectedPortalId !== previousPortalId);
+    } else {
+      this.portalProbeGeneration += 1;
+      this.portalProbeState = null;
+    }
+  }
+
+  private portalUrl(portal: PortalSummary): string {
+    return resolvePortalUrl(
+      portal,
+      this.context.gateway.connection.gatewayUrl,
+      window.location.origin,
+    );
+  }
+
+  private ensurePortalProbe(portal: PortalSummary, force = false) {
+    const url = this.portalUrl(portal);
+    const key = `${portal.id}\u0000${url}`;
+    if (!force && this.portalProbeState?.key === key) {
+      return;
+    }
+    const cached = force ? undefined : this.portalProbeCache.get(key);
+    if (cached !== undefined) {
+      this.portalProbeState = { key, status: cached ? "reachable" : "unreachable" };
+      return;
+    }
+
+    const generation = ++this.portalProbeGeneration;
+    this.portalProbeState = { key, status: "probing" };
+    void probePortalReachable(url).then((reachable) => {
+      this.portalProbeCache.set(key, reachable);
+      if (generation === this.portalProbeGeneration && this.portalProbeState?.key === key) {
+        this.portalProbeState = { key, status: reachable ? "reachable" : "unreachable" };
+      }
+    });
+  }
+
+  private selectPortal(portal: PortalSummary) {
+    if (portal.id === this.selectedPortalId) {
+      return;
+    }
+    this.selectedPortalId = portal.id;
+    this.ensurePortalProbe(portal, true);
   }
 
   private async loadPortals() {
@@ -183,12 +243,10 @@ class PortalsPage extends OpenClawLightDomElement {
   }
 
   private renderPortal(portal: PortalSummary) {
-    const portalUrl = resolvePortalUrl(
-      portal,
-      this.context.gateway.connection.gatewayUrl,
-      window.location.origin,
-    );
+    const portalUrl = this.portalUrl(portal);
     const frameKey = `${portal.id}\u0000${portalUrl}`;
+    const probeStatus =
+      this.portalProbeState?.key === frameKey ? this.portalProbeState.status : "probing";
     return html`
       <section class="portals-preview">
         <header class="portals-preview__header">
@@ -217,20 +275,49 @@ class PortalsPage extends OpenClawLightDomElement {
         ${this.error
           ? html`<div class="callout danger portals-preview__error">${this.error}</div>`
           : nothing}
-        ${keyed(
-          frameKey,
-          html`<iframe
-            ${ref((element) => {
-              if (element instanceof HTMLIFrameElement && !element.hasAttribute("src")) {
-                element.setAttribute("src", portalUrl);
-              }
-            })}
-            class="portals-preview__frame"
-            title=${t("portalsPage.previewTitle", { title: portal.title })}
-            referrerpolicy="no-referrer"
-            sandbox=${PORTAL_FRAME_SANDBOX}
-          ></iframe>`,
-        )}
+        ${probeStatus === "probing"
+          ? html`
+              <div class="portals-empty portals-preview__state" role="status" aria-live="polite">
+                <div class="portals-empty__title">${t("portalsPage.loading")}</div>
+              </div>
+            `
+          : probeStatus === "unreachable"
+            ? html`
+                <div class="portals-preview__notice" role="status">
+                  <div class="portals-preview__notice-title">
+                    ${t("portalsPage.unreachableTitle")}
+                  </div>
+                  <p>${t("portalsPage.unreachableBody")}</p>
+                  <a
+                    class="portals-preview__notice-url"
+                    href=${portalUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    >${portalUrl}</a
+                  >
+                  <button
+                    class="btn"
+                    type="button"
+                    @click=${() => this.ensurePortalProbe(portal, true)}
+                  >
+                    ${t("portalsPage.retry")}
+                  </button>
+                </div>
+              `
+            : keyed(
+                frameKey,
+                html`<iframe
+                  ${ref((element) => {
+                    if (element instanceof HTMLIFrameElement && !element.hasAttribute("src")) {
+                      element.setAttribute("src", portalUrl);
+                    }
+                  })}
+                  class="portals-preview__frame"
+                  title=${t("portalsPage.previewTitle", { title: portal.title })}
+                  referrerpolicy="no-referrer"
+                  sandbox=${PORTAL_FRAME_SANDBOX}
+                ></iframe>`,
+              )}
       </section>
     `;
   }
@@ -254,7 +341,7 @@ class PortalsPage extends OpenClawLightDomElement {
                       class="portals-rail__item ${portal.id === selectedPortal.id ? "active" : ""}"
                       type="button"
                       aria-current=${portal.id === selectedPortal.id ? "true" : nothing}
-                      @click=${() => (this.selectedPortalId = portal.id)}
+                      @click=${() => this.selectPortal(portal)}
                     >
                       <span class="portals-rail__title">${portal.title}</span>
                       <span class="portals-rail__port"

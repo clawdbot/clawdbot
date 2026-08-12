@@ -2142,6 +2142,10 @@ export const en: TranslationMap = {
     unsupported: "This gateway does not support portals.",
     loadFailed: "Could not load portals: {error}",
     closeFailed: "Could not close the portal: {error}",
+    unreachableTitle: "Portal not reachable from this browser",
+    unreachableBody:
+      "The Gateway is likely being accessed through a proxy or tunnel that exposes only its main port. Open this URL from a browser on the Gateway host.",
+    retry: "Retry",
   },
   modelSetup: {
     heading: "Connect a verified AI model",
