@@ -87,7 +87,7 @@ type GatewayClientBootstrapAuthPolicy = "default" | "interactive" | "probe";
 
 type ConfiguredGatewayTargetIdentity = {
   authSurface: "local" | "remote";
-  tlsSource: "local loopback" | "config gateway.remote.url";
+  tlsSource?: "local loopback" | "config gateway.remote.url";
 };
 
 function appendControlUiBasePath(url: string, basePath: string): string {
@@ -140,7 +140,9 @@ function resolveExactConfiguredGatewayTarget(params: {
         publicOrigin.replace(/^https:/u, "wss:").replace(/^http:/u, "ws:"),
         basePath,
       ),
-      identity: { authSurface: "local", tlsSource: "local loopback" },
+      // A public reverse proxy may terminate a different certificate than the
+      // direct local listener, so local auth ownership does not imply a TLS pin.
+      identity: { authSurface: "local" },
     });
   }
   const matches = candidates.filter(({ target }) => target === params.explicitUrl);

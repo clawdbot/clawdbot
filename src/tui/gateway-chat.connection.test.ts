@@ -270,6 +270,7 @@ describe("resolveGatewayConnection", () => {
         mode: "local",
         publicOrigin: "HTTPS://Gateway.Example/",
         controlUi: { basePath: "/openclaw" },
+        tls: { enabled: true },
         auth: {
           mode: "token",
           token: { source: "env", provider: "default", id: "PROFILE_GATEWAY_TOKEN" },
@@ -278,15 +279,16 @@ describe("resolveGatewayConnection", () => {
     });
 
     await withEnvAsync({ PROFILE_GATEWAY_TOKEN: "resolved-profile-token" }, async () => {
-      await expect(
-        resolveGatewayConnection({
-          url: "wss://gateway.example/openclaw",
-          allowConfiguredAuthForExactTarget: true,
-        }),
-      ).resolves.toMatchObject({
+      const result = await resolveGatewayConnection({
+        url: "wss://gateway.example/openclaw",
+        allowConfiguredAuthForExactTarget: true,
+      });
+
+      expect(result).toMatchObject({
         url: "wss://gateway.example/openclaw",
         token: "resolved-profile-token",
       });
+      expect(result.tlsFingerprint).toBeUndefined();
     });
   });
 
