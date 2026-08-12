@@ -94,6 +94,40 @@ description: Use anime style IMPORTANT: Must be kawaii
     expect(result.issues).toEqual([]);
   });
 
+  it("normalizes colon-rich free-form fields other than description", () => {
+    const content = `---
+name: sample-skill
+read_when: signals: user announcing a conversion task
+---`;
+    const result = parseFrontmatterBlockResult(content);
+
+    expect(result.frontmatter.read_when).toBe("signals: user announcing a conversion task");
+    expect(result.issues).toEqual([]);
+  });
+
+  it("normalizes multiple colon-rich pure-text fields in one block", () => {
+    const content = `---
+name: sample-skill
+read_when: signals: user announcing a conversion task
+summary: handles formats: pdf and docx
+---`;
+    const result = parseFrontmatterBlockResult(content);
+
+    expect(result.frontmatter.read_when).toBe("signals: user announcing a conversion task");
+    expect(result.frontmatter.summary).toBe("handles formats: pdf and docx");
+    expect(result.issues).toEqual([]);
+  });
+
+  it("keeps structured fields strict when a pure-text field is normalized", () => {
+    const result = parseFrontmatterBlockResult(`---
+name: sample-skill
+read_when: signals: user announcing a conversion task
+metadata: [broken
+---`);
+
+    expect(result.issues[0]).toMatchObject({ code: "BAD_INDENT" });
+  });
+
   it("leaves valid YAML description semantics untouched", () => {
     expect(
       parseFrontmatterBlock(`---

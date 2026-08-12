@@ -80,15 +80,20 @@ function parseLineFrontmatter(block: string): ParsedFrontmatter {
   return result;
 }
 
-function normalizeFreeformDescription(block: string): string {
+// Pure-text scalar fields whose inline values may legitimately contain a
+// colon+space. Restoring them keeps legacy single-line frontmatter loadable
+// without loosening strict parsing for structured fields like `metadata`.
+const FREEFORM_TEXT_FIELDS = new Set(["description", "read_when", "summary"]);
+
+function normalizeFreeformValue(block: string, keyName: string): string {
   const doc = parseDocument(block, { schema: "core", prettyErrors: false });
   if (!isMap(doc.contents)) {
     return block;
   }
-  const descriptionPair = doc.contents.items.find(
-    (pair) => isScalar(pair.key) && pair.key.value === "description",
+  const pair = doc.contents.items.find(
+    (candidate) => isScalar(candidate.key) && candidate.key.value === keyName,
   );
-  const keyStart = isNode(descriptionPair?.key) ? descriptionPair.key.range?.[0] : undefined;
+  const keyStart = isNode(pair?.key) ? pair.key.range?.[0] : undefined;
   if (keyStart === undefined) {
     return block;
   }
@@ -96,13 +101,21 @@ function normalizeFreeformDescription(block: string): string {
   const lineEnd = block.indexOf("\n", keyStart);
   const end = lineEnd === -1 ? block.length : lineEnd;
   const line = block.slice(lineStart, end);
-  const match = line.match(/^(?:description|"description"|'description'):\s*(.*)$/);
+  const match = line.match(/^(?:[^:\n]+|"[^"]+"|'[^']+'):\s*(.*)$/);
   const rawValue = match?.[1]?.trim();
   if (!rawValue || /^[|>](?:[1-9][+-]?|[+-][1-9]?)?$/.test(rawValue)) {
     return block;
   }
-  const replacement = `description: ${JSON.stringify(stripQuotes(rawValue))}`;
+  const replacement = `${keyName}: ${JSON.stringify(stripQuotes(rawValue))}`;
   return `${block.slice(0, lineStart)}${replacement}${block.slice(end)}`;
+}
+
+function normalizeFreeformTextFields(block: string): string {
+  let updated = block;
+  for (const field of FREEFORM_TEXT_FIELDS) {
+    updated = normalizeFreeformValue(updated, field);
+  }
+  return updated;
 }
 
 function parseYamlFrontmatterOnce(
@@ -184,7 +197,7 @@ function parseYamlFrontmatter(block: string): ParsedFrontmatterBlockResult {
   if (parsed.issues.length === 0) {
     return parsed;
   }
-  const recoveredBlock = normalizeFreeformDescription(block);
+  const recoveredBlock = normalizeFreeformTextFields(block);
   return recoveredBlock === block ? parsed : parseYamlFrontmatterOnce(recoveredBlock, fallback);
 }
 
