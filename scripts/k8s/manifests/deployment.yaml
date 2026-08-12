@@ -29,6 +29,9 @@ spec:
             - sh
             - -c
             - |
+              # Seed-if-missing: the PVC copy owns config after first boot so edits made
+              # through OpenClaw (onboard, channels add, doctor --fix, Control UI) survive
+              # restarts. ConfigMap edits need an explicit reseed (see docs/install/kubernetes.md).
               [ -f /home/node/.openclaw/openclaw.json ] || cp /config/openclaw.json /home/node/.openclaw/openclaw.json
               mkdir -p /home/node/.openclaw/workspace
               [ -f /home/node/.openclaw/workspace/AGENTS.md ] || cp /config/AGENTS.md /home/node/.openclaw/workspace/AGENTS.md
