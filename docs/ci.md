@@ -715,11 +715,15 @@ Local changed-lane logic lives in `scripts/changed-lanes.mjs` and is executed by
 
 Affected lanes are sufficient for changed-check evidence reuse only when every
 path is classified without `lanes.all`, refs resolve, sparse inputs are
-present, and every current required command is either run or exactly proven.
+present, the current worktree has no tracked or untracked state outside the
+gate-owned proof stores, and every current required command is either run or
+exactly proven.
 For remote runs, "proven" means the fresh Testbox rebuilt the expected
 runtime/toolchain inputs and accepted a full passed receipt from the bounded
 artifact-forwarded bundle; missing, stale, corrupt, oversized, skipped, or
-wrong-family receipts are non-proof and rerun the native child.
+wrong-family receipts are non-proof. Descendant scans continue past rejected
+same-command candidates and rerun the native child only when no valid later
+candidate proves the current plan.
 `tsBuildInfo` files remain TypeScript compiler cache only and are never treated
 as a passed changed-check receipt.
 

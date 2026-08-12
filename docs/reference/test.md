@@ -107,22 +107,25 @@ before deciding whether to skip a native `tsgo` or `tsgolint` child. After a
 successful remote plan, Crabbox retrieves one required proof-export artifact and
 the caller imports only schema-valid passed receipts from that bounded bundle.
 
-Reuse is deliberately narrow. Exact-target reuse still requires a schema-valid
-receipt with `status=passed`, `exitCode=0`, `ranTool=true`, the same command
-family, and matching repo identity, base/head, merge-base, Git head/tree,
-changed paths, changed path content states, lane plan, command argv, selected
-resource env, package and lockfile digests, wrapper/helper identity, effective
-wrapper argv, runtime/toolchain facts, and TypeScript/oxlint config closure
-digests.
+Reuse is deliberately narrow. Exact-target reuse still requires a clean current
+worktree, a schema-valid receipt with `status=passed`, `exitCode=0`,
+`ranTool=true`, the same command family, and matching repo identity, base/head,
+merge-base, Git head/tree, changed paths, changed path content states, lane
+plan, command argv, selected resource env, package and lockfile digests,
+wrapper/helper identity, effective wrapper argv, runtime/toolchain facts, and
+TypeScript/oxlint config closure digests. The receipt/artifact transport stores
+the gate owns are ignored so proof writes do not invalidate themselves.
 
 When the exact receipt is absent, `check:changed` may reuse an ancestor receipt
 only if the producer commit is a verified ancestor of the current commit, the
 current worktree is clean, the descendant Git delta classifies through the
 normal changed-lanes planner, and that delta does not select the same native
-proof command. Docs-only and release-metadata-only descendant commits can reuse
-all native proof. Core, extension, public contract, script/tooling, global,
-planner, wrapper, config, package/lock, malformed, partial, skipped, no-target,
-dirty, sparse, non-ancestor, or unresolved cases fail closed to the current plan.
+proof command. The bounded scan keeps looking past stale same-command receipts
+until it either finds a valid later candidate or reports the first fail-closed
+reason. Docs-only and release-metadata-only descendant commits can reuse all
+native proof. Core, extension, public contract, script/tooling, global, planner,
+wrapper, config, package/lock, malformed, partial, skipped, no-target, dirty,
+sparse, non-ancestor, or unresolved cases fail closed to the current plan.
 
 `--dry-run` prints the evidence reuse decision beside each evidence-capable
 planned command, including the evidence SHA path when reusable and the

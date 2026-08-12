@@ -349,11 +349,19 @@ export function evaluateReusableReceipt(
   descendantOptions?: DescendantProofReuseOptions,
 ): ReuseDecision {
   const candidatePath = path.join(receiptDir, `${expected.fingerprint}.json`);
+  const cwd = descendantOptions?.cwd ?? expected.producer.worktreeRoot ?? process.cwd();
   if (expected.commandFamily === "other" || expected.requiredInputs.expectedWrapperProof === null) {
     return {
       reusable: false,
       path: candidatePath,
       reason: "unsupported command family for changed-check evidence receipt reuse",
+    };
+  }
+  if (!gitWorktreeClean(cwd)) {
+    return {
+      reusable: false,
+      path: candidatePath,
+      reason: "current worktree has dirty or untracked files",
     };
   }
   const exactDecision = evaluateExactReceipt(candidatePath, expected);
@@ -409,14 +417,32 @@ function evaluateDescendantReceipts(
       reason: receiptPaths,
     };
   }
+  let firstRejected: ReuseDecision | null = null;
+  let malformedCandidates = 0;
   for (const receiptPath of receiptPaths) {
     const parsed = readSchemaValidReceipt(receiptPath);
-    if (!parsed || !sameReceiptCommand(parsed, expected)) {
+    if (!parsed) {
+      malformedCandidates += 1;
       continue;
     }
-    return evaluateDescendantReceiptCandidate(receiptPath, parsed, expected, options);
+    if (!sameReceiptCommand(parsed, expected)) {
+      continue;
+    }
+    const decision = evaluateDescendantReceiptCandidate(receiptPath, parsed, expected, options);
+    if (decision.reusable) {
+      return decision;
+    }
+    firstRejected ??= decision;
   }
-  return null;
+  return (
+    firstRejected ??
+    (malformedCandidates > 0
+      ? rejected(
+          path.join(receiptDir, `${expected.fingerprint}.json`),
+          "no reusable changed-check evidence receipt found after skipping malformed candidates",
+        )
+      : null)
+  );
 }
 
 function listAtomicReceiptPaths(receiptDir: string) {
@@ -1140,16 +1166,28 @@ function gitIsAncestor(producerHead: string, currentHead: string, cwd: string) {
 
 function gitWorktreeClean(cwd: string) {
   try {
-    return (
-      execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], {
-        cwd,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }).trim().length === 0
-    );
+    const status = execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return status
+      .split("\n")
+      .filter(Boolean)
+      .every((line) => isProofStoreStatusPath(line.slice(3).replace(/^"|"$/gu, "")));
   } catch {
     return false;
   }
+}
+
+function isProofStoreStatusPath(statusPath: string) {
+  const normalized = statusPath.replaceAll("\\", "/");
+  return (
+    normalized.startsWith(".artifacts/check-changed-receipts/") ||
+    normalized.startsWith(".artifacts/check-changed-remote-proof-staging/") ||
+    normalized.startsWith(".artifacts/check-changed-proof-export/") ||
+    normalized.startsWith(".crabbox/")
+  );
 }
 
 function gitChangedPathsBetween(producerHead: string, currentHead: string, cwd: string) {

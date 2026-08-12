@@ -11,6 +11,7 @@ import {
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { gzipSync } from "node:zlib";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -23,24 +24,6 @@ import {
   listChangedPathsFromGit,
   listStagedChangedPaths,
 } from "../../scripts/changed-lanes.mts";
-import {
-  commandFamily,
-  createCheckProofReceipt,
-  createCheckProofReceiptBundleFromDir,
-  decodeCheckProofReceiptBundleFromEnv,
-  encodeCheckProofReceiptBundleForEnv,
-  createWrapperProof,
-  importCheckProofReceiptBundle,
-  readCheckProofReceiptBundleFromArtifactTarball,
-  type DescendantProofPlan,
-  type DescendantProofReuseOptions,
-  evaluateReusableReceipt,
-  isReusableCheckProofReceipt,
-  readWrapperProofReceipt,
-  writeCheckProofReceipt,
-  writeWrapperProofReceipt,
-  type CheckProofReceipt,
-} from "../../scripts/lib/check-proof-reuse.mts";
 import {
   buildChangedCheckCrabboxArgs,
   changedCheckLocalDependenciesReady,
@@ -72,6 +55,24 @@ import {
   resolveChangedCheckProofArtifactPath,
 } from "../../scripts/check-changed.mts";
 import { resolveOxfmtInvocation } from "../../scripts/format-docs.mts";
+import {
+  commandFamily,
+  createCheckProofReceipt,
+  createCheckProofReceiptBundleFromDir,
+  decodeCheckProofReceiptBundleFromEnv,
+  encodeCheckProofReceiptBundleForEnv,
+  createWrapperProof,
+  importCheckProofReceiptBundle,
+  readCheckProofReceiptBundleFromArtifactTarball,
+  type DescendantProofPlan,
+  type DescendantProofReuseOptions,
+  evaluateReusableReceipt,
+  isReusableCheckProofReceipt,
+  readWrapperProofReceipt,
+  writeCheckProofReceipt,
+  writeWrapperProofReceipt,
+  type CheckProofReceipt,
+} from "../../scripts/lib/check-proof-reuse.mts";
 import { isDirectRunPath } from "../../scripts/lib/direct-run.mjs";
 import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
 
@@ -198,42 +199,122 @@ function writeFakeSuccessfulCrabboxNode(binDir: string): void {
 }
 
 function writeFakeLifecycleCrabboxNode(binDir: string): void {
+  const fakeRunnerPath = path.join(binDir, "fake-crabbox-runner.mjs");
+  const fakeProofWriterPath = path.join(binDir, "fake-tsgo-proof-writer.mjs");
   writeFileSync(
     path.join(binDir, "node"),
     [
       "#!/bin/sh",
       "set -eu",
-      "export_path=",
-      "prior_bundle=",
-      "lease=tbx_lifecycle",
-      'while [ "$#" -gt 0 ]; do',
-      '  if [ "$1" = "--artifact-glob" ]; then',
-      "    shift",
-      '    export_path="$1"',
-      "  else",
-      '    case "$1" in',
-      '      OPENCLAW_CHECK_CHANGED_PRIOR_RECEIPTS_B64=*) prior_bundle="${1#OPENCLAW_CHECK_CHANGED_PRIOR_RECEIPTS_B64=}" ;;',
-      "    esac",
-      "  fi",
-      "  shift || true",
-      "done",
-      'if [ -z "$export_path" ]; then exit 1; fi',
-      'if [ -n "$prior_bundle" ]; then',
-      '  printf "%s" "$prior_bundle" > "$CAPTURE_BUNDLE_PATH"',
-      "else",
-      "  count=0",
-      '  if [ -f "$HEAVY_COUNT_PATH" ]; then count="$(cat "$HEAVY_COUNT_PATH")"; fi',
-      "  count=$((count + 1))",
-      '  printf "%s\\n" "$count" > "$HEAVY_COUNT_PATH"',
+      'if [ "${1:-}" = "scripts/crabbox-wrapper.mjs" ]; then',
+      '  exec "$REAL_NODE" "$FAKE_CRABBOX_RUNNER" "$@"',
       "fi",
-      'mkdir -p "$(dirname "$export_path")" ".crabbox/runs/$lease"',
-      'cp "$FIRST_BUNDLE_PATH" "$export_path"',
-      'tar -czf ".crabbox/runs/$lease/blacksmith-artifacts.tgz" "$export_path"',
-      'printf \'{"provider":"blacksmith-testbox","leaseId":"%s","exitCode":0,"artifacts":[{"kind":"artifact-glob","path":"%s/.crabbox/runs/%s/blacksmith-artifacts.tgz"}]}\\n\' "$lease" "$PWD" "$lease" >&2',
       "exit 0",
       "",
     ].join("\n"),
     { mode: 0o755 },
+  );
+  writeFileSync(
+    path.join(binDir, "corepack"),
+    [
+      "#!/bin/sh",
+      "set -eu",
+      'if [ "${1:-}" != "pnpm" ]; then',
+      '  echo "unexpected corepack command: $*" >&2',
+      "  exit 1",
+      "fi",
+      "shift",
+      'command="${1:-}"',
+      "shift || true",
+      'if [ "$command" = "check:changed" ]; then',
+      '  exec "$REAL_NODE" "$REPO_ROOT/scripts/check-changed.mjs" "$@"',
+      "fi",
+      'if [ "$command" = "tsgo:core" ]; then',
+      "  count=0",
+      '  if [ -f "$HEAVY_COUNT_PATH" ]; then count="$(cat "$HEAVY_COUNT_PATH")"; fi',
+      "  count=$((count + 1))",
+      '  printf "%s\\n" "$count" > "$HEAVY_COUNT_PATH"',
+      '  exec "$REAL_NODE" --import "$TSX_IMPORT" "$FAKE_TSGO_PROOF_WRITER" -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo',
+      "fi",
+      "exit 0",
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  writeFileSync(
+    fakeRunnerPath,
+    [
+      "import { spawnSync, execFileSync } from 'node:child_process';",
+      "import fs from 'node:fs';",
+      "import os from 'node:os';",
+      "import path from 'node:path';",
+      "",
+      "const args = process.argv.slice(2);",
+      "let exportPath = '';",
+      "let separator = -1;",
+      "for (let index = 0; index < args.length; index += 1) {",
+      "  if (args[index] === '--artifact-glob') {",
+      "    exportPath = args[index + 1] ?? '';",
+      "    index += 1;",
+      "  } else if (args[index] === '--') {",
+      "    separator = index;",
+      "    break;",
+      "  }",
+      "}",
+      "if (!exportPath || separator === -1) {",
+      "  process.exit(1);",
+      "}",
+      "const env = { ...process.env };",
+      "let commandIndex = separator + 1;",
+      "while (commandIndex < args.length && /^[A-Za-z_][A-Za-z0-9_]*=/u.test(args[commandIndex] ?? '')) {",
+      "  const raw = args[commandIndex] ?? '';",
+      "  const equals = raw.indexOf('=');",
+      "  env[raw.slice(0, equals)] = raw.slice(equals + 1);",
+      "  if (raw.startsWith('OPENCLAW_CHECK_CHANGED_PRIOR_RECEIPTS_B64=')) {",
+      "    fs.writeFileSync(env.CAPTURE_BUNDLE_PATH, raw.slice(equals + 1));",
+      "  }",
+      "  commandIndex += 1;",
+      "}",
+      "const command = args.slice(commandIndex);",
+      "const remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), 'changed-check-remote-'));",
+      "execFileSync('git', ['clone', '--quiet', '--no-local', process.cwd(), remoteDir], { stdio: 'ignore' });",
+      "env.PATH = `${env.FAKE_BIN_DIR}${path.delimiter}${env.PATH ?? ''}`;",
+      "const result = spawnSync(command[0], command.slice(1), { cwd: remoteDir, env, encoding: 'utf8' });",
+      "if (result.stdout) process.stdout.write(result.stdout);",
+      "if (result.stderr) process.stderr.write(result.stderr);",
+      "const lease = `tbx_lifecycle_${Date.now()}`;",
+      "const tarball = path.resolve(process.cwd(), '.crabbox', 'runs', lease, 'blacksmith-artifacts.tgz');",
+      "fs.mkdirSync(path.dirname(tarball), { recursive: true });",
+      "if (result.status === 0) {",
+      "  execFileSync('tar', ['-czf', tarball, '-C', remoteDir, exportPath], { stdio: 'ignore' });",
+      "}",
+      "const report = {",
+      "  provider: 'blacksmith-testbox',",
+      "  leaseId: lease,",
+      "  exitCode: result.status ?? 1,",
+      "  artifacts: result.status === 0 ? [{ kind: 'artifact-glob', path: tarball }] : [],",
+      "};",
+      "process.stderr.write(`${JSON.stringify(report)}\\n`);",
+      "process.exit(result.status ?? 1);",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  writeFileSync(
+    fakeProofWriterPath,
+    [
+      `import { createTsgoWrapperProofForArgs } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/run-tsgo.mts")).href)};`,
+      `import { writeWrapperProofReceipt } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/lib/check-proof-reuse.mts")).href)};`,
+      "",
+      "const { proof, sparseGuardError } = createTsgoWrapperProofForArgs(process.argv.slice(2), process.env);",
+      "if (sparseGuardError) {",
+      "  console.error(sparseGuardError);",
+      "  process.exit(1);",
+      "}",
+      "writeWrapperProofReceipt(process.env.OPENCLAW_TOOL_PROOF_RECEIPT, proof);",
+      "",
+    ].join("\n"),
+    "utf8",
   );
 }
 
@@ -241,13 +322,29 @@ function createProofRepo(prefix: string) {
   const dir = makeTempRepoRoot(tempDirs, prefix);
   git(dir, ["init", "-q", "--initial-branch=main"]);
   const files: Record<string, string> = {
+    ".gitignore": ".artifacts/\n.crabbox/\n",
     ".oxlintrc.json": "{}\n",
     "config/oxlint/boundary-guards.json": "{}\n",
     "config/tsconfig/oxlint.json": "{}\n",
     "config/tsconfig/oxlint.core.json": "{}\n",
     "config/tsconfig/oxlint.extensions.json": "{}\n",
     "config/tsconfig/oxlint.scripts.json": "{}\n",
-    "package.json": prettyJson({ name: "proof-repo", version: "0.0.0", scripts: {} }),
+    "package.json": prettyJson({
+      name: "proof-repo",
+      version: "0.0.0",
+      scripts: {
+        "tsgo:core":
+          "node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo",
+        "tsgo:core:test":
+          "node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test.tsbuildinfo",
+        "tsgo:extensions":
+          "node scripts/run-tsgo.mjs -p tsconfig.extensions.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/extensions.tsbuildinfo",
+        "tsgo:extensions:test":
+          "node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.extensions.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/extensions-test.tsbuildinfo",
+        "tsgo:scripts":
+          "node scripts/run-tsgo.mjs -p tsconfig.scripts.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/scripts.tsbuildinfo",
+      },
+    }),
     "pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
     "pnpm-workspace.yaml": "packages: []\n",
     "scripts/changed-lanes.mjs": "export {};\n",
@@ -485,6 +582,41 @@ function runChangedFormatLaneWithRepoOxfmt(cwd: string, changedPaths: string[]) 
   });
 }
 
+function writeSingleEntryTarGz(
+  tarballPath: string,
+  entry: { name: string; body?: string; typeflag?: string; linkname?: string },
+) {
+  const body = Buffer.from(entry.body ?? "", "utf8");
+  const header = Buffer.alloc(512);
+  const write = (offset: number, length: number, value: string) => {
+    header.write(value.slice(0, length), offset, length, "utf8");
+  };
+  const writeOctal = (offset: number, length: number, value: number) => {
+    write(offset, length, value.toString(8).padStart(length - 1, "0"));
+    header[offset + length - 1] = 0;
+  };
+  write(0, 100, entry.name);
+  writeOctal(100, 8, 0o644);
+  writeOctal(108, 8, 0);
+  writeOctal(116, 8, 0);
+  writeOctal(124, 12, entry.typeflag && entry.typeflag !== "0" ? 0 : body.length);
+  writeOctal(136, 12, 0);
+  header.fill(" ", 148, 156);
+  write(156, 1, entry.typeflag ?? "0");
+  write(157, 100, entry.linkname ?? "");
+  write(257, 6, "ustar");
+  write(263, 2, "00");
+  let checksum = 0;
+  for (const byte of header) {
+    checksum += byte;
+  }
+  write(148, 8, checksum.toString(8).padStart(6, "0"));
+  header[154] = 0;
+  header[155] = 32;
+  const padding = Buffer.alloc((512 - (body.length % 512)) % 512);
+  writeFileSync(tarballPath, gzipSync(Buffer.concat([header, body, padding, Buffer.alloc(1024)])));
+}
+
 function createSyntheticMergeRepo(prefix: string): { dir: string; staleBase: string } {
   const dir = makeTempRepoRoot(tempDirs, prefix);
   git(dir, ["init", "-q", "--initial-branch=main"]);
@@ -657,67 +789,31 @@ describe("scripts/changed-lanes", () => {
     const repo = createProofRepo("changed-check-delegated-proof-lifecycle-");
     writeRepoFile(repo.dir, "src/core.ts", "export const core = 42;\n");
     commitAll(repo.dir, "core producer");
-    const producerHead = git(repo.dir, ["rev-parse", "HEAD"]);
-    const remoteEnv = {
-      CI: "1",
-      OPENCLAW_CHECK_CHANGED_REMOTE_CHILD: "1",
-      OPENCLAW_CHANGED_LANES_RAW_SYNC: "1",
-      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
-      PATH: "/usr/bin",
-    };
-    const plan = createChangedCheckPlan(detectChangedLanes(["src/core.ts"]), {
-      base: repo.base,
-      env: remoteEnv,
-      head: producerHead,
-    });
-    const planCommand = expectDefined(
-      plan.commands.find((command) => command.name === "typecheck core"),
-      "typecheck core command",
-    );
-    const command = planCommand.bin
-      ? ({ ...planCommand, bin: planCommand.bin } as ReturnType<typeof createPnpmManagedCommand>)
-      : createPnpmManagedCommand(planCommand);
-    const wrapperProof = createWrapperProofForCommand("typecheck core", repo.dir);
-    const receipt = createCheckProofReceipt({
-      command,
-      context: {
-        base: repo.base,
-        changedPaths: ["src/core.ts"],
-        cwd: repo.dir,
-        head: producerHead,
-        planCommands: plan.commands,
-        planSummary: plan.summary,
-      },
-      exitCode: 0,
-      expectedWrapperProof: wrapperProof,
-      wrapperProof,
-    });
-    const firstReceiptDir = makeTempRepoRoot(tempDirs, "changed-check-first-remote-receipts-");
-    writeCheckProofReceipt(firstReceiptDir, receipt);
-    const firstBundlePath = path.join(repo.dir, "first-remote-bundle.json");
-    writeFileSync(
-      firstBundlePath,
-      prettyJson(createCheckProofReceiptBundleFromDir(firstReceiptDir)),
-    );
 
-    const binDir = path.join(repo.dir, "bin");
+    const binDir = makeTempRepoRoot(tempDirs, "changed-check-fake-remote-bin-");
     mkdirSync(binDir, { recursive: true });
     writeFakeLifecycleCrabboxNode(binDir);
-    const heavyCountPath = path.join(repo.dir, "remote-heavy-count.txt");
-    const captureBundlePath = path.join(repo.dir, "second-prior-bundle.txt");
+    const heavyCountPath = path.join(binDir, "remote-heavy-count.txt");
+    const captureBundlePath = path.join(binDir, "second-prior-bundle.txt");
+    const proofReceiptDir = makeTempRepoRoot(tempDirs, "changed-check-caller-receipts-");
     const env = {
       ...createNestedGitEnv(),
       CAPTURE_BUNDLE_PATH: captureBundlePath,
       CI: "",
-      FIRST_BUNDLE_PATH: firstBundlePath,
+      FAKE_BIN_DIR: binDir,
+      FAKE_CRABBOX_RUNNER: path.join(binDir, "fake-crabbox-runner.mjs"),
+      FAKE_TSGO_PROOF_WRITER: path.join(binDir, "fake-tsgo-proof-writer.mjs"),
       GITHUB_ACTIONS: "",
       HEAVY_COUNT_PATH: heavyCountPath,
       OPENCLAW_CHECK_CHANGED_REMOTE_CHILD: "",
       OPENCLAW_TESTBOX: "1",
+      REAL_NODE: process.execPath,
+      REPO_ROOT: repoRoot,
       PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      TSX_IMPORT: tsxImport,
     };
     const script = path.join(repoRoot, "scripts/check-changed.mjs");
-    const args = ["--base", repo.base, "--head", "HEAD"];
+    const args = ["--base", repo.base, "--head", "HEAD", "--proof-receipt-dir", proofReceiptDir];
 
     const first = spawnSync(process.execPath, [script, ...args], {
       cwd: repo.dir,
@@ -727,11 +823,7 @@ describe("scripts/changed-lanes", () => {
     expect(first.status, first.stderr).toBe(0);
     expect(first.stderr).toContain("imported remote changed-check proof receipts: 1");
     expect(readFileSync(heavyCountPath, "utf8").trim()).toBe("1");
-    expect(
-      existsSync(
-        path.join(repo.dir, ".artifacts/check-changed-receipts", `${receipt.fingerprint}.json`),
-      ),
-    ).toBe(true);
+    expect(createCheckProofReceiptBundleFromDir(proofReceiptDir).receipts).toHaveLength(1);
 
     const second = spawnSync(process.execPath, [script, ...args], {
       cwd: repo.dir,
@@ -739,25 +831,20 @@ describe("scripts/changed-lanes", () => {
       env,
     });
     expect(second.status, second.stderr).toBe(0);
+    expect(second.stderr).toContain("imported prior changed-check proof receipts: 1");
+    expect(second.stderr).toContain("reusing changed-check evidence receipt");
     expect(readFileSync(heavyCountPath, "utf8").trim()).toBe("1");
 
-    const decoded = decodeCheckProofReceiptBundleFromEnv(
-      readFileSync(captureBundlePath, "utf8").trim(),
-    );
-    expect(decoded.ok).toBe(true);
-    if (!decoded.ok) {
-      throw new Error(decoded.reason);
-    }
-    const stagedReceiptDir = makeTempRepoRoot(tempDirs, "changed-check-second-remote-receipts-");
-    expect(importCheckProofReceiptBundle(stagedReceiptDir, decoded.bundle)).toEqual(
-      expect.objectContaining({ imported: 1 }),
-    );
-    expect(evaluateReusableReceipt(stagedReceiptDir, receipt)).toEqual(
-      expect.objectContaining({
-        reusable: true,
-        reason: "exact-target evidence reuse",
-      }),
-    );
+    writeRepoFile(repo.dir, "src/descendant.ts", "export const descendant = 1;\n");
+    commitAll(repo.dir, "affected descendant");
+    const affected = spawnSync(process.execPath, [script, ...args], {
+      cwd: repo.dir,
+      encoding: "utf8",
+      env,
+    });
+    expect(affected.status, affected.stderr).toBe(0);
+    expect(affected.stderr).toContain("descendant changed-check plan includes typecheck core");
+    expect(readFileSync(heavyCountPath, "utf8").trim()).toBe("2");
   });
 
   it.each([
@@ -827,11 +914,26 @@ describe("scripts/changed-lanes", () => {
 
   it("prints changed-check evidence decisions in dry-run output", () => {
     const receiptDir = makeTempRepoRoot(tempDirs, "changed-check-dry-run-evidence-");
-    const freshResult = runRepoScript("scripts/check-changed.mjs", [
+    const repo = createProofRepo("changed-check-dry-run-repo-");
+    const runDryRun = (extraArgs: string[]) =>
+      spawnSync(
+        process.execPath,
+        [path.join(repoRoot, "scripts/check-changed.mjs"), ...extraArgs],
+        {
+          cwd: repo.dir,
+          encoding: "utf8",
+          env: createNestedGitEnv(),
+        },
+      );
+    const freshResult = runDryRun([
       "--dry-run",
       "--no-reuse",
       "--proof-receipt-dir",
       receiptDir,
+      "--base",
+      repo.base,
+      "--head",
+      "HEAD",
       "--",
       "scripts/check-changed.mts",
     ]);
@@ -839,10 +941,14 @@ describe("scripts/changed-lanes", () => {
     expect(freshResult.stderr).toContain("[check:changed:dry-run] no reuse:");
     expect(freshResult.stderr).toContain("force-fresh requested");
 
-    const missingResult = runRepoScript("scripts/check-changed.mjs", [
+    const missingResult = runDryRun([
       "--dry-run",
       "--proof-receipt-dir",
       receiptDir,
+      "--base",
+      repo.base,
+      "--head",
+      "HEAD",
       "--",
       "scripts/check-changed.mts",
     ]);
@@ -1505,47 +1611,19 @@ describe("scripts/changed-lanes", () => {
 
   it("reuses only exact passed proof receipts for the same command family", () => {
     const receiptDir = makeTempRepoRoot(tempDirs, "changed-check-evidence-");
-    const command = {
-      name: "lint core changed file",
-      bin: "node",
-      args: [
-        "scripts/run-oxlint.mjs",
-        "--tsconfig",
-        "config/tsconfig/oxlint.core.json",
-        "src/agents/auth-profiles/usage.ts",
-      ],
-      env: { PATH: "/usr/bin", OPENCLAW_LOCAL_CHECK: "1" },
-    };
-    const context = {
-      base: "origin/main",
-      head: "HEAD",
-      changedPaths: ["src/agents/auth-profiles/usage.ts"],
-      planSummary: "core, coreTests",
-      cwd: repoRoot,
-    };
-    const wrapperProof = createWrapperProof({
-      tool: "tsgolint",
-      wrapper: "scripts/run-oxlint.mts",
-      argv: ["--tsconfig", "config/tsconfig/oxlint.core.json", "src/agents/auth-profiles/usage.ts"],
-      cwd: repoRoot,
+    const fixture = createStoredProof({
+      commandName: "typecheck core",
+      producerContents: "export const core = 100;\n",
+      producerPath: "src/core.ts",
     });
-    const expected = createCheckProofReceipt({
-      command,
-      context,
-      exitCode: 0,
-      expectedWrapperProof: wrapperProof,
-      wrapperProof: wrapperProof,
+    const expected = createExpectedProof({
+      currentPaths: ["src/core.ts"],
+      fixture,
     });
-    const stored = createCheckProofReceipt({
-      command,
-      context,
-      exitCode: 0,
-      expectedWrapperProof: wrapperProof,
-      wrapperProof,
-    });
+    const stored = fixture.receipt;
 
     expect(stored.requiredInputs.repo).not.toHaveProperty("worktreeRoot");
-    expect(stored.producer.worktreeRoot).toBe(repoRoot);
+    expect(stored.producer.worktreeRoot).toBe(fixture.dir);
     expect(isReusableCheckProofReceipt(stored, expected)).toBe(true);
     writeCheckProofReceipt(receiptDir, stored);
     expect(evaluateReusableReceipt(receiptDir, expected)).toEqual(
@@ -1558,7 +1636,7 @@ describe("scripts/changed-lanes", () => {
       isReusableCheckProofReceipt(
         {
           ...stored,
-          commandFamily: "tsgo",
+          commandFamily: "tsgolint",
         },
         expected,
       ),
@@ -1573,6 +1651,61 @@ describe("scripts/changed-lanes", () => {
         expected,
       ),
     ).toBe(false);
+  });
+
+  it("fails exact-target proof reuse on dirty or untracked worktree state outside changed paths", () => {
+    const untracked = createStoredProof({
+      commandName: "typecheck core",
+      producerContents: "export const core = 101;\n",
+      producerPath: "src/core.ts",
+    });
+    const untrackedExpected = createExpectedProof({
+      currentPaths: ["src/core.ts"],
+      fixture: untracked,
+    });
+    writeRepoFile(untracked.dir, "docs/outside-current-paths.md", "dirty\n");
+    expect(evaluateReusableReceipt(untracked.receiptDir, untrackedExpected)).toEqual(
+      expect.objectContaining({
+        reusable: false,
+        reason: "current worktree has dirty or untracked files",
+      }),
+    );
+
+    const tracked = createStoredProof({
+      commandName: "typecheck core",
+      producerContents: "export const core = 102;\n",
+      producerPath: "src/core.ts",
+    });
+    const trackedExpected = createExpectedProof({
+      currentPaths: ["src/core.ts"],
+      fixture: tracked,
+    });
+    writeRepoFile(tracked.dir, "package.json", `${prettyJson({ name: "proof-repo-dirty" })}`);
+    expect(evaluateReusableReceipt(tracked.receiptDir, trackedExpected)).toEqual(
+      expect.objectContaining({
+        reusable: false,
+        reason: "current worktree has dirty or untracked files",
+      }),
+    );
+
+    const artifact = createStoredProof({
+      commandName: "typecheck core",
+      producerContents: "export const core = 103;\n",
+      producerPath: "src/core.ts",
+    });
+    const artifactReceiptDir = path.join(artifact.dir, ".artifacts/check-changed-receipts");
+    writeCheckProofReceipt(artifactReceiptDir, artifact.receipt);
+    expect(
+      evaluateReusableReceipt(
+        artifactReceiptDir,
+        createExpectedProof({ currentPaths: ["src/core.ts"], fixture: artifact }),
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        reusable: true,
+        reason: "exact-target evidence reuse",
+      }),
+    );
   });
 
   it("round-trips bounded remote proof bundles without letting failed writes overwrite PASS", () => {
@@ -1627,6 +1760,36 @@ describe("scripts/changed-lanes", () => {
     );
   });
 
+  it("fails closed for concurrent or stale receipt-store locks without clobbering PASS", () => {
+    const fixture = createStoredProof({
+      commandName: "typecheck core",
+      producerContents: "export const core = 211;\n",
+      producerPath: "src/core.ts",
+    });
+    const lockedDir = makeTempRepoRoot(tempDirs, "changed-check-locked-receipts-");
+    writeFileSync(path.join(lockedDir, ".install.lock"), "stale\n", "utf8");
+
+    expect(writeCheckProofReceipt(lockedDir, fixture.receipt)).toEqual({
+      installed: false,
+      reason: "receipt store busy",
+    });
+    expect(existsSync(path.join(lockedDir, `${fixture.receipt.fingerprint}.json`))).toBe(false);
+
+    unlinkSync(path.join(lockedDir, ".install.lock"));
+    expect(writeCheckProofReceipt(lockedDir, fixture.receipt)).toEqual({
+      installed: true,
+      reason: "installed reusable receipt",
+    });
+    writeFileSync(path.join(lockedDir, ".install.lock"), "concurrent\n", "utf8");
+    expect(writeCheckProofReceipt(lockedDir, cloneJson(fixture.receipt))).toEqual({
+      installed: false,
+      reason: "receipt store busy",
+    });
+    expect(
+      JSON.parse(readFileSync(path.join(lockedDir, `${fixture.receipt.fingerprint}.json`), "utf8")),
+    ).toEqual(expect.objectContaining({ status: "passed", ranTool: true }));
+  });
+
   it("fails closed for malformed remote bundles and unsafe Crabbox artifact archives", () => {
     const fixture = createStoredProof({
       commandName: "typecheck core",
@@ -1679,6 +1842,28 @@ describe("scripts/changed-lanes", () => {
     expect(() =>
       readCheckProofReceiptBundleFromArtifactTarball(symlinkTarball, exportPath),
     ).toThrow(/regular file/u);
+
+    const hardlinkTarball = path.join(artifactRoot, "hardlink.tgz");
+    writeSingleEntryTarGz(hardlinkTarball, {
+      name: exportPath,
+      typeflag: "1",
+      linkname: "real.json",
+    });
+    expect(() =>
+      readCheckProofReceiptBundleFromArtifactTarball(hardlinkTarball, exportPath),
+    ).toThrow(/regular file/u);
+
+    const fifoTarball = path.join(artifactRoot, "fifo.tgz");
+    writeSingleEntryTarGz(fifoTarball, { name: exportPath, typeflag: "6" });
+    expect(() => readCheckProofReceiptBundleFromArtifactTarball(fifoTarball, exportPath)).toThrow(
+      /regular file/u,
+    );
+
+    const oversizedTarball = path.join(artifactRoot, "oversized.tgz");
+    writeFileSync(oversizedTarball, Buffer.alloc(1024 * 1024 + 1));
+    expect(() =>
+      readCheckProofReceiptBundleFromArtifactTarball(oversizedTarball, exportPath),
+    ).toThrow(/missing or oversized/u);
   });
 
   it("resolves the exact Blacksmith artifact tarball from final timing JSON", () => {
@@ -1734,6 +1919,51 @@ describe("scripts/changed-lanes", () => {
         root,
       ),
     ).toThrow(/did not report success/u);
+  });
+
+  it("continues descendant receipt scans after stale or malformed earlier candidates", () => {
+    const fixture = createStoredProof({
+      commandName: "typecheck core",
+      producerContents: "export const core = 201;\n",
+      producerPath: "src/core.ts",
+    });
+    writeRepoFile(fixture.dir, "docs/current.md", "current\n");
+    commitAll(fixture.dir, "current descendant");
+    const expected = createExpectedProof({
+      currentPaths: ["docs/current.md", "src/core.ts"],
+      fixture,
+    });
+    const stale = cloneJson(fixture.receipt);
+    stale.requiredInputs.git.currentHead = "f".repeat(40);
+    writeFileSync(path.join(fixture.receiptDir, `${"0".repeat(64)}.json`), prettyJson(stale));
+    writeFileSync(path.join(fixture.receiptDir, `${"1".repeat(64)}.json`), "{", "utf8");
+
+    expect(
+      evaluateReusableReceipt(
+        fixture.receiptDir,
+        expected,
+        createDescendantOptionsForTest(fixture.dir),
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        reusable: true,
+        reason: "descendant-safe evidence reuse",
+        path: path.join(fixture.receiptDir, `${fixture.receipt.fingerprint}.json`),
+      }),
+    );
+
+    const overLimitDir = makeTempRepoRoot(tempDirs, "changed-check-overlimit-receipts-");
+    for (let index = 0; index < 513; index += 1) {
+      writeFileSync(path.join(overLimitDir, `${index.toString(16).padStart(64, "0")}.json`), "{}");
+    }
+    expect(
+      evaluateReusableReceipt(overLimitDir, expected, createDescendantOptionsForTest(fixture.dir)),
+    ).toEqual(
+      expect.objectContaining({
+        reusable: false,
+        reason: "too many changed-check evidence receipts to scan",
+      }),
+    );
   });
 
   it("reuses ancestor proof when descendant commits are docs-only or release metadata only", () => {
@@ -2230,37 +2460,14 @@ describe("scripts/changed-lanes", () => {
 
   it("rejects malformed, partial, and old-schema changed-check evidence receipts", () => {
     const receiptDir = makeTempRepoRoot(tempDirs, "changed-check-bad-evidence-");
-    const command = {
-      name: "lint scripts changed file",
-      bin: "node",
-      args: [
-        "scripts/run-oxlint.mjs",
-        "--tsconfig",
-        "config/tsconfig/oxlint.scripts.json",
-        "scripts/check-changed.mts",
-      ],
-      env: { PATH: "/usr/bin" },
-    };
-    const context = {
-      base: "origin/main",
-      head: "HEAD",
-      changedPaths: ["scripts/check-changed.mts"],
-      planSummary: "scripts",
-      planCommands: [command],
-      cwd: repoRoot,
-    };
-    const wrapperProof = createWrapperProof({
-      tool: "tsgolint",
-      wrapper: "scripts/run-oxlint.mts",
-      argv: ["--tsconfig", "config/tsconfig/oxlint.scripts.json", "scripts/check-changed.mts"],
-      cwd: repoRoot,
+    const fixture = createStoredProof({
+      commandName: "typecheck core",
+      producerContents: "export const core = 301;\n",
+      producerPath: "src/core.ts",
     });
-    const expected = createCheckProofReceipt({
-      command,
-      context,
-      exitCode: 0,
-      expectedWrapperProof: wrapperProof,
-      wrapperProof,
+    const expected = createExpectedProof({
+      currentPaths: ["src/core.ts"],
+      fixture,
     });
     const receiptPath = path.join(receiptDir, `${expected.fingerprint}.json`);
 
@@ -2303,12 +2510,13 @@ describe("scripts/changed-lanes", () => {
 
   it("keeps tsgo evidence separate from tsgolint evidence", () => {
     const receiptDir = makeTempRepoRoot(tempDirs, "changed-check-family-");
+    const repo = createProofRepo("changed-check-family-repo-");
     const context = {
-      base: "origin/main",
+      base: repo.base,
       head: "HEAD",
       changedPaths: ["scripts/check-changed.mts"],
       planSummary: "scripts",
-      cwd: repoRoot,
+      cwd: repo.dir,
     };
     const tsgolintCommand = {
       name: "lint scripts changed file",
@@ -2325,7 +2533,7 @@ describe("scripts/changed-lanes", () => {
       tool: "tsgolint",
       wrapper: "scripts/run-oxlint.mts",
       argv: ["--tsconfig", "config/tsconfig/oxlint.scripts.json", "scripts/check-changed.mts"],
-      cwd: repoRoot,
+      cwd: repo.dir,
     });
     const expectedTsgolint = createCheckProofReceipt({
       command: tsgolintCommand,
@@ -2338,7 +2546,7 @@ describe("scripts/changed-lanes", () => {
       tool: "tsgo",
       wrapper: "scripts/run-tsgo.mts",
       argv: ["-p", "scripts/tsconfig.json", "--noEmit"],
-      cwd: repoRoot,
+      cwd: repo.dir,
     });
     const storedTsgo = createCheckProofReceipt({
       command: {
