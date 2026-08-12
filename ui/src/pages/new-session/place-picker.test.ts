@@ -67,6 +67,7 @@ function placeParams(overrides: Partial<PlaceSelectParams> = {}): PlaceSelectPar
     onBrowserNavigate: () => undefined,
     onBrowserBack: () => undefined,
     onRegisterProject: () => undefined,
+    onConnectMachine: () => undefined,
     onClose: () => undefined,
     onToggleWorktree: () => undefined,
     onBaseRefInput: () => undefined,
@@ -200,6 +201,21 @@ describe("project picker", () => {
 });
 
 describe("Where picker", () => {
+  it("offers machine connection only to admins", () => {
+    const onConnectMachine = vi.fn();
+    const container = document.createElement("div");
+
+    render(renderPlaceSelect(placeParams({ isAdmin: true, onConnectMachine })), container);
+
+    const connect = container.querySelector<HTMLButtonElement>('[data-value="connect-machine"]');
+    expect(connect?.textContent?.trim()).toBe("Connect a machine…");
+    connect?.click();
+    expect(onConnectMachine).toHaveBeenCalledOnce();
+
+    render(renderPlaceSelect(placeParams({ isAdmin: false, onConnectMachine })), container);
+    expect(container.querySelector('[data-value="connect-machine"]')).toBeNull();
+  });
+
   it("uses node presence until a non-empty authoritative environment catalog arrives", () => {
     const execNodes = [
       {
