@@ -556,15 +556,6 @@ export async function deliverAgentCommandResult(
       config: cfg,
     }) ??
     resolveDefaultAgentId(cfg);
-  // Project the active agent's configured identity (name/emoji/avatar) into the
-  // durable batch so channels that honor per-message authorship (e.g. Slack
-  // `username`/`icon_emoji` with `chat:write.customize`) render it. Without this
-  // the agent-RPC final-delivery path reaches shared outbound delivery with no
-  // identity metadata, so every message posts under the channel's default bot
-  // identity regardless of config. See #121513.
-  const deliveryIdentity = deliveryAgentId
-    ? resolveAgentOutboundIdentity(cfg, deliveryAgentId)
-    : undefined;
   const deliver = opts.deliver === true;
   const bestEffortDeliver = opts.bestEffortDeliver === true;
   const turnSourceChannel = opts.runContext?.messageChannel ?? opts.messageChannel;
@@ -937,6 +928,11 @@ export async function deliverAgentCommandResult(
   if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
     if (deliveryTarget && !deliveryStatus) {
       params.assertDeliveryCurrent?.();
+      // Resolve identity here, only on the send path, so non-delivering and
+      // preflight-failed branches never touch the identity/avatar filesystem.
+      const deliveryIdentity = deliveryAgentId
+        ? resolveAgentOutboundIdentity(cfg, deliveryAgentId)
+        : undefined;
       const restartAbort = createRestartOnlyAbortSignal(opts.abortSignal);
       let send: DurableSendResult;
       try {
