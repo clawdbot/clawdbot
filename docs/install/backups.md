@@ -77,11 +77,18 @@ below cover them.
 ## Schedule backups
 
 The recommended schedule is one Gateway-owned automation. This example backs
-up every registered database daily and pushes the current branch to `origin`:
+up every registered database daily and pushes the current branch to `origin`.
+Pushing requires the repository to have an `origin` remote first, so
+initialize it once before enabling a pushed schedule:
 
 ```bash
+openclaw backup git init --repository ~/Backups/openclaw-git --remote git@github.com:you/openclaw-backups.git
 openclaw backup enable --repository ~/Backups/openclaw-git --every 24h --push
 ```
+
+`backup enable --push` refuses to schedule when no `origin` remote is
+configured, so a fresh install cannot silently create a schedule whose pushes
+always fail.
 
 Use `--global-only` or `--agent <id>` to narrow the scope. Add
 `--exclude-secrets` for a redacted Git history. Re-running the command updates

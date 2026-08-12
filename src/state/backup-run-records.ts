@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
@@ -7,6 +8,7 @@ import {
 } from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateDatabase } from "./openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 type BackupRunDatabase = Pick<OpenClawStateDatabase, "backup_runs">;
 
@@ -74,6 +76,12 @@ export function recordBackupRunOutcome(params: {
   createdAt?: number;
   env?: NodeJS.ProcessEnv;
 }): void {
+  // Best-effort log only: never bootstrap an absent state database to record an
+  // outcome, or a failed backup on a fresh host would create a blank DB that a
+  // retry then treats as real backup input.
+  if (!existsSync(resolveOpenClawStateSqlitePath(params.env ?? process.env))) {
+    return;
+  }
   const manifest = JSON.stringify({
     kind: params.kind,
     ...(boundedText(params.target, 512) ? { target: boundedText(params.target, 512) } : {}),

@@ -9,7 +9,10 @@ import {
 } from "../commands/backup-health.js";
 import { recordBackupRunOutcome } from "./backup-run-records.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
-import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  runOpenClawStateWriteTransaction,
+} from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 const roots: string[] = [];
@@ -17,10 +20,16 @@ const mocks = vi.hoisted(() => ({ note: vi.fn() }));
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 
-async function testEnv(): Promise<NodeJS.ProcessEnv> {
+async function testEnv(options?: { bootstrap?: boolean }): Promise<NodeJS.ProcessEnv> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-runs-test-"));
   roots.push(root);
-  return { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+  const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+  if (options?.bootstrap) {
+    // Recording is non-creating by contract, so the fixture bootstraps the
+    // state database the way a real gateway host already has.
+    runOpenClawStateWriteTransaction(() => undefined, { env });
+  }
+  return env;
 }
 
 afterEach(async () => {
@@ -34,7 +43,7 @@ afterEach(async () => {
 
 describe("backup run records", () => {
   it("records archive and Git outcomes and prunes the operational log to 200 rows", async () => {
-    const env = await testEnv();
+    const env = await testEnv({ bootstrap: true });
     recordBackupRunOutcome({
       env,
       archivePath: "/backups/archive.tar.gz",
@@ -105,6 +114,9 @@ describe("backup run records", () => {
       "Backups",
     );
 
+    // Recording is non-creating; bootstrap the state database before the
+    // recording phase the way a real gateway host already has.
+    runOpenClawStateWriteTransaction(() => undefined, { env });
     vi.spyOn(Date, "now").mockReturnValue(1_000);
     recordBackupRunOutcome({
       env,

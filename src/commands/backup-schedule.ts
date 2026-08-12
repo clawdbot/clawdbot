@@ -2,6 +2,7 @@ import path from "node:path";
 import { callGatewayFromCli, type GatewayRpcOpts } from "../cli/gateway-rpc.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import type { CronJob } from "../cron/types.js";
+import { executeGitCommand } from "../infra/git-exec.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
@@ -78,8 +79,18 @@ export async function backupEnableCommand(
     payload: { kind: "command" as const, argv: buildScheduledArgv(options, repositoryPath) },
     delivery: { mode: "none" as const },
   };
-  if (options.push && !options.excludeSecrets) {
-    runtime.error(GIT_BACKUP_PUSH_CREDENTIAL_WARNING);
+  if (options.push) {
+    // The unattended job cannot configure a remote; without this preflight the
+    // first scheduled run records a degraded push-failed backup instead.
+    const origin = await executeGitCommand(repositoryPath, ["remote", "get-url", "origin"]);
+    if (origin.code !== 0) {
+      throw new Error(
+        `--push requires an origin remote. Run: openclaw backup git init --repository ${shortenHomePath(repositoryPath)} --remote <url>`,
+      );
+    }
+    if (!options.excludeSecrets) {
+      runtime.error(GIT_BACKUP_PUSH_CREDENTIAL_WARNING);
+    }
   }
   const result = (await callGatewayFromCli("cron.add", options, spec)) as {
     created?: boolean;

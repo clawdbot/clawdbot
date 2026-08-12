@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const callGatewayFromCli = vi.hoisted(() => vi.fn());
@@ -13,9 +17,28 @@ import { backupDisableCommand, backupEnableCommand } from "./backup-schedule.js"
 
 const BACKUP_CRON_JOB_NAME = "openclaw-backup-scheduled";
 
+const roots: string[] = [];
+
+// enable --push preflights an origin remote, so push fixtures need a real repo.
+async function pushReadyRepository(): Promise<string> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-schedule-test-"));
+  roots.push(root);
+  execFileSync("git", ["-C", root, "init"], { stdio: "ignore" });
+  execFileSync("git", ["-C", root, "remote", "add", "origin", "git@example.invalid:backups.git"], {
+    stdio: "ignore",
+  });
+  return root;
+}
+
 describe("scheduled backups", () => {
   beforeEach(() => {
     callGatewayFromCli.mockReset();
+  });
+
+  afterEach(async () => {
+    await Promise.all(
+      roots.splice(0).map(async (root) => await fs.rm(root, { recursive: true, force: true })),
+    );
   });
 
   it("adds one isolated command job with the selected Git backup argv", async () => {
@@ -26,9 +49,10 @@ describe("scheduled backups", () => {
       throw new Error(`unexpected method ${method}`);
     });
     const runtime = createTestRuntime();
+    const repository = await pushReadyRepository();
     await expect(
       backupEnableCommand(runtime, {
-        repository: "/tmp/openclaw-backups",
+        repository,
         every: "6h",
         push: true,
         excludeSecrets: true,
@@ -50,7 +74,7 @@ describe("scheduled backups", () => {
             "git",
             "create",
             "--repository",
-            "/tmp/openclaw-backups",
+            repository,
             "--all",
             "--push",
             "--exclude-secrets",
@@ -108,10 +132,21 @@ describe("scheduled backups", () => {
     });
 
     await backupEnableCommand(runtime, {
-      repository: "/tmp/openclaw-backups",
+      repository: await pushReadyRepository(),
       push: true,
     });
 
     expect(callGatewayFromCli).toHaveBeenCalledOnce();
+  });
+
+  it("refuses a pushed schedule when the repository has no origin remote", async () => {
+    const runtime = createTestRuntime();
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-schedule-test-"));
+    roots.push(root);
+    execFileSync("git", ["-C", root, "init"], { stdio: "ignore" });
+    await expect(backupEnableCommand(runtime, { repository: root, push: true })).rejects.toThrow(
+      /--push requires an origin remote/,
+    );
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
   });
 });
