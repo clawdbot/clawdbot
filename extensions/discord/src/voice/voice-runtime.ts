@@ -1,7 +1,6 @@
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { APIVoiceState, Client } from "../internal/discord.js";
 import { formatMention } from "../mentions.js";
 import { resolveDiscordVoiceEnabled } from "./config.js";
@@ -86,16 +85,14 @@ export class DiscordVoiceManager {
   private readonly voiceSessions: DiscordVoiceSessions;
   private destroyed = false;
 
-  constructor(
-    private params: {
-      client: Client;
-      cfg: OpenClawConfig;
-      discordConfig: DiscordAccountConfig;
-      accountId: string;
-      runtime: RuntimeEnv;
-      botUserId?: string;
-    },
-  ) {
+  constructor(params: {
+    client: Client;
+    cfg: OpenClawConfig;
+    discordConfig: DiscordAccountConfig;
+    accountId: string;
+    runtime: RuntimeEnv;
+    botUserId?: string;
+  }) {
     this.botUserId = params.botUserId;
     this.voiceEnabled = resolveDiscordVoiceEnabled(params.discordConfig.voice);
     const voiceAccess = resolveDiscordVoiceAccess(params);

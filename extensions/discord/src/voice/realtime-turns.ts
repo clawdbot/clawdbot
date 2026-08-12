@@ -18,7 +18,6 @@ import {
   type DiscordRealtimeWakeNamePolicy,
 } from "./activation.js";
 import { convertDiscordPcm48kStereoToRealtimePcm24kMono } from "./audio.js";
-import { formatVoiceLogPreview } from "./log-preview.js";
 import type { DiscordRealtimePlaybackPort } from "./realtime-playback.js";
 import { mergeRealtimePartialTranscript } from "./realtime-transcript.js";
 import type {

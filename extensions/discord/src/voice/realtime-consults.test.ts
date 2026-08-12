@@ -119,7 +119,7 @@ defineDiscordVoiceTests(
       });
       const { bridgeParams, entry, manager } = await createJoinedAgentProxyFixture({ client });
       const realtime = entry.realtime as unknown as {
-        enqueueExactSpeechMessage: (text: string) => void;
+        playback: { enqueueExactSpeechMessage: (text: string) => void };
       };
       const connection = (entry as unknown as { connection: { destroy: ReturnType<typeof vi.fn> } })
         .connection;
@@ -129,14 +129,14 @@ defineDiscordVoiceTests(
 
       await manager.join({ guildId: "g2", channelId: "2001" });
       const siblingRealtime = getSessionEntry(manager, "g2").realtime as unknown as {
-        enqueueExactSpeechMessage: (text: string) => void;
+        playback: { enqueueExactSpeechMessage: (text: string) => void };
       };
 
-      realtime.enqueueExactSpeechMessage(accepted);
+      realtime.playback.enqueueExactSpeechMessage(accepted);
       expectUserMessageIncludes(accepted);
       expect(manager.status()).toHaveLength(2);
 
-      realtime.enqueueExactSpeechMessage("overflow");
+      realtime.playback.enqueueExactSpeechMessage("overflow");
 
       expect(manager.status()).toEqual([
         expect.objectContaining({ guildId: "g2", channelId: "2001" }),
@@ -145,12 +145,12 @@ defineDiscordVoiceTests(
       expect(realtimeSessionMock.close).toHaveBeenCalledOnce();
       expectUserMessageNotIncludes("overflow");
 
-      siblingRealtime.enqueueExactSpeechMessage("sibling remains usable");
+      siblingRealtime.playback.enqueueExactSpeechMessage("sibling remains usable");
       expectUserMessageIncludes("sibling remains usable");
 
       bridgeParams.onReady?.();
       bridgeParams.onEvent?.({ direction: "server", type: "response.done" });
-      realtime.enqueueExactSpeechMessage("late");
+      realtime.playback.enqueueExactSpeechMessage("late");
       entry.stop();
 
       expect(connection.destroy).toHaveBeenCalledOnce();
@@ -161,19 +161,19 @@ defineDiscordVoiceTests(
     it("terminates realtime voice when retained exact speech exceeds the message budget", async () => {
       const { entry, manager } = await createJoinedAgentProxyFixture();
       const realtime = entry.realtime as unknown as {
-        enqueueExactSpeechMessage: (text: string) => void;
+        playback: { enqueueExactSpeechMessage: (text: string) => void };
       };
       const connection = (entry as unknown as { connection: { destroy: ReturnType<typeof vi.fn> } })
         .connection;
 
       for (let index = 0; index < 32; index += 1) {
-        realtime.enqueueExactSpeechMessage(`answer-${index}`);
+        realtime.playback.enqueueExactSpeechMessage(`answer-${index}`);
       }
 
       expect(manager.status()).toHaveLength(1);
       expect(realtimeSessionMock.sendUserMessage).toHaveBeenCalledOnce();
 
-      realtime.enqueueExactSpeechMessage("answer-overflow");
+      realtime.playback.enqueueExactSpeechMessage("answer-overflow");
 
       expect(manager.status()).toStrictEqual([]);
       expect(connection.destroy).toHaveBeenCalledOnce();

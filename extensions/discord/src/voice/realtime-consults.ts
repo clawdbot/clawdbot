@@ -3,7 +3,6 @@ import {
   classifySkippableRealtimeVoiceConsultTranscript,
   controlRealtimeVoiceAgentRun,
   createRealtimeVoiceAgentTalkbackQueue,
-  matchRealtimeVoiceConsultQuestions,
   parseRealtimeVoiceAgentControlToolArgs,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
@@ -30,8 +29,6 @@ import { logVoiceVerbose } from "./session.js";
 const logger = createSubsystemLogger("discord/voice");
 const DISCORD_REALTIME_TALKBACK_DEBOUNCE_MS = 350;
 const DISCORD_REALTIME_FALLBACK_TEXT = "I hit an error while checking that. Please try again.";
-const DISCORD_REALTIME_RECENT_AGENT_PROXY_CONSULT_LIMIT = 16;
-const DISCORD_REALTIME_RECENT_AGENT_PROXY_CONSULT_TTL_MS = 15_000;
 const DISCORD_REALTIME_FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
 const DISCORD_REALTIME_FORCED_CONSULT_REASON =
   "provider_final_transcript_without_openclaw_agent_consult";

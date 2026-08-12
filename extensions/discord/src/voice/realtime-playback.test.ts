@@ -424,8 +424,10 @@ defineDiscordVoiceTests(
         bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
       }
 
-      const realtime = entry.realtime as unknown as { outputStream?: PassThrough };
-      const stream = realtime.outputStream;
+      const realtime = entry.realtime as unknown as {
+        playback: { currentOutputStream: () => PassThrough | null };
+      };
+      const stream = realtime.playback.currentOutputStream();
       if (!stream) {
         throw new Error("expected realtime output stream");
       }
@@ -473,8 +475,10 @@ defineDiscordVoiceTests(
           bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
         }
 
-        const realtime = entry.realtime as unknown as { outputStream?: PassThrough };
-        const stream = realtime.outputStream;
+        const realtime = entry.realtime as unknown as {
+          playback: { currentOutputStream: () => PassThrough | null };
+        };
+        const stream = realtime.playback.currentOutputStream();
         if (!stream) {
           throw new Error("expected realtime output stream");
         }

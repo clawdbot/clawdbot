@@ -4,7 +4,6 @@ import {
   createRealtimeVoiceSessionHarness,
   matchRealtimeVoiceConsultQuestions,
   REALTIME_VOICE_AGENT_CONTROL_TOOL,
-  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   resolveConfiguredRealtimeVoiceProvider,
   resolveRealtimeVoiceAgentConsultToolPolicy,
@@ -472,14 +471,6 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       return false;
     }
     return this.playback.isBargeInEnabled();
-  }
-
-  private get outputStream() {
-    return this.playback.currentOutputStream();
-  }
-
-  private enqueueExactSpeechMessage(text: string): void {
-    this.playback.enqueueExactSpeechMessage(text);
   }
 
   private get realtimeConfig(): DiscordRealtimeVoiceConfig {
