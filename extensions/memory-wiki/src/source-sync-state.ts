@@ -9,6 +9,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import { createWikiPageFilename, extractHumanNotesBlock } from "./markdown.js";
+import { isPathWithinOrEqual } from "./source-path-shared.js";
 
 export type MemoryWikiImportedSourceGroup = "bridge" | "unsafe-local";
 
@@ -52,6 +53,22 @@ type MemoryWikiSourceSyncStateRecord = MemoryWikiImportedSourceStateEntry & {
 
 export const MEMORY_WIKI_SOURCE_SYNC_STATE_NAMESPACE = "source-sync";
 export const MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES = 20_000;
+
+// Ownership rows shipped in v2026.7.1 keyed only by canonical source path, so
+// bridge and unsafe-local imports of one physical file overwrote each other's
+// row and orphaned the losing page (#118370). Group-scoped keys keep both
+// bindings owned; unsafe-local additionally binds the configured root so
+// moving a root re-keys instead of orphaning the previous page.
+export function scopeImportedSourceSyncKey(
+  group: MemoryWikiImportedSourceGroup,
+  bindingKey: string,
+): string {
+  return `${group}:${bindingKey}`;
+}
+
+function isScopedImportedSourceSyncKey(syncKey: string): boolean {
+  return syncKey.startsWith("bridge:") || syncKey.startsWith("unsafe-local:");
+}
 const MAX_MEMORY_WIKI_NOTES_RECOVERY_BYTES = 16 * 1024 * 1024;
 const MAX_MEMORY_WIKI_SOURCE_PAGE_HEADER_BYTES = 64 * 1024;
 const MAX_MEMORY_WIKI_SOURCE_PAGE_SCAN_BYTES = 32 * 1024 * 1024;
@@ -179,7 +196,15 @@ export function createMemoryWikiSourceSyncStateStore(
       const entries: MemoryWikiImportedSourceState["entries"] = {};
       for (const row of await openStore().entries()) {
         const value = row.value;
-        if (value.vaultRootKey !== vaultRootKey || typeof value.syncKey !== "string") {
+        // Legacy unscoped rows stay invisible to runtime: the doctor migration
+        // memory-wiki-source-sync-group-scoped-keys owns their translation, and
+        // reading them here would let pruning delete pages that group-scoped
+        // rows already own.
+        if (
+          value.vaultRootKey !== vaultRootKey ||
+          typeof value.syncKey !== "string" ||
+          !isScopedImportedSourceSyncKey(value.syncKey)
+        ) {
           continue;
         }
         const normalized = normalizeSourceSyncState({
@@ -222,6 +247,14 @@ export function createMemoryWikiSourceSyncStateStore(
       );
       for (const row of await store.entries()) {
         if (row.value.vaultRootKey === vaultRootKey && !nextKeys.has(row.key)) {
+          // Legacy unscoped rows are owned by the group-scoped-keys doctor
+          // migration; a full write must never delete them out from under it.
+          if (
+            typeof row.value.syncKey === "string" &&
+            !isScopedImportedSourceSyncKey(row.value.syncKey)
+          ) {
+            continue;
+          }
           await store.delete(row.key);
         }
       }
@@ -534,4 +567,142 @@ export function setImportedSourceEntry(params: {
   const changes = sourceSyncStateChanges.get(params.state);
   changes?.deleteKeys.delete(params.syncKey);
   changes?.upsertKeys.add(params.syncKey);
+}
+
+type LegacyImportedSourceSyncRow = {
+  storeKey: string;
+  syncKey: string;
+  entry: MemoryWikiImportedSourceStateEntry;
+};
+
+async function listLegacyImportedSourceSyncRows(params: {
+  vaultRoot: string;
+  openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
+}): Promise<{ legacyRows: LegacyImportedSourceSyncRow[]; retainedKeys: string[] }> {
+  const raw = params.openKeyedStore<MemoryWikiSourceSyncStateRecord>({
+    namespace: MEMORY_WIKI_SOURCE_SYNC_STATE_NAMESPACE,
+    maxEntries: MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES,
+    overflowPolicy: "reject-new",
+  });
+  const vaultRootKey = resolveVaultRootKey(params.vaultRoot);
+  const legacyRows: LegacyImportedSourceSyncRow[] = [];
+  const retainedKeys: string[] = [];
+  for (const row of await raw.entries()) {
+    const value = row.value;
+    if (
+      value.vaultRootKey !== vaultRootKey ||
+      typeof value.syncKey !== "string" ||
+      isScopedImportedSourceSyncKey(value.syncKey)
+    ) {
+      continue;
+    }
+    const normalized = normalizeSourceSyncState({
+      version: 1,
+      entries: { [value.syncKey]: value },
+    });
+    const entry = normalized.entries[value.syncKey];
+    if (!entry) {
+      // Unknown shapes stay untouched: no runtime version can read them, and
+      // deleting them is a data call the operator should see in warnings first.
+      retainedKeys.push(value.syncKey);
+      continue;
+    }
+    legacyRows.push({ storeKey: row.key, syncKey: value.syncKey, entry });
+  }
+  return { legacyRows, retainedKeys };
+}
+
+export async function countLegacyImportedSourceSyncRows(params: {
+  vaultRoot: string;
+  openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
+}): Promise<number> {
+  const { legacyRows } = await listLegacyImportedSourceSyncRows(params);
+  return legacyRows.length;
+}
+
+export type LegacyImportedSourceSyncMigrationResult = {
+  translatedCount: number;
+  prunedCount: number;
+  retainedKeys: string[];
+};
+
+export function translateLegacyImportedSourceSyncKey(params: {
+  entry: MemoryWikiImportedSourceStateEntry;
+  syncKey: string;
+  unsafeLocalConfiguredRoots: readonly string[];
+}): string | undefined {
+  if (params.entry.group === "bridge") {
+    return scopeImportedSourceSyncKey("bridge", params.syncKey);
+  }
+  const root = params.unsafeLocalConfiguredRoots.find((candidate) =>
+    isPathWithinOrEqual(candidate, params.entry.sourcePath),
+  );
+  return root
+    ? scopeImportedSourceSyncKey("unsafe-local", `${root}\0${params.entry.sourcePath}`)
+    : undefined;
+}
+
+export async function migrateLegacyImportedSourceSyncKeys(params: {
+  vaultRoot: string;
+  openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
+  unsafeLocalConfiguredPaths: readonly string[];
+}): Promise<LegacyImportedSourceSyncMigrationResult> {
+  const raw = params.openKeyedStore<MemoryWikiSourceSyncStateRecord>({
+    namespace: MEMORY_WIKI_SOURCE_SYNC_STATE_NAMESPACE,
+    maxEntries: MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES,
+    overflowPolicy: "reject-new",
+  });
+  const vaultRootKey = resolveVaultRootKey(params.vaultRoot);
+  const { legacyRows, retainedKeys } = await listLegacyImportedSourceSyncRows(params);
+  const configuredRoots = params.unsafeLocalConfiguredPaths.map((configuredPath) =>
+    path.resolve(configuredPath),
+  );
+
+  let translatedCount = 0;
+  const staleRows: LegacyImportedSourceSyncRow[] = [];
+  for (const row of legacyRows) {
+    const nextSyncKey = translateLegacyImportedSourceSyncKey({
+      entry: row.entry,
+      syncKey: row.syncKey,
+      unsafeLocalConfiguredRoots: configuredRoots,
+    });
+    if (!nextSyncKey) {
+      // The source is no longer under any configured unsafe-local root: prune
+      // through the canonical salvage path instead of dropping the row silently.
+      staleRows.push(row);
+      continue;
+    }
+    const nextStoreKey = resolveStateEntryKey(vaultRootKey, nextSyncKey);
+    // Register the scoped replacement before deleting the legacy row so a crash
+    // mid-migration never loses ownership; reruns are idempotent.
+    if (!(await raw.lookup(nextStoreKey))) {
+      await raw.register(nextStoreKey, { ...row.entry, vaultRootKey, syncKey: nextSyncKey });
+    }
+    await raw.delete(row.storeKey);
+    translatedCount += 1;
+  }
+
+  let prunedCount = 0;
+  if (staleRows.length > 0) {
+    const store = createMemoryWikiSourceSyncStateStore(params.openKeyedStore);
+    const state = await readMemoryWikiSourceSyncState(params.vaultRoot, store);
+    for (const row of staleRows) {
+      state.entries[row.syncKey] = row.entry;
+    }
+    // Keep every live scoped row; only the injected stale legacy rows prune.
+    const activeKeys = new Set(
+      Object.keys(state.entries).filter((key) => isScopedImportedSourceSyncKey(key)),
+    );
+    for (const group of new Set(staleRows.map((row) => row.entry.group))) {
+      prunedCount += await pruneImportedSourceEntries({
+        vaultRoot: params.vaultRoot,
+        group,
+        activeKeys,
+        state,
+      });
+    }
+    await writeMemoryWikiSourceSyncState(params.vaultRoot, state, store);
+  }
+
+  return { translatedCount, prunedCount, retainedKeys };
 }

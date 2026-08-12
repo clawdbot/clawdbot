@@ -28,11 +28,14 @@ import {
   writeMemoryWikiImportRunRecord,
 } from "./src/import-runs-state.js";
 import {
+  countLegacyImportedSourceSyncRows,
   createMemoryWikiSourceSyncStateStore,
   MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES,
   MEMORY_WIKI_SOURCE_SYNC_STATE_NAMESPACE,
+  migrateLegacyImportedSourceSyncKeys,
   readLegacyMemoryWikiSourceSyncState,
   resolveMemoryWikiSourceSyncStatePath,
+  translateLegacyImportedSourceSyncKey,
   writeMemoryWikiSourceSyncState,
 } from "./src/source-sync-state.js";
 export { legacyConfigRules, normalizeCompatibilityConfig } from "./src/config-compat.js";
@@ -225,6 +228,12 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       const changes: string[] = [];
       const warnings: string[] = [];
       const store = createMemoryWikiSourceSyncStateStore(params.context.openPluginStateKeyedStore);
+      const resolved = resolveMemoryWikiConfig(readConfiguredPluginConfig(params.config), {
+        homedir: resolveHomeDir(params.env),
+      });
+      const unsafeLocalConfiguredRoots = resolved.unsafeLocal.paths.map((configuredPath) =>
+        path.resolve(configuredPath),
+      );
       for (const vaultRoot of resolveConfiguredVaultRoots({
         config: params.config,
         env: params.env,
@@ -239,8 +248,22 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           continue;
         }
         const existingState = await store.read(vaultRoot);
+        // Translate legacy unscoped keys into group-scoped keys on import.
+        // Entries whose unsafe-local root is no longer configured keep their
+        // legacy key and stay runtime-invisible until the group-scoped-keys
+        // migration prunes them through the canonical salvage path.
+        const translatedEntries = Object.fromEntries(
+          Object.entries(state.entries).map(([syncKey, entry]) => [
+            translateLegacyImportedSourceSyncKey({
+              entry,
+              syncKey,
+              unsafeLocalConfiguredRoots,
+            }) ?? syncKey,
+            entry,
+          ]),
+        );
         const mergedEntries = {
-          ...state.entries,
+          ...translatedEntries,
           ...existingState.entries,
         };
         const mergedCount = Object.keys(mergedEntries).length;
@@ -266,6 +289,56 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           changes,
           warnings,
         });
+      }
+      return { changes, warnings };
+    },
+  },
+  {
+    id: "memory-wiki-source-sync-group-scoped-keys",
+    label: "Memory Wiki source sync ownership keys",
+    async detectLegacyState(params) {
+      const previews: string[] = [];
+      for (const vaultRoot of resolveConfiguredVaultRoots({
+        config: params.config,
+        env: params.env,
+      })) {
+        const legacyCount = await countLegacyImportedSourceSyncRows({
+          vaultRoot,
+          openKeyedStore: params.context.openPluginStateKeyedStore,
+        });
+        if (legacyCount > 0) {
+          previews.push(
+            `- Memory Wiki source sync ownership: ${legacyCount} legacy entries for ${vaultRoot} -> group-scoped keys`,
+          );
+        }
+      }
+      return previews.length > 0 ? { preview: previews } : null;
+    },
+    async migrateLegacyState(params) {
+      const changes: string[] = [];
+      const warnings: string[] = [];
+      const resolved = resolveMemoryWikiConfig(readConfiguredPluginConfig(params.config), {
+        homedir: resolveHomeDir(params.env),
+      });
+      for (const vaultRoot of resolveConfiguredVaultRoots({
+        config: params.config,
+        env: params.env,
+      })) {
+        const result = await migrateLegacyImportedSourceSyncKeys({
+          vaultRoot,
+          openKeyedStore: params.context.openPluginStateKeyedStore,
+          unsafeLocalConfiguredPaths: resolved.unsafeLocal.paths,
+        });
+        if (result.translatedCount > 0 || result.prunedCount > 0) {
+          changes.push(
+            `Migrated Memory Wiki source sync ownership -> group-scoped keys (${result.translatedCount} translated, ${result.prunedCount} stale pruned)`,
+          );
+        }
+        for (const retainedKey of result.retainedKeys) {
+          warnings.push(
+            `Retained unrecognized Memory Wiki source sync row for ${vaultRoot}: ${retainedKey}`,
+          );
+        }
       }
       return { changes, warnings };
     },

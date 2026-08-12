@@ -13,8 +13,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   assertMemoryWikiSourceSyncStateCapacity,
   configureMemoryWikiSourceSyncStateStore,
+  countLegacyImportedSourceSyncRows,
   createMemoryWikiSourceSyncStateStore,
   MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES,
+  migrateLegacyImportedSourceSyncKeys,
   pruneImportedSourceEntries,
   readLegacyMemoryWikiSourceSyncState,
   readMemoryWikiSourceSyncState,
@@ -26,10 +28,13 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const tempDirs = createMemoryWikiTestHarness();
 
+function openKeyedStoreForEnv(env: NodeJS.ProcessEnv) {
+  return <T>(options: OpenKeyedStoreOptions) =>
+    createPluginStateKeyedStoreForTests<T>("memory-wiki", { ...options, env });
+}
+
 function openStore(env: NodeJS.ProcessEnv) {
-  return createMemoryWikiSourceSyncStateStore(<T>(options: OpenKeyedStoreOptions) =>
-    createPluginStateKeyedStoreForTests<T>("memory-wiki", { ...options, env }),
-  );
+  return createMemoryWikiSourceSyncStateStore(openKeyedStoreForEnv(env));
 }
 
 function createImportedSourceState(pagePath: string, group: "bridge" | "unsafe-local" = "bridge") {
@@ -132,7 +137,7 @@ describe("memory wiki source sync state", () => {
       {
         version: 1,
         entries: {
-          alpha: {
+          "bridge:alpha": {
             group: "bridge",
             pagePath: "sources/alpha.md",
             sourcePath: "/tmp/source.md",
@@ -148,7 +153,7 @@ describe("memory wiki source sync state", () => {
     await expect(readMemoryWikiSourceSyncState(vaultRoot, store)).resolves.toEqual({
       version: 1,
       entries: {
-        alpha: {
+        "bridge:alpha": {
           group: "bridge",
           pagePath: "sources/alpha.md",
           sourcePath: "/tmp/source.md",
@@ -168,7 +173,7 @@ describe("memory wiki source sync state", () => {
     const counting = createCountingStore();
     const entries = Object.fromEntries(
       Array.from({ length: 1_914 }, (_, index) => [
-        `source-${index}`,
+        `bridge:source-${index}`,
         {
           group: "bridge" as const,
           pagePath: `sources/source-${index}.md`,
@@ -187,11 +192,11 @@ describe("memory wiki source sync state", () => {
     await writeMemoryWikiSourceSyncState(vaultRoot, state, counting.store);
     expect(counting.calls).toEqual({ register: 0, delete: 0, entries: 0 });
 
-    const changed = state.entries["source-0"];
+    const changed = state.entries["bridge:source-0"];
     expect(changed).toBeDefined();
     setImportedSourceEntry({
       state,
-      syncKey: "source-0",
+      syncKey: "bridge:source-0",
       entry: { ...changed!, sourceSize: changed!.sourceSize + 1 },
     });
     await writeMemoryWikiSourceSyncState(vaultRoot, state, counting.store);
@@ -201,15 +206,15 @@ describe("memory wiki source sync state", () => {
     await pruneImportedSourceEntries({
       vaultRoot,
       group: "bridge",
-      activeKeys: new Set(Object.keys(state.entries).filter((key) => key !== "source-1")),
+      activeKeys: new Set(Object.keys(state.entries).filter((key) => key !== "bridge:source-1")),
       state,
     });
     await writeMemoryWikiSourceSyncState(vaultRoot, state, counting.store);
     expect(counting.calls).toEqual({ register: 0, delete: 1, entries: 0 });
 
     const persisted = await readMemoryWikiSourceSyncState(vaultRoot, counting.store);
-    expect(persisted.entries["source-0"]?.sourceSize).toBe(1);
-    expect(persisted.entries["source-1"]).toBeUndefined();
+    expect(persisted.entries["bridge:source-0"]?.sourceSize).toBe(1);
+    expect(persisted.entries["bridge:source-1"]).toBeUndefined();
     expect(Object.keys(persisted.entries)).toHaveLength(1_913);
   });
 
@@ -228,7 +233,7 @@ describe("memory wiki source sync state", () => {
       vaultRoot,
       {
         version: 1,
-        entries: { "source-0": makeEntry(0), "source-1": makeEntry(1) },
+        entries: { "bridge:source-0": makeEntry(0), "bridge:source-1": makeEntry(1) },
       },
       counting.store,
     );
@@ -237,29 +242,29 @@ describe("memory wiki source sync state", () => {
     await pruneImportedSourceEntries({
       vaultRoot,
       group: "bridge",
-      activeKeys: new Set(["source-0"]),
+      activeKeys: new Set(["bridge:source-0"]),
       state: tracked,
     });
     setImportedSourceEntry({
       state: tracked,
-      syncKey: "source-2",
+      syncKey: "bridge:source-2",
       entry: makeEntry(2),
     });
     await writeMemoryWikiSourceSyncState(vaultRoot, tracked, counting.store);
     await expect(readMemoryWikiSourceSyncState(vaultRoot, counting.store)).resolves.toMatchObject({
-      entries: { "source-0": makeEntry(0), "source-2": makeEntry(2) },
+      entries: { "bridge:source-0": makeEntry(0), "bridge:source-2": makeEntry(2) },
     });
 
     await writeMemoryWikiSourceSyncState(
       vaultRoot,
       {
         version: 1,
-        entries: { "source-0": makeEntry(0), "source-3": makeEntry(3) },
+        entries: { "bridge:source-0": makeEntry(0), "bridge:source-3": makeEntry(3) },
       },
       counting.store,
     );
     await expect(readMemoryWikiSourceSyncState(vaultRoot, counting.store)).resolves.toMatchObject({
-      entries: { "source-0": makeEntry(0), "source-3": makeEntry(3) },
+      entries: { "bridge:source-0": makeEntry(0), "bridge:source-3": makeEntry(3) },
     });
   });
 
@@ -303,13 +308,189 @@ describe("memory wiki source sync state", () => {
     });
   });
 
+  it("keeps legacy unscoped rows invisible to runtime reads and full writes", async () => {
+    const stateDir = await tempDirs.createTempDir("memory-wiki-source-sync-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const vaultRoot = path.join(stateDir, "vault");
+    const store = openStore(env);
+    const legacyEntry = {
+      group: "bridge" as const,
+      pagePath: "sources/legacy.md",
+      sourcePath: "/tmp/legacy.md",
+      sourceUpdatedAtMs: 1,
+      sourceSize: 2,
+      renderFingerprint: "fp",
+    };
+    await writeMemoryWikiSourceSyncState(
+      vaultRoot,
+      { version: 1, entries: { "/tmp/legacy.md": legacyEntry } },
+      store,
+    );
+
+    await expect(readMemoryWikiSourceSyncState(vaultRoot, store)).resolves.toEqual({
+      version: 1,
+      entries: {},
+    });
+    await expect(
+      countLegacyImportedSourceSyncRows({ vaultRoot, openKeyedStore: openKeyedStoreForEnv(env) }),
+    ).resolves.toBe(1);
+
+    // A full write of scoped state must not delete the legacy row either.
+    await writeMemoryWikiSourceSyncState(
+      vaultRoot,
+      { version: 1, entries: { "bridge:/tmp/other.md": { ...legacyEntry } } },
+      store,
+    );
+    await expect(
+      countLegacyImportedSourceSyncRows({ vaultRoot, openKeyedStore: openKeyedStoreForEnv(env) }),
+    ).resolves.toBe(1);
+  });
+
+  it("migrates legacy rows to group-scoped keys idempotently", async () => {
+    const stateDir = await tempDirs.createTempDir("memory-wiki-source-sync-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const vaultRoot = path.join(stateDir, "vault");
+    const store = openStore(env);
+    const sourceRoot = path.join(stateDir, "private");
+    const sourceFile = path.join(sourceRoot, "MEMORY.md");
+    await fs.mkdir(sourceRoot, { recursive: true });
+    await fs.writeFile(sourceFile, "# durable\n", "utf8");
+    const bridgeEntry = {
+      group: "bridge" as const,
+      pagePath: "sources/bridge-legacy.md",
+      sourcePath: "/tmp/legacy-bridge.md",
+      sourceUpdatedAtMs: 1,
+      sourceSize: 2,
+      renderFingerprint: "fp-a",
+    };
+    const localEntry = {
+      group: "unsafe-local" as const,
+      pagePath: "sources/local-legacy.md",
+      sourcePath: sourceFile,
+      sourceUpdatedAtMs: 3,
+      sourceSize: 4,
+      renderFingerprint: "fp-b",
+    };
+    const localKey = localEntry.sourcePath;
+    await writeMemoryWikiSourceSyncState(
+      vaultRoot,
+      {
+        version: 1,
+        entries: { "/tmp/legacy-bridge.md": bridgeEntry, [localKey]: localEntry },
+      },
+      store,
+    );
+
+    const migrate = () =>
+      migrateLegacyImportedSourceSyncKeys({
+        vaultRoot,
+        openKeyedStore: openKeyedStoreForEnv(env),
+        unsafeLocalConfiguredPaths: [sourceRoot],
+      });
+    await expect(migrate()).resolves.toEqual({
+      translatedCount: 2,
+      prunedCount: 0,
+      retainedKeys: [],
+    });
+
+    const state = await readMemoryWikiSourceSyncState(vaultRoot, store);
+    const rootKey = path.resolve(sourceRoot);
+    expect(Object.keys(state.entries).toSorted()).toEqual(
+      [`bridge:/tmp/legacy-bridge.md`, `unsafe-local:${rootKey}\0${localKey}`].toSorted(),
+    );
+    expect(state.entries[`unsafe-local:${rootKey}\0${localKey}`]).toMatchObject({
+      pagePath: "sources/local-legacy.md",
+    });
+
+    // Reruns are no-ops once every row is scoped.
+    await expect(migrate()).resolves.toEqual({
+      translatedCount: 0,
+      prunedCount: 0,
+      retainedKeys: [],
+    });
+  });
+
+  it("prunes stale legacy unsafe-local rows through the canonical salvage path", async () => {
+    const stateDir = await tempDirs.createTempDir("memory-wiki-source-sync-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const vaultRoot = path.join(stateDir, "vault");
+    const store = openStore(env);
+    const pagePath = "sources/orphan.md";
+    const pageAbsPath = path.join(vaultRoot, pagePath);
+    await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
+    await fs.writeFile(
+      pageAbsPath,
+      [
+        "# Unsafe Local Import: orphan",
+        "",
+        "## Content",
+        "```",
+        "generated",
+        "```",
+        "",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        "durable handwritten note",
+        "<!-- openclaw:human:end -->",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await writeMemoryWikiSourceSyncState(
+      vaultRoot,
+      {
+        version: 1,
+        entries: {
+          "/tmp/gone/source.md": {
+            group: "unsafe-local" as const,
+            pagePath,
+            sourcePath: "/tmp/gone/source.md",
+            sourceUpdatedAtMs: 1,
+            sourceSize: 2,
+            renderFingerprint: "fp",
+          },
+        },
+      },
+      store,
+    );
+
+    await expect(
+      migrateLegacyImportedSourceSyncKeys({
+        vaultRoot,
+        openKeyedStore: openKeyedStoreForEnv(env),
+        unsafeLocalConfiguredPaths: [],
+      }),
+    ).resolves.toEqual({ translatedCount: 0, prunedCount: 1, retainedKeys: [] });
+
+    // The orphaned page is removed, its Notes salvaged, and the row deleted.
+    await expect(fs.access(pageAbsPath)).rejects.toMatchObject({ code: "ENOENT" });
+    const salvageDir = path.join(vaultRoot, ".salvage");
+    const salvageFiles = await fs.readdir(salvageDir);
+    expect(salvageFiles).toHaveLength(1);
+    await expect(
+      fs.readFile(path.join(salvageDir, salvageFiles[0] ?? ""), "utf8"),
+    ).resolves.toContain("durable handwritten note");
+    await expect(
+      countLegacyImportedSourceSyncRows({ vaultRoot, openKeyedStore: openKeyedStoreForEnv(env) }),
+    ).resolves.toBe(0);
+
+    // The migration converges: a rerun finds no legacy rows and does nothing.
+    await expect(
+      migrateLegacyImportedSourceSyncKeys({
+        vaultRoot,
+        openKeyedStore: openKeyedStoreForEnv(env),
+        unsafeLocalConfiguredPaths: [],
+      }),
+    ).resolves.toEqual({ translatedCount: 0, prunedCount: 0, retainedKeys: [] });
+  });
+
   it("rejects writes beyond the source-sync state row cap", async () => {
     const stateDir = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const vaultRoot = path.join(stateDir, "vault");
     const store = openStore({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
     const entries = Object.fromEntries(
       Array.from({ length: MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES + 1 }, (_, index) => [
-        `source-${index}`,
+        `bridge:source-${index}`,
         {
           group: "bridge" as const,
           pagePath: `sources/source-${index}.md`,
@@ -830,7 +1011,7 @@ describe("memory wiki source sync state", () => {
       {
         version: 1 as const,
         entries: {
-          "sync-key": {
+          "bridge:sync-key": {
             group: "bridge" as const,
             pagePath: "sources/missing-vault.md",
             sourcePath: "/tmp/source.md",

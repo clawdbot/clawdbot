@@ -9,3 +9,11 @@ export async function resolveArtifactKey(absolutePath: string): Promise<string> 
     ? lowercasePreservingWhitespace(canonicalPath)
     : canonicalPath;
 }
+
+export function isPathWithinOrEqual(parentPath: string, candidatePath: string): boolean {
+  const relative = path.relative(parentPath, candidatePath);
+  return (
+    relative === "" ||
+    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+  );
+}

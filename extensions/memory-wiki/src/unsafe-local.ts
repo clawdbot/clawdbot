@@ -16,11 +16,11 @@ import {
   slugifyWikiSegment,
 } from "./markdown.js";
 import { writeImportedSourcePage } from "./source-page-shared.js";
-import { resolveArtifactKey } from "./source-path-shared.js";
 import {
   assertMemoryWikiSourceSyncStateCapacity,
   pruneImportedSourceEntries,
   readMemoryWikiSourceSyncState,
+  scopeImportedSourceSyncKey,
   writeMemoryWikiSourceSyncState,
 } from "./source-sync-state.js";
 import { initializeMemoryWikiVault } from "./vault.js";
@@ -85,7 +85,12 @@ async function collectUnsafeLocalArtifacts(
         const files = await listAllowedFilesRecursive(absoluteConfiguredPath);
         for (const absolutePath of files) {
           scopedArtifacts.push({
-            syncKey: await resolveArtifactKey(absolutePath),
+            // The binding mirrors page identity (configured root + raw source
+            // path) so every generated page keeps exactly one ownership row.
+            syncKey: scopeImportedSourceSyncKey(
+              "unsafe-local",
+              `${absoluteConfiguredPath}\0${absolutePath}`,
+            ),
             configuredPath: absoluteConfiguredPath,
             absolutePath,
             relativePath: path.relative(absoluteConfiguredPath, absolutePath).replace(/\\/g, "/"),
@@ -93,7 +98,10 @@ async function collectUnsafeLocalArtifacts(
         }
       } else if (stat.isFile()) {
         scopedArtifacts.push({
-          syncKey: await resolveArtifactKey(absoluteConfiguredPath),
+          syncKey: scopeImportedSourceSyncKey(
+            "unsafe-local",
+            `${absoluteConfiguredPath}\0${absoluteConfiguredPath}`,
+          ),
           configuredPath: absoluteConfiguredPath,
           absolutePath: absoluteConfiguredPath,
           relativePath: path.basename(absoluteConfiguredPath),

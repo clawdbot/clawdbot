@@ -229,7 +229,7 @@ describe("memory-wiki doctor source sync migration", () => {
     await expect(readMemoryWikiSourceSyncState(vaultRoot, store)).resolves.toEqual({
       version: 1,
       entries: {
-        alpha: {
+        "bridge:alpha": {
           group: "bridge",
           pagePath: "sources/alpha.md",
           sourcePath: "/tmp/alpha.md",
@@ -380,7 +380,7 @@ describe("memory-wiki doctor source sync migration", () => {
     await store.write(vaultRoot, {
       version: 1,
       entries: {
-        current: {
+        "bridge:current": {
           group: "bridge",
           pagePath: "sources/current.md",
           sourcePath: "/tmp/current.md",
@@ -405,7 +405,7 @@ describe("memory-wiki doctor source sync migration", () => {
     await expect(readMemoryWikiSourceSyncState(vaultRoot, store)).resolves.toEqual({
       version: 1,
       entries: {
-        stale: {
+        "bridge:stale": {
           group: "bridge",
           pagePath: "sources/stale.md",
           sourcePath: "/tmp/stale.md",
@@ -413,7 +413,7 @@ describe("memory-wiki doctor source sync migration", () => {
           sourceSize: 20,
           renderFingerprint: "stale",
         },
-        current: {
+        "bridge:current": {
           group: "bridge",
           pagePath: "sources/current.md",
           sourcePath: "/tmp/current.md",
@@ -467,7 +467,9 @@ describe("memory-wiki doctor source sync migration", () => {
     for (const agentId of agentIds) {
       await expect(
         readMemoryWikiSourceSyncState(path.join(vaultRoot, agentId), store),
-      ).resolves.toMatchObject({ entries: { [agentId]: { renderFingerprint: agentId } } });
+      ).resolves.toMatchObject({
+        entries: { [`bridge:${agentId}`]: { renderFingerprint: agentId } },
+      });
     }
   });
 });
