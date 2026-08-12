@@ -307,7 +307,6 @@ export function renderPlaceSelect(params: {
     ? icons.monitorSmartphone
     : icons.monitor;
   const browseNeedsAdmin = !params.browseAvailable && !params.isAdmin;
-  const browseDisabled = params.submitting || params.pendingCloud || !params.browseAvailable;
   // Native disabled buttons suppress pointer/focus events in some browsers, so the
   // repair tooltip keeps only this limited-access state focusable and guards activation.
   const browseButton = html`<button
@@ -320,7 +319,7 @@ export function renderPlaceSelect(params: {
     params.pendingCloud ||
     (!params.browseAvailable && !browseNeedsAdmin)}
     @click=${() => {
-      if (!browseDisabled) {
+      if (params.browseAvailable && !params.submitting && !params.pendingCloud) {
         params.onBrowse(browseTarget);
       }
     }}
