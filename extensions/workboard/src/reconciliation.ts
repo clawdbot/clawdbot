@@ -20,7 +20,8 @@ const MAX_OBSERVATION_ID_LENGTH = 200;
 const MAX_ASSOCIATION_KEY_LENGTH = 160;
 const MAX_TRIAGE_ENTRIES = 20;
 const MAX_TRIAGE_CARD_ID_LENGTH = 120;
-const MAX_TRIAGE_REFERENCE_URL_LENGTH = 2000;
+const MAX_TRIAGE_REFERENCE_LENGTH = 1024;
+const MAX_TRIAGE_BYTES = 16 * 1024;
 const DEFAULT_PAGE_SIZE = 50;
 const RECONCILIATION_PROTECTED_STATUSES = new Set<WorkboardStatus>(["blocked", "review", "done"]);
 
@@ -179,7 +180,6 @@ const CARD_FIELDS = new Set([
 const LINK_FIELDS = new Set(["title"]);
 const TRIAGE_FIELDS = new Set(["candidateCardIds", "evidence"]);
 const TRIAGE_EVIDENCE_FIELDS = new Set(["reference", "sha256"]);
-const TRIAGE_REFERENCE_FIELDS = new Set(["type", "url"]);
 
 function objectWithOnly(
   value: unknown,
@@ -217,35 +217,44 @@ function projectReconciliationTriage(value: unknown): WorkboardReconciliationTri
   if (!Array.isArray(input.evidence) || input.evidence.length > MAX_TRIAGE_ENTRIES) {
     throw new Error("triage evidence supports at most 20 entries.");
   }
-  return {
+  const triage = {
     candidateCardIds: input.candidateCardIds.map(readSafeTriageCardId),
     evidence: input.evidence.map((value) => {
       const evidence = objectWithOnly(value, "triage evidence", TRIAGE_EVIDENCE_FIELDS);
-      const reference = objectWithOnly(
+      const reference = readBoundedString(
         evidence.reference,
         "triage evidence reference",
-        TRIAGE_REFERENCE_FIELDS,
+        MAX_TRIAGE_REFERENCE_LENGTH,
       );
-      if (reference.type !== "url")
-        throw new Error("triage evidence reference.type is unsupported.");
-      const url = readBoundedString(
-        reference.url,
-        "triage evidence reference.url",
-        MAX_TRIAGE_REFERENCE_URL_LENGTH,
-      );
-      if (/\p{C}/u.test(url))
-        throw new Error("triage evidence reference.url must not contain control characters.");
-      try {
-        if (new URL(url).protocol !== "https:") throw new Error();
-      } catch {
-        throw new Error("triage evidence reference.url must be an HTTPS URL.");
-      }
+      if (!isSafeTriageReference(reference))
+        throw new Error("triage evidence reference is unsupported.");
       if (typeof evidence.sha256 !== "string" || !/^[a-f0-9]{64}$/i.test(evidence.sha256)) {
         throw new Error("triage evidence sha256 must be 64 hexadecimal characters.");
       }
-      return { reference: { type: "url", url }, sha256: evidence.sha256.toLowerCase() };
+      return { reference, sha256: evidence.sha256.toLowerCase() };
     }),
   };
+  if (Buffer.byteLength(JSON.stringify(triage), "utf8") > MAX_TRIAGE_BYTES) {
+    throw new Error("reconciliation triage must be 16384 bytes or fewer.");
+  }
+  return triage;
+}
+
+function isSafeTriageReference(reference: string): boolean {
+  if (/\p{C}/u.test(reference)) return false;
+  try {
+    const url = new URL(reference);
+    if (url.search || url.hash || url.username || url.password) return false;
+    if (url.protocol === "codex:") {
+      return url.hostname === "thread" && /^\/[A-Za-z0-9_-]{1,200}$/.test(url.pathname);
+    }
+    if (url.protocol !== "git:" && url.protocol !== "file:") return false;
+    if (url.protocol === "file:" && url.hostname) return false;
+    if (url.protocol === "git:" && !/^[A-Za-z0-9._-]{1,120}$/.test(url.hostname)) return false;
+    return /^\/(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+$/.test(url.pathname);
+  } catch {
+    return false;
+  }
 }
 
 export function projectReconciliationObservation(

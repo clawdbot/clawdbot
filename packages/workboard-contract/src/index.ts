@@ -356,7 +356,7 @@ export type WorkboardMetadata = {
 };
 
 export type WorkboardReconciliationTriageEvidence = {
-  reference: { type: "url"; url: string };
+  reference: string;
   sha256: string;
 };
 

@@ -39,11 +39,11 @@ describe("WorkboardReconciler", () => {
       candidateCardIds: ["candidate-alpha", "candidate-beta"],
       evidence: [
         {
-          reference: { type: "url", url: "https://example.test/evidence/alpha" },
+          reference: "codex://thread/alpha",
           sha256: "a".repeat(64),
         },
         {
-          reference: { type: "url", url: "https://example.test/evidence/beta" },
+          reference: "git://repo/evidence/beta",
           sha256: "b".repeat(64),
         },
       ],
@@ -92,7 +92,7 @@ describe("WorkboardReconciler", () => {
           candidateCardIds: ["forged"],
           evidence: [
             {
-              reference: { type: "url", url: "https://example.test/forged" },
+              reference: "file:///workspace/forged",
               sha256: "c".repeat(64),
             },
           ],
@@ -111,7 +111,7 @@ describe("WorkboardReconciler", () => {
         candidateCardIds: ["candidate-owned"],
         evidence: [
           {
-            reference: { type: "url", url: "https://example.test/evidence/owned" },
+            reference: "file:///workspace/evidence/owned",
             sha256: "e".repeat(64),
           },
         ],
@@ -148,13 +148,13 @@ describe("WorkboardReconciler", () => {
           candidateCardIds: [],
           evidence: [
             {
-              reference: { type: "file", url: "file:///private" },
+              reference: "https://example.test/private",
               sha256: "d".repeat(64),
             },
           ],
         },
       } as never),
-    ).rejects.toThrow("triage evidence reference.type is unsupported.");
+    ).rejects.toThrow("triage evidence reference is unsupported.");
     expect(await store.list()).toHaveLength(2);
 
     expect(() =>
@@ -167,6 +167,43 @@ describe("WorkboardReconciler", () => {
         triage: { candidateCardIds: [], evidence: [], notes: "not allowed" },
       }),
     ).toThrow("triage.notes is not allowed.");
+  });
+
+  it("accepts all bounded triage entries but rejects a serialized payload over 16 KiB", async () => {
+    const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
+    const maximal = {
+      candidateCardIds: Array.from({ length: 20 }, (_, index) => `candidate-${index}`),
+      evidence: Array.from({ length: 20 }, (_, index) => ({
+        reference: `codex://thread/thread-${index}`,
+        sha256: index.toString(16).padStart(64, "0"),
+      })),
+    };
+    const accepted = await reconciler.apply({
+      sourceUrl: "https://example.test/runs/maximal-triage",
+      tenant: "acme",
+      idempotencyKey: "maximal-triage",
+      sourceUpdatedAt: 100,
+      card: { title: "Maximum triage entries" },
+      triage: maximal,
+    } as never);
+    expect(accepted.card.metadata?.reconciliationTriage).toEqual(maximal);
+
+    await expect(
+      reconciler.apply({
+        sourceUrl: "https://example.test/runs/oversized-triage",
+        tenant: "acme",
+        idempotencyKey: "oversized-triage",
+        sourceUpdatedAt: 101,
+        card: { title: "Oversized triage" },
+        triage: {
+          candidateCardIds: Array.from({ length: 20 }, (_, index) => `candidate-${index}`),
+          evidence: Array.from({ length: 20 }, (_, index) => ({
+            reference: `file:///workspace/${"x".repeat(1000 - index)}`,
+            sha256: index.toString(16).padStart(64, "0"),
+          })),
+        },
+      } as never),
+    ).rejects.toThrow("reconciliation triage must be 16384 bytes or fewer.");
   });
 
   it("canonicalizes one objective per tenant while retaining each external association", async () => {
