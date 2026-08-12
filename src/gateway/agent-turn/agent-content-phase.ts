@@ -183,7 +183,7 @@ export async function prepareAgentContentPhase(params: {
           ...(agentId ? { agentId } : {}),
           clone: false,
         });
-        const routedAgentId = resolveAgentIdFromSessionKey(canonicalKey);
+        const routedAgentId = resolveAgentIdFromSessionKey(canonicalKey, agentId);
         const compatibilityOwner = tryResolveSessionCompatibilityOwnerAgentId(cfg, canonicalKey);
         if (!compatibilityOwner || routedAgentId !== compatibilityOwner) {
           return true;
