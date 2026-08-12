@@ -1,12 +1,12 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { findCapabilityProviderById } from "../../packages/media-generation-core/src/capability-model-ref.js";
+import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeMediaProviderId } from "../media-understanding/provider-id.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";

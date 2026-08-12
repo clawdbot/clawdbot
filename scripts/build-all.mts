@@ -9,6 +9,7 @@ import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import prettyMilliseconds from "pretty-ms";
+import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
 import {
   listPluginSdkDeclarationOutputs,
   pluginSdkEntrypoints,
@@ -59,7 +60,6 @@ type BuildAllStepParams = {
   comSpec?: string;
 };
 type BuildAllCacheParams = { rootDir?: string; fs?: BuildAllFs; env?: NodeJS.ProcessEnv };
-const FULL_GIT_COMMIT_RE = /^[0-9a-f]{40}$/iu;
 const BUILD_CACHE_VERSION = 4;
 const TSDOWN_DECLARATION_EXTENSIONS = [".d.ts", ".d.mts", ".d.cts"];
 const TSDOWN_SOURCE_EXTENSIONS = [
@@ -491,19 +491,12 @@ export function resolveBuildAllEnvironment(
   now: () => Date = () => new Date(),
   readGitCommit: () => string | null = readCurrentGitCommit,
 ) {
-  const explicitTimestamp = env.OPENCLAW_BUILD_TIMESTAMP?.trim();
-  const explicitCommit = env.GIT_COMMIT?.trim() || env.GIT_SHA?.trim();
-  const checkedOutCommit = explicitCommit ? null : readGitCommit()?.trim();
-  // GITHUB_SHA names the workflow invocation and can differ from a checked-out tag.
-  const commit = explicitCommit || checkedOutCommit || env.GITHUB_SHA?.trim();
-  if (commit && !FULL_GIT_COMMIT_RE.test(commit)) {
-    throw new Error("build commit must be a full 40-character hexadecimal SHA");
-  }
-  return {
-    ...env,
-    OPENCLAW_BUILD_TIMESTAMP: explicitTimestamp || now().toISOString(),
-    ...(commit ? { GIT_COMMIT: commit.toLowerCase() } : {}),
-  };
+  return resolveBuildIdentityEnvironment({
+    commitLabel: "build commit",
+    env,
+    now,
+    readGitCommit,
+  });
 }
 
 function resolveStepEnv(step: BuildAllStep, env: NodeJS.ProcessEnv, platform: NodeJS.Platform) {

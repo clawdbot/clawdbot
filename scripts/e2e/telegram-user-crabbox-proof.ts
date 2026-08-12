@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { parseStrictBooleanArg } from "../lib/arg-utils.mts";
-import { coerceErrorMessage } from "../lib/error-format.mts";
+import { coerceErrorMessage, toStringifiedError } from "../lib/error-format.mts";
 import { sleep } from "../lib/sleep.mjs";
 import { resolveWindowsTaskkillPath } from "../lib/windows-taskkill.mjs";
 import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mts";
@@ -965,8 +965,7 @@ export function runCommand(params: {
           timeoutKillGraceMs,
         }).then(
           () => reject(error),
-          (cleanupError: unknown) =>
-            reject(cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError))),
+          (cleanupError: unknown) => reject(toStringifiedError(cleanupError)),
         );
         return;
       }
@@ -2070,12 +2069,12 @@ function sshArgs(inspect: CrabboxInspect, sshPort = inspect.sshPort?.trim() || "
 }
 
 function isTransientSshFailure(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = coerceErrorMessage(error);
   return /Connection (?:closed|reset)|Operation timed out|Connection timed out/u.test(message);
 }
 
 function isSshConnectionFailure(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = coerceErrorMessage(error);
   const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
   return (
     code === "ETIMEDOUT" ||
@@ -3177,7 +3176,7 @@ async function finishSession(root: string, opts: Options, outputDir: string) {
     }
     desktopSessionTerminationAttempted = true;
     await terminateRemoteDesktopSession(root, session.crabbox.inspect).catch((error: unknown) => {
-      summary.desktopSessionTerminateError = error instanceof Error ? error.message : String(error);
+      summary.desktopSessionTerminateError = coerceErrorMessage(error);
     });
   };
   try {
@@ -3254,37 +3253,37 @@ async function finishSession(root: string, opts: Options, outputDir: string) {
       await stopLocalSutDaemon(session.localSut);
       sutQuiesced = true;
     } catch (error) {
-      summary.sutStopError = error instanceof Error ? error.message : String(error);
+      summary.sutStopError = coerceErrorMessage(error);
       summary.status = "fail";
     }
     if (sutQuiesced) {
       try {
         preserveLocalSutRuntimeArtifacts(session.localSut, session.outputDir);
       } catch (error) {
-        summary.runtimeArtifactError = error instanceof Error ? error.message : String(error);
+        summary.runtimeArtifactError = coerceErrorMessage(error);
         summary.status = "fail";
       }
     }
     try {
       destroyLocalSutRuntime(session.localSut);
     } catch (error) {
-      summary.sutDestroyError = error instanceof Error ? error.message : String(error);
+      summary.sutDestroyError = coerceErrorMessage(error);
       summary.status = "fail";
     }
     if (session.localSut.funnelBridge) {
       await stopTailscaleFunnelBridge(root, session.localSut.funnelBridge).catch(
         (error: unknown) => {
-          summary.funnelResetError = error instanceof Error ? error.message : String(error);
+          summary.funnelResetError = coerceErrorMessage(error);
         },
       );
     }
     await terminateDesktopSession();
     await releaseCredential(root, opts, session.credential.leaseFile).catch((error: unknown) => {
-      summary.credentialReleaseError = error instanceof Error ? error.message : String(error);
+      summary.credentialReleaseError = coerceErrorMessage(error);
     });
     if (session.crabbox.createdLease && !opts.keepBox) {
       await stopCrabbox(root, opts, session.crabbox.id).catch((error: unknown) => {
-        summary.crabboxStopError = error instanceof Error ? error.message : String(error);
+        summary.crabboxStopError = coerceErrorMessage(error);
       });
     }
     if (opts.keepBox) {
@@ -3613,12 +3612,12 @@ async function main() {
     killTree(localSut?.mock);
     if (credential) {
       await releaseCredential(root, opts, credential.leaseFile).catch((error: unknown) => {
-        summary.credentialReleaseError = error instanceof Error ? error.message : String(error);
+        summary.credentialReleaseError = coerceErrorMessage(error);
       });
     }
     if (leaseId && createdLease && !opts.keepBox) {
       await stopCrabbox(root, opts, leaseId).catch((error: unknown) => {
-        summary.crabboxStopError = error instanceof Error ? error.message : String(error);
+        summary.crabboxStopError = coerceErrorMessage(error);
       });
     }
     if (opts.keepBox && leaseId) {
@@ -3685,7 +3684,7 @@ function isMainModule(): boolean {
 
 if (isMainModule()) {
   main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(coerceErrorMessage(error));
     process.exit(1);
   });
 }

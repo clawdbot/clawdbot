@@ -4,23 +4,12 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "../../../lib/record-shared.mjs";
 import { extractAgentReplyTexts } from "../agent-turn-output.mjs";
+import { readPositiveIntEnv } from "../env-limits.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { readTextFileTail, tailText } from "../text-file-utils.mjs";
 
 const command = process.argv[2];
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
-
-function readPositiveIntEnv(name, fallback) {
-  const text = String(process.env[name] ?? fallback).trim();
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`invalid ${name}: ${text}`);
-  }
-  const value = Number(text);
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new Error(`invalid ${name}: ${text}`);
-  }
-  return value;
-}
 
 const agentTurnTimeoutSeconds = readPositiveIntEnv(
   "OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS",

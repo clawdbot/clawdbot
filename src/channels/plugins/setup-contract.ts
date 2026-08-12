@@ -1,7 +1,7 @@
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Option } from "commander";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { ChannelSetupAdapter } from "./setup-adapter.types.js";
 import type { ChannelSetupInput } from "./setup-input.js";

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
@@ -25,7 +26,6 @@ import {
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
-  toPreparedModelRuntimeError,
 } from "./prepared-model-runtime.errors.js";
 import type {
   PreparedModelRuntimeBuildStats,
@@ -495,7 +495,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
           }
           break;
         } catch (error) {
-          const refreshError = toPreparedModelRuntimeError(error);
+          const refreshError = toStringifiedError(error);
           const lostCandidate = attempt.some((candidate) => !candidate.isCurrent());
           if (
             !(refreshError instanceof PreparedModelRuntimePublicationSupersededError) ||
@@ -524,7 +524,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
         candidate.owner.needsRefresh = false;
       }
     } catch (error) {
-      const refreshError = toPreparedModelRuntimeError(error);
+      const refreshError = toStringifiedError(error);
       for (const candidate of candidates) {
         if (!candidate.isCurrent()) {
           continue;
@@ -602,7 +602,7 @@ export async function publishModelRuntimeSnapshot(
       owner.needsRefresh = false;
       return result.snapshot;
     } catch (error) {
-      const refreshError = toPreparedModelRuntimeError(error);
+      const refreshError = toStringifiedError(error);
       if (owner.generation === generation && owners.get(key) === owner) {
         owner.pending = undefined;
         owner.needsRefresh = true;

@@ -22,7 +22,7 @@ export async function fetchJson(
   return await fetchFn(url, { ...init, signal });
 }
 
-export { parseFiniteNumber } from "./parse-finite-number.js";
+export { parseFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 
 /** Parses a provider reset-time string without leaking an invalid Date timestamp. */
 export function parseUsageResetAt(value: unknown): number | undefined {

@@ -1,15 +1,15 @@
 // Control UI chat module implements stream reconciliation behavior.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
   streamSegmentHasItemId,
   streamSegmentUsesAccumulatedText,
   trimAccumulatedStreamPrefix,
 } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../lib/string-coerce.ts";
 import {
   extractToolMessageRefs,
   resolveLiveToolStreamRefs,

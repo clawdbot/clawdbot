@@ -1715,8 +1715,4 @@ export async function uninstallManagedPlugin(params: {
   });
 }
 
-/** Normalize unexpected lifecycle failures for Gateway response adapters. */
-export function formatManagedPluginLifecycleError(error: unknown): string {
-  return formatErrorMessage(error);
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

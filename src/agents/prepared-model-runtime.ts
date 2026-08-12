@@ -1,10 +1,10 @@
 /** Lifecycle-owned auth/model discovery snapshots for agent runs. */
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { registerRuntimeAuthProfileStoreMutationListener } from "./auth-profiles/runtime-snapshots.js";
 import { registerPreparedRuntimeAuthMaterializationPublisher } from "./prepared-model-runtime-materializations.js";
-import { toPreparedModelRuntimeError } from "./prepared-model-runtime.errors.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimeOwnerRetention,
@@ -513,7 +513,7 @@ export function rejectPendingPreparedModelRuntimeReplacement(
     return;
   }
   pendingModelRuntimeReplacement = undefined;
-  const replacementError = toPreparedModelRuntimeError(error);
+  const replacementError = toStringifiedError(error);
   replacement.reject(replacementError);
   notifyPreparedModelRuntimePublication({ phase: "failed", error: replacementError });
 }
@@ -633,7 +633,7 @@ export function refreshPreparedModelRuntimeSnapshots(
       }
     },
     (error: unknown) => {
-      const refreshError = toPreparedModelRuntimeError(error);
+      const refreshError = toStringifiedError(error);
       if (requestEpoch === refreshRequestEpoch) {
         // Candidate and queued auth builds may finish independently. A failed transaction must
         // leave no owner from its partially published generation request-visible.
@@ -739,7 +739,7 @@ function invalidateForAuthMutation(event: AuthMutationEvent): void {
     if (error instanceof PreparedModelRuntimePublicationSupersededError) {
       return;
     }
-    const refreshError = toPreparedModelRuntimeError(error);
+    const refreshError = toStringifiedError(error);
     notifyPreparedModelRuntimePublication({ phase: "failed", error: refreshError });
     log.warn(`auth-triggered model runtime refresh failed: ${String(refreshError)}`);
   });

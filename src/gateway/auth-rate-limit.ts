@@ -17,7 +17,10 @@
  *   {@link createAuthRateLimiter} and pass it where needed.
  */
 
-import { resolveIntegerOption, resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+import {
+  resolveIntegerOption,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { isLoopbackAddress, resolveClientIp } from "./net.js";
 
 // ---------------------------------------------------------------------------

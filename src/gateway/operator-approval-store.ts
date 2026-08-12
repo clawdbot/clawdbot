@@ -1,7 +1,9 @@
 // Persistent operator approval lifecycle and first-answer-wins transitions.
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { sql, type Selectable } from "kysely";
 import {
   type DecisionReceiptV1,
@@ -261,27 +263,16 @@ function normalizeExecutionIdentityBinding(input: NewOperatorApproval) {
 }
 
 function parseApprovalPresentation(raw: string): ApprovalPresentation | null {
-  try {
-    const value: unknown = JSON.parse(raw);
-    return validateApprovalPresentation(value) ? value : null;
-  } catch {
-    return null;
-  }
+  const value = safeParseJson(raw);
+  return validateApprovalPresentation(value) ? value : null;
 }
 
 function parseStringArray(raw: string): string[] | null {
-  try {
-    const value: unknown = JSON.parse(raw);
-    if (
-      !Array.isArray(value) ||
-      value.some((entry) => typeof entry !== "string" || !entry.trim())
-    ) {
-      return null;
-    }
-    return value as string[];
-  } catch {
+  const value = safeParseJson(raw);
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string" || !entry.trim())) {
     return null;
   }
+  return value as string[];
 }
 
 function requireString(value: string, label: string): string {
@@ -329,17 +320,6 @@ function decodeOperatorApprovalHistoryCursor(raw: string): OperatorApprovalHisto
     }
     throw new OperatorApprovalHistoryCursorError();
   }
-}
-
-function normalizeStringArray(values: readonly string[] | undefined): string[] {
-  const result: string[] = [];
-  for (const value of values ?? []) {
-    const normalized = normalizeNullableString(value);
-    if (normalized && !result.includes(normalized)) {
-      result.push(normalized);
-    }
-  }
-  return result;
 }
 
 function stringifyPresentation(presentation: ApprovalPresentation): string {
@@ -1289,8 +1269,10 @@ export function insertOperatorApproval(params: {
   if (input.presentation.kind !== input.kind) {
     throw new Error("operator approval kind must match its safe presentation");
   }
-  const reviewerDeviceIdsJson = JSON.stringify(normalizeStringArray(input.reviewerDeviceIds));
-  const audienceSessionKeys = normalizeStringArray(input.audienceSessionKeys);
+  const reviewerDeviceIdsJson = JSON.stringify(
+    normalizeUniqueTrimmedStringList(input.reviewerDeviceIds),
+  );
+  const audienceSessionKeys = normalizeUniqueTrimmedStringList(input.audienceSessionKeys);
   if (audienceSessionKeys.length > OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS) {
     throw new Error(
       `operator approval audience exceeds ${OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS} sessions`,

@@ -9,13 +9,13 @@ import {
   type PluginSdkDocCategory,
   type PluginSdkDocEntrypoint,
 } from "../../scripts/lib/plugin-sdk-doc-metadata.ts";
+import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
 import {
   createDeclarationClosureRenderer,
   formatPluginSdkDiagnostics,
 } from "./api-baseline-declaration-closure.js";
 import { printPluginSdkExportDeclaration } from "./api-baseline-declaration-print.js";
 import { normalizePluginSdkApiSourcePath as relativePath } from "./api-baseline-normalization.js";
-import { publicPluginSdkEntrypoints } from "./entrypoints.ts";
 
 export {
   normalizePluginSdkApiDeclarationText,

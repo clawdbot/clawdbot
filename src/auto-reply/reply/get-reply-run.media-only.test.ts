@@ -98,7 +98,7 @@ vi.mock(import("../../routing/session-key.js"), async (importOriginal) => {
   return {
     ...actual,
     normalizeMainKey: () => "main",
-    normalizeAgentId: (id: string | undefined | null) => id ?? "default",
+    normalizeAgentId: vi.fn((id: string | undefined | null) => id ?? "default"),
   };
 });
 
