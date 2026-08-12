@@ -5,6 +5,11 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import {
+  isDefaultAgentRuntimeId,
+  normalizeOptionalAgentRuntimeId,
+  OPENCLAW_AGENT_RUNTIME_ID,
+} from "../agents/agent-runtime-id.js";
 import { isCliProvider, type CliProviderClassifier } from "../agents/model-selection.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -19,7 +24,7 @@ const AGENT_RUNTIME_LABELS: Readonly<Record<string, string>> = {
   "google-gemini-cli": "Gemini CLI",
 };
 
-export function resolveAgentRuntimeLabel(args: {
+type AgentRuntimeLabelArgs = {
   config?: OpenClawConfig;
   sessionEntry?: Pick<
     SessionEntry,
@@ -28,7 +33,42 @@ export function resolveAgentRuntimeLabel(args: {
   resolvedHarness?: string;
   fallbackProvider?: string;
   classifyCliProvider?: CliProviderClassifier;
-}): string {
+};
+
+/** The runtime the label describes, kept beside its text so the pin can be compared to it. */
+function resolveDescribedAgentRuntime(args: AgentRuntimeLabelArgs): {
+  label: string;
+  runtime?: string;
+} {
+  const runtimeRaw = normalizeOptionalString(args.resolvedHarness);
+  const runtime = normalizeOptionalLowercaseString(runtimeRaw);
+  if (runtime && runtime !== "auto" && runtime !== "default") {
+    return {
+      label: AGENT_RUNTIME_LABELS[runtime] ?? sanitizeTerminalText(runtimeRaw ?? runtime),
+      runtime,
+    };
+  }
+
+  const providerRaw =
+    normalizeOptionalString(args.sessionEntry?.modelProvider) ??
+    normalizeOptionalString(args.sessionEntry?.providerOverride) ??
+    normalizeOptionalString(args.fallbackProvider);
+  const provider = providerRaw ? sanitizeTerminalText(providerRaw) : undefined;
+  const providerRuntime = normalizeOptionalLowercaseString(providerRaw);
+  if (provider && (args.classifyCliProvider?.(provider) ?? isCliProvider(provider, args.config))) {
+    return {
+      label: AGENT_RUNTIME_LABELS[providerRuntime ?? ""] ?? `${provider} (cli)`,
+      runtime: providerRuntime,
+    };
+  }
+
+  return {
+    label: expectDefined(AGENT_RUNTIME_LABELS.openclaw, "OpenClaw runtime label"),
+    runtime: OPENCLAW_AGENT_RUNTIME_ID,
+  };
+}
+
+export function resolveAgentRuntimeLabel(args: AgentRuntimeLabelArgs): string {
   const acpAgentRaw = normalizeOptionalString(args.sessionEntry?.acp?.agent);
   const acpAgent = acpAgentRaw ? sanitizeTerminalText(acpAgentRaw) : undefined;
   // ACP sessions own their displayed runtime because the backend can differ
@@ -39,23 +79,21 @@ export function resolveAgentRuntimeLabel(args: {
     return backend ? `${acpAgent} (acp/${backend})` : `${acpAgent} (acp)`;
   }
 
-  const runtimeRaw = normalizeOptionalString(args.resolvedHarness);
-  const runtime = normalizeOptionalLowercaseString(runtimeRaw);
-  if (runtime && runtime !== "auto" && runtime !== "default") {
-    return AGENT_RUNTIME_LABELS[runtime] ?? sanitizeTerminalText(runtimeRaw ?? runtime);
+  const described = resolveDescribedAgentRuntime(args);
+  const pinned = normalizeOptionalAgentRuntimeId(args.sessionEntry?.agentHarnessId);
+  // The persisted `agentHarnessId` owns the transcript, and dispatch paths disagree
+  // about it: turn selection filters it by provider compatibility while compaction
+  // and memory-flush runs forward it unfiltered, where harness selection promotes it
+  // to the requested runtime. Naming only the freshly resolved runtime would claim a
+  // runtime the next turn may not use, which is how a wedged session reads green.
+  if (
+    !pinned ||
+    isDefaultAgentRuntimeId(pinned) ||
+    pinned === normalizeOptionalAgentRuntimeId(described.runtime)
+  ) {
+    return described.label;
   }
-
-  const providerRaw =
-    normalizeOptionalString(args.sessionEntry?.modelProvider) ??
-    normalizeOptionalString(args.sessionEntry?.providerOverride) ??
-    normalizeOptionalString(args.fallbackProvider);
-  const provider = providerRaw ? sanitizeTerminalText(providerRaw) : undefined;
-  if (provider && (args.classifyCliProvider?.(provider) ?? isCliProvider(provider, args.config))) {
-    return (
-      AGENT_RUNTIME_LABELS[normalizeOptionalLowercaseString(providerRaw) ?? ""] ??
-      `${provider} (cli)`
-    );
-  }
-
-  return expectDefined(AGENT_RUNTIME_LABELS.openclaw, "OpenClaw runtime label");
+  return `${described.label} (session pin: ${
+    AGENT_RUNTIME_LABELS[pinned] ?? sanitizeTerminalText(pinned)
+  })`;
 }
