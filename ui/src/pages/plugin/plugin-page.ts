@@ -16,6 +16,7 @@ import { hasOperatorApprovalsAccess } from "../../app/operator-access.ts";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
+  scheduleStaleChunkReload,
 } from "../../app/stale-chunk-reload.ts";
 import { renderLazyViewError } from "../../components/lazy-view-error.ts";
 import { renderLoadingState } from "../../components/loading-state.ts";
@@ -183,7 +184,7 @@ export class PluginPage extends OpenClawLightDomContentsElement {
       }
       this.bundledViewState = nextState;
       if (nextState.status === "error" && isStaleChunkImportError(nextState.error)) {
-        void retryStaleChunkReloadWhenReachable();
+        void scheduleStaleChunkReload();
       }
     };
     void this.loadBundledView(key).then(

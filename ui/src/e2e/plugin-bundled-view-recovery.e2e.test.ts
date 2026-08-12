@@ -16,7 +16,7 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("reloads after a stale Logbook chunk failure and recovers", async () => {
+  it("stops automatic reloads after one failed recovery and keeps manual Reload", async () => {
     await mkdir(artifactDir, { recursive: true });
     await suite.withPage(
       {
@@ -62,9 +62,12 @@ suite.define(() => {
 
         let failedRequests = 0;
         let assetRequests = 0;
-        const failFirstBundledChunk = async (route: Route) => {
+        let failingChunkPath: string | null = null;
+        const failBundledChunkTwice = async (route: Route) => {
           assetRequests += 1;
-          if (failedRequests === 0) {
+          const requestPath = new URL(route.request().url()).pathname;
+          failingChunkPath ??= requestPath;
+          if (requestPath === failingChunkPath && failedRequests < 2) {
             failedRequests += 1;
             await route.abort("internetdisconnected");
             return;
@@ -83,7 +86,7 @@ suite.define(() => {
           await documentReachable;
           await route.fulfill({ status: 200 });
         });
-        await page.route(bundledChunk, failFirstBundledChunk);
+        await page.route(bundledChunk, failBundledChunkTwice);
         await page.getByRole("link", { name: "Logbook", exact: true }).click();
         await expect.poll(() => failedRequests).toBe(1);
 
@@ -104,10 +107,18 @@ suite.define(() => {
           }
         });
         markDocumentReachable();
+
+        await expect.poll(() => failedRequests).toBe(2);
+        await alert.waitFor();
+        await page.waitForTimeout(500);
+        expect(await alert.count()).toBe(1);
+        expect(navigationCount).toBe(1);
+
+        await alert.getByRole("button", { name: "Reload" }).click();
         await page.locator(".logbook").waitFor();
         expect(await alert.count()).toBe(0);
-        expect(assetRequests).toBeGreaterThan(1);
-        expect(navigationCount).toBe(1);
+        expect(assetRequests).toBeGreaterThan(2);
+        expect(navigationCount).toBe(2);
         await gateway.waitForRequest("logbook.status");
         await page.screenshot({
           fullPage: true,
