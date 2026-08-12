@@ -177,7 +177,7 @@ describe("Control UI theme contrast", () => {
 
   it("limits the white assistant surface to contrast-safe light completed message bubbles", () => {
     expect(groupedCss).toMatch(
-      /:root\[data-theme-mode="light"\]\s*:not\(\[data-theme="custom-light"\]\)\[data-assistant-message-surface="white"\][^{}]*\.chat-group\.assistant[^{}]*\.chat-bubble--assistant-surface\s*\{[^{}]*background:\s*#fff;/u,
+      /:root\[data-theme-mode="light"\]\s*:not\(\s*\[data-theme="custom-light"\]\s*\)\s*\[data-assistant-message-surface="white"\][^{}]*\.chat-group\.assistant[^{}]*\.chat-bubble--assistant-surface\s*\{[^{}]*background:\s*#fff;/u,
     );
     expect(groupedCss).not.toMatch(
       /data-assistant-message-surface="white"[^{}]*\.chat-bubble:not/u,
