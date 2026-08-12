@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "v
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
+import { getReplySystemEventSessionKey } from "../../auto-reply/reply/system-event-session-key.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -294,6 +295,49 @@ describe("channel turn kernel", () => {
       >();
       expectTypeOf(dispatchChannelInboundTurn(plan)).toEqualTypeOf<Promise<ChannelTurnResult>>();
     }
+  });
+
+  it.each([
+    {
+      channel: "slack",
+      routeSessionKey: "agent:main:slack:channel:c1",
+      dispatchSessionKey: "agent:main:slack:channel:c1:thread:123.456",
+    },
+    {
+      channel: "discord",
+      routeSessionKey: "agent:main:discord:channel:c1",
+      dispatchSessionKey: "agent:main:discord:channel:c1:thread:t1",
+    },
+  ])("carries $channel route system-event ownership privately into dispatch", async (scenario) => {
+    const { channel, routeSessionKey, dispatchSessionKey } = scenario;
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(
+      async (params: Parameters<DispatchReplyWithBufferedBlockDispatcher>[0]) => {
+        expect(params.ctx).not.toHaveProperty("SystemEventSessionKey");
+        expect(getReplySystemEventSessionKey({ ...params.replyOptions })).toBe(routeSessionKey);
+        await params.dispatcherOptions.deliver({ text: "reply" }, { kind: "final" });
+        return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+      },
+    ) as DispatchReplyWithBufferedBlockDispatcher;
+
+    await dispatchAssembledChannelTurn({
+      cfg,
+      channel,
+      agentId: "main",
+      routeSessionKey,
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx({
+        SessionKey: dispatchSessionKey,
+        Surface: channel,
+        Provider: channel,
+      }),
+      recordInboundSession: createRecordInboundSession(),
+      dispatchReplyWithBufferedBlockDispatcher,
+      delivery: {
+        deliver: async () => ({ visibleReplySent: true }),
+      },
+    });
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
   });
 
   it("runs routed direct message hooks after payload preparation", async () => {

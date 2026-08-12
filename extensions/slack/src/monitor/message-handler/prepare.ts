@@ -1592,7 +1592,8 @@ export async function prepareSlackMessage(params: {
       agentId: route.agentId,
       dmScope: route.dmScope,
       accountId: route.accountId,
-      routeSessionKey: sessionKey,
+      routeSessionKey: route.sessionKey,
+      dispatchSessionKey: sessionKey,
       parentSessionKey: threadKeys.parentSessionKey,
     },
     reply: {

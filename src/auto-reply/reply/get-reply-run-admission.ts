@@ -48,6 +48,7 @@ import {
   resolveRoutedDeliveryThreadId,
 } from "./routed-delivery-thread.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
+import { getReplySystemEventSessionKey } from "./system-event-session-key.js";
 
 export async function prepareReplyRunAdmission(context: PreparedReplyRunContext) {
   const {
@@ -130,19 +131,30 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
   const drainedSystemEventBlocks: string[] = [];
-  const rebuildPromptBodies = async () => {
-    if (!useFastReplyRuntime && heartbeatRunScope !== "commitment-only") {
+  const drainSystemEventBlocks = async () => {
+    if (useFastReplyRuntime || heartbeatRunScope === "commitment-only") {
+      return;
+    }
+    const routeSystemEventSessionKey = normalizeOptionalString(getReplySystemEventSessionKey(opts));
+    const systemEventSessionKeys =
+      routeSystemEventSessionKey && routeSystemEventSessionKey !== sessionKey
+        ? [routeSystemEventSessionKey, sessionKey]
+        : [sessionKey];
+    for (const systemEventSessionKey of systemEventSessionKeys) {
+      const isCurrentSession = systemEventSessionKey === sessionKey;
       const eventsBlock = await drainFormattedSystemEvents({
         cfg,
-        sessionKey,
-        isMainSession,
-        isNewSession,
+        sessionKey: systemEventSessionKey,
+        isMainSession: isCurrentSession && isMainSession,
+        isNewSession: isCurrentSession && isNewSession,
         suppressHeartbeatOwnedEvents: context.isHeartbeat,
       });
       if (eventsBlock) {
         drainedSystemEventBlocks.push(eventsBlock);
       }
     }
+  };
+  const rebuildPromptBodies = () => {
     const { activeGoalContext, inboundUserContext } = context.getInboundContext();
     return buildReplyPromptEnvelope({
       ctx,
@@ -557,6 +569,17 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       typing.cleanup();
       return { kind: "reply", reply: queueState.reply } as const;
     }
+  }
+  if (activeRunQueueAction !== "drop") {
+    await traceRunPhase("reply.drain_system_events", () => drainSystemEventBlocks());
+    ({
+      prefixedCommandBody,
+      queuedBody,
+      transcriptBody,
+      transcriptCommandBody,
+      media: promptMedia,
+      currentInboundContext,
+    } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies()));
   }
 
   return {
