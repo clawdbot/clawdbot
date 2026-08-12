@@ -11,12 +11,17 @@ final class GatewaySleepCycleController {
     typealias Resume = (String) async throws -> Void
     typealias Refresh = () async -> Void
     typealias CurrentRoute = () -> String?
+    typealias RetryDelay = (Duration) async -> Void
+
+    private static let resumeAttempts = 3
+    private static let resumeRetryDelay: Duration = .seconds(2)
 
     private let requestID: String
     private let currentRoute: CurrentRoute
     private let prepare: Prepare
     private let resume: Resume
     private let refresh: Refresh
+    private let retryDelay: RetryDelay
     private let log: (String) -> Void
     private var suspension: (id: String, route: String?)?
     private var cycleGeneration: UInt64 = 0
@@ -27,6 +32,7 @@ final class GatewaySleepCycleController {
         prepare: @escaping Prepare,
         resume: @escaping Resume,
         refresh: @escaping Refresh,
+        retryDelay: @escaping RetryDelay = { try? await Task.sleep(for: $0) },
         log: @escaping (String) -> Void)
     {
         self.requestID = requestID
@@ -34,6 +40,7 @@ final class GatewaySleepCycleController {
         self.prepare = prepare
         self.resume = resume
         self.refresh = refresh
+        self.retryDelay = retryDelay
         self.log = log
     }
 
@@ -71,17 +78,33 @@ final class GatewaySleepCycleController {
             }
             return
         }
+        let generation = self.cycleGeneration
+        // Refresh first: after real sleep the transport is usually dead, and the
+        // resume RPC needs the re-established connection to succeed at all.
+        await self.refresh()
         if let suspension {
             if let route = suspension.route, self.currentRoute() == route {
-                do {
-                    try await self.resume(suspension.id)
-                } catch {
-                    self.log("gateway wake resume failed: \(error.localizedDescription)")
-                }
+                await self.resumeWithRetries(suspension.id, generation: generation)
             } else {
                 self.log("dropping gateway sleep lease: route/mode changed across sleep; lease will self-expire")
             }
         }
-        await self.refresh()
+    }
+
+    private func resumeWithRetries(_ suspensionID: String, generation: UInt64) async {
+        for attempt in 1...Self.resumeAttempts {
+            // A new sleep cycle owns the connection; abandoned leases self-expire.
+            guard generation == self.cycleGeneration else { return }
+            do {
+                try await self.resume(suspensionID)
+                return
+            } catch {
+                self.log("gateway wake resume attempt \(attempt) failed: \(error.localizedDescription)")
+                if attempt < Self.resumeAttempts {
+                    await self.retryDelay(Self.resumeRetryDelay)
+                }
+            }
+        }
+        self.log("giving up on gateway wake resume; lease will self-expire")
     }
 }

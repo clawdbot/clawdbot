@@ -58,6 +58,72 @@ struct GatewaySleepCycleControllerTests {
         #expect(resumedIDs == ["late-suspension"])
     }
 
+    @Test func `resume retries after a transport failure and succeeds`() async {
+        var resumeAttempts = 0
+        var delays = 0
+        let controller = GatewaySleepCycleController(
+            requestID: "macos-sleep-test-run",
+            currentRoute: { "ws://127.0.0.1:18789" },
+            prepare: { _ in .ready(suspensionID: "suspension-retry") },
+            resume: { _ in
+                resumeAttempts += 1
+                if resumeAttempts == 1 { throw PrepareFailure() }
+            },
+            refresh: {},
+            retryDelay: { _ in delays += 1 },
+            log: { _ in })
+
+        await controller.willSleep(mode: .local)
+        await controller.didWake(mode: .local)
+
+        #expect(resumeAttempts == 2)
+        #expect(delays == 1)
+    }
+
+    @Test func `resume gives up after exhausting retries`() async {
+        var resumeAttempts = 0
+        var logs: [String] = []
+        let controller = GatewaySleepCycleController(
+            requestID: "macos-sleep-test-run",
+            currentRoute: { "ws://127.0.0.1:18789" },
+            prepare: { _ in .ready(suspensionID: "suspension-exhaust") },
+            resume: { _ in
+                resumeAttempts += 1
+                throw PrepareFailure()
+            },
+            refresh: {},
+            retryDelay: { _ in },
+            log: { logs.append($0) })
+
+        await controller.willSleep(mode: .local)
+        await controller.didWake(mode: .local)
+
+        #expect(resumeAttempts == 3)
+        #expect(logs.contains { $0.contains("giving up") })
+    }
+
+    @Test func `a new sleep cycle aborts in-flight resume retries`() async {
+        var resumeAttempts = 0
+        var beginNextSleep: (() async -> Void)?
+        let controller = GatewaySleepCycleController(
+            requestID: "macos-sleep-test-run",
+            currentRoute: { "ws://127.0.0.1:18789" },
+            prepare: { _ in .ready(suspensionID: "suspension-abort") },
+            resume: { _ in
+                resumeAttempts += 1
+                throw PrepareFailure()
+            },
+            refresh: {},
+            retryDelay: { _ in await beginNextSleep?() },
+            log: { _ in })
+
+        await controller.willSleep(mode: .local)
+        beginNextSleep = { await controller.willSleep(mode: .local) }
+        await controller.didWake(mode: .local)
+
+        #expect(resumeAttempts == 1)
+    }
+
     @Test func `busy preparation does not resume but still refreshes`() async {
         var resumeCount = 0
         var refreshCount = 0
