@@ -131,6 +131,8 @@ export async function startGatewayCoreRuntime(input: {
     workerPlacementDispatchAvailable,
     workerPlacementControlAvailable,
     workerDesktopObserveAvailable,
+    desktopObserveAvailable,
+    desktopSessionRegistry,
     listStartupChannelGatewayMethods,
     coreGatewayMethodNames,
     pluginHostServices,
@@ -142,6 +144,9 @@ export async function startGatewayCoreRuntime(input: {
     activateRuntimeSecrets,
     residentRegistry,
   } = runtime;
+  if (desktopSessionRegistry) {
+    kernel.addGatewayLifetimeSidecar({ stop: () => desktopSessionRegistry.stopAll() });
+  }
   let earlyRuntimePromise: ReturnType<
     Awaited<ReturnType<typeof loadGatewayStartupEarlyModule>>["startGatewayEarlyRuntime"]
   > | null = null;
@@ -372,8 +377,10 @@ export async function startGatewayCoreRuntime(input: {
             descriptor.name !== "environments.destroy")) &&
         (workerPlacementDispatchAvailable || descriptor.name !== "sessions.dispatch") &&
         (workerPlacementControlAvailable || descriptor.name !== "sessions.reclaim") &&
+        (desktopObserveAvailable || descriptor.name !== "desktop.observe") &&
         (workerDesktopObserveAvailable ||
-          (descriptor.name !== "worker.desktop.observe" &&
+          (descriptor.name !== "desktop.launch" &&
+            descriptor.name !== "worker.desktop.observe" &&
             descriptor.name !== "worker.desktop.launch")),
     );
     return createGatewayMethodRegistry(

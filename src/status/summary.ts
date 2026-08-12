@@ -590,8 +590,12 @@ export async function getStatusSummary(
     selectRecentSessionCandidates(allSessions, RECENT_SESSION_LIMIT),
   );
   const totalSessions = allSessions.length;
+  const hostDesktop = await (
+    await import("../gateway/desktop/host-source.js")
+  ).inspectHostDesktop({ config: cfg.desktop?.host });
   const summary: StatusSummary = {
     runtimeVersion: resolveRuntimeServiceVersion(process.env),
+    hostDesktop: hostDesktop.status,
     linkChannel: linkContext
       ? {
           id: linkContext.plugin.id,

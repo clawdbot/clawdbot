@@ -115,12 +115,27 @@ export async function prepareGatewayKernelState(params: {
     hasConfiguredWorkerProfiles ||
     Boolean(workerEnvironmentStartup?.records.length) ||
     Boolean(workerEnvironmentStartup?.hasNonlocalPlacementRecords);
+  const hostDesktopConfig = gatewayPluginConfigAtStart.desktop?.host;
+  const hostDesktopEnabled = hostDesktopConfig?.enabled === true;
   const workerGatewayEndpoint = {
     resolve: (() => undefined) as () => { host: "127.0.0.1" | "::1"; port: number } | undefined,
   };
-  const desktopSessionRegistry = shouldStartWorkerEnvironmentService
-    ? createDesktopSessionRegistry()
-    : undefined;
+  const desktopSessionRegistry =
+    shouldStartWorkerEnvironmentService || hostDesktopEnabled
+      ? createDesktopSessionRegistry()
+      : undefined;
+  const hostDesktopService =
+    hostDesktopConfig && hostDesktopEnabled && desktopSessionRegistry
+      ? (
+          await startupTrace.measure(
+            "host-desktop.runtime-import",
+            () => import("./desktop/host-source.js"),
+          )
+        ).createHostDesktopService({
+          config: hostDesktopConfig,
+          registry: desktopSessionRegistry,
+        })
+      : undefined;
   const workerEnvironmentRuntime =
     workerEnvironmentStartup && desktopSessionRegistry
       ? await startupTrace.measure("worker-environments.runtime-imports", async () => {
@@ -134,8 +149,7 @@ export async function prepareGatewayKernelState(params: {
           });
         })
       : {};
-  const { workerEnvironmentService, workerLiveEvents, workerTunnelManager } =
-    workerEnvironmentRuntime;
+  const { workerEnvironmentService, workerLiveEvents } = workerEnvironmentRuntime;
   // Assigned once approval managers exist; placement dispatch must not run before then.
   const workerDispatchAuthority = {
     revoke: (_params: { sessionId: string; sessionKeys: readonly string[] }): void => {
@@ -167,6 +181,7 @@ export async function prepareGatewayKernelState(params: {
     : undefined;
   const workerDesktopObserveAvailable =
     Boolean(workerEnvironmentService) && gatewayPluginConfigAtStart.cloudWorkers?.desktop === true;
+  const desktopObserveAvailable = workerDesktopObserveAvailable || Boolean(hostDesktopService);
   const channelLogs = Object.fromEntries(
     listGatewayStartupChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
@@ -188,8 +203,11 @@ export async function prepareGatewayKernelState(params: {
       (method) =>
         (workerPlacementDispatchAvailable || method !== "sessions.dispatch") &&
         (workerPlacementControlAvailable || method !== "sessions.reclaim") &&
+        (desktopObserveAvailable || method !== "desktop.observe") &&
         (workerDesktopObserveAvailable ||
-          (method !== "worker.desktop.observe" && method !== "worker.desktop.launch")),
+          (method !== "desktop.launch" &&
+            method !== "worker.desktop.observe" &&
+            method !== "worker.desktop.launch")),
     );
   const runtimeConfig = await startupTrace.measure("runtime.config", async () => {
     const { resolveGatewayRuntimeConfig } = await import("./server-runtime-config.js");
@@ -421,7 +439,7 @@ export async function prepareGatewayKernelState(params: {
     handleWatchNodeRequest: async (req: IncomingMessage, res: ServerResponse) =>
       (await watchNodeRequestHandler.current?.(req, res)) ?? false,
     workerIngressEnabled: Boolean(workerEnvironmentService),
-    desktopSessionRegistry: workerTunnelManager ? desktopSessionRegistry : undefined,
+    desktopSessionRegistry,
     clients: connectionState.clients,
   });
   const {
@@ -453,6 +471,9 @@ export async function prepareGatewayKernelState(params: {
     workerPlacementControlAvailable,
     workerPlacementDispatchAvailable,
     workerDesktopObserveAvailable,
+    desktopObserveAvailable,
+    desktopSessionRegistry,
+    hostDesktopService,
     channelLogs,
     channelRuntimeEnvs,
     listStartupChannelGatewayMethods,

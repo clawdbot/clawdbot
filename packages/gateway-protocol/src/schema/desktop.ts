@@ -1,0 +1,36 @@
+// Gateway Protocol schema module defines source-agnostic desktop validation shapes.
+import { Type, type Static } from "typebox";
+import { closedObject } from "./closed-object.js";
+import { WorkerDesktopAppIdSchema } from "./environments.js";
+import { NonEmptyString } from "./primitives.js";
+
+// Desktop sources are additive; node and future source kinds append new union arms.
+export const DesktopSourceSchema = Type.Union([
+  closedObject({ kind: Type.Literal("host") }),
+  closedObject({ kind: Type.Literal("environment"), environmentId: NonEmptyString }),
+]);
+
+export const DesktopObserveParamsSchema = closedObject({
+  source: DesktopSourceSchema,
+  control: Type.Optional(Type.Boolean()),
+});
+
+export const DesktopObserveResultSchema = closedObject({
+  transport: Type.String({ enum: ["rfb"] }),
+  wsPath: NonEmptyString,
+  expiresAtMs: Type.Integer({ minimum: 0 }),
+  control: Type.Boolean(),
+  vncPassword: Type.Optional(NonEmptyString),
+  // Auth drives credential prompting without coupling clients to RFB security numbers.
+  auth: Type.Optional(Type.String({ enum: ["none", "vnc-password", "ard-account"] })),
+});
+
+export const DesktopLaunchParamsSchema = closedObject({
+  source: closedObject({ kind: Type.Literal("environment"), environmentId: NonEmptyString }),
+  app: WorkerDesktopAppIdSchema,
+});
+
+export type DesktopSource = Static<typeof DesktopSourceSchema>;
+export type DesktopObserveParams = Static<typeof DesktopObserveParamsSchema>;
+export type DesktopObserveResult = Static<typeof DesktopObserveResultSchema>;
+export type DesktopLaunchParams = Static<typeof DesktopLaunchParamsSchema>;

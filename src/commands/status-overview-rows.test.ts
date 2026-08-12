@@ -23,6 +23,7 @@ describe("status-overview-rows", () => {
       "1 files · 2 chunks · plugin memory · ok(vector ready) · warn(fts ready) · muted(cache warm)",
     );
     expect(findRowValue(rows, "Plugin compatibility")).toBe("warn(1 notice · 1 plugin)");
+    expect(findRowValue(rows, "Host desktop")).toBe("muted(disabled)");
     expect(findRowValue(rows, "Sessions")).toBe(
       "2 active · default gpt-5.5 (12k ctx) · store.json",
     );
