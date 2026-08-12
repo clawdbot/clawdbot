@@ -4,6 +4,7 @@ import {
   getRuntimeAmbientEnvTriggers,
   getRuntimeConfigAppliedHash,
   getRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshotRefreshHandler,
   getRuntimeConfigSourceSnapshot,
   setRuntimeAmbientEnvTriggers,
   setRuntimeConfigAppliedHash,
@@ -19,7 +20,13 @@ import {
   getActivePluginRegistryWorkspaceDir,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
+import {
+  clearSecretsRuntimeSnapshotState,
+  getActiveSecretsRuntimeRefreshContext,
+  getActiveSecretsRuntimeSnapshotRevisionState,
+  getActiveSecretsRuntimeSnapshotState,
+  restoreSecretsRuntimeSnapshotStateAfterClear,
+} from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import { prepareGatewayKernelRequestRuntime } from "./server-kernel-request-runtime.js";
@@ -140,8 +147,9 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
   ensureOpenClawCliOnPath();
   let lifecycleRuntime: Awaited<ReturnType<typeof prepareGatewayLifecycle>> | undefined;
   // Pre-lifecycle failure cleanup is scoped to state THIS attempt published: an embedded
-  // process can already run a Gateway whose registry and config snapshot these globals hold,
-  // and a second kernel attempt failing during preflight must not strip them from it.
+  // process can already run a Gateway whose registry, config snapshot, and secrets runtime
+  // these globals hold, and a second kernel attempt failing during preflight must not strip
+  // them from it.
   const priorRegistry = getActivePluginRegistry();
   const priorRegistryKey = getActivePluginRegistryKey();
   const priorRegistryWorkspaceDir = getActivePluginRegistryWorkspaceDir();
@@ -149,6 +157,10 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
   const priorSourceSnapshot = getRuntimeConfigSourceSnapshot();
   const priorAppliedHash = getRuntimeConfigAppliedHash();
   const priorAmbientEnvTriggers = getRuntimeAmbientEnvTriggers();
+  const priorSecretsSnapshot = getActiveSecretsRuntimeSnapshotState();
+  const priorSecretsRevision = getActiveSecretsRuntimeSnapshotRevisionState();
+  const priorSecretsRefreshContext = getActiveSecretsRuntimeRefreshContext();
+  const priorSecretsRefreshHandler = getRuntimeConfigSnapshotRefreshHandler();
   try {
     const bootstrap = await prepareGatewayServerBootstrap({
       port,
@@ -212,8 +224,8 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
       // registrations from a Gateway that never started as LANDED channel owners — while a
       // still-running embedded Gateway's state is preserved or restored. The registry retires
       // FIRST — plugin-host cleanup still reads the runtime config and secrets snapshots,
-      // exactly as normal shutdown orders it — and the snapshots scrub afterwards even when
-      // that cleanup throws.
+      // exactly as normal shutdown orders it — and the snapshots scrub (or restore to their
+      // prior state) afterwards even when that cleanup throws.
       try {
         if (getActivePluginRegistry() !== priorRegistry) {
           await clearActivePluginRegistry();
@@ -227,7 +239,24 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
           }
         }
       } finally {
-        clearSecretsRuntimeSnapshotState();
+        // The secrets family follows the same THIS-attempt scope: leave a surviving snapshot
+        // untouched when this attempt never replaced it (revision unchanged), otherwise clear
+        // and reactivate the captured prior state — clear-only strips a surviving embedded
+        // Gateway's secrets runtime. clearSecretsRuntimeSnapshotState() also cascades into
+        // clearRuntimeConfigSnapshot(); the config restores below compensate and stay after it.
+        if (
+          !priorSecretsSnapshot ||
+          getActiveSecretsRuntimeSnapshotRevisionState() !== priorSecretsRevision
+        ) {
+          clearSecretsRuntimeSnapshotState();
+          if (priorSecretsSnapshot) {
+            restoreSecretsRuntimeSnapshotStateAfterClear({
+              snapshot: priorSecretsSnapshot,
+              refreshContext: priorSecretsRefreshContext,
+              refreshHandler: priorSecretsRefreshHandler,
+            });
+          }
+        }
         clearPluginMetadataLifecycleCaches();
         if (getRuntimeConfigSnapshot() !== priorSnapshot) {
           clearRuntimeConfigSnapshot();

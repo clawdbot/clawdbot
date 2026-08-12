@@ -1178,4 +1178,25 @@ export function clearSecretsRuntimeSnapshotState(): void {
     clearHook();
   }
 }
+
+/**
+ * Reinstates a snapshot captured via getActiveSecretsRuntimeSnapshotState() after
+ * clearSecretsRuntimeSnapshotState() wiped the slots. The clear owns the auth-store wipe, so the
+ * captured credential clones re-adopt the live credentials revision instead of tripping the
+ * stale-credentials activation guard.
+ */
+export function restoreSecretsRuntimeSnapshotStateAfterClear(params: {
+  snapshot: PreparedSecretsRuntimeSnapshot;
+  refreshContext: SecretsRuntimeRefreshContext | null;
+  refreshHandler: RuntimeConfigSnapshotRefreshHandler | null;
+}): void {
+  activateSecretsRuntimeSnapshotState({
+    ...params,
+    snapshot: {
+      ...params.snapshot,
+      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+    },
+    mergeLiveAuthBookkeeping: false,
+  });
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

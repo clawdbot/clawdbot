@@ -5,6 +5,11 @@
 // channel owners and applies stale schemas.
 import { describe, expect, it, vi } from "vitest";
 import {
+  getRuntimeAuthProfileStoreCredentialsRevision,
+  getRuntimeAuthProfileStoreSnapshotCore,
+  listRuntimeAuthProfileStoreSnapshots,
+} from "../agents/auth-profiles/runtime-snapshots.js";
+import {
   clearRuntimeConfigSnapshot,
   getRuntimeAmbientEnvTriggers,
   getRuntimeConfigAppliedHash,
@@ -19,6 +24,14 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import {
+  activateSecretsRuntimeSnapshotState,
+  clearSecretsRuntimeSnapshotState,
+  getActiveSecretsRuntimeSnapshotState,
+  getLiveSecretsRuntimeAuthStores,
+  type PreparedSecretsRuntimeSnapshot,
+} from "../secrets/runtime-state.js";
+import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { createGatewayKernel } from "./server-kernel.js";
@@ -111,6 +124,7 @@ describe("createGatewayKernel pre-lifecycle failure", () => {
     // prior-state preservation is pinned in server-kernel.startup-failure-early.test.ts).
     resetPluginRuntimeStateForTest();
     clearRuntimeConfigSnapshot();
+    clearSecretsRuntimeSnapshotState();
     try {
       await expect(
         createGatewayKernel(port, {
@@ -127,6 +141,12 @@ describe("createGatewayKernel pre-lifecycle failure", () => {
       // config.get keeps reporting an applied revision) from a Gateway that never started.
       expect(getRuntimeAmbientEnvTriggers()).toBeNull();
       expect(getRuntimeConfigAppliedHash()).toBeNull();
+      // Bootstrap activated this attempt's own secrets snapshot before the lifecycle failure;
+      // with no prior gateway the scrub-on-failure contract leaves every secrets slot cleared.
+      expect(getActiveSecretsRuntimeSnapshotState()).toBeNull();
+      expect(getLiveSecretsRuntimeAuthStores()).toEqual([]);
+      expect(listRuntimeAuthProfileStoreSnapshots()).toEqual([]);
+      expect(getActiveRuntimeWebToolsMetadataFromState()).toBeNull();
       // Registry teardown ran BEFORE the snapshot scrub.
       expect(teardownOrder.calls.lastIndexOf("registry")).toBeGreaterThanOrEqual(0);
       expect(teardownOrder.calls.lastIndexOf("registry")).toBeLessThan(
@@ -244,6 +264,109 @@ describe("createGatewayKernel pre-lifecycle failure", () => {
       expect(getRuntimeConfigSnapshot()).toBeNull();
     } finally {
       configLoadFailure.enabled = false;
+      resetPluginRuntimeStateForTest();
+      clearRuntimeConfigSnapshot();
+      await state.cleanup();
+    }
+  });
+
+  // ClawSweeper cycle 35 (P1): a failed SECOND start replaces the active secrets snapshot during
+  // bootstrap and dies before a lifecycle exists. Clearing without reactivating the captured
+  // prior state strips the surviving embedded Gateway's secrets runtime — active snapshot,
+  // auth-store snapshots, web-tool metadata — while registry and config state come back.
+  it("restores the surviving gateway's secrets runtime after a failed second start", async () => {
+    const port = await getFreePort();
+    const state = await createOpenClawTestState({
+      label: "gateway-kernel-secrets-restore",
+      layout: "home",
+      env: {
+        OPENCLAW_GATEWAY_PASSWORD: undefined,
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+        OPENCLAW_SKIP_CANVAS_HOST: "1",
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_CRON: "1",
+        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+        OPENCLAW_SKIP_PROVIDERS: "1",
+        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+        VITEST: "1",
+      },
+    });
+    const token = "gateway-kernel-secrets-token";
+    await state.writeConfig({
+      gateway: {
+        auth: { mode: "token", token },
+        controlUi: { enabled: false },
+        port,
+      },
+    });
+    state.applyEnv();
+    resetPluginRuntimeStateForTest();
+    clearRuntimeConfigSnapshot();
+    clearSecretsRuntimeSnapshotState();
+    // The surviving embedded gateway's state: registry + applied snapshot + activated secrets
+    // runtime (seeded through the same activation seam gateway startup uses).
+    setActivePluginRegistry(createEmptyPluginRegistry(), "embedded-prior-secrets");
+    const runningConfig: OpenClawConfig = { channels: {} };
+    setAppliedRuntimeConfigSnapshot(runningConfig, runningConfig);
+    const agentDir = "/tmp/openclaw-embedded-prior-secrets";
+    const priorSecrets: PreparedSecretsRuntimeSnapshot = {
+      sourceConfig: runningConfig,
+      config: runningConfig,
+      authStores: [
+        {
+          agentDir,
+          store: {
+            version: 1,
+            profiles: {
+              "openai:embedded-prior": {
+                type: "api_key",
+                provider: "openai",
+                key: "sk-embedded-prior",
+              },
+            },
+          },
+        },
+      ],
+      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+      warnings: [],
+      webTools: {
+        search: { providerSource: "configured", selectedProvider: "brave", diagnostics: [] },
+        fetch: { providerSource: "none", diagnostics: [] },
+        diagnostics: [],
+      },
+    };
+    activateSecretsRuntimeSnapshotState({
+      snapshot: priorSecrets,
+      refreshContext: null,
+      refreshHandler: null,
+    });
+    try {
+      await expect(
+        createGatewayKernel(port, {
+          auth: { mode: "token", token },
+          bind: "loopback",
+          controlUiEnabled: false,
+          sidecarStartup: "defer",
+        }),
+      ).rejects.toThrow("fixture pre-lifecycle failure");
+      // The surviving gateway keeps resolving through its activated secrets runtime.
+      expect(getActiveSecretsRuntimeSnapshotState()?.config).toEqual(runningConfig);
+      expect(
+        getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles["openai:embedded-prior"],
+      ).toMatchObject({ key: "sk-embedded-prior" });
+      expect(getLiveSecretsRuntimeAuthStores()).toMatchObject([
+        {
+          agentDir,
+          store: { profiles: { "openai:embedded-prior": { key: "sk-embedded-prior" } } },
+        },
+      ]);
+      expect(getActiveRuntimeWebToolsMetadataFromState()?.search).toMatchObject({
+        providerSource: "configured",
+        selectedProvider: "brave",
+      });
+    } finally {
+      clearSecretsRuntimeSnapshotState();
       resetPluginRuntimeStateForTest();
       clearRuntimeConfigSnapshot();
       await state.cleanup();
