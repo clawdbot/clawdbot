@@ -15,6 +15,8 @@ type DockLayoutControllerOptions<TDock extends DockPanelPlacement> = {
   reservationPrefix: string;
   isAvailable: () => boolean;
   isFullscreen?: () => boolean;
+  maxWidth?: () => number;
+  reserveViewport?: boolean;
   onResize?: () => void;
 };
 
@@ -28,7 +30,7 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
   private resizeCleanup: (() => void) | null = null;
   private readonly onViewportResize = () => {
     const height = Math.min(this.height, this.options.layout.maxHeight());
-    const width = Math.min(this.width, this.options.layout.maxWidth());
+    const width = Math.min(this.width, this.maxWidth());
     if (height === this.height && width === this.width) {
       return;
     }
@@ -58,7 +60,7 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     this.open = layout.open && this.options.isAvailable();
     this.dock = layout.dock;
     this.height = layout.height;
-    this.width = layout.width;
+    this.width = Math.min(layout.width, this.maxWidth());
     window.addEventListener("resize", this.onViewportResize);
   }
 
@@ -138,7 +140,7 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
   }
 
   syncReservation(): void {
-    if (this.isFullscreen()) {
+    if (this.isFullscreen() || this.options.reserveViewport === false) {
       return;
     }
     const visible = this.options.isAvailable() && this.open;
@@ -166,7 +168,7 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
         this.height = Math.min(next, this.options.layout.maxHeight());
       } else {
         const next = Math.max(this.options.layout.minWidth, startWidth + (startX - move.clientX));
-        this.width = Math.min(next, this.options.layout.maxWidth());
+        this.width = Math.min(next, this.maxWidth());
       }
       this.syncReservation();
       this.options.onResize?.();
@@ -212,6 +214,9 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
   }
 
   private clearReservation(): void {
+    if (this.options.reserveViewport === false) {
+      return;
+    }
     const root = document.documentElement.style;
     root.setProperty(`--oc-${this.options.reservationPrefix}-reserve-bottom`, "0px");
     root.setProperty(`--oc-${this.options.reservationPrefix}-reserve-right`, "0px");
@@ -219,6 +224,16 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
 
   private isFullscreen(): boolean {
     return this.options.isFullscreen?.() === true;
+  }
+
+  private maxWidth(): number {
+    return Math.max(
+      this.options.layout.minWidth,
+      Math.min(
+        this.options.layout.maxWidth(),
+        this.options.maxWidth?.() ?? Number.POSITIVE_INFINITY,
+      ),
+    );
   }
 }
 

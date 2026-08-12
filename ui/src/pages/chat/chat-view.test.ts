@@ -819,13 +819,8 @@ function createSessionWorkspace(
     loading: false,
     error: null,
     activeId: null,
-    dock: "right",
     narrowLayout: false,
-    dockDragging: false,
-    dockDragZone: null,
     onToggleCollapsed: () => undefined,
-    onSetDock: () => undefined,
-    onDockDragStart: () => undefined,
     onRefresh: () => undefined,
     onBrowsePath: () => undefined,
     onCopyPath: () => undefined,
@@ -1841,8 +1836,8 @@ describe("chat composer workbench", () => {
     expect(main?.parentElement).toBe(workbench);
     expect(rail?.parentElement).toBe(workbench);
     expect(Array.from(workbench?.children ?? []).map((child) => child.className)).toEqual([
-      "chat-workspace-rail",
       "chat-workbench__main",
+      "chat-workspace-rail",
     ]);
     expect(container.querySelector(".chat-workspace-rail__path")?.textContent?.trim()).toBe(
       "/workspace",
@@ -1910,7 +1905,7 @@ describe("chat composer workbench", () => {
     openSpy.mockRestore();
   });
 
-  it("forces the workspace rail to the bottom dock and drops side-dock controls on narrow panes", () => {
+  it("forces the workspace rail to the bottom dock on narrow panes", () => {
     const container = renderChatView({
       sessionWorkspace: createSessionWorkspace({
         narrowLayout: true,
@@ -1927,6 +1922,21 @@ describe("chat composer workbench", () => {
     expect(container.querySelector(".chat-workspace-rail__grip")).toBeNull();
     expect(container.querySelector(".chat-workspace-rail__terminal")).toBeNull();
     expect(container.querySelector(".chat-session-diff-toggle")).toBeNull();
+  });
+
+  it("keeps the pane header in the conversation column while rails span the workbench", () => {
+    const container = renderChatView({
+      header: html`<header class="chat-pane__header">Session</header>`,
+      sessionWorkspace: createSessionWorkspace(),
+      workspaceRail: [344, html`<div class="chat-workspace-rail-resizer"></div>`],
+    });
+
+    const workbench = container.querySelector<HTMLElement>(".chat-workbench");
+    const column = container.querySelector(".chat-main__conversation-column");
+    expect(column?.firstElementChild?.classList.contains("chat-pane__header")).toBe(true);
+    expect(container.querySelector(".chat-workspace-rail")?.contains(column)).toBe(false);
+    expect(workbench?.style.getPropertyValue("--chat-workspace-rail-width")).toBe("344px");
+    expect(workbench?.querySelector(".chat-workspace-rail-resizer")).not.toBeNull();
   });
 
   it("moves the background-tasks rail to a bottom strip on narrow panes", () => {

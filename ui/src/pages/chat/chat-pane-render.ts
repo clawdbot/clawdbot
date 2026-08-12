@@ -31,8 +31,8 @@ import {
 } from "./chat-pane-session-controls.ts";
 import {
   SESSION_RAIL_SIDE_MIN_PANE_WIDTH,
-  WORKSPACE_RAIL_MAX_WIDTH,
   WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
+  chatMainWidth,
 } from "./chat-pane-shared.ts";
 import {
   renderSidebarRegion,
@@ -70,9 +70,7 @@ import {
   activatePanel,
   closeSlot,
   detachPanelToColumn,
-  isSidebarRegionCollapsed,
   mergePanelIntoColumn,
-  sidebarPrimaryWidth,
   type SidebarSide,
   type SidebarSlotId,
 } from "./sidebar-layout.ts";
@@ -147,9 +145,8 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       approvalSnapshot?.approvalQueue ?? [],
       state.sessionKey,
     );
-    // Tool rows consult the global title store while rendering; point its
-    // fetcher at this pane's connection. Requests capture session + agent at
-    // schedule time, so later renders of other panes cannot re-route them.
+    // Tool rows consult the global title store while rendering. Requests capture
+    // session + agent at schedule time, so another pane cannot re-route them.
     configureToolTitleFetcher({
       client: state.connected ? state.client : null,
       sessionKey: catalogKey ? null : state.sessionKey || null,
@@ -202,34 +199,26 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         gatewaySnapshot.client?.instanceId,
         state.sessionKey,
       );
-    // Never flash "view-only" while metadata loads; after loading, anything short
-    // of a continuable session (failed lookups too) explains the disabled composer.
+    // Do not flash view-only while metadata loads; failed lookups still explain
+    // why the composer is disabled.
     const catalogDisabledReason =
       catalogKey && !this.catalogLoading && this.catalogSession?.canContinue !== true
         ? this.catalogHost?.kind === "node"
           ? t("chat.catalog.remoteViewOnly")
           : t("chat.catalog.unsupportedViewOnly")
         : null;
-    const sidebarChatColumn = sidebarLayout.columns.find((column) =>
-      column.panels.some((panel) => panel.slot === "chat"),
-    );
-    const sidebarRegionCollapsed = isSidebarRegionCollapsed(sidebarLayout, this.paneWidth);
-    const chatLayoutWidth = sidebarRegionCollapsed
-      ? this.paneWidth
-      : (sidebarChatColumn?.width ?? sidebarPrimaryWidth(sidebarLayout, this.paneWidth));
+    const chatLayoutWidth = this.chatLayoutWidth(sidebarLayout);
     const sessionWorkspace = createSessionWorkspaceProps(state, {
       draftScope: this.presentationId,
       narrowLayout: chatLayoutWidth < WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
     });
-    const railSideDocked =
-      !sessionWorkspace.collapsed &&
-      !sessionWorkspace.narrowLayout &&
-      sessionWorkspace.dock !== "bottom";
-    // The workspace rail claims the first side slot; tasks need room for both columns.
+    const railSideDocked = !sessionWorkspace.collapsed && !sessionWorkspace.narrowLayout;
+    // The workspace claims the first side slot; tasks need room for both columns.
     const backgroundTasks = createBackgroundTasksProps(state, {
       narrowLayout:
         chatLayoutWidth <
-        WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH + (railSideDocked ? WORKSPACE_RAIL_MAX_WIDTH : 0),
+        WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH +
+          (railSideDocked ? this.workspaceRailLayout.width + 4 : 0),
       openTaskId:
         state.sidebarContent?.kind === "task" && detailSlotOpen(sidebarLayout)
           ? state.sidebarContent.taskId
@@ -237,9 +226,11 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       onOpenTaskDetail: (task) => state.handleOpenSidebar({ kind: "task", taskId: task.id }),
     });
     const tasksSideDocked = !backgroundTasks.collapsed && !backgroundTasks.narrowLayout;
-    // Only side-docked rails narrow the conversation region.
-    const sideRailCount = (railSideDocked ? 1 : 0) + (tasksSideDocked ? 1 : 0);
-    const chatMainWidth = chatLayoutWidth - sideRailCount * WORKSPACE_RAIL_MAX_WIDTH;
+    const conversationWidth = chatMainWidth(
+      chatLayoutWidth,
+      railSideDocked ? this.workspaceRailLayout.width : null,
+      tasksSideDocked ? this.tasksRailLayout.width : null,
+    );
     const selfUser = resolveCurrentSelfUser({
       snapshotUser: gatewaySnapshot.selfUser,
       presenceEntries: readPresenceEntries(gatewaySnapshot.hello?.snapshot),
@@ -308,7 +299,8 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         : this.sessionCompanionThreads.view(state.sessionKey, currentAgentId),
       ...this.sessionRailCommandProps(state.sessionKey),
       sessionRailMode: this.selectedSessionRailMode(state.sessionKey),
-      sessionRailDocked: !catalogKey && chatMainWidth >= SESSION_RAIL_SIDE_MIN_PANE_WIDTH,
+      sessionRailDocked: !catalogKey && conversationWidth >= SESSION_RAIL_SIDE_MIN_PANE_WIDTH,
+      companionRail: this.companionRailColumn(),
       onSessionRailSubmit: (question) => void this.submitSessionCompanionQuestion(question),
       onSessionRailDraftChange: (draft) =>
         this.sessionCompanionThreads.setDraft(state.sessionKey, draft, currentAgentId),
@@ -319,8 +311,8 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
           this.sessionRailMode = mode;
         }
       },
-      // Unconditional: catalog chats never render the rail (sessionRailReady is
-      // forced false), and a hide/show from any surface must reach the gateway.
+      // Catalog chats never render this rail, but hide/show from any surface must
+      // still reach the gateway.
       onObserverVisibilityChange: this.setSessionObserverVisibility,
       gatewayQuestionPrompts: catalogKey || sessionParticipationBlocked ? [] : this.questionPrompts,
       onGatewayQuestionChange: () => {
@@ -433,17 +425,18 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
             effortAccess: mutationAccess.effort,
           }),
       sessionWorkspace: catalogKey ? undefined : sessionWorkspace,
+      workspaceRail: this.workspaceRailColumn(),
       backgroundTasks: catalogKey ? undefined : backgroundTasks,
+      tasksRail: this.tasksRailColumn(),
       taskSuggestions: this.taskSuggestions,
       pullRequests: this.sessionPullRequests.filter(
         (pullRequest) => !this.dismissedSessionPullRequestIds.has(chatPullRequestId(pullRequest)),
       ),
-      // Decided on the undismissed list: a dismissed open PR still exists, so
-      // the row must not offer creating a duplicate.
       pullRequestsBranch: createPullRequestBranch(
         this.sessionPullRequests,
         this.sessionPullRequestsBranch,
       ),
+      // A dismissed open PR still exists, so the row must not offer a duplicate.
       pullRequestsRateLimited: this.sessionPullRequestsRateLimited,
       pullRequestsExpanded: this.sessionPullRequestsExpanded,
       onExpandPullRequests: () => {
@@ -496,7 +489,8 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       },
       onChatScroll: (event) => this.handleTranscriptScroll(event),
       onHistoryIntent: (event) => this.handleTranscriptHistoryIntent(event),
-      // Metadata can resize a committed row; re-enter the scroll owner so the follow lock wins.
+      // Metadata can resize a committed row; re-enter the scroll owner so the
+      // follow lock wins.
       onAssistantAttachmentLoaded: () => scheduleChatScroll(state),
       getDraft: () => state.chatMessage,
       onDraftChange: state.handleChatDraftChange,
@@ -603,8 +597,20 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       resolveArtifactDownload: (params) => resolveChatArtifactDownload(state, params),
       basePath: state.basePath,
     };
-    const chat = renderChat(props);
-    const primary = this.renderBoardPrimary(board, chat);
+    const header = this.renderPaneHeader(
+      sessionWorkspace,
+      backgroundTasks,
+      selectedSession,
+      Boolean(catalogKey),
+      selectedAgent?.workspace,
+      selectedAgent?.workspaceGit === true,
+    );
+    const chat = renderChat({ ...props, header: board.face === "dashboard" ? nothing : header });
+    const boardPrimary = this.renderBoardPrimary(board, chat);
+    const primary =
+      board.face === "dashboard"
+        ? html`<div class="chat-pane-primary-column">${header}${boardPrimary}</div>`
+        : boardPrimary;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
     const panelTemplates = {
       chat,
@@ -689,14 +695,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       primary,
       sessionKey: state.sessionKey,
     });
-    return html`${this.renderPaneHeader(
-      sessionWorkspace,
-      backgroundTasks,
-      selectedSession,
-      Boolean(catalogKey),
-      selectedAgent?.workspace,
-      selectedAgent?.workspaceGit === true,
-    )}${content}${renderChatImageLightbox(
+    return html`${content}${renderChatImageLightbox(
       state.imageLightbox,
       state.handleCloseImage,
     )}${this.renderResetConfirmation()}`;

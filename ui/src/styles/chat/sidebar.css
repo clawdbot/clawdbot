@@ -2,7 +2,7 @@
 .chat-workbench {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(230px, 280px);
+  grid-template-columns: minmax(0, 1fr);
   gap: 0;
   flex: 1;
   min-height: 0;
@@ -13,6 +13,12 @@
    thread. Reopen via the pane header or ⇧⌘B. */
 .chat-workbench--workspace-collapsed {
   grid-template-columns: minmax(0, 1fr);
+}
+
+.chat-workbench--workspace-open {
+  grid-template-columns:
+    minmax(0, 1fr) 4px
+    minmax(260px, var(--chat-workspace-rail-width));
 }
 
 /* Bottom dock mirrors the terminal panel: the rail becomes a strip under the
@@ -39,13 +45,15 @@
    rules sit after the collapse/dock modifiers so the extra column wins at
    equal specificity. */
 .chat-workbench--tasks-open {
-  grid-template-columns: minmax(0, 1fr) minmax(270px, 330px);
+  grid-template-columns:
+    minmax(0, 1fr) 4px
+    minmax(270px, var(--chat-tasks-rail-width));
 }
 
-.chat-workbench--tasks-open:not(.chat-workbench--workspace-collapsed):not(
-  .chat-workbench--dock-bottom
-) {
-  grid-template-columns: minmax(0, 1fr) minmax(230px, 280px) minmax(270px, 330px);
+.chat-workbench--workspace-open.chat-workbench--tasks-open {
+  grid-template-columns:
+    minmax(0, 1fr) 4px minmax(260px, var(--chat-workspace-rail-width)) 4px
+    minmax(270px, var(--chat-tasks-rail-width));
 }
 
 /* Compact icon button shared by the pane header actions. Sizing only — chrome
@@ -170,6 +178,15 @@
   flex: 1 1 0;
 }
 
+.chat-main__conversation-column {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .chat-main__conversation {
   position: relative;
   display: flex;
@@ -196,10 +213,48 @@
 
 .chat-main--rail-docked > openclaw-chat-session-rail {
   display: block;
-  width: 400px;
-  min-width: 400px;
+  width: var(--chat-companion-rail-width);
+  min-width: 300px;
   min-height: 0;
-  flex: 0 0 400px;
+  flex: 0 0 var(--chat-companion-rail-width);
+}
+
+:is(.chat-workspace-rail-resizer, .chat-tasks-rail-resizer, .chat-companion-rail-resizer) {
+  position: relative;
+  z-index: 2;
+  width: 4px;
+  min-width: 4px;
+  cursor: ew-resize;
+  background: transparent;
+}
+
+:is(.chat-workspace-rail-resizer, .chat-tasks-rail-resizer, .chat-companion-rail-resizer)::before {
+  position: absolute;
+  inset: 0 -4px;
+  content: "";
+}
+
+:is(.chat-workspace-rail-resizer, .chat-tasks-rail-resizer, .chat-companion-rail-resizer)::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: var(--border);
+  content: "";
+  transition:
+    background 150ms ease-out,
+    width 150ms ease-out;
+}
+
+:is(
+  .chat-workspace-rail-resizer,
+  .chat-tasks-rail-resizer,
+  .chat-companion-rail-resizer
+):hover::after {
+  width: 2px;
+  background: var(--accent);
 }
 
 openclaw-chat-sidebar-region,
@@ -405,13 +460,12 @@ openclaw-chat-sidebar-region,
 }
 
 .chat-workspace-rail {
-  grid-column: 2;
+  grid-column: 3;
   grid-row: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  border-left: 1px solid var(--border);
   background: color-mix(in srgb, var(--panel) 84%, transparent);
 }
 
@@ -460,16 +514,22 @@ openclaw-chat-sidebar-region,
   padding: 0;
 }
 
-/* Grab affordance for drag-to-dock. */
-.chat-workspace-rail__grip {
-  cursor: grab;
-  user-select: none;
-  -webkit-user-select: none;
-  touch-action: none;
+.chat-workspace-rail__terminal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* Chromeless at rest like the sibling ghost buttons; chrome on hover only. */
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
 }
 
-.chat-workspace-rail__grip:active {
-  cursor: grabbing;
+.chat-workspace-rail__terminal:hover,
+.chat-workspace-rail__terminal:focus-visible {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
 /* Overrides the shared .nav-collapse-toggle chrome (border, elevated
@@ -799,8 +859,31 @@ openclaw-chat-sidebar-region,
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  border-left: 1px solid var(--border);
   background: color-mix(in srgb, var(--panel) 84%, transparent);
+}
+
+.chat-workspace-rail-resizer {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.chat-workbench--workspace-open.chat-workbench--tasks-open .chat-tasks-rail-resizer {
+  grid-column: 4;
+  grid-row: 1;
+}
+
+.chat-workbench--tasks-open:not(.chat-workbench--workspace-open) .chat-tasks-rail-resizer {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.chat-pane-primary-column {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .chat-tasks-rail__header {
