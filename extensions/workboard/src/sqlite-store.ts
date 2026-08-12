@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
@@ -134,6 +135,10 @@ function ensureColumn(db: DatabaseSync, tableName: string, columnName: string, d
     return;
   }
   db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${definition}`);
+}
+
+function legacyAssociationKey(linkId: string): string {
+  return `legacy_${createHash("sha256").update(linkId).digest("base64url")}`;
 }
 
 const WORKBOARD_SCHEMA_SQL = `
@@ -375,11 +380,27 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
     "reconciliation_association_key",
     "reconciliation_association_key TEXT",
   );
-  db.prepare(
+  const legacyLinks = db
+    .prepare(
+      `SELECT id FROM workboard_card_links
+       WHERE reconciliation_association_key IS NULL AND id LIKE 'external:%'`,
+    )
+    .all() as Array<{ id: string }>;
+  const updateLegacyAssociationKey = db.prepare(
+    "UPDATE workboard_card_links SET reconciliation_association_key = ? WHERE id = ?",
+  );
+  for (const link of legacyLinks) {
+    updateLegacyAssociationKey.run(legacyAssociationKey(link.id), link.id);
+  }
+  db.exec(
     `UPDATE workboard_card_links
-     SET reconciliation_association_key = replace(id, ':', '_')
-     WHERE reconciliation_association_key IS NULL AND id LIKE 'external:%'`,
-  ).run();
+     SET last_source_observation_request_json = json_set(
+       json_remove(last_source_observation_request_json, '$.expectedRevision'),
+       '$.reconciliationAssociationKey', reconciliation_association_key
+     )
+     WHERE last_source_observation_request_json IS NOT NULL
+       AND json_valid(last_source_observation_request_json)`,
+  );
   ensureColumn(
     db,
     "workboard_card_links",

@@ -243,7 +243,7 @@ describe("WorkboardReconciler", () => {
       sourceUpdatedAt: 100,
       card: { title: "Deploy API", status: "running" },
     });
-    await store.update(created.card.id, { status: "blocked" });
+    const blocked = await store.update(created.card.id, { status: "blocked" });
 
     const missingOnce = await reconciler.observeSource({
       cardId: created.card.id,
@@ -251,10 +251,12 @@ describe("WorkboardReconciler", () => {
       objectiveKey: "deploy-api",
       sourceUrl: "https://example.test/runs/a",
       idempotencyKey: "a",
+      reconciliationAssociationKey: created.link.reconciliationAssociationKey,
       observationId: "scan-200",
       sourceState: "missing-after-successful-full-scan",
       staleAfterMisses: 2,
       observedAt: 200,
+      expectedRevision: blocked.updatedAt,
     });
     const link = (result: typeof missingOnce) =>
       result.card.metadata?.links?.find((entry) => entry.id.includes("external:"));
@@ -265,10 +267,12 @@ describe("WorkboardReconciler", () => {
       objectiveKey: "deploy-api",
       sourceUrl: "https://example.test/runs/a",
       idempotencyKey: "a",
+      reconciliationAssociationKey: created.link.reconciliationAssociationKey,
       observationId: "scan-300",
       sourceState: "missing-after-successful-full-scan",
       staleAfterMisses: 2,
       observedAt: 300,
+      expectedRevision: missingOnce.revision,
     });
     expect(link(stale)?.staleAt).toBe(300);
     const failed = await reconciler.observeSource({
@@ -277,10 +281,12 @@ describe("WorkboardReconciler", () => {
       objectiveKey: "deploy-api",
       sourceUrl: "https://example.test/runs/a",
       idempotencyKey: "a",
+      reconciliationAssociationKey: created.link.reconciliationAssociationKey,
       observationId: "scan-400",
       sourceState: "dependency-failed",
       staleAfterMisses: 2,
       observedAt: 400,
+      expectedRevision: stale.revision,
     });
     expect(link(failed)?.consecutiveSuccessfulFullScanMisses).toBe(2);
     const present = await reconciler.observeSource({
@@ -289,10 +295,12 @@ describe("WorkboardReconciler", () => {
       objectiveKey: "deploy-api",
       sourceUrl: "https://example.test/runs/a",
       idempotencyKey: "a",
+      reconciliationAssociationKey: created.link.reconciliationAssociationKey,
       observationId: "scan-500",
       sourceState: "present",
       staleAfterMisses: 2,
       observedAt: 500,
+      expectedRevision: failed.revision,
     });
     expect(link(present)?.consecutiveSuccessfulFullScanMisses).toBe(0);
     expect(link(present)?.staleAt).toBeUndefined();
@@ -315,6 +323,7 @@ describe("WorkboardReconciler", () => {
       objectiveKey: "deploy-api",
       sourceUrl: "https://example.test/runs/replay",
       idempotencyKey: "replay",
+      reconciliationAssociationKey: created.link.reconciliationAssociationKey,
       observationId: "scan-42:replay:missing",
       sourceState: "missing-after-successful-full-scan" as const,
       staleAfterMisses: 2,
@@ -358,7 +367,9 @@ describe("WorkboardReconciler", () => {
       objectiveKey: "deploy-api",
       sourceUrl: "https://example.test/runs/evidence",
       idempotencyKey: "evidence",
+      reconciliationAssociationKey: created.link.reconciliationAssociationKey,
       staleAfterMisses: 2,
+      expectedRevision: created.card.updatedAt,
     };
     const missingOne = await reconciler.observeSource({
       ...base,
@@ -429,10 +440,12 @@ describe("WorkboardReconciler", () => {
       objectiveKey: "deploy-api",
       sourceUrl: "https://example.test/runs/ack",
       idempotencyKey: "ack",
+      reconciliationAssociationKey: created.link.reconciliationAssociationKey,
       observationId: "ack-1",
       sourceState: "missing-after-successful-full-scan" as const,
       staleAfterMisses: 1,
       observedAt: 2,
+      expectedRevision: created.card.updatedAt,
     };
     const first = await reconciler.observeSource(observation);
     await (reconciler as unknown as { store: WorkboardStore }).store.update(created.card.id, {
@@ -468,6 +481,7 @@ describe("WorkboardReconciler", () => {
         objectiveKey: "deploy-api",
         sourceUrl: "https://example.test/runs/frozen",
         idempotencyKey: "frozen",
+        reconciliationAssociationKey: created.link.reconciliationAssociationKey,
         observationId: "frozen-1",
         sourceState: "missing-after-successful-full-scan",
         staleAfterMisses: 3,
@@ -482,6 +496,7 @@ describe("WorkboardReconciler", () => {
           objectiveKey: "deploy-api",
           sourceUrl: "https://example.test/runs/frozen",
           idempotencyKey: "frozen",
+          reconciliationAssociationKey: created.link.reconciliationAssociationKey,
           observationId: "frozen-2",
           sourceState: "missing-after-successful-full-scan",
           staleAfterMisses: 3,
@@ -519,6 +534,7 @@ describe("WorkboardReconciler", () => {
       objectiveKey: "deploy-api",
       sourceUrl: "https://example.test/runs/one",
       idempotencyKey: "one",
+      reconciliationAssociationKey: firstLink.link.reconciliationAssociationKey,
       observationId: "chain-one",
       sourceState: "present",
       staleAfterMisses: 2,
@@ -531,6 +547,7 @@ describe("WorkboardReconciler", () => {
       objectiveKey: "deploy-api",
       sourceUrl: "https://example.test/runs/two",
       idempotencyKey: "two",
+      reconciliationAssociationKey: secondLink.link.reconciliationAssociationKey,
       observationId: "chain-two",
       sourceState: "present",
       staleAfterMisses: 2,
@@ -566,6 +583,7 @@ describe("WorkboardReconciler", () => {
         sourceState: "missing-after-successful-full-scan" as const,
         staleAfterMisses: 2,
         observedAt: 2,
+        expectedRevision: created.card.updatedAt,
       };
       await first.observeSource(observation);
       stores.close();
@@ -605,9 +623,11 @@ describe("WorkboardReconciler", () => {
       objectiveKey: "deploy",
       sourceUrl: "https://attacker.test/a",
       idempotencyKey: "a",
+      reconciliationAssociationKey: created.link.reconciliationAssociationKey,
       observationId: "wrong-source",
       staleAfterMisses: 1,
       observedAt: 2,
+      expectedRevision: created.card.updatedAt,
     } as const;
     for (const sourceState of [
       "present",
@@ -629,6 +649,7 @@ describe("WorkboardReconciler", () => {
       sourceState: "missing-after-successful-full-scan",
       observedAt: 3,
       observationId: "later-source",
+      expectedRevision: stale.revision,
     });
     const link = (result: typeof stale) =>
       result.card.metadata?.links?.find((entry) => entry.id.startsWith("external:"));
@@ -660,9 +681,11 @@ describe("WorkboardReconciler", () => {
         objectiveKey: "deploy-api",
         sourceUrl: "https://example.test/a",
         idempotencyKey: "a",
+        reconciliationAssociationKey: "safe-key",
         sourceState: "present",
         staleAfterMisses: 2,
         observedAt: 1,
+        expectedRevision: 1,
       }),
     ).toThrow("observationId is required.");
     expect(() =>
@@ -672,12 +695,34 @@ describe("WorkboardReconciler", () => {
         objectiveKey: "deploy-api",
         sourceUrl: "https://example.test/a",
         idempotencyKey: "a",
+        reconciliationAssociationKey: "safe-key",
         observationId: "x".repeat(201),
         sourceState: "present",
         staleAfterMisses: 2,
         observedAt: 1,
+        expectedRevision: 1,
       }),
     ).toThrow("observationId must be 200 characters or fewer.");
+  });
+
+  it("requires an association address and CAS revision for strict source observations", () => {
+    const base = {
+      cardId: "card",
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      sourceUrl: "https://example.test/a",
+      idempotencyKey: "a",
+      observationId: "strict-address",
+      sourceState: "present",
+      staleAfterMisses: 2,
+      observedAt: 1,
+    };
+    expect(() => projectReconciliationSourceObservation(base)).toThrow(
+      "reconciliationAssociationKey is required.",
+    );
+    expect(() =>
+      projectReconciliationSourceObservation({ ...base, reconciliationAssociationKey: "safe-key" }),
+    ).toThrow("expectedRevision must be a non-negative timestamp.");
   });
   it("returns stable ID-ordered pages and rejects limits outside 1 through 100", async () => {
     const store = new WorkboardStore(createMemoryStore());

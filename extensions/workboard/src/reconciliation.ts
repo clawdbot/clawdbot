@@ -219,15 +219,11 @@ export function projectReconciliationSourceObservation(
     objectiveKey: readBoundedString(input.objectiveKey, "objectiveKey", MAX_OBJECTIVE_KEY_LENGTH),
     sourceUrl: readBoundedString(input.sourceUrl, "sourceUrl", 2000),
     idempotencyKey: readBoundedString(input.idempotencyKey, "idempotencyKey", 160),
-    ...(input.reconciliationAssociationKey === undefined
-      ? {}
-      : {
-          reconciliationAssociationKey: readBoundedString(
-            input.reconciliationAssociationKey,
-            "reconciliationAssociationKey",
-            MAX_ASSOCIATION_KEY_LENGTH,
-          ),
-        }),
+    reconciliationAssociationKey: readBoundedString(
+      input.reconciliationAssociationKey,
+      "reconciliationAssociationKey",
+      MAX_ASSOCIATION_KEY_LENGTH,
+    ),
     observationId: readBoundedString(
       input.observationId,
       "observationId",
@@ -236,9 +232,7 @@ export function projectReconciliationSourceObservation(
     sourceState,
     staleAfterMisses: input.staleAfterMisses as number,
     observedAt: readTimestamp(input.observedAt, "observedAt"),
-    ...(input.expectedRevision === undefined
-      ? {}
-      : { expectedRevision: readTimestamp(input.expectedRevision, "expectedRevision") }),
+    expectedRevision: readTimestamp(input.expectedRevision, "expectedRevision"),
   };
 }
 

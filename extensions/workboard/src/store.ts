@@ -145,6 +145,33 @@ function sourceObservationRequestJson(
   });
 }
 
+function canonicalSourceObservationRequestJson(
+  value: string | undefined,
+  associationKey: string,
+): string | undefined {
+  if (!value) return undefined;
+  try {
+    const request = JSON.parse(value) as Record<string, unknown>;
+    return JSON.stringify({
+      cardId: request.cardId,
+      tenant: request.tenant,
+      objectiveKey: request.objectiveKey,
+      sourceUrl: request.sourceUrl,
+      idempotencyKey: request.idempotencyKey,
+      reconciliationAssociationKey:
+        typeof request.reconciliationAssociationKey === "string"
+          ? request.reconciliationAssociationKey
+          : associationKey,
+      observationId: request.observationId,
+      sourceState: request.sourceState,
+      staleAfterMisses: request.staleAfterMisses,
+      observedAt: request.observedAt,
+    });
+  } catch {
+    return value;
+  }
+}
+
 function sourceObservationResult(
   card: WorkboardCard,
   observation: WorkboardReconciliationSourceObservation,
@@ -357,12 +384,9 @@ export class WorkboardStore extends WorkboardNotificationStore {
         sourceUpdatedAt: 0,
       });
       const links = card.metadata?.links ?? [];
-      const index = observation.reconciliationAssociationKey
-        ? links.findIndex(
-            (link) =>
-              link.reconciliationAssociationKey === observation.reconciliationAssociationKey,
-          )
-        : links.findIndex((link) => link.id === linkId);
+      const index = links.findIndex(
+        (link) => link.reconciliationAssociationKey === observation.reconciliationAssociationKey,
+      );
       if (index === -1)
         throw new Error("source observation does not match an external association.");
       const current = links[index]!;
@@ -371,7 +395,12 @@ export class WorkboardStore extends WorkboardNotificationStore {
       }
       const requestJson = sourceObservationRequestJson(observation);
       if (current.lastSourceObservationId === observation.observationId) {
-        if (current.lastSourceObservationRequestJson !== requestJson) {
+        if (
+          canonicalSourceObservationRequestJson(
+            current.lastSourceObservationRequestJson,
+            observation.reconciliationAssociationKey,
+          ) !== requestJson
+        ) {
           throw new Error("source observationId conflicts with a different request.");
         }
         return sourceObservationResult(card, observation, current);

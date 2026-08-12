@@ -145,7 +145,7 @@ export type WorkboardLink = {
   /** Source timestamp for durable external-execution associations only. */
   sourceUpdatedAt?: number;
   /** Opaque, machine-only address for a durable external-execution association. */
-  reconciliationAssociationKey?: string;
+  reconciliationAssociationKey: string;
   /** Reconciliation-only source evidence. These fields never change card workflow state. */
   consecutiveSuccessfulFullScanMisses?: number;
   staleAt?: number;
@@ -398,7 +398,7 @@ export type WorkboardReconciliationObservation = {
   idempotencyKey: string;
   sourceUpdatedAt: number;
   cardId?: string;
-  expectedRevision?: number;
+  expectedRevision: number;
   card?: Partial<
     Pick<
       WorkboardCard,
