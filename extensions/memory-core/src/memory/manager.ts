@@ -1,6 +1,5 @@
 // Memory Core plugin module implements the concrete memory index manager.
 import type { DatabaseSync } from "node:sqlite";
-import type { FSWatcher } from "chokidar";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
@@ -21,13 +20,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
-import {
-  type EmbeddingProvider,
-  type EmbeddingProviderId,
-  type EmbeddingProviderRequest,
-  type EmbeddingProviderResult,
-  type EmbeddingProviderRuntime,
-} from "./embeddings.js";
+import type { EmbeddingProvider, EmbeddingProviderRequest } from "./embeddings.js";
 import { awaitPendingManagerWork } from "./manager-async-state.js";
 import { MEMORY_BATCH_FAILURE_LIMIT } from "./manager-batch-state.js";
 import { closeMemoryDatabase } from "./manager-db.js";
@@ -67,8 +60,6 @@ function getLocalEmbeddingRuntimeFacts(provider: EmbeddingProvider | null): unkn
   return typeof getRuntimeFacts === "function" ? getRuntimeFacts() : undefined;
 }
 
-const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
-const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
 const log = createSubsystemLogger("memory");
 const INDEX_MANAGER_REGISTRY = new MemoryManagerRegistry<MemoryIndexManager>();
 
@@ -77,10 +68,7 @@ export async function closeAllMemoryIndexManagers(): Promise<void> {
   await INDEX_MANAGER_REGISTRY.closeAll(async (manager) => await manager.close());
 }
 
-export async function closeMemoryIndexManagersForAgent(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-}): Promise<void> {
+export async function closeMemoryIndexManagersForAgent(params: { agentId: string }): Promise<void> {
   await INDEX_MANAGER_REGISTRY.closeForAgent({
     agentId: params.agentId,
     purpose: "default",
@@ -97,7 +85,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   protected readonly workspaceDir: string;
   protected readonly settings: ResolvedMemorySearchConfig;
   protected readonly providerRequirement: MemoryEmbeddingProviderRequirement;
-  protected override provider: EmbeddingProvider | null;
   protected readonly requestedProvider: EmbeddingProviderRequest;
   protected providerInitPromise: Promise<void> | null = null;
   protected providerInitialized = false;
@@ -109,11 +96,8 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   protected closing = false;
   protected activeManagerOperations = 0;
   protected managerIdleWaiters = new Set<() => void>();
-  protected override fallbackFrom?: EmbeddingProviderId;
-  protected override fallbackReason?: string;
   protected providerUnavailableReason?: string;
   protected override providerLifecycle: MemoryProviderLifecycleState;
-  protected override providerRuntime?: EmbeddingProviderRuntime;
   protected batch: {
     enabled: boolean;
     wait: boolean;
@@ -126,8 +110,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   protected batchFailureLastProvider?: string;
   protected batchFailureLock: Promise<void> = Promise.resolve();
   protected db: DatabaseSync;
-  protected override readonly sources: Set<MemorySource>;
-  protected override providerKey: string;
   protected readonly cache: { enabled: boolean; maxEntries?: number };
   protected readonly vector: {
     enabled: boolean;
@@ -137,24 +119,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     loadError?: string;
     dims?: number;
   };
-  protected override readonly fts: {
-    enabled: boolean;
-    available: boolean;
-    loadError?: string;
-  };
-  protected override vectorReady: Promise<boolean> | null = null;
-  protected override watcher: FSWatcher | null = null;
-  protected override watchTimer: NodeJS.Timeout | null = null;
-  protected override sessionWatchTimer: NodeJS.Timeout | null = null;
-  protected override sessionUnsubscribe: (() => void) | null = null;
-  protected override intervalTimer: NodeJS.Timeout | null = null;
-  protected override memoryWatchPressureStartupTimer: NodeJS.Timeout | null = null;
-  protected override closed = false;
-  protected override dirty = false;
-  protected override sessionsDirty = false;
-  protected override sessionsDirtyFiles = new Set<string>();
-  protected override sessionPendingFiles = new Set<string>();
-  protected override sessionPendingTargets = new Map<string, MemorySessionSyncTarget>();
   protected indexIdentityDirty = false;
   protected sessionWarm = new Set<string>();
   private syncing: Promise<void> | null = null;
@@ -237,7 +201,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     workspaceDir: string;
     settings: ResolvedMemorySearchConfig;
     providerRequirement: MemoryEmbeddingProviderRequirement;
-    providerResult?: EmbeddingProviderResult;
     purpose?: MemoryIndexManagerPurpose;
     acquireLocalService?: MemoryCoreAcquireLocalService;
   }) {
@@ -252,13 +215,11 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     this.workspaceDir = params.workspaceDir;
     this.settings = effectiveSettings;
     this.providerRequirement = params.providerRequirement;
-    this.provider = null;
     this.requestedProvider = effectiveSettings.provider;
     this.providerLifecycle = createPendingMemoryProviderLifecycle(this.requestedProvider);
-    if (params.providerResult) {
-      this.applyProviderResult(params.providerResult);
+    for (const source of effectiveSettings.sources) {
+      this.sources.add(source);
     }
-    this.sources = new Set(effectiveSettings.sources);
     this.db = this.openDatabase();
     try {
       this.providerKey = this.computeProviderKey();
@@ -266,7 +227,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         enabled: effectiveSettings.cache.enabled,
         maxEntries: effectiveSettings.cache.maxEntries,
       };
-      this.fts = { enabled: effectiveSettings.query.hybrid.enabled, available: false };
+      this.fts.enabled = effectiveSettings.query.hybrid.enabled;
       this.ensureSchema();
       this.vector = {
         enabled: effectiveSettings.store.vector.enabled,
@@ -279,7 +240,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       }
       const initialIndexIdentity = this.resolveCurrentIndexIdentityState({
         meta,
-        providerKeyKnown: Boolean(params.providerResult),
+        providerKeyKnown: false,
       });
       this.indexIdentityState = initialIndexIdentity;
       this.indexIdentityDirty =
@@ -541,9 +502,9 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
             enabled: true,
             entries:
               (
-                this.db.prepare(`SELECT COUNT(*) as c FROM ${EMBEDDING_CACHE_TABLE}`).get() as
-                  | { c: number }
-                  | undefined
+                this.db
+                  .prepare(`SELECT COUNT(*) as c FROM ${MEMORY_EMBEDDING_CACHE_TABLE}`)
+                  .get() as { c: number } | undefined
               )?.c ?? 0,
             maxEntries: this.cache.maxEntries,
           }
@@ -560,7 +521,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         enabled: this.vector.enabled,
         index: resolvePersistedMemoryVectorIndexState({
           db: this.db,
-          vectorTable: VECTOR_TABLE,
+          vectorTable: MEMORY_INDEX_VECTOR_TABLE,
           metaVectorDims: this.vector.dims,
           hasSemanticChunks: this.hasSemanticChunks(),
         }),

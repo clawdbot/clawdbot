@@ -1,12 +1,10 @@
-// Memory Core tests cover manager search orchestration behavior.
+// Memory Core tests cover manager provider lifecycle lease behavior.
 import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { clearMemoryEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseForTest,
@@ -55,6 +53,14 @@ const identityAliasFixture = vi.hoisted(() => ({
   canonicalModel: "hf:fixture/default-model.gguf",
   cacheModel: "/fixture/cache/default-model.gguf",
 }));
+
+function createLocalWorkerExitError(): Error {
+  return Object.assign(new Error("Local embedding worker exited unexpectedly (exit code 134)"), {
+    code: "LOCAL_EMBEDDING_WORKER_EXITED",
+    reason: "exit",
+    exitCode: 134,
+  });
+}
 
 function setMemoryIndexStateDir(stateDir: string): void {
   Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
@@ -432,48 +438,6 @@ describe("memory index", () => {
     });
   }
 
-  async function seedMemoryIndexSessionTranscript(params: {
-    messages: Array<{
-      content: string;
-      role: "assistant" | "user";
-      senderIsOwner?: boolean;
-      timestamp: number | string;
-    }>;
-    sessionId: string;
-    sessionKey?: string;
-  }): Promise<void> {
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    const storePath = path.join(sessionsDir, "sessions.json");
-    const sessionKey = params.sessionKey ?? `agent:main:memory:${params.sessionId}`;
-    // Message timestamps are behavioral inputs; entry freshness only keeps the
-    // fixture out of real session-retention maintenance as wall time advances.
-    const updatedAt = Date.now();
-    await fs.mkdir(sessionsDir, { recursive: true });
-    await upsertSessionEntry({
-      agentId: "main",
-      sessionKey,
-      storePath,
-      entry: {
-        sessionId: params.sessionId,
-        updatedAt,
-      },
-    });
-    for (const message of params.messages) {
-      await appendSessionTranscriptMessageByIdentity({
-        agentId: "main",
-        sessionId: params.sessionId,
-        sessionKey,
-        storePath,
-        message: {
-          role: message.role,
-          timestamp: message.timestamp,
-          content: [{ type: "text", text: message.content }],
-          ...(message.senderIsOwner ? { __openclaw: { senderIsOwner: true } } : {}),
-        },
-      });
-    }
-  }
-
   function requireManager(
     result: Awaited<ReturnType<typeof getMemorySearchManager>>,
     missingMessage = "manager missing",
@@ -501,348 +465,463 @@ describe("memory index", () => {
     return manager;
   }
 
-  async function expectHybridKeywordSearchFindsMemory(cfg: TestCfg) {
-    const manager = await getFreshManager(cfg);
-    try {
-      const status = manager.status();
-      if (!status.fts?.available) {
-        return;
-      }
-
-      await manager.sync({ reason: "test" });
-      const results = await manager.search("zebra");
-      expect(results.length).toBeGreaterThan(0);
-      expect(results[0]?.path).toContain("memory/2026-01-12.md");
-    } finally {
-      await manager.close?.();
-    }
-  }
-
-  async function getFtsSessionManager(params: {
-    stateDirName: string;
-  }): Promise<MemoryIndexManager | null> {
-    forceNoProvider = true;
-    setMemoryIndexStateDir(path.join(workspaceDir, params.stateDirName));
-    const cfg = createCfg({
-      provider: "none",
-      sources: ["memory", "sessions"],
-      sessionMemory: true,
-      minScore: 0,
-      hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
-    });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    const manager = requireManager(result);
+  it("keeps an active FTS-only generation stable while fallback activates", async () => {
+    const manager = await getFreshManager(
+      createCfg({ provider: "openai", fallback: "fallback-provider" }),
+      "cli",
+    );
     managersForCleanup.add(manager);
-    resetManagerForTest(manager);
-    return manager.status().fts?.available ? manager : null;
-  }
-
-  it("finds keyword matches via hybrid search when query embedding is zero", async () => {
-    await expectHybridKeywordSearchFindsMemory(
-      createCfg({
-        hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
-      }),
-    );
-  });
-
-  it("retries transient query embedding transport failures during search", async () => {
-    const cfg = createCfg({
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-    });
-    const manager = await getPersistentManager(cfg);
-    await manager.sync({ reason: "test" });
-
-    let queryCalls = 0;
-    (
-      manager as unknown as {
-        provider: {
-          id: string;
-          model: string;
-          embedQuery: (text: string) => Promise<number[]>;
-          embedBatch: (texts: string[]) => Promise<number[][]>;
-          close: () => Promise<void>;
-        };
-        waitForEmbeddingRetry: (delayMs: number, action: string) => Promise<void>;
-      }
-    ).provider = {
-      id: "mock",
-      model: "mock-embed",
-      embedQuery: async () => {
-        queryCalls += 1;
-        if (queryCalls === 1) {
-          throw new Error("TypeError: fetch failed | other side closed");
-        }
-        return [1, 0, 0, 0];
-      },
-      embedBatch: async (texts: string[]) => texts.map(() => [1, 0, 0, 0]),
-      close: async () => {},
+    type IndexEntry = {
+      path: string;
+      absPath: string;
+      mtimeMs: number;
+      size: number;
+      hash: string;
+      content: string;
     };
-    (
-      manager as unknown as {
-        waitForEmbeddingRetry: (delayMs: number, action: string) => Promise<void>;
-      }
-    ).waitForEmbeddingRetry = async () => {};
-
-    const results = await manager.search("alpha");
-
-    expect(queryCalls).toBe(2);
-    expect(results.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(true);
-  });
-
-  it("fails search after bounded query embedding retries are exhausted", async () => {
-    const cfg = createCfg({
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
-    });
-    const manager = await getPersistentManager(cfg);
-    await manager.sync({ reason: "test" });
-
-    let queryCalls = 0;
-    (
-      manager as unknown as {
-        provider: {
-          id: string;
-          model: string;
-          embedQuery: (text: string) => Promise<number[]>;
-          embedBatch: (texts: string[]) => Promise<number[][]>;
-          close: () => Promise<void>;
+    const fields = manager as unknown as {
+      provider: { id: string } | null;
+      providerKey: string;
+      computeProviderKey: () => string;
+      ensureProviderInitialized: () => Promise<void>;
+      markLocalEmbeddingProviderDegraded: (err: unknown) => void;
+      activateFallbackProvider: (reason: string) => Promise<boolean>;
+      beginSyncProviderGeneration: () => void;
+      endSyncProviderGeneration: () => void;
+      indexFile: (
+        entry: IndexEntry,
+        options: { source: "memory"; content: string },
+      ) => Promise<void>;
+      db: {
+        prepare: (sql: string) => {
+          get: (...params: unknown[]) => { model?: string } | undefined;
         };
-      }
-    ).provider = {
-      id: "mock",
-      model: "mock-embed",
-      embedQuery: async () => {
-        queryCalls += 1;
-        throw new Error("TypeError: fetch failed | other side closed");
-      },
-      embedBatch: async (texts: string[]) => texts.map(() => [1, 0, 0, 0]),
-      close: async () => {},
+      };
     };
-    (
-      manager as unknown as {
-        waitForEmbeddingRetry: (delayMs: number, action: string) => Promise<void>;
-      }
-    ).waitForEmbeddingRetry = async () => {};
-
-    await expect(manager.search("alpha")).rejects.toThrow("fetch failed");
-    expect(queryCalls).toBe(3);
-  });
-
-  it("preserves keyword-only hybrid hits when minScore exceeds text weight", async () => {
-    await expectHybridKeywordSearchFindsMemory(
-      createCfg({
-        minScore: 0.35,
-        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
-      }),
-    );
-  });
-
-  it("supplements thin strict FTS results for conversational queries", async () => {
-    const cases = [
-      {
-        query: "that thing we discussed about the API",
-        strictFile: "strict-english.md",
-        strictText: "That thing we discussed about the API belongs in the first draft.",
-        recallFile: "recall-english.md",
-        recallText: "API authentication uses short-lived OAuth tokens.",
-      },
-      {
-        query: "ayer hablamos sobre estrategia de despliegue",
-        strictFile: "strict-spanish.md",
-        strictText: "Ayer hablamos sobre estrategia de despliegue para la primera region.",
-        recallFile: "recall-spanish.md",
-        recallText: "La estrategia de despliegue requiere una ventana de mantenimiento.",
-      },
-    ] as const;
-    for (const entry of cases) {
-      await fs.writeFile(path.join(memoryDir, entry.strictFile), entry.strictText);
-      await fs.writeFile(path.join(memoryDir, entry.recallFile), entry.recallText);
+    await fields.ensureProviderInitialized();
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
     }
+    fields.provider.id = "local";
+    fields.providerKey = fields.computeProviderKey();
+    fields.markLocalEmbeddingProviderDegraded(createLocalWorkerExitError());
+    await vi.waitFor(() => {
+      expect(fields.provider).toBeNull();
+      expect(providerCloseCalls).toBe(1);
+    });
 
-    const manager = await getPersistentManager(
-      createCfg({
-        minScore: 0,
-        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
-      }),
-    );
-    await manager.sync({ reason: "test" });
-    const provider = Reflect.get(manager, "provider") as {
-      embedQuery: (text: string) => Promise<number[]>;
+    const createEntry = (name: string): IndexEntry => {
+      const content = `# Log\n${name} FTS-only generation.`;
+      return {
+        path: `memory/${name}.md`,
+        absPath: path.join(memoryDir, `${name}.md`),
+        mtimeMs: Date.now(),
+        size: Buffer.byteLength(content),
+        hash: hashText(content),
+        content,
+      };
     };
-    const embedQuerySpy = vi.spyOn(provider, "embedQuery");
+    const first = createEntry("fts-first");
+    const second = createEntry("fts-second");
 
-    for (const entry of cases) {
-      const results = await manager.search(entry.query, { maxResults: 6 });
-      expect(results.some((result) => result.path.endsWith(`memory/${entry.recallFile}`))).toBe(
-        true,
-      );
-    }
-    expect(embedQuerySpy).toHaveBeenCalledTimes(cases.length);
-  });
-
-  it("bounds per-keyword FTS fallback in provider-backed hybrid search", async () => {
-    const cfg = createCfg({
-      minScore: 0.35,
-      hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
-    });
-    const manager = await getPersistentManager(cfg);
-    await manager.sync({ reason: "test" });
-
-    const db = (
-      manager as unknown as {
-        db: {
-          prepare: (sql: string) => unknown;
-        };
-      }
-    ).db;
-    const originalPrepare = db.prepare.bind(db);
-    let ftsSelects = 0;
-    const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sql: string) => {
-      if (
-        sql.includes("FROM memory_index_chunks_fts") &&
-        sql.includes("WHERE memory_index_chunks_fts MATCH ?")
-      ) {
-        ftsSelects += 1;
-      }
-      return originalPrepare(sql);
-    });
-
+    fields.beginSyncProviderGeneration();
     try {
-      const results = await manager.search(
-        "zebra project router gateway session transcript approval command owner workspace token budget retry queue",
-        { maxResults: 5 },
-      );
-
-      expect(results.length).toBeGreaterThan(0);
-      expect(results[0]?.path).toContain("memory/2026-01-12.md");
-      expect(ftsSelects).toBeGreaterThan(1);
-      expect(ftsSelects).toBeLessThanOrEqual(7);
+      await fields.indexFile(first, { source: "memory", content: first.content });
+      await expect(fields.activateFallbackProvider("local worker exited")).resolves.toBe(true);
+      await fields.indexFile(second, { source: "memory", content: second.content });
     } finally {
-      prepareSpy.mockRestore();
+      fields.endSyncProviderGeneration();
     }
+
+    expect(
+      fields.db.prepare("SELECT model FROM memory_index_chunks WHERE path = ?").get(first.path)
+        ?.model,
+    ).toBe("fts-only");
+    expect(
+      fields.db.prepare("SELECT model FROM memory_index_chunks WHERE path = ?").get(second.path)
+        ?.model,
+    ).toBe("fts-only");
   });
 
-  it("preserves fallback body boosts through hybrid weighting", async () => {
-    const manager = await getPersistentManager(
-      createCfg({
-        minScore: 0,
-        hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
-      }),
-    );
-    await fs.writeFile(
-      path.join(memoryDir, "body.md"),
-      "Alpha gamma alpha gamma strongest fallback body match.",
-    );
-    await fs.writeFile(path.join(memoryDir, "alpha.md"), "Unrelated path-only candidate.");
+  it("waits for admitted provider users before retirement", async () => {
+    const cfg = createCfg({ provider: "openai" });
+    const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
-
-    const results = await manager.search("alpha gamma", { maxResults: 2, minScore: 0 });
-
-    expect(results.map((entry) => entry.path)).toEqual(["memory/body.md", "memory/alpha.md"]);
-    expect(results[0]?.score).toBeGreaterThan(results[1]?.score ?? 0);
-  });
-
-  it("bootstraps an empty index on first search so session transcript hits are available", async () => {
-    try {
-      const manager = await getFtsSessionManager({
-        stateDirName: ".state-session-bootstrap",
-      });
-      if (!manager) {
-        return;
-      }
-
-      await seedMemoryIndexSessionTranscript({
-        sessionId: "session-bootstrap",
-        messages: [
-          {
-            role: "assistant",
-            timestamp: "2026-04-07T15:25:04.113Z",
-            content: "The current Project Nebula codename is ORBIT-10.",
-          },
-        ],
-      });
-
-      const results = await manager.search("current Project Nebula codename ORBIT-10", {
-        minScore: 0,
-        maxResults: 3,
-      });
-
-      expect(results[0]?.source).toBe("sessions");
-      expect(results[0]?.snippet).toContain("ORBIT-10");
-    } finally {
-      restoreMemoryIndexStateDir();
+    const fields = manager as unknown as {
+      provider: {
+        embedQuery: (text: string) => Promise<number[]>;
+      } | null;
+      embedQueryWithRetry: (text: string) => Promise<number[]>;
+      retireCurrentProvider: () => Promise<void>;
+    };
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
     }
+    let releaseFirstQuery: () => void = () => {};
+    let markFirstQueryStarted: () => void = () => {};
+    const firstQueryGate = new Promise<void>((resolve) => {
+      releaseFirstQuery = resolve;
+    });
+    const firstQueryStarted = new Promise<void>((resolve) => {
+      markFirstQueryStarted = resolve;
+    });
+    fields.provider.embedQuery = async () => {
+      markFirstQueryStarted();
+      await firstQueryGate;
+      return [1, 0, 0, 0];
+    };
+
+    const queryPromise = fields.embedQueryWithRetry("alpha");
+    await firstQueryStarted;
+    const retirementPromise = fields.retireCurrentProvider();
+    let retirementSettled = false;
+    void retirementPromise.then(
+      () => {
+        retirementSettled = true;
+      },
+      () => {
+        retirementSettled = true;
+      },
+    );
+    try {
+      await Promise.resolve();
+      expect(retirementSettled).toBe(false);
+      expect(providerCloseCalls).toBe(0);
+    } finally {
+      releaseFirstQuery();
+    }
+
+    await expect(queryPromise).resolves.toEqual([1, 0, 0, 0]);
+    await retirementPromise;
+    expect(providerCloseCalls).toBe(1);
   });
 
-  it("keeps remember-only session transcripts out of ordinary manager searches", async () => {
-    forceNoProvider = true;
-    setMemoryIndexStateDir(path.join(workspaceDir, ".state-remember-search-sources"));
-    try {
-      const cfg = createCfg({
-        provider: "none",
-        rememberAcrossConversations: true,
-        minScore: 0,
-        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
-      });
-      const manager = await getFreshManager(cfg);
-      managersForCleanup.add(manager);
-      if (!manager.status().fts?.available) {
-        return;
-      }
-
-      await seedMemoryIndexSessionTranscript({
-        sessionId: "remember-only",
-        messages: [
-          {
-            role: "assistant",
-            timestamp: "2026-04-07T15:25:04.113Z",
-            content: "Recall-only canary is NEBULA-47.",
+  it("uses the leased provider runtime after retirement starts", async () => {
+    const manager = await getPersistentManager(createCfg({ provider: "openai" }));
+    type QueryProvider = {
+      embedQuery: (text: string, options?: { signal?: AbortSignal }) => Promise<number[]>;
+    };
+    const fields = manager as unknown as {
+      provider: QueryProvider | null;
+      providerRuntime?: { inlineQueryTimeoutMs?: number };
+      acquireProviderUse: (provider: QueryProvider) => () => void;
+      retireCurrentProvider: () => Promise<void>;
+      embedQueryWithRetry: (
+        text: string,
+        signal: AbortSignal | undefined,
+        provider: QueryProvider,
+        markDegraded: boolean,
+        providerRuntime: { inlineQueryTimeoutMs?: number },
+      ) => Promise<number[]>;
+    };
+    await manager.probeEmbeddingAvailability();
+    const provider = fields.provider;
+    if (!provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    const providerRuntime = { inlineQueryTimeoutMs: 10 };
+    fields.providerRuntime = providerRuntime;
+    provider.embedQuery = async (_text, options) =>
+      await new Promise<number[]>((resolve, reject) => {
+        const timer = setTimeout(() => resolve([1, 0, 0, 0]), 100);
+        options?.signal?.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(timer);
+            const reason = options.signal?.reason;
+            reject(reason instanceof Error ? reason : new Error("embedding aborted"));
           },
-        ],
+          { once: true },
+        );
       });
 
-      await manager.sync({ reason: "test", force: true });
-
+    const releaseProvider = fields.acquireProviderUse(provider);
+    const retirementPromise = fields.retireCurrentProvider();
+    try {
+      await vi.waitFor(() => expect(fields.provider).toBeNull());
       await expect(
-        manager.search("Recall-only canary NEBULA-47", { minScore: 0 }),
-      ).resolves.toEqual([]);
-      const trustedResults = await manager.search("Recall-only canary NEBULA-47", {
-        minScore: 0,
-        sources: ["sessions"],
-      });
-      expect(trustedResults[0]?.source).toBe("sessions");
+        fields.embedQueryWithRetry("alpha", undefined, provider, false, providerRuntime),
+      ).rejects.toThrow("timed out");
+      expect(providerCloseCalls).toBe(0);
     } finally {
-      restoreMemoryIndexStateDir();
+      releaseProvider();
     }
+
+    await retirementPromise;
+    expect(providerCloseCalls).toBe(1);
   });
 
-  it("returns before provider or index bootstrap for a blank query", async () => {
-    const manager = await getPersistentManager(
-      createCfg({ provider: "required-provider", hybrid: { enabled: true } }),
-    );
-    providerCalls = [];
-
-    await expect(manager.search(" \n\t ")).resolves.toStrictEqual([]);
-
-    expect(providerCalls).toHaveLength(0);
-  });
-
-  it("waits for dirty sync before querying", async () => {
-    forceNoProvider = true;
-    const manager = await getPersistentManager(
-      createCfg({ provider: "none", minScore: 0, onSearch: true, hybrid: { enabled: true } }),
-    );
+  it("waits for an admitted search before manager teardown", async () => {
+    const manager = await getPersistentManager(createCfg({ provider: "openai" }));
     await manager.sync({ reason: "test" });
-    await fs.writeFile(
-      path.join(memoryDir, "search-sync.md"),
-      "Current memory appears only after the dirty search sync.",
-    );
-    await vi.waitFor(() => expect(manager.status().dirty).toBe(true));
+    const fields = manager as unknown as {
+      searchVector: () => Promise<unknown[]>;
+      closing: boolean;
+      closed: boolean;
+    };
+    let releaseVectorSearch: () => void = () => {};
+    let markVectorSearchStarted: () => void = () => {};
+    const vectorSearchGate = new Promise<void>((resolve) => {
+      releaseVectorSearch = resolve;
+    });
+    const vectorSearchStarted = new Promise<void>((resolve) => {
+      markVectorSearchStarted = resolve;
+    });
+    fields.searchVector = async () => {
+      markVectorSearchStarted();
+      await vectorSearchGate;
+      return [];
+    };
 
-    const results = await manager.search("current dirty search sync", {
-      maxResults: 5,
-      minScore: 0,
+    const searchPromise = manager.search("alpha");
+    await vectorSearchStarted;
+    const closePromise = manager.close();
+    let closeSettled = false;
+    void closePromise.then(
+      () => {
+        closeSettled = true;
+      },
+      () => {
+        closeSettled = true;
+      },
+    );
+    try {
+      await Promise.resolve();
+      expect(closeSettled).toBe(false);
+      expect(fields.closing).toBe(true);
+      expect(fields.closed).toBe(false);
+      expect(providerCloseCalls).toBe(0);
+    } finally {
+      releaseVectorSearch();
+    }
+
+    await expect(searchPromise).resolves.toBeDefined();
+    await closePromise;
+    expect(providerCloseCalls).toBe(1);
+  });
+
+  it("waits for an admitted vector probe before manager teardown", async () => {
+    const manager = await getPersistentManager(createCfg({ provider: "openai" }));
+    const fields = manager as unknown as {
+      ensureVectorReady: () => Promise<boolean>;
+    };
+    let releaseProbe: () => void = () => {};
+    let markProbeStarted: () => void = () => {};
+    const probeGate = new Promise<void>((resolve) => {
+      releaseProbe = resolve;
+    });
+    const probeStarted = new Promise<void>((resolve) => {
+      markProbeStarted = resolve;
+    });
+    fields.ensureVectorReady = async () => {
+      markProbeStarted();
+      await probeGate;
+      return true;
+    };
+
+    const probePromise = manager.probeVectorAvailability();
+    await probeStarted;
+    const closePromise = manager.close();
+    let closeSettled = false;
+    void closePromise.then(
+      () => {
+        closeSettled = true;
+      },
+      () => {
+        closeSettled = true;
+      },
+    );
+    try {
+      await Promise.resolve();
+      expect(closeSettled).toBe(false);
+      expect(providerCloseCalls).toBe(0);
+    } finally {
+      releaseProbe();
+    }
+
+    await expect(probePromise).resolves.toBe(true);
+    await closePromise;
+    expect(providerCloseCalls).toBe(1);
+  });
+
+  it("fails closed when fallback initialization fails for an explicit provider", async () => {
+    const cfg = createCfg({
+      provider: "openai",
+      fallback: "fallback-provider",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+    const fields = manager as unknown as {
+      provider: {
+        embedQuery: (text: string) => Promise<number[]>;
+      } | null;
+    };
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    fields.provider.embedQuery = async () => {
+      throw new Error("embedding provider failed");
+    };
+    providerCreationFailure = "fallback-provider";
+
+    await expect(manager.search("alpha")).rejects.toThrow(
+      /Memory search unavailable: embedding provider "openai" is configured but unavailable\./,
+    );
+
+    providerCreationFailure = null;
+    await expect(manager.search("alpha")).resolves.toBeDefined();
+  });
+
+  it("retries the optional primary after fallback initialization fails", async () => {
+    const cfg = createCfg({
+      fallback: "fallback-provider",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+    const fields = manager as unknown as {
+      provider: {
+        id: string;
+        embedQuery: (text: string) => Promise<number[]>;
+      } | null;
+    };
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    fields.provider.embedQuery = async () => {
+      throw new Error("embedding provider failed");
+    };
+    providerCreationFailure = "fallback-provider";
+    const callsBeforeSearch = providerCalls.length;
+
+    await expect(manager.search("alpha")).resolves.toBeDefined();
+
+    providerCreationFailure = null;
+    await expect(manager.search("alpha")).resolves.toBeDefined();
+    expect(providerCalls.slice(callsBeforeSearch).map((call) => call.provider)).toEqual([
+      "fallback-provider",
+      "openai",
+    ]);
+    expect(fields.provider?.id).toBe("mock");
+  });
+
+  it("fails closed and retries a required primary after a null fallback result", async () => {
+    const cfg = createCfg({
+      provider: "openai",
+      fallback: "fallback-provider",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+    const fields = manager as unknown as {
+      provider: { embedQuery: (text: string) => Promise<number[]> } | null;
+    };
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    fields.provider.embedQuery = async () => {
+      throw new Error("embedding provider failed");
+    };
+    providerNullResult = "fallback-provider";
+
+    await expect(manager.search("alpha")).rejects.toThrow(
+      /Memory search unavailable: embedding provider "openai" is configured but unavailable\./,
+    );
+
+    providerNullResult = null;
+    await expect(manager.search("alpha")).resolves.toBeDefined();
+  });
+
+  it("retries an optional primary after a null fallback result", async () => {
+    const cfg = createCfg({
+      fallback: "fallback-provider",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+    const fields = manager as unknown as {
+      provider: { id: string; embedQuery: (text: string) => Promise<number[]> } | null;
+    };
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    fields.provider.embedQuery = async () => {
+      throw new Error("embedding provider failed");
+    };
+    providerNullResult = "fallback-provider";
+
+    await expect(manager.search("alpha")).resolves.toBeDefined();
+
+    providerNullResult = null;
+    await expect(manager.search("alpha")).resolves.toBeDefined();
+    expect(fields.provider?.id).toBe("mock");
+  });
+
+  it("keeps concurrent optional searches in FTS mode when shared fallback fails", async () => {
+    const cfg = createCfg({
+      fallback: "fallback-provider",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+    const fields = manager as unknown as {
+      provider: {
+        embedQuery: (text: string) => Promise<number[]>;
+      } | null;
+      ensureProviderInitialized: () => Promise<void>;
+    };
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    fields.provider.embedQuery = async () => {
+      throw new Error("embedding provider failed");
+    };
+    const ensureProviderInitialized = fields.ensureProviderInitialized.bind(manager);
+    let providerInitializationCalls = 0;
+    fields.ensureProviderInitialized = async () => {
+      providerInitializationCalls += 1;
+      await ensureProviderInitialized();
+    };
+    providerCreationFailure = "fallback-provider";
+    let releaseProviderInit: () => void = () => {};
+    providerInitGate = new Promise<void>((resolve) => {
+      releaseProviderInit = resolve;
     });
 
-    expect(results.some((entry) => entry.path === "memory/search-sync.md")).toBe(true);
+    const callsBeforeSearch = providerCalls.length;
+    const firstSearch = manager.search("alpha");
+    await vi.waitFor(() =>
+      expect(providerCalls.some((call) => call.provider === "fallback-provider")).toBe(true),
+    );
+    const initializationCallsBeforeSecondSearch = providerInitializationCalls;
+    const secondSearch = manager.search("zebra");
+    let secondSettled = false;
+    void secondSearch.then(
+      () => {
+        secondSettled = true;
+      },
+      () => {
+        secondSettled = true;
+      },
+    );
+    try {
+      await vi.waitFor(() =>
+        expect(providerInitializationCalls).toBeGreaterThan(initializationCallsBeforeSecondSearch),
+      );
+      expect(secondSettled).toBe(false);
+      releaseProviderInit();
+      const results = await Promise.all([firstSearch, secondSearch]);
+      expect(results.every((result) => result.length > 0)).toBe(true);
+      expect(
+        providerCalls
+          .slice(callsBeforeSearch)
+          .filter((call) => call.provider === "fallback-provider"),
+      ).toHaveLength(1);
+    } finally {
+      providerInitGate = null;
+      releaseProviderInit();
+      await Promise.allSettled([firstSearch, secondSearch]);
+    }
   });
 });

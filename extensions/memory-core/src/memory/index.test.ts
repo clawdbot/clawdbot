@@ -30,11 +30,6 @@ import "./test-runtime-mocks.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import type { MemoryIndexManager } from "./manager.js";
-import {
-  closeAllMemoryIndexManagers,
-  closeMemoryIndexManagersForAgent,
-  MemoryIndexManager as RuntimeMemoryIndexManager,
-} from "./manager.js";
 import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
 
 // This suite performs real sqlite/media indexing and can exceed the global
@@ -63,6 +58,7 @@ let providerCloseGate: Promise<void> | null = null;
 let providerInitGate: Promise<void> | null = null;
 let providerCalls: Array<{ provider?: string; model?: string; outputDimensionality?: number }> = [];
 let forceNoProvider = false;
+
 const originalMemoryIndexStateDir = process.env.OPENCLAW_STATE_DIR;
 
 const identityAliasFixture = vi.hoisted(() => ({
@@ -70,14 +66,6 @@ const identityAliasFixture = vi.hoisted(() => ({
   canonicalModel: "hf:fixture/default-model.gguf",
   cacheModel: "/fixture/cache/default-model.gguf",
 }));
-
-function createLocalWorkerExitError(): Error {
-  return Object.assign(new Error("Local embedding worker exited unexpectedly (exit code 134)"), {
-    code: "LOCAL_EMBEDDING_WORKER_EXITED",
-    reason: "exit",
-    exitCode: 134,
-  });
-}
 
 function setMemoryIndexStateDir(stateDir: string): void {
   Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
@@ -519,8 +507,9 @@ describe("memory index", () => {
     cfg: TestCfg,
     purpose?: "default" | "status" | "cli",
   ): Promise<MemoryIndexManager> {
-    const { getRequiredMemoryIndexManager } = await import("./test-manager-helpers.js");
-    return await getRequiredMemoryIndexManager({ cfg, agentId: "main", purpose });
+    const manager = requireManager(await getMemorySearchManager({ cfg, agentId: "main", purpose }));
+    managersForCleanup.add(manager);
+    return manager;
   }
 
   function rewritePersistedProviderIdentity(manager: MemoryIndexManager, model: string): void {
@@ -548,23 +537,6 @@ describe("memory index", () => {
     db.prepare(
       "UPDATE memory_embedding_cache SET model = ?, provider_key = ? WHERE provider = ?",
     ).run(model, providerKey, identityAliasFixture.provider);
-  }
-
-  async function expectHybridKeywordSearchFindsMemory(cfg: TestCfg) {
-    const manager = await getFreshManager(cfg);
-    try {
-      const status = manager.status();
-      if (!status.fts?.available) {
-        return;
-      }
-
-      await manager.sync({ reason: "test" });
-      const results = await manager.search("zebra");
-      expect(results.length).toBeGreaterThan(0);
-      expect(results[0]?.path).toContain("memory/2026-01-12.md");
-    } finally {
-      await manager.close?.();
-    }
   }
 
   it("does not prepare vector deletes after in-place reset drops a missing vector table", async () => {

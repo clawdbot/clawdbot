@@ -33,7 +33,7 @@ type MemoryIndexSearchOptions = NonNullable<Parameters<MemorySearchManager["sear
 export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
   protected abstract sessionWarm: Set<string>;
 
-  async warmSession(sessionKey?: string): Promise<void> {
+  protected async warmSession(sessionKey?: string): Promise<void> {
     if (!this.settings.sync.onSessionStart) {
       return;
     }

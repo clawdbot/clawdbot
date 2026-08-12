@@ -19,7 +19,6 @@ import type {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
-import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import {
   createEmbeddingProvider,
   resolveEmbeddingProviderAdapterTransport,
@@ -128,19 +127,6 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     options?: { allowEmbeddingBootstrapFallback?: boolean; queuedSessionOwner?: boolean },
   ): Promise<void>;
 
-  private static async loadProviderResult(params: {
-    cfg: OpenClawConfig;
-    agentId: string;
-    settings: ResolvedMemorySearchConfig;
-    acquireLocalService?: MemoryCoreAcquireLocalService;
-  }): Promise<EmbeddingProviderResult> {
-    return await createEmbeddingProvider({
-      config: params.cfg,
-      agentDir: resolveAgentDir(params.cfg, params.agentId),
-      ...(params.acquireLocalService ? { acquireLocalService: params.acquireLocalService } : {}),
-      ...resolveMemoryPrimaryProviderRequest({ settings: params.settings }),
-    });
-  }
   protected applyProviderResult(providerResult: EmbeddingProviderResult): void {
     const providerState = resolveMemoryProviderState(providerResult);
     this.provider = providerState.provider;
@@ -319,11 +305,11 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
         if (this.closed) {
           return;
         }
-        const providerResult = await MemoryProviderLifecycle.loadProviderResult({
-          cfg: this.cfg,
-          agentId: this.agentId,
-          settings: this.settings,
-          acquireLocalService: this.acquireLocalService,
+        const providerResult = await createEmbeddingProvider({
+          config: this.cfg,
+          agentDir: resolveAgentDir(this.cfg, this.agentId),
+          ...(this.acquireLocalService ? { acquireLocalService: this.acquireLocalService } : {}),
+          ...resolveMemoryPrimaryProviderRequest({ settings: this.settings }),
         });
         this.applyProviderResult(providerResult);
         this.providerKey = this.computeProviderKey();

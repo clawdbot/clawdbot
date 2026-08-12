@@ -3,23 +3,10 @@ import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { clearMemoryEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import {
-  hashText,
-  INVALID_PROJECT_ANNOTATION_KEY,
-  MEMORY_CHUNKING_VERSION,
-  type MemorySessionSyncTarget,
-  type MemorySyncParams,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseForTest,
-  openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -28,7 +15,6 @@ import {
 } from "../test-helpers.js";
 import "./test-runtime-mocks.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
-import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import type { MemoryIndexManager } from "./manager.js";
 import {
   closeAllMemoryIndexManagers,
@@ -63,6 +49,7 @@ let providerCloseGate: Promise<void> | null = null;
 let providerInitGate: Promise<void> | null = null;
 let providerCalls: Array<{ provider?: string; model?: string; outputDimensionality?: number }> = [];
 let forceNoProvider = false;
+
 const originalMemoryIndexStateDir = process.env.OPENCLAW_STATE_DIR;
 
 const identityAliasFixture = vi.hoisted(() => ({
@@ -70,14 +57,6 @@ const identityAliasFixture = vi.hoisted(() => ({
   canonicalModel: "hf:fixture/default-model.gguf",
   cacheModel: "/fixture/cache/default-model.gguf",
 }));
-
-function createLocalWorkerExitError(): Error {
-  return Object.assign(new Error("Local embedding worker exited unexpectedly (exit code 134)"), {
-    code: "LOCAL_EMBEDDING_WORKER_EXITED",
-    reason: "exit",
-    exitCode: 134,
-  });
-}
 
 function setMemoryIndexStateDir(stateDir: string): void {
   Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
@@ -361,36 +340,6 @@ describe("memory index", () => {
     );
   });
 
-  function resetManagerForTest(manager: MemoryIndexManager) {
-    // These tests reuse managers for performance. Clear the index + embedding
-    // cache to keep each test fully isolated.
-    const db = (
-      manager as unknown as {
-        db: {
-          exec: (sql: string) => void;
-          prepare: (sql: string) => { get: (name: string) => { name?: string } | undefined };
-        };
-      }
-    ).db;
-    for (const table of [
-      "memory_index_sources",
-      "memory_index_chunks",
-      "memory_embedding_cache",
-      "memory_index_chunks_fts",
-      "memory_index_chunks_vec",
-    ]) {
-      const existingTable = db
-        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-        .get(table);
-      if (existingTable?.name === table) {
-        db.exec(`DELETE FROM ${table}`);
-      }
-    }
-    (manager as unknown as { dirty: boolean }).dirty = true;
-    (manager as unknown as { sessionsDirty: boolean }).sessionsDirty = false;
-    (manager as unknown as { sessionsDirtyFiles: Set<string> }).sessionsDirtyFiles.clear();
-  }
-
   type TestCfg = Parameters<typeof getMemorySearchManager>[0]["cfg"];
 
   function createCfg(params: {
@@ -455,48 +404,6 @@ describe("memory index", () => {
     });
   }
 
-  async function seedMemoryIndexSessionTranscript(params: {
-    messages: Array<{
-      content: string;
-      role: "assistant" | "user";
-      senderIsOwner?: boolean;
-      timestamp: number | string;
-    }>;
-    sessionId: string;
-    sessionKey?: string;
-  }): Promise<void> {
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    const storePath = path.join(sessionsDir, "sessions.json");
-    const sessionKey = params.sessionKey ?? `agent:main:memory:${params.sessionId}`;
-    // Message timestamps are behavioral inputs; entry freshness only keeps the
-    // fixture out of real session-retention maintenance as wall time advances.
-    const updatedAt = Date.now();
-    await fs.mkdir(sessionsDir, { recursive: true });
-    await upsertSessionEntry({
-      agentId: "main",
-      sessionKey,
-      storePath,
-      entry: {
-        sessionId: params.sessionId,
-        updatedAt,
-      },
-    });
-    for (const message of params.messages) {
-      await appendSessionTranscriptMessageByIdentity({
-        agentId: "main",
-        sessionId: params.sessionId,
-        sessionKey,
-        storePath,
-        message: {
-          role: message.role,
-          timestamp: message.timestamp,
-          content: [{ type: "text", text: message.content }],
-          ...(message.senderIsOwner ? { __openclaw: { senderIsOwner: true } } : {}),
-        },
-      });
-    }
-  }
-
   function requireManager(
     result: Awaited<ReturnType<typeof getMemorySearchManager>>,
     missingMessage = "manager missing",
@@ -507,64 +414,13 @@ describe("memory index", () => {
     return result.manager as unknown as MemoryIndexManager;
   }
 
-  async function getPersistentManager(cfg: TestCfg): Promise<MemoryIndexManager> {
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    const manager = requireManager(result);
-    managersForCleanup.add(manager);
-    resetManagerForTest(manager);
-    return manager;
-  }
-
   async function getFreshManager(
     cfg: TestCfg,
     purpose?: "default" | "status" | "cli",
   ): Promise<MemoryIndexManager> {
-    const { getRequiredMemoryIndexManager } = await import("./test-manager-helpers.js");
-    return await getRequiredMemoryIndexManager({ cfg, agentId: "main", purpose });
-  }
-
-  function rewritePersistedProviderIdentity(manager: MemoryIndexManager, model: string): void {
-    const providerKey = hashText(
-      JSON.stringify({
-        provider: identityAliasFixture.provider,
-        model,
-      }),
-    );
-    const db = Reflect.get(manager, "db") as {
-      prepare: (sql: string) => {
-        get: (...params: unknown[]) => { value?: string } | undefined;
-        run: (...params: unknown[]) => void;
-      };
-    };
-    const metaRow = db
-      .prepare("SELECT value FROM memory_index_meta WHERE key = ?")
-      .get("memory_index_meta_v1");
-    const meta = JSON.parse(metaRow?.value ?? "{}") as MemoryIndexMeta;
-    db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = ?").run(
-      JSON.stringify({ ...meta, model, providerKey }),
-      "memory_index_meta_v1",
-    );
-    db.prepare("UPDATE memory_index_chunks SET model = ?").run(model);
-    db.prepare(
-      "UPDATE memory_embedding_cache SET model = ?, provider_key = ? WHERE provider = ?",
-    ).run(model, providerKey, identityAliasFixture.provider);
-  }
-
-  async function expectHybridKeywordSearchFindsMemory(cfg: TestCfg) {
-    const manager = await getFreshManager(cfg);
-    try {
-      const status = manager.status();
-      if (!status.fts?.available) {
-        return;
-      }
-
-      await manager.sync({ reason: "test" });
-      const results = await manager.search("zebra");
-      expect(results.length).toBeGreaterThan(0);
-      expect(results[0]?.path).toContain("memory/2026-01-12.md");
-    } finally {
-      await manager.close?.();
-    }
+    const manager = requireManager(await getMemorySearchManager({ cfg, agentId: "main", purpose }));
+    managersForCleanup.add(manager);
+    return manager;
   }
 
   it("waits for scoped manager close before initializing a replacement", async () => {
@@ -578,7 +434,7 @@ describe("memory index", () => {
     const first = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
     managersForCleanup.add(first);
     await first.probeEmbeddingAvailability();
-    const closePromise = closeMemoryIndexManagersForAgent({ cfg, agentId: "main" });
+    const closePromise = closeMemoryIndexManagersForAgent({ agentId: "main" });
     const callsBeforeReplacement = providerCalls.length;
     const secondPromise = getMemorySearchManager({ cfg, agentId: "main" }).then((result) =>
       requireManager(result),
@@ -834,7 +690,7 @@ describe("memory index", () => {
     await first.probeEmbeddingAvailability();
     providerCloseFailuresRemaining = 2;
 
-    await expect(closeMemoryIndexManagersForAgent({ cfg, agentId: "main" })).rejects.toThrow(
+    await expect(closeMemoryIndexManagersForAgent({ agentId: "main" })).rejects.toThrow(
       "provider close failed",
     );
     expect(providerCloseCalls).toBe(2);

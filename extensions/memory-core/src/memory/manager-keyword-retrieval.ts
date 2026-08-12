@@ -195,10 +195,6 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     });
   }
 
-  private buildFtsQuery(raw: string): string | null {
-    return buildFtsQuery(raw);
-  }
-
   private async searchKeyword(
     query: string,
     limit: number,
@@ -220,7 +216,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
       limit,
       snippetMaxChars: SNIPPET_MAX_CHARS,
       sourceFilter: this.buildSourceFilter(undefined, sourceFilterList),
-      buildFtsQuery: (raw) => this.buildFtsQuery(raw),
+      buildFtsQuery,
       bm25RankToScore,
       boostFallbackRanking: options?.boostFallbackRanking,
       rankingQuery: options?.rankingQuery,
@@ -239,7 +235,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
       limit,
       snippetMaxChars: SNIPPET_MAX_CHARS,
       sourceFilter: this.buildSourceFilter(PATH_FTS_TABLE, sourceFilterList),
-      buildFtsQuery: (raw) => this.buildFtsQuery(raw),
+      buildFtsQuery,
       bm25RankToScore,
     }).catch((err: unknown) => {
       log.warn(`memory search: path keyword query failed: ${formatErrorMessage(err)}`);
@@ -284,8 +280,8 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     if (fallbackTerms.length === 0) {
       return fullQueryResults;
     }
-    const strictFtsQuery = this.buildFtsQuery(query)?.toLowerCase();
-    const keywordFtsQuery = this.buildFtsQuery(fallbackTerms.join(" "))?.toLowerCase();
+    const strictFtsQuery = buildFtsQuery(query)?.toLowerCase();
+    const keywordFtsQuery = buildFtsQuery(fallbackTerms.join(" "))?.toLowerCase();
     if (fullQueryResults.length > 0 && strictFtsQuery === keywordFtsQuery) {
       // Expansion did not normalize this already-matching keyword query; OR
       // probes can only weaken its strict relevance before importance ranking.

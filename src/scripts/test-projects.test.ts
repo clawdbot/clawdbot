@@ -563,6 +563,8 @@ describe("test-projects args", () => {
         includePatterns: [
           "extensions/memory-core/src/memory/index.test.ts",
           "extensions/memory-core/src/memory/manager-keyword-retrieval.test.ts",
+          "extensions/memory-core/src/memory/manager-provider-lifecycle-fallback.test.ts",
+          "extensions/memory-core/src/memory/manager-provider-lifecycle-leases.test.ts",
           "extensions/memory-core/src/memory/manager-provider-lifecycle.test.ts",
           "extensions/memory-core/src/memory/manager-registry.test.ts",
           "extensions/memory-core/src/memory/manager-search-orchestration.test.ts",

@@ -3,23 +3,13 @@ import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { clearMemoryEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import {
-  hashText,
-  INVALID_PROJECT_ANNOTATION_KEY,
-  MEMORY_CHUNKING_VERSION,
-  type MemorySessionSyncTarget,
-  type MemorySyncParams,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseForTest,
-  openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -28,13 +18,7 @@ import {
 } from "../test-helpers.js";
 import "./test-runtime-mocks.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
-import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import type { MemoryIndexManager } from "./manager.js";
-import {
-  closeAllMemoryIndexManagers,
-  closeMemoryIndexManagersForAgent,
-  MemoryIndexManager as RuntimeMemoryIndexManager,
-} from "./manager.js";
 import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
 
 // This suite performs real sqlite/media indexing and can exceed the global
@@ -63,6 +47,7 @@ let providerCloseGate: Promise<void> | null = null;
 let providerInitGate: Promise<void> | null = null;
 let providerCalls: Array<{ provider?: string; model?: string; outputDimensionality?: number }> = [];
 let forceNoProvider = false;
+
 const originalMemoryIndexStateDir = process.env.OPENCLAW_STATE_DIR;
 
 const identityAliasFixture = vi.hoisted(() => ({
@@ -513,58 +498,6 @@ describe("memory index", () => {
     managersForCleanup.add(manager);
     resetManagerForTest(manager);
     return manager;
-  }
-
-  async function getFreshManager(
-    cfg: TestCfg,
-    purpose?: "default" | "status" | "cli",
-  ): Promise<MemoryIndexManager> {
-    const { getRequiredMemoryIndexManager } = await import("./test-manager-helpers.js");
-    return await getRequiredMemoryIndexManager({ cfg, agentId: "main", purpose });
-  }
-
-  function rewritePersistedProviderIdentity(manager: MemoryIndexManager, model: string): void {
-    const providerKey = hashText(
-      JSON.stringify({
-        provider: identityAliasFixture.provider,
-        model,
-      }),
-    );
-    const db = Reflect.get(manager, "db") as {
-      prepare: (sql: string) => {
-        get: (...params: unknown[]) => { value?: string } | undefined;
-        run: (...params: unknown[]) => void;
-      };
-    };
-    const metaRow = db
-      .prepare("SELECT value FROM memory_index_meta WHERE key = ?")
-      .get("memory_index_meta_v1");
-    const meta = JSON.parse(metaRow?.value ?? "{}") as MemoryIndexMeta;
-    db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = ?").run(
-      JSON.stringify({ ...meta, model, providerKey }),
-      "memory_index_meta_v1",
-    );
-    db.prepare("UPDATE memory_index_chunks SET model = ?").run(model);
-    db.prepare(
-      "UPDATE memory_embedding_cache SET model = ?, provider_key = ? WHERE provider = ?",
-    ).run(model, providerKey, identityAliasFixture.provider);
-  }
-
-  async function expectHybridKeywordSearchFindsMemory(cfg: TestCfg) {
-    const manager = await getFreshManager(cfg);
-    try {
-      const status = manager.status();
-      if (!status.fts?.available) {
-        return;
-      }
-
-      await manager.sync({ reason: "test" });
-      const results = await manager.search("zebra");
-      expect(results.length).toBeGreaterThan(0);
-      expect(results[0]?.path).toContain("memory/2026-01-12.md");
-    } finally {
-      await manager.close?.();
-    }
   }
 
   async function getFtsSessionManager(params: {
