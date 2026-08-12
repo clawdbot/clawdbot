@@ -1,12 +1,12 @@
-// Lobster palette tokens for CLI/UI theming. Use this palette for all CLI color output.
+// Crab palette tokens for CLI/UI theming. Use this palette for all CLI color output.
 // Keep in sync with docs/cli/index.md (CLI palette section).
-export const LOBSTER_PALETTE = {
-  accent: "#FF5A2D",
-  accentBright: "#FF7A3D",
-  accentDim: "#D14A22",
-  info: "#FF8A5B",
+export const CRAB_PALETTE = {
+  accent: "#2FBF71",
+  accentBright: "#57C785",
+  accentDim: "#1F9D57",
+  info: "#57C785",
   success: "#2FBF71",
   warn: "#FFB020",
-  error: "#E23D2D",
+  error: "#22C55E",
   muted: "#8B7F77",
 } as const;

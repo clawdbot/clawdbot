@@ -1,59 +1,59 @@
-// Decorative lobster pet that perches on the sidebar footer and mirrors
+// Decorative crab pet that perches on the sidebar footer and mirrors
 // gateway status: it idles (naps, waves, wanders) when nothing is running,
 // scurries while runs are active, and paces worriedly while disconnected.
-// Drawn in the smooth OpenClaw lobster style (see the dreams scene and
-// icons.lobster). Look and personality are seeded per session + page load so
-// every new session hatches a slightly different lobster.
-import "../styles/lobster-pet.css";
+// Drawn in the smooth OpenClaw crab style (see the dreams scene and
+// icons.crab). Look and personality are seeded per session + page load so
+// every new session hatches a slightly different crab.
+import "../styles/crab-pet.css";
 import { expectDefined } from "@openclaw/normalization-core";
 import { LitElement, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
-import { isLobsterDay } from "../../../src/shared/lobster-day.js";
-import * as dex from "./lobster-dex.ts";
-import { playLobsterPetChirp, type LobsterPetChirpKind } from "./lobster-pet-audio.ts";
-import * as contract from "./lobster-pet-contract.ts";
-import * as lobsterLook from "./lobster-pet-look.ts";
-import * as plans from "./lobster-pet-plans.ts";
-import { LobsterLedgeTraffic } from "./lobster-pet-traffic.ts";
+import { isCrabDay } from "../../../src/shared/crab-day.js";
+import * as dex from "./crab-dex.ts";
+import { playCrabPetChirp, type CrabPetChirpKind } from "./crab-pet-audio.ts";
+import * as contract from "./crab-pet-contract.ts";
+import * as crabLook from "./crab-pet-look.ts";
+import * as plans from "./crab-pet-plans.ts";
+import { CrabLedgeTraffic } from "./crab-pet-traffic.ts";
 
 export {
-  lobsterPetSeed,
-  resolveLobsterPetMode,
-  resolveLobsterRunOutcome,
-  type LobsterPetLook,
-  type LobsterPetMode,
-  type LobsterRunOutcome,
-} from "./lobster-pet-contract.ts";
+  crabPetSeed,
+  resolveCrabPetMode,
+  resolveCrabRunOutcome,
+  type CrabPetLook,
+  type CrabPetMode,
+  type CrabRunOutcome,
+} from "./crab-pet-contract.ts";
 export {
-  LOBSTER_PET_PALETTES,
-  canonicalLobsterLook,
-  createLobsterPetLook,
-  lobsterLookStyle,
-  renderLobsterSvg,
-} from "./lobster-pet-look.ts";
-export { lobsterPaletteName } from "./lobster-pet-lore.ts";
-export { moonPhaseFraction } from "./lobster-pet-moon.ts";
+  CRAB_PET_PALETTES,
+  canonicalCrabLook,
+  createCrabPetLook,
+  crabLookStyle,
+  renderCrabSvg,
+} from "./crab-pet-look.ts";
+export { crabPaletteName } from "./crab-pet-lore.ts";
+export { moonPhaseFraction } from "./crab-pet-moon.ts";
 
-class LobsterPet extends LitElement {
+class CrabPet extends LitElement {
   override createRenderRoot() {
     return this;
   }
 
   @property({ attribute: false }) seed = 0;
-  @property({ attribute: false }) mode: contract.LobsterPetMode = "idle";
+  @property({ attribute: false }) mode: contract.CrabPetMode = "idle";
 
   @property({ attribute: false }) visitsEnabled = true;
-  @property({ attribute: false }) runOutcome: contract.LobsterRunOutcome = "ok";
+  @property({ attribute: false }) runOutcome: contract.CrabRunOutcome = "ok";
   @property({ attribute: false }) soundsEnabled = false;
   @property({ attribute: false }) gatewayVersion: string | null = null;
 
-  @state() private act: plans.LobsterPetAct | null = null;
+  @state() private act: plans.CrabPetAct | null = null;
   @state() private spotPct = 80;
   @state() private facing: 1 | -1 = 1;
   @state() private entering = false;
-  @state() private entrance: contract.LobsterPetEntrance = "walk";
+  @state() private entrance: contract.CrabPetEntrance = "walk";
   @state() private presence: "out" | "in" | "leaving" = "out";
-  @state() private anchor: plans.LobsterPetAnchor = "ledge";
+  @state() private anchor: plans.CrabPetAnchor = "ledge";
   @state() private scheduledVisiting = false;
   @state() private dismissed = false;
   @state() private grumpy = false;
@@ -64,11 +64,11 @@ class LobsterPet extends LitElement {
   @state() private anniversary = false;
   private sailorDay = false;
   // Rare-load identity resolved once per seed (Elder, old-friend returns,
-  // Lobsterdex completion) - a load-start snapshot, like familiarity.
-  private identity: plans.LobsterLoadIdentity | null = null;
-  private entranceRng: () => number = lobsterLook.mulberry32(0);
+  // Crabdex completion) - a load-start snapshot, like familiarity.
+  private identity: plans.CrabLoadIdentity | null = null;
+  private entranceRng: () => number = crabLook.mulberry32(0);
   // Passers and the bottle run on their own clocks beside the resident.
-  private readonly traffic = new LobsterLedgeTraffic(this, {
+  private readonly traffic = new CrabLedgeTraffic(this, {
     visitsEnabled: () => this.visitsEnabled,
     onPasserFacing: (facing) => this.watchTraffic(facing),
     onPasserMidCross: () => this.reactToPasser(),
@@ -81,7 +81,7 @@ class LobsterPet extends LitElement {
   private moltPlanned = false;
   private twinPlanned = false;
   private shellTimer: number | null = null;
-  private familiarity: dex.LobsterFamiliarity = {
+  private familiarity: dex.CrabFamiliarity = {
     tier: "regular",
     wary: false,
     visits: 0,
@@ -89,9 +89,9 @@ class LobsterPet extends LitElement {
   };
   private greetedThisLoad = false;
 
-  private look: contract.LobsterPetLook | null = null;
-  private rng: () => number = lobsterLook.mulberry32(0);
-  private visitRng: () => number = lobsterLook.mulberry32(0);
+  private look: contract.CrabPetLook | null = null;
+  private rng: () => number = crabLook.mulberry32(0);
+  private visitRng: () => number = crabLook.mulberry32(0);
   private idleTimer: number | null = null;
   private actEndTimer: number | null = null;
   private enterTimer: number | null = null;
@@ -153,11 +153,11 @@ class LobsterPet extends LitElement {
   override willUpdate(changed: Map<PropertyKey, unknown>) {
     const seedChanged = this.look === null || changed.has("seed");
     if (seedChanged) {
-      this.look = lobsterLook.createLobsterPetLook(this.seed);
-      this.rng = lobsterLook.mulberry32(this.seed ^ 0x9e3779b9);
-      this.visitRng = lobsterLook.mulberry32(this.seed ^ 0x5eaf00d);
-      this.entranceRng = lobsterLook.mulberry32((this.seed ^ 0xe27a) >>> 0);
-      this.identity = plans.resolveLobsterLoadIdentity(this.seed, this.look);
+      this.look = crabLook.createCrabPetLook(this.seed);
+      this.rng = crabLook.mulberry32(this.seed ^ 0x9e3779b9);
+      this.visitRng = crabLook.mulberry32(this.seed ^ 0x5eaf00d);
+      this.entranceRng = crabLook.mulberry32((this.seed ^ 0xe27a) >>> 0);
+      this.identity = plans.resolveCrabLoadIdentity(this.seed, this.look);
       this.look = this.identity.look;
       this.spotPct = this.look.spotPct;
       this.facing = this.look.facing;
@@ -175,10 +175,10 @@ class LobsterPet extends LitElement {
         this.shellTimer = null;
       }
       // The Elder never molts: it is already every size it will ever need.
-      this.moltPlanned = plans.isLobsterMoltLoad(this.seed) && !this.identity.elder;
-      this.twinPlanned = plans.isLobsterTwinLoad(this.seed);
-      this.familiarity = dex.getLobsterFamiliarity();
-      this.sailorDay = isLobsterDay(new Date());
+      this.moltPlanned = plans.isCrabMoltLoad(this.seed) && !this.identity.elder;
+      this.twinPlanned = plans.isCrabTwinLoad(this.seed);
+      this.familiarity = dex.getCrabFamiliarity();
+      this.sailorDay = isCrabDay(new Date());
       this.greetedThisLoad = false;
       this.scheduleVisits();
       this.traffic.reset(this.seed);
@@ -188,7 +188,7 @@ class LobsterPet extends LitElement {
       this.outcomePresenceOwner = null;
       this.trackVigil();
     } else if (changed.has("mode")) {
-      const previousMode = changed.get("mode") as contract.LobsterPetMode | undefined;
+      const previousMode = changed.get("mode") as contract.CrabPetMode | undefined;
       const finished = previousMode === "busy" && this.mode === "idle";
       const presenceOwner = finished && this.vigil ? "vigil" : null;
       this.trackVigil();
@@ -199,7 +199,7 @@ class LobsterPet extends LitElement {
         // reschedules from the new mode's pool.
         // Success cheers, failure droops, a user abort is nothing to
         // celebrate or mourn - just acknowledge the change.
-        const finishAct = plans.resolveLobsterFinishAct(this.runOutcome);
+        const finishAct = plans.resolveCrabFinishAct(this.runOutcome);
         this.performAct(finished ? finishAct : "startle", presenceOwner);
       }
     }
@@ -207,9 +207,9 @@ class LobsterPet extends LitElement {
     // known (the hello can land after the first render).
     if (!this.movingDayChecked && this.gatewayVersion) {
       this.movingDayChecked = true;
-      this.movingDay = plans.detectLobsterMovingDay(this.gatewayVersion);
+      this.movingDay = plans.detectCrabMovingDay(this.gatewayVersion);
     }
-    // The completed-Lobsterdex trim lives on the host so it survives the pet
+    // The completed-Crabdex trim lives on the host so it survives the pet
     // being out; the visits setting and dismissals silence it too.
     this.toggleAttribute(
       "data-dex-complete",
@@ -232,24 +232,24 @@ class LobsterPet extends LitElement {
         this.rollPerch();
         // Entrance rolls burn once per arrival on their own stream, aligned
         // across scheduled visits and offline summons.
-        this.entrance = plans.pickLobsterEntrance(this.entranceRng());
+        this.entrance = plans.pickCrabEntrance(this.entranceRng());
         if (this.look) {
           // Anniversary check reads the dex before this arrival records into
           // it: a first-ever visit today must not celebrate itself.
-          this.anniversary = dex.isLobsterFirstVisitAnniversary(
-            dex.getLobsterdexEntries().get(this.look.palette.id)?.firstSeenAt ?? null,
+          this.anniversary = dex.isCrabFirstVisitAnniversary(
+            dex.getCrabdexEntries().get(this.look.palette.id)?.firstSeenAt ?? null,
             new Date(),
           );
           // Every genuine arrival (visit or offline summon) logs the palette
           // with the first visitor's name (the Elder signs as itself) and
           // any shiny sighting, and bumps the familiarity count.
-          dex.recordLobsterVisit(this.look.palette.id, {
+          dex.recordCrabVisit(this.look.palette.id, {
             name: this.identity
-              ? plans.lobsterLoadDisplayName(this.identity, this.seed)
-              : lobsterLook.lobsterPetName(this.look, this.seed),
+              ? plans.crabLoadDisplayName(this.identity, this.seed)
+              : crabLook.crabPetName(this.look, this.seed),
             shiny: this.look.shiny,
           });
-          dex.recordLobsterArrivalStats();
+          dex.recordCrabArrivalStats();
         }
       }
       this.presence = "in";
@@ -289,7 +289,7 @@ class LobsterPet extends LitElement {
         this.greetedThisLoad = true;
         this.performAct("wave");
       }
-    }, plans.LOBSTER_PET_ENTRANCE_MS[this.entrance]);
+    }, plans.CRAB_PET_ENTRANCE_MS[this.entrance]);
     this.scheduleNextAct();
   }
 
@@ -303,7 +303,7 @@ class LobsterPet extends LitElement {
     }
   };
 
-  // Press-and-hold pets the lobster (content eyes, a floating heart); a
+  // Press-and-hold pets the crab (content eyes, a floating heart); a
   // quick tap is a poke. Pokes are fun until they are not: 3 fast pokes turn
   // it grumpy for a minute, 10 send it off in a huff until a later visit.
   // Offline pets are on duty and never huff.
@@ -343,8 +343,8 @@ class LobsterPet extends LitElement {
     this.holdPetted = false;
   };
 
-  private playChirp(kind: LobsterPetChirpKind) {
-    this.audioCtx = playLobsterPetChirp(this.audioCtx, this.soundsEnabled, kind);
+  private playChirp(kind: CrabPetChirpKind) {
+    this.audioCtx = playCrabPetChirp(this.audioCtx, this.soundsEnabled, kind);
   }
 
   private pokeNow() {
@@ -380,7 +380,7 @@ class LobsterPet extends LitElement {
     this.clearVisitTimers();
     this.scheduledVisiting = false;
     this.armArrival(
-      lobsterLook.randomBetween(this.visitRng, plans.VISIT_GAP_MS[0], plans.VISIT_GAP_MS[1]),
+      crabLook.randomBetween(this.visitRng, plans.VISIT_GAP_MS[0], plans.VISIT_GAP_MS[1]),
     );
   }
 
@@ -414,7 +414,7 @@ class LobsterPet extends LitElement {
       return;
     }
     this.lastGazeAt = now;
-    const sprite = this.querySelector(".lobster-pet:not(.lobster-pet--shell)");
+    const sprite = this.querySelector(".crab-pet:not(.crab-pet--shell)");
     if (!sprite) {
       return;
     }
@@ -430,7 +430,7 @@ class LobsterPet extends LitElement {
   private readonly handleShoo = (event: Event) => {
     event.preventDefault();
     this.dismissed = true;
-    dex.recordLobsterShoo();
+    dex.recordCrabShoo();
   };
 
   private clearActTimers() {
@@ -463,9 +463,9 @@ class LobsterPet extends LitElement {
     if (this.visitRng() < plans.VISIT_SHY_CHANCE) {
       return;
     }
-    const tuning = dex.LOBSTER_FAMILIARITY_TUNING[this.familiarity.tier];
+    const tuning = dex.CRAB_FAMILIARITY_TUNING[this.familiarity.tier];
     this.armArrival(
-      lobsterLook.randomBetween(
+      crabLook.randomBetween(
         this.visitRng,
         plans.VISIT_FIRST_DELAY_MS[0],
         plans.VISIT_FIRST_DELAY_MS[1],
@@ -479,8 +479,8 @@ class LobsterPet extends LitElement {
       this.rollPerch();
       this.scheduledVisiting = true;
       this.armDeparture(
-        lobsterLook.randomBetween(this.visitRng, plans.VISIT_STAY_MS[0], plans.VISIT_STAY_MS[1]) *
-          dex.LOBSTER_FAMILIARITY_TUNING[this.familiarity.tier].stayMul,
+        crabLook.randomBetween(this.visitRng, plans.VISIT_STAY_MS[0], plans.VISIT_STAY_MS[1]) *
+          dex.CRAB_FAMILIARITY_TUNING[this.familiarity.tier].stayMul,
       );
     }, delayMs);
   }
@@ -489,17 +489,17 @@ class LobsterPet extends LitElement {
     this.visitTimer = window.setTimeout(() => {
       this.visitTimer = null;
       this.scheduledVisiting = false;
-      const tuning = dex.LOBSTER_FAMILIARITY_TUNING[this.familiarity.tier];
-      const waryMul = this.familiarity.wary ? dex.LOBSTER_FAMILIARITY_TUNING.waryGapMul : 1;
+      const tuning = dex.CRAB_FAMILIARITY_TUNING[this.familiarity.tier];
+      const waryMul = this.familiarity.wary ? dex.CRAB_FAMILIARITY_TUNING.waryGapMul : 1;
       this.armArrival(
-        lobsterLook.randomBetween(this.visitRng, plans.VISIT_GAP_MS[0], plans.VISIT_GAP_MS[1]) *
+        crabLook.randomBetween(this.visitRng, plans.VISIT_GAP_MS[0], plans.VISIT_GAP_MS[1]) *
           tuning.gapMul *
           waryMul,
       );
     }, stayMs);
   }
 
-  // ---- Ledge traffic (scheduling lives in LobsterLedgeTraffic) ----
+  // ---- Ledge traffic (scheduling lives in CrabLedgeTraffic) ----
 
   // The resident notices traffic: it turns toward a passer's entry side,
   // then follows it out with a mid-crossing flip. Scuttle owns facing while
@@ -532,7 +532,7 @@ class LobsterPet extends LitElement {
     this.anchor = this.visitRng() < 0.6 ? "ledge" : "bar";
     this.setAttribute("data-spot", this.anchor);
     const zone = this.currentZone();
-    this.spotPct = Math.round(lobsterLook.randomBetween(this.visitRng, zone[0], zone[1]));
+    this.spotPct = Math.round(crabLook.randomBetween(this.visitRng, zone[0], zone[1]));
     this.facing = this.visitRng() < 0.5 ? 1 : -1;
   }
 
@@ -558,14 +558,14 @@ class LobsterPet extends LitElement {
     ) {
       return;
     }
-    const profile = plans.resolveLobsterActProfile(this.mode, this.look.personality);
+    const profile = plans.resolveCrabActProfile(this.mode, this.look.personality);
     if (!profile) {
       return;
     }
-    const delay = lobsterLook.randomBetween(this.rng, profile.delayMs[0], profile.delayMs[1]);
+    const delay = crabLook.randomBetween(this.rng, profile.delayMs[0], profile.delayMs[1]);
     this.idleTimer = window.setTimeout(() => {
       this.idleTimer = null;
-      const nextProfile = plans.resolveLobsterActProfile(this.mode, this.look?.personality ?? null);
+      const nextProfile = plans.resolveCrabActProfile(this.mode, this.look?.personality ?? null);
       // A crossing pauses the fidget loop: the pet is busy watching. The
       // traffic controller's passer-end hook restarts scheduling.
       if (
@@ -580,11 +580,11 @@ class LobsterPet extends LitElement {
         this.performAct("molt");
         return;
       }
-      this.performAct(lobsterLook.pickWeighted(this.rng, nextProfile.acts));
+      this.performAct(crabLook.pickWeighted(this.rng, nextProfile.acts));
     }, delay);
   }
 
-  private performAct(act: plans.LobsterPetAct, presenceOwner: "vigil" | null = null) {
+  private performAct(act: plans.CrabPetAct, presenceOwner: "vigil" | null = null) {
     this.clearActTimers();
     // The active outcome chain carries its sole presence owner across linked
     // acts; overrides, forced departures, and the terminal act release it.
@@ -601,7 +601,7 @@ class LobsterPet extends LitElement {
         this.completeMolt();
       }
       if (act === "droop") {
-        // Bad news gets processed lobster-style: tidy the ledge, then move on.
+        // Bad news gets processed crab-style: tidy the ledge, then move on.
         this.performAct("sweep", presenceOwner);
         return;
       }
@@ -609,7 +609,7 @@ class LobsterPet extends LitElement {
       if (this.wantsVisible()) {
         this.scheduleNextAct();
       }
-    }, plans.LOBSTER_PET_ACT_DURATION_MS[act]);
+    }, plans.CRAB_PET_ACT_DURATION_MS[act]);
   }
 
   // Shedding: the old shell stays behind and slowly fades while the pet
@@ -624,10 +624,7 @@ class LobsterPet extends LitElement {
       this.shellScale = this.look.scale;
       this.look = {
         ...this.look,
-        scale: expectDefined(
-          tiers[Math.min(index + 1, tiers.length - 1)],
-          "lobster molt size tier",
-        ),
+        scale: expectDefined(tiers[Math.min(index + 1, tiers.length - 1)], "crab molt size tier"),
       };
     }
     this.shellSpotPct = this.spotPct;
@@ -651,7 +648,7 @@ class LobsterPet extends LitElement {
       return;
     }
     const zone = this.currentZone();
-    let target = Math.round(lobsterLook.randomBetween(this.rng, zone[0], zone[1]));
+    let target = Math.round(crabLook.randomBetween(this.rng, zone[0], zone[1]));
     // A same-spot walk reads as a glitch; nudge to the other zone edge.
     if (Math.abs(target - this.spotPct) < 4) {
       target =
@@ -672,7 +669,7 @@ class LobsterPet extends LitElement {
       : identity?.oldFriend
         ? "an old friend"
         : null;
-    return lobsterLook.renderLobsterPetScene({
+    return crabLook.renderCrabPetScene({
       look,
       mode: this.mode,
       presence: this.presence,
@@ -705,7 +702,7 @@ class LobsterPet extends LitElement {
       seed: this.seed,
       movingDay: this.movingDay,
       sailorDay: this.sailorDay,
-      nameOverride: identity ? plans.lobsterLoadDisplayName(identity, this.seed) : null,
+      nameOverride: identity ? plans.crabLoadDisplayName(identity, this.seed) : null,
       flavor,
       bottle: this.traffic.bottle(),
       onPointerDown: this.handleHoldStart,
@@ -716,6 +713,6 @@ class LobsterPet extends LitElement {
     });
   }
 }
-if (!customElements.get("openclaw-lobster-pet")) {
-  customElements.define("openclaw-lobster-pet", LobsterPet);
+if (!customElements.get("openclaw-crab-pet")) {
+  customElements.define("openclaw-crab-pet", CrabPet);
 }

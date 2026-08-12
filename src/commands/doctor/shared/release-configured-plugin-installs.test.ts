@@ -818,44 +818,44 @@ describe("configured plugin install release step", () => {
 
   it("includes allow-only official plugin ids in the repair set", async () => {
     mocks.getOfficialExternalPluginCatalogEntry.mockImplementation((pluginId: string) => {
-      if (pluginId === "lobster") {
-        return { name: "@openclaw/lobster" };
+      if (pluginId === "crab") {
+        return { name: "@openclaw/crab" };
       }
       return undefined;
     });
     const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: {
         plugins: {
-          allow: ["lobster", "unofficial-custom"],
+          allow: ["crab", "unofficial-custom"],
         },
       },
       env: {},
     });
 
-    expect(result.pluginIds).toEqual(["lobster"]);
+    expect(result.pluginIds).toEqual(["crab"]);
     expect(result.channelIds).toStrictEqual([]);
   });
 
   it("skips allow-only plugin ids that already have material plugin entries", async () => {
     mocks.getOfficialExternalPluginCatalogEntry.mockImplementation((pluginId: string) => {
-      if (pluginId === "lobster") {
-        return { name: "@openclaw/lobster" };
+      if (pluginId === "crab") {
+        return { name: "@openclaw/crab" };
       }
       return undefined;
     });
     const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
       cfg: {
         plugins: {
-          allow: ["lobster"],
+          allow: ["crab"],
           entries: {
-            lobster: { enabled: true },
+            crab: { enabled: true },
           },
         },
       },
       env: {},
     });
 
-    expect(result.pluginIds).toEqual(["lobster"]);
-    expect(mocks.getOfficialExternalPluginCatalogEntry).not.toHaveBeenCalledWith("lobster");
+    expect(result.pluginIds).toEqual(["crab"]);
+    expect(mocks.getOfficialExternalPluginCatalogEntry).not.toHaveBeenCalledWith("crab");
   });
 });

@@ -79,11 +79,11 @@ describe("decorative emoji terminal helpers", () => {
       isTty: true,
     };
 
-    expect(stripDecorativeEmojiForTerminal("The lobster in your shell. 🦞", badTerminal)).toBe(
-      "The lobster in your shell.",
+    expect(stripDecorativeEmojiForTerminal("The crab in your shell. 🦞", badTerminal)).toBe(
+      "The crab in your shell.",
     );
-    expect(stripDecorativeEmojiForTerminal("The lobster in your shell. 🦞", goodTerminal)).toBe(
-      "The lobster in your shell. 🦞",
+    expect(stripDecorativeEmojiForTerminal("The crab in your shell. 🦞", goodTerminal)).toBe(
+      "The crab in your shell. 🦞",
     );
   });
 });

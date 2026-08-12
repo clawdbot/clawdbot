@@ -2,19 +2,19 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { LOBSTER_PALETTE_LORE } from "./lobster-pet-lore.ts";
-import { LOBSTER_PALETTE_WEIGHTS } from "./lobster-pet-palettes.ts";
+import { CRAB_PALETTE_LORE } from "./crab-pet-lore.ts";
+import { CRAB_PALETTE_WEIGHTS } from "./crab-pet-palettes.ts";
 import {
-  LOBSTER_PET_PALETTES,
-  canonicalLobsterLook,
-  createLobsterPetLook,
-  lobsterPetSeed,
+  CRAB_PET_PALETTES,
+  canonicalCrabLook,
+  createCrabPetLook,
+  crabPetSeed,
   moonPhaseFraction,
-} from "./lobster-pet.ts";
+} from "./crab-pet.ts";
 
-type LobsterPetPaletteId = ReturnType<typeof createLobsterPetLook>["palette"]["id"];
+type CrabPetPaletteId = ReturnType<typeof createCrabPetLook>["palette"]["id"];
 
-const LOBSTER_PET_PALETTE_IDS: LobsterPetPaletteId[] = [
+const CRAB_PET_PALETTE_IDS: CrabPetPaletteId[] = [
   "emerald",
   "blue",
   "gold",
@@ -61,9 +61,9 @@ const LOBSTER_PET_PALETTE_IDS: LobsterPetPaletteId[] = [
 
 const SPOT_ZONES = { left: [12, 38], right: [60, 84] } as const;
 
-describe("lobster pet variants", () => {
+describe("crab pet variants", () => {
   it("is deterministic per seed", () => {
-    expect(createLobsterPetLook(1234)).toEqual(createLobsterPetLook(1234));
+    expect(createCrabPetLook(1234)).toEqual(createCrabPetLook(1234));
   });
 
   it("stays within the variant catalog for many seeds", () => {
@@ -77,7 +77,7 @@ describe("lobster pet variants", () => {
     const glints = new Set<string | null>();
     const neutralDate = new Date("2026-07-15T12:00:00");
     for (let seed = 0; seed < 300; seed++) {
-      const look = createLobsterPetLook(seed, neutralDate);
+      const look = createCrabPetLook(seed, neutralDate);
       palettes.add(look.palette.id);
       personalities.add(look.personality);
       builds.add(look.build);
@@ -86,7 +86,7 @@ describe("lobster pet variants", () => {
       crusherSides.add(look.crusherSide);
       freckleRolls.add(look.freckles);
       glints.add(look.glint);
-      expect(LOBSTER_PET_PALETTE_IDS).toContain(look.palette.id);
+      expect(CRAB_PET_PALETTE_IDS).toContain(look.palette.id);
       expect([1.7, 2, 2.5]).toContain(look.scale);
       expect(["none", "crown", "sprout", "patch"]).toContain(look.accessory);
       expect(["perky", "droopy"]).toContain(look.antennae);
@@ -115,16 +115,16 @@ describe("lobster pet variants", () => {
     let shinies = 0;
     const total = 20_000;
     const neutralDate = new Date("2026-07-15T12:00:00");
-    expect(LOBSTER_PET_PALETTE_IDS).toHaveLength(42);
-    expect(LOBSTER_PET_PALETTES).toHaveLength(42);
+    expect(CRAB_PET_PALETTE_IDS).toHaveLength(42);
+    expect(CRAB_PET_PALETTES).toHaveLength(42);
     for (let seed = 0; seed < total; seed++) {
-      const look = createLobsterPetLook(seed, neutralDate);
+      const look = createCrabPetLook(seed, neutralDate);
       counts.set(look.palette.id, (counts.get(look.palette.id) ?? 0) + 1);
       if (look.shiny) {
         shinies++;
       }
     }
-    for (const id of LOBSTER_PET_PALETTE_IDS) {
+    for (const id of CRAB_PET_PALETTE_IDS) {
       expect(counts.get(id) ?? 0).toBeGreaterThan(0);
     }
     for (const grail of [
@@ -160,9 +160,7 @@ describe("lobster pet variants", () => {
     ]) {
       expect(counts.get(grail) ?? 0).toBeLessThan(total * 0.018);
     }
-    const weights = new Map(
-      LOBSTER_PALETTE_WEIGHTS.map(([palette, weight]) => [palette.id, weight]),
-    );
+    const weights = new Map(CRAB_PALETTE_WEIGHTS.map(([palette, weight]) => [palette.id, weight]));
     const goldenRetroWeight = expectDefined(weights.get("goldenretro"), "golden retro weight");
     const retroWeight = expectDefined(weights.get("retro"), "retro weight");
     const totalWeight = [...weights.values()].reduce((sum, weight) => sum + weight, 0);
@@ -181,11 +179,11 @@ describe("lobster pet variants", () => {
   });
 
   it("keeps palette lore complete and exact", () => {
-    const paletteIds = LOBSTER_PET_PALETTES.map((palette) => palette.id).toSorted();
-    expect(Object.keys(LOBSTER_PALETTE_LORE).toSorted()).toEqual(paletteIds);
+    const paletteIds = CRAB_PET_PALETTES.map((palette) => palette.id).toSorted();
+    expect(Object.keys(CRAB_PALETTE_LORE).toSorted()).toEqual(paletteIds);
     for (const id of paletteIds) {
-      expect(LOBSTER_PALETTE_LORE[id].flavor.trim()).not.toBe("");
-      expect(LOBSTER_PALETTE_LORE[id].hint.trim()).not.toBe("");
+      expect(CRAB_PALETTE_LORE[id].flavor.trim()).not.toBe("");
+      expect(CRAB_PALETTE_LORE[id].hint.trim()).not.toBe("");
     }
   });
 
@@ -193,24 +191,24 @@ describe("lobster pet variants", () => {
     const neutralDate = new Date("2026-07-15T12:00:00");
     let chimeraSeed: number | null = null;
     for (let seed = 0; seed < 20_000; seed++) {
-      const look = createLobsterPetLook(seed, neutralDate);
+      const look = createCrabPetLook(seed, neutralDate);
       expect(look.chimeraParts === null).toBe(look.palette.id !== "chimera");
       if (look.palette.id === "chimera" && chimeraSeed === null) {
         chimeraSeed = seed;
       }
     }
     const seed = expectDefined(chimeraSeed, "chimera seed");
-    const chimera = createLobsterPetLook(seed, neutralDate);
+    const chimera = createCrabPetLook(seed, neutralDate);
     expect(new Set(Object.values(expectDefined(chimera.chimeraParts, "chimera parts"))).size).toBe(
       4,
     );
-    expect(createLobsterPetLook(seed, neutralDate).chimeraParts).toEqual(chimera.chimeraParts);
+    expect(createCrabPetLook(seed, neutralDate).chimeraParts).toEqual(chimera.chimeraParts);
 
     const palette = expectDefined(
-      LOBSTER_PET_PALETTES.find((candidate) => candidate.id === "chimera"),
+      CRAB_PET_PALETTES.find((candidate) => candidate.id === "chimera"),
       "chimera palette",
     );
-    expect(canonicalLobsterLook(palette).chimeraParts).toEqual({
+    expect(canonicalCrabLook(palette).chimeraParts).toEqual({
       body: "#35a55b",
       clawLeft: "#4a7dfc",
       clawRight: "#f4b840",
@@ -220,19 +218,15 @@ describe("lobster pet variants", () => {
 
   it("stably offsets canonical blink timing by palette", () => {
     const emerald = expectDefined(
-      LOBSTER_PET_PALETTES.find((palette) => palette.id === "emerald"),
+      CRAB_PET_PALETTES.find((palette) => palette.id === "emerald"),
       "emerald palette",
     );
     const blue = expectDefined(
-      LOBSTER_PET_PALETTES.find((palette) => palette.id === "blue"),
+      CRAB_PET_PALETTES.find((palette) => palette.id === "blue"),
       "blue palette",
     );
-    expect(canonicalLobsterLook(emerald).blinkDelayS).not.toBe(
-      canonicalLobsterLook(blue).blinkDelayS,
-    );
-    expect(canonicalLobsterLook(emerald).blinkDelayS).toBe(
-      canonicalLobsterLook(emerald).blinkDelayS,
-    );
+    expect(canonicalCrabLook(emerald).blinkDelayS).not.toBe(canonicalCrabLook(blue).blinkDelayS);
+    expect(canonicalCrabLook(emerald).blinkDelayS).toBe(canonicalCrabLook(emerald).blinkDelayS);
   });
 
   it("tracks known new and full moons", () => {
@@ -246,7 +240,7 @@ describe("lobster pet variants", () => {
   it("keeps Clawtron's LED on the perky antenna", () => {
     const neutralDate = new Date("2026-07-15T12:00:00");
     const clawtron = Array.from({ length: 20_000 }, (_, seed) =>
-      createLobsterPetLook(seed, neutralDate),
+      createCrabPetLook(seed, neutralDate),
     ).find((look) => look.palette.id === "clawtron");
     expect(clawtron?.antennae).toBe("perky");
   });
@@ -254,13 +248,13 @@ describe("lobster pet variants", () => {
   it("keeps zombies' antennae droopy", () => {
     const neutralDate = new Date("2026-07-15T12:00:00");
     const zombie = Array.from({ length: 20_000 }, (_, seed) =>
-      createLobsterPetLook(seed, neutralDate),
+      createCrabPetLook(seed, neutralDate),
     ).find((look) => look.palette.id === "zombie");
     expect(zombie?.antennae).toBe("droopy");
   });
 
   it("derives distinct salted seeds per session key, stable within a load", () => {
-    expect(lobsterPetSeed("agent:a:main")).toBe(lobsterPetSeed("agent:a:main"));
-    expect(lobsterPetSeed("agent:a:main")).not.toBe(lobsterPetSeed("agent:b:other"));
+    expect(crabPetSeed("agent:a:main")).toBe(crabPetSeed("agent:a:main"));
+    expect(crabPetSeed("agent:a:main")).not.toBe(crabPetSeed("agent:b:other"));
   });
 });

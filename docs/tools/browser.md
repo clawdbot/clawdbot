@@ -174,13 +174,13 @@ Browser settings live in `~/.openclaw/openclaw.json`.
     },
     // snapshotDefaults: { mode: "efficient" }, // default snapshot mode when the caller omits one
     defaultProfile: "openclaw",
-    color: "#FF4500",
+    color: "#2FBF71",
     headless: false,
     noSandbox: false,
     attachOnly: false,
     executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
     profiles: {
-      openclaw: { cdpPort: 18800, color: "#FF4500" },
+      openclaw: { cdpPort: 18800, color: "#2FBF71" },
       work: {
         cdpPort: 18801,
         color: "#0066CC",

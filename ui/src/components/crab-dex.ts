@@ -6,10 +6,10 @@
 // cycle).
 import { getSafeLocalStorage } from "../local-storage.ts";
 
-const LOBSTERDEX_KEY = "openclaw.control.lobsterdex.v1";
-const FAMILIARITY_KEY = "openclaw.control.lobsterpet.familiarity.v1";
+const CRABDEX_KEY = "openclaw.control.crabdex.v1";
+const FAMILIARITY_KEY = "openclaw.control.crabpet.familiarity.v1";
 
-type LobsterdexEntry = {
+type CrabdexEntry = {
   firstSeenAt: number | null;
   name: string | null;
   // When a shiny of this palette first sparkled by; null until one does.
@@ -18,11 +18,11 @@ type LobsterdexEntry = {
 
 type PersistedDex = Record<string, { firstSeenAt?: number; name?: string; shinySeenAt?: number }>;
 
-function readDex(): Map<string, LobsterdexEntry> {
+function readDex(): Map<string, CrabdexEntry> {
   try {
-    const raw = getSafeLocalStorage()?.getItem(LOBSTERDEX_KEY);
+    const raw = getSafeLocalStorage()?.getItem(CRABDEX_KEY);
     const parsed: unknown = raw ? JSON.parse(raw) : {};
-    const entries = new Map<string, LobsterdexEntry>();
+    const entries = new Map<string, CrabdexEntry>();
     if (Array.isArray(parsed)) {
       // v1 stored a bare palette-id array; carry ids over without memories.
       for (const value of parsed) {
@@ -56,7 +56,7 @@ function readDex(): Map<string, LobsterdexEntry> {
   }
 }
 
-function writeDex(entries: Map<string, LobsterdexEntry>): void {
+function writeDex(entries: Map<string, CrabdexEntry>): void {
   const persisted: PersistedDex = {};
   for (const [id, entry] of [...entries.entries()].toSorted(([a], [b]) => a.localeCompare(b))) {
     persisted[id] = {
@@ -65,18 +65,18 @@ function writeDex(entries: Map<string, LobsterdexEntry>): void {
       ...(entry.shinySeenAt !== null ? { shinySeenAt: entry.shinySeenAt } : {}),
     };
   }
-  getSafeLocalStorage()?.setItem(LOBSTERDEX_KEY, JSON.stringify(persisted));
+  getSafeLocalStorage()?.setItem(CRABDEX_KEY, JSON.stringify(persisted));
 }
 
-export function getLobsterdex(): ReadonlySet<string> {
+export function getCrabdex(): ReadonlySet<string> {
   return new Set(readDex().keys());
 }
 
-export function getLobsterdexEntries(): ReadonlyMap<string, LobsterdexEntry> {
+export function getCrabdexEntries(): ReadonlyMap<string, CrabdexEntry> {
   return readDex();
 }
 
-export function recordLobsterVisit(
+export function recordCrabVisit(
   paletteId: string,
   details: { name?: string; shiny?: boolean } = {},
 ): void {
@@ -110,10 +110,10 @@ export function recordLobsterVisit(
 
 // ---- Familiarity ----
 
-type LobsterFamiliarityTier = "shy" | "regular" | "friend";
+type CrabFamiliarityTier = "shy" | "regular" | "friend";
 
-export type LobsterFamiliarity = {
-  tier: LobsterFamiliarityTier;
+export type CrabFamiliarity = {
+  tier: CrabFamiliarityTier;
   wary: boolean;
   visits: number;
   shoos: number;
@@ -122,7 +122,7 @@ export type LobsterFamiliarity = {
 // Behavior multipliers per tier; the pet reads these once per load. Shy pets
 // keep visits short and arrive late; friends linger, return sooner, and
 // greet. Wary pets (shooed too often) leave longer gaps between visits.
-export const LOBSTER_FAMILIARITY_TUNING = {
+export const CRAB_FAMILIARITY_TUNING = {
   shy: { stayMul: 0.6, firstDelayMul: 1.3, gapMul: 1 },
   regular: { stayMul: 1, firstDelayMul: 1, gapMul: 1 },
   friend: { stayMul: 1.6, firstDelayMul: 0.7, gapMul: 0.8 },
@@ -150,19 +150,19 @@ function writeFamiliarityCounters(counters: { visits: number; shoos: number }): 
   }
 }
 
-export function recordLobsterArrivalStats(): void {
+export function recordCrabArrivalStats(): void {
   const counters = readFamiliarityCounters();
   writeFamiliarityCounters({ ...counters, visits: counters.visits + 1 });
 }
 
-export function recordLobsterShoo(): void {
+export function recordCrabShoo(): void {
   const counters = readFamiliarityCounters();
   writeFamiliarityCounters({ ...counters, shoos: counters.shoos + 1 });
 }
 
-export function getLobsterFamiliarity(): LobsterFamiliarity {
+export function getCrabFamiliarity(): CrabFamiliarity {
   const { visits, shoos } = readFamiliarityCounters();
-  const tier: LobsterFamiliarityTier = visits < 3 ? "shy" : visits < 15 ? "regular" : "friend";
+  const tier: CrabFamiliarityTier = visits < 3 ? "shy" : visits < 15 ? "regular" : "friend";
   const wary = shoos >= 3 && shoos > visits * 0.3;
   return { tier, wary, visits, shoos };
 }
@@ -177,7 +177,7 @@ const HONORIFICS: Array<[number, string]> = [
   [50, "Sir"],
 ];
 
-export function lobsterHonorific(visits: number): string | null {
+export function crabHonorific(visits: number): string | null {
   for (const [threshold, title] of HONORIFICS) {
     if (visits >= threshold) {
       return title;
@@ -191,7 +191,7 @@ export function lobsterHonorific(visits: number): string | null {
 // celebrate on leap years only - rarity is the point.
 const ANNIVERSARY_MIN_ELAPSED_MS = 300 * 24 * 60 * 60 * 1000;
 
-export function isLobsterFirstVisitAnniversary(firstSeenAt: number | null, now: Date): boolean {
+export function isCrabFirstVisitAnniversary(firstSeenAt: number | null, now: Date): boolean {
   if (firstSeenAt === null || now.getTime() - firstSeenAt < ANNIVERSARY_MIN_ELAPSED_MS) {
     return false;
   }

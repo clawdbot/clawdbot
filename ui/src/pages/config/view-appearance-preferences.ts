@@ -4,17 +4,17 @@ import {
   normalizeChatFollowUpMode,
   normalizeChatSendShortcut,
 } from "../../app/settings.ts";
-import { icons } from "../../components/icons.ts";
-import { getLobsterdexEntries } from "../../components/lobster-dex.ts";
-import { previewLobsterChirp } from "../../components/lobster-pet-audio.ts";
-import { LOBSTER_PALETTE_LORE } from "../../components/lobster-pet-lore.ts";
+import { getCrabdexEntries } from "../../components/crab-dex.ts";
+import { previewCrabChirp } from "../../components/crab-pet-audio.ts";
+import { CRAB_PALETTE_LORE } from "../../components/crab-pet-lore.ts";
 import {
-  LOBSTER_PET_PALETTES,
-  canonicalLobsterLook,
-  lobsterLookStyle,
-  lobsterPaletteName,
-  renderLobsterSvg,
-} from "../../components/lobster-pet.ts";
+  CRAB_PET_PALETTES,
+  canonicalCrabLook,
+  crabLookStyle,
+  crabPaletteName,
+  renderCrabSvg,
+} from "../../components/crab-pet.ts";
+import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { renderSettingsRow, renderSettingsToggleRow } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
@@ -257,65 +257,65 @@ export function renderChatPreferencesSection(
   `;
 }
 
-// Lobster pet toggles and the Lobsterdex live with the rest of the appearance
+// Crab pet toggles and the Crabdex live with the rest of the appearance
 // prefs; the toggles are browser-local, so embedded editors omit this section.
-export function renderLobsterPetSection(props: ConfigProps) {
-  if (!props.setLobsterPetVisits || !props.setLobsterPetSounds) {
+export function renderCrabPetSection(props: ConfigProps) {
+  if (!props.setCrabPetVisits || !props.setCrabPetSounds) {
     return nothing;
   }
-  const lobsterPetVisits = props.lobsterPetVisits === true;
-  const lobsterPetSounds = props.lobsterPetSounds === true;
-  const dexEntries = getLobsterdexEntries();
-  const seenCount = LOBSTER_PET_PALETTES.filter((palette) => dexEntries.has(palette.id)).length;
+  const crabPetVisits = props.crabPetVisits === true;
+  const crabPetSounds = props.crabPetSounds === true;
+  const dexEntries = getCrabdexEntries();
+  const seenCount = CRAB_PET_PALETTES.filter((palette) => dexEntries.has(palette.id)).length;
   return html`
     <section class="settings-section">
       <div class="settings-section__header">
-        <h2 class="settings-section__heading">${t("quickSettings.appearance.lobsterdex")}</h2>
+        <h2 class="settings-section__heading">${t("quickSettings.appearance.crabdex")}</h2>
       </div>
       <div class="settings-group">
         ${renderSettingsToggleRow({
-          title: t("quickSettings.appearance.lobsterVisits"),
-          description: lobsterPetVisits
-            ? t("quickSettings.appearance.lobsterVisitsOn")
-            : t("quickSettings.appearance.lobsterVisitsOff"),
-          checked: lobsterPetVisits,
-          onChange: (enabled) => props.setLobsterPetVisits?.(enabled),
+          title: t("quickSettings.appearance.crabVisits"),
+          description: crabPetVisits
+            ? t("quickSettings.appearance.crabVisitsOn")
+            : t("quickSettings.appearance.crabVisitsOff"),
+          checked: crabPetVisits,
+          onChange: (enabled) => props.setCrabPetVisits?.(enabled),
         })}
         ${renderSettingsToggleRow({
-          title: t("quickSettings.appearance.lobsterSounds"),
-          description: lobsterPetSounds
-            ? t("quickSettings.appearance.lobsterSoundsOn")
-            : t("quickSettings.appearance.lobsterSoundsOff"),
-          checked: lobsterPetSounds,
-          onChange: (enabled) => props.setLobsterPetSounds?.(enabled),
+          title: t("quickSettings.appearance.crabSounds"),
+          description: crabPetSounds
+            ? t("quickSettings.appearance.crabSoundsOn")
+            : t("quickSettings.appearance.crabSoundsOff"),
+          checked: crabPetSounds,
+          onChange: (enabled) => props.setCrabPetSounds?.(enabled),
           onAct: (enabled) => {
             if (enabled) {
-              previewLobsterChirp();
+              previewCrabChirp();
             }
           },
         })}
         ${renderSettingsRow({
-          title: t("quickSettings.appearance.lobsterdex"),
-          description: t("quickSettings.appearance.lobsterdexSeen", {
+          title: t("quickSettings.appearance.crabdex"),
+          description: t("quickSettings.appearance.crabdexSeen", {
             seen: String(seenCount),
-            total: String(LOBSTER_PET_PALETTES.length),
+            total: String(CRAB_PET_PALETTES.length),
           }),
           stacked: true,
           control: html`
-            <div class="lobsterdex__gallery">
-              <div class="lobsterdex">
-                ${LOBSTER_PET_PALETTES.map((palette) => {
-                  const look = canonicalLobsterLook(palette);
+            <div class="crabdex__gallery">
+              <div class="crabdex">
+                ${CRAB_PET_PALETTES.map((palette) => {
+                  const look = canonicalCrabLook(palette);
                   const entry = dexEntries.get(palette.id);
                   const seen = entry !== undefined;
                   const shinySeen = entry?.shinySeenAt != null;
-                  const baseName = seen ? (entry.name ?? lobsterPaletteName(palette.id)) : "?";
+                  const baseName = seen ? (entry.name ?? crabPaletteName(palette.id)) : "?";
                   const displayName = shinySeen ? `${baseName} ✦` : baseName;
-                  const lore = LOBSTER_PALETTE_LORE[palette.id];
+                  const lore = CRAB_PALETTE_LORE[palette.id];
                   const loreLine = seen ? lore.flavor : lore.hint;
                   const visitedLine =
                     seen && entry.firstSeenAt !== null
-                      ? t("quickSettings.appearance.lobsterdexFirstVisited", {
+                      ? t("quickSettings.appearance.crabdexFirstVisited", {
                           name: baseName,
                           date: new Date(entry.firstSeenAt).toLocaleDateString(),
                         })
@@ -326,19 +326,19 @@ export function renderLobsterPetSection(props: ConfigProps) {
                   return html`
                     <openclaw-tooltip>
                       <span
-                        class="lobsterdex__mini lobster-pet--palette-${palette.id} ${seen
+                        class="crabdex__mini crab-pet--palette-${palette.id} ${seen
                           ? ""
-                          : "lobsterdex__mini--unseen"}"
-                        style=${lobsterLookStyle(look)}
+                          : "crabdex__mini--unseen"}"
+                        style=${crabLookStyle(look)}
                         tabindex="0"
                         aria-label=${ariaLabel}
                       >
-                        ${renderLobsterSvg(look, { standalone: true })}
+                        ${renderCrabSvg(look, { standalone: true })}
                         ${shinySeen
-                          ? html`<span class="lobsterdex__mini-star" aria-hidden="true">✦</span>`
+                          ? html`<span class="crabdex__mini-star" aria-hidden="true">✦</span>`
                           : nothing}
                       </span>
-                      <span slot="content" class="lobsterdex__tooltip">
+                      <span slot="content" class="crabdex__tooltip">
                         <strong>${displayName}</strong>
                         <span>${loreLine}</span>
                         ${visitedLine ? html`<span>${visitedLine}</span>` : nothing}
@@ -347,10 +347,10 @@ export function renderLobsterPetSection(props: ConfigProps) {
                   `;
                 })}
               </div>
-              ${props.lobsterdexHref
+              ${props.crabdexHref
                 ? html`<a
-                    class="btn btn--sm lobsterdex__open"
-                    href=${props.lobsterdexHref}
+                    class="btn btn--sm crabdex__open"
+                    href=${props.crabdexHref}
                     @click=${(event: MouseEvent) => {
                       if (
                         event.button === 0 &&
@@ -360,10 +360,10 @@ export function renderLobsterPetSection(props: ConfigProps) {
                         !event.altKey
                       ) {
                         event.preventDefault();
-                        props.onOpenLobsterdex?.();
+                        props.onOpenCrabdex?.();
                       }
                     }}
-                    >${t("quickSettings.appearance.lobsterdexOpen")}</a
+                    >${t("quickSettings.appearance.crabdexOpen")}</a
                   >`
                 : nothing}
             </div>

@@ -14,7 +14,7 @@ import { APPEARANCE_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 import {
   renderChatPreferencesSection,
   renderLanguageSection,
-  renderLobsterPetSection,
+  renderCrabPetSection,
   renderSidebarPreferencesSection,
 } from "./view-appearance-preferences.ts";
 import type { ConfigProps } from "./view-types.ts";
@@ -282,7 +282,7 @@ export function renderAppearanceSection(
         </div>
       </section>
 
-      ${renderSidebarPreferencesSection(props)} ${renderLobsterPetSection(props)}
+      ${renderSidebarPreferencesSection(props)} ${renderCrabPetSection(props)}
       ${renderChatPreferencesSection(props, inputs.chatMessageWidth)}
 
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.connection} class="settings-section">

@@ -8,7 +8,7 @@ import {
 import type { AcpSessionManagerDeps } from "./manager.types.js";
 
 // U+1F99E (🦞) is a surrogate pair in UTF-16; a raw .slice() boundary can split it.
-const LOBSTER = "🦞";
+const CRAB = "🦞";
 
 const HIGH_SURROGATE_WITHOUT_LOW = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
 
@@ -23,7 +23,7 @@ function fakeDeps(): AcpSessionManagerDeps {
 describe("appendBackgroundTaskProgressSummary", () => {
   it("keeps surrogate pairs intact at the progress truncation boundary", () => {
     // combined length 244 puts the pair astride the 239-char cut point.
-    const result = appendBackgroundTaskProgressSummary("x".repeat(238), `${LOBSTER}tail`);
+    const result = appendBackgroundTaskProgressSummary("x".repeat(238), `${CRAB}tail`);
     expect(result).toBe(`${"x".repeat(238)}…`);
     expect(HIGH_SURROGATE_WITHOUT_LOW.test(result)).toBe(false);
     expect(result.length).toBeLessThanOrEqual(240);
@@ -36,7 +36,7 @@ describe("appendBackgroundTaskProgressSummary", () => {
 
   it("returns short combined summaries unchanged", () => {
     expect(appendBackgroundTaskProgressSummary("done: ", "ok")).toBe("done: ok");
-    expect(appendBackgroundTaskProgressSummary("", `  step ${LOBSTER}`)).toBe(`step ${LOBSTER}`);
+    expect(appendBackgroundTaskProgressSummary("", `  step ${CRAB}`)).toBe(`step ${CRAB}`);
   });
 });
 
@@ -48,7 +48,7 @@ describe("resolveBackgroundTaskContext", () => {
       cfg: {} as unknown as OpenClawConfig,
       sessionKey: "child-session",
       requestId: "run-1",
-      text: `${"y".repeat(158)}${LOBSTER}tail`,
+      text: `${"y".repeat(158)}${CRAB}tail`,
     });
     expect(context?.task).toBe(`${"y".repeat(158)}…`);
     expect(HIGH_SURROGATE_WITHOUT_LOW.test(context?.task ?? "")).toBe(false);
@@ -60,8 +60,8 @@ describe("resolveBackgroundTaskContext", () => {
       cfg: {} as unknown as OpenClawConfig,
       sessionKey: "child-session",
       requestId: "run-2",
-      text: `summarize ${LOBSTER} feedback`,
+      text: `summarize ${CRAB} feedback`,
     });
-    expect(context?.task).toBe(`summarize ${LOBSTER} feedback`);
+    expect(context?.task).toBe(`summarize ${CRAB} feedback`);
   });
 });

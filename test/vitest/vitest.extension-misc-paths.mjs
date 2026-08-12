@@ -12,7 +12,7 @@ export const miscExtensionTestRoots = [
   "extensions/litellm",
   "extensions/llm-task",
   "extensions/linux-canvas",
-  "extensions/lobster",
+  "extensions/crab",
   "extensions/opencode",
   "extensions/opencode-go",
   "extensions/openshell",

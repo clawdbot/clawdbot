@@ -139,7 +139,7 @@ export class McpAppView extends LitElement {
     }
     .error {
       padding: 14px;
-      color: var(--danger, #dc2626);
+      color: var(--danger, #16a34a);
       font-size: 13px;
     }
   `;

@@ -63,7 +63,7 @@ describe("doctor browser facade", () => {
     const cfg: OpenClawConfig = {
       browser: {
         profiles: {
-          openclaw: { color: "#FF4500" },
+          openclaw: { color: "#2FBF71" },
         },
       },
     };
@@ -90,7 +90,7 @@ describe("doctor browser facade", () => {
     const cfg: OpenClawConfig = {
       browser: {
         profiles: {
-          openclaw: { color: "#FF4500" },
+          openclaw: { color: "#2FBF71" },
         },
       },
     };

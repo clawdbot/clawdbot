@@ -44,19 +44,15 @@ import {
   storeSidebarCatalogGrouping,
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
+import { crabPetSeed, resolveCrabPetMode, resolveCrabRunOutcome } from "./crab-pet-contract.ts";
 import { icons } from "./icons.ts";
-import {
-  lobsterPetSeed,
-  resolveLobsterPetMode,
-  resolveLobsterRunOutcome,
-} from "./lobster-pet-contract.ts";
 import { SessionOrganizerController } from "./session-organizer-controller.ts";
 import { SidebarMenusController } from "./sidebar-menus-controller.ts";
 // The shared loader retries transient chunk failures online; a deploy-pruned
 // chunk still stays off until reload when that retry fails, by design.
 const sidebarChromeImport = createIdleImport(() =>
   Promise.all([
-    customElements.get("openclaw-lobster-pet") ? undefined : import("./lobster-pet.ts"),
+    customElements.get("openclaw-crab-pet") ? undefined : import("./crab-pet.ts"),
     customElements.get("openclaw-viewer-facepile") ? undefined : import("./viewer-facepile.ts"),
   ]),
 );
@@ -444,17 +440,14 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
               .updateRunning=${this.updateRunning}
               .onUpdate=${this.onUpdate}
             ></openclaw-sidebar-update-card>
-            <openclaw-lobster-pet
-              .seed=${lobsterPetSeed(this.sessionKey)}
-              .mode=${resolveLobsterPetMode(
-                !this.offline,
-                this.sessionData.sessionsResult?.sessions,
-              )}
-              .runOutcome=${resolveLobsterRunOutcome(this.sessionData.sessionsResult?.sessions)}
-              .visitsEnabled=${this.lobsterPetVisits}
-              .soundsEnabled=${this.lobsterPetSounds}
+            <openclaw-crab-pet
+              .seed=${crabPetSeed(this.sessionKey)}
+              .mode=${resolveCrabPetMode(!this.offline, this.sessionData.sessionsResult?.sessions)}
+              .runOutcome=${resolveCrabRunOutcome(this.sessionData.sessionsResult?.sessions)}
+              .visitsEnabled=${this.crabPetVisits}
+              .soundsEnabled=${this.crabPetSounds}
               .gatewayVersion=${this.gatewayVersion}
-            ></openclaw-lobster-pet>
+            ></openclaw-crab-pet>
             ${this.devGitBranch
               ? html`<openclaw-tooltip .content=${this.devGitBranch}>
                   <div class="sidebar-footer-branch">

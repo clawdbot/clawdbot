@@ -62,9 +62,9 @@ const COMPUTED_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
     new Set(["@discord/embedded-app-sdk"]),
   ],
   [
-    "extensions/lobster",
-    // Keep Lobster external to the plugin bundle; its computed core import is resolved at runtime.
-    new Set(["@clawdbot/lobster"]),
+    "extensions/crab",
+    // Keep Crab external to the plugin bundle; its computed core import is resolved at runtime.
+    new Set(["@clawdbot/crab"]),
   ],
 ]);
 

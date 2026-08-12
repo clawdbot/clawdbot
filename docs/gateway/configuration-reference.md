@@ -429,7 +429,7 @@ See [Plugins](/tools/plugin).
       sweepMinutes: 5,
     },
     profiles: {
-      openclaw: { cdpPort: 18800, color: "#FF4500" },
+      openclaw: { cdpPort: 18800, color: "#2FBF71" },
       work: {
         cdpPort: 18801,
         color: "#0066CC",
@@ -444,7 +444,7 @@ See [Plugins](/tools/plugin).
       },
       remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" },
     },
-    color: "#FF4500",
+    color: "#2FBF71",
     // headless: false,
     // noSandbox: false,
     // extraArgs: [],
@@ -516,7 +516,7 @@ See [Plugins](/tools/plugin).
 ```json5
 {
   ui: {
-    seamColor: "#FF4500",
+    seamColor: "#2FBF71",
     assistant: {
       name: "OpenClaw",
       avatar: "CB", // emoji, short text, image URL, or data URI

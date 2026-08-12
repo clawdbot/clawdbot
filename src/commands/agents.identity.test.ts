@@ -150,7 +150,7 @@ describe("agents set-identity command", () => {
     const { workspace } = await createIdentityWorkspace();
     await writeIdentityFile(workspace, [
       "- Name: OpenClaw",
-      "- Theme: space lobster",
+      "- Theme: space crab",
       "- Emoji: :)",
       "- Avatar: avatars/openclaw.png",
       "",
@@ -174,7 +174,7 @@ describe("agents set-identity command", () => {
 
     expect(getWrittenMainIdentity()).toEqual({
       name: "Nova",
-      theme: "space lobster",
+      theme: "space crab",
       emoji: "🦞",
       avatar: "https://example.com/override.png",
     });

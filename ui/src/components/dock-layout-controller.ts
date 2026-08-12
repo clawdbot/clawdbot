@@ -248,7 +248,7 @@ export const dockPanelStyles = css`
     background: transparent;
   }
   :is(.bp-resizer, .tp-resizer):hover {
-    background: var(--accent, #ff5c5c);
+    background: var(--accent, #2fbf71);
     opacity: 0.5;
   }
   :is(.bp-resizer--bottom, .tp-resizer--bottom) {

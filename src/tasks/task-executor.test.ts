@@ -315,7 +315,7 @@ describe("task-executor", () => {
         scopeKind: "session",
         childSessionKey: "agent:main:main",
         runId: "run-executor-kind",
-        task: "Generate lobster video",
+        task: "Generate crab video",
         startedAt: 10,
         deliveryStatus: "not_applicable",
       });

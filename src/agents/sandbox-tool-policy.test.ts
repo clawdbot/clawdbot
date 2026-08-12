@@ -61,19 +61,19 @@ describe("pickSandboxToolPolicy", () => {
     const cfg: OpenClawConfig = {
       tools: {
         profile: "coding",
-        alsoAllow: ["lobster"],
+        alsoAllow: ["crab"],
       },
     };
 
     const resolved = resolveEffectiveToolPolicy({ config: cfg, agentId: "main" });
-    expect(resolved.globalPolicy).toEqual({ allow: ["*", "lobster"], deny: undefined });
-    expect(resolved.profileAlsoAllow).toEqual(["lobster"]);
+    expect(resolved.globalPolicy).toEqual({ allow: ["*", "crab"], deny: undefined });
+    expect(resolved.profileAlsoAllow).toEqual(["crab"]);
   });
 
   it("does not block fs root expansion when only global alsoAllow is configured", () => {
     const cfg: OpenClawConfig = {
       tools: {
-        alsoAllow: ["lobster"],
+        alsoAllow: ["crab"],
       },
     };
 

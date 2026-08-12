@@ -336,7 +336,7 @@ class SessionMenu extends OpenClawLightDomElement {
             inputmode="text"
             maxlength="16"
             aria-label=${t("sessionsView.customEmoji")}
-            placeholder="🦞"
+            placeholder="🦀"
             ?disabled=${this.disabled}
             @keydown=${(event: KeyboardEvent) => {
               if (event.key !== "Enter") {

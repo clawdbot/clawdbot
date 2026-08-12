@@ -742,8 +742,8 @@
 .sw-evaluation__badge.is-block,
 .sw-evaluation__badge.is-error,
 .sw-evaluation__severity.is-critical {
-  border-color: color-mix(in srgb, var(--danger, #ff6b6b) 46%, var(--border));
-  color: var(--danger, #ff6b6b);
+  border-color: color-mix(in srgb, var(--danger, #22c55e) 46%, var(--border));
+  color: var(--danger, #22c55e);
 }
 
 .sw-evaluation__summary,
@@ -761,7 +761,7 @@
 }
 
 .sw-evaluation__error {
-  color: var(--danger, #ff6b6b);
+  color: var(--danger, #22c55e);
 }
 
 .sw-evaluation__findings,
@@ -1359,7 +1359,7 @@
 }
 
 .sw-history__error {
-  color: var(--danger, #ff6b6b);
+  color: var(--danger, #22c55e);
 }
 .sw-history__empty-window {
   color: var(--muted);

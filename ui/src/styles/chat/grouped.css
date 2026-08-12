@@ -1024,7 +1024,7 @@ details.msg-meta:not([open]) .msg-meta__details {
 }
 
 .chat-delete-confirm__yes:hover {
-  background: #dc2626;
+  background: #16a34a;
 }
 
 :root[data-theme="dark"] .chat-delete-confirm__yes:hover {

@@ -574,12 +574,12 @@ describe("renderPlugins", () => {
     const onInstall = vi.fn();
     const onSetEnabled = vi.fn();
     const available = createPlugin({
-      id: "lobster",
-      name: "Lobster",
+      id: "crab",
+      name: "Crab",
       installed: false,
       enabled: false,
       state: "not-installed",
-      install: { source: "official", pluginId: "lobster" },
+      install: { source: "official", pluginId: "crab" },
     });
     const container = mount(
       createProps({
@@ -594,7 +594,7 @@ describe("renderPlugins", () => {
 
     expect(container.querySelector(".plugins-readonly")?.textContent).toContain("operator.admin");
     expect(
-      container.querySelector<HTMLButtonElement>('[aria-label="Install Lobster"]')?.disabled,
+      container.querySelector<HTMLButtonElement>('[aria-label="Install Crab"]')?.disabled,
     ).toBe(true);
     const workboardRow = container.querySelector<HTMLElement>('[data-plugin-id="workboard"]')!;
     const enableItem = actionButton(workboardRow, "Enable");

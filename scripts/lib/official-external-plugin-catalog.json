@@ -379,22 +379,22 @@
       }
     },
     {
-      "name": "@openclaw/lobster",
-      "description": "Lobster workflow tool plugin (typed pipelines + resumable approvals)",
+      "name": "@openclaw/crab",
+      "description": "Crab workflow tool plugin (typed pipelines + resumable approvals)",
       "source": "official",
       "kind": "plugin",
       "openclaw": {
         "plugin": {
-          "id": "lobster",
-          "label": "Lobster"
+          "id": "crab",
+          "label": "Crab"
         },
         "catalog": {
           "featured": true,
           "order": 50
         },
         "install": {
-          "clawhubSpec": "clawhub:@openclaw/lobster",
-          "npmSpec": "@openclaw/lobster",
+          "clawhubSpec": "clawhub:@openclaw/crab",
+          "npmSpec": "@openclaw/crab",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.25"
         }

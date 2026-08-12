@@ -108,7 +108,7 @@ describe("emitCliBanner", () => {
     expect(hasEmittedCliBanner()).toBe(true);
   });
 
-  it("adds the ASCII crab on lobster days for rich random-mode terminals", async () => {
+  it("adds the ASCII crab on crab days for rich random-mode terminals", async () => {
     const { emitCliBanner } = await importFreshBannerModule();
     setStdoutIsTty(true);
     const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
@@ -128,7 +128,7 @@ describe("emitCliBanner", () => {
     expect(written).toContain("( v.v )");
   });
 
-  it("keeps lobster day out of plain terminals and pinned tagline modes", async () => {
+  it("keeps crab day out of plain terminals and pinned tagline modes", async () => {
     const { emitCliBanner, testing } = await importFreshBannerModule();
     setStdoutIsTty(true);
     const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);

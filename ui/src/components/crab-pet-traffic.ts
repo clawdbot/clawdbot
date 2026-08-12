@@ -5,18 +5,18 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import {
-  LOBSTER_BOTTLE_FORTUNES,
-  LOBSTER_PASSER_CROSS_MS,
-  planLobsterBottle,
-  planLobsterPasser,
+  CRAB_BOTTLE_FORTUNES,
+  CRAB_PASSER_CROSS_MS,
+  planCrabBottle,
+  planCrabPasser,
   prefersReducedMotion,
-  type LobsterBottlePlan,
-  type LobsterPasserPlan,
-} from "./lobster-pet-plans.ts";
+  type CrabBottlePlan,
+  type CrabPasserPlan,
+} from "./crab-pet-plans.ts";
 
 // Facing, reactions, and the act loop stay owned by the pet element; the
 // controller only reports crossing milestones.
-type LobsterTrafficHooks = {
+type CrabTrafficHooks = {
   visitsEnabled: () => boolean;
   // Fired at crossing start (toward the entry side) and mid-cross (travel
   // direction) so the resident can watch the traffic go by.
@@ -25,11 +25,11 @@ type LobsterTrafficHooks = {
   onPasserDone: () => void;
 };
 
-type LobsterBottleScene = { spotPct: number; opened: boolean; fortune: string };
+type CrabBottleScene = { spotPct: number; opened: boolean; fortune: string };
 
-export class LobsterLedgeTraffic implements ReactiveController {
-  passer: LobsterPasserPlan | null = null;
-  private bottlePlan: LobsterBottlePlan | null = null;
+export class CrabLedgeTraffic implements ReactiveController {
+  passer: CrabPasserPlan | null = null;
+  private bottlePlan: CrabBottlePlan | null = null;
   private bottleVisible = false;
   private bottleOpened = false;
   private passerTimer: number | null = null;
@@ -40,7 +40,7 @@ export class LobsterLedgeTraffic implements ReactiveController {
 
   constructor(
     private readonly host: ReactiveControllerHost,
-    private readonly hooks: LobsterTrafficHooks,
+    private readonly hooks: CrabTrafficHooks,
   ) {
     host.addController(this);
   }
@@ -67,10 +67,10 @@ export class LobsterLedgeTraffic implements ReactiveController {
   }
 
   passerCrossMs(): number {
-    return this.passer ? LOBSTER_PASSER_CROSS_MS[this.passer.kind] : 0;
+    return this.passer ? CRAB_PASSER_CROSS_MS[this.passer.kind] : 0;
   }
 
-  bottle(): LobsterBottleScene | null {
+  bottle(): CrabBottleScene | null {
     if (!this.bottleVisible || !this.bottlePlan) {
       return null;
     }
@@ -78,8 +78,8 @@ export class LobsterLedgeTraffic implements ReactiveController {
       spotPct: this.bottlePlan.spotPct,
       opened: this.bottleOpened,
       fortune: expectDefined(
-        LOBSTER_BOTTLE_FORTUNES[this.bottlePlan.fortuneIndex],
-        "lobster bottle fortune",
+        CRAB_BOTTLE_FORTUNES[this.bottlePlan.fortuneIndex],
+        "crab bottle fortune",
       ),
     };
   }
@@ -114,7 +114,7 @@ export class LobsterLedgeTraffic implements ReactiveController {
   }
 
   private schedulePasser(seed: number) {
-    const plan = planLobsterPasser(seed);
+    const plan = planCrabPasser(seed);
     if (!plan || prefersReducedMotion()) {
       return;
     }
@@ -125,7 +125,7 @@ export class LobsterLedgeTraffic implements ReactiveController {
       }
       this.passer = plan;
       this.host.requestUpdate();
-      const crossMs = LOBSTER_PASSER_CROSS_MS[plan.kind];
+      const crossMs = CRAB_PASSER_CROSS_MS[plan.kind];
       this.hooks.onPasserFacing(plan.direction === 1 ? -1 : 1);
       this.passerWatchTimer = window.setTimeout(() => {
         this.passerWatchTimer = null;
@@ -146,7 +146,7 @@ export class LobsterLedgeTraffic implements ReactiveController {
   // The bottle keeps its own clock: it washes up whether or not the pet is
   // around, waits to be opened, and drifts back out with the tide.
   private scheduleBottle(seed: number) {
-    this.bottlePlan = planLobsterBottle(seed);
+    this.bottlePlan = planCrabBottle(seed);
     if (!this.bottlePlan) {
       return;
     }

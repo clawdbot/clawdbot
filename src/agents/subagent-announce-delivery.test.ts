@@ -3640,9 +3640,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         childSessionKey: "video_generate:task-123",
         childSessionId: "task-123",
         announceType: "video generation task",
-        taskLabel: "lobster trailer",
-        result: "Generated 1 video.\nMEDIA:/tmp/lobster-trailer.mp4",
-        mediaUrls: ["/tmp/lobster-trailer.mp4"],
+        taskLabel: "crab trailer",
+        result: "Generated 1 video.\nMEDIA:/tmp/crab-trailer.mp4",
+        mediaUrls: ["/tmp/crab-trailer.mp4"],
         replyInstruction: "Deliver the generated video through the message tool.",
       }),
     });

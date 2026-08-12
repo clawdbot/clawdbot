@@ -632,7 +632,7 @@ describe("createVideoGenerateTool", () => {
       requesterSessionKey: "agent:main:discord:direct:123",
       ownerKey: "agent:main:discord:direct:123",
       scopeKind: "session",
-      task: "friendly lobster surfing",
+      task: "friendly crab surfing",
       status: "running",
       deliveryStatus: "not_applicable",
       notifyPolicy: "silent",
@@ -648,14 +648,14 @@ describe("createVideoGenerateTool", () => {
         {
           buffer: Buffer.from("video-bytes"),
           mimeType: "video/mp4",
-          fileName: "lobster.mp4",
+          fileName: "crab.mp4",
         },
       ],
       metadata: { taskId: "task-1" },
     });
     const saveSpy = vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
-      path: "/tmp/generated-lobster.mp4",
-      id: "generated-lobster.mp4",
+      path: "/tmp/generated-crab.mp4",
+      id: "generated-crab.mp4",
       size: 11,
       contentType: "video/mp4",
     });
@@ -678,7 +678,7 @@ describe("createVideoGenerateTool", () => {
       throw new Error("expected video_generate tool");
     }
 
-    const result = await tool.execute("call-1", { prompt: "friendly lobster surfing" });
+    const result = await tool.execute("call-1", { prompt: "friendly crab surfing" });
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
 
     expect(saveSpy).toHaveBeenCalledWith(
@@ -686,24 +686,24 @@ describe("createVideoGenerateTool", () => {
       "video/mp4",
       "tool-video-generation",
       8 * 1024 * 1024,
-      "lobster.mp4",
+      "crab.mp4",
     );
     expect(text).toContain("Generated 1 video with qwen/wan2.6-t2v.");
-    expect(text).toContain('path="/tmp/generated-lobster.mp4"');
+    expect(text).toContain('path="/tmp/generated-crab.mp4"');
     expect(text).not.toContain("MEDIA:");
     const details = resultDetails(result);
     expect(details.provider).toBe("qwen");
     expect(details.model).toBe("wan2.6-t2v");
     expect(details.count).toBe(1);
     expect((details.media as { mediaUrls?: string[] }).mediaUrls).toEqual([
-      "/tmp/generated-lobster.mp4",
+      "/tmp/generated-crab.mp4",
     ]);
     expect((details.media as { attachments?: unknown }).attachments).toEqual([
       {
         type: "video",
-        path: "/tmp/generated-lobster.mp4",
+        path: "/tmp/generated-crab.mp4",
         mimeType: "video/mp4",
-        name: "generated-lobster.mp4",
+        name: "generated-crab.mp4",
         sizeBytes: 11,
         durationMs: 3250,
         width: 1280,
@@ -711,10 +711,10 @@ describe("createVideoGenerateTool", () => {
       },
     ]);
     expect(probeMediaFilesWithinBudgetMock).toHaveBeenCalledWith(
-      [{ filePath: "/tmp/generated-lobster.mp4", kind: "video" }],
+      [{ filePath: "/tmp/generated-crab.mp4", kind: "video" }],
       { budgetMs: 3000, concurrency: 2, maxProbes: 8 },
     );
-    expect(details.paths).toEqual(["/tmp/generated-lobster.mp4"]);
+    expect(details.paths).toEqual(["/tmp/generated-crab.mp4"]);
     expect(details.metadata).toEqual({ taskId: "task-1" });
     expect(taskExecutorMocks.createRunningTaskRun).not.toHaveBeenCalled();
     expect(taskExecutorMocks.completeTaskRunByRunId).not.toHaveBeenCalled();
@@ -740,7 +740,7 @@ describe("createVideoGenerateTool", () => {
     }
 
     const defaultResult = await tool.execute("call-timeout-default", {
-      prompt: "friendly lobster surfing",
+      prompt: "friendly crab surfing",
     });
     vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
       path: "/tmp/out-override.mp4",
@@ -749,7 +749,7 @@ describe("createVideoGenerateTool", () => {
       contentType: "video/mp4",
     });
     const overrideResult = await tool.execute("call-timeout-override", {
-      prompt: "friendly lobster surfing",
+      prompt: "friendly crab surfing",
       timeoutMs: 12_345,
     });
 
@@ -769,13 +769,13 @@ describe("createVideoGenerateTool", () => {
         {
           buffer: Buffer.from("video-bytes"),
           mimeType: "video/mp4",
-          fileName: "lobster.mp4",
+          fileName: "crab.mp4",
         },
       ],
     });
     const saveSpy = vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
-      path: "/tmp/generated-lobster.mp4",
-      id: "generated-lobster.mp4",
+      path: "/tmp/generated-crab.mp4",
+      id: "generated-crab.mp4",
       size: 11,
       contentType: "video/mp4",
     });
@@ -793,14 +793,14 @@ describe("createVideoGenerateTool", () => {
       throw new Error("expected video_generate tool");
     }
 
-    await tool.execute("call-default-cap", { prompt: "friendly lobster surfing" });
+    await tool.execute("call-default-cap", { prompt: "friendly crab surfing" });
 
     expect(saveSpy).toHaveBeenCalledWith(
       Buffer.from("video-bytes"),
       "video/mp4",
       "tool-video-generation",
       MAX_VIDEO_BYTES,
-      "lobster.mp4",
+      "crab.mp4",
     );
   });
 
@@ -812,9 +812,9 @@ describe("createVideoGenerateTool", () => {
       ignoredOverrides: [],
       videos: [
         {
-          url: "https://example.com/generated-lobster.mp4",
+          url: "https://example.com/generated-crab.mp4",
           mimeType: "video/mp4",
-          fileName: "lobster.mp4",
+          fileName: "crab.mp4",
         },
       ],
       metadata: { taskId: "task-1" },
@@ -834,21 +834,21 @@ describe("createVideoGenerateTool", () => {
       throw new Error("expected video_generate tool");
     }
 
-    const result = await tool.execute("call-url", { prompt: "friendly lobster surfing" });
+    const result = await tool.execute("call-url", { prompt: "friendly crab surfing" });
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
 
     expect(saveSpy).not.toHaveBeenCalled();
     expect(text).toContain("Generated 1 video with vydra/veo3.");
-    expect(text).toContain('mediaUrl="https://example.com/generated-lobster.mp4"');
+    expect(text).toContain('mediaUrl="https://example.com/generated-crab.mp4"');
     expect(text).not.toContain("MEDIA:");
     const details = resultDetails(result);
     expect(details.provider).toBe("vydra");
     expect(details.model).toBe("veo3");
     expect(details.count).toBe(1);
     expect((details.media as { mediaUrls?: string[] }).mediaUrls).toEqual([
-      "https://example.com/generated-lobster.mp4",
+      "https://example.com/generated-crab.mp4",
     ]);
-    expect(details.paths).toEqual(["https://example.com/generated-lobster.mp4"]);
+    expect(details.paths).toEqual(["https://example.com/generated-crab.mp4"]);
     expect(details.metadata).toEqual({ taskId: "task-1" });
   });
 
@@ -861,9 +861,9 @@ describe("createVideoGenerateTool", () => {
       videos: [
         {
           buffer: Buffer.from("large-video-bytes"),
-          url: "https://fal.run/files/generated-lobster.mp4",
+          url: "https://fal.run/files/generated-crab.mp4",
           mimeType: "video/mp4",
-          fileName: "lobster.mp4",
+          fileName: "crab.mp4",
         },
       ],
     });
@@ -885,21 +885,21 @@ describe("createVideoGenerateTool", () => {
     }
 
     const result = await tool.execute("call-url-fallback", {
-      prompt: "friendly lobster surfing",
+      prompt: "friendly crab surfing",
     });
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
 
     expect(text).toContain("Generated 1 video with fal/fal-ai/minimax/video-01-live.");
-    expect(text).toContain('mediaUrl="https://fal.run/files/generated-lobster.mp4"');
+    expect(text).toContain('mediaUrl="https://fal.run/files/generated-crab.mp4"');
     expect(text).not.toContain("MEDIA:");
     const details = resultDetails(result);
     expect(details.provider).toBe("fal");
     expect(details.model).toBe("fal-ai/minimax/video-01-live");
     expect(details.count).toBe(1);
     expect((details.media as { mediaUrls?: string[] }).mediaUrls).toEqual([
-      "https://fal.run/files/generated-lobster.mp4",
+      "https://fal.run/files/generated-crab.mp4",
     ]);
-    expect(details.paths).toEqual(["https://fal.run/files/generated-lobster.mp4"]);
+    expect(details.paths).toEqual(["https://fal.run/files/generated-crab.mp4"]);
   });
 
   it("starts background generation and wakes the session with url-only MEDIA lines", async () => {
@@ -909,7 +909,7 @@ describe("createVideoGenerateTool", () => {
       requesterSessionKey: "agent:main:discord:direct:123",
       ownerKey: "agent:main:discord:direct:123",
       scopeKind: "session",
-      task: "friendly lobster surfing",
+      task: "friendly crab surfing",
       status: "running",
       deliveryStatus: "not_applicable",
       notifyPolicy: "silent",
@@ -926,9 +926,9 @@ describe("createVideoGenerateTool", () => {
       ignoredOverrides: [],
       videos: [
         {
-          url: "https://example.com/generated-lobster.mp4",
+          url: "https://example.com/generated-crab.mp4",
           mimeType: "video/mp4",
-          fileName: "lobster.mp4",
+          fileName: "crab.mp4",
         },
       ],
       metadata: { taskId: "task-1" },
@@ -958,7 +958,7 @@ describe("createVideoGenerateTool", () => {
       throw new Error("expected video_generate tool");
     }
 
-    const result = await tool.execute("call-1", { prompt: "friendly lobster surfing" });
+    const result = await tool.execute("call-1", { prompt: "friendly crab surfing" });
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
 
     expect(text).toContain("Background task started for video generation (task-123).");
@@ -998,12 +998,12 @@ describe("createVideoGenerateTool", () => {
     expect(wake.attachments).toEqual([
       {
         type: "video",
-        url: "https://example.com/generated-lobster.mp4",
+        url: "https://example.com/generated-crab.mp4",
         mimeType: "video/mp4",
-        name: "lobster.mp4",
+        name: "crab.mp4",
       },
     ]);
-    expect(wake.result).toContain('mediaUrl="https://example.com/generated-lobster.mp4"');
+    expect(wake.result).toContain('mediaUrl="https://example.com/generated-crab.mp4"');
     expect(wake.result).not.toContain("MEDIA:");
   });
 
@@ -1024,9 +1024,7 @@ describe("createVideoGenerateTool", () => {
       throw new Error("expected video_generate tool");
     }
 
-    await expect(tool.execute("call-2", { prompt: "broken lobster" })).rejects.toThrow(
-      "queue boom",
-    );
+    await expect(tool.execute("call-2", { prompt: "broken crab" })).rejects.toThrow("queue boom");
     expect(taskExecutorMocks.failTaskRunByRunId).not.toHaveBeenCalled();
   });
 
@@ -1069,7 +1067,7 @@ describe("createVideoGenerateTool", () => {
     }
 
     await tool.execute("call-model-only-start", {
-      prompt: "friendly lobster surfing",
+      prompt: "friendly crab surfing",
     });
     const createdTask = firstMockCallArg(taskExecutorMocks.createRunningTaskRun) as {
       runId: string;
@@ -1084,7 +1082,7 @@ describe("createVideoGenerateTool", () => {
         requesterSessionKey: "agent:main:discord:direct:123",
         ownerKey: "agent:main:discord:direct:123",
         scopeKind: "session",
-        task: "friendly lobster surfing",
+        task: "friendly crab surfing",
         status: "succeeded",
         deliveryStatus: "not_applicable",
         notifyPolicy: "silent",
@@ -1095,7 +1093,7 @@ describe("createVideoGenerateTool", () => {
     ]);
 
     const result = await tool.execute("call-provider-qualified-repeat", {
-      prompt: "friendly lobster surfing",
+      prompt: "friendly crab surfing",
       model: "google/veo-3.1-pro-generate-preview",
     });
     const text = (result.content?.[0] as { text?: string } | undefined)?.text ?? "";
@@ -1117,7 +1115,7 @@ describe("createVideoGenerateTool", () => {
         {
           buffer: Buffer.from("video-bytes"),
           mimeType: "video/mp4",
-          fileName: "lobster.mp4",
+          fileName: "crab.mp4",
         },
       ],
       normalization: {
@@ -1134,8 +1132,8 @@ describe("createVideoGenerateTool", () => {
       },
     });
     vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
-      path: "/tmp/generated-lobster.mp4",
-      id: "generated-lobster.mp4",
+      path: "/tmp/generated-crab.mp4",
+      id: "generated-crab.mp4",
       size: 11,
       contentType: "video/mp4",
     });
@@ -1154,7 +1152,7 @@ describe("createVideoGenerateTool", () => {
     }
 
     const result = await tool.execute("call-1", {
-      prompt: "friendly lobster surfing",
+      prompt: "friendly crab surfing",
       durationSeconds: 5,
     });
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
@@ -1187,7 +1185,7 @@ describe("createVideoGenerateTool", () => {
         {
           buffer: Buffer.from("video-bytes"),
           mimeType: "video/mp4",
-          fileName: "lobster.mp4",
+          fileName: "crab.mp4",
         },
       ],
     });
@@ -1207,7 +1205,7 @@ describe("createVideoGenerateTool", () => {
 
     await expect(
       tool.execute("call-1", {
-        prompt: "friendly lobster surfing",
+        prompt: "friendly crab surfing",
         durationSeconds: 5.5,
       }),
     ).rejects.toThrow("durationSeconds must be a positive integer");
@@ -1224,7 +1222,7 @@ describe("createVideoGenerateTool", () => {
         {
           buffer: Buffer.from("video-bytes"),
           mimeType: "video/mp4",
-          fileName: "lobster.mp4",
+          fileName: "crab.mp4",
         },
       ],
       normalization: {
@@ -1239,8 +1237,8 @@ describe("createVideoGenerateTool", () => {
       },
     });
     vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
-      path: "/tmp/generated-lobster.mp4",
-      id: "generated-lobster.mp4",
+      path: "/tmp/generated-crab.mp4",
+      id: "generated-crab.mp4",
       size: 11,
       contentType: "video/mp4",
     });
@@ -1259,7 +1257,7 @@ describe("createVideoGenerateTool", () => {
     }
 
     const result = await tool.execute("call-1", {
-      prompt: "friendly lobster surfing",
+      prompt: "friendly crab surfing",
       size: "1280x720",
     });
 
@@ -1429,7 +1427,7 @@ describe("createVideoGenerateTool", () => {
 
     await expect(
       tool.execute("call-1", {
-        prompt: "lobster timelapse",
+        prompt: "crab timelapse",
         image: "data:image/png;base64,cG5n",
       }),
     ).rejects.toThrow("video-plugin does not support image-to-video reference inputs.");
@@ -1465,13 +1463,13 @@ describe("createVideoGenerateTool", () => {
         {
           buffer: Buffer.from("video-bytes"),
           mimeType: "video/mp4",
-          fileName: "lobster.mp4",
+          fileName: "crab.mp4",
         },
       ],
     });
     vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
-      path: "/tmp/generated-lobster.mp4",
-      id: "generated-lobster.mp4",
+      path: "/tmp/generated-crab.mp4",
+      id: "generated-crab.mp4",
       size: 11,
       contentType: "video/mp4",
     });
@@ -1490,7 +1488,7 @@ describe("createVideoGenerateTool", () => {
     }
 
     const result = await tool.execute("call-openai-generate", {
-      prompt: "A lobster on a neon bridge",
+      prompt: "A crab on a neon bridge",
       size: "1280x720",
       resolution: "720P",
       audio: false,
@@ -1526,7 +1524,7 @@ describe("createVideoGenerateTool", () => {
     // Record with numeric-string keys and silently forwarded.
     await expect(
       tool.execute("call-1", {
-        prompt: "lobster",
+        prompt: "crab",
         providerOptions: ["seed", 42] as unknown as Record<string, unknown>,
       }),
     ).rejects.toThrow(
@@ -1535,7 +1533,7 @@ describe("createVideoGenerateTool", () => {
     // String providerOptions should also be rejected.
     await expect(
       tool.execute("call-2", {
-        prompt: "lobster",
+        prompt: "crab",
         providerOptions: "seed=42" as unknown as Record<string, unknown>,
       }),
     ).rejects.toThrow(
@@ -1552,7 +1550,7 @@ describe("createVideoGenerateTool", () => {
     const tool = createVideoPluginTool();
 
     await tool.execute("call-1", {
-      prompt: "lobster",
+      prompt: "crab",
       providerOptions: { seed: 42, draft: true },
     });
 
@@ -1573,7 +1571,7 @@ describe("createVideoGenerateTool", () => {
 
     await expect(
       tool.execute("call-1", {
-        prompt: "lobster",
+        prompt: "crab",
         image: "data:image/png;base64,cG5n",
         // Only one image is provided, so passing two roles is an off-by-one bug.
         imageRoles: ["first_frame", "last_frame"],
@@ -1589,7 +1587,7 @@ describe("createVideoGenerateTool", () => {
 
     await expect(
       tool.execute("call-1", {
-        prompt: "lobster",
+        prompt: "crab",
         imageRoles: "first_frame" as unknown as string[],
       }),
     ).rejects.toThrow(
@@ -1606,7 +1604,7 @@ describe("createVideoGenerateTool", () => {
     const tool = createVideoPluginTool();
 
     await tool.execute("call-1", {
-      prompt: "lobster",
+      prompt: "crab",
       images: ["data:image/png;base64,Zmlyc3Q=", "data:image/png;base64,bGFzdA=="],
       imageRoles: ["first_frame", "last_frame"],
     });
@@ -1633,7 +1631,7 @@ describe("createVideoGenerateTool", () => {
     const tool = createVideoPluginTool();
 
     await tool.execute("call-1", {
-      prompt: "lobster",
+      prompt: "crab",
       image: "https://example.test/reference.png",
     });
 
@@ -1669,7 +1667,7 @@ describe("createVideoGenerateTool", () => {
     }
 
     await tool.execute("call-1", {
-      prompt: "lobster",
+      prompt: "crab",
       image: "/tmp/reference.png",
     });
 
@@ -1688,7 +1686,7 @@ describe("createVideoGenerateTool", () => {
 
     await expect(
       tool.execute("call-1", {
-        prompt: "lobster",
+        prompt: "crab",
         audioRef: "data:audio/mpeg;base64,bXAz",
       }),
     ).rejects.toThrow("audio data: URLs are not supported for video_generate.");
@@ -1701,7 +1699,7 @@ describe("createVideoGenerateTool", () => {
     const tool = createVideoPluginTool();
 
     await tool.execute("call-1", {
-      prompt: "lobster",
+      prompt: "crab",
       aspectRatio: "adaptive",
     });
 
@@ -1716,7 +1714,7 @@ describe("createVideoGenerateTool", () => {
     const tool = createVideoPluginTool();
 
     await tool.execute("call-1", {
-      prompt: "lobster",
+      prompt: "crab",
       aspectRatio: "17:9",
       resolution: "draft-large",
     });

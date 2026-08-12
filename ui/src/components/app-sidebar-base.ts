@@ -40,8 +40,8 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   /** Agents surfaced first in the chip quick switcher when many exist. */
   @property({ attribute: false }) pinnedAgentIds: readonly string[] = [];
   @property({ attribute: false }) themeMode: ThemeMode = "system";
-  @property({ attribute: false }) lobsterPetVisits = true;
-  @property({ attribute: false }) lobsterPetSounds = false;
+  @property({ attribute: false }) crabPetVisits = true;
+  @property({ attribute: false }) crabPetSounds = false;
   @property({ attribute: false }) gatewayVersion: string | null = null;
   @property({ attribute: false }) devGitBranch: string | null = null;
   @property({ attribute: false }) updateAvailable: UpdateAvailable | null = null;

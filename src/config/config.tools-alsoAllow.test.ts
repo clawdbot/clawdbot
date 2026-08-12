@@ -9,7 +9,7 @@ describe("config: tools.alsoAllow", () => {
     const res = validateConfigObject({
       tools: {
         allow: ["group:fs"],
-        alsoAllow: ["lobster"],
+        alsoAllow: ["crab"],
       },
     });
 
@@ -26,7 +26,7 @@ describe("config: tools.alsoAllow", () => {
           main: {
             tools: {
               allow: ["group:fs"],
-              alsoAllow: ["lobster"],
+              alsoAllow: ["crab"],
             },
           },
         },
@@ -43,7 +43,7 @@ describe("config: tools.alsoAllow", () => {
     const res = validateConfigObject({
       tools: {
         profile: "coding",
-        alsoAllow: ["lobster"],
+        alsoAllow: ["crab"],
       },
     });
 

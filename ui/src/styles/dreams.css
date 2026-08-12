@@ -1,5 +1,5 @@
 /* ===========================================
-   Dreams Tab – Sleeping Lobster Animation
+   Dreams Tab – Sleeping Crab Animation
    =========================================== */
 
 .dreams-page {
@@ -38,39 +38,39 @@
   user-select: none;
 }
 
-/* ---- Breathing lobster ---- */
+/* ---- Breathing crab ---- */
 
-.dreams__lobster {
+.dreams__crab {
   animation: dreams-breathe 4s ease-in-out infinite;
   filter: drop-shadow(0 0 40px rgba(255, 77, 77, 0.25));
   transition: filter 0.6s ease;
 }
 
-.dreams__lobster svg {
+.dreams__crab svg {
   width: 160px;
   height: 160px;
 }
 
 /* Stirring: press the sleeper and it half-opens one eye, without quite
    waking. The peek eye ships hidden inside the sleeping svg. */
-.dreams__lobster .lob-eye-peek {
+.dreams__crab .crab-eye-peek {
   display: none;
 }
 
-.dreams__lobster:active .lob-eye-peek {
+.dreams__crab:active .crab-eye-peek {
   display: block;
 }
 
-.dreams__lobster:active .lob-eye-closed path:first-of-type {
+.dreams__crab:active .crab-eye-closed path:first-of-type {
   opacity: 0;
 }
 
-.dreams__lobster:active {
+.dreams__crab:active {
   animation-play-state: paused;
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .dreams__lobster:active .lob-antennae {
+  .dreams__crab:active .crab-antennae {
     animation: dreams-stir-antennae 0.9s ease-in-out infinite;
     transform-origin: 60px 14px;
   }
@@ -124,7 +124,7 @@
   animation: dreams-float-z 4s ease-out infinite;
 }
 
-/* Z's originate from the lobster's head and float up-right at an angle.
+/* Z's originate from the crab's head and float up-right at an angle.
    Use nth-of-type because Z's are <span> while stars/moon/glow are <div>. */
 .dreams__z:nth-of-type(1) {
   font-size: 14px;
@@ -271,7 +271,7 @@
   }
 }
 
-/* ---- Ambient glow under lobster ---- */
+/* ---- Ambient glow under crab ---- */
 
 .dreams__glow {
   position: absolute;
@@ -452,7 +452,7 @@
 
 /* ---- Idle / inactive state ---- */
 
-.dreams--idle .dreams__lobster {
+.dreams--idle .dreams__crab {
   filter: drop-shadow(0 0 20px rgba(255, 77, 77, 0.1));
 }
 

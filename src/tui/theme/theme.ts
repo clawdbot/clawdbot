@@ -129,7 +129,7 @@ const lightPalette = {
   code: "#92400E",
   codeBorder: "#92400E",
   link: "#047857",
-  error: "#DC2626",
+  error: "#16A34A",
   success: "#047857",
 } as const;
 

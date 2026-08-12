@@ -1211,7 +1211,7 @@ TAGLINES+=("I can run local, remote, or purely on vibes—results may vary with 
 TAGLINES+=("If you can describe it, I can probably automate it—or at least make it funnier.")
 TAGLINES+=("Your config is valid, your assumptions are not.")
 TAGLINES+=("Claws out, commit in—let's ship something mildly responsible.")
-TAGLINES+=("I'll butter your workflow like a lobster roll: messy, delicious, effective.")
+TAGLINES+=("I'll butter your workflow like a crab roll: messy, delicious, effective.")
 TAGLINES+=("Shell yeah—I'm here to pinch the toil and leave you the glory.")
 TAGLINES+=("If it's repetitive, I'll automate it; if it's hard, I'll bring jokes and a rollback plan.")
 TAGLINES+=("WhatsApp, but make it ✨engineering✨.")
@@ -3426,14 +3426,14 @@ main() {
     if [[ "$is_upgrade" == "true" ]]; then
         local update_messages=(
             "Leveled up! New skills unlocked. You're welcome."
-            "Fresh code, same lobster. Miss me?"
+            "Fresh code, same crab. Miss me?"
             "Back and better. Did you even notice I was gone?"
             "Update complete. I learned some new tricks while I was out."
             "Upgraded! Now with 23% more sass."
             "I've evolved. Try to keep up. 🦞"
             "New version, who dis? Oh right, still me but shinier."
             "Patched, polished, and ready to pinch. Let's go."
-            "The lobster has molted. Harder shell, sharper claws."
+            "The crab has molted. Harder shell, sharper claws."
             "Update done! Check the changelog or just trust me, it's good."
             "Reborn from the boiling waters of npm. Stronger now."
             "I went away and came back smarter. You should try it sometime."
@@ -3459,7 +3459,7 @@ main() {
             "Cozy. I've already read your calendar. We need to talk."
             "Finally unpacked. Now point me at your problems."
             "cracks claws Alright, what are we building?"
-            "The lobster has landed. Your terminal will never be the same."
+            "The crab has landed. Your terminal will never be the same."
             "All done! I promise to only judge your code a little bit."
         )
         local completion_message
