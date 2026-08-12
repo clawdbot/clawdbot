@@ -208,7 +208,7 @@ export function randomBetween(rng: () => number, min: number, max: number): numb
 
 // Seeded glint tints for common palettes (rare palettes pin their own via
 // CSS). Applied through --crab-glint-seed so offline grey still wins.
-const GLINT_TINTS = ["#ffd166", "#ff8ac2", "#b79bff"] as const;
+const GLINT_TINTS = ["#3fff7d", "#4ecfa6", "#b79bff"] as const;
 
 export function createCrabPetLook(seed: number, now: Date = new Date()): CrabPetLook {
   const rng = mulberry32(seed);
@@ -619,11 +619,11 @@ export function renderCrabPetScene(args: {
           <span class="crab-pet__bubble" style="--i:2"></span>
           <span class="crab-pet__heart">♥</span>
           <svg class="crab-pet__broom" viewBox="0 0 24 40" aria-hidden="true">
-            <path d="M12 2 L12 24" stroke="#8a5a2b" stroke-width="3" stroke-linecap="round" />
+            <path d="M12 2 L12 24" stroke="#5a6b52" stroke-width="3" stroke-linecap="round" />
             <path d="M6 24 L18 24 L21 38 L3 38 Z" fill="#e8b04b" />
             <path
               d="M7.5 28 L6.5 36 M12 28 L12 36 M16.5 28 L17.5 36"
-              stroke="#b6791f"
+              stroke="#4fb072"
               stroke-width="1.5"
             />
           </svg>
