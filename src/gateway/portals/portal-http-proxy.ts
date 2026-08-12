@@ -210,7 +210,8 @@ export function handlePortalProxyRequest(params: {
   // Next.js) often bind ::1 only, and family autoselection reaches either stack.
   const proxyReq = requestHttp({
     hostname: "localhost",
-    autoSelectFamily: true,
+    createConnection: () =>
+      net.connect({ host: "localhost", autoSelectFamily: true, port: target.targetPort }),
     port: target.targetPort,
     method: req.method,
     path: authorization.requestPath,
