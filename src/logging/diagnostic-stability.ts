@@ -248,6 +248,13 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
   };
 
   switch (event.type) {
+    case "model.auth.state":
+      record.outcome = event.state;
+      record.mode = event.authMode;
+      assignReasonCode(record, event.reason);
+      break;
+    case "model.auth.clear":
+      break;
     case "model.usage":
       record.channel = event.channel;
       record.provider = event.provider;

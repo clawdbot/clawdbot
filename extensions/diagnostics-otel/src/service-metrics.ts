@@ -1,4 +1,5 @@
-import type { Meter, MetricOptions } from "@opentelemetry/api";
+import type { Attributes, Meter, MetricOptions, ObservableResult } from "@opentelemetry/api";
+import type { DiagnosticModelAuthStateEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
   AGENT_DURATION_MS_BUCKETS,
   CONTEXT_TOKENS_BUCKETS,
@@ -18,6 +19,35 @@ export function createDiagnosticsMetrics(
     meter.createCounter(resolveMetricName(name), options);
   const createHistogram = (name: `openclaw.${string}`, options?: MetricOptions) =>
     meter.createHistogram(resolveMetricName(name), options);
+  let modelAuthState:
+    | { value: number; observedAtSeconds: number; attributes: Attributes }
+    | undefined;
+  const modelAuthReadyGauge = meter.createObservableGauge(
+    resolveMetricName("openclaw.model_auth_ready"),
+    {
+      unit: "1",
+      description: "Latest actively observed Codex model authentication readiness",
+    },
+  );
+  const modelAuthLastProbeGauge = meter.createObservableGauge(
+    resolveMetricName("openclaw.model_auth_last_probe"),
+    {
+      unit: "s",
+      description: "Unix timestamp of the latest Codex model authentication probe",
+    },
+  );
+  const observeModelAuthReady = (result: ObservableResult) => {
+    if (modelAuthState) {
+      result.observe(modelAuthState.value, modelAuthState.attributes);
+    }
+  };
+  const observeModelAuthLastProbe = (result: ObservableResult) => {
+    if (modelAuthState) {
+      result.observe(modelAuthState.observedAtSeconds, modelAuthState.attributes);
+    }
+  };
+  modelAuthReadyGauge.addCallback(observeModelAuthReady);
+  modelAuthLastProbeGauge.addCallback(observeModelAuthLastProbe);
 
   const tokensCounter = createCounter("openclaw.tokens", {
     unit: "1",
@@ -286,6 +316,24 @@ export function createDiagnosticsMetrics(
     description: "Diagnostic telemetry exporter lifecycle and failure events",
   });
   return {
+    recordModelAuthState(evt: DiagnosticModelAuthStateEvent) {
+      modelAuthState = {
+        value: evt.state === "ready" ? 1 : evt.state === "not_ready" ? 0 : -1,
+        observedAtSeconds: evt.ts / 1_000,
+        attributes: {
+          "openclaw.auth_mode": evt.authMode,
+          "openclaw.reason": evt.reason,
+        },
+      };
+    },
+    clearModelAuthState() {
+      modelAuthState = undefined;
+    },
+    disposeModelAuthMetrics() {
+      modelAuthState = undefined;
+      modelAuthReadyGauge.removeCallback(observeModelAuthReady);
+      modelAuthLastProbeGauge.removeCallback(observeModelAuthLastProbe);
+    },
     tokensCounter,
     genAiTokenUsageHistogram,
     genAiOperationDurationHistogram,

@@ -193,6 +193,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
   let unregisterOwnedSdkRuntime: (() => void) | null = null;
   let unregisterUnhandledRejectionHandler: (() => void) | null = null;
   let retireExporterRoutes: ((preserveFailures?: boolean) => void) | null = null;
+  let disposeDiagnosticMetrics: (() => void) | null = null;
   let preserveExporterRoutesOnNextStop = false;
 
   const stopStarted = async (options?: { preserveExporterRoutes?: boolean }) => {
@@ -205,6 +206,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
     const currentUnregisterOwnedSdkRuntime = unregisterOwnedSdkRuntime;
     const currentUnregisterUnhandledRejectionHandler = unregisterUnhandledRejectionHandler;
     const currentRetireExporterRoutes = retireExporterRoutes;
+    const currentDisposeDiagnosticMetrics = disposeDiagnosticMetrics;
 
     unsubscribe = null;
     unregisterTracePropagationBridge = null;
@@ -214,6 +216,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
     stopActiveTrustedSpans = null;
     unregisterOwnedSdkRuntime = null;
     unregisterUnhandledRejectionHandler = null;
+    disposeDiagnosticMetrics = null;
     retireExporterRoutes = options?.preserveExporterRoutes ? currentRetireExporterRoutes : null;
 
     const settle = async (...stops: Array<(() => void | Promise<void>) | null>) =>
@@ -226,6 +229,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       currentUnsubscribe,
       currentStopActiveTrustedSpans,
       currentUnregisterOwnedSdkRuntime,
+      currentDisposeDiagnosticMetrics,
     );
     const providerFailures = await settle(
       currentLogProvider ? () => currentLogProvider.shutdown() : null,
@@ -562,6 +566,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const diagnosticsTrace = createDiagnosticsTraceRuntime(tracer);
       stopActiveTrustedSpans = diagnosticsTrace.stopActiveTrustedSpans;
       const diagnosticMetrics = createDiagnosticsMetrics(meter, otel.metricNamePrefix);
+      disposeDiagnosticMetrics = () => diagnosticMetrics.disposeModelAuthMetrics();
 
       const diagnosticsLogs = createDiagnosticsLogExporter({
         contentCapturePolicy,

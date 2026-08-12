@@ -76,6 +76,8 @@ export function createDiagnosticsEventHandler(params: {
     recordTelemetryExporter,
     recordPayloadLarge,
     recordModelFailover,
+    recordModelAuthState,
+    clearModelAuthState,
   } = recorders;
   return (
     evt: DiagnosticEventPayload,
@@ -189,6 +191,16 @@ export function createDiagnosticsEventHandler(params: {
           return;
         case "model.call.error":
           recordModelCallError(evt, metadata, privateData.modelContent);
+          return;
+        case "model.auth.state":
+          if (metadata.trusted) {
+            recordModelAuthState(evt);
+          }
+          return;
+        case "model.auth.clear":
+          if (metadata.trusted) {
+            clearModelAuthState();
+          }
           return;
         case "tool.execution.started":
           recordToolExecutionStarted(evt, metadata);

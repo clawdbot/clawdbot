@@ -131,7 +131,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-reply-pipeline": 12,
   "interactive-runtime": 11,
   // +3: canonical incognito classifier projected through deprecated compatibility barrels.
-  "infra-runtime": 596,
+  // +2: model-auth state/clear diagnostic event contracts during the runtime-barrel migration.
+  "infra-runtime": 598,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   // +1: deprecated agent media projection re-export during the media migration window.
@@ -266,7 +267,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: narrow channel agent-run terminal reader and outcome contract.
       // +5: narrow string, record, and error coercion helpers.
       // +1: normalized Gateway public origin resolver for plugin-generated links.
-      4308,
+      // +4: model-auth state/clear diagnostic event contracts through public runtime barrels.
+      4312,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -348,7 +350,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
       // +7: restore still-existing deprecated inbound-dispatch compatibility re-exports.
       // +6: source-compatible harness contracts retained during the V2 migration window.
-      1142,
+      // +2: model-auth state/clear diagnostic events during the runtime-barrel migration.
+      1144,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

@@ -13,6 +13,14 @@ const telemetryState = vi.hoisted(() => {
   };
   const counters = new Map<string, { add: ReturnType<typeof vi.fn> }>();
   const histograms = new Map<string, { record: ReturnType<typeof vi.fn> }>();
+  const observableGauges = new Map<
+    string,
+    {
+      addCallback: ReturnType<typeof vi.fn>;
+      removeCallback: ReturnType<typeof vi.fn>;
+      callbacks: Set<(result: { observe(value: number, attrs?: unknown): void }) => void>;
+    }
+  >();
   const spans: Array<{
     name: string;
     addEvent: ReturnType<typeof vi.fn>;
@@ -52,8 +60,20 @@ const telemetryState = vi.hoisted(() => {
       histograms.set(name, histogram);
       return histogram;
     }),
+    createObservableGauge: vi.fn((name: string) => {
+      const callbacks = new Set<
+        (result: { observe(value: number, attrs?: unknown): void }) => void
+      >();
+      const gauge = {
+        callbacks,
+        addCallback: vi.fn((callback) => callbacks.add(callback)),
+        removeCallback: vi.fn((callback) => callbacks.delete(callback)),
+      };
+      observableGauges.set(name, gauge);
+      return gauge;
+    }),
   };
-  return { counters, histograms, spans, tracer, meter };
+  return { counters, histograms, observableGauges, spans, tracer, meter };
 });
 
 const traceProviderCtor = vi.hoisted(() => vi.fn());
@@ -713,11 +733,13 @@ describe("diagnostics-otel service", () => {
     delete process.env.OTEL_PROPAGATORS;
     telemetryState.counters.clear();
     telemetryState.histograms.clear();
+    telemetryState.observableGauges.clear();
     telemetryState.spans.length = 0;
     telemetryState.tracer.startSpan.mockClear();
     telemetryState.tracer.setSpanContext.mockClear();
     telemetryState.meter.createCounter.mockClear();
     telemetryState.meter.createHistogram.mockClear();
+    telemetryState.meter.createObservableGauge.mockClear();
     traceProviderCtor.mockClear();
     traceProviderShutdown.mockClear();
     meterProviderCtor.mockClear();
@@ -926,6 +948,88 @@ describe("diagnostics-otel service", () => {
       );
     },
   );
+
+  test("exports only the latest trusted model auth state and actual probe time", async () => {
+    const startedAtSeconds = Date.now() / 1_000;
+    const started = await startOtelService({ metrics: true });
+
+    const collect = (name: string) => {
+      const observations: Array<{ value: number; attrs?: unknown }> = [];
+      const gauge = telemetryState.observableGauges.get(name);
+      for (const callback of gauge?.callbacks ?? []) {
+        callback({ observe: (value, attrs) => observations.push({ value, attrs }) });
+      }
+      return observations;
+    };
+    expect(collect("openclaw.model_auth_ready")).toEqual([]);
+    expect(collect("openclaw.model_auth_last_probe")).toEqual([]);
+
+    emitTrustedDiagnosticEvent({
+      type: "model.auth.state",
+      state: "ready",
+      authMode: "subscription",
+      reason: "ready",
+    });
+    emitDiagnosticEvent({
+      type: "model.auth.state",
+      state: "not_ready",
+      authMode: "unknown",
+      reason: "missing_account",
+    });
+
+    expect(collect("openclaw.model_auth_ready")).toEqual([
+      {
+        value: 1,
+        attrs: { "openclaw.auth_mode": "subscription", "openclaw.reason": "ready" },
+      },
+    ]);
+
+    emitTrustedDiagnosticEvent({
+      type: "model.auth.state",
+      state: "not_ready",
+      authMode: "subscription",
+      reason: "unauthenticated",
+    });
+    expect(collect("openclaw.model_auth_ready")).toEqual([
+      {
+        value: 0,
+        attrs: {
+          "openclaw.auth_mode": "subscription",
+          "openclaw.reason": "unauthenticated",
+        },
+      },
+    ]);
+    const probe = collect("openclaw.model_auth_last_probe");
+    expect(probe).toHaveLength(1);
+    expect(probe[0]?.value).toBeGreaterThanOrEqual(startedAtSeconds);
+    expect(probe[0]?.attrs).toEqual({
+      "openclaw.auth_mode": "subscription",
+      "openclaw.reason": "unauthenticated",
+    });
+
+    emitDiagnosticEvent({ type: "model.auth.clear" });
+    expect(collect("openclaw.model_auth_ready")).toHaveLength(1);
+    emitTrustedDiagnosticEvent({ type: "model.auth.clear" });
+    expect(collect("openclaw.model_auth_ready")).toEqual([]);
+    expect(collect("openclaw.model_auth_last_probe")).toEqual([]);
+
+    emitTrustedDiagnosticEvent({
+      type: "model.auth.state",
+      state: "ready",
+      authMode: "subscription",
+      reason: "ready",
+    });
+    expect(collect("openclaw.model_auth_ready")).toEqual([
+      {
+        value: 1,
+        attrs: { "openclaw.auth_mode": "subscription", "openclaw.reason": "ready" },
+      },
+    ]);
+
+    await started.service.stop?.(started.ctx);
+    expect(collect("openclaw.model_auth_ready")).toEqual([]);
+    expect(collect("openclaw.model_auth_last_probe")).toEqual([]);
+  });
 
   test("records message-flow metrics and spans", async () => {
     await startOtelService({ traces: true, metrics: true, logs: true });

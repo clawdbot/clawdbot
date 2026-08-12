@@ -36,6 +36,8 @@ export type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
   DiagnosticEventPrivateData,
+  DiagnosticModelAuthClearEvent,
+  DiagnosticModelAuthStateEvent,
   DiagnosticModelCallContent,
 } from "../infra/diagnostic-events.js";
 export type { DiagnosticModelContentCapturePolicy } from "../infra/diagnostic-llm-content.js";

@@ -678,6 +678,27 @@ export type DiagnosticModelCallErrorEvent = DiagnosticModelCallBaseEvent & {
   usage?: DiagnosticModelCallUsage;
 };
 
+export type DiagnosticModelAuthStateEvent = DiagnosticBaseEvent & {
+  type: "model.auth.state";
+  state: "ready" | "not_ready" | "unknown";
+  authMode: "subscription" | "api_key" | "native" | "unknown";
+  reason:
+    | "ready"
+    | "missing_account"
+    | "unauthenticated"
+    | "route_mismatch"
+    | "unsupported_auth_mode"
+    | "probe_error"
+    | "transport_error"
+    | "transport_auth_error"
+    | "configuration_error"
+    | "unsupported_version";
+};
+
+export type DiagnosticModelAuthClearEvent = DiagnosticBaseEvent & {
+  type: "model.auth.clear";
+};
+
 type DiagnosticModelCallPromptStats = Readonly<{
   inputMessagesCount?: number;
   inputMessagesChars?: number;
@@ -838,6 +859,8 @@ export type DiagnosticEventPayload =
   | DiagnosticModelCallStartedEvent
   | DiagnosticModelCallCompletedEvent
   | DiagnosticModelCallErrorEvent
+  | DiagnosticModelAuthStateEvent
+  | DiagnosticModelAuthClearEvent
   | DiagnosticContextAssembledEvent
   | DiagnosticMemorySampleEvent
   | DiagnosticMemoryPressureEvent
