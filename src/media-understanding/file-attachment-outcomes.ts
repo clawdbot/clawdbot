@@ -63,11 +63,17 @@ const POSIX_ABSOLUTE_PATH = /^\//;
 const WINDOWS_ABSOLUTE_PATH = /^[A-Za-z]:\\/;
 const MARKER_PATH_SAFE = /^[\p{L}\p{M}\p{N} /\\:._-]+$/u;
 
-function markerSafeLocalPath(value?: string): string | undefined {
+function markerSafeLocalPath(value?: string, allowWorkspaceRelative = false): string | undefined {
   if (!value || value.length > MARKER_LOCAL_PATH_MAX_CHARS) {
     return undefined;
   }
-  if (!POSIX_ABSOLUTE_PATH.test(value) && !WINDOWS_ABSOLUTE_PATH.test(value)) {
+  const isAbsolute = POSIX_ABSOLUTE_PATH.test(value) || WINDOWS_ABSOLUTE_PATH.test(value);
+  if (
+    !isAbsolute &&
+    (!allowWorkspaceRelative ||
+      value.includes("\\") ||
+      value.split("/").some((segment) => !segment || segment === "." || segment === ".."))
+  ) {
     return undefined;
   }
   return MARKER_PATH_SAFE.test(value) ? value : undefined;
@@ -86,7 +92,7 @@ export function isSkippedFileOutcome(outcome: FileAttachmentOutcome): boolean {
 
 export function renderFileAttachmentOutcome(
   outcome: FileAttachmentOutcome,
-  options?: { selfServeLocalPaths?: boolean },
+  options?: { selfServeLocalPath?: string | false },
 ): string | null {
   switch (outcome.kind) {
     case "extracted":
@@ -100,8 +106,12 @@ export function renderFileAttachmentOutcome(
       const formatClause = mime
         ? `Unsupported document format: ${mime}.`
         : "Unsupported document format.";
-      const localPath =
-        options?.selfServeLocalPaths === false ? undefined : markerSafeLocalPath(outcome.localPath);
+      const localPath = markerSafeLocalPath(
+        options?.selfServeLocalPath === false
+          ? undefined
+          : (options?.selfServeLocalPath ?? outcome.localPath),
+        typeof options?.selfServeLocalPath === "string",
+      );
       // Modern OOXML files unzip to XML; legacy OLE formats (msword, x-cfb) do
       // not, and a wrong hint sends the agent down a dead extraction path.
       const formatHint = outcome.mime?.startsWith("application/vnd.openxmlformats-officedocument")

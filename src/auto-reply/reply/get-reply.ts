@@ -30,7 +30,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
-import { hasStagedMediaFacts } from "../../media/media-facts.js";
+import { hasStagedMediaFacts, normalizeMediaFacts } from "../../media/media-facts.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isModelSelectionLocked,
@@ -203,11 +203,9 @@ function canSelfServeLocalPaths(params: {
   opts?: GetReplyOptions;
   senderIsOwner: boolean;
   spawnedBy?: string;
+  stagedPathsAvailable: boolean;
 }): boolean {
-  if (
-    params.opts?.disableTools === true ||
-    !resolveEffectiveToolFsRootExpansionAllowed({ cfg: params.cfg, agentId: params.agentId })
-  ) {
+  if (params.opts?.disableTools === true) {
     return false;
   }
   const policySessionKey = resolveRuntimePolicySessionKey({
@@ -215,7 +213,15 @@ function canSelfServeLocalPaths(params: {
     ctx: params.ctx,
     sessionKey: params.sessionKey,
   });
-  if (resolveSandboxRuntimeStatus({ cfg: params.cfg, sessionKey: policySessionKey }).sandboxed) {
+  const sandboxed = resolveSandboxRuntimeStatus({
+    cfg: params.cfg,
+    sessionKey: policySessionKey,
+  }).sandboxed;
+  if (
+    (sandboxed && !params.stagedPathsAvailable) ||
+    (!sandboxed &&
+      !resolveEffectiveToolFsRootExpansionAllowed({ cfg: params.cfg, agentId: params.agentId }))
+  ) {
     return false;
   }
   const capabilityProfile = resolveConversationCapabilityProfile({
@@ -256,6 +262,15 @@ function canSelfServeLocalPaths(params: {
       toolNames: ["read"],
       warn: () => {},
     }).length === 1
+  );
+}
+
+function collectStagedAttachmentPaths(ctx: MsgContext): ReadonlyMap<number, string> {
+  return new Map(
+    normalizeMediaFacts(ctx.media).flatMap((fact, index) => {
+      const mediaPath = normalizeOptionalString(fact.path);
+      return mediaPath ? [[index, mediaPath] as const] : [];
+    }),
   );
 }
 
@@ -871,9 +886,10 @@ export async function getReplyFromConfig(
         opts: resolvedOpts,
         senderIsOwner: fastCommand.senderIsOwner,
         spawnedBy: normalizeOptionalString(sessionEntry.spawnedBy),
+        stagedPathsAvailable: false,
       })
     ) {
-      enableLocalPathSelfServe(finalized, sessionCtx);
+      enableLocalPathSelfServe([finalized, sessionCtx]);
     }
     logResolverTiming("milestone", "before_fast_directive_prepared_reply");
     const fastReplyResult = await traceGetReplyPhase("reply.run_prepared_reply", () =>
@@ -1171,6 +1187,30 @@ export async function getReplyFromConfig(
     }
   }
 
+  let stagedAttachmentPaths = hasStagedMediaFacts(finalized.media)
+    ? collectStagedAttachmentPaths(finalized)
+    : new Map<number, string>();
+  // Already-staged facts or SDK projections must remain a single-stage contract.
+  if (
+    !useFastTestBootstrap &&
+    sessionKey &&
+    !inboundMediaWasAlreadyStaged &&
+    !hasStagedMediaFacts(ctx.media) &&
+    hasInboundMedia(ctx)
+  ) {
+    const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();
+    const stageResult = await traceGetReplyPhase("reply.stage_media", () =>
+      stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey,
+        workspaceDir,
+      }),
+    );
+    stagedAttachmentPaths = stageResult.staged;
+  }
+
   if (
     enableLocalPathSelfServe &&
     canSelfServeLocalPaths({
@@ -1185,28 +1225,12 @@ export async function getReplyFromConfig(
       opts: resolvedOpts,
       senderIsOwner: command.senderIsOwner,
       spawnedBy: normalizeOptionalString(sessionEntry.spawnedBy),
+      stagedPathsAvailable: stagedAttachmentPaths.size > 0,
     })
   ) {
-    enableLocalPathSelfServe(finalized, sessionCtx);
-  }
-
-  // Already-staged facts or SDK projections must remain a single-stage contract.
-  if (
-    !useFastTestBootstrap &&
-    sessionKey &&
-    !inboundMediaWasAlreadyStaged &&
-    !hasStagedMediaFacts(ctx.media) &&
-    hasInboundMedia(ctx)
-  ) {
-    const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();
-    await traceGetReplyPhase("reply.stage_media", () =>
-      stageSandboxMedia({
-        ctx,
-        sessionCtx,
-        cfg,
-        sessionKey,
-        workspaceDir,
-      }),
+    enableLocalPathSelfServe(
+      [finalized, sessionCtx],
+      stagedAttachmentPaths.size > 0 ? stagedAttachmentPaths : undefined,
     );
   }
 

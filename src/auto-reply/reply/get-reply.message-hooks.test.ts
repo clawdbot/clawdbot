@@ -468,6 +468,48 @@ describe("getReplyFromConfig message hooks", () => {
     expect(enable).not.toHaveBeenCalled();
   });
 
+  it("promotes a remote document staged before media understanding", async () => {
+    const remotePath = "/remote/report.docx";
+    const stagedPath = "media/inbound/report.docx";
+    const contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    vi.mocked(stageSandboxMediaMock).mockImplementationOnce(async (params) => {
+      const stagedFacts = [
+        {
+          path: stagedPath,
+          contentType,
+          workspaceDir: "/tmp/workspace",
+        },
+      ];
+      params.ctx.media = stagedFacts;
+      params.sessionCtx.media = stagedFacts;
+      return { staged: new Map([[0, stagedPath]]) };
+    });
+    const enable = await runLocalPathSelfServeCase({
+      ctx: {
+        ...hostDocumentCtx,
+        media: [
+          {
+            path: remotePath,
+            contentType,
+          },
+        ],
+        MediaRemoteHost: "user@gateway-host",
+        OriginatingChannel: "telegram",
+        AccountId: "default",
+        SenderId: "42",
+      },
+      cfg: {
+        agents: {
+          defaults: { sandbox: { mode: "non-main", scope: "agent" } },
+          list: [{ id: "main", default: true }],
+        },
+      },
+    });
+
+    expect(stageSandboxMediaMock).toHaveBeenCalledOnce();
+    expect(enable).toHaveBeenCalledWith(expect.any(Array), new Map([[0, stagedPath]]));
+  });
+
   it("withholds local document self-service when the turn cannot read files", async () => {
     const enable = await runLocalPathSelfServeCase({
       ctx: hostDocumentCtx,

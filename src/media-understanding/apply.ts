@@ -61,7 +61,10 @@ export type ApplyMediaUnderstandingResult = {
   appliedAudio: boolean;
   appliedVideo: boolean;
   appliedFile: boolean;
-  enableLocalPathSelfServe?: (...contexts: MsgContext[]) => void;
+  enableLocalPathSelfServe?: (
+    contexts: MsgContext[],
+    stagedPaths?: ReadonlyMap<number, string>,
+  ) => void;
 };
 
 const CAPABILITY_ORDER: MediaUnderstandingCapability[] = ["image", "audio", "video"];
@@ -114,7 +117,11 @@ type ClassifiedFileAttachment = {
 };
 
 type AttachmentContextBlock = { text: string; consumesMarkerBudget: boolean };
-type LocalPathSelfServeUpgrade = { fallback: string; selfServe: string };
+type LocalPathSelfServeUpgrade = {
+  attachmentIndex: number;
+  fallback: string;
+  render: (path?: string) => string | undefined;
+};
 
 // URL attachments may carry signed query credentials; only the pathname
 // basename is safe to surface as a model-visible display name.
@@ -312,7 +319,7 @@ async function extractFileContext(params: {
       );
     }
     const blockText = renderFileAttachmentOutcome(outcome, {
-      selfServeLocalPaths: params.selfServePathsEnabled,
+      selfServeLocalPath: params.selfServePathsEnabled ? undefined : false,
     });
     if (blockText === null) {
       continue;
@@ -330,12 +337,19 @@ async function extractFileContext(params: {
       consumesMarkerBudget: isSkippedFileOutcome(outcome),
     });
     if (outcome.kind === "unsupported-format" && outcome.localPath) {
-      const fallback = renderFileAttachmentOutcome(outcome, { selfServeLocalPaths: false });
-      const selfServe = renderFileAttachmentOutcome(outcome, { selfServeLocalPaths: true });
+      const fallback = renderFileAttachmentOutcome(outcome, { selfServeLocalPath: false });
+      const selfServe = renderFileAttachmentOutcome(outcome);
       if (fallback && selfServe) {
         localPathSelfServeUpgrades.push({
+          attachmentIndex: attachment.index,
           fallback: renderBlock(fallback),
-          selfServe: renderBlock(selfServe),
+          render: (path) => {
+            const rendered = renderFileAttachmentOutcome(
+              outcome,
+              path ? { selfServeLocalPath: path } : undefined,
+            );
+            return rendered ? renderBlock(rendered) : undefined;
+          },
         });
       }
     }
@@ -348,13 +362,22 @@ const SELF_SERVE_CONTEXT_FIELDS = ["Body", "BodyForAgent", "agentText"] as const
 function enableLocalPathSelfServe(
   upgrades: LocalPathSelfServeUpgrade[],
   contexts: MsgContext[],
+  stagedPaths?: ReadonlyMap<number, string>,
 ): void {
   for (const context of contexts) {
     for (const upgrade of upgrades) {
+      const stagedPath = stagedPaths?.get(upgrade.attachmentIndex);
+      if (stagedPaths && !stagedPath) {
+        continue;
+      }
+      const selfServe = upgrade.render(stagedPath);
+      if (!selfServe) {
+        continue;
+      }
       for (const field of SELF_SERVE_CONTEXT_FIELDS) {
         const value = context[field];
         if (typeof value === "string") {
-          context[field] = value.replace(upgrade.fallback, upgrade.selfServe);
+          context[field] = value.replace(upgrade.fallback, selfServe);
         }
       }
     }
@@ -618,8 +641,15 @@ export async function applyMediaUnderstanding(params: {
       appliedFile: fileContext.blocks.length > 0,
       ...(fileContext.localPathSelfServeUpgrades.length > 0
         ? {
-            enableLocalPathSelfServe: (...contexts: MsgContext[]) =>
-              enableLocalPathSelfServe(fileContext.localPathSelfServeUpgrades, contexts),
+            enableLocalPathSelfServe: (
+              contexts: MsgContext[],
+              stagedPaths?: ReadonlyMap<number, string>,
+            ) =>
+              enableLocalPathSelfServe(
+                fileContext.localPathSelfServeUpgrades,
+                contexts,
+                stagedPaths,
+              ),
           }
         : {}),
     };
