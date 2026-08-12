@@ -1818,21 +1818,21 @@ describe("Codex supervision catalog", () => {
       throw new Error("Codex reconciliation source is not registered");
     }
     registerCodexSessionReconciliationRuntime({ api, control: createControl({ listHistoryPage }) });
-    await expect(
-      reconciliationProvider?.list({
-        hostId: CODEX_LOCAL_SESSION_HOST_ID,
-        archived: false,
-        limit: 1,
-      }),
-    ).resolves.toMatchObject({
+    const currentFirst = await reconciliationProvider?.list({
+      hostId: CODEX_LOCAL_SESSION_HOST_ID,
+      archived: false,
+      limit: 1,
+    });
+    expect(currentFirst).toMatchObject({
       sessions: [{ threadId: "current-1" }],
-      nextCursor: "page-2",
       complete: false,
     });
+    const currentCursor = (currentFirst as { nextCursor?: string }).nextCursor;
+    expect(currentCursor).toEqual(expect.any(String));
     await expect(
       reconciliationProvider?.list({
         hostId: CODEX_LOCAL_SESSION_HOST_ID,
-        cursor: "page-2",
+        cursor: currentCursor,
         archived: false,
         limit: 1,
       }),
@@ -1840,21 +1840,21 @@ describe("Codex supervision catalog", () => {
       sessions: [{ threadId: "current-2" }],
       complete: true,
     });
-    await expect(
-      reconciliationProvider?.list({
-        hostId: CODEX_LOCAL_SESSION_HOST_ID,
-        archived: true,
-        limit: 1,
-      }),
-    ).resolves.toMatchObject({
+    const archivedFirst = await reconciliationProvider?.list({
+      hostId: CODEX_LOCAL_SESSION_HOST_ID,
+      archived: true,
+      limit: 1,
+    });
+    expect(archivedFirst).toMatchObject({
       sessions: [{ threadId: "archived-1" }],
-      nextCursor: "page-2",
       complete: false,
     });
+    const archivedCursor = (archivedFirst as { nextCursor?: string }).nextCursor;
+    expect(archivedCursor).toEqual(expect.any(String));
     await expect(
       reconciliationProvider?.list({
         hostId: CODEX_LOCAL_SESSION_HOST_ID,
-        cursor: "page-2",
+        cursor: archivedCursor,
         archived: true,
         limit: 1,
       }),
@@ -1862,6 +1862,14 @@ describe("Codex supervision catalog", () => {
       sessions: [{ threadId: "archived-2" }],
       complete: true,
     });
+    await expect(
+      reconciliationProvider?.list({
+        hostId: CODEX_LOCAL_SESSION_HOST_ID,
+        cursor: "forged-cursor",
+        archived: false,
+        limit: 1,
+      }),
+    ).rejects.toThrow("Codex reconciliation catalog is unavailable");
     expect(listHistoryPage).toHaveBeenCalledTimes(4);
   });
 

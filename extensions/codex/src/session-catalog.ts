@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { resolveDefaultAgentDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
@@ -134,6 +134,8 @@ const CODEX_SESSION_CATALOG_LIST_TTL_MS = 32_000;
 const CODEX_SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES = 32;
 const MAX_RECONCILIATION_TRANSCRIPT_ITEMS = 1000;
 const MAX_RECONCILIATION_TIME_MS = 8_640_000_000_000_000;
+const MAX_RECONCILIATION_SCAN_STATES = 128;
+const RECONCILIATION_SCAN_STATE_TTL_MS = 5 * 60_000;
 
 type CodexCatalogRequestOptions = {
   config: OpenClawConfig | undefined;
@@ -1149,8 +1151,29 @@ function registerCodexSessionReconciliation(params: {
   control: CodexSessionCatalogControl;
 }): void {
   const transcriptEligibility = new Set<string>();
+  const scanStates = new Map<
+    string,
+    {
+      hostId: string;
+      archived: boolean;
+      cursor: string;
+      seen: Set<string>;
+      pages: number;
+      expiresAt: number;
+    }
+  >();
   const transcriptEligibilityKey = (hostId: string, threadId: string, archived: boolean) =>
     `${hostId}\u0000${threadId}\u0000${archived}`;
+  const pruneScanStates = (now: number) => {
+    for (const [token, state] of scanStates) {
+      if (state.expiresAt <= now) scanStates.delete(token);
+    }
+    while (scanStates.size >= MAX_RECONCILIATION_SCAN_STATES) {
+      const token = scanStates.keys().next().value;
+      if (!token) break;
+      scanStates.delete(token);
+    }
+  };
   params.api.runtime.codexReconciliation.register({
     list: async (input) => {
       try {
@@ -1161,12 +1184,22 @@ function registerCodexSessionReconciliation(params: {
           ...(input.limit !== undefined ? { limit: input.limit } : {}),
         });
         assertReconciliationNotAborted(input.signal);
+        const now = Date.now();
+        pruneScanStates(now);
+        const prior = request.cursor ? scanStates.get(request.cursor) : undefined;
+        if (request.cursor && (!prior || prior.expiresAt <= now)) {
+          throw new Error("reconciliation cursor is unavailable");
+        }
+        if (prior && (prior.hostId !== request.hostId || prior.archived !== request.archived)) {
+          throw new Error("reconciliation cursor is invalid");
+        }
+        if (request.cursor) scanStates.delete(request.cursor);
         const page =
           request.hostId === CODEX_LOCAL_SESSION_HOST_ID
             ? await enumerateLocalCodexSessionHistory({
                 control: params.control,
                 archived: request.archived,
-                ...(request.cursor ? { cursor: request.cursor } : {}),
+                ...(prior ? { cursor: prior.cursor } : {}),
                 limit: request.limit,
                 pageLimit: 1,
                 signal: input.signal,
@@ -1176,7 +1209,7 @@ function registerCodexSessionReconciliation(params: {
                 nodeId: request.hostId.slice("node:".length),
                 clientScopes: ["operator.admin"],
                 archived: request.archived,
-                ...(request.cursor ? { cursor: request.cursor } : {}),
+                ...(prior ? { cursor: prior.cursor } : {}),
                 limit: request.limit,
                 pageLimit: 1,
                 signal: input.signal,
@@ -1190,11 +1223,34 @@ function registerCodexSessionReconciliation(params: {
             );
           }
         }
+        const nextUpstreamCursor = page.nextCursor;
+        if (nextUpstreamCursor && prior?.seen.has(nextUpstreamCursor)) {
+          throw new Error("history cursor loop");
+        }
+        const pages = (prior?.pages ?? 0) + 1;
+        if (nextUpstreamCursor && pages >= MAX_ACTION_CATALOG_PAGES) {
+          throw new Error("history page limit exceeded");
+        }
+        let nextCursor: string | undefined;
+        if (nextUpstreamCursor) {
+          pruneScanStates(now);
+          nextCursor = randomUUID();
+          const seen = new Set(prior?.seen);
+          seen.add(nextUpstreamCursor);
+          scanStates.set(nextCursor, {
+            hostId: request.hostId,
+            archived: request.archived,
+            cursor: nextUpstreamCursor,
+            seen,
+            pages,
+            expiresAt: now + RECONCILIATION_SCAN_STATE_TTL_MS,
+          });
+        }
         return {
           hostId: request.hostId,
           sessions,
-          ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
-          complete: !page.nextCursor,
+          ...(nextCursor ? { nextCursor } : {}),
+          complete: !nextCursor,
         };
       } catch (error) {
         return rethrowReconciliationError(error, "Codex reconciliation catalog is unavailable");
