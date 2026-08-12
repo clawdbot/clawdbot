@@ -12,6 +12,7 @@ import {
 import { buildChannelKeyCandidates } from "openclaw/plugin-sdk/channel-targets";
 import { normalizeHyphenSlug } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { mergeSlackAccountConfig, resolveDefaultSlackAccountId } from "./accounts.js";
+import { getSlackInstallationKind } from "./installation-identity-state.js";
 
 type SlackChannelPolicyEntry = {
   requireMention?: boolean;
@@ -85,8 +86,9 @@ function resolveSlackGroupPolicyScope(params: ChannelGroupContext) {
     | Record<string, SlackChannelPolicyEntry>
     | undefined;
   const channelName = params.groupChannel?.replace(/^#/, "");
+  const allowUnscoped = getSlackInstallationKind(accountId) !== "enterprise";
   const candidates = buildChannelKeyCandidates(
-    ...buildSlackChannelIdCandidates(params.groupId),
+    ...buildSlackChannelIdCandidates(params.groupId, params.groupSpace, { allowUnscoped }),
     channelName ? `#${channelName}` : undefined,
     channelName,
     normalizeHyphenSlug(channelName),
