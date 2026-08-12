@@ -136,6 +136,10 @@ export default definePluginEntry({
         getPluginConfig: resolveCurrentPluginConfig,
         getRuntimeConfig: resolveCurrentConfig,
       });
+      codexSessionCatalogRuntime.registerReconciliation({
+        api,
+        control: sessionCatalogControl,
+      });
       for (const command of createCodexSessionCatalogNodeHostCommands(sessionCatalogControl, {
         getPluginConfig: resolveCurrentPluginConfig,
         getRuntimeConfig: resolveCurrentConfig,

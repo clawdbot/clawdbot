@@ -872,6 +872,176 @@ function flattenTranscriptPageDesc(page: CodexThreadTurnsListResponse) {
   return page.data.flatMap((turn) => turn.items.toReversed());
 }
 
+function readReconciliationHostId(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new CatalogParamsError("Codex reconciliation hostId must be a string");
+  }
+  const hostId = value.trim();
+  if (
+    !hostId ||
+    hostId.length > 256 ||
+    (hostId !== CODEX_LOCAL_SESSION_HOST_ID && !hostId.startsWith("node:"))
+  ) {
+    throw new CatalogParamsError("Codex reconciliation hostId is invalid");
+  }
+  return hostId;
+}
+
+function readReconciliationListRequest(value: unknown) {
+  if (!isRecord(value)) {
+    throw new CatalogParamsError("Codex reconciliation parameters must be an object");
+  }
+  requireOnlyKeys(value, new Set(["hostId", "archived", "limit"]));
+  if (typeof value.archived !== "boolean") {
+    throw new CatalogParamsError("Codex reconciliation archived partition must be explicit");
+  }
+  return {
+    hostId: readReconciliationHostId(value.hostId),
+    archived: value.archived,
+    limit: normalizeLimit(value.limit, "limit"),
+  };
+}
+
+function readReconciliationTranscriptRequest(value: unknown) {
+  if (!isRecord(value)) {
+    throw new CatalogParamsError("Codex reconciliation parameters must be an object");
+  }
+  requireOnlyKeys(value, new Set(["hostId", "threadId", "cursor", "limit"]));
+  const threadId = readOptionalString(value, "threadId", MAX_SESSION_ID_LENGTH);
+  if (!threadId) {
+    throw new CatalogParamsError("Codex reconciliation threadId is required");
+  }
+  const cursor = readOptionalString(value, "cursor", MAX_CURSOR_LENGTH);
+  return {
+    hostId: readReconciliationHostId(value.hostId),
+    threadId,
+    limit: normalizeLimit(value.limit, "limit"),
+    ...(cursor ? { cursor } : {}),
+  };
+}
+
+function assertReconciliationNotAborted(signal: AbortSignal | undefined): void {
+  signal?.throwIfAborted();
+}
+
+async function readCodexReconciliationTranscript(params: {
+  runtime: PluginRuntime;
+  control: CodexSessionCatalogControl;
+  request: ReturnType<typeof readReconciliationTranscriptRequest>;
+  signal?: AbortSignal;
+}): Promise<CodexSessionTranscriptPage> {
+  assertReconciliationNotAborted(params.signal);
+  if (params.request.hostId === CODEX_LOCAL_SESSION_HOST_ID) {
+    const page = parseTranscriptPage(
+      await params.control.listTurnPage({
+        threadId: params.request.threadId,
+        limit: params.request.limit,
+        sortDirection: "desc",
+        itemsView: "full",
+        ...(params.request.cursor ? { cursor: params.request.cursor } : {}),
+      }),
+    );
+    assertReconciliationNotAborted(params.signal);
+    return {
+      hostId: params.request.hostId,
+      label: "Local Codex",
+      threadId: params.request.threadId,
+      items: flattenTranscriptPageDesc(page),
+      ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+      ...(page.backwardsCursor ? { backwardsCursor: page.backwardsCursor } : {}),
+    };
+  }
+  const nodeId = params.request.hostId.slice("node:".length);
+  const node = (await params.runtime.nodes.list()).nodes.find(
+    (candidate) =>
+      candidate.nodeId === nodeId &&
+      candidate.connected === true &&
+      candidate.commands?.includes(CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND) === true &&
+      candidate.invocableCommands?.includes(CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND) === true,
+  );
+  if (!node) {
+    throw new Error("reconciliation transcript unavailable");
+  }
+  const raw = await params.runtime.nodes.invoke({
+    nodeId,
+    command: CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+    params: {
+      threadId: params.request.threadId,
+      limit: params.request.limit,
+      ...(params.request.cursor ? { cursor: params.request.cursor } : {}),
+    },
+    timeoutMs: NODE_INVOKE_TIMEOUT_MS,
+    scopes: ["operator.admin"],
+  });
+  const page = parseTranscriptPage(unwrapNodeInvokePayload(raw));
+  assertReconciliationNotAborted(params.signal);
+  return {
+    hostId: params.request.hostId,
+    label: nodeLabel(node),
+    threadId: params.request.threadId,
+    items: flattenTranscriptPageDesc(page),
+    ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+    ...(page.backwardsCursor ? { backwardsCursor: page.backwardsCursor } : {}),
+  };
+}
+
+/** Registers the reconciler-only source; this does not change the sidebar catalog. */
+function registerCodexSessionReconciliation(params: {
+  api: OpenClawPluginApi;
+  control: CodexSessionCatalogControl;
+}): void {
+  params.api.registerGatewayMethod(
+    "codex.reconciliation.threads.list",
+    async ({ params: requestParams, respond, signal }) => {
+      try {
+        const request = readReconciliationListRequest(requestParams);
+        assertReconciliationNotAborted(signal);
+        const page =
+          request.hostId === CODEX_LOCAL_SESSION_HOST_ID
+            ? await params.control.listHistoryPage({
+                archived: request.archived,
+                limit: request.limit,
+              })
+            : await enumerateCodexSessionHistory({
+                runtime: params.api.runtime,
+                nodeId: request.hostId.slice("node:".length),
+                clientScopes: ["operator.admin"],
+                archived: request.archived,
+                limit: request.limit,
+              });
+        assertReconciliationNotAborted(signal);
+        respond(true, { hostId: request.hostId, ...page });
+      } catch {
+        respond(false, undefined, {
+          code: "codex_reconciliation_unavailable",
+          message: "Codex reconciliation source is unavailable",
+        });
+      }
+    },
+    { scope: "operator.admin" },
+  );
+  params.api.registerGatewayMethod(
+    "codex.reconciliation.transcript.read",
+    async ({ params: requestParams, respond, signal }) => {
+      try {
+        const page = await readCodexReconciliationTranscript({
+          runtime: params.api.runtime,
+          control: params.control,
+          request: readReconciliationTranscriptRequest(requestParams),
+          signal,
+        });
+        respond(true, page);
+      } catch {
+        respond(false, undefined, {
+          code: "codex_reconciliation_unavailable",
+          message: "Codex reconciliation source is unavailable",
+        });
+      }
+    },
+    { scope: "operator.admin" },
+  );
+}
+
 /** Reads the persisted transcript for a Gateway-local or paired-node Codex session. */
 async function readCodexSessionTranscript(params: {
   runtime: PluginRuntime;
@@ -1680,6 +1850,7 @@ function registerCodexSessionCatalog(params: {
 
 export const codexSessionCatalogRuntime = {
   register: registerCodexSessionCatalog,
+  registerReconciliation: registerCodexSessionReconciliation,
   list: listCodexSessionCatalog,
   enumerateHistory: enumerateCodexSessionHistory,
   readTranscript: readCodexSessionTranscript,
