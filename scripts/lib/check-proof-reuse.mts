@@ -101,6 +101,21 @@ type ReuseDecision =
   | { reusable: true; path: string; receipt: CheckProofReceipt; reason: string }
   | { reusable: false; path: string; reason: string };
 
+export type DescendantProofPlan = {
+  commands: ProofCommand[];
+  lanesAll: boolean;
+  releaseMetadataOnly: boolean;
+};
+
+export type DescendantProofReuseOptions = {
+  cwd?: string;
+  createDescendantPlan: (params: {
+    currentHead: string;
+    paths: string[];
+    producerHead: string;
+  }) => DescendantProofPlan | null;
+};
+
 const REUSABLE_ENV_KEYS = [
   "CI",
   "GITHUB_ACTIONS",
@@ -145,6 +160,9 @@ const CHECK_EVIDENCE_INPUT_PATHS = [
   "scripts/run-tsgo.mjs",
   "scripts/run-tsgo.mts",
 ].toSorted();
+const DESCENDANT_RECEIPT_SCAN_LIMIT = 512;
+const FULL_GIT_SHA_RE = /^[0-9a-f]{40}$/u;
+const RELEASE_METADATA_INVALIDATION_EXCEPTIONS = new Set(["package.json"]);
 
 const digestMemo = new Map<string, string | null>();
 
@@ -308,6 +326,7 @@ export function isReusableCheckProofReceipt(receipt: unknown, expected: CheckPro
 export function evaluateReusableReceipt(
   receiptDir: string,
   expected: CheckProofReceipt,
+  descendantOptions?: DescendantProofReuseOptions,
 ): ReuseDecision {
   const candidatePath = path.join(receiptDir, `${expected.fingerprint}.json`);
   if (expected.commandFamily === "other" || expected.requiredInputs.expectedWrapperProof === null) {
@@ -317,6 +336,18 @@ export function evaluateReusableReceipt(
       reason: "unsupported command family for changed-check evidence receipt reuse",
     };
   }
+  const exactDecision = evaluateExactReceipt(candidatePath, expected);
+  if (
+    exactDecision.reusable ||
+    exactDecision.reason !== "missing changed-check evidence receipt" ||
+    !descendantOptions
+  ) {
+    return exactDecision;
+  }
+  return evaluateDescendantReceipts(receiptDir, expected, descendantOptions) ?? exactDecision;
+}
+
+function evaluateExactReceipt(candidatePath: string, expected: CheckProofReceipt): ReuseDecision {
   try {
     const parsed = JSON.parse(fs.readFileSync(candidatePath, "utf8"));
     if (isReusableCheckProofReceipt(parsed, expected)) {
@@ -343,6 +374,144 @@ export function evaluateReusableReceipt(
           : "malformed changed-check evidence receipt",
     };
   }
+}
+
+function evaluateDescendantReceipts(
+  receiptDir: string,
+  expected: CheckProofReceipt,
+  options: DescendantProofReuseOptions,
+): ReuseDecision | null {
+  const receiptPaths = listAtomicReceiptPaths(receiptDir);
+  if (typeof receiptPaths === "string") {
+    return {
+      reusable: false,
+      path: path.join(receiptDir, `${expected.fingerprint}.json`),
+      reason: receiptPaths,
+    };
+  }
+  for (const receiptPath of receiptPaths) {
+    const parsed = readSchemaValidReceipt(receiptPath);
+    if (!parsed || !sameReceiptCommand(parsed, expected)) {
+      continue;
+    }
+    return evaluateDescendantReceiptCandidate(receiptPath, parsed, expected, options);
+  }
+  return null;
+}
+
+function listAtomicReceiptPaths(receiptDir: string) {
+  try {
+    const names = fs
+      .readdirSync(receiptDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+      .map((entry) => entry.name)
+      .toSorted((left, right) => left.localeCompare(right));
+    if (names.length > DESCENDANT_RECEIPT_SCAN_LIMIT) {
+      return "too many changed-check evidence receipts to scan";
+    }
+    return names.map((name) => path.join(receiptDir, name));
+  } catch (error) {
+    const code = isRecord(error) ? error.code : null;
+    return code === "ENOENT" ? [] : "changed-check evidence receipt scan failed";
+  }
+}
+
+function readSchemaValidReceipt(receiptPath: string): CheckProofReceipt | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
+    return isCheckProofReceipt(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function evaluateDescendantReceiptCandidate(
+  receiptPath: string,
+  receipt: CheckProofReceipt,
+  expected: CheckProofReceipt,
+  options: DescendantProofReuseOptions,
+): ReuseDecision {
+  const expectedWrapperProof = expected.requiredInputs.expectedWrapperProof;
+  if (receipt.status !== "passed" || receipt.exitCode !== 0 || receipt.ranTool !== true) {
+    return rejected(receiptPath, "changed-check evidence receipt did not pass with ranTool=true");
+  }
+  if (!expectedWrapperProof || receipt.commandFamily !== expected.commandFamily) {
+    return rejected(receiptPath, "changed-check evidence receipt command family mismatch");
+  }
+  if (
+    stableStringify(receipt.requiredInputs.expectedWrapperProof) !==
+      stableStringify(expectedWrapperProof) ||
+    stableStringify(receipt.observed.wrapperProof) !== stableStringify(expectedWrapperProof)
+  ) {
+    return rejected(
+      receiptPath,
+      "changed-check evidence receipt lacks matching native wrapper proof",
+    );
+  }
+  const producerHead = fullGitSha(receipt.requiredInputs.git.currentHead);
+  const currentHead = fullGitSha(expected.requiredInputs.git.currentHead);
+  if (!producerHead || !currentHead) {
+    return rejected(receiptPath, "changed-check evidence receipt has unresolved git head");
+  }
+  if (producerHead === currentHead) {
+    return rejected(receiptPath, "missing exact-target changed-check evidence receipt");
+  }
+  const cwd = options.cwd ?? process.cwd();
+  const ancestor = gitIsAncestor(producerHead, currentHead, cwd);
+  if (ancestor === "unknown") {
+    return rejected(receiptPath, "changed-check evidence ancestry unresolved");
+  }
+  if (ancestor === "no") {
+    return rejected(
+      receiptPath,
+      "changed-check evidence producer is not an ancestor of current HEAD",
+    );
+  }
+  if (!gitWorktreeClean(cwd)) {
+    return rejected(receiptPath, "current worktree has dirty or untracked files");
+  }
+  const descendantPaths = gitChangedPathsBetween(producerHead, currentHead, cwd);
+  if (!descendantPaths) {
+    return rejected(receiptPath, "changed-check evidence descendant range unresolved");
+  }
+  if (descendantPaths.length === 0) {
+    return rejected(receiptPath, "missing exact-target changed-check evidence receipt");
+  }
+  const descendantPlan = options.createDescendantPlan({
+    currentHead,
+    paths: descendantPaths,
+    producerHead,
+  });
+  if (!descendantPlan) {
+    return rejected(receiptPath, "changed-check descendant plan unresolved");
+  }
+  if (descendantPlan.lanesAll) {
+    return rejected(receiptPath, "descendant changed-check delta requires full proof");
+  }
+  const stableMismatch = describeDescendantStableMismatch(receipt, expected, descendantPlan);
+  if (stableMismatch) {
+    return rejected(receiptPath, stableMismatch);
+  }
+  const changedPathMismatch = describeDescendantPathMismatch(receipt, expected, descendantPaths);
+  if (changedPathMismatch) {
+    return rejected(receiptPath, changedPathMismatch);
+  }
+  const affectedCommand = descendantPlan.commands.find((command) =>
+    sameNormalizedCommand(normalizeCommand(command), expected.requiredInputs.command),
+  );
+  if (affectedCommand) {
+    return rejected(receiptPath, `descendant changed-check plan includes ${affectedCommand.name}`);
+  }
+  return {
+    reusable: true,
+    path: receiptPath,
+    receipt,
+    reason: "descendant-safe evidence reuse",
+  };
+}
+
+function rejected(path: string, reason: string): ReuseDecision {
+  return { reusable: false, path, reason };
 }
 
 export function readReusableReceipt(receiptDir: string, expected: CheckProofReceipt) {
@@ -406,6 +575,157 @@ function createRequiredInputs(params: {
   };
 }
 
+function sameReceiptCommand(receipt: CheckProofReceipt, expected: CheckProofReceipt) {
+  return (
+    receipt.commandFamily === expected.commandFamily &&
+    sameNormalizedCommand(receipt.requiredInputs.command, expected.requiredInputs.command)
+  );
+}
+
+function sameNormalizedCommand(left: NormalizedCommand, right: NormalizedCommand) {
+  return (
+    left.name === right.name &&
+    left.bin === right.bin &&
+    left.args.length === right.args.length &&
+    left.args.every((arg, index) => arg === right.args[index])
+  );
+}
+
+function describeDescendantStableMismatch(
+  receipt: CheckProofReceipt,
+  expected: CheckProofReceipt,
+  descendantPlan: DescendantProofPlan,
+) {
+  if (
+    stableStringify(receipt.requiredInputs.repo) !== stableStringify(expected.requiredInputs.repo)
+  ) {
+    return "changed-check evidence repo identity mismatch";
+  }
+  const receiptGit = receipt.requiredInputs.git;
+  const expectedGit = expected.requiredInputs.git;
+  if (
+    receiptGit.baseRef !== expectedGit.baseRef ||
+    !sameFullSha(receiptGit.baseSha, expectedGit.baseSha) ||
+    !sameFullSha(receiptGit.mergeBaseSha, expectedGit.mergeBaseSha)
+  ) {
+    return "changed-check evidence base or merge-base mismatch";
+  }
+  if (
+    stableStringify(receipt.requiredInputs.env) !== stableStringify(expected.requiredInputs.env)
+  ) {
+    return "changed-check evidence environment mismatch";
+  }
+  if (
+    stableStringify(receipt.requiredInputs.runtime) !==
+    stableStringify(expected.requiredInputs.runtime)
+  ) {
+    return "changed-check evidence runtime or toolchain mismatch";
+  }
+  const changedInvalidationInput = firstChangedInvalidationInput(
+    receipt.requiredInputs.invalidationInputs,
+    expected.requiredInputs.invalidationInputs,
+    descendantPlan,
+  );
+  if (changedInvalidationInput) {
+    return `changed-check evidence owner input changed: ${changedInvalidationInput}`;
+  }
+  return null;
+}
+
+function firstChangedInvalidationInput(
+  receiptInputs: Record<string, string | null>,
+  expectedInputs: Record<string, string | null>,
+  descendantPlan: DescendantProofPlan,
+) {
+  const keys = [
+    ...new Set([...Object.keys(receiptInputs), ...Object.keys(expectedInputs)]),
+  ].toSorted((left, right) => left.localeCompare(right));
+  for (const key of keys) {
+    if (
+      receiptInputs[key] !== expectedInputs[key] &&
+      !(descendantPlan.releaseMetadataOnly && RELEASE_METADATA_INVALIDATION_EXCEPTIONS.has(key))
+    ) {
+      return key;
+    }
+  }
+  return null;
+}
+
+function describeDescendantPathMismatch(
+  receipt: CheckProofReceipt,
+  expected: CheckProofReceipt,
+  descendantPaths: string[],
+) {
+  const producerPaths = new Set(receipt.requiredInputs.changedPaths.paths);
+  const descendantPathSet = new Set(descendantPaths);
+  for (const producerPath of receipt.requiredInputs.changedPaths.paths) {
+    if (
+      stableStringify(receipt.requiredInputs.changedPaths.states[producerPath]) !==
+      stableStringify(expected.requiredInputs.changedPaths.states[producerPath])
+    ) {
+      return "changed-check evidence producer path state changed";
+    }
+  }
+  for (const currentPath of expected.requiredInputs.changedPaths.paths) {
+    if (!producerPaths.has(currentPath) && !descendantPathSet.has(currentPath)) {
+      return "current changed paths include uncommitted or unresolved worktree state";
+    }
+  }
+  return null;
+}
+
+function fullGitSha(value: string | null) {
+  return typeof value === "string" && FULL_GIT_SHA_RE.test(value) ? value : null;
+}
+
+function sameFullSha(left: string | null, right: string | null) {
+  return fullGitSha(left) !== null && left === right;
+}
+
+function gitIsAncestor(producerHead: string, currentHead: string, cwd: string) {
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", producerHead, currentHead], {
+      cwd,
+      stdio: "ignore",
+    });
+    return "yes" as const;
+  } catch (error) {
+    const status = isRecord(error) && typeof error.status === "number" ? error.status : null;
+    return status === 1 ? ("no" as const) : ("unknown" as const);
+  }
+}
+
+function gitWorktreeClean(cwd: string) {
+  try {
+    return (
+      execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], {
+        cwd,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim().length === 0
+    );
+  } catch {
+    return false;
+  }
+}
+
+function gitChangedPathsBetween(producerHead: string, currentHead: string, cwd: string) {
+  try {
+    return execFileSync("git", ["diff", "--name-only", `${producerHead}..${currentHead}`], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      maxBuffer: 16 * 1024 * 1024,
+    })
+      .split("\n")
+      .map((entry) => entry.trim().replaceAll("\\", "/"))
+      .filter(Boolean)
+      .toSorted((left, right) => left.localeCompare(right));
+  } catch {
+    return null;
+  }
+}
+
 function isCheckProofReceipt(value: unknown): value is CheckProofReceipt {
   return (
     isRecord(value) &&
@@ -418,8 +738,9 @@ function isCheckProofReceipt(value: unknown): value is CheckProofReceipt {
     (value.commandFamily === "tsgo" ||
       value.commandFamily === "tsgolint" ||
       value.commandFamily === "other") &&
-    isRecord(value.requiredInputs) &&
-    isRecord(value.observed)
+    isRequiredInputs(value.requiredInputs) &&
+    isRecord(value.observed) &&
+    (value.observed.wrapperProof === null || isWrapperProof(value.observed.wrapperProof))
   );
 }
 
@@ -438,6 +759,87 @@ function isWrapperProof(value: unknown): value is WrapperProof {
     isRecord(value.configDigests) &&
     Object.values(value.configDigests).every((digest) => typeof digest === "string")
   );
+}
+
+function isRequiredInputs(value: unknown): value is CheckProofReceipt["requiredInputs"] {
+  return (
+    isRecord(value) &&
+    isRecord(value.repo) &&
+    (typeof value.repo.remoteOrigin === "string" || value.repo.remoteOrigin === null) &&
+    (typeof value.repo.worktreeRoot === "string" || value.repo.worktreeRoot === null) &&
+    isRecord(value.git) &&
+    isNullableString(value.git.baseRef) &&
+    isNullableString(value.git.headRef) &&
+    isNullableString(value.git.baseSha) &&
+    isNullableString(value.git.headSha) &&
+    isNullableString(value.git.mergeBaseSha) &&
+    isNullableString(value.git.currentHead) &&
+    isNullableString(value.git.currentTree) &&
+    isRecord(value.changedPaths) &&
+    Array.isArray(value.changedPaths.paths) &&
+    value.changedPaths.paths.every((entry) => typeof entry === "string") &&
+    isPathStateRecord(value.changedPaths.states) &&
+    isRecord(value.plan) &&
+    typeof value.plan.summary === "string" &&
+    Array.isArray(value.plan.commands) &&
+    value.plan.commands.every(isNormalizedCommand) &&
+    isReceiptCommand(value.command) &&
+    isStringMap(value.env) &&
+    isRecord(value.runtime) &&
+    typeof value.runtime.platform === "string" &&
+    typeof value.runtime.arch === "string" &&
+    typeof value.runtime.node === "string" &&
+    typeof value.runtime.modules === "string" &&
+    typeof value.runtime.v8 === "string" &&
+    isNullableString(value.runtime.execPathDigest) &&
+    isNullableStringMap(value.invalidationInputs) &&
+    (value.expectedWrapperProof === null || isWrapperProof(value.expectedWrapperProof))
+  );
+}
+
+function isReceiptCommand(value: unknown): value is CheckProofReceipt["requiredInputs"]["command"] {
+  return (
+    isNormalizedCommand(value) &&
+    (value.family === "tsgo" || value.family === "tsgolint" || value.family === "other")
+  );
+}
+
+function isNormalizedCommand(value: unknown): value is NormalizedCommand {
+  return (
+    isRecord(value) &&
+    typeof value.name === "string" &&
+    (typeof value.bin === "string" || value.bin === null) &&
+    Array.isArray(value.args) &&
+    value.args.every((entry) => typeof entry === "string")
+  );
+}
+
+function isPathStateRecord(value: unknown): value is Record<string, PathState> {
+  return isRecord(value) && Object.values(value).every(isPathState);
+}
+
+function isPathState(value: unknown): value is PathState {
+  return (
+    isRecord(value) &&
+    ((value.kind === "missing" && value.digest === null) ||
+      ((value.kind === "file" || value.kind === "directory" || value.kind === "other") &&
+        typeof value.digest === "string"))
+  );
+}
+
+function isStringMap(value: unknown): value is Record<string, string> {
+  return isRecord(value) && Object.values(value).every((entry) => typeof entry === "string");
+}
+
+function isNullableStringMap(value: unknown): value is Record<string, string | null> {
+  return (
+    isRecord(value) &&
+    Object.values(value).every((entry) => typeof entry === "string" || entry === null)
+  );
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return typeof value === "string" || value === null;
 }
 
 function normalizeCommand(command: ProofCommand): NormalizedCommand {

@@ -35,6 +35,7 @@ import {
   defaultCheckProofReceiptDir,
   evaluateReusableReceipt,
   readWrapperProofReceipt,
+  type DescendantProofReuseOptions,
   type WrapperProof,
   writeCheckProofReceipt,
 } from "./lib/check-proof-reuse.mts";
@@ -1012,6 +1013,7 @@ async function runChangedCheck(result: ChangedLaneResult, options: ChangedCheckR
     cwd: process.cwd(),
   };
   const proofReceiptDir = options.proofReceiptDir ?? defaultCheckProofReceiptDir();
+  const descendantReuse = createDescendantProofReuseOptions(options, childEnv);
   const releaseLock = options.dryRun
     ? () => {}
     : acquireLocalHeavyCheckLockSync({
@@ -1023,6 +1025,7 @@ async function runChangedCheck(result: ChangedLaneResult, options: ChangedCheckR
   try {
     printPlan(result, plan, options, {
       context: proofContext,
+      descendantReuse,
       proofReceiptDir,
       proofReuse: options.proofReuse !== false,
     });
@@ -1035,6 +1038,7 @@ async function runChangedCheck(result: ChangedLaneResult, options: ChangedCheckR
     for (const command of plan.commands) {
       const status = await runPlanCommand(command, timings, {
         context: proofContext,
+        descendantReuse,
         proofReceiptDir,
         proofReuse: options.proofReuse !== false,
       });
@@ -1049,6 +1053,42 @@ async function runChangedCheck(result: ChangedLaneResult, options: ChangedCheckR
   } finally {
     releaseLock();
   }
+}
+
+function createDescendantProofReuseOptions(
+  options: ChangedCheckRunOptions,
+  childEnv: NodeJS.ProcessEnv,
+): DescendantProofReuseOptions {
+  return {
+    cwd: process.cwd(),
+    createDescendantPlan: ({ currentHead, paths, producerHead }) => {
+      try {
+        const result = detectChangedLanesForPaths({
+          base: producerHead,
+          head: currentHead,
+          paths,
+        });
+        const plan = createChangedCheckPlan(result, {
+          ...options,
+          base: producerHead,
+          env: childEnv,
+          head: currentHead,
+          staged: false,
+        });
+        return {
+          commands: plan.commands.map(normalizeProofPlanCommand),
+          lanesAll: result.lanes.all,
+          releaseMetadataOnly: result.lanes.releaseMetadata,
+        };
+      } catch {
+        return null;
+      }
+    },
+  };
+}
+
+function normalizeProofPlanCommand(command: ChangedCheckCommand) {
+  return command.bin ? { ...command, bin: command.bin } : createPnpmManagedCommand(command);
 }
 
 function sameArgs(left: string[], right: string[]) {
@@ -1084,6 +1124,7 @@ function printPlan(
 
 type ProofRunOptions = {
   context: ProofRunContext;
+  descendantReuse: DescendantProofReuseOptions;
   proofReceiptDir: string;
   proofReuse: boolean;
 };
@@ -1134,7 +1175,11 @@ function describeCommandEvidenceDecision(command: ChangedCheckCommand, options: 
   if (blockers.length > 0) {
     return `no reuse: ${managedCommand.name}: ${blockers.join("; ")}`;
   }
-  const decision = evaluateReusableReceipt(options.proofReceiptDir, expected);
+  const decision = evaluateReusableReceipt(
+    options.proofReceiptDir,
+    expected,
+    options.descendantReuse,
+  );
   return decision.reusable
     ? `reusing changed-check evidence receipt for ${managedCommand.name}: ${decision.path}`
     : `no reuse: ${managedCommand.name}: ${decision.reason}`;
@@ -1371,7 +1416,9 @@ async function runCommand(
       ? (options.context.reuseBlockers ?? [])
       : ["force-fresh requested"];
     const decision =
-      blockers.length === 0 ? evaluateReusableReceipt(options.proofReceiptDir, expected) : null;
+      blockers.length === 0
+        ? evaluateReusableReceipt(options.proofReceiptDir, expected, options.descendantReuse)
+        : null;
     if (decision?.reusable) {
       console.error(`[check:changed] reusing changed-check evidence receipt: ${decision.path}`);
       timings.push({
@@ -1494,7 +1541,7 @@ function printUsage() {
       "  --staged         Check staged paths instead of git diff paths",
       "  --dry-run        Print the planned checks without running them",
       "  --timed          Print timing summary",
-      "  --proof-reuse    Reuse exact changed-check evidence receipts (default)",
+      "  --proof-reuse    Reuse exact or descendant-safe changed-check evidence receipts (default)",
       "  --no-reuse       Run fresh checks while still writing new evidence receipts",
       "  --force-fresh    Alias for --no-reuse",
       "  --proof-receipt-dir <dir>",

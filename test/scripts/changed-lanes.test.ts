@@ -17,8 +17,11 @@ import {
   listStagedChangedPaths,
 } from "../../scripts/changed-lanes.mts";
 import {
+  commandFamily,
   createCheckProofReceipt,
   createWrapperProof,
+  type DescendantProofPlan,
+  type DescendantProofReuseOptions,
   evaluateReusableReceipt,
   isReusableCheckProofReceipt,
   readWrapperProofReceipt,
@@ -151,6 +154,225 @@ function writeRepoFile(repoDir: string, filePath: string, contents: string): voi
 
 const prettyJson = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
 const cloneJson = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
+function createProofRepo(prefix: string) {
+  const dir = makeTempRepoRoot(tempDirs, prefix);
+  git(dir, ["init", "-q", "--initial-branch=main"]);
+  const files: Record<string, string> = {
+    ".oxlintrc.json": "{}\n",
+    "config/oxlint/boundary-guards.json": "{}\n",
+    "config/tsconfig/oxlint.json": "{}\n",
+    "config/tsconfig/oxlint.core.json": "{}\n",
+    "config/tsconfig/oxlint.extensions.json": "{}\n",
+    "config/tsconfig/oxlint.scripts.json": "{}\n",
+    "package.json": prettyJson({ name: "proof-repo", version: "0.0.0", scripts: {} }),
+    "pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+    "pnpm-workspace.yaml": "packages: []\n",
+    "scripts/changed-lanes.mjs": "export {};\n",
+    "scripts/changed-lanes.mts": "export {};\n",
+    "scripts/check-changed.mjs": "export {};\n",
+    "scripts/check-changed.mts": "export {};\n",
+    "scripts/lib/check-proof-reuse.mts": "export {};\n",
+    "scripts/lib/local-heavy-check-runtime.mts": "export {};\n",
+    "scripts/lib/managed-child-process.mts": "export {};\n",
+    "scripts/lib/tsgo-sparse-guard.mts": "export {};\n",
+    "scripts/lib/tsx-cli-shim.mjs": "export {};\n",
+    "scripts/run-oxlint-shards.mts": "export {};\n",
+    "scripts/run-oxlint.mjs": "export {};\n",
+    "scripts/run-oxlint.mts": "export {};\n",
+    "scripts/run-tsgo.mjs": "export {};\n",
+    "scripts/run-tsgo.mts": "export {};\n",
+    "src/core.ts": "export const core = 1;\n",
+    "src/plugin-sdk/api.ts": "export const api = 1;\n",
+    "tsconfig.core.json": "{}\n",
+    "tsconfig.extensions.json": "{}\n",
+    "tsconfig.scripts.json": "{}\n",
+  };
+  for (const [filePath, contents] of Object.entries(files)) {
+    writeRepoFile(dir, filePath, contents);
+  }
+  commitAll(dir, "base");
+  return {
+    base: git(dir, ["rev-parse", "HEAD"]),
+    dir,
+    receiptDir: makeTempRepoRoot(tempDirs, `${prefix}receipts-`),
+  };
+}
+
+function createDescendantPlanForTest(
+  _cwd: string,
+  params: { currentHead: string; paths: string[]; producerHead: string },
+): DescendantProofPlan {
+  const result = detectChangedLanes(params.paths);
+  const plan = createChangedCheckPlan(result, {
+    base: params.producerHead,
+    env: createChangedCheckChildEnv({ PATH: "/usr/bin" }),
+    head: params.currentHead,
+  });
+  return {
+    commands: plan.commands.map((command) =>
+      command.bin ? { ...command, bin: command.bin } : createPnpmManagedCommand(command),
+    ),
+    lanesAll: result.lanes.all,
+    releaseMetadataOnly: result.lanes.releaseMetadata,
+  };
+}
+
+function createDescendantOptionsForTest(cwd: string): DescendantProofReuseOptions {
+  return {
+    cwd,
+    createDescendantPlan: (params) => createDescendantPlanForTest(cwd, params),
+  };
+}
+
+type PlannedProof = {
+  command: ReturnType<typeof createPnpmManagedCommand>;
+  commands: ReturnType<typeof createChangedCheckPlan>["commands"];
+  summary: string;
+};
+
+function createManagedPlanForTest(
+  _cwd: string,
+  params: { base: string; head: string; paths: string[] },
+): PlannedProof {
+  const result = detectChangedLanes(params.paths);
+  const plan = createChangedCheckPlan(result, {
+    base: params.base,
+    env: createChangedCheckChildEnv({ PATH: "/usr/bin" }),
+    head: params.head,
+  });
+  const command = expectDefined(
+    plan.commands.find((candidate) => candidate.name.startsWith("typecheck")),
+    "typecheck proof command",
+  );
+  return {
+    command: command.bin
+      ? ({ ...command, bin: command.bin } as ReturnType<typeof createPnpmManagedCommand>)
+      : createPnpmManagedCommand(command),
+    commands: plan.commands,
+    summary: plan.summary,
+  };
+}
+
+function createWrapperProofForCommand(commandName: string, cwd: string) {
+  const argvByCommand: Record<string, string[]> = {
+    "typecheck core": [
+      "-p",
+      "tsconfig.core.json",
+      "--incremental",
+      "--tsBuildInfoFile",
+      ".artifacts/tsgo-cache/core.tsbuildinfo",
+    ],
+    "typecheck core tests": [
+      "-p",
+      "test/tsconfig/tsconfig.core.test.json",
+      "--incremental",
+      "--tsBuildInfoFile",
+      ".artifacts/tsgo-cache/core-test.tsbuildinfo",
+    ],
+    "typecheck extension tests": [
+      "-p",
+      "test/tsconfig/tsconfig.extensions.test.json",
+      "--incremental",
+      "--tsBuildInfoFile",
+      ".artifacts/tsgo-cache/extensions-test.tsbuildinfo",
+    ],
+    "typecheck extensions": [
+      "-p",
+      "tsconfig.extensions.json",
+      "--incremental",
+      "--tsBuildInfoFile",
+      ".artifacts/tsgo-cache/extensions.tsbuildinfo",
+    ],
+    "typecheck scripts": [
+      "-p",
+      "tsconfig.scripts.json",
+      "--incremental",
+      "--tsBuildInfoFile",
+      ".artifacts/tsgo-cache/scripts.tsbuildinfo",
+    ],
+  };
+  return createWrapperProof({
+    tool: "tsgo",
+    wrapper: "scripts/run-tsgo.mts",
+    argv: expectDefined(argvByCommand[commandName], `wrapper argv for ${commandName}`),
+    cwd,
+  });
+}
+
+function createStoredProof(params: {
+  commandName: string;
+  producerContents: string;
+  producerPath: string;
+}) {
+  const repo = createProofRepo("changed-check-descendant-");
+  writeRepoFile(repo.dir, params.producerPath, params.producerContents);
+  commitAll(repo.dir, "producer");
+  const producerHead = git(repo.dir, ["rev-parse", "HEAD"]);
+  const plan = createManagedPlanForTest(repo.dir, {
+    base: repo.base,
+    head: producerHead,
+    paths: [params.producerPath],
+  });
+  const command =
+    plan.command.name === params.commandName
+      ? plan.command
+      : expectDefined(
+          createDescendantPlanForTest(repo.dir, {
+            currentHead: producerHead,
+            paths: [params.producerPath],
+            producerHead: repo.base,
+          }).commands.find((candidate) => candidate.name === params.commandName),
+          params.commandName,
+        );
+  const wrapperProof = createWrapperProofForCommand(params.commandName, repo.dir);
+  const receipt = createCheckProofReceipt({
+    command,
+    context: {
+      base: repo.base,
+      changedPaths: [params.producerPath],
+      cwd: repo.dir,
+      head: producerHead,
+      planCommands: plan.commands,
+      planSummary: plan.summary,
+    },
+    exitCode: 0,
+    expectedWrapperProof: wrapperProof,
+    wrapperProof,
+  });
+  writeCheckProofReceipt(repo.receiptDir, receipt);
+  return { ...repo, command, commandName: params.commandName, producerHead, receipt, wrapperProof };
+}
+
+function createExpectedProof(params: {
+  currentPaths: string[];
+  fixture: ReturnType<typeof createStoredProof>;
+  wrapperProof?: ReturnType<typeof createWrapperProof>;
+}) {
+  const head = git(params.fixture.dir, ["rev-parse", "HEAD"]);
+  const plan = createManagedPlanForTest(params.fixture.dir, {
+    base: params.fixture.base,
+    head,
+    paths: params.currentPaths,
+  });
+  const wrapperProof =
+    params.wrapperProof ??
+    createWrapperProofForCommand(params.fixture.commandName, params.fixture.dir);
+  return createCheckProofReceipt({
+    command: params.fixture.command,
+    context: {
+      base: params.fixture.base,
+      changedPaths: params.currentPaths,
+      cwd: params.fixture.dir,
+      head,
+      planCommands: plan.commands,
+      planSummary: plan.summary,
+    },
+    exitCode: 0,
+    expectedWrapperProof: wrapperProof,
+    wrapperProof,
+  });
+}
 
 // Executes the exact "format changed files" plan command with the repo-pinned oxfmt,
 // reconstructing `pnpm format:check <plan args>`. Guards the runtime verdict, not just
@@ -1162,6 +1384,363 @@ describe("scripts/changed-lanes", () => {
     ).toBe(false);
   });
 
+  it("reuses ancestor proof when descendant commits are docs-only or release metadata only", () => {
+    const docsFixture = createStoredProof({
+      commandName: "typecheck core",
+      producerContents: "export const core = 2;\n",
+      producerPath: "src/core.ts",
+    });
+    writeRepoFile(docsFixture.dir, "docs/release-notes.md", "docs descendant\n");
+    commitAll(docsFixture.dir, "docs descendant");
+    const docsHead = git(docsFixture.dir, ["rev-parse", "HEAD"]);
+    const docsDeltaPlan = createDescendantPlanForTest(docsFixture.dir, {
+      currentHead: docsHead,
+      paths: ["docs/release-notes.md"],
+      producerHead: docsFixture.producerHead,
+    });
+    expect(docsDeltaPlan.commands.filter((command) => commandFamily(command) !== "other")).toEqual(
+      [],
+    );
+    const docsExpected = createExpectedProof({
+      currentPaths: ["docs/release-notes.md", "src/core.ts"],
+      fixture: docsFixture,
+    });
+    expect(
+      evaluateReusableReceipt(
+        docsFixture.receiptDir,
+        docsExpected,
+        createDescendantOptionsForTest(docsFixture.dir),
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        reusable: true,
+        reason: "descendant-safe evidence reuse",
+      }),
+    );
+
+    const releaseFixture = createStoredProof({
+      commandName: "typecheck core",
+      producerContents: "export const core = 3;\n",
+      producerPath: "src/core.ts",
+    });
+    writeRepoFile(
+      releaseFixture.dir,
+      "package.json",
+      prettyJson({ name: "proof-repo", version: "0.0.1", scripts: {} }),
+    );
+    commitAll(releaseFixture.dir, "release metadata descendant");
+    const releaseExpected = createExpectedProof({
+      currentPaths: ["package.json", "src/core.ts"],
+      fixture: releaseFixture,
+    });
+    expect(
+      evaluateReusableReceipt(
+        releaseFixture.receiptDir,
+        releaseExpected,
+        createDescendantOptionsForTest(releaseFixture.dir),
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        reusable: true,
+        reason: "descendant-safe evidence reuse",
+      }),
+    );
+  });
+
+  it("maps descendant lanes to affected proof commands", () => {
+    const unaffectedFixture = createStoredProof({
+      commandName: "typecheck core",
+      producerContents: "export const core = 4;\n",
+      producerPath: "src/core.ts",
+    });
+    writeRepoFile(
+      unaffectedFixture.dir,
+      "extensions/demo/src/index.ts",
+      "export const extension = 1;\n",
+    );
+    commitAll(unaffectedFixture.dir, "extension descendant");
+    const unaffectedExpected = createExpectedProof({
+      currentPaths: ["extensions/demo/src/index.ts", "src/core.ts"],
+      fixture: unaffectedFixture,
+    });
+    expect(
+      evaluateReusableReceipt(
+        unaffectedFixture.receiptDir,
+        unaffectedExpected,
+        createDescendantOptionsForTest(unaffectedFixture.dir),
+      ),
+    ).toEqual(expect.objectContaining({ reusable: true }));
+
+    const affectedFixture = createStoredProof({
+      commandName: "typecheck core",
+      producerContents: "export const core = 5;\n",
+      producerPath: "src/core.ts",
+    });
+    writeRepoFile(affectedFixture.dir, "src/descendant.ts", "export const descendant = 1;\n");
+    commitAll(affectedFixture.dir, "core descendant");
+    const affectedExpected = createExpectedProof({
+      currentPaths: ["src/core.ts", "src/descendant.ts"],
+      fixture: affectedFixture,
+    });
+    expect(
+      evaluateReusableReceipt(
+        affectedFixture.receiptDir,
+        affectedExpected,
+        createDescendantOptionsForTest(affectedFixture.dir),
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        reusable: false,
+        reason: "descendant changed-check plan includes typecheck core",
+      }),
+    );
+  });
+
+  it("invalidates core and extension proof for descendant public contract changes", () => {
+    for (const [commandName, producerPath] of [
+      ["typecheck core", "src/core.ts"],
+      ["typecheck extensions", "extensions/demo/src/index.ts"],
+    ] as const) {
+      const fixture = createStoredProof({
+        commandName,
+        producerContents: `export const value = ${JSON.stringify(commandName)};\n`,
+        producerPath,
+      });
+      writeRepoFile(
+        fixture.dir,
+        "src/plugin-sdk/descendant-contract.ts",
+        "export const api = 2;\n",
+      );
+      commitAll(fixture.dir, "public contract descendant");
+      const expected = createExpectedProof({
+        currentPaths: [producerPath, "src/plugin-sdk/descendant-contract.ts"],
+        fixture,
+      });
+      expect(
+        evaluateReusableReceipt(
+          fixture.receiptDir,
+          expected,
+          createDescendantOptionsForTest(fixture.dir),
+        ),
+        commandName,
+      ).toEqual(expect.objectContaining({ reusable: false }));
+    }
+  });
+
+  it("fails closed for global, owner-input, ancestry, dirty, and skipped descendant candidates", () => {
+    const globalCases = [
+      ["unknown root path", "mystery.root", "descendant changed-check delta requires full proof"],
+      ["lockfile", "pnpm-lock.yaml", "descendant changed-check delta requires full proof"],
+      [
+        "planner input",
+        "scripts/lib/check-proof-reuse.mts",
+        "changed-check evidence owner input changed: scripts/lib/check-proof-reuse.mts",
+      ],
+      [
+        "wrapper input",
+        "scripts/run-tsgo.mts",
+        "changed-check evidence receipt lacks matching native wrapper proof",
+      ],
+      [
+        "config closure",
+        "tsconfig.core.json",
+        "changed-check evidence receipt lacks matching native wrapper proof",
+      ],
+    ] as const;
+    for (const [name, descendantPath, reason] of globalCases) {
+      const fixture = createStoredProof({
+        commandName: "typecheck core",
+        producerContents: `export const core = ${JSON.stringify(name)};\n`,
+        producerPath: "src/core.ts",
+      });
+      writeRepoFile(fixture.dir, descendantPath, `${name}\n`);
+      commitAll(fixture.dir, `${name} descendant`);
+      const expected = createExpectedProof({
+        currentPaths: ["src/core.ts", descendantPath],
+        fixture,
+      });
+      if (descendantPath === "scripts/lib/check-proof-reuse.mts") {
+        expected.requiredInputs.invalidationInputs[descendantPath] = "changed";
+      } else if (descendantPath === "scripts/run-tsgo.mts") {
+        expect(expected.requiredInputs.expectedWrapperProof).not.toBeNull();
+        if (expected.requiredInputs.expectedWrapperProof) {
+          expected.requiredInputs.expectedWrapperProof.wrapperDigest = "changed";
+        }
+      } else if (descendantPath === "tsconfig.core.json") {
+        expect(expected.requiredInputs.expectedWrapperProof).not.toBeNull();
+        if (expected.requiredInputs.expectedWrapperProof) {
+          expected.requiredInputs.expectedWrapperProof.configDigests["tsconfig.core.json"] =
+            "changed";
+        }
+      }
+      expect(
+        evaluateReusableReceipt(
+          fixture.receiptDir,
+          expected,
+          createDescendantOptionsForTest(fixture.dir),
+        ),
+        name,
+      ).toEqual(expect.objectContaining({ reusable: false, reason }));
+    }
+
+    const nonAncestor = createStoredProof({
+      commandName: "typecheck core",
+      producerContents: "export const core = 6;\n",
+      producerPath: "src/core.ts",
+    });
+    git(nonAncestor.dir, ["switch", "-q", "-c", "side", nonAncestor.base]);
+    writeRepoFile(nonAncestor.dir, "docs/side.md", "side\n");
+    commitAll(nonAncestor.dir, "side");
+    const sideHead = git(nonAncestor.dir, ["rev-parse", "HEAD"]);
+    git(nonAncestor.dir, ["switch", "-q", "main"]);
+    const nonAncestorReceipt = cloneJson(nonAncestor.receipt);
+    nonAncestorReceipt.requiredInputs.git.currentHead = sideHead;
+    writeCheckProofReceipt(nonAncestor.receiptDir, nonAncestorReceipt);
+    writeRepoFile(nonAncestor.dir, "docs/current.md", "current\n");
+    commitAll(nonAncestor.dir, "current descendant");
+    expect(
+      evaluateReusableReceipt(
+        nonAncestor.receiptDir,
+        createExpectedProof({
+          currentPaths: ["docs/current.md", "src/core.ts"],
+          fixture: nonAncestor,
+        }),
+        createDescendantOptionsForTest(nonAncestor.dir),
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        reusable: false,
+        reason: "changed-check evidence producer is not an ancestor of current HEAD",
+      }),
+    );
+
+    const unresolved = createStoredProof({
+      commandName: "typecheck core",
+      producerContents: "export const core = 7;\n",
+      producerPath: "src/core.ts",
+    });
+    const unresolvedReceipt = cloneJson(unresolved.receipt);
+    unresolvedReceipt.requiredInputs.git.currentHead = "f".repeat(40);
+    writeCheckProofReceipt(unresolved.receiptDir, unresolvedReceipt);
+    writeRepoFile(unresolved.dir, "docs/current.md", "current\n");
+    commitAll(unresolved.dir, "current descendant");
+    expect(
+      evaluateReusableReceipt(
+        unresolved.receiptDir,
+        createExpectedProof({
+          currentPaths: ["docs/current.md", "src/core.ts"],
+          fixture: unresolved,
+        }),
+        createDescendantOptionsForTest(unresolved.dir),
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        reusable: false,
+        reason: "changed-check evidence ancestry unresolved",
+      }),
+    );
+
+    const dirty = createStoredProof({
+      commandName: "typecheck core",
+      producerContents: "export const core = 8;\n",
+      producerPath: "src/core.ts",
+    });
+    writeRepoFile(dirty.dir, "docs/current.md", "current\n");
+    commitAll(dirty.dir, "current descendant");
+    const dirtyExpected = createExpectedProof({
+      currentPaths: ["docs/current.md", "src/core.ts"],
+      fixture: dirty,
+    });
+    writeRepoFile(dirty.dir, "docs/uncommitted.md", "dirty\n");
+    expect(
+      evaluateReusableReceipt(
+        dirty.receiptDir,
+        dirtyExpected,
+        createDescendantOptionsForTest(dirty.dir),
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        reusable: false,
+        reason: "current worktree has dirty or untracked files",
+      }),
+    );
+
+    const skipped = createStoredProof({
+      commandName: "typecheck core",
+      producerContents: "export const core = 9;\n",
+      producerPath: "src/core.ts",
+    });
+    const skippedReceipt = cloneJson(skipped.receipt);
+    skippedReceipt.status = "skipped";
+    skippedReceipt.ranTool = false;
+    writeCheckProofReceipt(skipped.receiptDir, skippedReceipt);
+    writeRepoFile(skipped.dir, "docs/current.md", "current\n");
+    commitAll(skipped.dir, "current descendant");
+    expect(
+      evaluateReusableReceipt(
+        skipped.receiptDir,
+        createExpectedProof({
+          currentPaths: ["docs/current.md", "src/core.ts"],
+          fixture: skipped,
+        }),
+        createDescendantOptionsForTest(skipped.dir),
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        reusable: false,
+        reason: "changed-check evidence receipt did not pass with ranTool=true",
+      }),
+    );
+  });
+
+  it("never uses tsgo ancestor receipts as tsgolint proof", () => {
+    const fixture = createStoredProof({
+      commandName: "typecheck scripts",
+      producerContents: "export const script = 1;\n",
+      producerPath: "scripts/tool.mts",
+    });
+    writeRepoFile(fixture.dir, "docs/current.md", "current\n");
+    commitAll(fixture.dir, "current descendant");
+    const tsgolintCommand = {
+      name: "lint scripts changed file",
+      bin: "node",
+      args: [
+        "scripts/run-oxlint.mjs",
+        "--tsconfig",
+        "config/tsconfig/oxlint.scripts.json",
+        "scripts/tool.mts",
+      ],
+      env: { PATH: "/usr/bin" },
+    };
+    const tsgolintProof = createWrapperProof({
+      tool: "tsgolint",
+      wrapper: "scripts/run-oxlint.mts",
+      argv: ["--tsconfig", "config/tsconfig/oxlint.scripts.json", "scripts/tool.mts"],
+      cwd: fixture.dir,
+    });
+    const expectedTsgolint = createCheckProofReceipt({
+      command: tsgolintCommand,
+      context: {
+        base: fixture.base,
+        changedPaths: ["docs/current.md", "scripts/tool.mts"],
+        cwd: fixture.dir,
+        head: git(fixture.dir, ["rev-parse", "HEAD"]),
+        planSummary: "scripts, docs",
+      },
+      exitCode: 0,
+      expectedWrapperProof: tsgolintProof,
+      wrapperProof: tsgolintProof,
+    });
+
+    expect(
+      evaluateReusableReceipt(
+        fixture.receiptDir,
+        expectedTsgolint,
+        createDescendantOptionsForTest(fixture.dir),
+      ),
+    ).toEqual(expect.objectContaining({ reusable: false }));
+  });
+
   it("invalidates changed-check evidence receipts on owner facts", () => {
     const command = {
       name: "typecheck scripts",
@@ -1237,7 +1816,11 @@ describe("scripts/changed-lanes", () => {
       [
         "effective command argv",
         (receipt) => {
-          receipt.requiredInputs.command.args = ["scripts/run-tsgo.mjs", "-p", "tsconfig.core.json"];
+          receipt.requiredInputs.command.args = [
+            "scripts/run-tsgo.mjs",
+            "-p",
+            "tsconfig.core.json",
+          ];
         },
       ],
       [
@@ -1305,11 +1888,7 @@ describe("scripts/changed-lanes", () => {
     const wrapperProof = createWrapperProof({
       tool: "tsgolint",
       wrapper: "scripts/run-oxlint.mts",
-      argv: [
-        "--tsconfig",
-        "config/tsconfig/oxlint.scripts.json",
-        "scripts/check-changed.mts",
-      ],
+      argv: ["--tsconfig", "config/tsconfig/oxlint.scripts.json", "scripts/check-changed.mts"],
       cwd: repoRoot,
     });
     const expected = createCheckProofReceipt({
@@ -1381,11 +1960,7 @@ describe("scripts/changed-lanes", () => {
     const tsgolintProof = createWrapperProof({
       tool: "tsgolint",
       wrapper: "scripts/run-oxlint.mts",
-      argv: [
-        "--tsconfig",
-        "config/tsconfig/oxlint.scripts.json",
-        "scripts/check-changed.mts",
-      ],
+      argv: ["--tsconfig", "config/tsconfig/oxlint.scripts.json", "scripts/check-changed.mts"],
       cwd: repoRoot,
     });
     const expectedTsgolint = createCheckProofReceipt({

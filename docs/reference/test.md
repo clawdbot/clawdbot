@@ -92,29 +92,34 @@ Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` sum
 
 ### `check:changed` evidence receipts
 
-`pnpm check:changed` writes changed-check evidence receipts for exact native
-`tsgo` and `tsgolint` targets and reuses them by default. Use `--no-reuse` or
+`pnpm check:changed` writes changed-check evidence receipts for native `tsgo` and
+`tsgolint` targets and reuses them by default. Use `--no-reuse` or
 `--force-fresh` to rerun while still writing new receipts. Receipts live under
 `.artifacts/check-changed-receipts` by default; use `--proof-receipt-dir <dir>`
 for isolated benchmark or CI experiments.
 
-Reuse is deliberately narrow. A receipt is reusable only when it is schema-valid,
-`status=passed`, `exitCode=0`, `ranTool=true`, uses the same command family, and
-matches the current repo identity, base/head, merge-base, Git head/tree, changed
-paths, changed path content states, lane plan, command argv, selected resource
-env, package and lockfile digests, wrapper/helper identity, effective wrapper
-argv, runtime/toolchain facts, and TypeScript/oxlint config closure digests.
-Sparse-checkout skips and no-target lint exits are non-reusable telemetry, not
-proof. A `tsgo` receipt never proves `tsgolint`/oxlint, and incremental
-`tsBuildInfo` files remain only the compiler cache; they are never evidence that
-a changed-check lane passed.
+Reuse is deliberately narrow. Exact-target reuse still requires a schema-valid
+receipt with `status=passed`, `exitCode=0`, `ranTool=true`, the same command
+family, and matching repo identity, base/head, merge-base, Git head/tree,
+changed paths, changed path content states, lane plan, command argv, selected
+resource env, package and lockfile digests, wrapper/helper identity, effective
+wrapper argv, runtime/toolchain facts, and TypeScript/oxlint config closure
+digests.
 
-`--dry-run` prints the exact-target evidence reuse decision beside each
-evidence-capable planned command, including the evidence SHA path when reusable
-and the force-fresh/no-reuse reason when it must rerun. Plans that hit
-`lanes.all`, unresolved refs, unknown root/toolchain changes, sparse missing
-inputs, or any malformed/partial/failed receipt fail closed to the current full
-plan.
+When the exact receipt is absent, `check:changed` may reuse an ancestor receipt
+only if the producer commit is a verified ancestor of the current commit, the
+current worktree is clean, the descendant Git delta classifies through the
+normal changed-lanes planner, and that delta does not select the same native
+proof command. Docs-only and release-metadata-only descendant commits can reuse
+all native proof. Core, extension, public contract, script/tooling, global,
+planner, wrapper, config, package/lock, malformed, partial, skipped, no-target,
+dirty, sparse, non-ancestor, or unresolved cases fail closed to the current plan.
+
+`--dry-run` prints the evidence reuse decision beside each evidence-capable
+planned command, including the evidence SHA path when reusable and the
+force-fresh/no-reuse reason when it must rerun. A `tsgo` receipt never proves
+`tsgolint`/oxlint, and incremental `tsBuildInfo` files remain only the compiler
+cache; they are never evidence that a changed-check lane passed.
 
 A Rust helper was evaluated for this owner boundary and rejected: it would not
 replace or accelerate the native `tsgo`/`tsgolint` work that dominates runtime
