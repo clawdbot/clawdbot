@@ -1932,6 +1932,16 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes Slack enterprise install changes through both owning tests", () => {
+    expectChangedTargets(
+      ["extensions/slack/src/monitor/enterprise-install.ts"],
+      [
+        "extensions/slack/src/monitor/enterprise-install.test.ts",
+        "extensions/slack/src/monitor/provider.auth-test-token.test.ts",
+      ],
+    );
+  });
+
   it("keeps unknown root surfaces cheap by default", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
