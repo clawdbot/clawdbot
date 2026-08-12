@@ -46,7 +46,11 @@ import {
 } from "./get-reply-directive-aliases.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
-import { type ReplyExecOverrides, resolveReplyExecOverrides } from "./get-reply-exec-overrides.js";
+import {
+  type ReplyExecOverrides,
+  resolveConfigExecDefaults,
+  resolveReplyExecOverrides,
+} from "./get-reply-exec-overrides.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import { defaultGroupActivation, resolveGroupRequireMention } from "./groups.js";
 import {
@@ -599,7 +603,12 @@ export async function resolveReplyDirectives(params: {
   const execOverrides = resolveReplyExecOverrides({
     directives,
     sessionEntry: targetSessionEntry,
-    agentExecDefaults: agentEntry?.tools?.exec,
+    // New dashboard/WebChat sessions have no session exec fields; inherit canonical
+    // tools.exec via resolveExecToolConfig so reply policy matches coding tools (#112376).
+    agentExecDefaults: resolveConfigExecDefaults({
+      cfg,
+      agentId,
+    }),
   });
 
   return {

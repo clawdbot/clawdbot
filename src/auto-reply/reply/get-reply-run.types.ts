@@ -37,7 +37,7 @@ export type InternalGetReplyOptions = BaseInternalGetReplyOptions & {
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 export type ExecOverrides = Pick<
   ExecToolDefaults,
-  "host" | "security" | "ask" | "node" | "nodeCwd"
+  "host" | "mode" | "security" | "ask" | "node" | "nodeCwd"
 >;
 
 export type RunPreparedReplyParams = {

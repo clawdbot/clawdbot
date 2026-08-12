@@ -242,6 +242,9 @@ export function buildExecOverridePromptHint(params: {
   }
   const parts = [
     exec?.host ? `host=${exec.host}` : undefined,
+    // Keep mode visible so mode:auto (auto-review) is not mistaken for a plain
+    // allowlist/on-miss pair by the model (#112376).
+    exec?.mode ? `mode=${exec.mode}` : undefined,
     exec?.security ? `security=${exec.security}` : undefined,
     exec?.ask ? `ask=${exec.ask}` : undefined,
     exec?.node ? `node=${exec.node}` : undefined,

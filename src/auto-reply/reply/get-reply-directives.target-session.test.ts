@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   applyInlineDirectiveOverrides: vi.fn(),
   listAgentEntries: vi.fn(),
   resolveFastModeState: vi.fn(),
+  resolveConfigExecDefaults: vi.fn(),
   resolveReplyExecOverrides: vi.fn(),
   shouldHandleTextCommands: vi.fn(() => false),
 }));
@@ -235,6 +236,7 @@ vi.mock("./runtime-policy-session-key.js", () => ({
 }));
 
 vi.mock("./get-reply-exec-overrides.js", () => ({
+  resolveConfigExecDefaults: (...args: unknown[]) => mocks.resolveConfigExecDefaults(...args),
   resolveReplyExecOverrides: (...args: unknown[]) => mocks.resolveReplyExecOverrides(...args),
 }));
 
@@ -268,6 +270,7 @@ describe("resolveReplyDirectives", () => {
     mocks.applyInlineDirectiveOverrides.mockReset();
     mocks.listAgentEntries.mockReset();
     mocks.resolveFastModeState.mockReset();
+    mocks.resolveConfigExecDefaults.mockReset();
     mocks.resolveReplyExecOverrides.mockReset();
     mocks.shouldHandleTextCommands.mockReset().mockReturnValue(false);
 
@@ -295,6 +298,7 @@ describe("resolveReplyDirectives", () => {
       source: "session",
       fastAutoOnSeconds: 60,
     }));
+    mocks.resolveConfigExecDefaults.mockReturnValue(undefined);
     mocks.resolveReplyExecOverrides.mockReturnValue(undefined);
   });
 

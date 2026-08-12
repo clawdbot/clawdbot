@@ -405,6 +405,23 @@ describe("runPreparedReply media-only handling", () => {
     expect(prompt).toContain("Do not assume a prior denial still applies");
   });
 
+  it("includes mode:auto in the current-session exec prompt hint (#112376)", async () => {
+    await runPrepared({
+      execOverrides: {
+        host: "gateway",
+        mode: "auto",
+        security: "allowlist",
+        ask: "on-miss",
+      },
+      resolvedElevatedLevel: "off",
+    });
+
+    const prompt = requireRunReplyAgentCall().followupRun.run.extraSystemPromptStatic;
+    expect(prompt).toContain(
+      "Current session exec defaults: host=gateway mode=auto security=allowlist ask=on-miss.",
+    );
+  });
+
   it("preserves parent session provenance in queued runs", async () => {
     const spawnedBy = "agent:main:telegram:group:parent";
 
