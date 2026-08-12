@@ -28,8 +28,13 @@ function canOwnerAccessTask(task: TaskRecord, identity: TaskOwnerIdentity): bool
   ) {
     return false;
   }
-  if (!identity.callerAgentId) {
-    return true;
+  const callerAgentId =
+    normalizeOptionalString(identity.callerAgentId) ??
+    parseAgentSessionKey(identity.callerOwnerKey)?.agentId;
+  // Bare owner keys can collide across per-agent stores, so an unscoped caller
+  // without a trusted agent identity must fail closed.
+  if (!callerAgentId) {
+    return false;
   }
   let taskAgentId = task.requesterAgentId ?? parseAgentSessionKey(task.ownerKey)?.agentId;
   if (!taskAgentId) {
@@ -44,7 +49,7 @@ function canOwnerAccessTask(task: TaskRecord, identity: TaskOwnerIdentity): bool
   }
   return (
     Boolean(taskAgentId) &&
-    normalizeOptionalString(taskAgentId) === normalizeOptionalString(identity.callerAgentId)
+    normalizeOptionalString(taskAgentId) === normalizeOptionalString(callerAgentId)
   );
 }
 
