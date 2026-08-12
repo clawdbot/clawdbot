@@ -228,7 +228,15 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
     await expect(promise).rejects.toThrow(
       `anthropic/test-model: ${COMPACTION_REMOVED_ERROR_MESSAGE}`,
     );
-    expect(mockedIsFailoverAssistantError).toHaveBeenCalledTimes(2);
+    expect(mockedIsFailoverAssistantError).toHaveBeenCalledTimes(1);
+    expect(mockedIsFailoverAssistantError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "test-model",
+        errorMessage: COMPACTION_REMOVED_ERROR_MESSAGE,
+      }),
+      { provider: "anthropic" },
+    );
     expect(getLastFormattedAssistant()).toMatchObject({
       provider: "anthropic",
       model: "test-model",
@@ -305,7 +313,9 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
       modelFallbacksOverride: ["deepseek/deepseek-chat"],
     });
 
-    expect(mockedIsFailoverAssistantError).toHaveBeenCalledWith(undefined);
+    expect(mockedIsFailoverAssistantError).toHaveBeenCalledWith(undefined, {
+      provider: "deepseek",
+    });
     expect(getLastFormattedAssistant()).toBeUndefined();
     expect(result.meta.finalAssistantVisibleText).toBeUndefined();
     expect(result.meta.agentMeta).toMatchObject({
