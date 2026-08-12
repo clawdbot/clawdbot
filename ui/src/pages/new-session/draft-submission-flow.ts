@@ -392,9 +392,6 @@ export class DraftSubmissionFlow {
     const submittedAt = Date.now();
     this.submittingValue = true;
     this.errorValue = null;
-    // Session creation is usually the long pole, so warm the destination while
-    // the current page continues to show startup progress.
-    void context.preload("chat").catch(() => undefined);
     this.place.browser.close();
     this.callbacks.closeTransientUi();
     this.callbacks.requestUpdate();
@@ -531,7 +528,7 @@ export class DraftSubmissionFlow {
           sessionKey: result.key,
           agentId: submissionAgentId,
         });
-        context.navigate(
+        await context.navigate(
           "chat",
           sessionNavigationTarget({
             context,
@@ -574,7 +571,7 @@ export class DraftSubmissionFlow {
         sessionKey: result.key,
         agentId: submissionAgentId,
       });
-      context.navigate(
+      await context.navigate(
         "chat",
         sessionNavigationTarget({
           context,

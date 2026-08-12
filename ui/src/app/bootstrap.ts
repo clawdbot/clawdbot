@@ -477,12 +477,13 @@ export function bootstrapApplication(
       if (!routerStarted) {
         pendingRouterStartNavigation = { routeId, location, mode: "push" };
       }
-      void navigateWithRouteTransition({
+      return navigateWithRouteTransition({
         document,
         from: router.getState().matches[0]?.routeId,
         to: routeId,
         prefersReducedMotion:
           globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false,
+        prepare: () => router.preloadLocation(location, context),
         navigate: () => router.navigate(routeId, context, { history: "push" }, location),
       }).catch((error: unknown) => {
         console.error("[openclaw] route navigation failed", error);

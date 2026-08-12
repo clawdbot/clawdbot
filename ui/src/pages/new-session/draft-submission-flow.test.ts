@@ -19,7 +19,7 @@ afterEach(() => {
 });
 
 describe("DraftSubmissionFlow", () => {
-  it("hands cloud startup to the application owner and navigates immediately", async () => {
+  it("keeps startup progress active through the navigation handoff", async () => {
     const createResult = vi.fn(async (params: Record<string, unknown>) => ({
       key: String(params.key),
       initialRun: { status: "idle" as const },
@@ -30,7 +30,13 @@ describe("DraftSubmissionFlow", () => {
           // Application-owned startup intentionally outlives this route.
         }),
     );
-    const navigate = vi.fn();
+    let finishNavigation!: () => void;
+    const navigate = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishNavigation = resolve;
+        }),
+    );
     const preload = vi.fn(async () => undefined);
     const setSessionKey = vi.fn();
     const selectAgent = vi.fn();
@@ -188,7 +194,12 @@ describe("DraftSubmissionFlow", () => {
       },
     ]);
 
-    await flow.submit();
+    const submission = flow.submit();
+    await vi.waitFor(() => expect(navigate).toHaveBeenCalledOnce());
+
+    expect(flow.submitting).toBe(true);
+    finishNavigation();
+    await submission;
 
     expect(start).toHaveBeenCalledOnce();
     expect(start.mock.calls[0]?.[0].recovery).toMatchObject({
@@ -202,7 +213,6 @@ describe("DraftSubmissionFlow", () => {
     expect(createResult).toHaveBeenCalledOnce();
     expect(setSessionKey).toHaveBeenCalledWith(start.mock.calls[0]?.[0].recovery.sessionKey);
     expect(selectAgent).toHaveBeenCalledWith("cloud");
-    expect(navigate).toHaveBeenCalledOnce();
-    expect(preload).toHaveBeenCalledWith("chat");
+    expect(preload).not.toHaveBeenCalled();
   });
 });

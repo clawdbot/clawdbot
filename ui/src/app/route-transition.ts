@@ -10,6 +10,7 @@ type RouteTransitionOptions = {
   document: ViewTransitionDocument;
   from: RouteId | undefined;
   navigate: () => Promise<void>;
+  prepare?: () => Promise<void>;
   prefersReducedMotion: boolean;
   to: RouteId;
 };
@@ -24,14 +25,22 @@ async function navigateAndRender(document: ViewTransitionDocument, navigate: () 
   await outlet?.updateComplete;
 }
 
-export function navigateWithRouteTransition(options: RouteTransitionOptions): Promise<void> {
-  const { document, from, navigate, prefersReducedMotion, to } = options;
+export async function navigateWithRouteTransition(options: RouteTransitionOptions): Promise<void> {
+  const { document, from, navigate, prepare, prefersReducedMotion, to } = options;
   if (
     from !== "new-session" ||
     to !== "chat" ||
     prefersReducedMotion ||
     typeof document.startViewTransition !== "function"
   ) {
+    return navigate();
+  }
+
+  try {
+    await prepare?.();
+  } catch {
+    // Preparation is an enhancement. Preserve direct navigation so its normal
+    // route error handling remains authoritative when preloading fails.
     return navigate();
   }
 
