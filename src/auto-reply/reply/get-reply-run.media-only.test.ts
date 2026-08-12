@@ -3658,9 +3658,9 @@ describe("runPreparedReply media-only handling", () => {
     expect(prompt).toContain("Slack reaction added: :eyes:");
     expect(prompt).toContain("Slack message in #claw-test from Alice");
     expect(peekSystemEventEntries("agent:main:slack:channel:c123")).toStrictEqual([]);
-    expect(
-      peekSystemEventEntries("agent:main:slack:channel:c123:thread:123.456"),
-    ).toStrictEqual([]);
+    expect(peekSystemEventEntries("agent:main:slack:channel:c123:thread:123.456")).toStrictEqual(
+      [],
+    );
   });
 
   it("keeps sender ownership when queued system events are prepended", async () => {
