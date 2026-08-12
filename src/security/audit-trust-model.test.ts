@@ -21,6 +21,51 @@ function requireMultiUserHeuristicFinding(findings: ReturnType<typeof audit>) {
 }
 
 describe("security audit trust model findings", () => {
+  it.each([
+    {
+      name: "account override",
+      cfg: {
+        channels: {
+          discord: { dmPolicy: "allowlist", accounts: { work: { dmPolicy: "open" } } },
+        },
+      } as OpenClawConfig,
+      path: "channels.discord.accounts.work.dmPolicy",
+    },
+    {
+      name: "legacy DM policy",
+      cfg: { channels: { discord: { dm: { policy: "open" } } } } as unknown as OpenClawConfig,
+      path: "channels.discord.dm.policy",
+    },
+  ])("shares configured open-inbound resolution for $name", ({ cfg, path }) => {
+    const exposure = collectExposureMatrixFindings(cfg).find(
+      (finding) => finding.checkId === "security.exposure.open_groups_with_elevated",
+    );
+    const multiUser = collectLikelyMultiUserSetupFindings(cfg).find(
+      (finding) => finding.checkId === "security.trust_model.multi_user_heuristic",
+    );
+
+    expect(exposure?.detail).toContain(path);
+    expect(multiUser?.detail).toContain(`${path}="open"`);
+  });
+
+  it("applies canonical DM policy precedence to every trust-model audit", () => {
+    const cfg = {
+      channels: { discord: { dmPolicy: "allowlist", dm: { policy: "open" } } },
+    } as unknown as OpenClawConfig;
+
+    expect(collectExposureMatrixFindings(cfg)).toEqual([]);
+    expect(collectLikelyMultiUserSetupFindings(cfg)).toEqual([]);
+  });
+
+  it("ignores model routing records that resemble inbound policy", () => {
+    const cfg = {
+      channels: { modelByChannel: { discord: { groupPolicy: "open" } } },
+    } as unknown as OpenClawConfig;
+
+    expect(collectExposureMatrixFindings(cfg)).toEqual([]);
+    expect(collectLikelyMultiUserSetupFindings(cfg)).toEqual([]);
+  });
+
   it("evaluates trust-model exposure findings", () => {
     const cases = [
       {

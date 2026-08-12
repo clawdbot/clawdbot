@@ -30,6 +30,7 @@ describe("security audit attack surface summary", () => {
     expect(summary.detail).toBe(
       [
         "groups: open=1, allowlist=1",
+        "direct messages: open=0",
         "tools.elevated: enabled",
         "hooks.webhooks: enabled",
         "hooks.internal: disabled",
@@ -37,6 +38,31 @@ describe("security audit attack surface summary", () => {
         "trust model: personal assistant (one trusted operator boundary), not hostile multi-tenant on one shared gateway. For multiple users or organizations, run one isolated Gateway cell per tenant: https://docs.openclaw.ai/gateway/multi-tenant-hosting",
       ].join("\n"),
     );
+  });
+
+  it.each([
+    {
+      name: "account group override",
+      cfg: {
+        channels: {
+          discord: {
+            groupPolicy: "allowlist",
+            accounts: { work: { groupPolicy: "open" } },
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["groups: open=1, allowlist=1", "direct messages: open=0"],
+    },
+    {
+      name: "legacy DM policy",
+      cfg: { channels: { discord: { dm: { policy: "open" } } } } as OpenClawConfig,
+      expected: ["groups: open=0, allowlist=0", "direct messages: open=1"],
+    },
+  ])("counts configured open inbound policy: $name", ({ cfg, expected }) => {
+    const summary = requireAttackSurfaceSummary(collectAttackSurfaceSummaryFindings(cfg));
+    for (const detail of expected) {
+      expect(summary.detail).toContain(detail);
+    }
   });
 
   it.each([

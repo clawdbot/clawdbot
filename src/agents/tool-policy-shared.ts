@@ -29,7 +29,7 @@ type ToolAllowlistWithIntersection = string[] & {
 };
 
 /** Core tool groups exposed to allow/deny policy config. */
-export const TOOL_GROUPS: Record<string, string[]> = { ...CORE_TOOL_GROUPS };
+const TOOL_GROUPS: Record<string, string[]> = { ...CORE_TOOL_GROUPS };
 
 /**
  * Preserves independent allowlists until a concrete tool surface can evaluate

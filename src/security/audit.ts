@@ -50,6 +50,11 @@ import {
   type McporterRegistryReadOutcome,
   type McporterRegistryRejectReason,
 } from "./audit-mcporter-registry.js";
+import {
+  listConfiguredOpenInboundPolicyPaths,
+  resolveConfiguredChannelDmAllowFromModes,
+  type ConfiguredOpenInboundPolicyOptions,
+} from "./audit-open-inbound.js";
 import type {
   SecurityAuditFinding,
   SecurityAuditReport,
@@ -630,7 +635,10 @@ function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   return findings;
 }
 
-function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+function collectExecRuntimeFindings(
+  cfg: OpenClawConfig,
+  openInboundOptions?: ConfiguredOpenInboundPolicyOptions,
+): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const globalExecHost = cfg.tools?.exec?.host;
   const globalStrictInlineEval = cfg.tools?.exec?.strictInlineEval === true;
@@ -716,7 +724,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
   );
   const fullExecScopes = effectiveExecScopes.filter((entry) => entry.security === "full");
   const execEnabledScopes = effectiveExecScopes.filter((entry) => entry.security !== "deny");
-  const openExecSurfacePaths = collectOpenExecSurfacePaths(cfg);
+  const openExecSurfacePaths = listConfiguredOpenInboundPolicyPaths(cfg, openInboundOptions);
 
   if (fullExecScopes.length > 0) {
     findings.push({
@@ -1158,41 +1166,6 @@ async function collectAgentSkillMcpBoundaryFindings(params: {
   return findings;
 }
 
-function collectOpenExecSurfacePaths(cfg: OpenClawConfig): string[] {
-  const channels = asNullableRecord(cfg.channels);
-  if (!channels) {
-    return [];
-  }
-  const hits = new Set<string>();
-  const seen = new WeakSet<object>();
-  const visit = (value: unknown, scope: string) => {
-    const record = asNullableRecord(value);
-    if (!record || seen.has(record)) {
-      return;
-    }
-    seen.add(record);
-    if (record.groupPolicy === "open") {
-      hits.add(`${scope}.groupPolicy`);
-    }
-    if (record.dmPolicy === "open") {
-      hits.add(`${scope}.dmPolicy`);
-    }
-    for (const [key, nested] of Object.entries(record)) {
-      if (key === "groups" || key === "accounts" || key === "dms") {
-        visit(nested, `${scope}.${key}`);
-        continue;
-      }
-      if (asNullableRecord(nested)) {
-        visit(nested, `${scope}.${key}`);
-      }
-    }
-  };
-  for (const [channelId, channelValue] of Object.entries(channels)) {
-    visit(channelValue, `channels.${channelId}`);
-  }
-  return Array.from(hits).toSorted();
-}
-
 function collectAutoAllowSkillsHits(approvals: ExecApprovalsFile): string[] {
   const hits: string[] = [];
   if (approvals.defaults?.autoAllowSkills === true) {
@@ -1343,8 +1316,14 @@ export async function runSecurityAuditCore(
   const context = await createAuditExecutionContext(opts);
   const { cfg, env, platform, stateDir, configPath } = context;
   const auditNonDeep = await loadAuditNonDeepModule();
+  const openInboundOptions = {
+    dmAllowFromModes: resolveConfiguredChannelDmAllowFromModes({
+      env: { ...env, OPENCLAW_STATE_DIR: stateDir },
+      workspaceDir: context.workspaceDir,
+    }),
+  } satisfies ConfiguredOpenInboundPolicyOptions;
 
-  findings.push(...auditNonDeep.collectAttackSurfaceSummaryFindings(cfg));
+  findings.push(...auditNonDeep.collectAttackSurfaceSummaryFindings(cfg, openInboundOptions));
   findings.push(...collectAgentRosterFindings(context.sourceConfig));
   findings.push(...auditNonDeep.collectSyncedFolderFindings({ stateDir, configPath }));
 
@@ -1356,7 +1335,7 @@ export async function runSecurityAuditCore(
   findings.push(...collectControlUiDeviceAuthMigrationFindings({ env, stateDir }));
   findings.push(...(await collectPluginSecurityAuditFindings(context)));
   findings.push(...collectElevatedFindings(cfg));
-  findings.push(...collectExecRuntimeFindings(cfg));
+  findings.push(...collectExecRuntimeFindings(cfg, openInboundOptions));
   findings.push(...(await collectAgentSkillMcpBoundaryFindings({ cfg, stateDir })));
   const hooksGatewayAuthCfg = shouldMaterializeHooksGatewayAuthRefs(cfg)
     ? await materializeAuditGatewayAuthRefs({
@@ -1383,8 +1362,8 @@ export async function runSecurityAuditCore(
   findings.push(...auditNonDeep.collectSecretsInConfigFindings(cfg));
   findings.push(...auditNonDeep.collectModelHygieneFindings(cfg));
   findings.push(...auditNonDeep.collectSmallModelRiskFindings({ cfg, env }));
-  findings.push(...auditNonDeep.collectExposureMatrixFindings(cfg));
-  findings.push(...auditNonDeep.collectLikelyMultiUserSetupFindings(cfg));
+  findings.push(...auditNonDeep.collectExposureMatrixFindings(cfg, openInboundOptions));
+  findings.push(...auditNonDeep.collectLikelyMultiUserSetupFindings(cfg, openInboundOptions));
 
   if (context.includeFilesystem) {
     findings.push(

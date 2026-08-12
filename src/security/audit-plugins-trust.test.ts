@@ -45,9 +45,11 @@ const mockPluginRegistryIds = vi.hoisted(() => [
   "brave",
   "discord",
   "google",
+  "legacy-plugin",
   "lmstudio",
   "memory-core",
   "ollama",
+  "some-plugin",
 ]);
 
 const readInstalledPackageVersionMock = vi.hoisted(() =>
@@ -117,7 +119,11 @@ vi.mock("../plugins/plugin-registry.js", () => ({
   createPluginRegistryIdNormalizer: () => (id: string) => id,
   loadPluginRegistrySnapshot: () => ({
     diagnostics: [],
-    plugins: mockPluginRegistryIds.map((pluginId) => ({ pluginId })),
+    plugins: mockPluginRegistryIds.map((pluginId) =>
+      pluginId === "some-plugin"
+        ? { pluginId, contributions: { contracts: { tools: ["some_plugin_tool"] } } }
+        : { pluginId },
+    ),
   }),
 }));
 
@@ -143,22 +149,43 @@ vi.mock("../agents/sandbox/config.js", () => ({
   resolveSandboxConfigForAgent: () => ({ mode: "off" }),
 }));
 
-vi.mock("../agents/sandbox/tool-policy.js", () => ({
-  resolveSandboxToolPolicyForAgent: () => undefined,
+vi.mock("../agents/agent-tools.policy.js", () => ({
+  resolveConfiguredToolPolicies: ({
+    cfg,
+    agentTools,
+  }: {
+    cfg: OpenClawConfig;
+    agentTools?: OpenClawConfig["tools"];
+  }) => {
+    const profile = agentTools?.profile ?? cfg.tools?.profile;
+    const alsoAllow = agentTools?.alsoAllow ?? cfg.tools?.alsoAllow ?? [];
+    const profileAllow =
+      profile === "coding"
+        ? ["read", "write", "edit", "apply_patch", "exec", "process"]
+        : profile === "minimal"
+          ? ["session_status"]
+          : undefined;
+    const policies = [
+      profileAllow ? { allow: [...profileAllow, ...alsoAllow] } : undefined,
+      cfg.tools?.allow || cfg.tools?.deny
+        ? { allow: cfg.tools.allow, deny: cfg.tools.deny }
+        : undefined,
+      agentTools?.allow || agentTools?.deny
+        ? { allow: agentTools.allow, deny: agentTools.deny }
+        : undefined,
+    ];
+    return policies.filter(Boolean);
+  },
 }));
 
 vi.mock("../agents/tool-policy-match.js", () => ({
-  isToolAllowedByPolicies: (_tool: string, policies: unknown[]) =>
-    policies.every((policy) => policy == null),
-}));
-
-vi.mock("../agents/tool-policy.js", () => ({
-  resolveToolProfilePolicy: (profile: unknown) =>
-    profile === "coding" || profile === "minimal" ? {} : undefined,
-}));
-
-vi.mock("../agents/sandbox-tool-policy.js", () => ({
-  pickSandboxToolPolicy: () => undefined,
+  isToolAllowedByPolicies: (tool: string, policies: Array<{ allow?: string[]; deny?: string[] }>) =>
+    policies.every((policy) => {
+      if (policy.deny?.includes(tool) || policy.deny?.includes("*")) {
+        return false;
+      }
+      return !policy.allow?.length || policy.allow.includes(tool) || policy.allow.includes("*");
+    }),
 }));
 
 describe("security audit install metadata findings", () => {
@@ -503,6 +530,10 @@ describe("security audit extension tool reachability findings", () => {
       recursive: true,
       mode: 0o700,
     });
+    await fs.mkdir(path.join(sharedExtensionsStateDir, "extensions", "legacy-plugin"), {
+      recursive: true,
+      mode: 0o700,
+    });
   });
 
   afterAll(async () => {
@@ -568,6 +599,95 @@ describe("security audit extension tool reachability findings", () => {
               (finding) => finding.checkId === "plugins.tools_reachable_permissive_policy",
             ),
           ).toBe(false);
+        },
+      },
+      {
+        name: "flags restrictive profiles widened with the plugin group",
+        cfg: {
+          plugins: { allow: ["some-plugin"] },
+          tools: { profile: "coding", alsoAllow: ["group:plugins"] },
+        } satisfies OpenClawConfig,
+        assert: (findings: Awaited<ReturnType<typeof runSharedExtensionsAudit>>) => {
+          expect(
+            findings.some(
+              (finding) => finding.checkId === "plugins.tools_reachable_permissive_policy",
+            ),
+          ).toBe(true);
+        },
+      },
+      {
+        name: "flags an agent profile widened with the plugin group",
+        cfg: {
+          plugins: { allow: ["some-plugin"] },
+          tools: { profile: "coding" },
+          agents: {
+            entries: {
+              ops: { tools: { profile: "coding", alsoAllow: ["group:plugins"] } },
+            },
+          },
+        } satisfies OpenClawConfig,
+        assert: (findings: Awaited<ReturnType<typeof runSharedExtensionsAudit>>) => {
+          const finding = findings.find(
+            (entry) => entry.checkId === "plugins.tools_reachable_permissive_policy",
+          );
+          expect(finding?.detail).toContain("- agents.entries.ops");
+          expect(finding?.detail).not.toContain("- default");
+        },
+      },
+      {
+        name: "flags an exact declared plugin tool allowlist",
+        cfg: {
+          plugins: { allow: ["some-plugin"] },
+          tools: { allow: ["some_plugin_tool"] },
+        } satisfies OpenClawConfig,
+        assert: (findings: Awaited<ReturnType<typeof runSharedExtensionsAudit>>) => {
+          expect(
+            findings.some(
+              (finding) => finding.checkId === "plugins.tools_reachable_permissive_policy",
+            ),
+          ).toBe(true);
+        },
+      },
+      {
+        name: "honors plugin group denies after runtime-equivalent expansion",
+        cfg: {
+          plugins: { allow: ["some-plugin"] },
+          tools: { deny: ["group:plugins"] },
+        } satisfies OpenClawConfig,
+        assert: (findings: Awaited<ReturnType<typeof runSharedExtensionsAudit>>) => {
+          expect(
+            findings.some(
+              (finding) => finding.checkId === "plugins.tools_reachable_permissive_policy",
+            ),
+          ).toBe(false);
+        },
+      },
+      {
+        name: "honors plugin id denies after runtime-equivalent expansion",
+        cfg: {
+          plugins: { allow: ["some-plugin"] },
+          tools: { deny: ["some-plugin"] },
+        } satisfies OpenClawConfig,
+        assert: (findings: Awaited<ReturnType<typeof runSharedExtensionsAudit>>) => {
+          expect(
+            findings.some(
+              (finding) => finding.checkId === "plugins.tools_reachable_permissive_policy",
+            ),
+          ).toBe(false);
+        },
+      },
+      {
+        name: "retains conservative probes for mixed legacy tool metadata",
+        cfg: {
+          plugins: { allow: ["some-plugin", "legacy-plugin"] },
+          tools: { deny: ["group:plugins"] },
+        } satisfies OpenClawConfig,
+        assert: (findings: Awaited<ReturnType<typeof runSharedExtensionsAudit>>) => {
+          expect(
+            findings.some(
+              (finding) => finding.checkId === "plugins.tools_reachable_permissive_policy",
+            ),
+          ).toBe(true);
         },
       },
       {

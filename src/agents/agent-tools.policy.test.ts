@@ -12,6 +12,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import {
   filterToolsByPolicy,
+  resolveConfiguredToolPolicies,
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
   resolveInheritedToolPolicyForSession,
@@ -19,7 +20,7 @@ import {
   resolveTrustedGroupId,
 } from "./agent-tools.policy.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
-import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import { isToolAllowedByPolicies, isToolAllowedByPolicyName } from "./tool-policy-match.js";
 
 vi.mock("../channels/plugins/session-conversation.js", () => ({
   resolveSessionConversation: ({ rawId }: { rawId: string }) => ({
@@ -65,6 +66,28 @@ function createSessionStorePath(prefix: string, agentId = "main"): string {
 }
 
 describe("agent-tools.policy", () => {
+  it.each([
+    {
+      name: "global",
+      cfg: {
+        tools: { profile: "coding", alsoAllow: ["group:plugins"] },
+      } satisfies OpenClawConfig,
+      agentTools: undefined,
+    },
+    {
+      name: "agent",
+      cfg: { tools: { profile: "coding" } } satisfies OpenClawConfig,
+      agentTools: { profile: "coding" as const, alsoAllow: ["group:plugins"] },
+    },
+  ])("merges $name profile alsoAllow in configured policy resolution", ({ cfg, agentTools }) => {
+    const policies = resolveConfiguredToolPolicies({
+      cfg,
+      agentTools,
+    });
+
+    expect(isToolAllowedByPolicies("group:plugins", policies)).toBe(true);
+  });
+
   it("treats * in allow as allow-all", () => {
     const tools = [createStubTool("read"), createStubTool("exec")];
     const filtered = filterToolsByPolicy(tools, { allow: ["*"] });

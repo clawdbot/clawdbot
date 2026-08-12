@@ -218,6 +218,48 @@ describe("security audit exec surface findings", () => {
     expect(hasFinding("security.exposure.open_channels_with_exec", "warn", findings)).toBe(true);
   });
 
+  it.each([
+    {
+      name: "account override",
+      channels: {
+        discord: { groupPolicy: "allowlist", accounts: { work: { groupPolicy: "open" } } },
+      },
+      path: "channels.discord.accounts.work.groupPolicy",
+    },
+    {
+      name: "legacy DM policy",
+      channels: { discord: { dm: { policy: "open" } } },
+      path: "channels.discord.dm.policy",
+    },
+    {
+      name: "nested-only DM policy",
+      channels: {
+        matrix: {
+          accounts: { work: { dmPolicy: "allowlist", dm: { policy: "open" } } },
+        },
+      },
+      path: "channels.matrix.accounts.work.dm.policy",
+    },
+    {
+      name: "account named dm",
+      channels: { discord: { accounts: { dm: { groupPolicy: "open" } } } },
+      path: "channels.discord.accounts.dm.groupPolicy",
+    },
+  ])(
+    "uses canonical open-inbound resolution for $name",
+    async ({ channels, path: expectedPath }) => {
+      const findings = await collectSecurityAuditFindings({
+        channels,
+        tools: { exec: { mode: "allowlist", host: "gateway" } },
+      } as unknown as OpenClawConfig);
+      const finding = findings.find(
+        (entry) => entry.checkId === "security.exposure.open_channels_with_exec",
+      );
+
+      expect(finding?.detail).toContain(expectedPath);
+    },
+  );
+
   it("escalates open channel exec exposure when full exec is configured", async () => {
     const findings = await collectSecurityAuditFindings({
       channels: {

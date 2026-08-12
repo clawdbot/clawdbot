@@ -3,11 +3,9 @@
  * Confirms plugin group expansion and unknown allowlist reporting.
  */
 import { describe, expect, it } from "vitest";
-import {
-  analyzeAllowlistByToolType,
-  buildPluginToolGroups,
-  type PluginToolGroups,
-} from "./tool-policy.js";
+import { analyzeAllowlistByToolType, buildPluginToolGroups } from "./tool-policy.js";
+
+type PluginToolGroups = ReturnType<typeof buildPluginToolGroups>;
 
 const pluginGroups: PluginToolGroups = {
   all: ["lobster", "workflow_tool"],

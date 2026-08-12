@@ -20,9 +20,7 @@ export {
   normalizeToolPolicyName,
   readToolAllowlistIntersection,
   resolveToolProfilePolicy,
-  TOOL_GROUPS,
 } from "./tool-policy-shared.js";
-export type { ToolProfileId } from "./tool-policy-shared.js";
 
 /** Tool allow/deny policy shape accepted by agent and sandbox config. */
 export type ToolPolicyLike = {
@@ -32,7 +30,7 @@ export type ToolPolicyLike = {
 };
 
 /** Plugin-owned tool group expansion state. */
-export type PluginToolGroups = {
+type PluginToolGroups = {
   all: string[];
   byPlugin: Map<string, string[]>;
 };

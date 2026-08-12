@@ -81,6 +81,21 @@ describe("tool-policy-pipeline", () => {
     expect(names).toEqual(["plugin_tool"]);
   });
 
+  test("provider policy cannot re-add a plugin tool removed by the base profile", () => {
+    const filtered = applyToolPolicyPipeline({
+      tools: asPolicyTools([{ name: "exec" }, { name: "plugin_tool" }]),
+      toolMeta: (tool) => (tool.name === "plugin_tool" ? { pluginId: "some-plugin" } : undefined),
+      warn: () => {},
+      steps: buildDefaultToolPolicyPipelineSteps({
+        profile: "coding",
+        profilePolicy: resolveToolProfilePolicy("coding"),
+        globalProviderPolicy: { allow: ["group:plugins"] },
+      }),
+    });
+
+    expect(filtered.map((tool) => tool.name)).toEqual([]);
+  });
+
   test.each([
     { expected: ["exec"], policy: { deny: ["canvas"] } },
     { expected: ["canvas", "show_widget"], policy: { allow: ["canvas"] } },
