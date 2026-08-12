@@ -429,6 +429,7 @@ const subagentSweeper = createSubagentRegistrySweeper({
   runs: subagentRuns,
   resumedRuns,
   persist: persistSubagentRuns,
+  persistOrThrow: persistSubagentRunsOrThrow,
   clearPendingLifecycleError,
   clearPendingLifecycleTimeout,
   sweepPendingLifecycle: (now) => pendingLifecycle.sweepExpired(now),

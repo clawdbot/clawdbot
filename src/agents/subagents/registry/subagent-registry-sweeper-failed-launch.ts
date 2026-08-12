@@ -72,6 +72,7 @@ export async function reconcileFailedLaunchCleanupForSweep(params: {
   entry: SubagentRunRecord;
   runs: Map<string, SubagentRunRecord>;
   now: number;
+  persistOrThrow: (runId: string) => void;
   deleteSession: (
     childSessionKey: string,
     identity: { sessionId: string; lifecycleRevision: string },
@@ -136,6 +137,17 @@ export async function reconcileFailedLaunchCleanupForSweep(params: {
       if (!sessionDeleted) {
         includeSessionEffects = false;
         entry.execution = { ...entry.execution, suppressSessionEffects: true };
+      }
+      const previousOutcome = entry.launchCleanupSessionOutcome;
+      entry.launchCleanupSessionOutcome = deletion;
+      try {
+        // Session deletion is irreversible. Persist its exact result before any
+        // fallible artifact cleanup so a retry cannot reinterpret a missing session.
+        params.persistOrThrow(runId);
+      } catch (error) {
+        entry.launchCleanupSessionOutcome = previousOutcome;
+        params.warn("failed to persist launch cleanup session outcome", { runId, error });
+        return "pending";
       }
     }
   }

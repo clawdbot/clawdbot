@@ -1,9 +1,6 @@
-import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
-import { retireLegacySubagentAttachmentCleanup } from "./openclaw-state-db-legacy-attachment-cleanup.js";
 import {
   repairLegacySubagentExecutionPayloads,
   repairLegacySubagentRetainedResults,
@@ -17,91 +14,6 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
     cleanup();
-  });
-});
-
-const ATTACHMENT_ID = "12345678-1234-4123-8123-123456789abc";
-
-describe("retireLegacySubagentAttachmentCleanup", () => {
-  it("warns operators and retires only shipped unconfined generated attachment receipts", async () => {
-    const db = new DatabaseSync(":memory:");
-    db.exec(`
-      CREATE TABLE subagent_runs (
-        run_id TEXT PRIMARY KEY,
-        payload_json TEXT NOT NULL
-      ) STRICT;
-    `);
-    const workspaceDir = path.resolve("/tmp/openclaw-legacy-workspace");
-    const legacyRootDir = path.join(workspaceDir, ".openclaw", "attachments");
-    const insert = db.prepare("INSERT INTO subagent_runs (run_id, payload_json) VALUES (?, ?)");
-    insert.run(
-      "legacy",
-      JSON.stringify({
-        attachmentsRootDir: legacyRootDir,
-        attachmentsDir: path.join(legacyRootDir, ATTACHMENT_ID),
-        retainAttachmentsOnKeep: true,
-      }),
-    );
-    insert.run(
-      "collector-cleanup-pending",
-      JSON.stringify({
-        collectorLaunchCleanupPending: true,
-        execution: { status: "terminal" },
-      }),
-    );
-    insert.run(
-      "sandbox-owned",
-      JSON.stringify({
-        attachmentsRootDir: legacyRootDir,
-        attachmentsDir: path.join(legacyRootDir, ATTACHMENT_ID),
-        attachmentsSandboxSessionKey: "agent:main:main",
-      }),
-    );
-    insert.run(
-      "unexpected",
-      JSON.stringify({
-        attachmentsRootDir: legacyRootDir,
-        attachmentsDir: path.join(legacyRootDir, "not-generated"),
-      }),
-    );
-
-    const logCapture = createWarnLogCapture("legacy-subagent-attachments");
-    let firstPass: Array<Record<string, unknown>>;
-    let secondPass: Array<Record<string, unknown>>;
-    try {
-      retireLegacySubagentAttachmentCleanup(db);
-      firstPass = db
-        .prepare("SELECT run_id, payload_json FROM subagent_runs ORDER BY run_id")
-        .all() as Array<Record<string, unknown>>;
-      retireLegacySubagentAttachmentCleanup(db);
-      secondPass = db
-        .prepare("SELECT run_id, payload_json FROM subagent_runs ORDER BY run_id")
-        .all() as Array<Record<string, unknown>>;
-      expect(await logCapture.findText(`attachments may remain at ${legacyRootDir}`)).toBeDefined();
-      expect(await logCapture.findText("inspect and remove them manually")).toBeDefined();
-    } finally {
-      logCapture.cleanup();
-    }
-
-    expect(secondPass).toEqual(firstPass);
-    const payloads = Object.fromEntries(
-      firstPass.map((row) => [
-        String(row.run_id),
-        JSON.parse(String(row.payload_json)) as Record<string, unknown>,
-      ]),
-    );
-    expect(payloads.legacy).not.toHaveProperty("attachmentsDir");
-    expect(payloads.legacy).not.toHaveProperty("attachmentsRootDir");
-    expect(payloads.legacy).not.toHaveProperty("retainAttachmentsOnKeep");
-    expect(payloads["collector-cleanup-pending"]).toMatchObject({
-      launchCleanupPending: true,
-      execution: { status: "terminal", suppressSessionEffects: true },
-    });
-    expect(payloads["collector-cleanup-pending"]).not.toHaveProperty(
-      "collectorLaunchCleanupPending",
-    );
-    expect(payloads["sandbox-owned"]?.attachmentsRootDir).toBe(legacyRootDir);
-    expect(payloads.unexpected?.attachmentsRootDir).toBe(legacyRootDir);
   });
 });
 

@@ -89,6 +89,7 @@ function createHarness(runtime: { current?: GatewayRecoveryRuntime }) {
     runs,
     resumedRuns: new Set(),
     persist: vi.fn(),
+    persistOrThrow: vi.fn(),
     clearPendingLifecycleError: vi.fn(),
     clearPendingLifecycleTimeout: vi.fn(),
     sweepPendingLifecycle: vi.fn(),

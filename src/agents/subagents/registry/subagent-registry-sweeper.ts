@@ -55,6 +55,7 @@ export function createSubagentRegistrySweeper(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
   persist: (...runIds: string[]) => void;
+  persistOrThrow: (runId: string) => void;
   clearPendingLifecycleError: (runId: string) => void;
   clearPendingLifecycleTimeout: (runId: string) => void;
   sweepPendingLifecycle: (now: number) => void;
@@ -444,6 +445,7 @@ export function createSubagentRegistrySweeper(params: {
           entry,
           runs,
           now,
+          persistOrThrow: params.persistOrThrow,
           deleteSession,
           settleFailedLaunch: params.settleFailedQueuedSubagentLaunch,
           cleanupResources: params.cleanupFailedLaunchResources,

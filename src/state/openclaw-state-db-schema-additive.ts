@@ -2,7 +2,6 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS } from "./openclaw-state-db-additive-columns.js";
-import { retireLegacySubagentAttachmentCleanup } from "./openclaw-state-db-legacy-attachment-cleanup.js";
 import {
   backfillAcpReplayEstimatedBytes,
   backfillCronJobsFromJobJson,
@@ -420,7 +419,6 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "subagent_runs", "swarm_schema_error TEXT");
   ensureColumn(db, "subagent_runs", "swarm_usage_json TEXT");
   repairLegacySubagentSuspensionReasons(db);
-  retireLegacySubagentAttachmentCleanup(db);
   repairLegacySubagentExecutionPayloads(db);
   repairLegacySubagentRetainedResults(db);
   ensureColumn(db, "worker_environments", "bootstrap_bundle_hash TEXT");

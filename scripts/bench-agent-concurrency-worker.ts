@@ -610,6 +610,7 @@ async function runSweepSample(childCount: number): Promise<Sample> {
     runs,
     resumedRuns: new Set(),
     persist: () => {},
+    persistOrThrow: () => {},
     clearPendingLifecycleError: () => {},
     clearPendingLifecycleTimeout: () => {},
     sweepPendingLifecycle: () => {},
