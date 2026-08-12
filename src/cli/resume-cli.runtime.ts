@@ -1,6 +1,7 @@
 // Resolves recent Gateway sessions and attaches the existing TUI to the selected key.
 import { cancel, isCancel } from "@clack/prompts";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ErrorShape } from "../../packages/gateway-protocol/src/frame-guards.js";
 import { selectStyled } from "../../packages/terminal-core/src/prompt-select-styled.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -22,6 +23,81 @@ const RESUME_HANDOFF_MISSING =
   "This session is no longer available. Copy a fresh command from the Control UI.";
 const RESUME_HANDOFF_UNRESOLVED =
   "Could not resolve the session handoff. Copy a fresh command from the Control UI.";
+
+type ParsedHandoffSessionResolveResult =
+  | { kind: "success"; key: string }
+  | { kind: "missing" }
+  | { kind: "ambiguous"; candidates: Array<{ key: string; displayName?: string }> }
+  | { kind: "error"; error: ErrorShape }
+  | { kind: "malformed" };
+
+function hasExactKeys(
+  value: unknown,
+  requiredKeys: readonly string[],
+  optionalKeys: readonly string[] = [],
+): value is Record<string, unknown> {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const keys = Object.keys(value);
+  return (
+    requiredKeys.every((key) => Object.hasOwn(value, key)) &&
+    keys.every((key) => requiredKeys.includes(key) || optionalKeys.includes(key))
+  );
+}
+
+function isHandoffSessionCandidate(value: unknown): value is { key: string; displayName?: string } {
+  return (
+    hasExactKeys(value, ["key"], ["displayName"]) &&
+    typeof value.key === "string" &&
+    (!Object.hasOwn(value, "displayName") || typeof value.displayName === "string")
+  );
+}
+
+function isHandoffErrorShape(value: unknown): value is ErrorShape {
+  if (
+    !hasExactKeys(value, ["code", "message"], ["details", "retryable", "retryAfterMs"]) ||
+    typeof value.code !== "string" ||
+    value.code.length === 0 ||
+    typeof value.message !== "string" ||
+    value.message.length === 0 ||
+    (Object.hasOwn(value, "retryable") && typeof value.retryable !== "boolean")
+  ) {
+    return false;
+  }
+  return (
+    !Object.hasOwn(value, "retryAfterMs") ||
+    (typeof value.retryAfterMs === "number" &&
+      Number.isInteger(value.retryAfterMs) &&
+      value.retryAfterMs >= 0)
+  );
+}
+
+function parseHandoffSessionResolveResult(value: unknown): ParsedHandoffSessionResolveResult {
+  if (hasExactKeys(value, ["ok", "key"]) && value.ok === true && typeof value.key === "string") {
+    return { kind: "success", key: value.key };
+  }
+  if (hasExactKeys(value, ["ok", "missing"]) && value.ok === true && value.missing === true) {
+    return { kind: "missing" };
+  }
+  if (
+    hasExactKeys(value, ["ok", "ambiguous", "candidates"]) &&
+    value.ok === true &&
+    value.ambiguous === true &&
+    Array.isArray(value.candidates) &&
+    value.candidates.every(isHandoffSessionCandidate)
+  ) {
+    return { kind: "ambiguous", candidates: value.candidates };
+  }
+  if (
+    hasExactKeys(value, ["ok", "error"]) &&
+    value.ok === false &&
+    isHandoffErrorShape(value.error)
+  ) {
+    return { kind: "error", error: value.error };
+  }
+  return { kind: "malformed" };
+}
 
 function requireInteractiveResumeTerminal() {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -98,20 +174,11 @@ async function resolveHandoffConnection(
     } catch {
       throw new Error(RESUME_HANDOFF_UNRESOLVED);
     }
-    if (!isRecord(result)) {
-      throw new Error(RESUME_HANDOFF_UNRESOLVED);
+    const parsed = parseHandoffSessionResolveResult(result);
+    if (parsed.kind === "success") {
+      return { connection: client.connection, sessionKey: parsed.key };
     }
-    const keys = Object.keys(result);
-    if (
-      keys.length === 2 &&
-      keys.includes("ok") &&
-      keys.includes("key") &&
-      result.ok === true &&
-      typeof result.key === "string"
-    ) {
-      return { connection: client.connection, sessionKey: result.key };
-    }
-    if (keys.length === 1 && keys[0] === "ok" && result.ok === false) {
+    if (parsed.kind === "missing") {
       throw new Error(RESUME_HANDOFF_MISSING);
     }
     throw new Error(RESUME_HANDOFF_UNRESOLVED);

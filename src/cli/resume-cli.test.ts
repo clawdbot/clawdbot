@@ -228,13 +228,54 @@ describe("runResumeCommand", () => {
   });
 
   it.each([
-    ["missing", { ok: false }, "This session is no longer available."],
+    ["missing", { ok: true, missing: true }, "This session is no longer available."],
     [
       "ambiguous",
+      {
+        ok: true,
+        ambiguous: true,
+        candidates: [{ key: "agent:main:one", displayName: "One" }],
+      },
+      "Could not resolve the session handoff.",
+    ],
+    [
+      "domain error",
+      { ok: false, error: { code: "INVALID_REQUEST", message: "invalid handoff" } },
+      "Could not resolve the session handoff.",
+    ],
+    ["projected missing", { ok: false }, "Could not resolve the session handoff."],
+    [
+      "projected ambiguity",
       { ok: false, candidates: [{ key: "agent:main:one" }] },
       "Could not resolve the session handoff.",
     ],
-    ["malformed", { ok: true }, "Could not resolve the session handoff."],
+    ["malformed success", { ok: true }, "Could not resolve the session handoff."],
+    [
+      "extra success field",
+      { ok: true, key: "agent:main:alpha", extra: true },
+      "Could not resolve the session handoff.",
+    ],
+    [
+      "malformed candidate",
+      { ok: true, ambiguous: true, candidates: [{ key: "agent:main:one", extra: true }] },
+      "Could not resolve the session handoff.",
+    ],
+    [
+      "malformed error",
+      {
+        ok: false,
+        error: { code: "INVALID_REQUEST", message: "invalid handoff", retryAfterMs: -1 },
+      },
+      "Could not resolve the session handoff.",
+    ],
+    [
+      "extra error field",
+      {
+        ok: false,
+        error: { code: "INVALID_REQUEST", message: "invalid handoff", extra: true },
+      },
+      "Could not resolve the session handoff.",
+    ],
   ])(
     "rejects a %s handoff resolution without discovery or TUI launch",
     async (_name, result, message) => {

@@ -11,6 +11,7 @@ import {
   ConnectErrorDetailCodes,
   readConnectErrorDetailCode,
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import type { ErrorShape } from "../../packages/gateway-protocol/src/frame-guards.js";
 import {
   type HelloOk,
   GATEWAY_SERVER_CAPS,
@@ -158,8 +159,13 @@ type HandoffSessionResolveParams = Required<
 >;
 type HandoffSessionResolveResult =
   | { ok: true; key: string }
-  | { ok: false }
-  | { ok: false; candidates: Array<{ key: string; displayName?: string }> };
+  | { ok: true; missing: true }
+  | {
+      ok: true;
+      ambiguous: true;
+      candidates: Array<{ key: string; displayName?: string }>;
+    }
+  | { ok: false; error: ErrorShape };
 
 export class GatewayChatClient implements TuiBackend {
   private client: GatewayClient;
