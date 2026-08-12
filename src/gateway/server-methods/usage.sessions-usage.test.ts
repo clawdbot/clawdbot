@@ -864,7 +864,7 @@ describe("sessions.usage", () => {
       },
     };
     const entry = { sessionId: "s-ops", updatedAt: 1_000 };
-    vi.mocked(loadSessionEntryReadOnly).mockReturnValueOnce({
+    vi.mocked(loadGatewaySessionEntryReadOnly).mockReturnValueOnce({
       cfg: config,
       agentId: "ops",
       canonicalKey: "global",
@@ -878,7 +878,7 @@ describe("sessions.usage", () => {
     const respond = await runSessionsUsageTimeseries({ key: "global" }, config);
 
     expect(mockArg(respond, 0, 0)).toBe(true);
-    expect(vi.mocked(loadSessionEntryReadOnly)).toHaveBeenCalledWith("global", {
+    expect(vi.mocked(loadGatewaySessionEntryReadOnly)).toHaveBeenCalledWith("global", {
       agentId: "ops",
     });
     expect(vi.mocked(loadSessionUsageTimeSeries)).toHaveBeenCalledWith(

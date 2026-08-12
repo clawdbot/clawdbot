@@ -30,7 +30,7 @@ import {
 } from "../sessions/agent-harness-session-key.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
-import { loadSessionEntryReadOnly } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
@@ -232,7 +232,7 @@ export async function invokeGatewayTool(params: {
   }
   const { agentId: selectedAgentId, sessionKey } = sessionTarget;
   const harnessEntry = isAgentHarnessSessionKey(sessionKey)
-    ? loadSessionEntryReadOnly(sessionKey, { agentId: selectedAgentId }).entry
+    ? loadGatewaySessionEntryReadOnly(sessionKey, { agentId: selectedAgentId }).entry
     : undefined;
   if (
     isAgentHarnessSessionKey(sessionKey) &&

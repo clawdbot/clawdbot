@@ -81,9 +81,8 @@ describe("attach gateway methods", () => {
     )(grantWithAgentOpts("research", respond));
 
     expect(respond.mock.calls[0]?.[0]).toBe(true);
-    expect((respond.mock.calls[0]?.[1] as { sessionKey?: string }).sessionKey).toBe(
-      "agent:research:main",
-    );
+    const result = respond.mock.calls[0]?.[1] as { sessionKey?: string } | undefined;
+    expect(result?.sessionKey).toBe("agent:research:main");
   });
   it("rejects attach grants for reserved harness sessions", async () => {
     const respond = vi.fn();
