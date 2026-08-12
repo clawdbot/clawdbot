@@ -188,16 +188,16 @@ export function scrollActiveSkillMenuOptionIntoView(
   }
   requestAnimationFrame(() => {
     const activeOption = document.getElementById(activeId);
-    const menu = activeOption?.closest<HTMLElement>(".skill-menu");
-    if (!activeOption || !menu) {
+    const scrollRegion = activeOption?.closest<HTMLElement>(".slash-menu__scroll");
+    if (!activeOption || !scrollRegion) {
       return;
     }
-    const menuBounds = menu.getBoundingClientRect();
+    const menuBounds = scrollRegion.getBoundingClientRect();
     const optionBounds = activeOption.getBoundingClientRect();
     if (optionBounds.top < menuBounds.top) {
-      menu.scrollTop -= menuBounds.top - optionBounds.top;
+      scrollRegion.scrollTop -= menuBounds.top - optionBounds.top;
     } else if (optionBounds.bottom > menuBounds.bottom) {
-      menu.scrollTop += optionBounds.bottom - menuBounds.bottom;
+      scrollRegion.scrollTop += optionBounds.bottom - menuBounds.bottom;
     }
   });
 }

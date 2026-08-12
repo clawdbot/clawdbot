@@ -3061,6 +3061,52 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     });
   });
 
+  it("keeps overflowing skill suggestions on the nested scroll viewport", async () => {
+    const page = await openBrowserPage(568, 320);
+    try {
+      const items = Array.from({ length: 16 }, (_, index) => {
+        const active = index === 15 ? " slash-menu-item--active" : "";
+        return `<div class="slash-menu-item${active}" role="option">
+          <span class="slash-menu-leading">
+            <span class="slash-menu-icon">${iconSvg()}</span>
+            <span class="slash-menu-name">$skill_${index + 1}</span>
+          </span>
+        </div>`;
+      }).join("");
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+        <div class="slash-menu skill-menu" role="listbox">
+          <div class="slash-menu__scroll">${items}</div>
+        </div>
+      </body></html>`);
+
+      const result = await page.evaluate(() => {
+        const active = document.querySelector<HTMLElement>(".slash-menu-item--active");
+        const scrollRegion = active?.closest<HTMLElement>(".slash-menu__scroll");
+        if (!active || !scrollRegion) {
+          throw new Error("Expected an active skill inside the nested viewport");
+        }
+        const viewport = scrollRegion.getBoundingClientRect();
+        const option = active.getBoundingClientRect();
+        scrollRegion.scrollTop += option.bottom - viewport.bottom;
+        const settledOption = active.getBoundingClientRect();
+        const settledViewport = scrollRegion.getBoundingClientRect();
+        return {
+          outerScrollTop: active.closest<HTMLElement>(".skill-menu")?.scrollTop,
+          scrollTop: scrollRegion.scrollTop,
+          visible:
+            settledOption.top >= settledViewport.top - 1 &&
+            settledOption.bottom <= settledViewport.bottom + 1,
+        };
+      });
+
+      expect(result.outerScrollTop).toBe(0);
+      expect(result.scrollTop).toBeGreaterThan(0);
+      expect(result.visible).toBe(true);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it("uses the compact mobile grid when the agent filter is not rendered", async () => {
     const page = await openFixture(320, 568, { singleAgent: true });
     try {
