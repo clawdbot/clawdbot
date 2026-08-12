@@ -944,7 +944,7 @@ export function renderSessionDiffToggle(
         aria-label=${label}
         @click=${sessionWorkspace.onOpenDiff}
       >
-        ${icons.fileDiff}
+        ${icons.diff}
       </button>
     </openclaw-tooltip>
   `;
@@ -1012,7 +1012,7 @@ export function renderSessionWorkspaceRail(
             aria-label=${t("chat.sessionDiff.show")}
             @click=${sessionWorkspace.onOpenDiff}
           >
-            ${icons.fileDiff}
+            ${icons.diff}
           </button>
         </openclaw-tooltip>
       `

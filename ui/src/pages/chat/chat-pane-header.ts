@@ -230,7 +230,7 @@ export abstract class ChatPaneHeader extends ChatPaneSessionMenu {
       panelMenuActions.push({
         id: "changes",
         label: t("chat.sessionDiff.show"),
-        icon: icons.fileDiff,
+        icon: icons.diff,
         onActivate: sessionWorkspace.onOpenDiff,
       });
     }
