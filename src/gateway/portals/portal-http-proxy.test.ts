@@ -230,7 +230,11 @@ describe("portal HTTP proxy", () => {
     });
     const echoed = new Promise<string>((resolve) => {
       ws.once("message", (data) => {
-        const bytes = Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data);
+        const bytes = Array.isArray(data)
+          ? Buffer.concat(data)
+          : data instanceof ArrayBuffer
+            ? Buffer.from(data)
+            : data;
         resolve(bytes.toString("utf8"));
       });
     });
