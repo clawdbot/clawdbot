@@ -391,5 +391,3 @@ export function createWorkerDesktopTunnels(deps: {
     stopAll,
   };
 }
-
-export type WorkerDesktopTunnels = ReturnType<typeof createWorkerDesktopTunnels>;
