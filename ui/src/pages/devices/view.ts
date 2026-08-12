@@ -135,7 +135,7 @@ function renderAgentBinding(agent: BindingAgent, state: BindingState) {
 function renderBindingSelect(agent: BindingAgent | null, state: BindingState) {
   const isDefault = agent === null;
   const sentinel = isDefault ? "" : "__default__";
-  const value = isDefault ? (state.defaultBinding ?? "") : (agent.binding ?? "__default__");
+  const selected = isDefault ? (state.defaultBinding ?? "") : (agent.binding ?? "__default__");
   const onChange = (event: Event) => {
     const value = (event.target as HTMLSelectElement).value.trim();
     if (agent === null) {
@@ -151,12 +151,12 @@ function renderBindingSelect(agent: BindingAgent | null, state: BindingState) {
       ?disabled=${state.disabled || state.nodes.length === 0}
       @change=${onChange}
     >
-      <option value=${sentinel} ?selected=${value === sentinel}>
+      <option value=${sentinel} ?selected=${selected === sentinel}>
         ${t(isDefault ? "devices.binding.anyNode" : "devices.binding.useDefault")}
       </option>
       ${state.nodes.map(
         (node) =>
-          html`<option value=${node.id} ?selected=${value === node.id}>${node.label}</option>`,
+          html`<option value=${node.id} ?selected=${selected === node.id}>${node.label}</option>`,
       )}
     </select>
   `;
