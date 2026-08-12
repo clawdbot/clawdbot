@@ -1237,18 +1237,19 @@ function registerCodexSessionReconciliation(params: {
               });
         assertReconciliationNotAborted(input.signal);
         const sessions = projectCodexReconciliationSessions(page.sessions, request.archived);
-        const resultSessions = !request.archived
-          ? sessions.map((session) => {
-              pruneTranscriptCapabilities(now);
-              const transcriptCapability = randomUUID();
-              transcriptCapabilities.set(transcriptCapability, {
-                hostId: request.hostId,
-                threadId: session.threadId,
-                expiresAt: now + RECONCILIATION_TRANSCRIPT_CAPABILITY_TTL_MS,
-              });
-              return { ...session, transcriptCapability };
-            })
-          : sessions;
+        const issuedTranscriptCapabilities: Record<string, string> = {};
+        if (!request.archived) {
+          for (const session of sessions) {
+            pruneTranscriptCapabilities(now);
+            const transcriptCapability = randomUUID();
+            transcriptCapabilities.set(transcriptCapability, {
+              hostId: request.hostId,
+              threadId: session.threadId,
+              expiresAt: now + RECONCILIATION_TRANSCRIPT_CAPABILITY_TTL_MS,
+            });
+            issuedTranscriptCapabilities[session.threadId] = transcriptCapability;
+          }
+        }
         const nextUpstreamCursor = page.nextCursor;
         if (nextUpstreamCursor && prior?.seen.has(nextUpstreamCursor)) {
           throw new Error("history cursor loop");
@@ -1274,7 +1275,10 @@ function registerCodexSessionReconciliation(params: {
         }
         return {
           hostId: request.hostId,
-          sessions: resultSessions,
+          sessions,
+          ...(Object.keys(issuedTranscriptCapabilities).length
+            ? { transcriptCapabilities: issuedTranscriptCapabilities }
+            : {}),
           ...(nextCursor ? { nextCursor } : {}),
           complete: !nextCursor,
         };
