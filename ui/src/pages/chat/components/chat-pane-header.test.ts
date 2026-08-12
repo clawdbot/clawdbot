@@ -15,6 +15,7 @@ import {
 import {
   canRevealSessionWorkspace,
   renderChatPaneHeader,
+  resolveChatPaneParentSession,
   resolveChatPaneWorkspace,
 } from "./chat-pane-header.ts";
 
@@ -80,6 +81,7 @@ function mount(patch: Partial<ChatPaneHeaderProps> = {}) {
     workspaceRoot: "/repo/openclaw",
     workspaceLabel: "openclaw",
     workspaceIcon: null,
+    parentSession: null,
     branch: "feature/header",
     branches: [],
     branchSwitchDisabledReason: null,
@@ -100,6 +102,7 @@ function mount(patch: Partial<ChatPaneHeaderProps> = {}) {
     onCancelRename: vi.fn(),
     onMenuOpenChange: vi.fn(),
     onMenuAction: vi.fn(),
+    onOpenParentSession: vi.fn(),
     onBranchSelect: vi.fn(),
     ...patch,
   };
@@ -324,6 +327,24 @@ describe("chat pane header", () => {
     );
   });
 
+  it("places a clickable parent between the project and child session", () => {
+    const parentSession = { key: "agent:main:parent", title: "Release prep" };
+    const { container, props } = mount({ parentSession });
+    const crumbs = container.querySelector(".chat-pane__crumbs");
+
+    expect([...(crumbs?.children ?? [])].map((child) => child.className)).toEqual([
+      "chat-pane__workspace-menu",
+      "chat-pane__crumb-sep",
+      "chat-pane__parent-session",
+      "chat-pane__crumb-sep",
+      "chat-pane__session-title chat-pane__session-title-button",
+    ]);
+    const parent = crumbs?.querySelector<HTMLButtonElement>(".chat-pane__parent-session");
+    expect(parent?.textContent?.trim()).toBe("Release prep");
+    parent?.click();
+    expect(props.onOpenParentSession).toHaveBeenCalledExactlyOnceWith("agent:main:parent");
+  });
+
   it("drops the separator when the session has no project segment", () => {
     const { container } = mount({ workspaceLabel: null, workspaceRoot: null });
     expect(container.querySelector(".chat-pane__crumb-sep")).toBeNull();
@@ -505,6 +526,38 @@ describe("chat pane header", () => {
       }),
     );
     expect(props.onBranchSelect).not.toHaveBeenCalled();
+  });
+});
+
+describe("chat pane parent resolution", () => {
+  it("uses the navigation parent and its canonical display name", () => {
+    const parent = row({
+      key: "agent:main:parent",
+      label: "Release prep",
+    });
+    const controlOwner = row({
+      key: "agent:main:control-owner",
+      label: "Coordinator",
+    });
+
+    expect(
+      resolveChatPaneParentSession(
+        row({
+          key: "agent:main:child",
+          parentSessionKey: parent.key,
+          spawnedBy: controlOwner.key,
+        }),
+        [controlOwner, parent],
+      ),
+    ).toEqual({ key: parent.key, title: "Release prep" });
+  });
+
+  it("omits unresolved and self-referential parents", () => {
+    const child = row({ key: "agent:main:child", parentSessionKey: "agent:main:missing" });
+    expect(resolveChatPaneParentSession(child, [child])).toBeNull();
+    expect(
+      resolveChatPaneParentSession({ ...child, parentSessionKey: child.key }, [child]),
+    ).toBeNull();
   });
 });
 

@@ -25,7 +25,7 @@ const hoisted = vi.hoisted(() => ({
 
 vi.mock("../session-utils.js", () => ({
   loadSessionEntry: hoisted.loadSessionEntry,
-  loadSessionEntryReadOnly: hoisted.loadSessionEntry,
+  loadGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({

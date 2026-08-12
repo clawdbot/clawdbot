@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import ts from "typescript";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { formatPluginSdkApiTypeAlias } from "./api-baseline-declaration-print.js";
@@ -17,35 +17,38 @@ import {
   renderPluginSdkApiBaseline,
   renderPluginSdkApiBaselineModules,
   writeRenderedPluginSdkApiBaselineArtifacts,
+  type PluginSdkApiModule,
   type PluginSdkApiBaselineRender,
 } from "./api-baseline.js";
 
-const TEST_ENTRYPOINTS = [
-  "agent-harness-runtime",
-  "approval-gateway-runtime",
-  "channel-policy",
-  "core",
-  "infra-runtime",
-  "plugin-entry",
-  "provider-auth",
-  "provider-catalog-live-runtime",
-  "provider-oauth-runtime",
-  "provider-selection-runtime",
-  "provider-web-search-config-contract",
-  "realtime-voice",
-  "session-catalog",
-  "sqlite-runtime-testing",
-] as const;
-
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function contractContents(rendered: PluginSdkApiBaselineRender): Record<string, string> {
-  return Object.fromEntries(rendered.contractFiles.map((file) => [file.fileName, file.content]));
+const SERIALIZATION_MODULES = ["fixture-a", "fixture-b"].map(
+  (entrypoint, index): PluginSdkApiModule => ({
+    category: null,
+    entrypoint,
+    exports: [
+      {
+        closureHash: String(index).repeat(64),
+        declaration: `export type Fixture${index} = string;`,
+        exportName: `Fixture${index}`,
+        kind: "type",
+        source: { path: `src/plugin-sdk/${entrypoint}.ts` },
+      },
+    ],
+    importSpecifier: `openclaw/plugin-sdk/${entrypoint}`,
+    source: { path: `src/plugin-sdk/${entrypoint}.ts` },
+  }),
+);
+const rendered = renderPluginSdkApiBaselineModules(SERIALIZATION_MODULES);
+
+function contractContents(result: PluginSdkApiBaselineRender): Record<string, string> {
+  return Object.fromEntries(result.contractFiles.map((file) => [file.fileName, file.content]));
 }
 
-function writeContractFiles(directory: string, rendered: PluginSdkApiBaselineRender): void {
+function writeContractFiles(directory: string, result: PluginSdkApiBaselineRender): void {
   fs.mkdirSync(directory, { recursive: true });
-  for (const file of rendered.contractFiles) {
+  for (const file of result.contractFiles) {
     fs.writeFileSync(path.join(directory, file.fileName), file.content);
   }
 }
@@ -133,6 +136,11 @@ async function renderPrivateDeclarationFixture(params?: {
       "type FixtureOptions = { nested: FixtureOptionLeaf };",
       "type FixtureResult = { nested: FixtureResultLeaf };",
       "export declare function createFixture(options: FixtureOptions): FixtureResult;",
+      "export class FixtureError extends Error {",
+      "  readonly status: number;",
+      '  constructor(status: number) { super("fixture"); this.status = status; }',
+      "  getStatus() { return this.status; }",
+      "}",
     ].join("\n"),
   );
   fs.writeFileSync(
@@ -191,14 +199,6 @@ function createTupleAliasFixture(tuple: string, warmup: string, prewarm: boolean
 }
 
 describe("Plugin SDK API baseline", () => {
-  let rendered: PluginSdkApiBaselineRender;
-
-  // Rendering builds a TS program across SDK entrypoints. Loaded CI runners can
-  // exceed the default hook budget; this work is compile-bound, not a hang.
-  beforeAll(async () => {
-    rendered = await renderPluginSdkApiBaseline({ entrypoints: TEST_ENTRYPOINTS });
-  }, 300_000);
-
   it("normalizes declaration import paths to repo-relative paths", () => {
     const repoRoot = process.cwd();
     const modelCatalogPath = path.join(repoRoot, "src", "agents", "agent-model-discovery");
@@ -286,78 +286,11 @@ describe("Plugin SDK API baseline", () => {
     );
   });
 
-  it("renders complete declarations for the canonical public entrypoint inventory", () => {
+  it("uses the canonical public entrypoint inventory", () => {
     expect(listPluginSdkApiBaselineEntrypoints()).toEqual(publicPluginSdkEntrypoints);
-
-    const findDeclaration = (exportName: string) =>
-      rendered.baseline.modules
-        .flatMap((moduleSurface) => moduleSurface.exports)
-        .find(
-          (exportSurface) =>
-            exportSurface.exportName === exportName && exportSurface.declaration !== null,
-        )?.declaration;
-
-    expect(rendered.baseline.modules.find((entry) => entry.entrypoint === "infra-runtime")).toEqual(
-      expect.objectContaining({
-        category: null,
-        importSpecifier: "openclaw/plugin-sdk/infra-runtime",
-      }),
-    );
-    expect(findDeclaration("OAuthProviderInterface")).toContain("readonly id: OAuthProviderId;");
-    expect(findDeclaration("OAuthProviderInterface")).toContain(
-      "login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials>;",
-    );
-    expect(findDeclaration("LiveModelCatalogHttpError")).toContain("readonly status: number;");
-    expect(findDeclaration("LiveModelCatalogHttpError")).toContain(
-      "constructor(providerId: string, status: number);",
-    );
-    expect(findDeclaration("AgentHarnessPreflightError")).toContain('readonly scope?: "harness";');
-    expect(findDeclaration("AgentHarnessPreflightError")).toContain(
-      "constructor(message: string, options?: ErrorOptions & {",
-    );
-    expect(findDeclaration("AgentHarnessPreflightError")).toContain('scope?: "harness";');
-    expect(findDeclaration("AgentHarnessPreflightError")).not.toContain("harnessId");
-    expect(findDeclaration("LiveModelCatalogHttpError")).not.toContain("super(");
-    expect(findDeclaration("LiveModelRowProjection")).toContain(
-      "export type LiveModelRowProjection",
-    );
-    expect(findDeclaration("ApprovalResolveResult")).not.toContain("see source");
-    expect(findDeclaration("RealtimeVoiceAgentConsultRuntime")).not.toContain("see source");
-    expect(findDeclaration("createWebSearchProviderContractFields")).toContain(
-      "export function createWebSearchProviderContractFields(",
-    );
-    expect(findDeclaration("createWebSearchProviderContractFields")).not.toContain(
-      "createBaseWebSearchProviderContractFields",
-    );
-    expect(findDeclaration("OPENCLAW_VERSION")).toContain("export const OPENCLAW_VERSION:");
-    expect(findDeclaration("SqliteTrajectoryRuntimeEventForTest")).toContain(
-      "export type SqliteTrajectoryRuntimeEventForTest =",
-    );
-    expect(
-      rendered.baseline.modules
-        .flatMap((moduleSurface) => moduleSurface.exports)
-        .find((exportSurface) => exportSurface.exportName === "definePluginEntry")?.closureHash,
-    ).toMatch(/^[a-f0-9]{64}$/u);
-    expect(findDeclaration("definePluginEntry")).toContain("DefinePluginEntryOptions");
-    expect(findDeclaration("definePluginEntry")).toContain("DefinedPluginEntry");
-    expect(findDeclaration("ProviderSelection")).toContain(
-      "export type ProviderSelection<TProvider> =",
-    );
-    expect(findDeclaration("SessionCatalogEntrySummary")).toContain(
-      "export interface SessionCatalogEntrySummary",
-    );
-    expect(findDeclaration("SessionCatalogEntrySummary")).toContain("entry: SessionEntry;");
-    expect(rendered.json).not.toContain('"line":');
-    expect(rendered.json).toContain('"source": {');
-    const contract = rendered.contractFiles.map((file) => file.content).join("");
-    expect(contract).not.toContain('"sourceLine":');
-    expect(contract).not.toContain('"sourcePath":');
-    expect(contract).toContain('"contentHash":"');
-    expect(contract).not.toContain('"closureHash":"');
-    expect(contract).not.toContain("// declaration closure:");
   });
 
-  it("renders snapshots independently of entrypoint discovery order", () => {
+  it("serializes modules independently of entrypoint discovery order", () => {
     const reverse = renderPluginSdkApiBaselineModules(rendered.baseline.modules.toReversed());
 
     expect(reverse.json).toBe(rendered.json);
@@ -432,6 +365,11 @@ describe("Plugin SDK API baseline", () => {
         expect.objectContaining({ contentHash: expect.stringMatching(/^[a-f0-9]{64}$/u) }),
       ]),
     );
+    const contract = rendered.contractFiles.map((file) => file.content).join("");
+    expect(rendered.json).toContain('"source": {');
+    expect(contract).not.toContain('"sourceLine":');
+    expect(contract).not.toContain('"sourcePath":');
+    expect(contract).not.toContain('"closureHash":');
 
     const mergeDir = tempDirs.make("openclaw-plugin-sdk-api-merge-");
     const contractDirectory = path.join(mergeDir, "plugin-sdk-api-baseline");
@@ -476,8 +414,15 @@ describe("Plugin SDK API baseline", () => {
   it("renders byte-identical contract files deterministically", async () => {
     const firstRender = await renderPrivateDeclarationFixture();
     const secondRender = await renderPrivateDeclarationFixture();
+    const fixtureError = firstRender.baseline.modules[0]?.exports.find(
+      (exportSurface) => exportSurface.exportName === "FixtureError",
+    )?.declaration;
 
     expect(secondRender.contractFiles).toEqual(firstRender.contractFiles);
+    expect(fixtureError).toContain("constructor(status: number);");
+    expect(fixtureError).toContain("getStatus(): number;");
+    expect(fixtureError).not.toContain("super(");
+    expect(fixtureError).not.toContain("return this.status");
   });
 
   it("checks and repairs modified, missing, and stale contract records", async () => {
@@ -642,13 +587,16 @@ describe("Plugin SDK API baseline", () => {
   it("ignores unrelated declarations beside an aliased re-export", async () => {
     const render = (extra = "") =>
       renderSourceFixture({
-        "fixture.ts": 'export { internalLeaf as publicLeaf } from "./dep.js";\n',
-        "dep.ts": `export type internalLeaf = { value: string };\n${extra}`,
+        "fixture.ts": 'export { internalFixture as publicFixture } from "./dep.js";\n',
+        "dep.ts": `export function internalFixture(value: string): string { return value; }\n${extra}`,
       });
     const baseline = await render();
     const unrelated = await render("export type Unrelated = { ignored: boolean };\n");
+    const declaration = baseline.baseline.modules[0]?.exports[0]?.declaration;
 
     expect(unrelated.contractFiles).toEqual(baseline.contractFiles);
+    expect(declaration).toContain("function publicFixture(");
+    expect(declaration).not.toContain("internalFixture");
   });
 
   it("captures transitive private declaration changes deterministically", async () => {

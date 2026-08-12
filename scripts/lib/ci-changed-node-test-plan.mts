@@ -6,6 +6,7 @@ import {
   findUnmatchedExplicitTestTargets,
   hasImportGraphImpactOnTargets,
   isTestFileTarget,
+  isTestSupportFileTarget,
   resolveChangedTestTargetPlan,
 } from "../test-projects.test-support.mts";
 import {
@@ -53,7 +54,11 @@ const splitNodeTestConfigs = new Set(
 );
 
 function isTestOnlyPath(changedPath: string) {
-  return isTestFileTarget(changedPath) || changedPath.startsWith("test/");
+  return (
+    isTestFileTarget(changedPath) ||
+    isTestSupportFileTarget(changedPath) ||
+    changedPath.startsWith("test/")
+  );
 }
 
 // Inputs `build:ci-artifacts` consumes: runtime/plugin/package sources plus

@@ -22,8 +22,18 @@ import "../../../components/workspace-icon.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
+import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
+import {
+  areUiSessionKeysEquivalent,
+  resolveUiSessionNavigationParentKey,
+} from "../../../lib/sessions/session-key.ts";
 
 export type ChatPaneHeaderAction = "reveal" | "copy-path" | "copy-branch";
+
+type ChatPaneParentSession = {
+  key: string;
+  title: string;
+};
 
 type ChatPaneHeaderProps = {
   paneId: string;
@@ -40,6 +50,7 @@ type ChatPaneHeaderProps = {
   workspaceLabel: string | null;
   /** Gateway-resolved project icon for the chip; absent keeps the folder glyph. */
   workspaceIcon: { routeUrl: string; authTokens: readonly string[]; authReady: boolean } | null;
+  parentSession: ChatPaneParentSession | null;
   branch: string | null;
   branches: SessionBranch[];
   branchSwitchDisabledReason: string | null;
@@ -66,6 +77,7 @@ type ChatPaneHeaderProps = {
   onCancelRename: () => void;
   onMenuOpenChange: (open: boolean) => void;
   onMenuAction: (action: ChatPaneHeaderAction) => void;
+  onOpenParentSession: (sessionKey: string) => void;
   onBranchSelect: (leafEntryId: string) => void;
   onOpenSplitView?: () => void;
   onSplitDown?: (paneId: string) => void;
@@ -124,11 +136,23 @@ export function resolveChatPaneWorkspace(params: {
   return { root, label };
 }
 
+export function resolveChatPaneParentSession(
+  session: GatewaySessionRow | undefined,
+  sessions: readonly GatewaySessionRow[],
+): ChatPaneParentSession | null {
+  const parentKey = resolveUiSessionNavigationParentKey(session);
+  if (!parentKey || (session && areUiSessionKeysEquivalent(parentKey, session.key))) {
+    return null;
+  }
+  const parent = sessions.find((row) => areUiSessionKeysEquivalent(row.key, parentKey));
+  return parent ? { key: parent.key, title: resolveSessionDisplayName(parent.key, parent) } : null;
+}
+
 /**
  * Header identity trail: which project, then which session inside it. Segments
  * and separators are rendered from one list so a further segment — the parent
- * session of a nested thread (#121700), yielding project / parent / child —
- * slots in without moving the project chip or the title.
+ * session of a nested thread, yielding project / parent / child — slots in
+ * without moving the project chip or the title.
  */
 function renderIdentityCrumbs(
   props: ChatPaneHeaderProps,
@@ -138,6 +162,10 @@ function renderIdentityCrumbs(
 ) {
   const projectCrumb = renderProjectCrumb(props, copied, copyPathLabel, copyBranchLabel);
   const segments: TemplateResult[] = projectCrumb ? [projectCrumb] : [];
+  const parentCrumb = renderParentSessionCrumb(props);
+  if (parentCrumb) {
+    segments.push(parentCrumb);
+  }
   segments.push(renderSessionCrumb(props));
   return html`
     <div class="chat-pane__crumbs">
@@ -149,6 +177,23 @@ function renderIdentityCrumbs(
       )}
     </div>
   `;
+}
+
+function renderParentSessionCrumb(props: ChatPaneHeaderProps): TemplateResult | null {
+  const parent = props.parentSession;
+  if (!parent) {
+    return null;
+  }
+  const label = t("chat.sessionHeader.openParent", { title: parent.title });
+  return html`<button
+    class="chat-pane__parent-session"
+    type="button"
+    title=${label}
+    aria-label=${label}
+    @click=${() => props.onOpenParentSession(parent.key)}
+  >
+    <span class="chat-pane__parent-session-text">${parent.title}</span>
+  </button>`;
 }
 
 function renderSessionCrumb(props: ChatPaneHeaderProps) {

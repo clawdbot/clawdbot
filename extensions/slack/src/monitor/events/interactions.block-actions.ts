@@ -914,6 +914,8 @@ async function resolveSlackBlockActionCommandAuthorized(params: {
   let channelUsers: Array<string | number> = [];
   if (isRoom && params.parsed.channelId) {
     const channelConfig = resolveSlackChannelConfig({
+      teamId: params.eventScope?.teamId ?? params.ctx.teamId,
+      allowUnscoped: params.ctx.installationIdentity?.kind !== "enterprise",
       channelId: params.parsed.channelId,
       channelName: params.auth.channelName,
       channels: params.ctx.channelsConfig,
@@ -926,6 +928,7 @@ async function resolveSlackBlockActionCommandAuthorized(params: {
 
   const commandIngress = await resolveSlackCommandIngress({
     ctx: params.ctx,
+    teamId: params.eventScope?.teamId ?? params.ctx.teamId,
     senderId: params.parsed.userId,
     senderName,
     channelType: params.auth.channelType ?? "channel",

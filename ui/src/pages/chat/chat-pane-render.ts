@@ -602,7 +602,6 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state as never),
       resolveArtifactDownload: (params) => resolveChatArtifactDownload(state, params),
       basePath: state.basePath,
-      gatewayUrl: state.settings.gatewayUrl,
     };
     const chat = renderChat(props);
     const primary = this.renderBoardPrimary(board, chat);

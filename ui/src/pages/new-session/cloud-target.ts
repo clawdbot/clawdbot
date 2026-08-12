@@ -50,7 +50,7 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
 }
 
 export function renderCloudProfileMenuItems(params: {
-  profiles: DraftCloudProfile[];
+  profiles: readonly DraftCloudProfile[];
   selectedId: string;
   submitting: boolean;
   icon?: unknown;

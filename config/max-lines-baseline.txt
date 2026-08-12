@@ -182,8 +182,6 @@ extensions/openai/image-generation-provider.test.ts
 extensions/openai/image-generation-provider.ts
 extensions/openai/openai-provider.test.ts
 extensions/openai/openai-provider.ts
-extensions/openai/realtime-voice-provider.test.ts
-extensions/openai/realtime-voice-provider.ts
 extensions/openrouter/index.test.ts
 extensions/openshell/src/backend.ts
 extensions/openshell/src/openshell-core.test.ts
@@ -247,8 +245,6 @@ extensions/slack/src/send.ts
 extensions/telegram/src/action-runtime.test.ts
 extensions/telegram/src/action-runtime.ts
 extensions/telegram/src/bot-message-context.session.ts
-extensions/telegram/src/bot-native-commands.session-meta.test.ts
-extensions/telegram/src/bot-native-commands.ts
 extensions/telegram/src/bot.create-telegram-bot.test.ts
 extensions/telegram/src/bot.test.ts
 extensions/telegram/src/bot/delivery.replies.ts
@@ -382,7 +378,6 @@ src/agents/embedded-agent-runner/transcript-file-state.test.ts
 src/agents/embedded-agent-subscribe.handlers.lifecycle.test.ts
 src/agents/embedded-agent-subscribe.handlers.tools.test.ts
 src/agents/embedded-agent-subscribe.subscribe-embedded-agent-session.subscribeembeddedagentsession.test.ts
-src/agents/embedded-agent-subscribe.ts
 src/agents/failover-error.test.ts
 src/agents/failover-error.ts
 src/agents/harness/native-hook-relay.test.ts
@@ -398,7 +393,6 @@ src/agents/model-selection.test.ts
 src/agents/models.profiles.live.test.ts
 src/agents/openai-transport-stream.base.test.ts
 src/agents/openai-transport-stream.replay-and-tools.test.ts
-src/agents/openai-transport-stream.streaming.test.ts
 src/agents/openclaw-tools.media-factory-plan.test.ts
 src/agents/openclaw-tools.session-status.test.ts
 src/agents/openclaw-tools.sessions.test.ts
@@ -913,7 +907,6 @@ ui/src/pages/chat/chat-view.test.ts
 ui/src/pages/chat/components/chat-message.test.ts
 ui/src/pages/chat/components/chat-session-workspace.ts
 ui/src/pages/chat/components/chat-sidebar.ts
-ui/src/pages/chat/components/chat-thread.ts
 ui/src/pages/chat/components/chat-tool-cards.ts
 ui/src/pages/chat/composer-persistence.test.ts
 ui/src/pages/chat/composer-persistence.ts
@@ -922,7 +915,6 @@ ui/src/pages/chat/tool-stream.ts
 ui/src/pages/config/config-page.ts
 ui/src/pages/config/view.browser.test.ts
 ui/src/pages/cron/view.ts
-ui/src/pages/new-session/new-session-page.ts
 ui/src/pages/plugins/plugins-page.ts
 ui/src/pages/plugins/view.ts
 ui/src/pages/sessions/sessions-page.ts

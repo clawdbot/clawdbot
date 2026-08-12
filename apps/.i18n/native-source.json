@@ -38875,7 +38875,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 104,
+      "line": 90,
       "path": "apps/macos/Sources/OpenClaw/TailscaleIntegrationSection.swift",
       "source": "Tailscale (dashboard access)",
       "surface": "apple",
@@ -38883,7 +38883,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 125,
+      "line": 111,
       "path": "apps/macos/Sources/OpenClaw/TailscaleIntegrationSection.swift",
       "source": "Local mode required. Update settings on the gateway host.",
       "surface": "apple",
@@ -38891,7 +38891,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 170,
+      "line": 156,
       "path": "apps/macos/Sources/OpenClaw/TailscaleIntegrationSection.swift",
       "source": "Refresh",
       "surface": "apple",
@@ -38899,7 +38899,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 192,
+      "line": 178,
       "path": "apps/macos/Sources/OpenClaw/TailscaleIntegrationSection.swift",
       "source": "App Store",
       "surface": "apple",
@@ -38907,7 +38907,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 194,
+      "line": 180,
       "path": "apps/macos/Sources/OpenClaw/TailscaleIntegrationSection.swift",
       "source": "Direct Download",
       "surface": "apple",
@@ -38915,7 +38915,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 196,
+      "line": 182,
       "path": "apps/macos/Sources/OpenClaw/TailscaleIntegrationSection.swift",
       "source": "Setup Guide",
       "surface": "apple",
@@ -38923,7 +38923,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 204,
+      "line": 190,
       "path": "apps/macos/Sources/OpenClaw/TailscaleIntegrationSection.swift",
       "source": "Exposure mode",
       "surface": "apple",
@@ -38931,7 +38931,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 206,
+      "line": 192,
       "path": "apps/macos/Sources/OpenClaw/TailscaleIntegrationSection.swift",
       "source": "Exposure",
       "surface": "apple",
@@ -38939,7 +38939,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 223,
+      "line": 209,
       "path": "apps/macos/Sources/OpenClaw/TailscaleIntegrationSection.swift",
       "source": "Dashboard URL:",
       "surface": "apple",
@@ -38947,7 +38947,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 235,
+      "line": 221,
       "path": "apps/macos/Sources/OpenClaw/TailscaleIntegrationSection.swift",
       "source": "Start Tailscale to get your tailnet hostname.",
       "surface": "apple",
@@ -38955,7 +38955,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 241,
+      "line": 227,
       "path": "apps/macos/Sources/OpenClaw/TailscaleIntegrationSection.swift",
       "source": "Start Tailscale",
       "surface": "apple",
@@ -38963,7 +38963,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 249,
+      "line": 235,
       "path": "apps/macos/Sources/OpenClaw/TailscaleIntegrationSection.swift",
       "source": "Require credentials",
       "surface": "apple",
@@ -38971,7 +38971,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 254,
+      "line": 240,
       "path": "apps/macos/Sources/OpenClaw/TailscaleIntegrationSection.swift",
       "source": "Serve uses Tailscale identity headers; no password required.",
       "surface": "apple",
@@ -38979,7 +38979,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 263,
+      "line": 249,
       "path": "apps/macos/Sources/OpenClaw/TailscaleIntegrationSection.swift",
       "source": "Funnel requires authentication.",
       "surface": "apple",
@@ -38987,7 +38987,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 272,
+      "line": 258,
       "path": "apps/macos/Sources/OpenClaw/TailscaleIntegrationSection.swift",
       "source": "Password",
       "surface": "apple",
@@ -38995,7 +38995,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 276,
+      "line": 262,
       "path": "apps/macos/Sources/OpenClaw/TailscaleIntegrationSection.swift",
       "source": "Stored in ~/.openclaw/openclaw.json. Prefer OPENCLAW_GATEWAY_PASSWORD for production.",
       "surface": "apple",
@@ -39003,7 +39003,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 279,
+      "line": 265,
       "path": "apps/macos/Sources/OpenClaw/TailscaleIntegrationSection.swift",
       "source": "Update password",
       "surface": "apple",

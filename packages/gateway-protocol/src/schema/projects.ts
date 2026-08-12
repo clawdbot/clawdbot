@@ -56,7 +56,32 @@ export const ProjectsRegisterParamsSchema = closedObject({
 });
 export const ProjectsRegisterResultSchema = ProjectRecordSchema;
 
-export const ProjectsRemoveParamsSchema = closedObject({ id: StoredProjectIdSchema });
+export const ProjectsAddParamsSchema = closedObject({
+  gitUrl: Type.String({ minLength: 1, maxLength: 2048 }),
+  name: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+});
+export const ProjectsAddResultSchema = ProjectRecordSchema;
+
+export const RemoteProjectSchema = closedObject({
+  name: Type.String({ minLength: 1, maxLength: 100 }),
+  fullName: Type.String({ minLength: 1, maxLength: 200 }),
+  description: Type.Optional(Type.String({ maxLength: 500 })),
+  cloneUrl: Type.String({ minLength: 1, maxLength: 2048 }),
+  webUrl: Type.String({ minLength: 1, maxLength: 2048 }),
+  private: Type.Boolean(),
+});
+export const ProjectsSearchRemoteParamsSchema = closedObject({
+  query: Type.String({ minLength: 1, maxLength: 200 }),
+});
+export const ProjectsSearchRemoteResultSchema = closedObject({
+  credential: Type.Union([Type.Literal("configured"), Type.Literal("missing")]),
+  projects: Type.Array(RemoteProjectSchema, { maxItems: 10 }),
+});
+
+export const ProjectsRemoveParamsSchema = closedObject({
+  id: StoredProjectIdSchema,
+  deleteCheckout: Type.Optional(Type.Boolean()),
+});
 export const ProjectsRemoveResultSchema = closedObject({ removed: Type.Boolean() });
 
 export type ProjectRecord = Static<typeof ProjectRecordSchema>;
@@ -65,5 +90,10 @@ export type ProjectsListParams = Static<typeof ProjectsListParamsSchema>;
 export type ProjectsListResult = Static<typeof ProjectsListResultSchema>;
 export type ProjectsRegisterParams = Static<typeof ProjectsRegisterParamsSchema>;
 export type ProjectsRegisterResult = Static<typeof ProjectsRegisterResultSchema>;
+export type ProjectsAddParams = Static<typeof ProjectsAddParamsSchema>;
+export type ProjectsAddResult = Static<typeof ProjectsAddResultSchema>;
+export type RemoteProject = Static<typeof RemoteProjectSchema>;
+export type ProjectsSearchRemoteParams = Static<typeof ProjectsSearchRemoteParamsSchema>;
+export type ProjectsSearchRemoteResult = Static<typeof ProjectsSearchRemoteResultSchema>;
 export type ProjectsRemoveParams = Static<typeof ProjectsRemoveParamsSchema>;
 export type ProjectsRemoveResult = Static<typeof ProjectsRemoveResultSchema>;

@@ -18,7 +18,7 @@ import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { buildDashboardSessionKey } from "../session-create-service.js";
-import { loadSessionEntryReadOnly } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import {
   abandonTaskSuggestionAcceptance,
   beginTaskSuggestionAcceptance,
@@ -107,7 +107,7 @@ async function rollbackSuggestedTaskSession(params: {
     return false;
   }
   try {
-    return !loadSessionEntryReadOnly(params.key, { agentId: params.agentId }).entry;
+    return !loadGatewaySessionEntryReadOnly(params.key, { agentId: params.agentId }).entry;
   } catch {
     return false;
   }
@@ -358,9 +358,9 @@ async function deliverSuggestedTaskToSourceSession(params: {
   const agentId = resolveSuggestionAgentId(params.suggestion, params.options);
   const fail = (error: NonNullable<Parameters<RespondFn>[2]>) =>
     failSuggestedTaskDelivery({ taskId: params.taskId, options: params.options, error });
-  let source: ReturnType<typeof loadSessionEntryReadOnly>;
+  let source: ReturnType<typeof loadGatewaySessionEntryReadOnly>;
   try {
-    source = loadSessionEntryReadOnly(params.suggestion.sessionKey, { agentId });
+    source = loadGatewaySessionEntryReadOnly(params.suggestion.sessionKey, { agentId });
   } catch (error) {
     return fail(errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
   }

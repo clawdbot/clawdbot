@@ -259,6 +259,43 @@ wa-popover.new-session-page__select::part(body) {
   text-transform: uppercase;
 }
 
+.new-session-page__project-search {
+  display: block;
+  padding: 4px 8px 6px;
+}
+
+.new-session-page__project-search input {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.new-session-page__project-search input:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.new-session-page__project-status,
+.new-session-page__project-error {
+  padding: 5px 8px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.new-session-page__project-status {
+  color: var(--muted);
+}
+
+.new-session-page__project-error {
+  color: var(--danger);
+}
+
 .new-session-page__menu-field {
   display: flex;
   align-items: center;

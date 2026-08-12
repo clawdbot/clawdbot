@@ -36,7 +36,10 @@ import type { PrepareGatewaySessionLifecycle } from "../session-lifecycle-prepar
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { readSessionMessageCountAsync } from "../session-transcript-readers.js";
-import { loadSessionEntryReadOnly, resolveGatewaySessionStoreTarget } from "../session-utils.js";
+import {
+  loadGatewaySessionEntryReadOnly,
+  resolveGatewaySessionStoreTarget,
+} from "../session-utils.js";
 import { resolveSessionPatchModelSelection } from "../sessions-patch.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { chatHandlers } from "./chat.js";
@@ -288,7 +291,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         !hasInitialTurn &&
         cfg.session?.dmScope === "main"
       ) {
-        const parent = loadSessionEntryReadOnly(
+        const parent = loadGatewaySessionEntryReadOnly(
           parentSessionKey,
           requestedAgent.agentId ? { agentId: requestedAgent.agentId } : undefined,
         );

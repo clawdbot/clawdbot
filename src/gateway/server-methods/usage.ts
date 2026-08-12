@@ -68,7 +68,7 @@ import {
 } from "../session-store-key.js";
 import {
   loadCombinedSessionStoreForGatewayCore,
-  loadSessionEntryReadOnly,
+  loadGatewaySessionEntryReadOnly,
 } from "../session-utils.js";
 import { loadUsageStatusStaleWhileRevalidate } from "./models-auth-status-usage-cache.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -135,7 +135,7 @@ function resolveSessionUsageTarget(
   config: OpenClawConfig,
   agentIdHint?: string,
 ): ResolvedSessionUsageTarget | undefined {
-  const { canonicalKey, entry, storePath } = loadSessionEntryReadOnly(
+  const { canonicalKey, entry, storePath } = loadGatewaySessionEntryReadOnly(
     key,
     agentIdHint ? { agentId: agentIdHint } : undefined,
   );

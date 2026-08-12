@@ -189,7 +189,7 @@ describe("chat header session menu", () => {
         {
           id: "changes",
           label: "Show session changes",
-          icon: icons.fileDiff,
+          icon: icons.diff,
           onActivate: showChanges,
         },
       ],

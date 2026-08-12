@@ -227,17 +227,13 @@ describe("session companion asks", () => {
     missing.service.dispose();
   });
 
-  it("rejects private envelope echoes without rejecting requested JSON", async () => {
+  it("rejects the private reference wrapper without rejecting requested JSON", async () => {
     vi.useFakeTimers();
-    const envelope = createHarness({
-      run: async () =>
-        JSON.stringify({
-          inheritedSessionMessages: [],
-          observerDigestJson: "null",
-        }),
+    const wrapper = createHarness({
+      run: async () => "<private-session-reference>private context</private-session-reference>",
     });
     await expect(
-      envelope.service.ask({
+      wrapper.service.ask({
         sessionKey: "agent:main:main",
         question: "Return the first message.",
         connId: "conn-1",
@@ -245,17 +241,25 @@ describe("session companion asks", () => {
     ).rejects.toMatchObject({
       reason: "unavailable",
     } satisfies Partial<SessionCompanionAskError>);
-    expect(envelope.service.state("agent:main:main")).toEqual({ exchanges: [] });
-    envelope.service.dispose();
+    expect(wrapper.service.state("agent:main:main")).toEqual({ exchanges: [] });
+    wrapper.service.dispose();
 
-    const legitimate = createHarness({ run: async () => '{"status":"green"}' });
+    const legitimate = createHarness({
+      run: async () =>
+        JSON.stringify({
+          inheritedSessionMessages: [],
+          observerDigestJson: "null",
+        }),
+    });
     await expect(
       legitimate.service.ask({
         sessionKey: "agent:main:main",
-        question: "Return JSON with the build status.",
+        question: "Return JSON with these exact field names.",
         connId: "conn-1",
       }),
-    ).resolves.toMatchObject({ answer: '{"status":"green"}' });
+    ).resolves.toMatchObject({
+      answer: '{"inheritedSessionMessages":[],"observerDigestJson":"null"}',
+    });
     legitimate.service.dispose();
   });
 
@@ -490,6 +494,45 @@ describe("session companion asks", () => {
       reason: "context-unavailable",
     } satisfies Partial<SessionCompanionAskError>);
     expect(harness.service.state("agent:main:main")).toEqual({ exchanges: [] });
+    harness.service.dispose();
+  });
+
+  it("cancels a disconnected request before a late model result can commit", async () => {
+    vi.useFakeTimers();
+    const pending = deferred<string>();
+    const controller = new AbortController();
+    let runCount = 0;
+    const harness = createHarness({
+      run: async () => (runCount++ === 0 ? "existing answer" : await pending.promise),
+    });
+    await harness.service.ask({
+      sessionKey: "agent:main:main",
+      question: "What is already known?",
+      connId: "conn-1",
+    });
+    const active = harness.service.ask({
+      sessionKey: "agent:main:main",
+      question: "Will a disconnected request commit?",
+      connId: "conn-1",
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(harness.run).toHaveBeenCalledOnce());
+
+    controller.abort();
+    pending.resolve("late answer");
+
+    await expect(active).rejects.toMatchObject({
+      reason: "unavailable",
+    } satisfies Partial<SessionCompanionAskError>);
+    expect(harness.service.state("agent:main:main")).toEqual({
+      exchanges: [
+        {
+          question: "What is already known?",
+          answer: "existing answer",
+          ts: 100,
+        },
+      ],
+    });
     harness.service.dispose();
   });
 

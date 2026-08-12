@@ -2644,21 +2644,21 @@ describe("activateSetupInference", () => {
     const runAuth = vi.fn(async () => ({
       profiles: [
         {
-          profileId: "ollama:default",
+          profileId: "local-test:default",
           credential: {
             type: "api_key" as const,
-            provider: "ollama",
-            key: "ollama-local",
+            provider: "local-test",
+            key: "local-test-key",
           },
         },
       ],
       configPatch: {
         models: {
           providers: {
-            ollama: {
-              baseUrl: "http://127.0.0.1:11434",
+            "local-test": {
+              baseUrl: "http://127.0.0.1:12345",
               api: "ollama" as const,
-              apiKey: "ollama-local",
+              apiKey: "local-test-key",
               models: [],
             },
           },
@@ -2666,19 +2666,19 @@ describe("activateSetupInference", () => {
       },
     }));
     const detect = vi.fn(async () => ({
-      modelRef: "ollama/qwen3.5:4b",
-      detail: "qwen3.5:4b at http://127.0.0.1:11434",
+      modelRef: "local-test/qwen-test",
+      detail: "qwen-test at http://127.0.0.1:12345",
     }));
     const prepare = vi.fn(async () => ({
       profiles: [],
-      defaultModel: "ollama/qwen3.5:4b",
+      defaultModel: "local-test/qwen-test",
       configPatch: {
         models: {
           providers: {
-            ollama: {
-              baseUrl: "http://127.0.0.1:11434",
+            "local-test": {
+              baseUrl: "http://127.0.0.1:12345",
               api: "ollama" as const,
-              apiKey: "ollama-local",
+              apiKey: "local-test-key",
               models: [],
             },
           },
@@ -2686,13 +2686,13 @@ describe("activateSetupInference", () => {
       },
     }));
     const provider: ProviderPlugin = {
-      id: "ollama",
-      label: "Ollama",
-      pluginId: "ollama",
+      id: "local-test",
+      label: "Local Test Provider",
+      pluginId: "local-test",
       auth: [
         {
           id: "local",
-          label: "Ollama",
+          label: "Local Test Provider",
           kind: "custom",
           run: runAuth,
           appGuidedSetup: { detect, prepare },
@@ -2701,14 +2701,14 @@ describe("activateSetupInference", () => {
     };
     const runEmbeddedAgent = vi.fn(
       async (params: SuccessfulRunParams & { authProfileId?: string }) =>
-        successfulRun("ollama", "qwen3.5:4b", params),
+        successfulRun("local-test", "qwen-test", params),
     );
     const configHarness = createConfigTransformHarness(initialConfig);
 
     try {
       const result = await activateSetupInference({
         kind: "provider-auth",
-        authChoice: "ollama",
+        authChoice: "local-test",
         workspace: "/tmp/openclaw-workspace",
         prompter: { note: vi.fn(async () => {}) } as never,
         deps: {
@@ -2717,11 +2717,11 @@ describe("activateSetupInference", () => {
           }),
           resolvePluginProviders: () => [provider],
           resolveManifestProviderAuthChoice: () => ({
-            pluginId: "ollama",
-            providerId: "ollama",
+            pluginId: "local-test",
+            providerId: "local-test",
             methodId: "local",
-            choiceId: "ollama",
-            choiceLabel: "Ollama",
+            choiceId: "local-test",
+            choiceLabel: "Local Test Provider",
             appGuidedDiscovery: true,
           }),
           runEmbeddedAgent: runEmbeddedAgent as never,
@@ -2729,16 +2729,16 @@ describe("activateSetupInference", () => {
         },
       });
 
-      expect(result).toMatchObject({ ok: true, modelRef: "ollama/qwen3.5:4b" });
+      expect(result).toMatchObject({ ok: true, modelRef: "local-test/qwen-test" });
       expect(runAuth).toHaveBeenCalledOnce();
       expect(detect).toHaveBeenCalledWith(
         expect.objectContaining({
           config: expect.objectContaining({
             models: {
               providers: {
-                ollama: expect.objectContaining({
-                  baseUrl: "http://127.0.0.1:11434",
-                  apiKey: "ollama-local",
+                "local-test": expect.objectContaining({
+                  baseUrl: "http://127.0.0.1:12345",
+                  apiKey: "local-test-key",
                 }),
               },
             },
@@ -2746,7 +2746,7 @@ describe("activateSetupInference", () => {
         }),
       );
       expect(prepare).toHaveBeenCalledWith(
-        expect.objectContaining({ modelRef: "ollama/qwen3.5:4b" }),
+        expect.objectContaining({ modelRef: "local-test/qwen-test" }),
       );
     } finally {
       await removeOAuthTestTempRoot(stateDir);

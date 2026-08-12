@@ -1,11 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { GatewayErrorDetailCodes } from "../../packages/gateway-protocol/src/index.js";
 import { SessionCompanionAskError } from "./session-companion-ask.js";
-import {
-  notifySessionCompanionPrepared,
-  registerSessionCompanionProgress,
-} from "./session-companion-progress.js";
 import { sessionCompanionHandlers } from "./session-companion-rpc.js";
 
 async function invoke(
@@ -16,10 +11,8 @@ async function invoke(
     state?: ReturnType<typeof vi.fn>;
     reset?: ReturnType<typeof vi.fn>;
   },
-  client: { connId?: string; connect?: { caps?: string[] } } = {
-    connId: "conn-1",
-    connect: { caps: [] },
-  },
+  client: { connId?: string } = { connId: "conn-1" },
+  signal?: AbortSignal,
 ) {
   const respond = vi.fn();
   await sessionCompanionHandlers[method]?.({
@@ -27,40 +20,12 @@ async function invoke(
     client,
     context: { sessionCompanion: companion },
     respond,
+    signal,
   } as never);
   return respond;
 }
 
 describe("session companion RPC", () => {
-  it("keeps the first progress owner and isolates callback failures", () => {
-    const first = vi.fn(() => {
-      throw new Error("presentation failed");
-    });
-    const second = vi.fn();
-    const clearFirst = registerSessionCompanionProgress({
-      connId: "conn-1",
-      sessionKey: "agent:main:main",
-      listener: first,
-    });
-    const clearSecond = registerSessionCompanionProgress({
-      connId: "conn-1",
-      sessionKey: "agent:main:main",
-      listener: second,
-    });
-
-    expect(() =>
-      notifySessionCompanionPrepared({
-        connId: "conn-1",
-        empty: false,
-        sessionKey: "agent:main:main",
-      }),
-    ).not.toThrow();
-    expect(first).toHaveBeenCalledOnce();
-    expect(second).not.toHaveBeenCalled();
-    clearSecond();
-    clearFirst();
-  });
-
   it("dispatches a valid ask and returns its timestamp", async () => {
     const ask = vi.fn(async () => ({ answer: "It is checking the fix.", ts: 123 }));
     const respond = await invoke(
@@ -80,34 +45,24 @@ describe("session companion RPC", () => {
     });
   });
 
-  it("emits progress only after context is ready, then returns the answer", async () => {
-    const ask = vi.fn(async () => {
-      notifySessionCompanionPrepared({
-        connId: "conn-1",
-        empty: false,
-        sessionKey: "agent:main:main",
-      });
-      return { answer: "It is checking the fix.", ts: 123 };
-    });
+  it("forwards the authenticated request lifetime and emits one final response", async () => {
+    const controller = new AbortController();
+    const ask = vi.fn(async () => ({ answer: "Bound to this connection.", ts: 124 }));
     const respond = await invoke(
       "sessions.companion.ask",
-      { sessionKey: "agent:main:main", question: "What is happening?" },
+      { sessionKey: "agent:main:main", question: "Who owns this ask?" },
       { ask },
-      {
-        connId: "conn-1",
-        connect: { caps: [GATEWAY_CLIENT_CAPS.SESSION_COMPANION_PROGRESS] },
-      },
+      { connId: "conn-1" },
+      controller.signal,
     );
 
     expect(ask).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
-      question: "What is happening?",
+      question: "Who owns this ask?",
       connId: "conn-1",
+      signal: controller.signal,
     });
-    expect(respond.mock.calls).toEqual([
-      [true, { status: "accepted", empty: false }],
-      [true, { answer: "It is checking the fix.", ts: 123 }],
-    ]);
+    expect(respond.mock.calls).toEqual([[true, { answer: "Bound to this connection.", ts: 124 }]]);
   });
 
   it.each([
@@ -173,10 +128,6 @@ describe("session companion RPC", () => {
       "sessions.companion.ask",
       { sessionKey: "agent:main:main", question: "Why?" },
       { ask },
-      {
-        connId: "conn-1",
-        connect: { caps: [GATEWAY_CLIENT_CAPS.SESSION_COMPANION_PROGRESS] },
-      },
     );
     expect(respond).toHaveBeenCalledWith(
       false,

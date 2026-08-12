@@ -1000,12 +1000,12 @@ export function isTestFileTarget(arg: string) {
   return /\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(arg);
 }
 
-function isTestSupportFileTarget(arg: string) {
+export function isTestSupportFileTarget(arg: string) {
   if (/(?:^|\/)(?:test-helpers|test-support)(?:\/|$)/u.test(arg)) {
     return true;
   }
   const basename = path.posix.basename(arg).replace(/\.[cm]?[jt]sx?$/u, "");
-  return /(?:^|[._-])test-(?:helpers|support)(?:[._-]|$)/u.test(basename);
+  return /(?:^|[._-])(?:suite|test-(?:helpers|support))(?:[._-]|$)/u.test(basename);
 }
 
 function isLikelyFileTarget(arg: string) {

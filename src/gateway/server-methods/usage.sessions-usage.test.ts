@@ -23,7 +23,7 @@ vi.mock("../session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
     ...actual,
-    loadSessionEntryReadOnly: vi.fn(actual.loadSessionEntryReadOnly),
+    loadGatewaySessionEntryReadOnly: vi.fn(actual.loadGatewaySessionEntryReadOnly),
     loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({ storePath: "(multiple)", store: {} })),
   };
 });
@@ -106,7 +106,7 @@ import {
 } from "../../infra/session-cost-usage.js";
 import {
   loadCombinedSessionStoreForGatewayCore,
-  loadSessionEntryReadOnly,
+  loadGatewaySessionEntryReadOnly,
 } from "../session-utils.js";
 import { testApi, usageHandlers } from "./usage.js";
 
@@ -190,7 +190,7 @@ function expectSuccessfulSessionsUsage(
 
 function mockStoredSession(key: string, sessionId: string) {
   const entry = { sessionId, updatedAt: 1_000 };
-  vi.mocked(loadSessionEntryReadOnly).mockReturnValueOnce({
+  vi.mocked(loadGatewaySessionEntryReadOnly).mockReturnValueOnce({
     cfg: TEST_RUNTIME_CONFIG,
     canonicalKey: key,
     entry,

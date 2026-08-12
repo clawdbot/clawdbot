@@ -564,6 +564,10 @@ img.chat-avatar.chat-avatar--logo {
   overflow-wrap: break-word;
 }
 
+.chat-thread .chat-bubble {
+  letter-spacing: 0; /* Custodian shares .chat-bubble but keeps the application-wide tracking. */
+}
+
 .chat-group.workspace-conflict .chat-group-messages {
   max-width: min(760px, calc(100% - 46px));
 }

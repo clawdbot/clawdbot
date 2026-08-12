@@ -210,6 +210,15 @@ describe("agent harness runtime SDK facade", () => {
       NonNullable<AgentHarnessSupportContext["modelProvider"]>["runtimePolicy"]
     >().toEqualTypeOf<ProviderModelRouteRuntimePolicy | undefined>();
   });
+
+  it("exports the V2 isolated-completion authorization contract through the harness", () => {
+    type IsolatedCompletionV2 = NonNullable<AgentHarnessV2["runIsolatedCompletionV2"]>;
+
+    expectTypeOf<Parameters<IsolatedCompletionV2>[0]["authorization"]["owner"]>().toEqualTypeOf<
+      "host" | "harness"
+    >();
+    expectTypeOf<Awaited<ReturnType<IsolatedCompletionV2>>["assistant"]>().not.toBeNever();
+  });
 });
 
 describe("agent harness user input helpers", () => {

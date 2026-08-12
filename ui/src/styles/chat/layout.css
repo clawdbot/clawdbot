@@ -3817,64 +3817,89 @@ button.chat-reply-preview--message:disabled {
   bottom: 100%;
   left: 0;
   right: 0;
-  max-height: 320px;
-  overflow-y: auto;
+  max-height: 288px;
+  overflow: hidden;
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
   border-radius: var(--menu-radius);
   box-shadow: var(--shadow-md);
   z-index: 30;
   margin-bottom: 4px;
+}
+
+.slash-menu__scroll {
+  box-sizing: border-box;
+  max-height: inherit;
+  overflow-y: auto;
   padding: var(--menu-padding);
   scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted) 35%, transparent) transparent;
+}
+
+.slash-menu__scroll::-webkit-scrollbar-track,
+.slash-menu__scroll::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 .slash-menu-group + .slash-menu-group {
-  margin-top: 4px;
+  margin-top: 2px;
   padding-top: 4px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
 }
 
 .slash-menu-group__label {
-  padding: 4px 10px 2px;
-  font-size: 0.68rem;
-  font-weight: 700;
+  padding: 4px 8px 3px;
+  font-size: calc(10px * var(--control-ui-text-scale));
+  font-weight: 650;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--accent);
-  opacity: 0.7;
+  letter-spacing: 0.08em;
+  color: var(--muted);
 }
 
 .slash-menu-item {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
   align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
-  border-radius: var(--radius-sm);
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
+  column-gap: 16px;
+  min-height: var(--menu-item-height);
+  padding: 0 8px;
+  border-radius: var(--menu-item-radius);
+  transition: background var(--duration-fast) ease;
 }
 
 .slash-menu-item:hover,
 .slash-menu-item--active {
-  background: color-mix(in srgb, var(--accent) 10%, var(--bg-hover));
+  background: color-mix(in srgb, var(--bg-hover) 52%, transparent);
+}
+
+.slash-menu-leading,
+.slash-menu-trailing {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.slash-menu-leading {
+  gap: 8px;
+}
+
+.slash-menu-trailing {
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .slash-menu-icon {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
   flex-shrink: 0;
-  color: var(--accent);
-  opacity: 0.7;
+  color: var(--muted);
 }
 
 .slash-menu-icon svg {
-  width: 14px;
-  height: 14px;
+  width: 13px;
+  height: 13px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.5px;
@@ -3882,98 +3907,43 @@ button.chat-reply-preview--message:disabled {
   stroke-linejoin: round;
 }
 
-.slash-menu-item--active .slash-menu-icon,
-.slash-menu-item:hover .slash-menu-icon {
-  opacity: 1;
-}
-
 .slash-menu-name {
-  font-size: 0.82rem;
-  font-weight: 600;
-  font-family: var(--mono);
-  color: var(--accent);
+  flex-shrink: 0;
+  max-width: calc(100% - 24px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 500;
+  color: var(--text);
   white-space: nowrap;
 }
 
 .slash-menu-args {
-  font-size: 0.75rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--control-ui-text-xs);
   /* Full-opacity --muted keeps slash-arg hints at WCAG AA on dark surfaces. */
   color: var(--muted);
-  font-family: var(--mono);
+  white-space: nowrap;
 }
 
 .slash-menu-desc {
-  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: right;
-  font-size: 0.75rem;
+  font-size: var(--control-ui-text-sm);
   color: var(--muted);
-}
-
-.slash-menu-item--active .slash-menu-name {
-  color: var(--accent-hover);
-}
-
-.slash-menu-item--active .slash-menu-desc {
-  color: var(--text);
 }
 
 .slash-menu-badge {
-  font-size: 0.65rem;
-  font-weight: 600;
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--accent);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 500;
+  color: var(--muted);
   white-space: nowrap;
   flex-shrink: 0;
-}
-
-.slash-menu-show-more {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  width: 100%;
-  padding: 8px 10px;
-  margin-top: 4px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--accent);
-  background: none;
-  border: none;
-  border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-.slash-menu-show-more:hover {
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  color: var(--accent-hover);
-}
-
-.slash-menu-footer {
-  display: flex;
-  gap: 10px;
-  padding: 6px 10px 4px;
-  font-size: 0.68rem;
-  color: var(--muted);
-  border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
-  margin-top: 4px;
-}
-
-.slash-menu-footer kbd {
-  display: inline-block;
-  padding: 1px 4px;
-  font-size: 0.65rem;
-  font-family: var(--mono);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  background: var(--bg);
-  line-height: 1.3;
 }
 
 .chat-attachments-preview {

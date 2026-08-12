@@ -127,9 +127,16 @@ async function nameIsUnavailable(
 ): Promise<boolean> {
   const worktreePath = path.join(root, name);
   const registered = findRegistryWorktreeByPath(env, worktreePath);
-  if (owner.ownerId && registered && worktreeOwnerMatches(registered, owner)) {
-    // Let createForRepository reuse or restore the caller's existing record.
-    // Treating it as a collision can create a second checkout for one owner.
+  if (
+    owner.ownerId &&
+    registered &&
+    registered.removedAt === undefined &&
+    worktreeOwnerMatches(registered, owner)
+  ) {
+    // Let createForRepository reuse the caller's live checkout; a collision here
+    // could mint a second checkout for one owner. Removed records stay collisions:
+    // restore is explicit-name/id only, so a generated name (title slug or random
+    // crustacean) must never silently resurrect a retired checkout.
     return false;
   }
   if (registered || (await worktreePathExists(worktreePath))) {

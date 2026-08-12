@@ -1,4 +1,3 @@
-import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -13,10 +12,9 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { SessionCompanionAskError } from "./session-companion-ask.js";
-import { registerSessionCompanionProgress } from "./session-companion-progress.js";
 
 export const sessionCompanionHandlers: GatewayRequestHandlers = {
-  "sessions.companion.ask": async ({ params, respond, client, context }) => {
+  "sessions.companion.ask": async ({ params, respond, client, context, signal }) => {
     if (!validateSessionsCompanionAskParams(params)) {
       respond(
         false,
@@ -53,20 +51,12 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const unregisterProgress = client.connect.caps?.includes(
-      GATEWAY_CLIENT_CAPS.SESSION_COMPANION_PROGRESS,
-    )
-      ? registerSessionCompanionProgress({
-          connId: client.connId,
-          sessionKey,
-          listener: (prepared) => respond(true, { status: "accepted", ...prepared }),
-        })
-      : undefined;
     try {
       const result = await context.sessionCompanion.ask({
         sessionKey,
         question,
         connId: client.connId,
+        ...(signal ? { signal } : {}),
       });
       respond(true, result);
     } catch (error) {
@@ -99,8 +89,6 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
           ...(error.retryAfterMs ? { retryAfterMs: error.retryAfterMs } : {}),
         }),
       );
-    } finally {
-      unregisterProgress?.();
     }
   },
   "sessions.companion.state": ({ params, respond, context }) => {
