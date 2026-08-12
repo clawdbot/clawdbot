@@ -2,6 +2,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import { fetchAssistantIdentity } from "../../app/assistant-identity.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { autoPromptNotificationsOnSend } from "../../app/notifications-auto-prompt.ts";
 import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
@@ -277,8 +278,15 @@ export function createPageState(
   };
   attachChatRealtimeActions(state);
   state.loadAssistantIdentity = () => loadPageAssistantIdentity(state);
-  state.handleSendChat = (messageOverride, options) =>
-    handleSendChat(state, messageOverride, options as never);
+  state.handleSendChat = (messageOverride, options) => {
+    if (
+      state.connected &&
+      ((messageOverride ?? state.chatMessage).trim().length > 0 || state.chatAttachments.length > 0)
+    ) {
+      autoPromptNotificationsOnSend(context);
+    }
+    return handleSendChat(state, messageOverride, options as never);
+  };
   state.handleAbortChat = async (options) => {
     await handleAbortChat(state, options as never);
     renderLifecycle.invalidate();
