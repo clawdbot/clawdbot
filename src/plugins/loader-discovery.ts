@@ -13,7 +13,7 @@ import {
 import { createPluginCandidatesFromManifestRegistry, pushDiagnostics } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import {
-  loadPluginManifestRegistry,
+  loadPluginManifestRegistryCore,
   type PluginManifestRecord,
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
@@ -58,7 +58,7 @@ export function resolvePluginLoadDiscovery(params: {
       }));
   const manifestRegistry =
     suppliedManifestRegistry ??
-    loadPluginManifestRegistry({
+    loadPluginManifestRegistryCore({
       config: context.cfg,
       workspaceDir: options.workspaceDir,
       env: context.env,

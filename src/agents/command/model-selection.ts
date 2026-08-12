@@ -59,6 +59,7 @@ import {
   normalizeThinkingCatalogProviders,
   resolveEffectiveAgentRuntime,
 } from "../thinking-runtime.js";
+import { persistAgentSession } from "./attempt-execution.shared.js";
 import {
   normalizeAgentCommandDefaultModelRef,
   normalizeAgentCommandModelRef,
@@ -67,7 +68,6 @@ import {
 import { normalizeExplicitOverrideInput } from "./prepare.js";
 import type { resolveAgentRunContext } from "./run-context.js";
 import { loadTranscriptResolveRuntime } from "./runtime-loaders.js";
-import { persistSessionEntry } from "./session-helpers.js";
 import type { AgentCommandOpts } from "./types.js";
 
 type AgentRunContext = ReturnType<typeof resolveAgentRunContext>;
@@ -219,7 +219,7 @@ export async function resolveEmbeddedModelSelection(params: {
       }
     }
     if (entryUpdated) {
-      sessionEntry = await persistSessionEntry({
+      sessionEntry = await persistAgentSession({
         sessionStore: params.sessionStore,
         sessionKey: params.sessionKey,
         storePath: params.storePath,
@@ -512,15 +512,16 @@ export async function resolveEmbeddedModelSelection(params: {
     primaryConfiguredThinkLevel !== "off" &&
     !hasResolvedThinkingCatalogEntry({ catalog: catalogForThinking, provider, model })
   ) {
-    const { loadPreparedModelCatalogSnapshot } = await import("../model-catalog.runtime.js");
+    // Thinking capability is a per-model fact; never materialize the full live catalog here.
+    const { loadProviderScopedThinkingCatalog } = await import("../model-catalog.runtime.js");
     const runtimeCatalog = normalizeThinkingCatalogProviders(
-      (
-        await loadPreparedModelCatalogSnapshot({
-          config: params.cfg,
-          agentId: params.sessionAgentId,
-          workspaceDir: params.workspaceDir,
-        })
-      ).entries,
+      await loadProviderScopedThinkingCatalog({
+        config: params.cfg,
+        provider,
+        model,
+        ...(params.sessionAgentId ? { agentId: params.sessionAgentId } : {}),
+        ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      }),
     );
     const allowedRuntimeCatalog = createModelVisibilityPolicy({
       cfg: params.cfg,
@@ -595,7 +596,7 @@ export async function resolveEmbeddedModelSelection(params: {
       thinkingLevel: params.thinkOverride,
     };
     sessionEntry =
-      (await persistSessionEntry({
+      (await persistAgentSession({
         sessionStore: params.sessionStore,
         sessionKey: params.sessionKey,
         storePath: params.storePath,

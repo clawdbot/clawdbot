@@ -151,17 +151,17 @@ Local mode (default) walks through these steps:
    provider-specific manual auth), including Custom Provider
    (OpenAI-compatible, OpenAI Responses-compatible, Anthropic-compatible, or
    Unknown auto-detect). Pick a default model.
-   Fresh OpenAI API-key setup defaults to `openai/gpt-5.6` (the bare direct-API
-   id resolves to Sol); fresh ChatGPT/Codex setup defaults to
-   `openai/gpt-5.6-sol`. Re-running setup preserves an existing explicit model,
-   including `openai/gpt-5.5`. Select `openai/gpt-5.5` explicitly if the
+   Fresh OpenAI API-key and ChatGPT/Codex setup default to
+   `openai/gpt-5.6-sol`. The bare direct-API `openai/gpt-5.6` alias remains
+   supported and resolves to Sol. Re-running setup preserves an existing
+   explicit model, including `openai/gpt-5.5`. Select `openai/gpt-5.5` explicitly if the
    account does not expose GPT-5.6.
    Security note: if this agent will run tools or process webhook/hook
    content, prefer the strongest latest-generation model available and keep
    tool policy strict - weaker or older tiers are easier to prompt-inject.
    For non-interactive runs, `--secret-input-mode ref` stores new credentials
    as env-backed refs; set the provider env var when adding a credential.
-   Existing resolvable named profiles and their `env`, `file`, or `exec` refs
+   Existing resolvable named profiles and their `env`, `file`, `exec`, or `store` refs
    are reused unchanged without a new credential write or additional provider
    env var. Previously stored plaintext is not migrated; see
    [Secrets management](/gateway/secrets). Interactive secret reference mode can

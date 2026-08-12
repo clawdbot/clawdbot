@@ -11,7 +11,7 @@ const runModelsAuthLoginFlowMock = vi.hoisted(() => vi.fn());
 const updateSessionEntryMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../commands/models/auth.js", () => ({
-  runModelsAuthLoginFlow: (opts: unknown) => runModelsAuthLoginFlowMock(opts),
+  runModelsAuthLoginFlowCore: (opts: unknown) => runModelsAuthLoginFlowMock(opts),
 }));
 vi.mock("../../config/sessions/session-accessor.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
@@ -527,6 +527,57 @@ describe("handleLoginCommand", () => {
     });
     resolveLogin();
     await first;
+  });
+
+  it("cancels an expired flow before replacing its reservation", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    let firstSignal: AbortSignal | undefined;
+    runModelsAuthLoginFlowMock
+      .mockImplementationOnce(async (opts: ModelsAuthLoginFlowOptions) => {
+        firstSignal = opts.signal;
+        if (!firstSignal) {
+          throw new Error("expected reservation signal");
+        }
+        const signal = firstSignal;
+        await new Promise<void>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () =>
+              reject(
+                signal.reason instanceof Error ? signal.reason : new Error("Codex login cancelled"),
+              ),
+            { once: true },
+          );
+        });
+        throw new Error("unreachable");
+      })
+      .mockResolvedValueOnce({
+        providerId: "openai",
+        methodId: "device-code",
+        profiles: [],
+      });
+
+    const first = handleLoginCommand(
+      buildLoginParams("/login codex", { opts: blockReplyOpts() }),
+      true,
+    );
+    await vi.waitFor(() => expect(firstSignal).toBeDefined());
+    now.mockReturnValue(15 * 60_000 + 1_001);
+
+    const second = await handleLoginCommand(
+      buildLoginParams("/login codex", { opts: blockReplyOpts() }),
+      true,
+    );
+
+    expect(firstSignal?.aborted).toBe(true);
+    await expect(first).resolves.toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "Codex login did not complete. Send `/login codex` to request a new code.",
+      },
+    });
+    expect(second?.reply?.text).toContain("could not switch");
+    now.mockRestore();
   });
 
   it("rejects non-owner senders before starting login", async () => {

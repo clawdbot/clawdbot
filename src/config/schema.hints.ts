@@ -23,6 +23,7 @@ const GROUP_HINTS = [
   ["gateway", "Gateway", 30],
   ["nodeHost", "Node Host", 35],
   ["cloudWorkers", "Cloud Workers", 37],
+  ["desktop", "Desktop", 38],
   ["agents", "Agents", 40],
   ["tools", "Tools", 50],
   ["bindings", "Bindings", 55],
@@ -85,6 +86,7 @@ const SECTION_DOCS_URLS = {
   voicewake: "https://docs.openclaw.ai/nodes/voicewake",
   presence: "https://docs.openclaw.ai/concepts/presence",
   cloudWorkers: "https://docs.openclaw.ai/gateway/cloud-workers",
+  desktop: "https://docs.openclaw.ai/gateway/configuration",
   worktrees: "https://docs.openclaw.ai/concepts/managed-worktrees",
   proxy: "https://docs.openclaw.ai/security/network-proxy",
   transcripts: "https://docs.openclaw.ai/plugins/meeting-plugins",
@@ -96,6 +98,7 @@ const SECTION_DOCS_URLS = {
 const SECTIONS_WITHOUT_DOCS = ["$schema", "meta", "attachments"] as const;
 
 const FIELD_PLACEHOLDERS: Record<string, string> = {
+  "gateway.publicOrigin": "https://gateway.example.com",
   "gateway.remote.url": "ws://host:18789",
   "gateway.remote.tlsFingerprint": "sha256:ab12cd34…",
   "gateway.remote.sshTarget": "user@host",

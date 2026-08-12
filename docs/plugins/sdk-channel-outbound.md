@@ -201,6 +201,13 @@ Use `payloadOutcomes` when a batch mixes sent, suppressed, and failed
 payloads. Do not infer hook cancellation from an empty legacy
 direct-delivery result.
 
+When a transport creates a thread during its first successful send, the
+outbound adapter may implement `adoptTargetFromDelivery(...)`. Return the
+typed thread ID from the platform receipt and core carries it into later
+payloads, pins, and post-delivery hooks in that durable batch. Core never
+replaces an explicit caller thread, and it does not infer adoption from
+`receipt.threadId` without the adapter opt-in.
+
 ### Automatic unknown-send reconciliation
 
 Set `message.durableFinal.automaticUnknownSendReconciliation` only when the

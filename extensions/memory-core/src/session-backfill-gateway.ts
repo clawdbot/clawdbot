@@ -1,4 +1,3 @@
-import { listAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import { readPositiveIntegerParam, readStringParam } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -6,17 +5,14 @@ import {
   errorShape,
   type GatewayRequestHandlerOptions,
 } from "openclaw/plugin-sdk/gateway-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { listAgentIds } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import {
-  executeSessionBackfill,
-  executeSessionBackfillBatch,
-  normalizeSessionBackfillSelection,
-  type RunSessionBackfillParams,
-  type SessionBackfillResult,
-} from "./session-backfill.js";
+import type { SessionBackfillResult } from "./session-backfill-contract.js";
+import { normalizeSessionBackfillSelection } from "./session-backfill-selection.js";
 
 const SESSION_BACKFILL_GATEWAY_METHODS = {
   preview: "memory.sessionBackfill.preview",
@@ -24,10 +20,12 @@ const SESSION_BACKFILL_GATEWAY_METHODS = {
   rollback: "memory.sessionBackfill.rollback",
 } as const;
 
-type SessionBackfillGatewayParams = Pick<
-  RunSessionBackfillParams,
-  "agentId" | "from" | "to" | "limitDays"
->;
+type SessionBackfillGatewayParams = {
+  agentId: string;
+  from?: string;
+  to?: string;
+  limitDays: number;
+};
 
 type SessionBackfillGatewayResult = {
   days: number;
@@ -44,6 +42,10 @@ type SessionBackfillGatewayResult = {
 
 class InvalidSessionBackfillRequestError extends Error {}
 
+const loadSessionBackfillGatewayRuntime = createLazyRuntimeModule(
+  () => import("./session-backfill-gateway.runtime.js"),
+);
+
 function paramsRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("params must be an object.");
@@ -58,7 +60,7 @@ function assertOnlyKeys(params: Record<string, unknown>, allowed: ReadonlySet<st
   }
 }
 
-function readOptionalString(params: Record<string, unknown>, key: "from" | "to") {
+function readOptionalSessionBoundary(params: Record<string, unknown>, key: "from" | "to") {
   const raw = params[key];
   if (raw !== undefined && typeof raw !== "string") {
     throw new Error(`${key} must be a string.`);
@@ -72,8 +74,8 @@ function readGatewayParams(value: unknown): SessionBackfillGatewayParams {
   const agentId = normalizeAgentId(readStringParam(params, "agentId", { required: true }));
   const selection = normalizeSessionBackfillSelection(
     {
-      from: readOptionalString(params, "from"),
-      to: readOptionalString(params, "to"),
+      from: readOptionalSessionBoundary(params, "from"),
+      to: readOptionalSessionBoundary(params, "to"),
       limitDays: readPositiveIntegerParam(params, "limitDays"),
     },
     { from: "from", to: "to", limitDays: "limitDays" },
@@ -165,6 +167,7 @@ export function registerSessionBackfillGatewayMethods(api: OpenClawPluginApi): v
         }
         try {
           const context = resolveExecutionContext(api, request.agentId);
+          const { executeSessionBackfillBatch } = await loadSessionBackfillGatewayRuntime();
           const execution = await executeSessionBackfillBatch({
             ...request,
             ...context,
@@ -203,6 +206,7 @@ export function registerSessionBackfillGatewayMethods(api: OpenClawPluginApi): v
       }
       try {
         const context = resolveExecutionContext(api, request.agentId);
+        const { executeSessionBackfill } = await loadSessionBackfillGatewayRuntime();
         const result = await executeSessionBackfill({ ...request, ...context, rollback: true });
         respond(true, {
           removedDiaryEntries: result.rollback?.removedDiaryEntries ?? 0,

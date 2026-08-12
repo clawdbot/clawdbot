@@ -7,6 +7,7 @@ import type {
   ExecApprovalRequestPayload,
 } from "../app/exec-approval.ts";
 import { t } from "../i18n/index.ts";
+import { formatCountdown } from "../lib/format.ts";
 
 const DEFAULT_EXEC_APPROVAL_DECISIONS = [
   "allow-once",
@@ -24,14 +25,9 @@ type ExecApprovalCardProps = {
   onDecision: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
 };
 
-export function formatApprovalCountdown(expiresAtMs: number, nowMs: number): string {
-  const totalSeconds = Math.max(0, Math.ceil((expiresAtMs - nowMs) / 1_000));
-  return `${String(Math.floor(totalSeconds / 60)).padStart(2, "0")}:${String(totalSeconds % 60).padStart(2, "0")}`;
-}
-
 export function approvalRemainingLabel(expiresAtMs: number, nowMs: number): string {
   return expiresAtMs > nowMs
-    ? t("execApproval.expiresIn", { time: formatApprovalCountdown(expiresAtMs, nowMs) })
+    ? t("execApproval.expiresIn", { time: formatCountdown(expiresAtMs, nowMs, true) })
     : t("execApproval.expired");
 }
 

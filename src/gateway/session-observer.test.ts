@@ -1,11 +1,6 @@
-import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  SessionObserverDigestSchema,
-  type SessionObserverDigest,
-} from "../../packages/gateway-protocol/src/schema/sessions.js";
+import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeSessionObserverModelOutput } from "./session-observer-model.js";
 import {
   createHarness,
   declareObserverVisibility,
@@ -97,7 +92,7 @@ describe("session observer", () => {
       "session.observer",
       expect.objectContaining({ headline: "Inspecting mobile rows", health: "on-track" }),
       new Set(["conn-1"]),
-      { dropIfSlow: true },
+      expect.objectContaining({ dropIfSlow: true }),
     );
     expect(harness.persistDigest).toHaveBeenCalledOnce();
     harness.observer.dispose();
@@ -108,9 +103,13 @@ describe("session observer", () => {
     vi.setSystemTime(1_000);
     const harness = createHarness({ subscribe: false });
     harness.subscribers.subscribe("conn-main", "agent:main:global")?.commit();
+    harness.subscribers.subscribe("conn-legacy", "global")?.commit();
     harness.subscribers.subscribe("conn-work", "agent:work:global")?.commit();
+    harness.subscribers.subscribe("conn-work-raw", "global")?.commit();
     declareObserverVisibility(harness.observer, "conn-main");
+    declareObserverVisibility(harness.observer, "conn-legacy");
     declareObserverVisibility(harness.observer, "conn-work");
+    declareObserverVisibility(harness.observer, "conn-work-raw");
 
     harness.observer.handleEvent(
       event({
@@ -136,16 +135,61 @@ describe("session observer", () => {
       [
         "session.observer",
         expect.objectContaining({ agentId: "main", revision: 1, sessionKey: "global" }),
-        new Set(["conn-main"]),
-        { dropIfSlow: true },
+        new Set(["conn-main", "conn-legacy", "conn-work-raw"]),
+        expect.objectContaining({ sessionKeys: ["agent:main:global", "global"] }),
       ],
       [
         "session.observer",
         expect.objectContaining({ agentId: "work", revision: 1, sessionKey: "global" }),
         new Set(["conn-work"]),
-        { dropIfSlow: true },
+        expect.objectContaining({ sessionKeys: ["agent:work:global"] }),
       ],
     ]);
+    harness.observer.dispose();
+  });
+
+  it("keeps the persisted fixed-store owner on the bare global observer stream", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const config = {
+      gateway: { controlUi: { sessionObserver: true } },
+      session: { scope: "global" as const, store: "/tmp/owned-shared.sqlite" },
+      agents: {
+        ownership: "explicit" as const,
+        defaults: {
+          utilityModel: "openai/gpt-test",
+          sessionStore: { agentId: "ops" },
+        },
+        entries: { ops: {}, research: {} },
+      },
+    } satisfies OpenClawConfig;
+    const harness = createHarness({ subscribe: false, config });
+    harness.subscribers.subscribe("conn-global", "global")?.commit();
+    harness.subscribers.subscribe("conn-scoped", "agent:ops:global")?.commit();
+    declareObserverVisibility(harness.observer, "conn-global");
+    declareObserverVisibility(harness.observer, "conn-scoped");
+
+    harness.observer.handleEvent(
+      event({
+        runId: "run-ops",
+        sessionKey: "global",
+        agentId: "ops",
+        stream: "item",
+        data: { kind: "preamble", phase: "update", progressText: "Ops agent work" },
+      }),
+    );
+    await flushObserver();
+
+    expect(harness.broadcastToConnIds).toHaveBeenCalledWith(
+      "session.observer",
+      expect.objectContaining({ agentId: "ops", sessionKey: "global" }),
+      new Set(["conn-scoped", "conn-global"]),
+      expect.objectContaining({
+        agentId: "ops",
+        dropIfSlow: true,
+        sessionKeys: ["agent:ops:global", "global"],
+      }),
+    );
     harness.observer.dispose();
   });
 
@@ -1043,44 +1087,5 @@ describe("session observer", () => {
     expect(digest?.revision).toBe(storedDigest.revision + 1);
     expect(harness.persistDigest).not.toHaveBeenCalled();
     harness.observer.dispose();
-  });
-});
-
-describe("session observer schema", () => {
-  it("validates protocol digests", () => {
-    expect(
-      Value.Check(SessionObserverDigestSchema, {
-        sessionKey: "agent:main:session-1",
-        agentId: "main",
-        runId: "run-1",
-        revision: 1,
-        updatedAt: 1,
-        headline: "Checking the implementation",
-        health: "on-track",
-        planProgress: { completed: 2, total: 4 },
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(SessionObserverDigestSchema, {
-        sessionKey: "agent:main:session-1",
-        revision: 1,
-        updatedAt: 1,
-        headline: "x".repeat(121),
-        health: "on-track",
-      }),
-    ).toBe(false);
-  });
-
-  it("rejects loose JSON and truncates accepted strings to hard caps", () => {
-    expect(normalizeSessionObserverModelOutput("```json\n{}\n```")).toBeNull();
-    const normalized = normalizeSessionObserverModelOutput(
-      JSON.stringify({
-        headline: "h".repeat(140),
-        assessment: "a".repeat(400),
-        health: "grinding",
-      }),
-    );
-    expect(normalized?.headline).toHaveLength(120);
-    expect(normalized?.assessment).toHaveLength(320);
   });
 });

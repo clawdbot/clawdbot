@@ -5,7 +5,7 @@ import {
   compactEmbeddedRunForRecovery,
   type EmbeddedRunCompactionRecoveryInput,
 } from "./compaction-runtime.js";
-import { createCompactionDiagId } from "./helpers.js";
+import { createRunRecoveryDiagId } from "./helpers.js";
 
 const MAX_TIMEOUT_COMPACTION_ATTEMPTS = 2;
 
@@ -50,7 +50,7 @@ export async function recoverEmbeddedRunTimeout(
     return false;
   }
 
-  const timeoutDiagId = createCompactionDiagId();
+  const timeoutDiagId = createRunRecoveryDiagId();
   input.state.timeoutCompactionAttempts += 1;
   log.warn(
     `[timeout-compaction] LLM timed out with high prompt token usage (${Math.round(tokenUsedRatio * 100)}%); ` +

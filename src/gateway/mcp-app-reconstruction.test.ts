@@ -30,7 +30,7 @@ vi.mock("./session-transcript-readers.js", () => ({
 }));
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: mocks.loadSessionEntry,
-  loadSessionEntryReadOnly: mocks.loadSessionEntry,
+  loadGatewaySessionEntryReadOnly: mocks.loadSessionEntry,
 }));
 
 import { mintMcpAppViewFromTranscript, restoreMcpAppView } from "./mcp-app-reconstruction.js";
@@ -116,6 +116,7 @@ describe("MCP App transcript reconstruction", () => {
     expect(restored).toEqual({ runtime, view });
     expect(mocks.fetchMcpAppView).toHaveBeenCalledWith({
       runtime,
+      agentId: "main",
       serverName: "demo",
       toolName: "show",
       uiResourceUri: "ui://demo/app",

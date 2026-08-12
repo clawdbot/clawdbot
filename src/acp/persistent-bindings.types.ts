@@ -5,7 +5,7 @@ import {
   normalizeOptionalString as normalizeText,
 } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelId } from "../channels/plugins/types.public.js";
-import { sha256HexPrefix } from "../infra/crypto-digest.js";
+import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import type { SessionBindingRecord } from "../infra/outbound/session-binding-service.js";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
@@ -25,6 +25,7 @@ export type ConfiguredAcpBindingSpec = {
   /** ACP harness agent id override (falls back to agentId when omitted). */
   acpAgentId?: string;
   mode: AcpRuntimeSessionMode;
+  model?: string;
   cwd?: string;
   backend?: string;
   label?: string;
@@ -68,7 +69,7 @@ function buildBindingHash(params: {
   accountId: string;
   conversationId: string;
 }): string {
-  return sha256HexPrefix(`${params.channel}:${params.accountId}:${params.conversationId}`, 16);
+  return sha256HexPrefixCore(`${params.channel}:${params.accountId}:${params.conversationId}`, 16);
 }
 
 /** Builds the stable generated ACP session key for a configured binding. */
@@ -101,6 +102,7 @@ export function toConfiguredAcpBindingRecord(spec: ConfiguredAcpBindingSpec): Se
       agentId: spec.agentId,
       ...(spec.acpAgentId ? { acpAgentId: spec.acpAgentId } : {}),
       label: spec.label,
+      ...(spec.model ? { model: spec.model } : {}),
       ...(spec.backend ? { backend: spec.backend } : {}),
       ...(spec.cwd ? { cwd: spec.cwd } : {}),
     },
@@ -158,6 +160,7 @@ export function resolveConfiguredAcpBindingSpecFromRecord(
     agentId,
     acpAgentId: normalizeText(record.metadata?.acpAgentId),
     mode: normalizeMode(record.metadata?.mode),
+    model: normalizeText(record.metadata?.model),
     cwd: normalizeText(record.metadata?.cwd),
     backend: normalizeText(record.metadata?.backend),
     label: normalizeText(record.metadata?.label),

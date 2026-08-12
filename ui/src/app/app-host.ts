@@ -44,6 +44,7 @@ import { selectShellRouteState, type ShellRouteState } from "./app-host-route-st
 import { OpenClawApp } from "./app-root.ts";
 import {
   isBrowserPanelAvailable,
+  isDesktopPanelAvailable,
   ShellChromeOwner,
   type ShellChromeHost,
 } from "./app-shell-chrome.ts";
@@ -62,6 +63,8 @@ import {
   BROWSER_PANEL_ELEMENT,
   COMMAND_PALETTE_ELEMENT,
   CUSTODIAN_PANEL_ELEMENT,
+  DESKTOP_PANEL_ELEMENT,
+  DEVICE_PAIR_SETUP_ELEMENT,
   EXEC_APPROVAL_ELEMENT,
   preloadOptionalElement,
   TERMINAL_PANEL_ELEMENT,
@@ -130,7 +133,9 @@ class OpenClawShell
   readonly commandPaletteElement = COMMAND_PALETTE_ELEMENT;
   readonly terminalPanelElement = TERMINAL_PANEL_ELEMENT;
   readonly browserPanelElement = BROWSER_PANEL_ELEMENT;
+  readonly desktopPanelElement = DESKTOP_PANEL_ELEMENT;
   readonly custodianPanelElement = CUSTODIAN_PANEL_ELEMENT;
+  readonly devicePairSetupElement = DEVICE_PAIR_SETUP_ELEMENT;
   readonly execApprovalElement = EXEC_APPROVAL_ELEMENT;
   @query("openclaw-command-palette") commandPalette: CommandPaletteElement | undefined;
   @query("openclaw-exec-approval")
@@ -424,7 +429,7 @@ class OpenClawShell
   }
 
   replaceChatWithCurrentSession() {
-    this.shellNavigation.replaceChatWithCurrentSession();
+    return this.shellNavigation.replaceChatWithCurrentSession();
   }
 
   recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]) {
@@ -472,8 +477,6 @@ class OpenClawShell
     this.shellChrome.handleDeferredTerminalToggle(event);
   readonly handleDeferredBrowserToggle = (event: Event) =>
     this.shellChrome.handleDeferredBrowserToggle(event);
-  readonly handleDeferredCustodianToggle = (event: Event) =>
-    this.shellChrome.handleDeferredCustodianToggle(event);
   readonly handleCommandPaletteSlashCommand = (command: string) =>
     this.shellChrome.handleCommandPaletteSlashCommand(command);
 
@@ -520,11 +523,18 @@ class OpenClawShell
     }
     const gatewaySnapshot = context.gateway?.snapshot;
     if (gatewaySnapshot) {
+      const desktopAvailable = isDesktopPanelAvailable(gatewaySnapshot);
+      if (this.commandPalette) {
+        this.commandPalette.desktopAvailable = desktopAvailable;
+      }
       if (isTerminalAvailable(gatewaySnapshot, context.config?.current.terminalEnabled ?? false)) {
         preloadOptionalElement(this, this.terminalPanelElement);
       }
       if (isBrowserPanelAvailable(gatewaySnapshot)) {
         preloadOptionalElement(this, this.browserPanelElement);
+      }
+      if (desktopAvailable) {
+        preloadOptionalElement(this, this.desktopPanelElement);
       }
       if (isGatewayMethodAdvertised(gatewaySnapshot, "openclaw.chat") === true) {
         preloadOptionalElement(this, this.custodianPanelElement);
@@ -532,6 +542,9 @@ class OpenClawShell
     }
     if ((context.overlays?.snapshot.approvalQueue.length ?? 0) > 0) {
       preloadOptionalElement(this, this.execApprovalElement);
+    }
+    if (context.overlays?.snapshot.devicePairSetupOpen) {
+      preloadOptionalElement(this, this.devicePairSetupElement);
     }
     const navState = {
       collapsed: this.nativeNavCollapsed(),
@@ -573,9 +586,9 @@ class OpenClawShell
       : ROUTE_IDS_WITHOUT_WORKBOARD;
   }
 
-  /** Sidebar draft-row hint while the new-session page is open, keyed off its ?agent param. */
-  draftSessionAgentId(): string {
-    return this.shellNavigation.draftSessionAgentId();
+  /** Agent targeted by the open new-session route, keyed off its ?agent param. */
+  newSessionRouteAgentId(): string {
+    return this.shellNavigation.newSessionRouteAgentId();
   }
 
   ensureAgentsList(

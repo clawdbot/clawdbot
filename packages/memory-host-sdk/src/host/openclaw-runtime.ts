@@ -15,7 +15,7 @@ export {
   asToolParamsRecord,
   jsonResult,
   readNumberParam,
-  readStringParam,
+  readToolStringParam as readStringParam,
 } from "../../../../src/agents/tools/common.js";
 export type { AnyAgentTool } from "../../../../src/agents/tools/common.js";
 export {
@@ -86,14 +86,7 @@ export function readTranscriptContentRevisionSync(params: {
     stats.lastObservedMutationAtMs ?? "",
   ].join(":");
 }
-export type { SessionSendPolicyConfig } from "../../../../src/config/types.base.js";
-export type {
-  MemoryBackend,
-  MemoryCitationsMode,
-  MemoryQmdConfig,
-  MemoryQmdIndexPath,
-  MemoryQmdSearchMode,
-} from "../../../../src/config/types.memory.js";
+export type { MemoryCitationsMode } from "../../../../src/config/types.memory.js";
 export {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
@@ -161,7 +154,10 @@ export { parseAgentSessionKey } from "../../../../src/routing/session-key.js";
 export { hasInterSessionUserProvenance } from "../../../../src/sessions/input-provenance.js";
 export { isCronRunSessionKey } from "../../../../src/sessions/session-key-utils.js";
 export { onSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
-export { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../../../../src/utils/cjk-chars.js";
+export {
+  CHARS_PER_TOKEN_ESTIMATE,
+  estimateStringChars,
+} from "@openclaw/normalization-core/cjk-chars";
 export { runTasksWithConcurrency } from "../../../../src/utils/run-with-concurrency.js";
 export { splitShellArgs } from "../../../../src/utils/shell-argv.js";
 export {
@@ -170,8 +166,4 @@ export {
   shortenHomePath,
   truncateUtf16Safe,
 } from "../../../../src/utils.js";
-export {
-  materializeWindowsSpawnProgram,
-  resolveWindowsSpawnProgram,
-} from "../../../../src/plugin-sdk/windows-spawn.js";
 export { resolveGlobalSingleton } from "../../../../src/shared/global-singleton.js";

@@ -274,6 +274,41 @@ describe("windows output encoding", () => {
     expect(decoder.flush()).toBe("");
   });
 
+  it("strips a leading UTF-8 BOM by default", () => {
+    const decoder = createWindowsOutputDecoder({ platform: "linux" });
+
+    expect(decoder.decode(Buffer.from("\uFEFFhello", "utf8"))).toBe("hello");
+    expect(decoder.flush()).toBe("");
+  });
+
+  it("preserves a split UTF-8 BOM when requested on POSIX", () => {
+    const decoder = createWindowsOutputDecoder({
+      platform: "linux",
+      preserveUtf8Bom: true,
+    });
+    const raw = Buffer.from("\uFEFFhello", "utf8");
+
+    expect(decoder.decode(raw.subarray(0, 1))).toBe("");
+    expect(decoder.decode(raw.subarray(1, 2))).toBe("");
+    expect(decoder.decode(raw.subarray(2))).toBe("\uFEFFhello");
+    expect(decoder.flush()).toBe("");
+  });
+
+  it("preserves a split UTF-8 BOM before the Windows codepage fallback", () => {
+    const decoder = createWindowsOutputDecoder({
+      platform: "win32",
+      preserveUtf8Bom: true,
+      windowsEncoding: "gbk",
+    });
+    const raw = Buffer.from("\uFEFF测试", "utf8");
+
+    expect(decoder.decode(raw.subarray(0, 1))).toBe("");
+    expect(decoder.decode(raw.subarray(1, 2))).toBe("");
+    expect(decoder.decode(raw.subarray(2, 4))).toBe("\uFEFF");
+    expect(decoder.decode(raw.subarray(4))).toBe("测试");
+    expect(decoder.flush()).toBe("");
+  });
+
   it("keeps split UTF-8 output intact on POSIX", () => {
     const decoder = createWindowsOutputDecoder({ platform: "linux" });
     const raw = Buffer.from(JSON.stringify({ text: "hello 世" }), "utf8");

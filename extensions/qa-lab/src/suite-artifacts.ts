@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { assertQaSuiteArtifactWritten } from "./artifact-assertion.js";
 import {
   hasQaCrablineArtifactPath,
@@ -9,11 +10,12 @@ import {
 } from "./crabline-artifacts.js";
 import { buildQaSuiteEvidenceSummary, QA_EVIDENCE_FILENAME } from "./evidence-summary.js";
 import type { QaProviderMode } from "./model-selection.js";
+import type { QaTransportDriver } from "./qa-transport-registry.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import { renderQaMarkdownReport, type QaReportScenario } from "./report.js";
 import type { RuntimeId } from "./runtime-parity.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
-import type { QaScorecardChannelDriver, QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
+import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import { splitModelRef } from "./suite-planning.js";
 import { countQaSuiteFailedScenarios, type QaSuiteSummaryJson } from "./suite-summary.js";
 import { createQaSuiteReportNotes } from "./suite-support.js";
@@ -23,6 +25,28 @@ type QaCrablineRuntime = typeof import("@openclaw/crabline");
 type QaCrablineChannelDriverSmokeResult = Awaited<
   ReturnType<QaCrablineRuntime["runOpenClawCrablineChannelDriverSmoke"]>
 >;
+
+/** Atomically replaces each file in order; summary-last is a completion signal, not a set transaction. */
+export async function publishQaSuiteArtifactFiles(params: {
+  outputDir: string;
+  files: readonly { content: string | Uint8Array; filePath: string }[];
+}) {
+  await fs.mkdir(params.outputDir, { recursive: true });
+  const dirMode = (await fs.stat(params.outputDir)).mode & 0o7777;
+  for (const file of params.files) {
+    await replaceFileAtomic({
+      filePath: file.filePath,
+      content: file.content,
+      dirMode,
+      mode: 0o600,
+      preserveExistingMode: true,
+      tempPrefix: `${path.basename(file.filePath)}.qa-artifact`,
+      syncTempFile: true,
+      syncParentDir: true,
+      throwOnCleanupError: true,
+    });
+  }
+}
 
 export type QaSuiteSummaryJsonParams = {
   scenarios: QaSuiteScenarioResult[];
@@ -35,7 +59,8 @@ export type QaSuiteSummaryJsonParams = {
   alternateModel: string;
   fastMode: boolean;
   concurrency: number;
-  channelDriver?: QaScorecardChannelDriver | null;
+  channel?: string | null;
+  channelDriver?: QaTransportDriver | null;
   channelDriverSelection?: QaSuiteChannelDriverSelection | null;
   scenarioIds?: readonly string[];
   runtimePair?: [RuntimeId, RuntimeId];
@@ -94,8 +119,8 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSui
       alternateModelName: alternateSplit?.model ?? null,
       fastMode: params.fastMode,
       concurrency: params.concurrency,
-      channelDriver: params.channelDriver ?? params.channelDriverSelection?.channelDriver ?? null,
-      channel: params.channelDriverSelection?.channel ?? null,
+      channelDriver: params.channelDriver ?? null,
+      channel: params.channel ?? params.channelDriverSelection?.channel ?? null,
       channelCapabilityMatrixPath: params.channelDriverSelection?.capabilityMatrixPath ?? null,
       channelDriverSmokePath: params.channelDriverSelection?.smokeArtifactPath ?? null,
       scenarioIds:
@@ -124,7 +149,8 @@ export async function writeQaSuiteArtifacts(params: {
   alternateModel: string;
   fastMode: boolean;
   concurrency: number;
-  channelDriver?: QaScorecardChannelDriver | null;
+  channel?: string | null;
+  channelDriver?: QaTransportDriver | null;
   channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   isolatedWorkers?: boolean;
   scenarioIds?: readonly string[];
@@ -204,8 +230,9 @@ export async function writeQaSuiteArtifacts(params: {
               : []),
           ],
           evidenceMode: params.evidenceMode,
-          channelId: params.channelDriverSelection?.channel ?? params.transport.id,
-          channelDriver: params.channelDriver ?? params.channelDriverSelection?.channelDriver,
+          channelId:
+            params.channel ?? params.channelDriverSelection?.channel ?? params.transport.id,
+          channelDriver: params.channelDriver ?? undefined,
           env: process.env,
           generatedAt: params.finishedAt.toISOString(),
           primaryModel: params.primaryModel,
@@ -260,22 +287,26 @@ export async function writeQaSuiteArtifacts(params: {
     );
   }
   const writeEvidenceFile = params.writeEvidenceFile ?? true;
-  await fs.writeFile(reportPath, report, "utf8");
-  if (evidence && writeEvidenceFile) {
-    await fs.writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
-  }
-  await fs.writeFile(
-    summaryPath,
-    `${JSON.stringify(
-      buildQaSuiteSummaryJson({
-        ...params,
-        channelDriverSelection: effectiveChannelDriverSelection,
-      }),
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
+  await publishQaSuiteArtifactFiles({
+    outputDir: params.outputDir,
+    files: [
+      { filePath: reportPath, content: report },
+      ...(evidence && writeEvidenceFile
+        ? [{ filePath: evidencePath, content: `${JSON.stringify(evidence, null, 2)}\n` }]
+        : []),
+      {
+        filePath: summaryPath,
+        content: `${JSON.stringify(
+          buildQaSuiteSummaryJson({
+            ...params,
+            channelDriverSelection: effectiveChannelDriverSelection,
+          }),
+          null,
+          2,
+        )}\n`,
+      },
+    ],
+  });
   await assertQaSuiteArtifactWritten("report", reportPath);
   await assertQaSuiteArtifactWritten("summary", summaryPath);
   if (evidence && writeEvidenceFile) {

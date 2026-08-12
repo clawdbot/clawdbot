@@ -107,11 +107,14 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const sandboxSessionKey =
     params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
   const contextSessionKey = params.sessionKey?.trim() || sandboxSessionKey;
-  const sandbox = await resolveSandboxContext({
-    config: params.config,
-    sessionKey: sandboxSessionKey,
-    workspaceDir: resolvedWorkspace,
-  });
+  const sandbox =
+    params.sandbox !== undefined
+      ? params.sandbox
+      : await resolveSandboxContext({
+          config: params.config,
+          sessionKey: sandboxSessionKey,
+          workspaceDir: resolvedWorkspace,
+        });
   preDynamicStartupStages.mark("sandbox");
   const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
     execOverrides: params.execOverrides,
@@ -359,7 +362,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     params.abortSignal?.addEventListener("abort", abortFromUpstream, { once: true });
   }
   const startupBindingBeforeRotation = startupBinding;
-  startupBinding = await rotateOversizedCodexAppServerStartupBinding({
+  const startupBindingResolution = await rotateOversizedCodexAppServerStartupBinding({
     binding: startupBinding,
     bindingStore,
     identity: bindingIdentity,
@@ -369,6 +372,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     config: params.config,
     contextEngineActive: Boolean(activeContextEngine),
   });
+  startupBinding = startupBindingResolution.binding;
   const initialInactiveThreadBootstrapBindingForcedFreshStart =
     initialStartupBindingHadInactiveThreadBootstrap && !startupBinding?.threadId;
   preDynamicStartupStages.mark("rotate-binding");
@@ -396,7 +400,11 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     configuredEvents: options.nativeHookRelay?.events,
     appServer,
   });
-  const mutable = { startupBinding, pluginAppServer: appServer };
+  const mutable = {
+    startupBinding,
+    startupContextTokens: startupBindingResolution.startupContextTokens,
+    pluginAppServer: appServer,
+  };
   const resolveRuntimeOptionsForCurrentBinding = (selection: {
     modelProvider?: string;
     model?: string;

@@ -145,11 +145,13 @@ are matched through your configured model and ClawHub search, and the step can
 be disabled with [`wizard.appRecommendations`](/gateway/configuration-reference#wizard).
 In a macOS, Linux, or Windows desktop session, it then opens the authenticated
 Control UI dashboard and waits up to 60 seconds for the browser client to
-connect. On headless Linux or over SSH, it prints a prominent copy-pasteable
-dashboard URL, including an SSH port-forward command for a loopback Gateway,
-and waits up to five minutes. A successful connection continues in the browser;
-an unreachable Gateway or a timeout falls back to the same terminal hatch as
-before. Pass `--tui` to skip the browser handoff and force that terminal hatch.
+connect. The short-lived handoff gives that exact signed browser a durable
+administrator credential. On headless Linux or over SSH, it prints a prominent
+copy-pasteable dashboard URL, including an SSH port-forward command for a
+loopback Gateway, and waits up to five minutes. A successful connection
+continues in the browser; an unreachable Gateway or a timeout falls back to the
+same terminal hatch as before. Pass `--tui` to skip the browser handoff and
+force that terminal hatch.
 If applying setup fails, onboarding falls back to the conversational OpenClaw
 chat to finish interactively. Channels, agents,
 plugins, and other optional features remain OpenClaw chat territory: run
@@ -218,7 +220,7 @@ OPENCLAW_LOCALE=en openclaw onboard # Explicit English override
 `--non-interactive` requires `--accept-risk` (acknowledges that agents are powerful and full system access is risky). `--mode` defaults to `local`.
 
 ```bash
-openclaw onboard --non-interactive --accept-risk \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --auth-choice custom-api-key \
   --custom-base-url "https://llm.example.com/v1" \
   --custom-model-id "foo-large" \
@@ -233,22 +235,20 @@ openclaw onboard --non-interactive --accept-risk \
 LM Studio also has a provider-specific key flag:
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --auth-choice lmstudio \
   --custom-base-url "http://localhost:1234/v1" \
   --custom-model-id "qwen/qwen3.5-9b" \
-  --lmstudio-api-key "$LM_API_TOKEN" \
-  --accept-risk
+  --lmstudio-api-key "$LM_API_TOKEN"
 ```
 
 Non-interactive Ollama:
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --auth-choice ollama \
   --custom-base-url "http://ollama-host:11434" \
-  --custom-model-id "qwen3.5:27b" \
-  --accept-risk
+  --custom-model-id "qwen3.5:27b"
 ```
 
 `--custom-base-url` defaults to `http://127.0.0.1:11434`. `--custom-model-id` is optional; if omitted, onboarding uses Ollama's suggested defaults. Cloud model IDs such as `kimi-k2.5:cloud` also work here.
@@ -256,13 +256,12 @@ openclaw onboard --non-interactive \
 Store provider keys as refs instead of plaintext:
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --auth-choice openai-api-key \
-  --secret-input-mode ref \
-  --accept-risk
+  --secret-input-mode ref
 ```
 
-With `--secret-input-mode ref`, onboarding stores new credentials as env-backed refs instead of plaintext: auth profiles use `keyRef: { source: "env", provider: "default", id: <envVar> }`, and custom providers use `models.providers.<id>.apiKey` (for example `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`). Set the provider env var when adding a new credential; an inline key flag without its matching env var fails fast. Existing resolvable named auth profiles and their `env`, `file`, or `exec` references are reused unchanged, without a new `apiKey` or `keyRef` write or additional provider env var. Existing plaintext profile credentials are not migrated; run `openclaw secrets configure --apply`, then `openclaw secrets audit --check`. See [Secrets management](/gateway/secrets).
+With `--secret-input-mode ref`, onboarding stores new credentials as env-backed refs instead of plaintext: auth profiles use `keyRef: { source: "env", provider: "default", id: <envVar> }`, and custom providers use `models.providers.<id>.apiKey` (for example `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`). Set the provider env var when adding a new credential; an inline key flag without its matching env var fails fast. Existing resolvable named auth profiles and their `env`, `file`, `exec`, or `store` references are reused unchanged, without a new `apiKey` or `keyRef` write or additional provider env var. Existing plaintext profile credentials are not migrated; run `openclaw secrets configure --apply`, then `openclaw secrets audit --check`. See [Secrets management](/gateway/secrets).
 
 ### Gateway auth (non-interactive)
 
@@ -277,13 +276,12 @@ With `--secret-input-mode ref`, onboarding stores new credentials as env-backed 
 ```bash
 export OPENAI_API_KEY="your-provider-key"
 export OPENCLAW_GATEWAY_TOKEN="your-token"
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --mode local \
   --auth-choice openai-api-key \
   --secret-input-mode ref \
   --gateway-auth token \
-  --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN \
-  --accept-risk
+  --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN
 ```
 
 ### Local gateway health
@@ -307,7 +305,7 @@ openclaw onboard --non-interactive \
 
 ```bash
 # Promptless endpoint selection
-openclaw onboard --non-interactive --accept-risk \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --auth-choice zai-coding-global \
   --zai-api-key "$ZAI_API_KEY"
 
@@ -317,7 +315,7 @@ openclaw onboard --non-interactive --accept-risk \
 Mistral:
 
 ```bash
-openclaw onboard --non-interactive --accept-risk \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --auth-choice mistral-api-key \
   --mistral-api-key "$MISTRAL_API_KEY"
 ```

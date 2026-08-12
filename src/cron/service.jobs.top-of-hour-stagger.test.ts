@@ -1,7 +1,7 @@
 // Top-of-hour stagger tests cover spreading jobs that would otherwise collide.
 import crypto from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import { computeJobNextRunAtMs } from "./service/jobs.js";
+import { computeJobNextRunAtMs } from "./service/jobs-scheduling.js";
 import type { CronJob } from "./types.js";
 
 const DEFAULT_TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1000;

@@ -14,7 +14,8 @@ import {
   resolveBrowserConfig,
 } from "../../plugin-sdk/browser-profiles.js";
 import { defaultRuntime } from "../../runtime.js";
-import type { SkillEligibilityContext, SkillUsagePath } from "../../skills/types.js";
+import { createLazyRuntimeNamedExport } from "../../shared/lazy-runtime.js";
+import type { SkillEligibilityContext, SkillSnapshot, SkillUsagePath } from "../../skills/types.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import { getSandboxBackendWorkdirResolver, requireSandboxBackendFactory } from "./backend.js";
 import { ensureSandboxBrowser } from "./browser.js";
@@ -29,6 +30,11 @@ import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
+const loadSyncWorkspaceSkills = createLazyRuntimeNamedExport(
+  () => import("../../skills/loading/workspace-skill-sync.runtime.js"),
+  "syncWorkspaceSkills",
+);
+
 async function syncSandboxSkillsToWorkspace(params: {
   sourceWorkspaceDir: string;
   targetWorkspaceDir: string;
@@ -36,17 +42,15 @@ async function syncSandboxSkillsToWorkspace(params: {
   agentId: string;
   rawSessionKey: string;
   execOverrides?: ExecPolicyOverrides;
+  skillsSnapshot?: SkillSnapshot;
 }): Promise<{ eligibility?: SkillEligibilityContext; skillUsagePaths?: SkillUsagePath[] }> {
   try {
-    const [
-      { syncSkillsToWorkspace },
-      { getRemoteSkillEligibility },
-      { resolveNodeExecEligibility },
-    ] = await Promise.all([
-      import("../../skills/loading/workspace.js"),
-      import("../../skills/runtime/remote.js"),
-      import("../exec-defaults.js"),
-    ]);
+    const [syncWorkspaceSkills, { getRemoteSkillEligibility }, { resolveNodeExecEligibility }] =
+      await Promise.all([
+        loadSyncWorkspaceSkills(),
+        import("../../skills/runtime/remote.js"),
+        import("../exec-defaults.js"),
+      ]);
     const nodeSkills = resolveNodeExecEligibility({
       cfg: params.config,
       sessionKey: params.rawSessionKey,
@@ -59,12 +63,13 @@ async function syncSandboxSkillsToWorkspace(params: {
         advertiseExecNode: nodeSkills.canExec,
       }),
     };
-    const skillUsagePaths = await syncSkillsToWorkspace({
+    const skillUsagePaths = await syncWorkspaceSkills({
       sourceWorkspaceDir: params.sourceWorkspaceDir,
       targetWorkspaceDir: params.targetWorkspaceDir,
       config: params.config,
       agentId: params.agentId,
       eligibility,
+      skillsSnapshot: params.skillsSnapshot,
     });
     return { eligibility, skillUsagePaths };
   } catch (error) {
@@ -80,6 +85,7 @@ async function ensureSandboxWorkspaceLayout(params: {
   rawSessionKey: string;
   config?: OpenClawConfig;
   execOverrides?: ExecPolicyOverrides;
+  skillsSnapshot?: SkillSnapshot;
   workspaceDir?: string;
 }): Promise<{
   agentWorkspaceDir: string;
@@ -95,6 +101,7 @@ async function ensureSandboxWorkspaceLayout(params: {
     resolveSandboxWorkspaceLayoutPaths({
       cfg,
       rawSessionKey,
+      agentId: params.agentId,
       workspaceDir: params.workspaceDir,
     });
 
@@ -113,6 +120,7 @@ async function ensureSandboxWorkspaceLayout(params: {
       agentId: params.agentId,
       rawSessionKey,
       execOverrides: params.execOverrides,
+      skillsSnapshot: params.skillsSnapshot,
     });
   } else {
     await fs.mkdir(workspaceDir, { recursive: true });
@@ -123,6 +131,7 @@ async function ensureSandboxWorkspaceLayout(params: {
       agentId: params.agentId,
       rawSessionKey,
       execOverrides: params.execOverrides,
+      skillsSnapshot: params.skillsSnapshot,
     });
   }
 
@@ -157,15 +166,6 @@ function resolveSandboxSession(params: {
   }
 
   const cfg = resolveSandboxConfigForAgent(params.config, runtime.agentId);
-  if (cfg.backend === "ssh") {
-    // Never let an unresolved inline SSH credential silently fall through to
-    // ambient host SSH identities for this agent.
-    assertSshSandboxSecretOwnerAvailable({
-      config: params.config,
-      scope: cfg.scope,
-      agentId: runtime.agentId,
-    });
-  }
   return { rawSessionKey, runtime, cfg };
 }
 
@@ -193,10 +193,27 @@ type ResolveSandboxContextParams = {
   execOverrides?: ExecPolicyOverrides;
   requireCurrentConfig?: boolean;
   sessionKey?: string;
+  skillsSnapshot?: SkillSnapshot;
   workspaceDir?: string;
 };
 
 type ResolvedSandboxSession = NonNullable<ReturnType<typeof resolveSandboxSession>>;
+
+function assertSandboxSessionSecretOwnerAvailable(
+  config: OpenClawConfig | undefined,
+  resolved: ResolvedSandboxSession,
+): void {
+  if (resolved.cfg.backend !== "ssh") {
+    return;
+  }
+  // Never let an unresolved inline SSH credential silently fall through to
+  // ambient host SSH identities for this agent.
+  assertSshSandboxSecretOwnerAvailable({
+    config,
+    scope: resolved.cfg.scope,
+    agentId: resolved.runtime.agentId,
+  });
+}
 
 async function resolveProvisionedSandboxContext(
   params: ResolveSandboxContextParams,
@@ -221,6 +238,7 @@ async function resolveProvisionedSandboxContext(
     rawSessionKey,
     config: params.config,
     execOverrides: params.execOverrides,
+    skillsSnapshot: params.skillsSnapshot,
     workspaceDir: params.workspaceDir,
   });
 
@@ -333,6 +351,7 @@ export async function resolveSandboxContext(params: {
   execOverrides?: ExecPolicyOverrides;
   requireCurrentConfig?: boolean;
   sessionKey?: string;
+  skillsSnapshot?: SkillSnapshot;
   workspaceDir?: string;
 }): Promise<SandboxContext | null> {
   const resolved = resolveSandboxSession(params);
@@ -343,6 +362,7 @@ export async function resolveSandboxContext(params: {
   // provisioning. Preserve that owner boundary across backend, browser,
   // registry, and filesystem-bridge setup so model fallback never retries it.
   try {
+    assertSandboxSessionSecretOwnerAvailable(params.config, resolved);
     return await resolveProvisionedSandboxContext(params, resolved);
   } catch (error) {
     throw toSandboxProvisioningError(error, resolved.cfg.backend);
@@ -358,6 +378,7 @@ export async function ensureSandboxWorkspaceForSession(params: {
   if (!resolved) {
     return null;
   }
+  assertSandboxSessionSecretOwnerAvailable(params.config, resolved);
   const { rawSessionKey, cfg, runtime } = resolved;
 
   const {

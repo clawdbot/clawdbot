@@ -1,4 +1,6 @@
 /** Plugin node-host bridge for loading plugin registry commands and dispatching node capabilities. */
+import { asOptionalRecord as normalizeRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
@@ -110,16 +112,6 @@ export function watchRegisteredNodeHostCommandAvailability(
     });
 }
 
-function normalizeString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function normalizeRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function isProviderSafeToolName(value: string): boolean {
   return /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(value);
 }
@@ -131,13 +123,13 @@ function buildNodePluginToolDescriptor(
   if (!agentTool) {
     return null;
   }
-  const name = normalizeString(agentTool.name);
-  const description = normalizeString(agentTool.description);
+  const name = normalizeOptionalString(agentTool.name) ?? "";
+  const description = normalizeOptionalString(agentTool.description) ?? "";
   if (!isProviderSafeToolName(name) || !description) {
     return null;
   }
-  const mcpServer = normalizeString(agentTool.mcp?.server);
-  const mcpTool = normalizeString(agentTool.mcp?.tool);
+  const mcpServer = normalizeOptionalString(agentTool.mcp?.server) ?? "";
+  const mcpTool = normalizeOptionalString(agentTool.mcp?.tool) ?? "";
   return {
     pluginId: entry.pluginId,
     name,

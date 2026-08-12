@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  extractErrorHttpStatus,
   extractLeadingHttpStatus,
   extractProviderWrappedHttpStatus,
   formatRawAssistantErrorForUi,
@@ -55,6 +56,27 @@ describe("extractProviderWrappedHttpStatus", () => {
     expect(extractProviderWrappedHttpStatus("API error (000): something")).toBeNull();
     expect(extractProviderWrappedHttpStatus("API error (999): something")).toBeNull();
     expect(extractProviderWrappedHttpStatus("API error (600): something")).toBeNull();
+  });
+});
+
+describe("extractErrorHttpStatus", () => {
+  it.each([
+    ["HTTP 429 too many requests", 429],
+    ["OpenAI API error (500): upstream failed", 500],
+    ["error, status code: 400, message: invalid request", 400],
+    ["unexpected status 503 from upstream", 503],
+    ["Error: HTTP status: 504, gateway timeout", 504],
+  ])("extracts guarded status from %s", (message, code) => {
+    expect(extractErrorHttpStatus(message)?.code).toBe(code);
+  });
+
+  it.each([
+    "request id req-4291 failed",
+    "input length 14295 tokens exceeds the model limit",
+    "model model-x-500-preview not found",
+    "Image width 500 exceeds the maximum allowed size",
+  ])("rejects embedded numeric text: %s", (message) => {
+    expect(extractErrorHttpStatus(message)).toBeNull();
   });
 });
 

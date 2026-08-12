@@ -275,7 +275,7 @@ export function inferUniqueProviderFromConfiguredModels(
 }
 
 /** Infer a unique provider for a bare model from a provider catalog. */
-export function inferUniqueProviderFromCatalog(params: {
+function inferUniqueProviderFromCatalog(params: {
   catalog: readonly ModelCatalogEntry[];
   model: string;
 }): string | undefined {
@@ -501,7 +501,7 @@ function resolveExactConfiguredProviderRef(
 }
 
 /** Normalize a configured allowlist entry into the canonical provider/model key. */
-export function resolveAllowlistModelKey(
+function resolveAllowlistModelKey(
   params: {
     cfg?: OpenClawConfig;
     raw: string;
@@ -524,50 +524,6 @@ export function resolveAllowlistModelKey(
     return null;
   }
   return modelKey(parsed.provider, parsed.model);
-}
-
-/** Build the exact configured model keys that constrain model visibility. */
-export function buildConfiguredAllowlistKeys(
-  params: {
-    cfg: OpenClawConfig | undefined;
-    defaultProvider: string;
-    agentId?: string;
-    allowManifestNormalization?: boolean;
-    allowPluginNormalization?: boolean;
-  } & ModelManifestNormalizationContext,
-): Set<string> | null {
-  const visibility = parseConfiguredModelVisibilityEntries({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  });
-  if (visibility.exactModelRefs.length === 0) {
-    return null;
-  }
-
-  const aliasIndex = buildModelAliasIndex({
-    cfg: params.cfg ?? {},
-    defaultProvider: params.defaultProvider,
-    agentId: resolvePolicyAliasAgentId(visibility.configPath, params.agentId),
-    allowManifestNormalization: params.allowManifestNormalization,
-    allowPluginNormalization: params.allowPluginNormalization,
-    manifestPlugins: params.manifestPlugins,
-  });
-  const keys = new Set<string>();
-  for (const raw of visibility.exactModelRefs) {
-    const key = resolveAllowlistModelKey({
-      cfg: params.cfg,
-      raw,
-      defaultProvider: params.defaultProvider,
-      aliasIndex,
-      allowManifestNormalization: params.allowManifestNormalization,
-      allowPluginNormalization: params.allowPluginNormalization,
-      manifestPlugins: params.manifestPlugins,
-    });
-    if (key) {
-      keys.add(key);
-    }
-  }
-  return keys.size > 0 ? keys : null;
 }
 
 type BuildModelAliasIndexParams = {

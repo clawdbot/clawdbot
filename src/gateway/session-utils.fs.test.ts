@@ -1,9 +1,14 @@
-// Session filesystem utility tests cover transcript reading, usage extraction,
-// preview rows, message counts, title fields, and archive candidate resolution.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  estimateStringChars,
+  estimateTokensFromChars,
+} from "@openclaw/normalization-core/cjk-chars";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+// Session filesystem utility tests cover transcript reading, usage extraction,
+// preview rows, message counts, title fields, and archive candidate resolution.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import {
@@ -11,13 +16,12 @@ import {
   openFileBackedSessionManagerForTest,
 } from "../../test/helpers/session-manager-file-fixture.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
-import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import {
   ArchivedTranscriptReader,
   buildSessionPreviewItems,
-  readLatestSessionUsageFromTranscriptAsync,
+  readLatestSessionUsageFromTranscriptFileAsync,
   resolveSessionTranscriptCandidates,
   type ReadRecentSessionMessagesOptions,
   type ReadSessionMessagesAsyncOptions,
@@ -221,12 +225,7 @@ function appendBlockedUserMessage(
   return messageId;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function expectMessageContents(messages: unknown[], expected: unknown[]) {
   expect(messages.map((message) => requireRecord(message, "message").content)).toEqual(expected);
@@ -462,31 +461,149 @@ describe("readSessionMessages", () => {
     }
   });
 
-  test("applies reset kept-tail projection to file-backed history", async () => {
-    const sessionId = "test-session-reset-boundary";
-    writeTranscript(tmpDir, sessionId, [
-      { type: "session", version: 3, id: sessionId },
-      createTranscriptMessage("old", null, "user", "old"),
-      createTranscriptMessage("kept-user", "old", "user", "kept question"),
-      createTranscriptMessage("kept-tool", "kept-user", "toolResult", "hidden tool"),
-      createTranscriptMessage("kept-assistant", "kept-tool", "assistant", "kept answer"),
-      {
-        type: "reset",
-        id: "reset-boundary",
-        parentId: "kept-assistant",
-        timestamp: "2026-07-22T00:00:00.000Z",
-        reason: "new",
-        firstKeptEntryId: "kept-user",
-      },
-      createTranscriptMessage("post-reset", "reset-boundary", "user", "new turn"),
-    ]);
+  test.each([
+    {
+      name: "keeps the reset marker first when no earlier entries survive",
+      sessionId: "test-session-reset-no-kept",
+      entries: (sessionId: string) => [
+        { type: "session", version: 3, id: sessionId },
+        createTranscriptMessage("old", null, "user", "old"),
+        {
+          type: "reset",
+          id: "reset-boundary",
+          parentId: "old",
+          timestamp: "2026-07-22T00:00:00.000Z",
+          reason: "reset",
+        },
+        createTranscriptMessage("post-reset", "reset-boundary", "user", "new turn"),
+      ],
+      expected: ["reset", "new turn"],
+    },
+    {
+      name: "places the reset marker between retained and new turns",
+      sessionId: "test-session-reset-kept-tail",
+      entries: (sessionId: string) => [
+        { type: "session", version: 3, id: sessionId },
+        createTranscriptMessage("old", null, "user", "old"),
+        createTranscriptMessage("kept-user", "old", "user", "kept question"),
+        createTranscriptMessage("kept-tool", "kept-user", "toolResult", "hidden tool"),
+        createTranscriptMessage("kept-assistant", "kept-tool", "assistant", "kept answer"),
+        {
+          type: "reset",
+          id: "reset-boundary",
+          parentId: "kept-assistant",
+          timestamp: "2026-07-22T00:00:00.000Z",
+          reason: "new",
+          firstKeptEntryId: "kept-user",
+        },
+        createTranscriptMessage("post-reset", "reset-boundary", "user", "new turn"),
+      ],
+      expected: ["kept question", "kept answer", "reset", "new turn"],
+    },
+    {
+      name: "drops an earlier compaction marker at a later reset boundary",
+      sessionId: "test-session-compaction-then-reset",
+      entries: (sessionId: string) => [
+        { type: "session", version: 3, id: sessionId },
+        createTranscriptMessage("old", null, "user", "old"),
+        {
+          type: "compaction",
+          id: "compaction-before-reset",
+          timestamp: "2026-07-22T00:00:00.000Z",
+        },
+        {
+          type: "reset",
+          id: "reset-boundary",
+          parentId: "compaction-before-reset",
+          timestamp: "2026-07-22T00:01:00.000Z",
+          reason: "reset",
+        },
+        createTranscriptMessage("post-reset", "reset-boundary", "assistant", "new answer"),
+      ],
+      expected: ["reset", "new answer"],
+    },
+    {
+      name: "preserves reset then compaction marker order",
+      sessionId: "test-session-reset-then-compaction",
+      entries: (sessionId: string) => [
+        { type: "session", version: 3, id: sessionId },
+        {
+          type: "reset",
+          id: "reset-boundary",
+          parentId: null,
+          timestamp: "2026-07-22T00:00:00.000Z",
+          reason: "reset",
+        },
+        createTranscriptMessage("post-reset", "reset-boundary", "user", "new turn"),
+        {
+          type: "compaction",
+          id: "compaction-after-reset",
+          parentId: "post-reset",
+          timestamp: "2026-07-22T00:01:00.000Z",
+        },
+        createTranscriptMessage(
+          "post-compaction",
+          "compaction-after-reset",
+          "assistant",
+          "new answer",
+        ),
+      ],
+      expected: ["reset", "new turn", "compaction", "new answer"],
+    },
+  ])("$name", async ({ sessionId, entries, expected }) => {
+    writeTranscript(tmpDir, sessionId, entries(sessionId));
 
-    const messages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
+    const project = (messages: unknown[]) =>
+      messages.map((message) => {
+        const record = message as { content?: unknown; __openclaw?: { kind?: string } };
+        return record["__openclaw"]?.kind ?? record.content;
+      });
+    const full = await readSessionMessagesAsync(sessionId, storePath, undefined, {
       mode: "full",
       reason: "test reset boundary",
     });
+    const recent = await readRecentSessionMessagesWithStatsAsync(sessionId, storePath, undefined, {
+      maxMessages: 10,
+      maxBytes: 16_384,
+    });
 
-    expectMessageContents(messages, ["kept question", "kept answer", "new turn"]);
+    expect(project(full)).toEqual(expected);
+    expect(project(recent.messages)).toEqual(expected);
+  });
+
+  test("keeps reset markers reachable through pagination", async () => {
+    const sessionId = "paginated-branch-with-reset";
+    const sessionFile = writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      createTranscriptMessage("old-user", null, "user", "old prompt"),
+      {
+        type: "reset",
+        id: "reset-1",
+        parentId: "old-user",
+        timestamp: "2026-07-22T00:00:00.000Z",
+        reason: "reset",
+      },
+      createTranscriptMessage("active-user", "reset-1", "user", "active prompt"),
+      createTranscriptMessage("active-assistant", "active-user", "assistant", "active answer"),
+    ]);
+    const newest = await readSessionMessagesPageWithStatsAsync(sessionId, storePath, sessionFile, {
+      offset: 0,
+      maxMessages: 2,
+    });
+    const oldest = await readSessionMessagesPageWithStatsAsync(sessionId, storePath, sessionFile, {
+      offset: 2,
+      maxMessages: 1,
+    });
+
+    expect(newest.totalMessages).toBe(3);
+    expectMessageFields(newest.messages[0], { content: "active prompt", openclaw: { seq: 2 } });
+    expectMessageFields(newest.messages[1], { content: "active answer", openclaw: { seq: 3 } });
+    expect(oldest.totalMessages).toBe(3);
+    expectMessageFields(oldest.messages[0], {
+      role: "system",
+      content: [{ type: "text", text: "Reset" }],
+      openclaw: { kind: "reset", id: "reset-1", seq: 1 },
+    });
   });
 
   test("keeps parentless linear history after a leaf control", async () => {
@@ -1424,7 +1541,7 @@ describe("readLatestSessionUsageFromTranscript", () => {
     const readFileSpy = vi.spyOn(fs, "readFileSync");
 
     try {
-      const snapshot = await readLatestSessionUsageFromTranscriptAsync(sessionId, storePath);
+      const snapshot = await readLatestSessionUsageFromTranscriptFileAsync(sessionId, storePath);
       expectUsageFields(snapshot, {
         modelProvider: "anthropic",
         model: "claude-sonnet-4-6",
@@ -1439,6 +1556,67 @@ describe("readLatestSessionUsageFromTranscript", () => {
     } finally {
       readFileSpy.mockRestore();
     }
+  });
+
+  test("treats unavailable JSONL context as terminal until a later valid snapshot", async () => {
+    const sessionId = "usage-unavailable-upgrade-sequence";
+    const oldCumulative = {
+      message: {
+        role: "assistant",
+        api: "cli",
+        provider: "claude-cli",
+        model: "claude-opus-4-7",
+        usage: { input: 128_814, output: 3_000, cacheRead: 992_953, totalTokens: 1_124_767 },
+      },
+    };
+    const unavailable = {
+      message: {
+        role: "assistant",
+        provider: "claude-cli",
+        model: "claude-opus-4-7",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          contextUsage: { state: "unavailable" },
+        },
+      },
+    };
+    writeTranscript(tmpDir, sessionId, [oldCumulative]);
+    const legacySnapshot = await readLatestSessionUsageFromTranscriptFileAsync(
+      sessionId,
+      storePath,
+    );
+    expect(legacySnapshot?.contextUsage).toEqual({ state: "unavailable" });
+    expect(legacySnapshot?.totalTokens).toBeUndefined();
+    writeTranscript(tmpDir, sessionId, [oldCumulative, unavailable]);
+
+    const unavailableSnapshot = await readLatestSessionUsageFromTranscriptFileAsync(
+      sessionId,
+      storePath,
+    );
+    expect(unavailableSnapshot?.contextUsage).toEqual({ state: "unavailable" });
+    expect(unavailableSnapshot?.totalTokens).toBeUndefined();
+    expect(unavailableSnapshot?.totalTokensFresh).toBeUndefined();
+
+    writeTranscript(tmpDir, sessionId, [
+      oldCumulative,
+      unavailable,
+      {
+        message: {
+          role: "assistant",
+          provider: "claude-cli",
+          model: "claude-opus-4-7",
+          usage: { input: 67_932, output: 2_000, cacheRead: 18_944, totalTokens: 88_876 },
+        },
+      },
+    ]);
+    expectUsageFields(await readLatestSessionUsageFromTranscriptFileAsync(sessionId, storePath), {
+      totalTokens: 86_876,
+      totalTokensFresh: true,
+    });
   });
 
   test("estimates transcript context when local model telemetry is missing", async () => {
@@ -1461,7 +1639,7 @@ describe("readLatestSessionUsageFromTranscript", () => {
       estimateStringChars(userText) + estimateStringChars(assistantText),
     );
 
-    expectUsageFields(await readLatestSessionUsageFromTranscriptAsync(sessionId, storePath), {
+    expectUsageFields(await readLatestSessionUsageFromTranscriptFileAsync(sessionId, storePath), {
       modelProvider: "openai-completions",
       model: "local-llama",
       totalTokens: expectedTotalTokens,

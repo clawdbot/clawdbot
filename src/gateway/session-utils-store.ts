@@ -19,9 +19,7 @@ import { resolveAgentAvatarUrlFromSource } from "../agents/identity-avatar-file.
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
-import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { insideGitCheckout } from "../agents/worktrees/git.js";
-import { listThinkingLevelOptions } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import {
@@ -34,7 +32,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import { listGatewayAgentsBasic } from "./agent-list.js";
-import { resolveGatewaySessionThinkingDefault } from "./session-utils-model.js";
+import type { GatewayAgentOwnership } from "./agent-list.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+import { resolveGatewayModelThinkingProfile } from "./session-utils-model.js";
 import {
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
@@ -101,8 +101,12 @@ function readAcpMetaForDeletedAgentCheck(params: {
   directKeys.add(params.sessionKey);
 
   for (const directKey of directKeys) {
+    const agentId =
+      parseAgentSessionKey(directKey)?.agentId ??
+      tryResolveSessionCompatibilityOwnerAgentId(params.cfg, directKey);
     const acpMeta = readAcpSessionMetaForEntry({
       sessionKey: directKey,
+      ...(agentId ? { agentId } : {}),
       entry: params.entry ?? undefined,
     });
     if (acpMeta) {
@@ -115,8 +119,12 @@ function readAcpMetaForDeletedAgentCheck(params: {
     candidateSessionKeys: directKeys,
     entry: params.entry ?? undefined,
   });
+  const finalAgentId =
+    parseAgentSessionKey(params.sessionKey)?.agentId ??
+    tryResolveSessionCompatibilityOwnerAgentId(params.cfg, params.sessionKey);
   return readAcpSessionMetaForEntry({
     sessionKey: params.sessionKey,
+    ...(finalAgentId ? { agentId: finalAgentId } : {}),
     entry: params.entry ?? undefined,
   });
 }
@@ -151,6 +159,7 @@ function loadSessionEntryWithMode(
       : canonicalMatch?.entry;
   return {
     cfg,
+    agentId: target.agentId,
     storePath,
     store,
     entry,
@@ -160,11 +169,14 @@ function loadSessionEntryWithMode(
   };
 }
 
-export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string; clone?: boolean }) {
+export function loadGatewaySessionEntry(
+  sessionKey: string,
+  opts?: { agentId?: string; clone?: boolean },
+) {
   return loadSessionEntryWithMode(sessionKey, opts, false);
 }
 
-export function loadSessionEntryReadOnly(
+export function loadGatewaySessionEntryReadOnly(
   sessionKey: string,
   opts?: { agentId?: string; clone?: boolean; includeStoreChildEntries?: boolean },
 ) {
@@ -250,18 +262,6 @@ export function isGroupOrChannelDisplaySession(
   );
 }
 
-function isStorePathTemplate(store?: string): boolean {
-  return typeof store === "string" && store.includes("{agentId}");
-}
-
-export function resolveConcreteSessionStorePath(storePath: string | undefined): string | undefined {
-  const trimmed = storePath?.trim();
-  if (!trimmed || trimmed === "(multiple)" || isStorePathTemplate(trimmed)) {
-    return undefined;
-  }
-  return trimmed;
-}
-
 function normalizeFallbackList(values: readonly string[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -312,6 +312,8 @@ export function listAgentsForGateway(
   },
 ): {
   defaultId: string;
+  ownership: GatewayAgentOwnership;
+  selectionRequired: boolean;
   mainKey: string;
   scope: SessionScope;
   agents: GatewayAgentRow[];
@@ -353,20 +355,15 @@ export function listAgentsForGateway(
       sessionKey,
       acpRuntime: false,
     });
-    const thinkingRuntime = resolveEffectiveAgentRuntime({
+    const agentModelCatalog = options?.modelCatalogByAgentId?.get(id) ?? modelCatalog;
+    const thinkingProfile = resolveGatewayModelThinkingProfile({
       cfg,
-      provider: resolvedModel.provider,
-      modelId: resolvedModel.model,
       agentId: id,
+      provider: resolvedModel.provider,
+      model: resolvedModel.model,
+      modelCatalog: agentModelCatalog,
       sessionKey,
     });
-    const agentModelCatalog = options?.modelCatalogByAgentId?.get(id) ?? modelCatalog;
-    const thinkingLevels = listThinkingLevelOptions(
-      resolvedModel.provider,
-      resolvedModel.model,
-      agentModelCatalog,
-      thinkingRuntime,
-    );
     const workspace = resolveAgentWorkspaceDir(cfg, id);
     // Must mirror the sessions.create worktree preflight: subdirectory workspaces inside a
     // repo are worktree-capable, so the UI toggle and the create path cannot diverge.
@@ -380,19 +377,20 @@ export function listAgentsForGateway(
         workspace,
         workspaceGit,
         agentRuntime,
-        thinkingLevels,
-        thinkingOptions: thinkingLevels.map((level) => level.label),
-        thinkingDefault: resolveGatewaySessionThinkingDefault({
-          cfg,
-          provider: resolvedModel.provider,
-          model: resolvedModel.model,
-          agentId: id,
-          modelCatalog: agentModelCatalog,
-          agentRuntime: thinkingRuntime,
-        }),
+        // Preserve the established serialized projection order for byte-stable responses.
+        thinkingLevels: thinkingProfile.thinkingLevels,
+        thinkingOptions: thinkingProfile.thinkingLevels.map((level) => level.label),
+        thinkingDefault: thinkingProfile.thinkingDefault,
       },
       model ? { model } : {},
     );
   });
-  return { defaultId: basic.defaultId, mainKey: basic.mainKey, scope: basic.scope, agents };
+  return {
+    defaultId: basic.defaultId,
+    ownership: basic.ownership!,
+    selectionRequired: basic.selectionRequired!,
+    mainKey: basic.mainKey,
+    scope: basic.scope,
+    agents,
+  };
 }

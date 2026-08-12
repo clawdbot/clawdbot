@@ -1,6 +1,6 @@
 /** Cursor and pagination helpers for ACP session/list requests. */
 import path from "node:path";
-import { readNumber } from "@openclaw/acp-core/meta";
+import { readMetadataNumber } from "@openclaw/acp-core/meta";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 const ACP_LIST_SESSIONS_DEFAULT_PAGE_SIZE = 100;
@@ -74,7 +74,7 @@ export function assertAbsoluteCwd(cwd: string, method: string): void {
 export function resolveListSessionsPageSize(
   meta: Record<string, unknown> | null | undefined,
 ): number {
-  const requested = readNumber(meta, ["limit", "pageSize"]);
+  const requested = readMetadataNumber(meta, ["limit", "pageSize"]);
   if (requested === undefined) {
     return ACP_LIST_SESSIONS_DEFAULT_PAGE_SIZE;
   }

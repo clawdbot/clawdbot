@@ -2,13 +2,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import * as archive from "./archive.js";
 import { resolveExistingInstallPath, withExtractedArchiveRoot } from "./install-flow.js";
 import * as installSource from "./install-source-utils.js";
 
 async function runExtractedArchiveFailureCase(configureArchive: () => void) {
-  vi.spyOn(installSource, "withTempDir").mockImplementation(
+  vi.spyOn(installSource, "withInstallWorkspace").mockImplementation(
     async (_prefix, fn) => await fn("/tmp/openclaw-install-flow"),
   );
   configureArchive();
@@ -26,7 +26,7 @@ function firstMockCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T |
 
 describe("resolveExistingInstallPath", () => {
   it("returns resolved path and stat for existing files", async () => {
-    await withTempDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
+    await withTestDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
       const filePath = path.join(fixtureRoot, "plugin.tgz");
       await fs.writeFile(filePath, "archive");
 
@@ -42,7 +42,7 @@ describe("resolveExistingInstallPath", () => {
   });
 
   it("returns a path-not-found error for missing paths", async () => {
-    await withTempDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
+    await withTestDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
       const missing = path.join(fixtureRoot, "missing.tgz");
 
       const result = await resolveExistingInstallPath(missing);
@@ -66,7 +66,7 @@ describe("withExtractedArchiveRoot", () => {
     const extractDir = path.join(tmpRoot, "extract");
     const packageRoot = path.join(extractDir, "package");
     const withTempDirSpy = vi
-      .spyOn(installSource, "withTempDir")
+      .spyOn(installSource, "withInstallWorkspace")
       .mockImplementation(async (_prefix, fn) => await fn(tmpRoot));
     const extractSpy = vi.spyOn(archive, "extractArchive").mockResolvedValue(undefined);
     const resolveRootSpy = vi.spyOn(archive, "resolvePackedRootDir").mockResolvedValue(packageRoot);

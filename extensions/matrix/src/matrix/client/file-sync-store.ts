@@ -15,7 +15,7 @@ import type {
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { isRecord } from "../../record-shared.js";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import { createAsyncLock } from "../async-lock.js";
 import { LogService } from "../sdk/logger.js";
@@ -166,6 +166,7 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
   private readonly hadCleanShutdownOnLoad: boolean;
   private cleanShutdown = false;
   private dirty = false;
+  private frozen = false;
   private persistTimer: NodeJS.Timeout | null = null;
   private persistPromise: Promise<void> | null = null;
 
@@ -225,6 +226,9 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
   }
 
   override setSyncData(syncData: ISyncResponse): Promise<void> {
+    if (this.frozen) {
+      return Promise.resolve();
+    }
     this.accumulator.accumulate(syncData);
     this.savedSync = this.accumulator.getJSON();
     this.markDirtyAndSchedulePersist();
@@ -238,6 +242,9 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
   }
 
   override storeClientOptions(options: IStoredClientOpts) {
+    if (this.frozen) {
+      return Promise.resolve();
+    }
     this.savedClientOptions = cloneJson(options);
     void super.storeClientOptions(options);
     this.markDirtyAndSchedulePersist();
@@ -285,6 +292,25 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
     this.dirty = true;
   }
 
+  async freezeSyncCursorPersistence(): Promise<void> {
+    this.frozen = true;
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
+    await this.persistPromise;
+  }
+
+  discardPendingSyncCursorPersistence(): void {
+    this.frozen = true;
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
+    this.cleanShutdown = false;
+    this.dirty = false;
+  }
+
   async flush(): Promise<void> {
     if (this.persistTimer) {
       clearTimeout(this.persistTimer);
@@ -301,6 +327,9 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
   }
 
   private markDirtyAndSchedulePersist(): void {
+    if (this.frozen) {
+      return;
+    }
     this.cleanShutdown = false;
     this.dirty = true;
     if (this.persistTimer) {

@@ -2,7 +2,6 @@
 // verification, and requester-spawned access checks.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { GatewayClientRequestError } from "../../gateway/client.js";
 import { looksLikeSessionId } from "../../sessions/session-id.js";
 const callGatewayMock = vi.fn();
 vi.mock("../../gateway/call.js", () => ({
@@ -168,6 +167,7 @@ describe("resolved session visibility checks", () => {
           resolvedViaSessionId: false,
         },
         requesterSessionKey: sessionKey,
+        requesterAgentId: "main",
         restrictToSpawned: false,
         visibilitySessionKey: sessionKey,
       }),
@@ -189,7 +189,7 @@ describe("resolved session visibility checks", () => {
         targetSessionKey: "agent:main:worker",
         restrictToSpawned: false,
         resolvedViaSessionId: false,
-        expectsGateway: false,
+        expectsGateway: true,
       },
       {
         requesterSessionKey: "agent:main:main",
@@ -203,7 +203,7 @@ describe("resolved session visibility checks", () => {
         targetSessionKey: "agent:main:main",
         restrictToSpawned: true,
         resolvedViaSessionId: false,
-        expectsGateway: false,
+        expectsGateway: true,
       },
     ];
 
@@ -218,12 +218,14 @@ describe("resolved session visibility checks", () => {
           resolvedViaSessionId: testCase.resolvedViaSessionId,
         },
         requesterSessionKey: testCase.requesterSessionKey,
+        requesterAgentId: "main",
         restrictToSpawned: testCase.restrictToSpawned,
         visibilitySessionKey: testCase.targetSessionKey,
       });
 
       await expect(result).resolves.toEqual({
         ok: true,
+        agentId: "main",
         key: testCase.targetSessionKey,
         displayKey: testCase.targetSessionKey,
       });
@@ -261,147 +263,75 @@ describe("resolved session visibility checks", () => {
           resolvedViaSessionId: false,
         },
         requesterSessionKey: "agent:main:main",
+        requesterAgentId: "main",
         restrictToSpawned: true,
         visibilitySessionKey: "agent:main:subagent:worker-999",
       }),
     ).resolves.toEqual({
       ok: true,
+      agentId: "main",
       key: "agent:main:subagent:worker-999",
       displayKey: "agent:main:subagent:worker-999",
     });
   });
+
+  it("propagates strict explicit-key resolution failures without a list fallback", async () => {
+    callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "sessions.resolve") {
+        throw new Error("unsupported sessions.resolve shape");
+      }
+      return { sessions: [{ key: "agent:main:subagent:worker" }] };
+    });
+
+    await expect(
+      resolveVisibleSessionReference({
+        action: "history",
+        resolvedSession: {
+          ok: true,
+          key: "agent:main:subagent:worker",
+          displayKey: "agent:main:subagent:worker",
+          resolvedViaSessionId: false,
+        },
+        requesterSessionKey: "agent:main:main",
+        requesterAgentId: "main",
+        restrictToSpawned: true,
+        visibilitySessionKey: "agent:main:subagent:worker",
+      }),
+    ).resolves.toMatchObject({ ok: false, status: "forbidden" });
+    expect(callGatewayMock.mock.calls.map(([request]) => request.method)).toEqual([
+      "sessions.resolve",
+    ]);
+  });
 });
 
 describe("resolveSessionReference", () => {
-  it("prefers a literal current session key before alias fallback", async () => {
-    callGatewayMock.mockResolvedValueOnce({ key: "current" });
+  it("uses a scoped key's encoded owner before visibility policy", async () => {
+    callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: { key?: string; agentId?: string } }) => {
+        expect(request.method).toBe("sessions.resolve");
+        expect(request.params).toMatchObject({ key: "Agent:ops:main", agentId: "ops" });
+        return { key: "agent:ops:main", agentId: "ops" };
+      },
+    );
 
     const result = await resolveSessionReference({
-      sessionKey: "current",
+      sessionKey: "Agent:ops:main",
+      keyAgentId: "main",
+      agentId: "main",
       alias: "main",
       mainKey: "main",
-      requesterInternalKey: "agent:main:subagent:child",
+      requesterInternalKey: "agent:main:main",
       restrictToSpawned: false,
     });
+
     expectResolvedSessionReference(result, {
-      key: "current",
-      displayKey: "current",
+      key: "agent:ops:main",
+      displayKey: "agent:ops:main",
       resolvedViaSessionId: false,
     });
-    expect(callGatewayMock).toHaveBeenCalledWith({
-      method: "sessions.resolve",
-      params: {
-        key: "current",
-        spawnedBy: undefined,
-        allowMissing: true,
-      },
-    });
   });
 
-  it("prefers a literal current sessionId before alias fallback", async () => {
-    callGatewayMock.mockResolvedValueOnce({});
-    callGatewayMock.mockResolvedValueOnce({ key: "agent:ops:main" });
-
-    const result = await resolveSessionReference({
-      sessionKey: "current",
-      alias: "main",
-      mainKey: "main",
-      requesterInternalKey: "agent:main:subagent:child",
-      restrictToSpawned: false,
-    });
-    expectResolvedSessionReference(result, {
-      key: "agent:ops:main",
-      displayKey: "agent:ops:main",
-      resolvedViaSessionId: true,
-    });
-    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
-      method: "sessions.resolve",
-      params: {
-        key: "current",
-        spawnedBy: undefined,
-        allowMissing: true,
-      },
-    });
-    expect(callGatewayMock).toHaveBeenNthCalledWith(2, {
-      method: "sessions.resolve",
-      params: {
-        sessionId: "current",
-        spawnedBy: undefined,
-        includeGlobal: true,
-        includeUnknown: true,
-        allowMissing: true,
-      },
-    });
-  });
-
-  it("retries literal current probes without allowMissing for older gateways", async () => {
-    const unsupportedAllowMissing = () =>
-      new GatewayClientRequestError({
-        code: "INVALID_REQUEST",
-        message: "invalid sessions.resolve params: at root: unexpected property 'allowMissing'",
-      });
-    callGatewayMock
-      .mockRejectedValueOnce(unsupportedAllowMissing())
-      .mockRejectedValueOnce(
-        new GatewayClientRequestError({
-          code: "INVALID_REQUEST",
-          message: "No session found: current",
-        }),
-      )
-      .mockRejectedValueOnce(unsupportedAllowMissing())
-      .mockResolvedValueOnce({ key: "agent:ops:main" });
-
-    const result = await resolveSessionReference({
-      sessionKey: "current",
-      alias: "main",
-      mainKey: "main",
-      requesterInternalKey: "agent:main:subagent:child",
-      restrictToSpawned: false,
-    });
-    expectResolvedSessionReference(result, {
-      key: "agent:ops:main",
-      displayKey: "agent:ops:main",
-      resolvedViaSessionId: true,
-    });
-    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
-      method: "sessions.resolve",
-      params: {
-        key: "current",
-        spawnedBy: undefined,
-        allowMissing: true,
-      },
-    });
-    expect(callGatewayMock).toHaveBeenNthCalledWith(2, {
-      method: "sessions.resolve",
-      params: {
-        key: "current",
-        spawnedBy: undefined,
-      },
-    });
-    expect(callGatewayMock).toHaveBeenNthCalledWith(3, {
-      method: "sessions.resolve",
-      params: {
-        sessionId: "current",
-        spawnedBy: undefined,
-        includeGlobal: true,
-        includeUnknown: true,
-        allowMissing: true,
-      },
-    });
-    expect(callGatewayMock).toHaveBeenNthCalledWith(4, {
-      method: "sessions.resolve",
-      params: {
-        sessionId: "current",
-        spawnedBy: undefined,
-        includeGlobal: true,
-        includeUnknown: true,
-      },
-    });
-  });
-
-  it("does not compatibility-retry unrelated gateway failures", async () => {
-    callGatewayMock.mockRejectedValueOnce(new Error("gateway timeout")).mockResolvedValueOnce({});
-
+  it("resolves current directly to the requester without probing another owner", async () => {
     const result = await resolveSessionReference({
       sessionKey: "current",
       alias: "main",
@@ -414,33 +344,7 @@ describe("resolveSessionReference", () => {
       displayKey: "agent:main:subagent:child",
       resolvedViaSessionId: false,
     });
-    expect(callGatewayMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("skips literal current key lookup when spawned visibility is restricted", async () => {
-    const result = await resolveSessionReference({
-      sessionKey: "current",
-      alias: "main",
-      mainKey: "main",
-      requesterInternalKey: "agent:main:subagent:child",
-      restrictToSpawned: true,
-    });
-    expectResolvedSessionReference(result, {
-      key: "agent:main:subagent:child",
-      displayKey: "agent:main:subagent:child",
-      resolvedViaSessionId: false,
-    });
-    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
-      method: "sessions.resolve",
-      params: {
-        sessionId: "current",
-        spawnedBy: "agent:main:subagent:child",
-        includeGlobal: false,
-        includeUnknown: false,
-        allowMissing: true,
-      },
-    });
-    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("treats the TUI client label as the requester session", async () => {

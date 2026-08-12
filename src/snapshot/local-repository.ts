@@ -31,28 +31,21 @@ import {
   createPrivateSqliteDirectory,
   createPrivateSqliteTempDirectory,
 } from "../infra/sqlite-private-directory.js";
-import {
-  createVerifiedSqliteSnapshot,
-  publishVerifiedSqliteFile,
-  type SqliteSnapshotValidator,
-} from "../infra/sqlite-snapshot.js";
+import { publishVerifiedSqliteFile } from "../infra/sqlite-snapshot.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { runExec } from "../process/exec.js";
-import { isValidAgentId, normalizeAgentId } from "../routing/session-key.js";
-import { assertOpenClawAgentDatabaseForMaintenance } from "../state/openclaw-agent-db.js";
-import { assertOpenClawStateDatabaseForMaintenance } from "../state/openclaw-state-db.js";
 import {
-  sanitizeOpenClawGlobalStateSnapshot,
-  sanitizeOpenClawStateLeaseRows,
-} from "../state/openclaw-state-snapshot-sanitizer.js";
-import {
-  containsAsciiControlCharacter,
   copySnapshotArtifact,
   hashSnapshotArtifact,
   readSnapshotManifest,
   type SnapshotArtifactDigest,
   writeSnapshotManifest,
 } from "./manifest.js";
+import {
+  buildSnapshotValidator,
+  createOpenClawSnapshotCopy,
+  normalizeSnapshotIdentity,
+} from "./openclaw-snapshot-copy.js";
 import {
   SNAPSHOT_MANIFEST_FILENAME,
   SNAPSHOT_SQLITE_FILENAME,
@@ -286,17 +279,9 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
       applyPrivateModeSync(stagingDir, SNAPSHOT_DIRECTORY_MODE);
       await assertPrivateStagingDirectory(stagingIdentity, stagingDir);
       await assertDirectoryIdentity(trustedRepositoryPath, repositoryIdentity);
-      const result = await createVerifiedSqliteSnapshot({
-        sourcePath,
+      const result = await createOpenClawSnapshotCopy({
+        database: { path: sourcePath, identity },
         targetPath: artifactPath,
-        requireNonEmptySource: identity.role !== "generic",
-        transform:
-          identity.role === "global"
-            ? sanitizeOpenClawGlobalStateSnapshot
-            : identity.role === "agent"
-              ? sanitizeOpenClawStateLeaseRows
-              : undefined,
-        validate: buildDatabaseValidator(identity),
       });
       applyPrivateModeSync(artifactPath, SNAPSHOT_FILE_MODE);
       const artifact = await hashSnapshotArtifact(stagingDir);
@@ -726,24 +711,6 @@ async function verifySnapshotDatabaseFile(
   assertArtifactMatchesManifest(artifactPath, verifiedArtifact, manifest);
 }
 
-function normalizeSnapshotIdentity(identity: SnapshotDatabaseIdentity): SnapshotDatabaseIdentity {
-  if (identity.role === "global") {
-    return identity;
-  }
-  if (identity.role === "agent") {
-    const agentId = normalizeAgentId(identity.agentId);
-    if (!isValidAgentId(identity.agentId) || agentId !== identity.agentId) {
-      throw new Error(`SQLite snapshot agent id must be canonical: ${identity.agentId}`);
-    }
-    return { role: "agent", agentId };
-  }
-  const id = identity.id.trim();
-  if (!id || id !== identity.id || id.length > 256 || containsAsciiControlCharacter(id)) {
-    throw new Error("SQLite snapshot generic database id is invalid.");
-  }
-  return { role: "generic", id };
-}
-
 function buildDatabaseManifest(
   identity: SnapshotDatabaseIdentity,
   sourcePath: string,
@@ -759,27 +726,10 @@ function buildDatabaseManifest(
   return { role: "generic", id: identity.id, basename, userVersion };
 }
 
-function buildDatabaseValidator(
-  identity: SnapshotDatabaseIdentity | SnapshotDatabaseManifest,
-): SqliteSnapshotValidator {
-  if (identity.role === "global") {
-    return (database, pathname) =>
-      assertOpenClawStateDatabaseForMaintenance(database, { pathname });
-  }
-  if (identity.role === "agent") {
-    return (database, pathname) =>
-      assertOpenClawAgentDatabaseForMaintenance(database, {
-        agentId: identity.agentId,
-        pathname,
-      });
-  }
-  return () => undefined;
-}
-
 function buildManifestDatabaseValidator(
   manifest: SnapshotDatabaseManifest,
-): SqliteSnapshotValidator {
-  const validateOwner = buildDatabaseValidator(manifest);
+): import("../infra/sqlite-snapshot.js").SqliteSnapshotValidator {
+  const validateOwner = buildSnapshotValidator(manifest);
   return (database, pathname) => {
     validateOwner(database, pathname);
     const userVersion = readSqliteUserVersion(database);
@@ -1276,6 +1226,19 @@ async function assertTrustedStagingRoot(
   }
   await assertTrustedPosixStagingAncestors(trustedRootPath, rootIdentity, uid);
   return trustedRootPath;
+}
+
+/** Create or strictly admit a Git repository through the local snapshot root trust policy. */
+export async function ensurePrivateSnapshotRepositoryRoot(rootPath: string): Promise<string> {
+  try {
+    return await assertTrustedStagingRoot(await fs.lstat(rootPath), rootPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+  const receipt = await ensurePrivateDirectory(rootPath, "Git backup repository");
+  return await assertTrustedStagingRoot(receipt.identity, rootPath);
 }
 
 async function assertPrivateStagingDirectory(

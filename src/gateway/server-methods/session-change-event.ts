@@ -1,7 +1,8 @@
 // Shared sessions.changed broadcaster for gateway RPC and chat-command mutations.
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { hasSessionChangeReceivers } from "../session-change-receivers.js";
 import { buildGatewaySessionEventFields } from "../session-event-payload.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { invalidateSessionSharingSnapshot } from "../session-sharing.js";
 import { loadGatewaySessionRow } from "../session-utils.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
@@ -51,35 +52,48 @@ function broadcastSessionsChanged(
   if (!hasSessionChangeReceivers(connIds)) {
     return;
   }
+  const cfg = context.getRuntimeConfig();
+  const unscopedOwnerAgentId = payload.sessionKey
+    ? tryResolveSessionCompatibilityOwnerAgentId(cfg, payload.sessionKey)
+    : undefined;
+  const effectiveAgentId = payload.agentId ?? unscopedOwnerAgentId;
   const sessionRow = payload.sessionKey
     ? loadGatewaySessionRow(
         payload.sessionKey,
-        payload.sessionKey === "global" && payload.agentId
-          ? { agentId: payload.agentId }
-          : undefined,
+        effectiveAgentId ? { agentId: effectiveAgentId } : undefined,
       )
     : null;
-  const defaultAgentId = resolveDefaultAgentId(context.getRuntimeConfig());
-  const activeRunState = sessionRow
-    ? resolveVisibleActiveSessionRunState({
-        context,
-        requestedKey: payload.sessionKey ?? sessionRow.key,
-        canonicalKey: sessionRow.key,
-        sessionId: sessionRow.sessionId,
-        agentId: sessionRow.key === "global" ? payload.agentId : undefined,
-        defaultAgentId,
-      })
-    : null;
+  let rowAgentId: string | undefined;
+  if (sessionRow) {
+    try {
+      rowAgentId = resolveAgentIdFromSessionKey(sessionRow.key, effectiveAgentId);
+    } catch {
+      rowAgentId = undefined;
+    }
+  }
+  const activeRunState =
+    sessionRow &&
+    (sessionRow.key !== "global" || rowAgentId !== undefined || unscopedOwnerAgentId !== undefined)
+      ? resolveVisibleActiveSessionRunState({
+          context,
+          requestedKey: payload.sessionKey ?? sessionRow.key,
+          canonicalKey: sessionRow.key,
+          sessionId: sessionRow.sessionId,
+          agentId: rowAgentId,
+          defaultAgentId: unscopedOwnerAgentId,
+        })
+      : null;
   context.broadcastToConnIds(
     "sessions.changed",
     {
       ...payload,
+      ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
       ts: Date.now(),
       ...(sessionRow
         ? {
             ...buildGatewaySessionEventFields({
               sessionRow,
-              agentId: payload.agentId,
+              agentId: effectiveAgentId,
               hasActiveRun: activeRunState?.active,
               activeRunIds: activeRunState?.runIds,
             }),
@@ -93,7 +107,7 @@ function broadcastSessionsChanged(
     },
     connIds,
     {
-      ...(payload.agentId ? { agentId: payload.agentId } : {}),
+      ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
       dropIfSlow: true,
       // Scope only to a concrete key; a `[undefined]` scope filters no connection
       // correctly and would strip draft gating, so fall back to an unscoped send.
@@ -168,4 +182,19 @@ export function emitSessionsChanged(context: SessionChangeContext, payload: Sess
   byKey.set(key, next);
   pendingSessionChanges.add(next);
   broadcastSessionsChanged(context, payload);
+}
+
+export function emitSessionArchived(
+  context: SessionChangeContext,
+  sessionKey: string | undefined,
+  agentId?: string,
+): void {
+  if (!sessionKey) {
+    return;
+  }
+  emitSessionsChanged(context, {
+    sessionKey,
+    ...(agentId ? { agentId } : {}),
+    reason: "archive",
+  });
 }

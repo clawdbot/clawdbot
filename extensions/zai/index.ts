@@ -16,7 +16,7 @@ import {
   normalizeApiKeyInput,
   normalizeOptionalSecretInput,
   type SecretInput,
-  upsertAuthProfileWithLock,
+  upsertAuthProfileWithLockOrThrow,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
@@ -41,8 +41,6 @@ import { isGlm52ModelId, resolveThinkingProfile } from "./provider-policy-api.js
 const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
 const PROFILE_ID = "zai:default";
-type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
-
 function resolveDeprecatedPiAgentAuthPath(env: NodeJS.ProcessEnv): string {
   const home = env.HOME?.trim() || env.USERPROFILE?.trim() || os.homedir();
   return path.join(home, ".pi", "agent", "auth.json");
@@ -69,15 +67,6 @@ function resolveDeprecatedPiAgentAccessToken(
     }
   } catch {}
   return undefined;
-}
-
-async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
-  const updated = await upsertAuthProfileWithLock(params);
-  if (!updated) {
-    throw new Error(
-      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
-    );
-  }
 }
 
 function resolveGlm5ForwardCompatModel(ctx: ProviderResolveDynamicModelContext) {

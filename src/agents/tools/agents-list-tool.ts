@@ -5,12 +5,16 @@
  */
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveModelAgentRuntimeMetadata } from "../agent-runtime-metadata.js";
-import { listAgentEntries, listAgentIds, resolveDefaultAgentId } from "../agent-scope-config.js";
-import { resolveAgentConfig, resolveAgentEffectiveModelPrimary } from "../agent-scope.js";
+import { listAgentEntries, listAgentIds } from "../agent-scope-config.js";
+import {
+  resolveAgentConfig,
+  resolveAgentEffectiveModelPrimary,
+  resolveSessionAgentIds,
+} from "../agent-scope.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
-import { resolveSubagentAllowedTargetIds } from "../subagent-target-policy.js";
+import { resolveSubagentAllowedTargetIds } from "../subagents/spawn/subagent-target-policy.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
@@ -96,11 +100,11 @@ export function createAgentsListTool(opts?: {
               mainKey,
             })
           : alias;
-      const requesterAgentId = normalizeAgentId(
-        opts?.requesterAgentIdOverride ??
-          parseAgentSessionKey(requesterInternalKey)?.agentId ??
-          resolveDefaultAgentId(cfg),
-      );
+      const requesterAgentId = resolveSessionAgentIds({
+        config: cfg,
+        sessionKey: requesterInternalKey,
+        agentId: opts?.requesterAgentIdOverride,
+      }).sessionAgentId;
 
       const allowAgents =
         resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ??

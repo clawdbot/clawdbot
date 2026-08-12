@@ -22,6 +22,7 @@ import {
   resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
+import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import {
   resolveAgentWorkspaceDir,
@@ -51,15 +52,23 @@ type PreparedOpenClawModelsJsonSource = ModelsJsonReadyResult & {
   workspaceDir?: string;
 };
 
+type ModelsConfigPluginMetadataSnapshot = Pick<
+  PluginMetadataSnapshot,
+  "index" | "manifestRegistry" | "owners" | "pluginIds"
+>;
+
 type EnsureOpenClawModelsJsonOptions = {
   env?: NodeJS.ProcessEnv;
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
+  pluginMetadataSnapshot?: ModelsConfigPluginMetadataSnapshot;
   preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
   workspaceDir?: string;
   providerDiscoveryProviderIds?: readonly string[];
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
+  onProviderCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
 };
+
+type PlanOpenClawModelsJsonSourceOptions = EnsureOpenClawModelsJsonOptions;
 
 type PlannedOpenClawModelsJsonSource = Readonly<{
   agentDir: string;
@@ -92,7 +101,7 @@ async function buildModelsJsonFingerprint(params: {
   sourceConfigForSecrets: OpenClawConfig;
   agentDir: string;
   workspaceDir?: string;
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index">;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "pluginIds">;
   providerDiscoveryProviderIds?: readonly string[];
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
@@ -120,6 +129,10 @@ async function buildModelsJsonFingerprint(params: {
     pluginCatalogFingerprint,
     workspaceDir: params.workspaceDir,
     pluginMetadataSnapshotIndexFingerprint,
+    pluginMetadataSnapshotPluginIds:
+      params.pluginMetadataSnapshot?.pluginIds === undefined
+        ? null
+        : params.pluginMetadataSnapshot.pluginIds.toSorted(),
     providerDiscoveryProviderIds: params.providerDiscoveryProviderIds,
     providerDiscoveryTimeoutMs: params.providerDiscoveryTimeoutMs,
     providerDiscoveryEntriesOnly: params.providerDiscoveryEntriesOnly === true,
@@ -287,7 +300,7 @@ async function buildModelsJsonSourceFingerprint(
   agentDirOverride?: string,
   options: {
     env?: NodeJS.ProcessEnv;
-    pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
+    pluginMetadataSnapshot?: ModelsConfigPluginMetadataSnapshot;
     workspaceDir?: string;
     providerDiscoveryProviderIds?: readonly string[];
     providerDiscoveryTimeoutMs?: number;
@@ -367,7 +380,7 @@ async function prepareOpenClawModelsJsonSource(
   const fingerprint = sourceFingerprint.fingerprint;
   const cacheKey = modelsJsonReadyCacheKey(targetPath, fingerprint);
   const cached = MODELS_JSON_STATE.readyCache.get(cacheKey);
-  if (cached) {
+  if (cached && !options.onProviderCatalogOutcome) {
     const settled = await cached;
     await ensureModelsFileModeForModelsJson(targetPath);
     return {
@@ -408,6 +421,9 @@ async function prepareOpenClawModelsJsonSource(
         : {}),
       ...(options.providerDiscoveryEntriesOnly === true
         ? { providerDiscoveryEntriesOnly: true }
+        : {}),
+      ...(options.onProviderCatalogOutcome
+        ? { onProviderCatalogOutcome: options.onProviderCatalogOutcome }
         : {}),
     });
 
@@ -490,7 +506,7 @@ async function prepareOpenClawModelsJsonSource(
 export async function planOpenClawModelsJsonSource(
   config?: OpenClawConfig,
   agentDirOverride?: string,
-  options: EnsureOpenClawModelsJsonOptions = {},
+  options: PlanOpenClawModelsJsonSourceOptions = {},
 ): Promise<PlannedOpenClawModelsJsonSource> {
   const resolved = resolveModelsConfigInput(config);
   const cfg = resolved.config;
@@ -539,6 +555,9 @@ export async function planOpenClawModelsJsonSource(
       : {}),
     ...(options.providerDiscoveryEntriesOnly === true
       ? { providerDiscoveryEntriesOnly: true }
+      : {}),
+    ...(options.onProviderCatalogOutcome
+      ? { onProviderCatalogOutcome: options.onProviderCatalogOutcome }
       : {}),
   });
   return {

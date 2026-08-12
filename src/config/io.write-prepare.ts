@@ -28,15 +28,6 @@ class DuplicateAgentRosterIdError extends Error {
   }
 }
 
-class UnresolvedAgentRosterIdError extends Error {
-  constructor(authoredId: string) {
-    super(
-      `Config write cannot safely resolve an explicitly replaced agent list slot for id "${authoredId}"; use a resolved literal id before writing the roster.`,
-    );
-    this.name = "UnresolvedAgentRosterIdError";
-  }
-}
-
 function assertUniqueNormalizedLegacyRosterIds(value: readonly unknown[]): void {
   const normalizedIds = new Set<string>();
   for (const entry of value) {
@@ -1200,7 +1191,9 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
                 : entry.id;
             if (typeof id !== "string") {
               if (structurallyExplicitLegacyIndexes.has(index) && typeof entry.id === "string") {
-                throw new UnresolvedAgentRosterIdError(entry.id);
+                throw new Error(
+                  `Config write cannot safely resolve an explicitly replaced agent list slot for id "${entry.id}"; use a resolved literal id before writing the roster.`,
+                );
               }
               return [];
             }
@@ -1494,6 +1487,7 @@ export function resolvePersistCandidateForWrite(params: {
   explicitSetValueSource?: unknown;
   allowedAgentRosterRemovals?: readonly string[];
   allowIncludeAncestorExplicitSetPaths?: boolean;
+  preserveLegacyAgentRoster?: boolean;
 }): unknown {
   const patch = createMergePatch(params.runtimeConfig, params.nextConfig);
   const projectedSource = normalizeTouchedAgentModelMapEntries({
@@ -1560,8 +1554,6 @@ export function resolvePersistCandidateForWrite(params: {
   if (persistCanonicalRoster) {
     persistedBase = deletePathValue(persistedBase, ["agents", "entries"]);
     persistedBase = deletePathValue(persistedBase, ["agents", "list"]);
-  } else if (canCanonicalizeAgentRoster(params.nextConfig)) {
-    persistedBase = restoreAuthoredAgentRoster(persistedBase, rootAuthoredConfig);
   }
   const persisted = injectExplicitlySetPaths({
     valueSource: explicitSetValueSource,
@@ -1582,19 +1574,25 @@ export function resolvePersistCandidateForWrite(params: {
         persistedCandidate: persisted,
       })
     : persisted;
+  const preserveAuthoredRoster =
+    canCanonicalizeAgentRoster(params.nextConfig) || params.preserveLegacyAgentRoster === true;
+  const withAuthoredRoster =
+    persistCanonicalRoster || !preserveAuthoredRoster
+      ? withPreservedIncludes
+      : restoreAuthoredAgentRoster(withPreservedIncludes, rootAuthoredConfig);
   if (persistCanonicalRoster) {
     // A roster rewrite must never drop entries the mutation did not explicitly delete.
     // A 2026-07-25 production incident lost agents.entries.main twice through silent rewrites.
     assertCanonicalAgentRosterRetainsEntries({
       currentConfig: params.sourceConfig,
-      canonicalConfig: withPreservedIncludes,
+      canonicalConfig: withAuthoredRoster,
       allowedRemovals: params.allowedAgentRosterRemovals,
     });
   }
   const withSchema = preserveRootSchemaUri({
     rootAuthoredConfig,
     nextConfig: params.nextConfig,
-    persistedCandidate: withPreservedIncludes,
+    persistedCandidate: withAuthoredRoster,
   });
   const withAuthoredParams = preserveAuthoredAgentParams({
     sourceConfig: params.sourceConfig,

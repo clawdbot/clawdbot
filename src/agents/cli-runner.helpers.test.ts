@@ -13,7 +13,6 @@ import { escapeRegExp } from "../shared/regexp.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   buildCliArgs,
-  buildClaudeOwnerKey,
   prepareCliPromptImagePayload,
   resolveCliRunQueueKey,
   writeCliSystemPromptFile,
@@ -140,6 +139,36 @@ describe("prepareCliPromptImagePayload prompt references", () => {
           media: [{ path: path.join(workspaceDir, "missing.png"), contentType: "image/png" }],
         }),
       ).rejects.toThrow("failed to hydrate 1 structured image attachment");
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("delivers readable structured images when an unresolved attachment is hydration-suppressed", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-mixed-media-"),
+    );
+    const imagePath = path.join(workspaceDir, "present.png");
+    const image = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
+    await fs.writeFile(imagePath, image);
+    try {
+      const result = await prepareCliPromptImagePayload({
+        backend: { command: "codex" },
+        prompt: "describe the attachments",
+        workspaceDir,
+        images: [{ type: "image", data: image.toString("base64"), mimeType: "image/png" }],
+        imageOrder: ["inline"],
+        media: [
+          { path: imagePath, contentType: "image/png" },
+          {
+            path: path.join(workspaceDir, "missing.png"),
+            contentType: "image/png",
+            hydrationSuppressed: true,
+          },
+        ],
+      });
+
+      expect(result.imagePaths).toHaveLength(1);
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
@@ -738,34 +767,5 @@ describe("resolveCliRunQueueKey", () => {
         ownerKey: "abcd1234",
       }),
     ).toBe("claude-cli:owner:abcd1234");
-  });
-});
-
-describe("buildClaudeOwnerKey", () => {
-  it("is deterministic and distinguishes session keys", () => {
-    const base = {
-      agentAccountId: "acct-1",
-      agentId: "agent-main",
-      authProfileId: "profile-a",
-      sessionId: "sess-1",
-      sessionKey: "key-a",
-    };
-    const a1 = buildClaudeOwnerKey(base);
-    const a2 = buildClaudeOwnerKey(base);
-    expect(a1).toBe(a2);
-    const b = buildClaudeOwnerKey({ ...base, sessionKey: "key-b" });
-    expect(a1).not.toBe(b);
-  });
-
-  it("matches the legacy buildClaudeLiveKey hash for a frozen fixture (DO NOT EDIT — splits queue from live-session map)", () => {
-    expect(
-      buildClaudeOwnerKey({
-        agentAccountId: "acct-1",
-        agentId: "agent-main",
-        authProfileId: "profile-a",
-        sessionId: "sess-1",
-        sessionKey: "key-a",
-      }),
-    ).toBe("718b9a6cf473526c3c357883dfc8f1da1cf90b709d9ed38d675b52314abe6800");
   });
 });

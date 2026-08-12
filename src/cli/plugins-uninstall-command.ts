@@ -6,7 +6,7 @@ import {
   replaceConfigFile,
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { parseClawHubPluginSpec } from "../infra/clawhub.js";
+import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {
@@ -64,6 +64,9 @@ async function runPluginUninstallCommandUnlocked(
     assertConfigWriteAllowedInCurrentMode();
   }
 
+  const { loadInstalledPluginIndex } = await import("../plugins/installed-plugin-index.js");
+  const { resolveInstalledPluginPackageOwnership } =
+    await import("../plugins/installed-plugin-package-ownership.js");
   const {
     loadInstalledPluginIndexInstallRecords,
     removePluginInstallRecordFromRecords,
@@ -77,10 +80,11 @@ async function runPluginUninstallCommandUnlocked(
     formatUninstallSlotResetPreview,
     planPluginUninstall,
     pluginUninstallTargetExists,
-    prepareConfigForPendingPluginDirectoryRemoval,
     resolveUninstallChannelConfigKeys,
     UNINSTALL_ACTION_LABELS,
   } = await import("../plugins/uninstall.js");
+  const { prepareConfigForPendingPluginDirectoryRemovalSet, recordPluginPackageUninstallPlan } =
+    await import("../plugins/uninstall-package-plan.js");
   const { commitPluginInstallRecordsWithConfig } =
     await import("../plugins/install-record-commit.js");
   const { selectInstallMutationWriteOptions } = await import("../plugins/install-persistence.js");
@@ -102,6 +106,7 @@ async function runPluginUninstallCommandUnlocked(
     { command: "uninstall" },
   );
   const cfg = withPluginInstallRecords(sourceConfig, installRecords);
+  const installedIndex = loadInstalledPluginIndex({ config: cfg, installRecords });
   const report = tracePluginLifecyclePhase(
     "plugin registry snapshot",
     () => buildPluginSnapshotReport({ config: cfg }),
@@ -124,15 +129,42 @@ async function runPluginUninstallCommandUnlocked(
     runtime.exit(1);
     return;
   }
-  const { plugin, pluginId } = selection.value;
-  const channelIds = plugin?.channelIds;
-  const initialPlan = planPluginUninstall({
-    config: cfg,
-    pluginId,
-    channelIds,
-    deleteFiles: !keepFiles,
-    extensionsDir,
-  });
+  const { plugin } = selection.value;
+  const requestedPluginId = selection.value.pluginId;
+  const ownership = resolveInstalledPluginPackageOwnership(installedIndex, requestedPluginId);
+  if (!ownership.ok) {
+    runtime.error(ownership.error);
+    runtime.exit(1);
+    return;
+  }
+  const { installOwner: pluginId, pluginIds: ownedPluginIds } = ownership.value;
+  const channelIds =
+    ownedPluginIds.length === 1 && ownedPluginIds[0] === requestedPluginId
+      ? plugin?.channelIds
+      : [
+          ...new Set(
+            ownedPluginIds.flatMap(
+              (entryId) => report.plugins.find((entry) => entry.id === entryId)?.channelIds ?? [],
+            ),
+          ),
+        ];
+  const initialPlan = planPluginUninstall(
+    recordPluginPackageUninstallPlan(
+      {
+        config: cfg,
+        pluginId,
+        ...(channelIds !== undefined ? { channelIds } : {}),
+        deleteFiles: !keepFiles,
+        extensionsDir,
+      },
+      {
+        runtimePluginIds: ownedPluginIds,
+        runtimeLoadPaths: ownedPluginIds.flatMap(
+          (entryId) => report.plugins.find((entry) => entry.id === entryId)?.source ?? [],
+        ),
+      },
+    ),
+  );
   if (!initialPlan.ok) {
     if (plugin) {
       runtime.error(
@@ -186,6 +218,11 @@ async function runPluginUninstallCommandUnlocked(
     runtime.log(
       `Plugin: ${theme.command(pluginName)}${pluginName !== pluginId ? theme.muted(` (${pluginId})`) : ""}`,
     );
+    if (ownedPluginIds.length > 1 || requestedPluginId !== pluginId) {
+      runtime.log(
+        `Package owner: ${theme.command(pluginId)}; all entries will be removed: ${ownedPluginIds.join(", ")}`,
+      );
+    }
     runtime.log(`Will remove: ${preview.length > 0 ? preview.join(", ") : "(nothing)"}`);
 
     const { collectClawPluginUninstallWarnings } =
@@ -208,7 +245,11 @@ async function runPluginUninstallCommandUnlocked(
   if (!opts.force) {
     let confirmed: boolean;
     try {
-      confirmed = await promptYesNo(`Uninstall plugin "${pluginId}"?`);
+      confirmed = await promptYesNo(
+        ownedPluginIds.length > 1
+          ? `Uninstall plugin package "${pluginId}" and all entries?`
+          : `Uninstall plugin "${pluginId}"?`,
+      );
     } catch (error) {
       if (isPromptInputClosedError(error, PromptInputClosedError)) {
         runtime.error(
@@ -235,7 +276,10 @@ async function runPluginUninstallCommandUnlocked(
     let finalWriteOptions = mutationWriteOptions;
     let directoryResult = { directoryRemoved: false, warnings: [] as string[] };
     if (plan.directoryRemoval) {
-      const disabledConfig = prepareConfigForPendingPluginDirectoryRemoval(sourceConfig, pluginId);
+      const disabledConfig = prepareConfigForPendingPluginDirectoryRemovalSet(
+        sourceConfig,
+        ownedPluginIds,
+      );
       const disabledCommit = await tracePluginLifecyclePhaseAsync(
         "config disable",
         () =>
@@ -267,13 +311,23 @@ async function runPluginUninstallCommandUnlocked(
       const refreshedSnapshot = refreshedPrepared.snapshot;
       const refreshedSourceConfig = (refreshedSnapshot.sourceConfig ??
         refreshedSnapshot.config) as OpenClawConfig;
-      const refreshedPlan = planPluginUninstall({
-        config: withPluginInstallRecords(refreshedSourceConfig, installRecords),
-        pluginId,
-        channelIds,
-        deleteFiles: true,
-        extensionsDir,
-      });
+      const refreshedPlan = planPluginUninstall(
+        recordPluginPackageUninstallPlan(
+          {
+            config: withPluginInstallRecords(refreshedSourceConfig, installRecords),
+            pluginId,
+            ...(channelIds !== undefined ? { channelIds } : {}),
+            deleteFiles: true,
+            extensionsDir,
+          },
+          {
+            runtimePluginIds: ownedPluginIds,
+            runtimeLoadPaths: ownedPluginIds.flatMap(
+              (entryId) => report.plugins.find((entry) => entry.id === entryId)?.source ?? [],
+            ),
+          },
+        ),
+      );
       if (!refreshedPlan.ok) {
         throw new Error(refreshedPlan.error);
       }
@@ -319,8 +373,12 @@ async function runPluginUninstallCommandUnlocked(
       directory: directoryResult.directoryRemoved,
     });
 
+    const uninstalledSubject =
+      ownedPluginIds.length > 1 || requestedPluginId !== pluginId
+        ? `plugin package "${pluginId}" and entries ${ownedPluginIds.join(", ")}`
+        : `plugin "${pluginId}"`;
     runtime.log(
-      `Uninstalled plugin "${pluginId}". Removed: ${removed.length > 0 ? removed.join(", ") : "nothing"}.`,
+      `Uninstalled ${uninstalledSubject}. Removed: ${removed.length > 0 ? removed.join(", ") : "nothing"}.`,
     );
     runtime.log("Restart the gateway to apply changes.");
   };

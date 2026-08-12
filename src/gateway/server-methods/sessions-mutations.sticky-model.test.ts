@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -27,20 +30,6 @@ vi.mock("../../logging/subsystem.js", async () => {
       subsystem === "agents/sticky-model-selection"
         ? { info: effects.info, warn: effects.warn }
         : actual.createSubsystemLogger(subsystem),
-  };
-});
-
-// Sticky-model tests own persistence policy; session-utils.test.ts owns the thinking
-// projection that otherwise materializes provider policy for every mutation here.
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
-  return {
-    ...actual,
-    resolveGatewaySessionThinkingProjection: vi.fn(() => ({
-      agentRuntime: { id: "openclaw", source: "implicit" },
-      effectiveThinkingLevel: "off",
-      thinkingLevels: [],
-    })),
   };
 });
 
@@ -120,7 +109,7 @@ describe("sessions.patch sticky model persistence", () => {
     "persists an accepted model for the resolved $agentId agent",
     async ({ agentId, sessionKey }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        await upsertSessionEntry(
+        await upsertSessionEntryCore(
           { agentId, sessionKey },
           { sessionId: `session-${agentId}`, updatedAt: 1 },
         );
@@ -133,10 +122,10 @@ describe("sessions.patch sticky model persistence", () => {
     },
   );
 
-  it("keeps a non-admin model switch session-scoped", async () => {
+  it("keeps a write-scoped model switch session-only without persisting the configured default", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:dm:non-admin";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         { sessionId: "session-non-admin", updatedAt: 1 },
       );
@@ -157,7 +146,7 @@ describe("sessions.patch sticky model persistence", () => {
   it("returns session success and warns when the sticky config write fails", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:dm:write-failure";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         { sessionId: "session-write-failure", updatedAt: 1 },
       );
@@ -185,7 +174,7 @@ describe("sessions.patch sticky model persistence", () => {
   ])("does not persist when model is $name", async ({ patch }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:dm:no-sticky";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
           sessionId: "session-main",

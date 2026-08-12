@@ -5,7 +5,11 @@ import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
-import type { RealtimeTalkInputDevice } from "../realtime-talk-input.ts";
+import {
+  realtimeTalkDeviceIssueMessage,
+  type RealtimeTalkDeviceIssue,
+  type RealtimeTalkInputDevice,
+} from "../realtime-talk-input.ts";
 import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import { renderMicrophoneActivity, voiceStatusLabel } from "./chat-voice-activity.ts";
@@ -49,18 +53,30 @@ type MicrophonePickerProps = {
   open: boolean;
   selectedDeviceId: string;
   voiceActive: boolean;
-  warning: string | null;
+  issue: RealtimeTalkDeviceIssue | null;
   onOpen: () => void;
   onClose: () => void;
   onSelect: (deviceId: string) => void;
 };
 
 export function renderMicrophonePicker(props: MicrophonePickerProps) {
+  // Discovery reporting an issue with nothing enumerated is the browser stating
+  // there is no capture route at all: a "System default" row would claim a
+  // selection that cannot exist, so the popover shows one empty state instead
+  // of a checked row stacked on two ways of saying the same thing.
+  const unavailable = !props.loading && props.devices.length === 0 ? props.issue : null;
   // System default renders even while discovery runs: the dropdown's one-time
   // focus step needs at least one item or keyboard users never enter the menu.
-  const options = props.loading
-    ? [{ deviceId: "", label: t("chat.composer.systemDefaultMicrophone") }]
-    : [{ deviceId: "", label: t("chat.composer.systemDefaultMicrophone") }, ...props.devices];
+  const options = unavailable
+    ? []
+    : [
+        { deviceId: "", label: t("chat.composer.systemDefaultMicrophone") },
+        ...(props.loading ? [] : props.devices),
+      ];
+  // A machine without a microphone and a browser that cannot enumerate are
+  // facts, not faults; only the recoverable reasons earn the warn tone.
+  const unavailableIsFault =
+    unavailable !== null && unavailable !== "none-found" && unavailable !== "list-unsupported";
   const label = t("chat.composer.microphoneInput");
   return html`
     <wa-dropdown
@@ -84,38 +100,53 @@ export function renderMicrophonePicker(props: MicrophonePickerProps) {
         ${icons.chevronDown}
       </button>
       <div class="chat-talk-input-picker__heading">${label}</div>
-      ${options.map((option) => {
-        const selected = option.deviceId === props.selectedDeviceId;
-        return html`
-          <wa-dropdown-item
-            class="chat-talk-input-picker__item"
-            value=${option.deviceId}
-            type="checkbox"
-            role="menuitemradio"
-            aria-checked=${String(selected)}
-            ${ref((element) => syncDropdownItemRadio(element, selected))}
+      ${unavailable
+        ? html`<div
+            class="chat-talk-input-picker__empty${unavailableIsFault
+              ? " chat-talk-input-picker__empty--fault"
+              : ""}"
+            role="status"
           >
-            <span class="chat-talk-input-picker__label">${option.label}</span>
-            <span slot="details" class="chat-talk-input-picker__check" aria-hidden="true"
-              >${selected ? icons.check : nothing}</span
-            >
-          </wa-dropdown-item>
-        `;
-      })}
-      ${props.loading
-        ? html`<div class="chat-talk-input-picker__note" role="status">${t("common.loading")}</div>`
-        : nothing}
-      ${!props.loading && props.devices.length === 0
-        ? html`<div class="chat-talk-input-picker__note">${t("chat.composer.noMicrophones")}</div>`
-        : nothing}
-      ${props.warning
-        ? html`<div class="chat-talk-input-picker__warning" role="alert">${props.warning}</div>`
-        : nothing}
-      ${props.voiceActive
-        ? html`<div class="chat-talk-input-picker__hint">
-            ${t("chat.composer.microphoneAppliesNextSession")}
+            ${realtimeTalkDeviceIssueMessage(unavailable, "audioinput")}
           </div>`
-        : nothing}
+        : html`
+            ${options.map((option) => {
+              const selected = option.deviceId === props.selectedDeviceId;
+              // Selection is radio-shaped, so the row stays a plain menu item:
+              // wa-dropdown-item type="checkbox" paints its own leading check
+              // and flips it on click, which would contradict this trailing
+              // check whenever the click does not change the stored device.
+              return html`
+                <wa-dropdown-item
+                  class="chat-talk-input-picker__item"
+                  value=${option.deviceId}
+                  role="menuitemradio"
+                  aria-checked=${String(selected)}
+                  ${ref((element) => syncDropdownItemRadio(element, selected))}
+                >
+                  <span class="chat-talk-input-picker__label">${option.label}</span>
+                  <span slot="details" class="chat-talk-input-picker__check" aria-hidden="true"
+                    >${selected ? icons.check : nothing}</span
+                  >
+                </wa-dropdown-item>
+              `;
+            })}
+            ${props.loading
+              ? html`<div class="chat-talk-input-picker__note" role="status">
+                  ${t("common.loading")}
+                </div>`
+              : nothing}
+            ${props.issue
+              ? html`<div class="chat-talk-input-picker__warning" role="alert">
+                  ${realtimeTalkDeviceIssueMessage(props.issue, "audioinput")}
+                </div>`
+              : nothing}
+            ${props.voiceActive
+              ? html`<div class="chat-talk-input-picker__hint">
+                  ${t("chat.composer.microphoneAppliesNextSession")}
+                </div>`
+              : nothing}
+          `}
     </wa-dropdown>
   `;
 }
@@ -278,7 +309,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
             ? nothing
             : html`
                 <span
-                  class="agent-chat__sr-only agent-chat__voice-status"
+                  class="sr-only agent-chat__voice-status"
                   role="status"
                   aria-live="polite"
                   aria-atomic="true"

@@ -10,9 +10,9 @@ import {
 describe("connection user profile helpers", () => {
   it("resolves identity only from the current live presence entry", () => {
     const entries = [
-      { instanceId: "other", user: { id: "other-profile", name: "Other" } },
-      { instanceId: "self", user: { id: "old", name: "Old" }, reason: "disconnect" },
-      { instanceId: "self", user: { id: "profile-1", name: "Ada" } },
+      { instanceId: "other", user: { id: "other-profile", name: "Other" }, ts: 1 },
+      { instanceId: "self", user: { id: "old", name: "Old" }, reason: "disconnect", ts: 2 },
+      { instanceId: "self", user: { id: "profile-1", name: "Ada" }, ts: 3 },
     ];
 
     expect(resolveSelfPresenceUser(entries, "self")).toEqual({ id: "profile-1", name: "Ada" });
@@ -21,7 +21,7 @@ describe("connection user profile helpers", () => {
   });
 
   it("prefers locally refreshed identity state over the presence snapshot", () => {
-    const presenceEntries = [{ instanceId: "self", user: { id: "profile-1", name: "Ada" } }];
+    const presenceEntries = [{ instanceId: "self", user: { id: "profile-1", name: "Ada" }, ts: 1 }];
 
     expect(
       resolveCurrentSelfUser({
@@ -44,7 +44,7 @@ describe("connection user profile helpers", () => {
   });
 
   it("reads presence payloads and builds scoped cache-busted avatar URLs", () => {
-    const entries = [{ instanceId: "self", user: { id: "profile/1" } }];
+    const entries = [{ instanceId: "self", user: { id: "profile/1" }, ts: 1 }];
     expect(readPresenceEntries({ presence: entries })).toEqual(entries);
     expect(readPresenceEntries({ presence: null })).toBeUndefined();
     expect(
@@ -59,9 +59,9 @@ describe("connection user profile helpers", () => {
       userProfileAvatarUrl(
         "wss://remote.example.test",
         "profile-1",
-        42,
+        "content-hash-png",
         "https://gateway.example.test/control/profile",
       ),
-    ).toBe("https://remote.example.test/api/users/profile-1/avatar?v=42");
+    ).toBe("https://remote.example.test/api/users/profile-1/avatar?v=content-hash-png");
   });
 });

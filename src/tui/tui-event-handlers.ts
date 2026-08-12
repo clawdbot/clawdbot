@@ -5,11 +5,11 @@ import {
   type SessionProjectionRunStatus,
 } from "../../packages/gateway-client/src/session-projection.js";
 import {
-  asString,
+  formatPrimitiveString,
   extractTextFromMessage,
   extractTuiAbortedText,
   formatTuiAbortDiagnostic,
-  isCommandMessage,
+  isCommandMarkedMessage,
 } from "./tui-formatters.js";
 import { createTuiRunLifecycle } from "./tui-run-lifecycle.js";
 import { matchesSelectedTuiSession, readTuiSessionUserMessage } from "./tui-session-events.js";
@@ -300,7 +300,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         tui.requestRender(true);
         return;
       }
-      if (isCommandMessage(evt.message)) {
+      if (isCommandMarkedMessage(evt.message)) {
         maybeRefreshHistoryForRun(evt.runId, { wasPendingChatRun: isPendingChatRun });
         const text = extractTextFromMessage(evt.message);
         if (text) {
@@ -568,7 +568,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       !finalizedRuns.has(evt.runId);
     if (
       evt.stream === "lifecycle" &&
-      asString(evt.data?.phase, "") === "start" &&
+      formatPrimitiveString(evt.data?.phase, "") === "start" &&
       !finalizedRuns.has(evt.runId) &&
       !(isLocalBtwRunId?.(evt.runId) ?? false) &&
       matchesSelectedTuiSession(state, evt)
@@ -610,9 +610,9 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       const data = evt.data ?? {};
-      const phase = asString(data.phase, "");
-      const toolCallId = asString(data.toolCallId, "");
-      const toolName = asString(data.name, "tool");
+      const phase = formatPrimitiveString(data.phase, "");
+      const toolCallId = formatPrimitiveString(data.toolCallId, "");
+      const toolName = formatPrimitiveString(data.name, "tool");
       if (!toolCallId) {
         return;
       }

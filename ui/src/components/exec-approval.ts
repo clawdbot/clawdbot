@@ -1,15 +1,16 @@
 // Control UI modal queues approvals that are not currently inline in chat.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import { modalApprovalQueue } from "../app/approval-presentation.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import { t } from "../i18n/index.ts";
+import { formatCountdown } from "../lib/format.ts";
 import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import {
   approvalRemainingLabel,
   approvalTitle,
-  formatApprovalCountdown,
   renderExecApprovalCard,
   resolveApprovalDecisions,
 } from "./exec-approval-card.ts";
@@ -27,7 +28,7 @@ type ExecApprovalProps = {
 
 function compactCommand(command: string): string {
   const singleLine = command.replace(/\s+/g, " ").trim();
-  return singleLine.length > 64 ? `${singleLine.slice(0, 61)}…` : singleLine;
+  return singleLine.length > 64 ? `${truncateUtf16Safe(singleLine, 61)}…` : singleLine;
 }
 
 function renderApprovalQueueList(params: {
@@ -46,7 +47,7 @@ function renderApprovalQueueList(params: {
       ${others.map((entry) => {
         const command = compactCommand(entry.request.command);
         const agent = entry.request.agentId?.trim() || "—";
-        const countdown = formatApprovalCountdown(entry.expiresAtMs, params.nowMs);
+        const countdown = formatCountdown(entry.expiresAtMs, params.nowMs, true);
         return html`
           <button
             class="exec-approval-list__item"

@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { CLI_OUTPUT_MAX_BUFFER } from "./defaults.constants.js";
 import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
@@ -233,7 +233,7 @@ describe("media-understanding CLI audio entry", () => {
   ])(
     "projects facts-first and deprecated template variables for $name",
     async ({ count, leadingEmpty }) => {
-      await withTempDir({ prefix: "openclaw-cli-media-template-" }, async (base) => {
+      await withTestDir({ prefix: "openclaw-cli-media-template-" }, async (base) => {
         const media = await Promise.all(
           Array.from({ length: count }, async (_, index) => {
             const mediaPath = path.join(base, `audio-${index}.wav`);

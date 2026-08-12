@@ -5,10 +5,21 @@
  * companion pass keeps the rest of scripts/** as library project files and
  * makes repository tests real consumers of deliberately testable helpers.
  */
+import fs from "node:fs";
 import productionConfig from "./knip.config.ts";
 
-const scriptEntries = productionConfig.workspaces["."].entry.filter((entry) =>
-  entry.startsWith("scripts/"),
+function isTypedShimImplementationEntry(entry: string): boolean {
+  const filePath = entry.endsWith("!") ? entry.slice(0, -1) : entry;
+  // The export-free Crabbox implementation must remain a root so its library imports stay live.
+  if (!filePath.endsWith(".mts") || filePath === "scripts/crabbox-wrapper.mts") {
+    return false;
+  }
+  const basePath = filePath.slice(0, -".mts".length);
+  return fs.existsSync(`${basePath}.mjs`) || fs.existsSync(`${basePath}.js`);
+}
+
+const scriptEntries = productionConfig.workspaces["."].entry.filter(
+  (entry) => entry.startsWith("scripts/") && !isTypedShimImplementationEntry(entry),
 );
 
 const repositoryToolEntries = [
@@ -47,6 +58,10 @@ const config = {
     ],
     // Oxlint consumes this required default export through a JSON config path.
     "scripts/oxlint-boundary-guards.mjs": ["exports"],
+    // Wrangler consumes the Worker default export and instantiates the Durable
+    // Object class by name from wrangler.jsonc; Knip cannot resolve either.
+    "scripts/cloudflare/src/index.ts": ["exports"],
+    "scripts/cloudflare/src/container.ts": ["exports"],
     "src/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
     "test/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
   },

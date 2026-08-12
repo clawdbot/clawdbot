@@ -79,7 +79,7 @@ export function registerMaintenanceCommands(program: Command) {
     )
     .option(
       "--json",
-      "With --lint, --post-upgrade, --state-sqlite, or --session-sqlite: emit machine-readable JSON output",
+      "Run read-only lint checks as JSON (or emit JSON for another machine mode)",
       false,
     )
     .option(
@@ -110,7 +110,21 @@ export function registerMaintenanceCommands(program: Command) {
         defaultRuntime.exit(2);
         return;
       }
-      if (opts.lint === true) {
+      const jsonImpliesLint =
+        opts.json === true &&
+        opts.lint !== true &&
+        opts.postUpgrade !== true &&
+        typeof opts.stateSqlite !== "string" &&
+        typeof opts.sessionSqlite !== "string" &&
+        !hasSessionSqliteOnlyDoctorOptions(opts);
+      if (jsonImpliesLint && (opts.repair === true || opts.fix === true || opts.force === true)) {
+        defaultRuntime.error(
+          "doctor --json runs read-only lint checks and cannot be combined with --repair, --fix, or --force.",
+        );
+        defaultRuntime.exit(2);
+        return;
+      }
+      if (opts.lint === true || jsonImpliesLint) {
         await runCommandWithRuntime(
           defaultRuntime,
           async () => {
@@ -258,20 +272,12 @@ export function registerMaintenanceCommands(program: Command) {
 }
 
 function hasLintOnlyDoctorOptions(opts: {
-  readonly json?: boolean;
-  readonly postUpgrade?: boolean;
-  readonly stateSqlite?: unknown;
-  readonly sessionSqlite?: unknown;
   readonly severityMin?: unknown;
   readonly all?: boolean;
   readonly skip?: unknown;
   readonly only?: unknown;
 }): boolean {
   return (
-    (opts.json === true &&
-      opts.postUpgrade !== true &&
-      typeof opts.stateSqlite !== "string" &&
-      typeof opts.sessionSqlite !== "string") ||
     typeof opts.severityMin === "string" ||
     opts.all === true ||
     (Array.isArray(opts.skip) && opts.skip.length > 0) ||

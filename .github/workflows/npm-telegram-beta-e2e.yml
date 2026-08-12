@@ -185,7 +185,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.15.0"
+  NODE_VERSION: "24.16.0"
 
 jobs:
   run_package_telegram_e2e:
@@ -230,6 +230,16 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
+
+      - name: Build private QA harness runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_BUILD_PRIVATE_QA: "1"
+        run: |
+          set -euo pipefail
+          pnpm build qaRuntime
+          test -f dist/plugin-sdk/qa-runtime.js
+          test -f dist/extensions/qa-lab/runtime-api.js
 
       - name: Validate inputs and secrets
         env:

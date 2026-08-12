@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { sleep } from "../utils/sleep.js";
 import { exerciseTuiCommandSurface } from "./tui-pty-command-surfaces-test-support.js";
 import {
   approveWorkspaceSkill,
@@ -22,7 +23,7 @@ import {
   streamingPrefixFrame,
   toolFrame,
 } from "./tui-pty-rendering-test-support.js";
-import { sleep, startPty, type PtyRun } from "./tui-pty-test-support.js";
+import { startPty, type PtyRun } from "./tui-pty-test-support.js";
 
 const activeRuns: PtyRun[] = [];
 const STARTUP_TIMEOUT_MS = 20_000;
@@ -642,7 +643,7 @@ describe.sequential("TUI PTY harness", () => {
 
       await fixture.run.write("\x1b[A", { delay: false });
       await fixture.run.write("\r", { delay: false });
-      await fixture.run.waitForOutput("Press Enter again to start this task in a worktree.");
+      await fixture.run.waitForOutput("Press Enter again to start this task.");
       await fixture.run.write("\r", { delay: false });
       await fixture.waitForLogEntry(
         (entry) =>

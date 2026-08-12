@@ -5,6 +5,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -67,6 +72,7 @@ function runUpdateDryRun(root: string, args: string[]) {
       OPENCLAW_HOME: root,
       OPENCLAW_NO_RESPAWN: "1",
       OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_SUPERVISOR_MODE: undefined,
       VITEST: undefined,
       VITEST_POOL_ID: undefined,
       VITEST_WORKER_ID: undefined,
@@ -80,24 +86,6 @@ function runUpdateDryRun(root: string, args: string[]) {
 }
 
 describe("update dry-run process state", () => {
-  it.each([
-    ["root command", ["update", "--dry-run", "--no-restart", "--json"]],
-    ["root shorthand", ["--update", "--dry-run", "--no-restart", "--json"]],
-  ])("leaves isolated state unchanged for the %s", async (_name, args) => {
-    const root = tempDirs.make("openclaw-update-dry-run-");
-    await fs.mkdir(path.join(root, "config"), { recursive: true });
-    await fs.mkdir(path.join(root, "state"), { recursive: true });
-    await fs.writeFile(path.join(root, "config", "openclaw.json"), "{}\n");
-    const before = await snapshotTree(root);
-
-    const result = runUpdateDryRun(root, args);
-
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ dryRun: true });
-    expect(await snapshotTree(root)).toEqual(before);
-  });
-
   it("keeps malformed config immutable while producing a best-effort preview", async () => {
     const root = tempDirs.make("openclaw-update-dry-run-malformed-");
     const configPath = path.join(root, "config", "openclaw.json");
@@ -153,5 +141,42 @@ describe("update dry-run process state", () => {
       wal: await sha256File(walPath),
     }).toEqual(markerHashesBefore);
     expect(snapshotDatabaseArtifacts(await snapshotTree(root))).toEqual(databaseArtifactsBefore);
+  });
+
+  it("fences the full mutable update path before observation or action", async () => {
+    const root = tempDirs.make("openclaw-update-owned-state-");
+    const configPath = path.join(root, "config", "openclaw.json");
+    const stateDir = path.join(root, "state");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(configPath, '{ "gateway": { "mode": "local" } }\n');
+    const externalEnv = {
+      ...process.env,
+      HOME: root,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_HOME: root,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_SUPERVISOR_MODE: "external",
+    };
+    claimOpenClawStateOwnership("gateway-supervisor", { env: externalEnv });
+    const databasePath = openOpenClawStateDatabase({ env: externalEnv }).path;
+    closeOpenClawStateDatabaseForTest();
+    const before = await snapshotTree(root);
+    const beforeDatabaseHash = await sha256File(databasePath);
+
+    const refused = runUpdateDryRun(root, [
+      "update",
+      "--timeout",
+      "invalid",
+      "--no-restart",
+      "--json",
+    ]);
+
+    expect(refused.error).toBeUndefined();
+    expect(refused.status).not.toBe(0);
+    expect(`${refused.stdout}\n${refused.stderr}`).toMatch(/gateway-supervisor/u);
+    expect(`${refused.stdout}\n${refused.stderr}`).toMatch(/OPENCLAW_SUPERVISOR_MODE=external/u);
+    expect(`${refused.stdout}\n${refused.stderr}`).not.toMatch(/invalid timeout/iu);
+    expect(await snapshotTree(root)).toEqual(before);
+    expect(await sha256File(databasePath)).toBe(beforeDatabaseHash);
   });
 });

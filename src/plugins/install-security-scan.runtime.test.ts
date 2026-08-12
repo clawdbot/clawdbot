@@ -1,14 +1,9 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const runInstallPolicyMock = vi.fn();
-const findBlockedManifestDependenciesMock = vi.fn();
-const findBlockedNodeModulesDirectoryMock = vi.fn();
-const findBlockedNodeModulesFileAliasMock = vi.fn();
-const findBlockedPackageDirectoryInPathMock = vi.fn();
-const findBlockedPackageFileAliasInPathMock = vi.fn();
 const getGlobalHookRunnerMock = vi.fn();
 
 vi.mock("../security/install-policy.js", async (importOriginal) => {
@@ -16,23 +11,6 @@ vi.mock("../security/install-policy.js", async (importOriginal) => {
   return {
     ...actual,
     runInstallPolicy: (...args: unknown[]) => runInstallPolicyMock(...args),
-  };
-});
-
-vi.mock("./dependency-denylist.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./dependency-denylist.js")>();
-  return {
-    ...actual,
-    findBlockedManifestDependencies: (...args: unknown[]) =>
-      findBlockedManifestDependenciesMock(...args),
-    findBlockedNodeModulesDirectory: (...args: unknown[]) =>
-      findBlockedNodeModulesDirectoryMock(...args),
-    findBlockedNodeModulesFileAlias: (...args: unknown[]) =>
-      findBlockedNodeModulesFileAliasMock(...args),
-    findBlockedPackageDirectoryInPath: (...args: unknown[]) =>
-      findBlockedPackageDirectoryInPathMock(...args),
-    findBlockedPackageFileAliasInPath: (...args: unknown[]) =>
-      findBlockedPackageFileAliasInPathMock(...args),
   };
 });
 
@@ -46,40 +24,39 @@ const {
   scanBundleInstallSourceRuntime,
   scanFileInstallSourceRuntime,
   scanInstalledPackageDependencyTreeRuntime,
+  scanPackageInstallSourceRuntime,
 } = await import("./install-security-scan.runtime.js");
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { force: true, recursive: true })));
-});
+function makeTempDir(prefix = "openclaw-install-scan-") {
+  return tempDirs.make(prefix);
+}
+
+async function addEscapingDependencyLink(rootDir: string) {
+  const outsideRoot = makeTempDir("openclaw-install-outside-");
+  const dependencyLink = path.join(rootDir, "node_modules", "outside-package");
+  await fs.mkdir(path.dirname(dependencyLink), { recursive: true });
+  await fs.symlink(outsideRoot, dependencyLink, "junction");
+}
 
 function expectOnlyOperatorPolicyRan() {
   expect(runInstallPolicyMock).toHaveBeenCalledTimes(1);
-  expect(findBlockedManifestDependenciesMock).not.toHaveBeenCalled();
-  expect(findBlockedNodeModulesDirectoryMock).not.toHaveBeenCalled();
-  expect(findBlockedNodeModulesFileAliasMock).not.toHaveBeenCalled();
-  expect(findBlockedPackageDirectoryInPathMock).not.toHaveBeenCalled();
-  expect(findBlockedPackageFileAliasInPathMock).not.toHaveBeenCalled();
   expect(getGlobalHookRunnerMock).not.toHaveBeenCalled();
 }
 
 beforeEach(() => {
   runInstallPolicyMock.mockReset();
-  findBlockedManifestDependenciesMock.mockReset();
-  findBlockedNodeModulesDirectoryMock.mockReset();
-  findBlockedNodeModulesFileAliasMock.mockReset();
-  findBlockedPackageDirectoryInPathMock.mockReset();
-  findBlockedPackageFileAliasInPathMock.mockReset();
   getGlobalHookRunnerMock.mockReset();
 });
 
 describe("install security scan official bypass", () => {
   it("bypasses plugin install friction for bundled OpenClaw sources", async () => {
+    const sourceDir = makeTempDir();
     const result = await scanBundleInstallSourceRuntime({
       logger: {},
       pluginId: "openclaw/kitchen-sink",
-      sourceDir: "/tmp/openclaw-bundled-plugin",
+      sourceDir,
       source: { kind: "bundled", authority: "openclaw", mutable: false, network: false },
     });
 
@@ -88,10 +65,11 @@ describe("install security scan official bypass", () => {
   });
 
   it("bypasses plugin install friction for official ClawHub sources", async () => {
+    const sourceDir = makeTempDir();
     const result = await scanBundleInstallSourceRuntime({
       logger: {},
       pluginId: "@openclaw/matrix",
-      sourceDir: "/tmp/openclaw-official-clawhub-plugin",
+      sourceDir,
       source: { kind: "clawhub", authority: "official", mutable: false, network: true },
     });
 
@@ -139,10 +117,11 @@ describe("install security scan official bypass", () => {
       },
     });
 
+    const sourceDir = makeTempDir();
     const result = await scanBundleInstallSourceRuntime({
       logger: {},
       pluginId: "@openclaw/matrix",
-      sourceDir: "/tmp/openclaw-official-clawhub-plugin",
+      sourceDir,
       source: { kind: "clawhub", authority: "official", mutable: false, network: true },
     });
 
@@ -153,6 +132,38 @@ describe("install security scan official bypass", () => {
       },
     });
     expectOnlyOperatorPolicyRan();
+  });
+
+  it("rejects escaping dependency symlinks for official bundle sources", async () => {
+    const sourceDir = makeTempDir();
+    await addEscapingDependencyLink(sourceDir);
+
+    await expect(
+      scanBundleInstallSourceRuntime({
+        logger: {},
+        pluginId: "@openclaw/matrix",
+        sourceDir,
+        source: { kind: "clawhub", authority: "official", mutable: false, network: true },
+      }),
+    ).rejects.toThrow("node_modules symlink target outside install root");
+    expect(runInstallPolicyMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects escaping dependency symlinks for trusted official packages", async () => {
+    const packageDir = makeTempDir();
+    await addEscapingDependencyLink(packageDir);
+
+    await expect(
+      scanPackageInstallSourceRuntime({
+        extensions: ["index.js"],
+        logger: {},
+        packageDir,
+        pluginId: "@openclaw/matrix",
+        source: { kind: "npm", authority: "official", mutable: false, network: true },
+        trustedSourceLinkedOfficialInstall: true,
+      }),
+    ).rejects.toThrow("node_modules symlink target outside install root");
+    expect(runInstallPolicyMock).not.toHaveBeenCalled();
   });
 
   it("still runs install policy for mutable workspace skill sources", async () => {
@@ -188,9 +199,7 @@ describe("install security scan official bypass", () => {
 
 describe("installed dependency tree scan", () => {
   it("accepts a managed host link declared as a runtime dependency", async () => {
-    findBlockedManifestDependenciesMock.mockReturnValue([]);
-    const npmRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-scan-"));
-    tempDirs.push(npmRoot);
+    const npmRoot = makeTempDir();
     const packageDir = path.join(npmRoot, "node_modules", "runtime-plugin");
     const hostLink = path.join(packageDir, "node_modules", "openclaw");
     await fs.mkdir(path.dirname(hostLink), { recursive: true });
@@ -217,10 +226,8 @@ describe("installed dependency tree scan", () => {
   });
 
   it("rejects an openclaw dependency symlink that does not target the trusted host", async () => {
-    findBlockedManifestDependenciesMock.mockReturnValue([]);
-    const npmRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-scan-"));
-    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-outside-"));
-    tempDirs.push(npmRoot, outsideRoot);
+    const npmRoot = makeTempDir();
+    const outsideRoot = makeTempDir("openclaw-install-outside-");
     const packageDir = path.join(npmRoot, "node_modules", "runtime-plugin");
     const hostLink = path.join(packageDir, "node_modules", "openclaw");
     await fs.mkdir(path.dirname(hostLink), { recursive: true });
@@ -244,6 +251,50 @@ describe("installed dependency tree scan", () => {
         pluginId: "runtime-plugin",
       }),
     ).rejects.toThrow("installed dependency scan found package outside install root");
+  });
+
+  it("rejects escaping dependency symlinks for trusted official installs", async () => {
+    const npmRoot = makeTempDir();
+    const packageDir = path.join(npmRoot, "node_modules", "runtime-plugin");
+    await fs.mkdir(packageDir, { recursive: true });
+    await fs.writeFile(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: "runtime-plugin" }),
+      "utf8",
+    );
+    await addEscapingDependencyLink(packageDir);
+
+    await expect(
+      scanInstalledPackageDependencyTreeRuntime({
+        dependencyScanRootDir: npmRoot,
+        logger: {},
+        packageDir,
+        pluginId: "runtime-plugin",
+        source: { kind: "npm", authority: "official", mutable: false, network: true },
+        trustedSourceLinkedOfficialInstall: true,
+      }),
+    ).rejects.toThrow("node_modules symlink target outside install root");
+    expect(runInstallPolicyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("package dependency boundaries", () => {
+  it("rejects dependency symlinks outside the staged package", async () => {
+    const packageDir = makeTempDir();
+    const outsideRoot = makeTempDir("openclaw-install-outside-");
+    const dependencyLink = path.join(packageDir, "node_modules", "outside-package");
+    await fs.mkdir(path.dirname(dependencyLink), { recursive: true });
+    await fs.symlink(outsideRoot, dependencyLink, "junction");
+
+    await expect(
+      scanPackageInstallSourceRuntime({
+        extensions: ["index.js"],
+        logger: {},
+        packageDir,
+        pluginId: "boundary-test",
+      }),
+    ).rejects.toThrow("node_modules symlink target outside install root");
+    expect(runInstallPolicyMock).not.toHaveBeenCalled();
   });
 });
 

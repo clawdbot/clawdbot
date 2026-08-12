@@ -43,7 +43,11 @@ export function selectGatewayConnectAuth(params: {
   const storedToken = normalized(params.storedToken);
   const stored = { storedToken, storedScopes: params.storedScopes };
   if (params.preferBootstrapToken && bootstrapToken) {
-    return { authBootstrapToken: bootstrapToken, authPassword, ...stored };
+    return {
+      authBootstrapToken: bootstrapToken,
+      signatureToken: bootstrapToken,
+      ...stored,
+    };
   }
   const useRetryToken =
     params.pendingDeviceTokenRetry === true &&

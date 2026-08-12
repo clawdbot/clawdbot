@@ -154,6 +154,32 @@ function writeWorkspacePackageEntry(params: {
   return { srcFile, distFile };
 }
 
+function writeWorkspacePackageExports(
+  root: string,
+  packageDir: string,
+  subpaths: readonly string[],
+) {
+  mkdirSafeDir(path.join(root, "packages", packageDir));
+  fs.writeFileSync(
+    path.join(root, "packages", packageDir, "package.json"),
+    JSON.stringify(
+      {
+        name: `@openclaw/${packageDir}`,
+        exports: Object.fromEntries(
+          subpaths.map((subpath) => {
+            const exportKey = subpath ? `./${subpath}` : ".";
+            const distFile = `./dist/${subpath || "index"}.mjs`;
+            return [exportKey, { import: distFile, default: distFile }];
+          }),
+        ),
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+}
+
 type WorkspaceAliasFixture = readonly [
   alias: `@openclaw/${string}`,
   packageDir: string,
@@ -1148,9 +1174,19 @@ describe("plugin sdk alias helpers", () => {
 
   it("aliases workspace packages to source when dist artifacts are missing", () => {
     const fixture = createPluginSdkAliasFixture();
+    writeWorkspacePackageExports(fixture.root, "media-core", ["", "attachment-classify", "mime"]);
+    writeWorkspacePackageExports(fixture.root, "acp-core", ["", "runtime/types"]);
+    writeWorkspacePackageExports(fixture.root, "normalization-core", [
+      "",
+      "agent-id",
+      "boolean-coercion",
+      "result",
+      "string-coerce",
+    ]);
     const workspaceAliases = writeWorkspaceAliasFixtures(fixture.root, [
       ["@openclaw/gateway-client", "gateway-client", "index"],
       ["@openclaw/gateway-client/timeouts", "gateway-client", "timeouts"],
+      ["@openclaw/gateway-client/websocket-data", "gateway-client", "websocket-data"],
       ["@openclaw/gateway-protocol", "gateway-protocol", "index"],
       ["@openclaw/gateway-protocol/schema", "gateway-protocol", "schema"],
       ["@openclaw/gateway-protocol/frame-guards", "gateway-protocol", "frame-guards"],
@@ -1159,6 +1195,7 @@ describe("plugin sdk alias helpers", () => {
       ["@openclaw/media-generation-core", "media-generation-core", "index"],
       ["@openclaw/media-generation-core/model-ref", "media-generation-core", "model-ref"],
       ["@openclaw/media-core", "media-core", "index"],
+      ["@openclaw/media-core/attachment-classify", "media-core", "attachment-classify"],
       ["@openclaw/media-core/mime", "media-core", "mime"],
       ["@openclaw/acp-core", "acp-core", "index"],
       ["@openclaw/acp-core/runtime/types", "acp-core", "runtime/types"],
@@ -1192,6 +1229,9 @@ describe("plugin sdk alias helpers", () => {
 
   it("aliases workspace package subpaths to dist when available", () => {
     const fixture = createPluginSdkAliasFixture();
+    writeWorkspacePackageExports(fixture.root, "media-core", ["attachment-classify"]);
+    writeWorkspacePackageExports(fixture.root, "acp-core", ["normalize-text"]);
+    writeWorkspacePackageExports(fixture.root, "normalization-core", ["record-coerce"]);
     const workspaceAliases = writeWorkspaceAliasFixtures(fixture.root, [
       ["@openclaw/gateway-client/readiness", "gateway-client", "readiness"],
       [
@@ -1202,6 +1242,7 @@ describe("plugin sdk alias helpers", () => {
       ["@openclaw/gateway-protocol/frame-guards", "gateway-protocol", "frame-guards"],
       ["@openclaw/markdown-core/render", "markdown-core", "render"],
       ["@openclaw/media-generation-core/catalog", "media-generation-core", "catalog"],
+      ["@openclaw/media-core/attachment-classify", "media-core", "attachment-classify"],
       [
         "@openclaw/acp-core/normalize-text",
         "acp-core",
@@ -1253,9 +1294,18 @@ describe("plugin sdk alias helpers", () => {
     );
     mkdirSafeDir(path.dirname(normalizationAgentId));
     fs.writeFileSync(normalizationAgentId, "export {};\n", "utf-8");
-    const cwdWithoutOpenClawPackage = makeTempDir();
+    const mediaAttachmentClassify = path.join(
+      fixture.root,
+      "dist",
+      "media-core",
+      "attachment-classify.js",
+    );
+    mkdirSafeDir(path.dirname(mediaAttachmentClassify));
+    fs.writeFileSync(mediaAttachmentClassify, "export {};\n", "utf-8");
+    const staleCheckout = createPluginSdkAliasFixture();
+    writeWorkspacePackageExports(staleCheckout.root, "media-core", ["mime"]);
 
-    const aliases = withCwd(cwdWithoutOpenClawPackage, () =>
+    const aliases = withCwd(staleCheckout.root, () =>
       withEnv({ NODE_ENV: undefined }, () =>
         buildPluginLoaderAliasMap(sourcePluginEntry, undefined, undefined, "dist"),
       ),
@@ -1266,6 +1316,9 @@ describe("plugin sdk alias helpers", () => {
     );
     expect(fs.realpathSync(aliases["@openclaw/normalization-core/agent-id"] ?? "")).toBe(
       fs.realpathSync(normalizationAgentId),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/media-core/attachment-classify"] ?? "")).toBe(
+      fs.realpathSync(mediaAttachmentClassify),
     );
   });
 

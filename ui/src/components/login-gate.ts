@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Control UI component renders the login gate.
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
@@ -11,7 +12,6 @@ import {
   shouldShowInsecureContextHint,
 } from "../lib/connection-hints.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
-import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { renderConnectCommand } from "./connect-command.ts";
 import { icons } from "./icons.ts";
@@ -178,11 +178,7 @@ function resolveLoginFailureFeedback(
       docsHref: "https://docs.openclaw.ai/web/control-ui#insecure-http",
       titleKey: "login.failure.insecure.title",
       summaryKey: "login.failure.insecure.summary",
-      stepKeys: [
-        "login.failure.insecure.stepHttps",
-        "login.failure.insecure.stepLocalCompat",
-        "login.failure.insecure.stepAvoidDisable",
-      ],
+      stepKeys: ["login.failure.insecure.stepHttps", "login.failure.insecure.stepAvoidDisable"],
     });
   }
 

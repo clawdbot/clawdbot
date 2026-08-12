@@ -15,8 +15,39 @@ export type MockCompactionSummaryFaultMode =
 
 type MockOpenAiRequestOutcome = "success" | "error";
 
+export type QaMockProviderDispatchRequest = {
+  route: "responses" | "anthropic-messages";
+  body: Record<string, unknown>;
+  raw: string;
+};
+
+export type QaMockProviderFailure = {
+  status: number;
+  type: string;
+  code?: string;
+  message: string;
+  presentation?: "anthropic-thinking";
+};
+
+export type QaMockProviderDispatchResult = {
+  events: StreamEvent[];
+  model: string;
+  failure?: QaMockProviderFailure;
+  onResponseSent?: () => void;
+  previewPauseMs?: number;
+  responsePauseMs?: number;
+};
+
 export type StreamEvent =
   | { type: "response.created"; response: { id: string } }
+  | {
+      type: "response.failed";
+      response: {
+        id: string;
+        status: "failed";
+        error?: { code: string; message: string };
+      };
+    }
   | {
       type: "response.output_item.added";
       output_index?: number;
@@ -136,6 +167,7 @@ export type MockOpenAiRequestSnapshot = {
   errorCode?: string;
   rawByteLength: number;
   plannedToolCallId?: string;
+  plannedToolItemId?: string;
   plannedToolName?: string;
   plannedWireToolName?: string;
   plannedToolArgs?: Record<string, unknown>;
@@ -190,6 +222,8 @@ export const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0nQAAAAASUVORK5CYII=";
 export const QA_REASONING_ONLY_RECOVERY_PROMPT_RE = /reasoning-only continuation qa check/i;
 export const QA_REASONING_ONLY_SIDE_EFFECT_PROMPT_RE = /reasoning-only after write safety check/i;
+export const QA_MIXED_REASONING_BLANK_FALLBACK_PROMPT_RE =
+  /mixed reasoning blank fallback qa check/i;
 export const QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT_RE = /anthropic thinking error qa check/i;
 export const QA_THINKING_VISIBILITY_OFF_PROMPT_RE = /qa thinking visibility check off/i;
 export const QA_THINKING_VISIBILITY_MAX_PROMPT_RE = /qa thinking visibility check max/i;
@@ -197,6 +231,10 @@ export const QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE = /empty response continuation
 export const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE = /empty response exhaustion qa check/i;
 export const QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE =
   /empty response after write recovery qa check/i;
+export const QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE = /repeated request recovery gateway qa check/i;
+export const QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE =
+  /repeated request queued reply gateway qa check/i;
+export const QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER = "GATEWAY_REPEATED_REQUEST_QUEUED_OK";
 export const QA_STREAMING_PROMPT_RE = /(?:partial|quiet) streaming qa check/i;
 export const QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE = /final-only marker streaming qa check/i;
 export const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
@@ -248,6 +286,12 @@ export const QA_WHATSAPP_REPLY_TO_BOT_TRIGGER_MARKER_RE =
 export const QA_WHATSAPP_BATCHED_FINAL_MARKER_RE = /\bWHATSAPP_QA_BATCHED_FINAL_([A-Z0-9]+)\b/u;
 export const QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE = /subagent direct fallback qa check/i;
 export const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback worker/i;
+// A subagent that yields on its own behalf, then finishes on a later follow-up
+// dispatched to the same paused child session. The worker regex must not match
+// the follow-up text, so the two turns carry deliberately disjoint wording: the
+// kickoff yields, and only the follow-up may finish.
+export const QA_SUBAGENT_SELF_YIELD_WORKER_RE = /subagent self yield qa worker/i;
+export const QA_SUBAGENT_SELF_YIELD_FOLLOW_UP_RE = /subagent self yield qa remote job finished/i;
 export const QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE =
   /subagent terminal reply qa check:\s*(visible|silent|empty|restart|fallback)/i;
 export const QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE =
@@ -276,8 +320,10 @@ export function isStrandedFinalRetryFailureRequest(allInputText: string): boolea
   );
 }
 export const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
+export const QA_SUBAGENT_SELF_YIELD_MARKER = "QA-SUBAGENT-SELF-YIELD-FOLLOW-UP-OK";
 export const QA_SUBAGENT_TERMINAL_MARKERS = {
   visible: "QA-SUBAGENT-TERMINAL-VISIBLE-OK",
+  silent: "QA-SUBAGENT-TERMINAL-SILENT-REPRESENTED",
   empty: "QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED",
   restart: "QA-SUBAGENT-TERMINAL-RESTART-OK",
   fallback: "QA-SUBAGENT-TERMINAL-FALLBACK-OK",

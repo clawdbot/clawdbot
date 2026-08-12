@@ -12,7 +12,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { parseDeliveryContextJson } from "./task-registry.sqlite.shared.js";
+import { parseDeliveryContextJson, parseSqliteJsonValue } from "./task-registry.sqlite.shared.js";
 import type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
 import {
   parseOptionalTaskTerminalOutcome,
@@ -90,17 +90,6 @@ function serializeJson(value: unknown): string | null {
   return value === undefined ? null : (JSON.stringify(value) ?? null);
 }
 
-function parseJsonValue(raw: string | null): JsonValue | undefined {
-  if (!raw?.trim()) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(raw) as JsonValue;
-  } catch {
-    return undefined;
-  }
-}
-
 function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
   const startedAt = normalizeSqliteNumber(row.started_at);
   const endedAt = normalizeSqliteNumber(row.ended_at);
@@ -109,7 +98,7 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
   const toolUseCount = normalizeSqliteNumber(row.tool_use_count);
   const scopeKind = parseTaskScopeKind(row.scope_kind);
   const terminalOutcome = parseOptionalTaskTerminalOutcome(row.terminal_outcome);
-  const detail = parseJsonValue(row.detail_json);
+  const detail = parseSqliteJsonValue<JsonValue>(row.detail_json);
   // System tasks intentionally have no requester session; ownerKey is the lookup anchor.
   const requesterSessionKey =
     scopeKind === "system" ? "" : row.requester_session_key?.trim() || row.owner_key;

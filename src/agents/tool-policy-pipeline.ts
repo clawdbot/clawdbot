@@ -3,6 +3,7 @@
  * stay tied to the layer that introduced them, while plugin groups are
  * expanded only after unknown core/plugin entries are classified.
  */
+import { isFrozenClawToolAllowPolicy } from "../claws/tool-policy-runtime.js";
 import { filterToolsByPolicy } from "./agent-tools.policy.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isKnownCoreToolId } from "./tool-catalog.js";
@@ -11,7 +12,7 @@ import {
   analyzeAllowlistByToolType,
   buildPluginToolGroups,
   expandPolicyWithPluginGroups,
-  normalizeToolName,
+  normalizeToolPolicyName,
   type DeclaredToolAllowlistContext,
   type ToolPolicyLike,
 } from "./tool-policy.js";
@@ -144,7 +145,7 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
   const coreToolNames = new Set(
     params.tools
       .filter((tool) => !params.toolMeta(tool))
-      .map((tool) => normalizeToolName(tool.name))
+      .map((tool) => normalizeToolPolicyName(tool.name))
       .filter(Boolean),
   );
 
@@ -160,6 +161,7 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
     }
 
     let policy: ToolPolicyLike | undefined = step.policy;
+    const frozenAllow = isFrozenClawToolAllowPolicy(policy);
     if (step.stripPluginOnlyAllowlist) {
       // Plugin-only allowlists are valid for deferred tools; warn only for entries that cannot match.
       const resolved = analyzeAllowlistByToolType(
@@ -171,7 +173,7 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
       if (resolved.unknownAllowlist.length > 0) {
         const unavailableCoreWarningAllowlist = new Set(
           (step.suppressUnavailableCoreToolWarningAllowlist ?? []).map((entry) =>
-            normalizeToolName(entry),
+            normalizeToolPolicyName(entry),
           ),
         );
         const gatedCoreEntries = resolved.unknownAllowlist.filter((entry) =>
@@ -206,7 +208,13 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
       policy = resolved.policy;
     }
 
-    const expanded = expandPolicyWithPluginGroups(policy, pluginGroups);
+    const expanded =
+      frozenAllow && policy
+        ? {
+            allow: policy.allow,
+            deny: expandPolicyWithPluginGroups({ deny: policy.deny }, pluginGroups)?.deny,
+          }
+        : expandPolicyWithPluginGroups(policy, pluginGroups);
     if (!expanded) {
       continue;
     }

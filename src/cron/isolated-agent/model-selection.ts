@@ -16,11 +16,11 @@ import {
   DEFAULT_PROVIDER,
   getModelRefStatus,
   loadResolvedPublishedModelCatalogOwner,
-  loadPreparedModelCatalogSnapshot,
+  loadProviderScopedThinkingCatalog,
   normalizeModelSelection,
   publishedModelCatalogOwnerMatchesAgent,
   resolveAgentConfig,
-  resolveAllowedModelRef,
+  resolveAllowedModelRefCore,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
   resolveSubagentModelConfigSelectionResult,
@@ -125,15 +125,16 @@ async function resolveCronThinkingCatalog(params: {
   ) {
     return catalog;
   }
+  // Thinking capability is a per-model fact; never materialize the full live catalog on cron turns.
   return normalizeThinkingCatalogProviders(
-    (
-      await loadPreparedModelCatalogSnapshot({
-        config: params.owner.config,
-        agentId: params.owner.agentId,
-        agentDir: params.owner.agentDir,
-        workspaceDir: params.owner.workspaceDir,
-      })
-    ).entries,
+    await loadProviderScopedThinkingCatalog({
+      config: params.owner.config,
+      provider: params.provider,
+      model: params.model,
+      agentId: params.owner.agentId,
+      agentDir: params.owner.agentDir,
+      workspaceDir: params.owner.workspaceDir,
+    }),
   );
 }
 
@@ -227,7 +228,7 @@ export async function resolveCronModelSelection(
   if (subagentModelRaw) {
     // Subagent/agent model config is advisory here: invalid refs fall back to
     // defaults so an agent config typo does not prevent unrelated cron runs.
-    const resolvedSubagent = resolveAllowedModelRef({
+    const resolvedSubagent = resolveAllowedModelRefCore({
       cfg: owner.config,
       catalog,
       raw: subagentModelRaw,
@@ -273,7 +274,7 @@ export async function resolveCronModelSelection(
   if (modelOverride !== undefined && modelOverride.length > 0) {
     // Payload model overrides are explicit cron config, so reject disallowed
     // refs instead of silently falling back to defaults.
-    const resolvedOverride = resolveAllowedModelRef({
+    const resolvedOverride = resolveAllowedModelRefCore({
       cfg: owner.config,
       catalog,
       raw: modelOverride,
@@ -304,7 +305,7 @@ export async function resolveCronModelSelection(
       // and hook-specific models can intentionally move a run away from history.
       const sessionProviderOverride =
         params.sessionEntry.providerOverride?.trim() || resolvedDefault.provider;
-      const resolvedSessionOverride = resolveAllowedModelRef({
+      const resolvedSessionOverride = resolveAllowedModelRefCore({
         cfg: owner.config,
         catalog,
         raw: `${sessionProviderOverride}/${sessionModelOverride}`,

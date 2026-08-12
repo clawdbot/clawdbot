@@ -2,6 +2,7 @@ import { resolveExecCommandHighlighting } from "../config/exec-command-highlight
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
+import { mergeGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
@@ -26,12 +27,16 @@ export function createLazyExecTool(
   presentation?: LazyExecToolPresentation,
 ): AnyAgentTool {
   let loadedTool: AnyAgentTool | undefined;
-  const loadTool = async () => {
-    if (!loadedTool) {
-      const { createExecTool } = await bashToolsModuleLoader.load();
-      loadedTool = createExecTool(defaults) as unknown as AnyAgentTool;
+  let loadingTool: Promise<AnyAgentTool> | undefined;
+  const loadTool = () => {
+    if (loadedTool) {
+      return Promise.resolve(loadedTool);
     }
-    return loadedTool;
+    loadingTool ??= bashToolsModuleLoader.load().then(({ createExecTool }) => {
+      loadedTool = createExecTool(defaults) as unknown as AnyAgentTool;
+      return loadedTool;
+    });
+    return loadingTool;
   };
 
   return {
@@ -70,7 +75,7 @@ export function resolveExecToolConfig(params: { cfg?: OpenClawConfig; agentId?: 
     security: layeredPolicy.security,
     ask: layeredPolicy.ask,
     node: agentExec?.node ?? globalExec?.node,
-    pathPrepend: agentExec?.pathPrepend ?? globalExec?.pathPrepend,
+    pathPrepend: mergeGatewayAgentCliPath(agentExec?.pathPrepend ?? globalExec?.pathPrepend),
     safeBins: agentExec?.safeBins ?? globalExec?.safeBins,
     strictInlineEval: agentExec?.strictInlineEval ?? globalExec?.strictInlineEval,
     commandHighlighting: resolveExecCommandHighlighting({

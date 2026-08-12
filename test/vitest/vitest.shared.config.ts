@@ -3,19 +3,19 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import acpCorePackageJson from "../../packages/acp-core/package.json" with { type: "json" };
-import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mjs";
+import normalizationCorePackageJson from "../../packages/normalization-core/package.json" with { type: "json" };
+import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mts";
 import privateLocalOnlyPluginSdkSubpaths from "../../scripts/lib/plugin-sdk-private-local-only-subpaths.json" with { type: "json" };
-import { createStateSchemaInlinePlugin } from "../../scripts/lib/state-schema-inline-plugin.mjs";
+import { createStateSchemaInlinePlugin } from "../../scripts/lib/state-schema-inline-plugin.mts";
 import {
   detectVitestHostInfo as detectVitestHostInfoImpl,
   isCiLikeEnv,
-  resolveLocalVitestMaxWorkers as resolveLocalVitestMaxWorkersImpl,
   resolveLocalVitestScheduling as resolveLocalVitestSchedulingImpl,
-} from "../../scripts/lib/vitest-local-scheduling.mjs";
+} from "../../scripts/lib/vitest-local-scheduling.mts";
 import type {
   LocalVitestScheduling,
   VitestHostInfo,
-} from "../../scripts/lib/vitest-local-scheduling.mjs";
+} from "../../scripts/lib/vitest-local-scheduling.mts";
 import {
   BUNDLED_PLUGIN_ROOT_DIR,
   BUNDLED_PLUGIN_TEST_GLOB,
@@ -32,7 +32,7 @@ export const jsdomOptimizedDeps = {
   optimizer: {
     web: {
       enabled: true,
-      include: ["lit", "lit-html", "@lit/reactive-element", "marked"] as string[],
+      include: ["lit", "lit-html", "@lit/reactive-element"] as string[],
     },
   },
 };
@@ -46,7 +46,7 @@ export function resolveLocalVitestMaxWorkers(
   system: VitestHostInfo = detectVitestHostInfo(),
   pool: OpenClawVitestPool = resolveDefaultVitestPool(env),
 ): number {
-  return resolveLocalVitestMaxWorkersImpl(env, system, pool);
+  return resolveLocalVitestSchedulingImpl(env, system, pool).maxWorkers;
 }
 
 export function resolveLocalVitestScheduling(
@@ -226,6 +226,10 @@ export const sharedVitestConfig = {
       {
         find: "@openclaw/gateway-client/timeouts",
         replacement: path.join(repoRoot, "packages", "gateway-client", "src", "timeouts.ts"),
+      },
+      {
+        find: "@openclaw/gateway-client/websocket-data",
+        replacement: path.join(repoRoot, "packages", "gateway-client", "src", "websocket-data.ts"),
       },
       {
         find: "@openclaw/gateway-client",
@@ -427,112 +431,13 @@ export const sharedVitestConfig = {
         find: "@openclaw/net-policy",
         replacement: path.join(repoRoot, "packages", "net-policy", "src", "index.ts"),
       },
-      {
-        find: "@openclaw/normalization-core/agent-id",
-        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "agent-id.ts"),
-      },
-      {
-        find: "@openclaw/normalization-core/boolean-coercion",
-        replacement: path.join(
-          repoRoot,
-          "packages",
-          "normalization-core",
-          "src",
-          "boolean-coercion.ts",
-        ),
-      },
-      {
-        find: "@openclaw/normalization-core/cjk-chars",
-        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "cjk-chars.ts"),
-      },
-      {
-        find: "@openclaw/normalization-core/error-coercion",
-        replacement: path.join(
-          repoRoot,
-          "packages",
-          "normalization-core",
-          "src",
-          "error-coercion.ts",
-        ),
-      },
-      {
-        find: "@openclaw/normalization-core/json-schema",
-        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "json-schema.ts"),
-      },
-      {
-        find: "@openclaw/normalization-core/number-coercion",
-        replacement: path.join(
-          repoRoot,
-          "packages",
-          "normalization-core",
-          "src",
-          "number-coercion.ts",
-        ),
-      },
-      {
-        find: "@openclaw/normalization-core/phone-presentation",
-        replacement: path.join(
-          repoRoot,
-          "packages",
-          "normalization-core",
-          "src",
-          "phone-presentation.ts",
-        ),
-      },
-      {
-        find: "@openclaw/normalization-core/record-coerce",
-        replacement: path.join(
-          repoRoot,
-          "packages",
-          "normalization-core",
-          "src",
-          "record-coerce.ts",
-        ),
-      },
-      {
-        find: "@openclaw/normalization-core/result",
-        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "result.ts"),
-      },
-      {
-        find: "@openclaw/normalization-core/stable-node-path",
-        replacement: path.join(
-          repoRoot,
-          "packages",
-          "normalization-core",
-          "src",
-          "stable-node-path.ts",
-        ),
-      },
-      {
-        find: "@openclaw/normalization-core/string-coerce",
-        replacement: path.join(
-          repoRoot,
-          "packages",
-          "normalization-core",
-          "src",
-          "string-coerce.ts",
-        ),
-      },
-      {
-        find: "@openclaw/normalization-core/string-normalization",
-        replacement: path.join(
-          repoRoot,
-          "packages",
-          "normalization-core",
-          "src",
-          "string-normalization.ts",
-        ),
-      },
-      {
-        find: "@openclaw/normalization-core/utf16-slice",
-        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "utf16-slice.ts"),
-      },
-      {
-        find: /^@openclaw\/normalization-core$/u,
-        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "index.ts"),
-      },
+      ...sourcePackageAliasesFromExports(
+        "normalization-core",
+        normalizationCorePackageJson.exports,
+      ),
       sourcePackageAlias("markdown-core", "code-spans"),
       sourcePackageAlias("markdown-core", "fences"),
+      sourcePackageAlias("media-core", "attachment-classify"),
       sourcePackageAlias("media-core", "base64"),
       sourcePackageAlias("media-core", "constants"),
       sourcePackageAlias("media-core", "content-length"),

@@ -25,7 +25,7 @@ import {
   compactEmbeddedRunForRecovery,
   type EmbeddedRunCompactionRecoveryInput,
 } from "./compaction-runtime.js";
-import { createCompactionDiagId } from "./helpers.js";
+import { createRunRecoveryDiagId } from "./helpers.js";
 import {
   isNoRealConversationCompactionNoop,
   resetNoRealConversationTokenSnapshot,
@@ -102,7 +102,7 @@ export async function recoverEmbeddedRunOverflow(
       : undefined;
 
   const runParams = input.runParams;
-  const overflowDiagId = createCompactionDiagId();
+  const overflowDiagId = createRunRecoveryDiagId();
   const errorText = contextOverflowError.text;
   const observedOverflowTokens = extractObservedOverflowTokenCount(errorText);
   const preflightRecovery = input.attempt.preflightRecovery;

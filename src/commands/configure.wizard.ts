@@ -7,14 +7,10 @@ import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatPortRangeHint } from "../cli/error-format.js";
 import { parsePort } from "../cli/shared/parse-port.js";
-import {
-  createConfigIO,
-  readConfigFileSnapshotForWrite,
-  resolveGatewayPort,
-} from "../config/config.js";
+import { readConfigFileSnapshotForWrite, resolveGatewayPort } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
-import { ConfigMutationConflictError } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-auth.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
@@ -25,7 +21,7 @@ import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { resolveSetupSecretInputString } from "../wizard/setup.secret-input.js";
-import { mergeWizardConfigOntoLatest } from "../wizard/setup.shared.js";
+import { writeWizardConfigFile } from "../wizard/setup.shared.js";
 import { removeChannelConfigWizard } from "./configure.channels.js";
 import { maybeInstallDaemon } from "./configure.daemon.js";
 import { promptAuthConfig } from "./configure.gateway-auth.js";
@@ -105,7 +101,7 @@ async function runGatewayHealthCheck(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
   port: number;
-}): Promise<void> {
+}): Promise<boolean> {
   const localLinks = resolveLocalControlUiProbeLinks({
     bind: params.cfg.gateway?.bind ?? "loopback",
     port: params.port,
@@ -114,20 +110,59 @@ async function runGatewayHealthCheck(params: {
     tlsEnabled: params.cfg.gateway?.tls?.enabled === true,
   });
   const remoteUrl = params.cfg.gateway?.remote?.url?.trim();
-  const wsUrl = params.cfg.gateway?.mode === "remote" && remoteUrl ? remoteUrl : localLinks.wsUrl;
-  const configuredToken = await resolveGatewaySecretInputForWizard({
-    cfg: params.cfg,
-    value: params.cfg.gateway?.auth?.token,
-    path: "gateway.auth.token",
-  });
-  const configuredPassword = await resolveGatewaySecretInputForWizard({
-    cfg: params.cfg,
-    value: params.cfg.gateway?.auth?.password,
-    path: "gateway.auth.password",
-  });
-  const token = normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN) ?? configuredToken;
-  const password =
-    normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD) ?? configuredPassword;
+  const remoteWsUrl = params.cfg.gateway?.mode === "remote" ? remoteUrl : undefined;
+  const probeMode = remoteWsUrl ? "remote" : "local";
+  const wsUrl = remoteWsUrl ?? localLinks.wsUrl;
+  let token: string | undefined;
+  let password: string | undefined;
+  // Remote and local probe credentials belong to different trust surfaces.
+  // Keep their resolution separate so one target never receives the other's secrets.
+  if (probeMode === "remote") {
+    const remoteProbeAuth = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: params.cfg,
+      env: process.env,
+      mode: "remote",
+    });
+    if (remoteProbeAuth.warning) {
+      const hasResolvedRemoteAuth = Boolean(
+        remoteProbeAuth.auth.token || remoteProbeAuth.auth.password,
+      );
+      note(
+        [
+          "Could not resolve remote gateway SecretRef for health check.",
+          remoteProbeAuth.warning,
+          ...(hasResolvedRemoteAuth
+            ? ["Continuing with the other configured remote credential."]
+            : [
+                "Health check skipped to avoid falling back to ambient credentials.",
+                `Fix the SecretRef, then run \`${formatCliCommand("openclaw health")}\` again.`,
+              ]),
+        ].join("\n"),
+        "Gateway auth",
+      );
+      // A failed ref does not invalidate a resolved sibling config credential.
+      // Skip only when generic health auth could otherwise recover ambient auth.
+      if (!hasResolvedRemoteAuth) {
+        return false;
+      }
+    }
+    ({ token, password } = remoteProbeAuth.auth);
+  } else {
+    const [configuredToken, configuredPassword] = await Promise.all([
+      resolveGatewaySecretInputForWizard({
+        cfg: params.cfg,
+        value: params.cfg.gateway?.auth?.token,
+        path: "gateway.auth.token",
+      }),
+      resolveGatewaySecretInputForWizard({
+        cfg: params.cfg,
+        value: params.cfg.gateway?.auth?.password,
+        path: "gateway.auth.password",
+      }),
+    ]);
+    token = normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN) ?? configuredToken;
+    password = normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD) ?? configuredPassword;
+  }
 
   await waitForGatewayReachable({
     url: wsUrl,
@@ -137,7 +172,19 @@ async function runGatewayHealthCheck(params: {
   });
 
   try {
-    await healthCommand({ json: false, timeoutMs: 10_000 }, params.runtime);
+    await healthCommand(
+      {
+        json: false,
+        timeoutMs: 10_000,
+        config: params.cfg,
+        token,
+        password,
+        ...(probeMode === "local"
+          ? { localPortOverride: params.port }
+          : { ignoreEnvUrlOverride: true }),
+      },
+      params.runtime,
+    );
   } catch (err) {
     params.runtime.error(formatHealthCheckFailure(err));
     note(
@@ -149,6 +196,7 @@ async function runGatewayHealthCheck(params: {
       "Health check help",
     );
   }
+  return true;
 }
 
 async function promptConfigureSection(
@@ -405,13 +453,7 @@ export async function runConfigureWizard(
       expectedConfigPath: prepared.writeOptions.expectedConfigPath,
       ownedConfigPathForWrite: prepared.writeOptions.ownedConfigPathForWrite,
     };
-    const readOwnedConfigSnapshot = async () =>
-      (
-        await createConfigIO({
-          configPath: configWriteOwnership.ownedConfigPathForWrite,
-        }).readConfigFileSnapshotForWrite()
-      ).snapshot;
-    let currentBaseHash = snapshot.hash;
+    const currentBaseHash = snapshot.hash;
     const baseConfig: OpenClawConfig = snapshot.valid
       ? (snapshot.sourceConfig ?? snapshot.config)
       : {};
@@ -471,14 +513,15 @@ export async function runConfigureWizard(
       })();
       const remoteProbePromise = remoteUrl
         ? (async () => {
-            const baseRemoteProbeToken = await resolveGatewaySecretInputForWizard({
+            const remoteProbeAuth = await resolveGatewayProbeAuthSafeWithSecretInputs({
               cfg: baseConfig,
-              value: baseConfig.gateway?.remote?.token,
-              path: "gateway.remote.token",
+              env: process.env,
+              mode: "remote",
             });
             return probeGatewayReachable({
               url: remoteUrl,
-              token: baseRemoteProbeToken,
+              token: remoteProbeAuth.auth.token,
+              ...(remoteProbeAuth.auth.password ? { password: remoteProbeAuth.auth.password } : {}),
               timeoutMs: GATEWAY_HINT_PROBE_TIMEOUT_MS,
             });
           })()
@@ -528,9 +571,21 @@ export async function runConfigureWizard(
         writeOptions: configWriteOwnership,
       });
       remoteConfig = committed.config;
-      currentBaseHash = undefined;
       logConfigUpdated(runtime);
-      outro("Remote gateway configured.");
+      if (selectedSections?.includes("health")) {
+        const healthCheckAttempted = await runGatewayHealthCheck({
+          cfg: remoteConfig,
+          runtime,
+          port: resolveGatewayPort(remoteConfig),
+        });
+        outro(
+          healthCheckAttempted
+            ? "Remote gateway configured and health check completed."
+            : "Remote gateway configured; health check skipped.",
+        );
+      } else {
+        outro("Remote gateway configured.");
+      }
       return;
     }
 
@@ -557,44 +612,12 @@ export async function runConfigureWizard(
         mode: metadataMode,
       });
 
-      // Retry loop: if config was mutated by a plugin, re-read and merge before retry
-      const maxRetries = 3;
-      for (let attempt = 0; attempt < maxRetries; attempt++) {
-        try {
-          const committed = await commitConfigWithPendingPluginInstalls({
-            nextConfig,
-            ...(currentBaseHash !== undefined ? { baseHash: currentBaseHash } : {}),
-            writeOptions: configWriteOwnership,
-          });
-          nextConfig = committed.config;
-
-          // After successful write, re-read the snapshot to get the new hash
-          const freshSnapshot = await readOwnedConfigSnapshot();
-          currentBaseHash = freshSnapshot.hash ?? undefined;
-          mergeBaseConfig = structuredClone(nextConfig);
-
-          logConfigUpdated(runtime);
-          return;
-        } catch (err) {
-          if (
-            err instanceof ConfigMutationConflictError &&
-            err.retryable &&
-            attempt < maxRetries - 1
-          ) {
-            // Config was mutated externally (e.g. plugin wrote token during auth setup).
-            // Re-read the on-disk config and merge plugin changes into nextConfig so
-            // the retry won't silently overwrite them.
-            const freshSnapshot = await readOwnedConfigSnapshot();
-            currentBaseHash = freshSnapshot.hash ?? undefined;
-            const diskConfig = freshSnapshot.valid
-              ? (freshSnapshot.sourceConfig ?? freshSnapshot.config)
-              : {};
-            nextConfig = mergeWizardConfigOntoLatest(diskConfig, mergeBaseConfig, nextConfig);
-            continue;
-          }
-          throw err;
-        }
-      }
+      nextConfig = await writeWizardConfigFile(nextConfig, {
+        mergeBase: mergeBaseConfig,
+        writeOptions: configWriteOwnership,
+      });
+      mergeBaseConfig = structuredClone(nextConfig);
+      logConfigUpdated(runtime);
     };
 
     const configureWorkspace = async () => {

@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { IOS_NODE, createIosNodeListResponse } from "./program.nodes-test-helpers.js";
-import { callGateway, runtime } from "./program.test-mocks.js";
+import { programGatewayCallMock, runtime } from "./program.test-mocks.js";
 
 let registerNodesCli: typeof import("./nodes-cli.js").registerNodesCli;
 
@@ -34,7 +34,7 @@ async function expectLoggedSingleMediaFile(params?: {
 }
 
 function mockNodeGateway(command?: string, payload?: Record<string, unknown>) {
-  callGateway.mockImplementation(async (...args: unknown[]) => {
+  programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
     const opts = (args[0] ?? {}) as { method?: string };
     if (opts.method === "node.list") {
       return createIosNodeListResponse();
@@ -56,7 +56,7 @@ function nodeInvokeCalls(): Array<{
   params: Record<string, unknown>;
   commandParams: Record<string, unknown>;
 }> {
-  return callGateway.mock.calls
+  return programGatewayCallMock.mock.calls
     .map((call) => call[0] as { method?: unknown; params?: Record<string, unknown> })
     .filter((call) => call.method === "node.invoke")
     .map((call) => {
@@ -154,10 +154,20 @@ describe("cli program (nodes media)", () => {
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("No cameras reported."));
   });
 
-  it("runs nodes camera snap and prints two MEDIA paths", async () => {
+  it("runs one default snap and two explicitly requested facing snaps", async () => {
     mockNodeGateway("camera.snap", { format: "jpg", base64: "aGk=", width: 1, height: 1 });
 
     await runNodesCommand(["nodes", "camera", "snap", "--node", "ios-node"]);
+
+    const defaultInvokeCalls = nodeInvokeCalls();
+    expect(defaultInvokeCalls).toHaveLength(1);
+    expect(defaultInvokeCalls[0]?.commandParams).not.toHaveProperty("facing");
+    await expectLoggedSingleMediaFile({
+      expectedPathPattern: /openclaw-camera-snap-unknown-.*\.jpg$/,
+    });
+
+    programGatewayCallMock.mockClear();
+    await runNodesCommand(["nodes", "camera", "snap", "--node", "ios-node", "--facing", "both"]);
 
     const invokeCalls = nodeInvokeCalls();
     const facings = invokeCalls
@@ -196,7 +206,7 @@ describe("cli program (nodes media)", () => {
   });
 
   it("runs one unknown-position camera snap for a Linux node", async () => {
-    callGateway.mockImplementation(async (...args: unknown[]) => {
+    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
       const opts = (args[0] ?? {}) as { method?: string };
       if (opts.method === "node.list") {
         return {
@@ -269,7 +279,7 @@ describe("cli program (nodes media)", () => {
   });
 
   it("runs an unknown-position camera clip for a Linux node", async () => {
-    callGateway.mockImplementation(async (...args: unknown[]) => {
+    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
       const opts = (args[0] ?? {}) as { method?: string };
       if (opts.method === "node.list") {
         return {

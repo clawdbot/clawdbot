@@ -49,6 +49,7 @@ export {
   filterSessionRows,
   filterVisibleSessionRows,
   getVisibleSessionRows,
+  isSystemCreatedSessionRow,
   resolveSessionNavigation,
   sessionMatchesArchivedFilter,
   scopedAgentIdForSession,
@@ -123,13 +124,19 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     pullRequestSummaries.delete(normalizedKey);
   };
 
+  // Canonical Gateway rows are the source of truth for everything except the
+  // UI-owned facts the capability keeps beside them, so every published result
+  // passes through the same overlay: swarm notes, then in-flight pin intents.
+  const decorateRows = (result: SessionsListResult | null): SessionsListResult | null =>
+    mutations.applyConfirmedArchives(mutations.applyPendingPins(swarmActivity.decorate(result)));
+
   const roster = createSessionRosterRefresh({
     connection,
     snapshot: () => gateway.snapshot,
     readState: () => state,
     publish,
     observerError: () => sessionEventSubscriptionError,
-    decorate: (result) => swarmActivity.decorate(result),
+    decorate: decorateRows,
     onCanonicalList(result) {
       mutations.settlePrepared(result);
       canonicalListRevision += 1;
@@ -172,6 +179,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     readState: () => state,
     publish,
     refreshReplacement: (agentId) => roster.refreshReplacement(agentId),
+    publishedRow: (key) => roster.publishedRow(key),
+    redecorateLists: () => roster.redecorateLists(),
     notifyCreated(key) {
       for (const listener of createdListeners) {
         listener(key);
@@ -225,9 +234,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     defaults?: SessionsListResult["defaults"],
     options?: SessionReconcileOptions,
   ): boolean => {
-    const result = swarmActivity.decorate(
-      reconcileSessionHistory(state.result, row, defaults, options),
-    );
+    const result = decorateRows(reconcileSessionHistory(state.result, row, defaults, options));
     if (result === state.result) {
       return false;
     }
@@ -250,12 +257,57 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     );
   };
 
+  const reconcileChangedOptions = (
+    payload: unknown,
+    options?: SessionReconcileOptions,
+  ): SessionReconcileOptions | undefined => {
+    const eventInfo = readSessionChangedEvent(payload);
+    const selectedSessionKey = gateway.snapshot.sessionKey?.trim();
+    const archivesSelectedSession =
+      eventInfo?.archived === true &&
+      Boolean(
+        selectedSessionKey &&
+        uiSessionEventMatches(
+          {
+            assistantAgentId: gateway.snapshot.assistantAgentId,
+            hello: gateway.snapshot.hello,
+            sessionKey: selectedSessionKey,
+          },
+          eventInfo.key,
+          eventInfo.agentId,
+        ),
+      );
+    if (!archivesSelectedSession) {
+      return options;
+    }
+    // The capability owns the shared roster, so every event consumer must
+    // preserve the routed archive regardless of subscriber delivery order.
+    return {
+      ...options,
+      archivedFilter: "all",
+    };
+  };
+
+  const reconcileChangedEvent = (payload: unknown, options?: SessionReconcileOptions) => {
+    const previous = state.result;
+    const eventInfo = readSessionChangedEvent(payload);
+    const reconciled = reconcileSessionChanged(
+      previous,
+      payload,
+      reconcileChangedOptions(payload, options),
+    );
+    if (reconciled.result !== previous && reconciled.key && eventInfo) {
+      mutations.observeArchiveState(reconciled.key, eventInfo.archived, reconciled.row);
+    }
+    return { eventInfo, reconciled };
+  };
+
   const reconcileChanged = (
     payload: unknown,
     options?: SessionReconcileOptions,
   ): SessionChangedResult => {
-    const base = reconcileSessionChanged(state.result, payload, options);
-    const result = swarmActivity.decorate(base.result);
+    const { reconciled: base } = reconcileChangedEvent(payload, options);
+    const result = decorateRows(base.result);
     const reconciled =
       result === base.result
         ? base
@@ -342,6 +394,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
           await roster.refresh({
             ...agentScope,
             includeDerivedTitles: true,
+            includeLastMessage: true,
             backgroundHydrate: true,
             force: true,
           });
@@ -355,15 +408,20 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return;
     }
     swarmActivity.observe(event.payload);
-    const decoratedResult = swarmActivity.decorate(state.result);
+    const decoratedResult = decorateRows(state.result);
     if (decoratedResult !== state.result) {
       publish({ ...state, result: decoratedResult });
     }
-    const reconciled = reconcileSessionChanged(state.result, event.payload, {
+    const { eventInfo, reconciled } = reconcileChangedEvent(event.payload, {
       resultAgentId: state.agentId,
       archivedFilter: roster.lastOptions().archivedFilter,
     });
-    const eventInfo = readSessionChangedEvent(event.payload);
+    if (eventInfo?.archived !== null) {
+      const result = decorateRows(reconciled.result);
+      if (result !== state.result) {
+        publishReconciledState({ ...state, result });
+      }
+    }
     const eventReason = (event.payload as { reason?: unknown } | null)?.reason;
     const payloadAgentId = (event.payload as { agentId?: unknown } | null)?.agentId;
     if (eventReason === "groups") {
@@ -436,6 +494,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     refreshReplacement: roster.refreshReplacement,
     createResult: mutations.createResult,
     create: mutations.create,
+    recover: mutations.recover,
     patch: mutations.patch,
     retireModelOverride: mutations.retireModelOverride,
     setModelOverride: mutations.setModelOverride,

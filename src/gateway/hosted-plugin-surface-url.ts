@@ -1,5 +1,5 @@
 // Hosted plugin surface URL resolver for gateway-advertised plugin node endpoints.
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isLoopbackHost } from "./net.js";
 
 type HostSource = string | null | undefined;

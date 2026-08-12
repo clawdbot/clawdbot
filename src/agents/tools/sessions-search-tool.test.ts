@@ -1,8 +1,7 @@
 /** sessions_search visibility, bounds, redaction, and input tests. */
 import { Value } from "typebox/value";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { callGateway as gatewayCall } from "../../gateway/call.js";
-import { sessionVisibilityGatewayTesting } from "../../plugin-sdk/session-visibility.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { createSessionsSearchTool } from "./sessions-search-tool.js";
 
@@ -86,11 +85,34 @@ function createTool(params: {
   });
 }
 
-afterEach(() => {
-  sessionVisibilityGatewayTesting.setCallGatewayForListSpawned();
-});
-
 describe("sessions_search tool", () => {
+  it("rejects a literal global target owned by another fixed-store agent", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const tool = createTool({
+      agentId: "research",
+      agentSessionKey: "agent:research:main",
+      config: {
+        session: { store: "/stores/shared.sqlite" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { research: {}, ops: {} },
+        },
+        tools: { sessions: { visibility: "all" } },
+      },
+      results: [hit({ sessionKey: "global", agentId: "ops" })],
+      requests,
+    });
+
+    const result = await tool.execute("foreign-global", {
+      query: "text",
+      sessionKey: "global",
+    });
+
+    expect(result.details).toMatchObject({ status: "forbidden" });
+    expect(requests.some((request) => request.method === "sessions.search")).toBe(false);
+  });
+
   it("declares exact success and error result contracts", async () => {
     const tool = createTool({ results: [hit()] });
     const success = await tool.execute("success-contract", { query: "text" });
@@ -251,9 +273,6 @@ describe("sessions_search tool", () => {
 
   it("uses the target agent for an explicit cross-agent session", async () => {
     const requests: CallGatewayRequest[] = [];
-    sessionVisibilityGatewayTesting.setCallGatewayForListSpawned(
-      async <T>() => ({ sessions: [] }) as T,
-    );
     const tool = createTool({
       requests,
       agentId: "main",
@@ -307,9 +326,6 @@ describe("sessions_search tool", () => {
 
   it("clamps sandboxed callers to spawned sessions", async () => {
     const requests: CallGatewayRequest[] = [];
-    sessionVisibilityGatewayTesting.setCallGatewayForListSpawned(
-      async <T>() => ({ sessions: [{ key: "agent:main:child:spawned" }] }) as T,
-    );
     const tool = createTool({
       agentSessionKey: "agent:main:main",
       sandboxed: true,
@@ -341,9 +357,6 @@ describe("sessions_search tool", () => {
   });
 
   it("keeps archived spawned rows visible from their ownership metadata", async () => {
-    sessionVisibilityGatewayTesting.setCallGatewayForListSpawned(
-      async <T>() => ({ sessions: [] }) as T,
-    );
     const tool = createTool({
       agentSessionKey: "agent:main:main",
       config: { tools: { sessions: { visibility: "tree" } } },

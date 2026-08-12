@@ -53,6 +53,8 @@ export {
 } from "../infra/diagnostic-events.js";
 export { resolveDiagnosticModelContentCapturePolicy } from "../infra/diagnostic-llm-content.js";
 export type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+// Shipped plugin contract: this formatter serializes diagnostic correlation
+// context. Core outbound propagation resolves exporter-owned context internally.
 export {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,

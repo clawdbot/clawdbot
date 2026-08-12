@@ -1,14 +1,9 @@
 // Xai tests cover tts plugin behavior.
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import {
-  isValidXaiTtsVoice,
-  listXaiTtsVoices,
-  XAI_BASE_URL,
-  XAI_TTS_FALLBACK_VOICES,
-  xaiTTS,
-  xaiTTSStream,
-} from "./tts.js";
+import { XAI_BASE_URL } from "./model-definitions.js";
+import { isValidXaiTtsVoice, XAI_TTS_FALLBACK_VOICES } from "./speech-provider-metadata.js";
+import { listXaiTtsVoices, xaiTTS, xaiTTSStream } from "./tts.js";
 
 const { FakeWebSocket } = vi.hoisted(() => {
   type Listener = (...args: unknown[]) => void;

@@ -20,13 +20,14 @@ import {
 import pMap from "p-map";
 import { Type } from "typebox";
 import { formatErrorMessage } from "../infra/errors.js";
+import { cancelUnreadResponseBody } from "../infra/http-body.js";
 /**
  * Scans remote provider model catalogs for configured providers.
  */
 import { readResponseWithLimit } from "../infra/http-body.js";
 import "../llm/ai-transport-host.js";
 import type { Context, Model, Tool } from "../llm/types.js";
-import { withTimeout } from "../node-host/with-timeout.js";
+import { runAbortableTimeout } from "../node-host/with-timeout.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
@@ -212,7 +213,7 @@ async function fetchOpenRouterModels(
   try {
     // fetch resolves after headers, so keep the shared timeout active until
     // the provider-controlled catalog body has been consumed.
-    return await withTimeout(
+    return await runAbortableTimeout(
       async (signal) => {
         res = await fetchImpl(OPENROUTER_MODELS_URL, {
           headers: { Accept: "application/json" },
@@ -284,9 +285,7 @@ async function fetchOpenRouterModels(
       "OpenRouter model scan",
     );
   } finally {
-    if (res && !res.bodyUsed) {
-      await res.body?.cancel().catch(() => undefined);
-    }
+    await cancelUnreadResponseBody(res);
   }
 }
 
@@ -308,7 +307,7 @@ async function probeTool(
   };
   const startedAt = Date.now();
   try {
-    const message = await withTimeout(
+    const message = await runAbortableTimeout(
       (signal) =>
         complete(model, context, {
           apiKey,
@@ -360,7 +359,7 @@ async function probeImage(
   };
   const startedAt = Date.now();
   try {
-    await withTimeout(
+    await runAbortableTimeout(
       (signal) =>
         complete(model, context, {
           apiKey,

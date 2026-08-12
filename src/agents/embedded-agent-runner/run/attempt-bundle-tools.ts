@@ -10,16 +10,16 @@ import { isRuntimeToolAllowed } from "../../tool-policy-match.js";
 import { replaceWithEffectiveToolAllowlist } from "../../tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
-import { replaceWithEffectiveCronCreatorToolAllowlist } from "../../tools/cron-tool.js";
+import { captureFinalEffectiveCronCreatorToolAllowlist } from "../../tools/cron-tool.js";
 import { applyFinalEffectiveToolPolicy } from "../effective-tool-policy.js";
 import { log } from "../logger.js";
 import type { prepareEmbeddedAttemptSetup } from "./attempt-setup.js";
-import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-base-prepare.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   shouldCreateBundleLspRuntimeForAttempt,
   shouldCreateBundleMcpRuntimeForAttempt,
 } from "./attempt-tool-construction-plan.js";
+import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type AttemptSetup = Awaited<ReturnType<typeof prepareEmbeddedAttemptSetup>>;
@@ -37,6 +37,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
 }) {
   const {
     cronCreatorToolAllowlist,
+    cronCreatorToolAllowlistCaptureRef,
     effectiveToolsAllow,
     inheritedToolAllowlist,
     localModelLeanPreserveToolNames,
@@ -113,6 +114,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   const bundleMcpRuntime = bundleMcpSessionRuntime
     ? await materializeBundleMcpToolsForRun({
         runtime: bundleMcpSessionRuntime,
+        agentId: params.sessionAgentId,
         reservedToolNames: [
           ...tools.map((tool) => tool.name),
           ...(clientTools?.map((tool) => tool.function.name) ?? []),
@@ -205,15 +207,17 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       agentId: params.sessionAgentId,
       preserveToolNames: localModelLeanPreserveToolNames,
     });
-    if (cronCreatorToolAllowlist.length > 0) {
-      // Cron is built before bundled tools; refresh its cap against the complete surface.
-      replaceWithEffectiveCronCreatorToolAllowlist(
+    const schemaProjection = filterRuntimeCompatibleTools(projectedTools);
+    if (cronCreatorToolAllowlistCaptureRef) {
+      // Cron is constructed before bundled tools; capture only the executable
+      // surface that survived provider normalization and schema quarantine.
+      captureFinalEffectiveCronCreatorToolAllowlist(
         cronCreatorToolAllowlist,
-        projectedTools,
+        cronCreatorToolAllowlistCaptureRef,
+        schemaProjection.tools,
         (tool) => getPluginToolMeta(tool),
       );
     }
-    const schemaProjection = filterRuntimeCompatibleTools(projectedTools);
     if (inheritedToolAllowlist?.length) {
       // Spawn tools close over this ref before MCP/LSP materialize. Refresh it
       // only after final policy and schema projection so children inherit the

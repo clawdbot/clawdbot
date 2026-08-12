@@ -148,7 +148,7 @@ function renderCard(
             ? html`<span class="logbook-card__app">${card.appPrimary}</span>`
             : nothing}
           <span class="logbook-card__duration"
-            >${formatDurationCompact(card.endMs - card.startMs, { spaced: true }) ?? "0s"}</span
+            >${formatDurationCompact(card.endMs - card.startMs) ?? "0s"}</span
           >
         </span>
       </button>
@@ -209,7 +209,7 @@ function renderStats(state: LogbookUiState): TemplateResult | typeof nothing {
           <span>${t("logbook.stats.focus", { pct: String(focusPct) })}</span>
           <span
             >${t("logbook.stats.tracked", {
-              duration: formatDurationCompact(stats.trackedMs, { spaced: true }) ?? "0s",
+              duration: formatDurationCompact(stats.trackedMs) ?? "0s",
             })}</span
           >
         </div>
@@ -229,7 +229,7 @@ function renderStats(state: LogbookUiState): TemplateResult | typeof nothing {
                 ></span>
               </span>
               <span class="logbook-stats__category-time"
-                >${formatDurationCompact(entry.ms, { spaced: true }) ?? "0s"}</span
+                >${formatDurationCompact(entry.ms) ?? "0s"}</span
               >
             </div>
           `,

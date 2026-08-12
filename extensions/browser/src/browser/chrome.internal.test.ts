@@ -7,9 +7,9 @@ import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
-import { rawDataToString } from "../infra/ws.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -60,7 +60,7 @@ vi.mock("./cdp-timeouts.js", async () => {
 
 import { CHROME_STDERR_HINT_MAX_CHARS } from "./cdp-timeouts.js";
 import {
-  getChromeWebSocketUrl,
+  getChromeWebSocketEndpoint,
   isChromeCdpReady,
   isChromeReachable,
   launchOpenClawChrome,
@@ -71,6 +71,12 @@ import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js"
 import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.js";
 
 const CHROME_TEST_WS_MAX_PAYLOAD_BYTES = 1024 * 1024;
+
+async function getChromeWebSocketUrl(
+  ...args: Parameters<typeof getChromeWebSocketEndpoint>
+): Promise<string | null> {
+  return (await getChromeWebSocketEndpoint(...args))?.url ?? null;
+}
 
 /**
  * Covers the parts of chrome.ts that the mainline chrome.test.ts does

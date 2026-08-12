@@ -10,6 +10,7 @@ installBrowserHistoryIsolation();
 function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>[0]> = {}) {
   return {
     agentId: "main",
+    canUpdateConfig: true,
     configForm: {
       agents: {
         entries: { main: { default: true, tools: { profile: "full" } } },
@@ -344,7 +345,7 @@ describe("agents tools panel (browser)", () => {
       { label: "Access", value: "Enabled by the current profile." },
       { label: "Source", value: "Plugin: voice-call" },
       { label: "Default Presets", value: "full" },
-      { label: "Current Thread", value: "Not available in this chat thread right now." },
+      { label: "Current Session", value: "Not available in this chat session right now." },
     ]);
   });
 
@@ -445,6 +446,44 @@ describe("agents tools panel (browser)", () => {
 });
 
 describe("agents skills panel (browser)", () => {
+  it("gates allowlist clearing separately from staged config edits", async () => {
+    const container = document.createElement("div");
+    render(
+      renderAgentSkills({
+        agentId: "main",
+        canPatchConfig: false,
+        canUpdateConfig: true,
+        report: {
+          workspaceDir: "/tmp/workspace",
+          managedSkillsDir: "/tmp/skills",
+          skills: [],
+        },
+        loading: false,
+        error: null,
+        activeAgentId: "main",
+        configForm: { agents: { entries: { main: { skills: ["coding-agent"] } } } },
+        configLoading: false,
+        configSaving: false,
+        configDirty: false,
+        filter: "",
+        onFilterChange: () => undefined,
+        onRefresh: () => undefined,
+        onToggle: () => undefined,
+        onClear: () => undefined,
+        onDisableAll: () => undefined,
+        onConfigReload: () => undefined,
+        onConfigSave: () => undefined,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
+    expect(buttons[0]?.disabled).toBe(true);
+    expect(buttons[1]?.disabled).toBe(false);
+    expect(buttons[2]?.disabled).toBe(true);
+  });
+
   it("explains an unsatisfied one-of binary requirement", async () => {
     const container = document.createElement("div");
     const skill: SkillStatusEntry = {
@@ -481,6 +520,8 @@ describe("agents skills panel (browser)", () => {
     render(
       renderAgentSkills({
         agentId: "main",
+        canPatchConfig: true,
+        canUpdateConfig: true,
         report: {
           workspaceDir: "/tmp/workspace",
           managedSkillsDir: "/tmp/skills",

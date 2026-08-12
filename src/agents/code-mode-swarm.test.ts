@@ -7,7 +7,7 @@ import { testing } from "./code-mode.test-support.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
-} from "./swarm-code-mode.js";
+} from "./subagents/swarm/swarm-code-mode.js";
 
 const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
 
@@ -351,13 +351,17 @@ describe("Code Mode swarm host bridge", () => {
       1,
       `${replayId}:bridge:1`,
       "global",
+      undefined,
     );
     expect(getSwarmRunByLaunchReplayKey).toHaveBeenNthCalledWith(
       2,
       `${replayId}:bridge:1`,
       "global",
+      undefined,
     );
     expect(waitForCollectorCompletion).toHaveBeenCalledWith({
+      config: globalAliasContext.config,
+      currentAgentId: undefined,
       runId: "collector-1",
       currentSessionKeys: new Set(["main", "global"]),
       signal: undefined,

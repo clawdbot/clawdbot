@@ -44,50 +44,6 @@ const commandSecretTargetsModuleLoader = createLazyImportLoader(
   () => import("../cli/command-secret-targets.js"),
 );
 
-function loadStatusScanDepsRuntimeModule() {
-  return statusScanDepsRuntimeModuleLoader.load();
-}
-
-function loadStatusAgentLocalModule() {
-  return statusAgentLocalModuleLoader.load();
-}
-
-function loadStatusUpdateModule() {
-  return statusUpdateModuleLoader.load();
-}
-
-function loadStatusScanRuntimeModule() {
-  return statusScanRuntimeModuleLoader.load();
-}
-
-function loadGatewayCallModule() {
-  return gatewayCallModuleLoader.load();
-}
-
-function loadStatusSummaryModule() {
-  return statusSummaryModuleLoader.load();
-}
-
-function loadChannelPluginIdsModule() {
-  return channelPluginIdsModuleLoader.load();
-}
-
-function loadConfigModule() {
-  return configModuleLoader.load();
-}
-
-function loadControlUiLinksModule() {
-  return controlUiLinksModuleLoader.load();
-}
-
-function loadCommandConfigResolutionModule() {
-  return commandConfigResolutionModuleLoader.load();
-}
-
-function loadCommandSecretTargetsModule() {
-  return commandSecretTargetsModuleLoader.load();
-}
-
 async function resolveStatusChannelsStatus(params: {
   cfg: OpenClawConfig;
   gatewayReachable: boolean;
@@ -99,7 +55,7 @@ async function resolveStatusChannelsStatus(params: {
     // Avoid a second gateway call after probe failure; channel tables can still summarize local config.
     return null;
   }
-  const { callGateway } = await loadGatewayCallModule();
+  const { callGateway } = await gatewayCallModuleLoader.load();
   return await callGateway({
     config: params.cfg,
     method: "channels.status",
@@ -113,6 +69,7 @@ async function resolveStatusChannelsStatus(params: {
 }
 
 export type StatusScanOverviewResult = {
+  env?: NodeJS.ProcessEnv;
   coldStart: boolean;
   hasConfiguredChannels: boolean;
   skipColdStartNetworkChecks: boolean;
@@ -145,6 +102,7 @@ export type StatusScanOverviewResult = {
 
 /** Collects the common status scan data shared by text, JSON, and status-all commands. */
 export async function collectStatusScanOverview(params: {
+  env?: NodeJS.ProcessEnv;
   commandName: string;
   opts: { timeoutMs?: number; all?: boolean };
   showSecrets: boolean;
@@ -181,6 +139,7 @@ export async function collectStatusScanOverview(params: {
     summarizingChannels?: string;
   };
 }): Promise<StatusScanOverviewResult> {
+  const env = params.env ?? process.env;
   if (params.labels?.loadingConfig) {
     params.progress?.setLabel(params.labels.loadingConfig);
   }
@@ -190,22 +149,23 @@ export async function collectStatusScanOverview(params: {
     resolvedConfig: cfg,
     secretDiagnostics,
   } = await loadStatusScanCommandConfig({
+    env,
     commandName: params.commandName,
     allowMissingConfigFastPath: params.allowMissingConfigFastPath,
     readConfigSnapshot: async () =>
-      (await loadConfigModule()).readBestEffortConfigSnapshot({
+      (await configModuleLoader.load()).readBestEffortConfigSnapshot({
         observe: false,
         skipPluginValidation: params.skipConfigPluginValidation,
       }),
     resolveConfig: async (loadedConfig) =>
       await (
-        await loadCommandConfigResolutionModule()
+        await commandConfigResolutionModuleLoader.load()
       ).resolveCommandConfigWithSecrets({
         config: loadedConfig,
         commandName: params.commandName,
-        targetIds: (await loadCommandSecretTargetsModule()).getStatusCommandSecretTargetIds(
+        targetIds: (await commandSecretTargetsModuleLoader.load()).getStatusCommandSecretTargetIds(
           loadedConfig,
-          process.env,
+          env,
           { includeChannelTargets: params.includeChannelSecretTargets },
         ),
         mode: "read_only_status",
@@ -215,7 +175,7 @@ export async function collectStatusScanOverview(params: {
   params.progress?.tick();
   const hasConfiguredChannels = params.resolveHasConfiguredChannels
     ? await params.resolveHasConfiguredChannels(cfg, sourceConfig)
-    : await loadChannelPluginIdsModule().then(({ hasConfiguredChannelsForReadOnlyScope }) =>
+    : await channelPluginIdsModuleLoader.load().then(({ hasConfiguredChannelsForReadOnlyScope }) =>
         hasConfiguredChannelsForReadOnlyScope({
           config: cfg,
           activationSourceConfig: sourceConfig,
@@ -239,18 +199,18 @@ export async function collectStatusScanOverview(params: {
     includeLocalStatusRpcFallback: params.includeLocalStatusRpcFallback,
     gatewayProbeTimeoutMs,
     getTailnetHostname: async (runner) => {
-      return await loadStatusScanDepsRuntimeModule().then(({ getTailnetHostname }) =>
-        getTailnetHostname(runner),
-      );
+      return await statusScanDepsRuntimeModuleLoader
+        .load()
+        .then(({ getTailnetHostname }) => getTailnetHostname(runner));
     },
     getUpdateCheckResult: async (updateParams) =>
-      await loadStatusUpdateModule().then(({ getUpdateCheckResult }) =>
-        getUpdateCheckResult(updateParams),
-      ),
+      await statusUpdateModuleLoader
+        .load()
+        .then(({ getUpdateCheckResult }) => getUpdateCheckResult(updateParams)),
     getAgentLocalStatuses: async (bootstrapCfg) =>
-      await loadStatusAgentLocalModule().then(({ getAgentLocalStatuses }) =>
-        getAgentLocalStatuses(bootstrapCfg),
-      ),
+      await statusAgentLocalModuleLoader
+        .load()
+        .then(({ getAgentLocalStatuses }) => getAgentLocalStatuses(bootstrapCfg)),
   });
 
   if (params.labels?.checkingTailscale) {
@@ -280,9 +240,9 @@ export async function collectStatusScanOverview(params: {
   const tailscaleHttpsUrl = await bootstrap.resolveTailscaleHttpsUrl();
   const advertisedControlUiLinks =
     params.includeAdvertisedControlUiLinks === true && cfg.gateway?.controlUi?.enabled !== false
-      ? await loadControlUiLinksModule().then(async ({ resolveAdvertisedControlUiLinks }) =>
+      ? await controlUiLinksModuleLoader.load().then(async ({ resolveAdvertisedControlUiLinks }) =>
           resolveAdvertisedControlUiLinks({
-            port: (await loadConfigModule()).resolveGatewayPort(cfg),
+            port: (await configModuleLoader.load()).resolveGatewayPort(cfg),
             bind: cfg.gateway?.bind,
             customBindHost: cfg.gateway?.customBindHost,
             basePath: cfg.gateway?.controlUi?.basePath,
@@ -309,7 +269,9 @@ export async function collectStatusScanOverview(params: {
         params.progress?.tick();
         // Runtime channel helpers stay lazy because JSON fast paths can skip channel data entirely.
         const { collectChannelStatusIssues, buildChannelsTable } =
-          await loadStatusScanRuntimeModule().then(({ statusScanRuntime }) => statusScanRuntime);
+          await statusScanRuntimeModuleLoader
+            .load()
+            .then(({ statusScanRuntime }) => statusScanRuntime);
         const channelIssuesLocal = channelsStatusLocal
           ? collectChannelStatusIssues(channelsStatusLocal)
           : [];
@@ -340,6 +302,7 @@ export async function collectStatusScanOverview(params: {
       };
 
   return {
+    env,
     coldStart,
     hasConfiguredChannels,
     skipColdStartNetworkChecks: bootstrap.skipColdStartNetworkChecks,
@@ -367,7 +330,7 @@ export async function resolveStatusSummaryFromOverview(params: {
   if (params.overview.skipColdStartNetworkChecks) {
     return buildColdStartStatusSummary();
   }
-  return await loadStatusSummaryModule().then(({ getStatusSummary }) =>
+  return await statusSummaryModuleLoader.load().then(({ getStatusSummary }) =>
     getStatusSummary({
       config: params.overview.cfg,
       sourceConfig: params.overview.sourceConfig,

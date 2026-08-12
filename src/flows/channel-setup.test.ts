@@ -465,6 +465,56 @@ describe("setupChannels workspace shadow exclusion", () => {
     });
   });
 
+  it("normalizes official external compatibility output from interactive setup", async () => {
+    const setupWizard = {
+      channel: "qqbot",
+      getStatus: vi.fn(async () => ({
+        channel: "qqbot",
+        configured: false,
+        statusLines: [],
+      })),
+      configure: vi.fn(async () => ({
+        cfg: {
+          channels: {
+            qqbot: {
+              appId: "app-id",
+              clientSecret: "secret",
+              allowFrom: ["*"],
+            },
+          },
+        },
+      })),
+    };
+    const activePlugin = makeSetupPlugin({ id: "qqbot", label: "QQ Bot", setupWizard });
+    listActiveChannelSetupPlugins.mockReturnValue([activePlugin]);
+    resolveChannelSetupEntries.mockReturnValue(
+      makeChannelSetupEntries({
+        entries: [{ id: "qqbot", meta: makeMeta("qqbot", "QQ Bot") }],
+      }),
+    );
+    const select = vi.fn().mockResolvedValueOnce("qqbot").mockResolvedValueOnce("__done__");
+
+    const next = await setupChannels(
+      {} as never,
+      {} as never,
+      {
+        confirm: vi.fn(async () => true),
+        note: vi.fn(async () => undefined),
+        select,
+      } as never,
+      {
+        deferStatusUntilSelection: true,
+        skipConfirm: true,
+        skipDmPolicyPrompt: true,
+      },
+    );
+
+    expect(next.channels?.qqbot).toMatchObject({
+      dmPolicy: "open",
+      allowFrom: ["openclaw:approval-disabled"],
+    });
+  });
+
   it("allowlists ClickClack when it is explicitly selected for setup", async () => {
     const setupWizard = {
       channel: "clickclack",

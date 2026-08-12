@@ -31,6 +31,22 @@ const SURFACE_TOKENS = ["--bg", "--bg-elevated", "--bg-muted", "--card", "--pane
 
 const AA_NORMAL_TEXT_MIN = 4.5;
 
+/*
+ * Separation guardrail for the markdown code chip.
+ *
+ * Text contrast was never the failure mode here: the chip surface itself
+ * collapsed. Every dark palette sets `--secondary` to the same hex as `--card`,
+ * so a chip painted with it was invisible inside a user bubble while light mode
+ * (which overrode the surface) looked correct. The chip tokens are read out of
+ * the live rule so swapping them back for a collapsing pair fails here.
+ */
+// Recognized workspace paths are excluded from the chip: they render as file
+// links, so their contrast comes from the link color, not this surface.
+const CODE_CHIP_RULE = ".chat-text :where(:not(pre, a.markdown-file-link) > code)";
+const CODE_CHIP_HOST_SURFACES = ["--card", "--bg"] as const;
+const CHIP_SURFACE_MIN_STEP = 1.05;
+const CHIP_BORDER_MIN_STEP = 1.25;
+
 type TokenMap = Map<string, string>;
 
 function parseThemeBlocks(baseCss: string): Map<string, TokenMap> {
@@ -39,7 +55,10 @@ function parseThemeBlocks(baseCss: string): Map<string, TokenMap> {
   for (const match of baseCss.matchAll(blockPattern)) {
     const selector = match[1] ?? "";
     const body = match[2] ?? "";
-    const tokens: TokenMap = new Map();
+    // base.css declares `:root` more than once (palette, then the standalone
+    // --cursor-action blocks). Merging keeps the palette; overwriting made the
+    // default `dark` theme resolve to an empty map and skip every assertion.
+    const tokens: TokenMap = blocks.get(selector) ?? new Map();
     for (const line of body.split("\n")) {
       const declaration = line.match(/^\s*(--[\w-]+)\s*:\s*([^;]+);/);
       const name = declaration?.[1];
@@ -92,6 +111,17 @@ function contrastRatio(foregroundHex: string, backgroundHex: string): number {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+/** Read the surface/border tokens the shipped code-chip rule actually paints. */
+function readCodeChipTokens(chatTextCss: string): { surface: string; border: string } {
+  const rule = chatTextCss.split(CODE_CHIP_RULE)[1]?.split("}")[0] ?? "";
+  const surface = rule.match(/background:\s*var\((--[\w-]+)\)/u)?.[1];
+  const border = rule.match(/border:[^;]*var\((--[\w-]+)\)/u)?.[1];
+  if (!surface || !border) {
+    throw new Error(`could not read chip tokens from "${CODE_CHIP_RULE}"`);
+  }
+  return { surface, border };
+}
+
 describe("Control UI theme contrast", () => {
   const baseCss = fs.readFileSync(path.join(stylesDir, "base.css"), "utf8");
   const themes = resolveThemes(parseThemeBlocks(baseCss));
@@ -115,6 +145,37 @@ describe("Control UI theme contrast", () => {
               `${themeName}: ${textToken} ${foreground} on ${surfaceToken} ${background} = ${ratio.toFixed(2)}:1 (< ${AA_NORMAL_TEXT_MIN}:1)`,
             );
           }
+        }
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it("keeps the markdown code chip separated from every surface it sits on", () => {
+    const chatTextCss = fs.readFileSync(path.join(stylesDir, "chat", "text.css"), "utf8");
+    const chip = readCodeChipTokens(chatTextCss);
+    const failures: string[] = [];
+    for (const [themeName, tokens] of themes) {
+      const surface = tokens.get(chip.surface);
+      const border = tokens.get(chip.border);
+      expect(surface, `${themeName}: ${chip.surface} is not a hex token`).toMatch(/^#/u);
+      expect(border, `${themeName}: ${chip.border} is not a hex token`).toMatch(/^#/u);
+      for (const hostToken of CODE_CHIP_HOST_SURFACES) {
+        const host = tokens.get(hostToken);
+        if (!host?.startsWith("#")) {
+          continue;
+        }
+        const surfaceStep = contrastRatio(surface ?? "", host);
+        const borderStep = contrastRatio(border ?? "", host);
+        if (surfaceStep < CHIP_SURFACE_MIN_STEP) {
+          failures.push(
+            `${themeName}: chip ${chip.surface} ${surface} on ${hostToken} ${host} = ${surfaceStep.toFixed(2)}:1 (< ${CHIP_SURFACE_MIN_STEP}:1)`,
+          );
+        }
+        if (borderStep < CHIP_BORDER_MIN_STEP) {
+          failures.push(
+            `${themeName}: chip border ${chip.border} ${border} on ${hostToken} ${host} = ${borderStep.toFixed(2)}:1 (< ${CHIP_BORDER_MIN_STEP}:1)`,
+          );
         }
       }
     }

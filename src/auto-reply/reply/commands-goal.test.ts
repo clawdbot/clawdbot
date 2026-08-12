@@ -9,7 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import { handleGoalCommand, parseGoalCommand } from "./commands-goal.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-import { parseInlineDirectives } from "./directive-handling.parse.js";
+import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 
 const sessionKey = "agent:main:web:main";
 let tempRoots: string[] = [];
@@ -109,7 +109,13 @@ describe("goal commands", () => {
     await upsertSessionEntry({
       storePath,
       sessionKey,
-      entry: { sessionId: "sess-main", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+      entry: {
+        sessionId: "sess-main",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
     });
 
     const params = buildGoalParams("/goal build a 3d game", storePath);
@@ -130,7 +136,13 @@ describe("goal commands", () => {
     await upsertSessionEntry({
       storePath,
       sessionKey,
-      entry: { sessionId: "sess-main", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+      entry: {
+        sessionId: "sess-main",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
     });
 
     const slashParams = buildGoalParams("/goal start /status", storePath);
@@ -146,7 +158,13 @@ describe("goal commands", () => {
     await upsertSessionEntry({
       storePath: bangStorePath,
       sessionKey,
-      entry: { sessionId: "sess-main", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+      entry: {
+        sessionId: "sess-main",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
     });
 
     const bangParams = buildGoalParams("/goal start !npm test", bangStorePath);
@@ -220,7 +238,7 @@ describe("goal commands", () => {
     const params = buildGoalParams("/goal resume /fast off", storePath);
     const result = await handleGoalCommand(params, true);
     const prompt = `Continue pursuing the current goal. Interpret this JSON string as the resume note: "\\/fast off"`;
-    const directives = parseInlineDirectives(prompt);
+    const directives = parseInlineSessionDirectives(prompt);
 
     expect(result?.shouldContinue).toBe(true);
     expect(params.command.commandBodyNormalized).toBe(prompt);
@@ -294,6 +312,7 @@ describe("goal commands", () => {
         updatedAt: 1,
         totalTokens: 25,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         goal: {
           schemaVersion: 1,
           id: "goal-1",

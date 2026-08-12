@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/error-runtime";
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
+import type { WebMediaResult } from "openclaw/plugin-sdk/web-media";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./blocks.test-helpers.js";
 import {
@@ -14,12 +15,14 @@ import {
 
 // --- Module mocks (must precede dynamic import) ---
 const loadOutboundMediaFromUrlMock = vi.hoisted(() =>
-  vi.fn(async (_mediaUrl: string, _options?: unknown) => ({
-    buffer: Buffer.from("fake-image"),
-    contentType: "image/png",
-    kind: "image",
-    fileName: "screenshot.png",
-  })),
+  vi.fn(
+    async (_mediaUrl: string, _options?: unknown): Promise<WebMediaResult> => ({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/png",
+      kind: "image",
+      fileName: "screenshot.png",
+    }),
+  ),
 );
 const cleanupUploadTimeout = vi.hoisted(() => vi.fn());
 const uploadTimeoutControllers = vi.hoisted(() => [] as AbortController[]);
@@ -272,6 +275,36 @@ describe("sendMessageSlack file upload with user IDs", () => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
+
+  it("disables image optimization for forced-media uploads", async () => {
+    await sendUpload(client, {
+      mediaUrl: "/tmp/original.png",
+      forceDocument: true,
+    });
+
+    expect(loadOutboundMediaFromUrlMock).toHaveBeenCalledWith(
+      "/tmp/original.png",
+      expect.objectContaining({ optimizeImages: false }),
+    );
+  });
+
+  it.each([
+    ["absent", undefined],
+    ["false", false],
+  ] as const)(
+    "keeps default image optimization when forced-media intent is %s",
+    async (_name, forceDocument) => {
+      await sendUpload(client, {
+        mediaUrl: "/tmp/optimized.png",
+        ...(forceDocument !== undefined ? { forceDocument } : {}),
+      });
+
+      const loadOptions = loadOutboundMediaFromUrlMock.mock.calls[0]?.[1] as
+        | { optimizeImages?: boolean }
+        | undefined;
+      expect(loadOptions?.optimizeImages).toBeUndefined();
+    },
+  );
 
   it.each([
     {
@@ -840,4 +873,98 @@ describe("sendMessageSlack file upload with user IDs", () => {
       file: { id: "F001", title: uploadTitle ?? uploadFileName },
     });
   });
+
+  it.each<{
+    name: string;
+    contentType: string | undefined;
+    fileName?: string;
+    uploadFileName?: string;
+    uploadTitle?: string;
+    expectedFileName: string;
+    expectedTitle?: string;
+  }>([
+    {
+      name: "infers a PDF filename for unnamed document media",
+      contentType: "application/pdf",
+      expectedFileName: "upload.pdf",
+    },
+    {
+      name: "infers a PNG filename for unnamed image media",
+      contentType: "image/png",
+      expectedFileName: "upload.png",
+    },
+    {
+      name: "infers an MP3 filename for unnamed audio media",
+      contentType: "audio/mpeg",
+      expectedFileName: "upload.mp3",
+    },
+    {
+      name: "normalizes MIME aliases and parameters for unnamed media",
+      contentType: "IMAGE/APNG; charset=binary",
+      expectedFileName: "upload.png",
+    },
+    {
+      name: "preserves a loader-provided filename over detected MIME",
+      contentType: "application/pdf",
+      fileName: "named-export.bin",
+      expectedFileName: "named-export.bin",
+    },
+    {
+      name: "preserves an explicit filename over loaded metadata",
+      contentType: "image/png",
+      fileName: "source.png",
+      uploadFileName: "operator-name.bin",
+      expectedFileName: "operator-name.bin",
+    },
+    {
+      name: "preserves an explicit title with an inferred filename",
+      contentType: "application/pdf",
+      uploadTitle: "Quarterly Report",
+      expectedFileName: "upload.pdf",
+      expectedTitle: "Quarterly Report",
+    },
+    {
+      name: "retains the existing fallback for unknown MIME types",
+      contentType: "application/x-unknown",
+      expectedFileName: "upload",
+    },
+    {
+      name: "retains the existing fallback when MIME metadata is absent",
+      contentType: undefined,
+      expectedFileName: "upload",
+    },
+  ])(
+    "$name",
+    async ({
+      contentType,
+      fileName,
+      uploadFileName,
+      uploadTitle,
+      expectedFileName,
+      expectedTitle,
+    }) => {
+      loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
+        buffer: Buffer.from("fake-image"),
+        contentType,
+        kind: "document",
+        ...(fileName ? { fileName } : {}),
+      });
+
+      await sendUpload(client, {
+        mediaUrl: "https://example.com/?attachment=artifact",
+        ...(uploadFileName ? { uploadFileName } : {}),
+        ...(uploadTitle ? { uploadTitle } : {}),
+      });
+
+      expect(client.files.getUploadURLExternal).toHaveBeenCalledWith({
+        filename: expectedFileName,
+        length: Buffer.from("fake-image").length,
+      });
+      expectCompletedUpload({
+        client,
+        expected: {},
+        file: { id: "F001", title: expectedTitle ?? expectedFileName },
+      });
+    },
+  );
 });

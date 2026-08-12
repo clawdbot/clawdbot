@@ -12,7 +12,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { MemorySearchResult } from "../memory-host-sdk/host/types.js";
 import {
   authorizeActiveMemorySearchHits,
-  getActiveMemorySearchManager,
+  getActiveMemorySearchManagerCore,
 } from "../plugins/memory-runtime.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import type { RealtimeVoiceAgentConsultResult } from "./agent-consult-runtime.js";
@@ -50,13 +50,6 @@ export type RealtimeVoiceFastContextConsultResult =
   | { handled: true; result: RealtimeVoiceAgentConsultResult };
 
 const MAX_SNIPPET_CHARS = 700;
-
-class RealtimeFastContextTimeoutError extends Error {
-  constructor(timeoutMs: number) {
-    super(`fast context lookup timed out after ${timeoutMs}ms`);
-    this.name = "RealtimeFastContextTimeoutError";
-  }
-}
 
 function normalizeSnippet(text: string): string {
   const normalized = text.replace(/\s+/g, " ").trim();
@@ -118,7 +111,7 @@ async function lookupFastContext(params: {
 }): Promise<FastContextLookupResult> {
   // The memory runtime owns whether memory/session search is active for this
   // agent. Talk only consumes the current manager when it is already available.
-  const memory = await getActiveMemorySearchManager({
+  const memory = await getActiveMemorySearchManagerCore({
     cfg: params.cfg,
     agentId: params.agentId,
   });
@@ -172,7 +165,7 @@ export async function resolveRealtimeVoiceFastContextConsult(params: {
         query,
       }),
       timeoutMs,
-      { createError: () => new RealtimeFastContextTimeoutError(timeoutMs) },
+      { createError: () => new Error(`fast context lookup timed out after ${timeoutMs}ms`) },
     );
     if (lookup.status === "unavailable") {
       params.logger.debug?.(`[talk] fast context unavailable: ${lookup.error}`);

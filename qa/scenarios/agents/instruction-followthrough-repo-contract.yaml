@@ -20,7 +20,8 @@ scenario:
     - docs/channels/qa-channel.md
   codeRefs:
     - src/agents/system-prompt.ts
-    - src/agents/embedded-agent-runner/run/incomplete-turn.ts
+    - src/agents/embedded-agent-runner/run/incomplete-turn-resolution.ts
+    - src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts
     - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:
     kind: flow
@@ -89,6 +90,9 @@ flow:
         - set: artifactPath
           value:
             expr: "path.join(env.gateway.workspaceDir, 'repo-contract-summary.txt')"
+        - set: requestCursorBefore
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - call: runAgentPrompt
           args:
             - ref: env
@@ -128,7 +132,7 @@ flow:
               expr: "`repo contract followthrough bounced for permission or stalled: ${outbound.text}`"
         - set: followthroughDebugRequests
           value:
-            expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].filter((request) => /repo contract followthrough check/i.test(String(request.allInputText ?? ''))) : []"
+            expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`))].filter((request) => /repo contract followthrough check/i.test(String(request.allInputText ?? ''))) : []"
         - assert:
             expr: "!env.mock || followthroughDebugRequests.filter((request) => request.plannedToolName === 'read').length >= 3"
             message:

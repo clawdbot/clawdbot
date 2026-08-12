@@ -1,9 +1,12 @@
 // Doctor gateway health tests cover gateway probe failures, auth requirements, and repair messages.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
+  GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
+  GATEWAY_HEALTH_RATE_LIMITED_TITLE,
 } from "./gateway-health-auth-diagnostic.js";
 
 const callGateway = vi.hoisted(() => vi.fn());
@@ -84,8 +87,43 @@ describe("checkGatewayHealth", () => {
       timeoutMs: 6000,
       config: cfg,
     });
+    expect(callGateway).toHaveBeenNthCalledWith(3, {
+      method: "diagnostics.stability",
+      params: { type: "telemetry.exporter", limit: 1000 },
+      timeoutMs: 3000,
+      config: cfg,
+    });
     expect(runtime.error).not.toHaveBeenCalled();
     expect(note.mock.calls.map(([, title]) => title)).not.toContain("OpenClaw version mismatch");
+  });
+
+  it("renders the shared redacted telemetry exporter summary", async () => {
+    callGateway
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({
+        events: [
+          {
+            seq: 1,
+            type: "telemetry.exporter",
+            source: "diagnostics-otel",
+            target: "logs",
+            transport: "stdout",
+            outcome: "started",
+            reason: "configured",
+            payload: "private log payload",
+          },
+        ],
+      });
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 });
+
+    expect(note).toHaveBeenCalledWith(
+      "diagnostics-otel · logs · started · stdout",
+      "Telemetry exporters",
+    );
+    expect(JSON.stringify(note.mock.calls)).not.toContain("private log payload");
   });
 
   it("reports failed channel diagnostics without marking a reachable gateway unhealthy", async () => {
@@ -297,6 +335,63 @@ describe("checkGatewayHealth", () => {
       GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
     );
     expect(callGateway).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a temporary lockout when status auth is rate-limited", async () => {
+    callGateway.mockRejectedValueOnce(new Error());
+    isGatewayCredentialsRequiredError.mockReturnValueOnce(true);
+    probeGatewayStatus.mockResolvedValueOnce({
+      ok: false,
+      kind: "connect",
+      error: "connect failed",
+      connectFailure: { kind: "rate-limited", detailCode: "AUTH_RATE_LIMITED" },
+    });
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await expect(
+      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
+    ).resolves.toEqual({ authenticated: false, healthOk: true });
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
+      GATEWAY_HEALTH_RATE_LIMITED_TITLE,
+    );
+    expect(note).not.toHaveBeenCalledWith(
+      GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
+      GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
+    );
+    const output = note.mock.calls.flat().join("\n");
+    expect(output).not.toContain("gateway.remote.token");
+    expect(output).not.toContain("devices rotate");
+  });
+
+  it("handles the real typed rate-limit error without forcing the credentials predicate", async () => {
+    const error = new GatewayClientRequestError({
+      code: "INVALID_REQUEST",
+      message: "unauthorized: too many failed authentication attempts (retry later)",
+      details: {
+        code: "AUTH_RATE_LIMITED",
+        authReason: "rate_limited",
+        recommendedNextStep: "wait_then_retry",
+      },
+      retryable: true,
+      retryAfterMs: 60_000,
+    });
+    callGateway.mockRejectedValueOnce(error);
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await expect(
+      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
+    ).resolves.toEqual({ authenticated: false, healthOk: true });
+
+    expect(isGatewayCredentialsRequiredError).not.toHaveBeenCalled();
+    expect(probeGatewayStatus).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
+      GATEWAY_HEALTH_RATE_LIMITED_TITLE,
+    );
   });
 
   it("reports credentials-required when status RPC auth SecretRefs are unavailable", async () => {

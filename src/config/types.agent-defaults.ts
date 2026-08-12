@@ -295,11 +295,11 @@ export type AgentDefaultsConfig = {
     model?: string;
     /** Session key for heartbeat runs ("main" or explicit session key). */
     session?: string;
-    /** Delivery target ("last", "none", or a channel id). */
+    /** Delivery target. Default "owner" uses explicit ownerAllowFrom/allowFrom; "last" may follow groups. */
     target?: string;
     /** Direct/DM delivery policy. Default: "allow". */
     directPolicy?: "allow" | "block";
-    /** Optional delivery override (E.164 for WhatsApp, chat id for Telegram). Supports :topic:NNN suffix for Telegram topics. */
+    /** Explicit channel destination; ignored for target "owner" or an unset target. */
     to?: string;
     /** Optional account id for multi-account channels. */
     accountId?: string;
@@ -322,6 +322,14 @@ export type AgentDefaultsConfig = {
   };
   /** Owner for ambient OpenClaw system-agent/Custodian inference. */
   systemAgent?: {
+    agentId?: string;
+  };
+  /** Upgrade-only owner for the inherited credential store until H2-2 relocates credentials. */
+  authInheritance?: {
+    agentId?: string;
+  };
+  /** Upgrade-only owner for legacy fixed session stores until SQLite records ownership. */
+  sessionStore?: {
     agentId?: string;
   };
   /** Max concurrent agent runs across all conversations. Default: min(16, max(8, available CPU parallelism)). */

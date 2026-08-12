@@ -101,6 +101,25 @@ describe("ManagedWorktreeService naming", () => {
     ).toHaveLength(1);
   });
 
+  it("numbers a generated name colliding with the owner's removed record", async () => {
+    const owner = {
+      repoRoot: repo,
+      baseRef: "HEAD",
+      ownerKind: "session" as const,
+      ownerId: "agent:main:main",
+    };
+    const first = await service.create({ ...owner, suggestedName: "same-title" });
+    await service.remove({ id: first.id, reason: "session-reset" });
+
+    const successor = await service.create({ ...owner, suggestedName: "same-title" });
+
+    expect(successor.id).not.toBe(first.id);
+    expect(successor.name).toBe("same-title-2");
+    expect((await service.list()).find((record) => record.id === first.id)?.removedAt).toEqual(
+      expect.any(Number),
+    );
+  });
+
   it("serializes overlapping numeric suffix families", async () => {
     await service.create({ repoRoot: repo, name: "task", baseRef: "HEAD" });
 

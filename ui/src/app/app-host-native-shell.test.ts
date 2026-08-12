@@ -3,6 +3,11 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "./app-host.ts";
+import {
+  installDialogPolyfill,
+  nextFrame,
+  waitForRenderedModalDialog,
+} from "../test-helpers/modal-dialog.ts";
 import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
 import type { ApplicationContext } from "./context.ts";
 import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./navigation-surface.ts";
@@ -382,8 +387,9 @@ describe("OpenClaw native shell", () => {
 });
 
 describe("OpenClaw shell update affordance", () => {
-  it("renders a floating card only while desktop navigation is collapsed", () => {
+  it("renders a capable floating card only while desktop navigation is collapsed", async () => {
     const container = document.createElement("div");
+    document.body.append(container);
     const shared = {
       onboarding: false,
       updateAvailable: {
@@ -391,29 +397,76 @@ describe("OpenClaw shell update affordance", () => {
         latestVersion: "2026.7.2",
         channel: "stable" as const,
       },
-      updateRunning: false,
+      updateBusy: false,
+      canUpdate: true,
       onUpdate: vi.fn(),
+      refreshRequired: false,
+      onRefresh: vi.fn(),
     };
     const collapsed = navigationSurfaceIsHidden({
+      onboarding: false,
       navCollapsed: true,
       navDrawerOpen: false,
       mobileNavLayout: false,
     });
     render(renderFloatingUpdateCard({ ...shared, navigationSurfaceHidden: collapsed }), container);
-    expect(container.querySelector("openclaw-sidebar-update-card")).not.toBeNull();
+    const card = container.querySelector<
+      HTMLElement & {
+        canUpdate: boolean;
+        onRefresh: () => void;
+        refreshRequired: boolean;
+        updateComplete: Promise<boolean>;
+      }
+    >("openclaw-sidebar-update-card");
+    expect(card).not.toBeNull();
+    await card?.updateComplete;
+    expect(card?.canUpdate).toBe(true);
+    const restoreDialogPolyfill = installDialogPolyfill();
+    card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+    const { modal } = await waitForRenderedModalDialog(document.body);
+    [...modal.querySelectorAll("button")]
+      .find((button) => button.textContent?.trim() === "Update and restart")
+      ?.click();
+    await nextFrame();
+    restoreDialogPolyfill();
+    expect(shared.onUpdate).toHaveBeenCalledOnce();
+
+    render(
+      renderFloatingUpdateCard({
+        ...shared,
+        navigationSurfaceHidden: collapsed,
+        updateAvailable: null,
+        refreshRequired: true,
+      }),
+      container,
+    );
+    expect(card?.refreshRequired).toBe(true);
+    card?.onRefresh();
+    expect(shared.onRefresh).toHaveBeenCalledOnce();
 
     const visible = navigationSurfaceIsHidden({
+      onboarding: false,
       navCollapsed: false,
       navDrawerOpen: false,
       mobileNavLayout: false,
     });
-    render(renderFloatingUpdateCard({ ...shared, navigationSurfaceHidden: visible }), container);
+    render(
+      renderFloatingUpdateCard({
+        ...shared,
+        navigationSurfaceHidden: visible,
+        updateAvailable: null,
+        refreshRequired: true,
+      }),
+      container,
+    );
     expect(container.querySelector("openclaw-sidebar-update-card")).toBeNull();
+    container.remove();
   });
 
   it("treats a closed mobile drawer as hidden navigation", () => {
     expect(
       navigationSurfaceIsHidden({
+        onboarding: false,
         navCollapsed: false,
         navDrawerOpen: false,
         mobileNavLayout: true,
@@ -421,10 +474,55 @@ describe("OpenClaw shell update affordance", () => {
     ).toBe(true);
     expect(
       navigationSurfaceIsHidden({
+        onboarding: false,
         navCollapsed: false,
         navDrawerOpen: true,
         mobileNavLayout: true,
       }),
     ).toBe(false);
+  });
+
+  it("keeps the stale-client refresh visible during onboarding", () => {
+    const container = document.createElement("div");
+    const shared = {
+      onboarding: true,
+      updateAvailable: null,
+      updateBusy: false,
+      onUpdate: vi.fn(),
+      refreshRequired: true,
+      onRefresh: vi.fn(),
+    };
+    expect(
+      navigationSurfaceIsHidden({
+        onboarding: true,
+        navCollapsed: false,
+        navDrawerOpen: false,
+        mobileNavLayout: false,
+      }),
+    ).toBe(true);
+
+    for (const navigationSurfaceHidden of [false, true]) {
+      render(renderFloatingUpdateCard({ ...shared, navigationSurfaceHidden }), container);
+      const cards = container.querySelectorAll<HTMLElement & { refreshRequired: boolean }>(
+        "openclaw-sidebar-update-card",
+      );
+      expect(cards).toHaveLength(1);
+      expect(cards[0]?.refreshRequired).toBe(true);
+    }
+
+    render(
+      renderFloatingUpdateCard({
+        ...shared,
+        navigationSurfaceHidden: true,
+        updateAvailable: {
+          currentVersion: "2026.7.1",
+          latestVersion: "2026.7.2",
+          channel: "stable",
+        },
+        refreshRequired: false,
+      }),
+      container,
+    );
+    expect(container.querySelector("openclaw-sidebar-update-card")).toBeNull();
   });
 });

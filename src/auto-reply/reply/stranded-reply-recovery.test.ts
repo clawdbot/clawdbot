@@ -82,6 +82,13 @@ describe("resolveStrandedReplyRecovery", () => {
     if (recovery.kind === "retry") {
       expect(recovery.run.strandedReplyRetry).toBe(true);
       expect(recovery.run.disableCollectBatching).toBe(true);
+      expect(recovery.run.prompt).toBe(
+        `[System] Your previous reply was not delivered to the conversation because ` +
+          `you did not call message(action=send). Your reply text was:\n\n` +
+          `"${substantiveFinal}"\n\n` +
+          `Please deliver this reply now by calling message(action=send). ` +
+          `Do not add any extra commentary; just deliver the original reply.`,
+      );
     }
   });
 

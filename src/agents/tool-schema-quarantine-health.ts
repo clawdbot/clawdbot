@@ -1,6 +1,7 @@
 // Persists runtime tool-schema quarantines in the shared SQLite-backed core
 // plugin-state store so health surfaces can see failures from any live
 // runtime process.
+import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   createRuntimeHealthRecordEnvelope,
   createRuntimeHealthStore,
@@ -19,10 +20,6 @@ type PersistedRuntimeToolSchemaQuarantineRecord = RuntimeHealthRecordEnvelope & 
   owner?: string;
   reason: string;
 };
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
 
 const quarantineStore = createRuntimeHealthStore<PersistedRuntimeToolSchemaQuarantineRecord>({
   ownerId: "core:runtime-tool-quarantine-health",

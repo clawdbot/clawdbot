@@ -16,7 +16,7 @@ import { truncateCloseReason } from "../close-reason.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
 import { resolveConnectAuthDecision, resolveConnectAuthState } from "./auth-context.js";
 import { formatGatewayAuthFailureMessage } from "./auth-messages.js";
-import { admitGatewayConnect, resolveTrustedProxyControlUiScopes } from "./connect-admission.js";
+import { admitGatewayConnect, applyConnectionScopeCap } from "./connect-admission.js";
 import { emitGatewayAuthSecurityEvent } from "./connect-auth-security.js";
 import { isControlUiOperatorBootstrapProfile } from "./connect-device-metadata.js";
 import { verifyGatewayConnectDeviceProof } from "./connect-device-proof.js";
@@ -68,7 +68,6 @@ export async function authenticateGatewayConnect(
   } = context.handler;
   const {
     connectParams,
-    configSnapshot,
     trustedProxies,
     allowRealIpFallback,
     peerLabel,
@@ -105,7 +104,6 @@ export async function authenticateGatewayConnect(
   const hasSharedAuth = hasTokenAuth || hasPasswordAuth;
   const controlUiAuthPolicy = resolveControlUiAuthPolicy({
     isControlUi,
-    controlUiConfig: configSnapshot.gateway?.controlUi,
     deviceRaw,
     deviceAuthMigrationPending: context.handler.isControlUiDeviceAuthMigrationPending?.(),
   });
@@ -463,10 +461,7 @@ export async function authenticateGatewayConnect(
     authMethod,
   });
   if (trustedProxyAuthOk) {
-    scopes = resolveTrustedProxyControlUiScopes({
-      requestedScopes: scopes,
-      upgradeReq,
-    });
+    scopes = applyConnectionScopeCap({ scopes, upgradeReq });
     connectParams.scopes = scopes;
   }
   const skipControlUiPairingForDevice = shouldSkipControlUiPairing(
