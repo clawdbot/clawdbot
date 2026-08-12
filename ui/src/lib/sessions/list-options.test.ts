@@ -283,6 +283,56 @@ describe("session list replacement options", () => {
     sessions.dispose();
   });
 
+  it("does not carry confirmed archive state into a replacement session", async () => {
+    const key = "agent:main:dashboard:replaced";
+    let listCallCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.patch") {
+        return {
+          ok: true,
+          entry: { sessionId: "archived-session", archivedAt: 20, updatedAt: 20 },
+        };
+      }
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      listCallCount += 1;
+      if (listCallCount === 1) {
+        return sessionsResult([{ key, kind: "direct", updatedAt: 10 }], listCallCount);
+      }
+      if (listCallCount === 2) {
+        return sessionsResult(
+          [
+            {
+              key,
+              kind: "direct",
+              sessionId: "replacement-session",
+              updatedAt: 30,
+              archived: false,
+            },
+          ],
+          listCallCount,
+        );
+      }
+      return sessionsResult(
+        [{ key, kind: "direct", updatedAt: 40, archived: false }],
+        listCallCount,
+      );
+    });
+    const sessions = createSessions({ request } as unknown as GatewayBrowserClient, key);
+
+    await sessions.refresh({ agentId: "main", force: true });
+    await sessions.patch(key, { archived: true }, { agentId: "main" });
+    expect(sessions.state.result?.sessions[0]).toMatchObject({
+      sessionId: "replacement-session",
+      archived: false,
+    });
+
+    await sessions.refresh({ agentId: "main", force: true });
+    expect(sessions.state.result?.sessions[0]?.archived).toBe(false);
+    sessions.dispose();
+  });
+
   it("keeps derived titles while an enriched roster response is temporarily degraded", async () => {
     const key = "agent:main:dashboard:session-1";
     let listCallCount = 0;

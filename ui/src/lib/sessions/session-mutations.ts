@@ -305,14 +305,13 @@ export function createSessionMutations(host: SessionMutationsHost) {
       }
       if (archivedPresentationRow) {
         const archivedAt = result.entry?.archivedAt ?? Date.now();
+        const archivedSessionId = result.entry?.sessionId ?? archivedPresentationRow.sessionId;
         confirmedArchives.set(normalizedKey, {
           archivedAt,
           ...(archivedPresentationRow.archivedBy
             ? { archivedBy: archivedPresentationRow.archivedBy }
             : {}),
-          ...(archivedPresentationRow.sessionId
-            ? { sessionId: archivedPresentationRow.sessionId }
-            : {}),
+          ...(archivedSessionId ? { sessionId: archivedSessionId } : {}),
         });
         const state = host.readState();
         if (state.result) {
@@ -499,11 +498,14 @@ export function createSessionMutations(host: SessionMutationsHost) {
       let changed = false;
       const sessions = result.sessions.map((row) => {
         const archive = confirmedArchives.get(row.key);
-        if (
-          !archive ||
-          row.archived === true ||
-          (archive.sessionId && row.sessionId && archive.sessionId !== row.sessionId)
-        ) {
+        if (!archive) {
+          return row;
+        }
+        if (archive.sessionId && row.sessionId && archive.sessionId !== row.sessionId) {
+          confirmedArchives.delete(row.key);
+          return row;
+        }
+        if (row.archived === true) {
           return row;
         }
         changed = true;
