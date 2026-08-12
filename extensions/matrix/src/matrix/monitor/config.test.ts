@@ -211,6 +211,37 @@ describe("resolveMatrixMonitorConfig", () => {
     });
   });
 
+  it("keeps exact server-less room IDs without requiring a :server suffix", async () => {
+    const runtime = createRuntime();
+    const resolveTargets = vi.fn(async () => []);
+
+    const result = await resolveMatrixMonitorConfig({
+      cfg: createConfig(),
+      accountId: "ops",
+      roomsConfig: {
+        "!kyPsk-bXS5fEmaIzUxZHgs6QVNyVjlbTSjy_ZkN48Ss": {
+          enabled: true,
+          users: ["@known:example.org"],
+        },
+      },
+      runtime,
+      resolveTargets,
+    });
+
+    // Server-less room IDs are exact IDs, not resolvable names: kept verbatim,
+    // never sent to resolveTargets, and never reported unresolved.
+    expect(result.roomsConfig).toEqual({
+      "!kyPsk-bXS5fEmaIzUxZHgs6QVNyVjlbTSjy_ZkN48Ss": {
+        enabled: true,
+        users: ["@known:example.org"],
+      },
+    });
+    expect(resolveTargets).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalledWith(
+      "matrix rooms must be room IDs or aliases (example: !room:server or #alias:server). Unresolved entries are ignored.",
+    );
+  });
+
   it("does not resolve mutable allowlist entries or room names by default", async () => {
     const runtime = createRuntime();
     const resolveTargets = vi.fn(

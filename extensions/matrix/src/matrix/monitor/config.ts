@@ -424,7 +424,9 @@ async function resolveMatrixMonitorRoomsConfig(params: {
       unresolved.push(entry);
       continue;
     }
-    if (cleaned.startsWith("!") && cleaned.includes(":")) {
+    if (cleaned.startsWith("!")) {
+      // Exact room ID, with or without :server — modern homeservers issue
+      // server-less IDs, which can only be matched verbatim (all admission needs).
       if (!nextRooms[cleaned]) {
         nextRooms[cleaned] = roomConfig;
       }
