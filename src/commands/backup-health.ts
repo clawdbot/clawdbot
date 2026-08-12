@@ -10,7 +10,7 @@ import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-sta
 // Backups older than two weeks no longer provide a useful routine recovery point.
 const BACKUP_STALE_AFTER_MS = 14 * 24 * 60 * 60 * 1_000;
 
-export type BackupFreshness = {
+type BackupFreshness = {
   latest?: BackupRunRecord;
   latestOk?: BackupRunRecord;
 };

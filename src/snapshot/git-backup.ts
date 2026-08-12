@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isPathInside } from "../infra/fs-safe.js";
-import { requireGit, requireGitBuffer, runGit } from "../infra/git-exec.js";
+import {
+  executeGitCommand as runGit,
+  requireGitCommand as requireGit,
+  requireGitCommandBuffer as requireGitBuffer,
+} from "../infra/git-exec.js";
 import {
   GIT_BACKUP_MANIFEST,
   GIT_BACKUP_SCHEMA,

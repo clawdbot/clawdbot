@@ -2,11 +2,11 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  commandError as commandErrorExec,
-  requireGit as requireGitExec,
-  requireGitBuffer as requireGitBufferExec,
-  requireGitRaw as requireGitRawExec,
-  runGit as runGitExec,
+  createGitCommandError,
+  executeGitCommand,
+  requireGitCommand,
+  requireGitCommandBuffer,
+  requireGitCommandRaw,
 } from "../../infra/git-exec.js";
 
 export type GitResult = {
@@ -27,11 +27,11 @@ export async function runGit(
   args: string[],
   options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array } = {},
 ): Promise<GitResult> {
-  return await runGitExec(cwd, args, options);
+  return await executeGitCommand(cwd, args, options);
 }
 
 export function commandError(command: string, result: GitResult): Error {
-  return commandErrorExec(command, result);
+  return createGitCommandError(command, result);
 }
 
 export async function requireGit(
@@ -39,11 +39,11 @@ export async function requireGit(
   args: string[],
   options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array } = {},
 ): Promise<string> {
-  return await requireGitExec(cwd, args, options);
+  return await requireGitCommand(cwd, args, options);
 }
 
 export async function requireGitRaw(cwd: string, args: string[]): Promise<string> {
-  return await requireGitRawExec(cwd, args);
+  return await requireGitCommandRaw(cwd, args);
 }
 
 export async function requireGitBuffer(
@@ -51,7 +51,7 @@ export async function requireGitBuffer(
   args: string[],
   options: { env?: NodeJS.ProcessEnv; input?: Uint8Array } = {},
 ): Promise<Buffer> {
-  return await requireGitBufferExec(cwd, args, options);
+  return await requireGitCommandBuffer(cwd, args, options);
 }
 
 function parseWorktreeList(output: string): WorktreeListEntry[] {

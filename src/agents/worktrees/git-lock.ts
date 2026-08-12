@@ -1,6 +1,6 @@
 import path from "node:path";
-import { commandError, runGit } from "./git.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
+import { commandError, runGit } from "./git.js";
 import { listGitWorktrees } from "./git.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 

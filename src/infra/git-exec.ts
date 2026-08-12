@@ -2,17 +2,17 @@ import { runCommandBuffered, runCommandWithTimeout } from "../process/exec.js";
 
 const GIT_TIMEOUT_MS = 120_000;
 
-export type GitResult = {
+type GitCommandResult = {
   stdout: string;
   stderr: string;
   code: number | null;
 };
 
-export async function runGit(
+export async function executeGitCommand(
   cwd: string,
   args: string[],
   options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array } = {},
-): Promise<GitResult> {
+): Promise<GitCommandResult> {
   return await runCommandWithTimeout(["git", "-C", cwd, ...args], {
     timeoutMs: GIT_TIMEOUT_MS,
     env: options.env,
@@ -20,32 +20,32 @@ export async function runGit(
   });
 }
 
-export function commandError(command: string, result: GitResult): Error {
+export function createGitCommandError(command: string, result: GitCommandResult): Error {
   const detail = (result.stderr || result.stdout).trim().split("\n").slice(-12).join("\n");
   return new Error(`${command} failed${detail ? `:\n${detail}` : ""}`);
 }
 
-export async function requireGit(
+export async function requireGitCommand(
   cwd: string,
   args: string[],
   options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array } = {},
 ): Promise<string> {
-  const result = await runGit(cwd, args, options);
+  const result = await executeGitCommand(cwd, args, options);
   if (result.code !== 0) {
-    throw commandError(`git ${args.join(" ")}`, result);
+    throw createGitCommandError(`git ${args.join(" ")}`, result);
   }
   return result.stdout.trim();
 }
 
-export async function requireGitRaw(cwd: string, args: string[]): Promise<string> {
-  const result = await runGit(cwd, args);
+export async function requireGitCommandRaw(cwd: string, args: string[]): Promise<string> {
+  const result = await executeGitCommand(cwd, args);
   if (result.code !== 0) {
-    throw commandError(`git ${args.join(" ")}`, result);
+    throw createGitCommandError(`git ${args.join(" ")}`, result);
   }
   return result.stdout;
 }
 
-export async function requireGitBuffer(
+export async function requireGitCommandBuffer(
   cwd: string,
   args: string[],
   options: { env?: NodeJS.ProcessEnv; input?: Uint8Array; maxOutputBytes?: number } = {},

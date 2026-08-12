@@ -4,7 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
-import { requireGit } from "../infra/git-exec.js";
+import { requireGitCommand as requireGit } from "../infra/git-exec.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -204,7 +204,14 @@ describe("Git-backed SQLite snapshots", () => {
         bytes: Uint8Array;
         optional: string | null;
       }>;
-      expect(rows.map((row) => ({ ...row, bytes: [...row.bytes] }))).toEqual([
+      expect(
+        rows.map((row) => ({
+          id: row.id,
+          huge: row.huge,
+          bytes: [...row.bytes],
+          optional: row.optional,
+        })),
+      ).toEqual([
         {
           id: 1n,
           huge: 9_007_199_254_740_993n,
