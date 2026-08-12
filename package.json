@@ -451,10 +451,6 @@
       "types": "./dist/plugin-sdk/channel-setup.d.ts",
       "default": "./dist/plugin-sdk/channel-setup.js"
     },
-    "./plugin-sdk/channel-streaming": {
-      "types": "./dist/plugin-sdk/channel-streaming.d.ts",
-      "default": "./dist/plugin-sdk/channel-streaming.js"
-    },
     "./plugin-sdk/channel-streaming-config": {
       "types": "./dist/plugin-sdk/channel-streaming-config.d.ts",
       "default": "./dist/plugin-sdk/channel-streaming-config.js"
@@ -704,10 +700,6 @@
     "./plugin-sdk/thread-bindings-session-runtime": {
       "default": "./dist/plugin-sdk/thread-bindings-session-runtime.js"
     },
-    "./plugin-sdk/text-runtime": {
-      "types": "./dist/plugin-sdk/text-runtime.d.ts",
-      "default": "./dist/plugin-sdk/text-runtime.js"
-    },
     "./plugin-sdk/text-chunking": {
       "types": "./dist/plugin-sdk/text-chunking.d.ts",
       "default": "./dist/plugin-sdk/text-chunking.js"
@@ -744,10 +736,6 @@
     "./plugin-sdk/channel-secret-basic-runtime": {
       "types": "./dist/plugin-sdk/channel-secret-basic-runtime.d.ts",
       "default": "./dist/plugin-sdk/channel-secret-basic-runtime.js"
-    },
-    "./plugin-sdk/channel-secret-runtime": {
-      "types": "./dist/plugin-sdk/channel-secret-runtime.d.ts",
-      "default": "./dist/plugin-sdk/channel-secret-runtime.js"
     },
     "./plugin-sdk/channel-secret-tts-runtime": {
       "default": "./dist/plugin-sdk/channel-secret-tts-runtime.js"
@@ -881,10 +869,6 @@
     "./plugin-sdk/account-resolution-runtime": {
       "default": "./dist/plugin-sdk/account-resolution-runtime.js"
     },
-    "./plugin-sdk/agent-config-primitives": {
-      "types": "./dist/plugin-sdk/agent-config-primitives.d.ts",
-      "default": "./dist/plugin-sdk/agent-config-primitives.js"
-    },
     "./plugin-sdk/access-groups": {
       "default": "./dist/plugin-sdk/access-groups.js"
     },
@@ -946,10 +930,6 @@
     "./plugin-sdk/discord": {
       "types": "./dist/plugin-sdk/discord.d.ts",
       "default": "./dist/plugin-sdk/discord.js"
-    },
-    "./plugin-sdk/matrix": {
-      "types": "./dist/plugin-sdk/matrix.d.ts",
-      "default": "./dist/plugin-sdk/matrix.js"
     },
     "./plugin-sdk/device-bootstrap": {
       "types": "./dist/plugin-sdk/device-bootstrap.d.ts",
@@ -1019,10 +999,6 @@
     "./plugin-sdk/channel-inbound-debounce": {
       "types": "./dist/plugin-sdk/channel-inbound-debounce.d.ts",
       "default": "./dist/plugin-sdk/channel-inbound-debounce.js"
-    },
-    "./plugin-sdk/channel-logging": {
-      "types": "./dist/plugin-sdk/channel-logging.d.ts",
-      "default": "./dist/plugin-sdk/channel-logging.js"
     },
     "./plugin-sdk/channel-mention-gating": {
       "default": "./dist/plugin-sdk/channel-mention-gating.js"
@@ -1124,10 +1100,6 @@
     },
     "./plugin-sdk/group-activation": {
       "default": "./dist/plugin-sdk/group-activation.js"
-    },
-    "./plugin-sdk/group-access": {
-      "types": "./dist/plugin-sdk/group-access.d.ts",
-      "default": "./dist/plugin-sdk/group-access.js"
     },
     "./plugin-sdk/global-singleton": {
       "default": "./dist/plugin-sdk/global-singleton.js"
@@ -1471,10 +1443,6 @@
     "./plugin-sdk/web-media": {
       "types": "./dist/plugin-sdk/web-media.d.ts",
       "default": "./dist/plugin-sdk/web-media.js"
-    },
-    "./plugin-sdk/zod": {
-      "types": "./dist/plugin-sdk/zod.d.ts",
-      "default": "./dist/plugin-sdk/zod.js"
     },
     "./plugin-sdk/agent-core": {
       "default": "./dist/plugin-sdk/agent-core.js"

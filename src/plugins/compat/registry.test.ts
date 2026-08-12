@@ -25,6 +25,16 @@ const removalDatePendingCompatCodes = new Set<PluginCompatCode>([
   "plugin-sdk-tool-plugin-public-demotion",
   "agent-harness-sdk-alias",
 ]);
+const retiredPluginSdkSubpathCodes = [
+  "plugin-sdk-channel-streaming-subpath",
+  "plugin-sdk-text-runtime-subpath",
+  "plugin-sdk-channel-secret-runtime-subpath",
+  "plugin-sdk-agent-config-primitives-subpath",
+  "plugin-sdk-matrix-subpath",
+  "plugin-sdk-channel-logging-subpath",
+  "plugin-sdk-group-access-subpath",
+  "plugin-sdk-zod-subpath",
+] as const satisfies readonly PluginCompatCode[];
 const deprecationMarkingCodes = [
   "plugin-sdk-channel-setup-input-fields",
   "plugin-sdk-broad-runtime-barrels",
@@ -135,6 +145,18 @@ describe("plugin compatibility registry", () => {
       "openclaw/plugin-sdk/agent-harness",
       "openclaw/plugin-sdk/agent-harness-runtime",
     ]);
+  });
+
+  it("keeps retired Plugin SDK subpaths as migration tombstones", () => {
+    const records = new Map(listPluginCompatRecords().map((record) => [record.code, record]));
+
+    for (const code of retiredPluginSdkSubpathCodes) {
+      expect(records.get(code)).toMatchObject({
+        status: "removed",
+        releaseNote: expect.stringMatching(/\S/u),
+      });
+      expect(records.get(code)?.removeAfter, code).toBeUndefined();
+    }
   });
 
   it("tracks the deprecation-marking families through the approved window", () => {

@@ -27,7 +27,7 @@ import {
   resolveChannelStreamingPreviewToolProgress,
   resolveTranscriptBackedChannelFinalText,
   selectLongerFinalText,
-} from "./channel-streaming.js";
+} from "./streaming.js";
 
 const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 1_500;
 
