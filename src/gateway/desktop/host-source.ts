@@ -29,7 +29,7 @@ export type HostDesktopStatus =
   | {
       enabled: true;
       state: "managed";
-      managedState: ManagedLinuxDesktopStatus["state"];
+      managedState: ManagedLinuxDesktopStatus["state"] | "unknown";
       port: number;
       display?: number;
       error?: string;
@@ -100,6 +100,18 @@ function managedInspection(managedStatus: ManagedLinuxDesktopStatus): HostDeskto
   };
 }
 
+function configuredManagedInspection(): HostDesktopInspection {
+  return {
+    status: {
+      enabled: true,
+      state: "managed",
+      managedState: "unknown",
+      port: DEFAULT_HOST_DESKTOP_PORT,
+    },
+    detail: "managed (configured; runtime state is available from the running Gateway status)",
+  };
+}
+
 function securityLabel(probe: Extract<RfbProbeResult, { kind: "rfb" }>): string {
   const auth = classifyRfbSecurity(probe.securityTypes);
   if (auth === "vnc-password") {
@@ -144,7 +156,9 @@ export async function inspectHostDesktop(params: {
           unavailableReason: "unsupported",
         };
       }
-      return managedInspection(params.managedDesktop?.status() ?? { state: "not-started" });
+      return params.managedDesktop
+        ? managedInspection(params.managedDesktop.status())
+        : configuredManagedInspection();
     }
     return {
       status: { enabled: true, state: "unavailable", port },

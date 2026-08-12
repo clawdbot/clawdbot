@@ -134,7 +134,9 @@ export function buildStatusCommandOverviewRows(
           ? `managed · running · display :${hostDesktop.display} · 127.0.0.1:${hostDesktop.port} · security VncAuth`
           : hostDesktop.managedState === "failed"
             ? `managed · failed: ${hostDesktop.error}`
-            : `managed · ${hostDesktop.managedState === "not-started" ? "not started" : "starting"}`
+            : hostDesktop.managedState === "unknown"
+              ? "managed · runtime state unavailable"
+              : `managed · ${hostDesktop.managedState === "not-started" ? "not started" : "starting"}`
         : `${hostDesktop.state} · 127.0.0.1:${hostDesktop.port}${hostDesktop.security ? ` · security ${hostDesktop.security}` : ""}`;
   return buildStatusOverviewRowsFromSurface({
     surface: params.surface,

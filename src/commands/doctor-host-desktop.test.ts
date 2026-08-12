@@ -74,16 +74,16 @@ describe("host desktop doctor section", () => {
     );
   });
 
-  it("reports managed not-started and failed states distinctly", async () => {
+  it("reports managed configured and failed states distinctly", async () => {
     vi.spyOn(hostSource, "inspectHostDesktop")
       .mockResolvedValueOnce({
         status: {
           enabled: true,
           state: "managed",
-          managedState: "not-started",
+          managedState: "unknown",
           port: 5900,
         },
-        detail: "managed (not started)",
+        detail: "managed (configured; runtime state is available from the running Gateway status)",
       })
       .mockResolvedValueOnce({
         status: {
@@ -101,7 +101,10 @@ describe("host desktop doctor section", () => {
       { desktop: { host: { enabled: true, managed: true } } },
       { platform: "linux" },
     );
-    expect(note).toHaveBeenCalledWith("managed (not started)", "Host desktop");
+    expect(note).toHaveBeenCalledWith(
+      "managed (configured; runtime state is available from the running Gateway status)",
+      "Host desktop",
+    );
     await expect(
       collectHostDesktopHealthFindings({
         desktop: { host: { enabled: true, managed: true } },

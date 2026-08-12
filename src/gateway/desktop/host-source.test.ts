@@ -269,4 +269,22 @@ describe("gateway host desktop source", () => {
       detail: "managed (running, display :99, port 46001, security: VncAuth)",
     });
   });
+
+  it("does not infer process-local managed state from standalone inspection", async () => {
+    await expect(
+      inspectHostDesktop({
+        config: { enabled: true, managed: true },
+        platform: "linux",
+        probeRfb: async () => ({ kind: "unreachable" }),
+      }),
+    ).resolves.toEqual({
+      status: {
+        enabled: true,
+        state: "managed",
+        managedState: "unknown",
+        port: 5900,
+      },
+      detail: "managed (configured; runtime state is available from the running Gateway status)",
+    });
+  });
 });
