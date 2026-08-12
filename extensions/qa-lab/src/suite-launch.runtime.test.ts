@@ -14,11 +14,13 @@ import type {
 const {
   crablineRuntimeLoads,
   prepareDockerE2eEnvironment,
+  replaceFileAtomicMock,
   runQaFlowSuite,
   runQaTestFileScenarios,
 } = vi.hoisted(() => ({
   crablineRuntimeLoads: vi.fn(),
   prepareDockerE2eEnvironment: vi.fn(),
+  replaceFileAtomicMock: vi.fn(),
   runQaFlowSuite: vi.fn(),
   runQaTestFileScenarios: vi.fn(),
 }));
@@ -42,6 +44,12 @@ vi.mock("./test-file-scenario-docker-batch.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./test-file-scenario-docker-batch.js")>()),
   prepareDockerE2eEnvironment,
 }));
+
+vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
+  replaceFileAtomicMock.mockImplementation(actual.replaceFileAtomic);
+  return { ...actual, replaceFileAtomic: replaceFileAtomicMock };
+});
 
 import { runQaSuite, runQaSuiteWithInfraRetry } from "./suite-launch.runtime.js";
 
@@ -122,6 +130,7 @@ function mockFlowPartitionFailures(failuresByScenarioId: ReadonlyMap<string, rea
 
 describe("qa suite runtime launcher", () => {
   beforeEach(() => {
+    replaceFileAtomicMock.mockClear();
     runQaFlowSuite.mockReset();
     runQaTestFileScenarios.mockReset();
     prepareDockerE2eEnvironment.mockReset();
@@ -1224,6 +1233,80 @@ describe("qa suite runtime launcher", () => {
       "log=.artifacts/qa-e2e/mixed/playwright/control-ui-chat-flow-playwright.log",
     );
   });
+
+  it.each([
+    { kind: "evidence", fileName: "qa-evidence.json" },
+    { kind: "report", fileName: "qa-suite-report.md" },
+    { kind: "summary", fileName: "qa-suite-summary.json" },
+  ])(
+    "preserves the prior unified $kind artifact when atomic publication fails",
+    async ({ fileName }) => {
+      const repoRoot = await makeTempRepo("qa-suite-unified-artifact-atomic-");
+      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "artifact-atomic");
+      const canonicalFileNames = [
+        "qa-evidence.json",
+        "qa-suite-report.md",
+        "qa-suite-summary.json",
+      ];
+      const sentinels = new Map(
+        canonicalFileNames.map((canonicalFileName) => [
+          canonicalFileName,
+          `prior ${canonicalFileName}\n`,
+        ]),
+      );
+      await fs.mkdir(outputDir, { recursive: true, mode: 0o750 });
+      await fs.chmod(outputDir, 0o750);
+      for (const [canonicalFileName, sentinel] of sentinels) {
+        const finalPath = path.join(outputDir, canonicalFileName);
+        await fs.writeFile(finalPath, sentinel, { encoding: "utf8", mode: 0o640 });
+        await fs.chmod(finalPath, 0o640);
+      }
+      const actualSecurityRuntime = await vi.importActual<
+        typeof import("openclaw/plugin-sdk/security-runtime")
+      >("openclaw/plugin-sdk/security-runtime");
+      const publicationOrder: string[] = [];
+      const failSelectedArtifact = async (options: Parameters<typeof replaceFileAtomicMock>[0]) => {
+        publicationOrder.push(path.basename(options.filePath));
+        return await actualSecurityRuntime.replaceFileAtomic({
+          ...options,
+          ...(path.basename(options.filePath) === fileName
+            ? {
+                beforeRename: async ({ tempPath }: { tempPath: string }) => {
+                  await fs.writeFile(tempPath, "partial replacement\n", "utf8");
+                  throw Object.assign(new Error("injected QA artifact publication failure"), {
+                    code: "EIO",
+                  });
+                },
+              }
+            : {}),
+        });
+      };
+
+      await replaceFileAtomicMock.withImplementation(failSelectedArtifact, async () => {
+        await expect(
+          runQaSuite({
+            repoRoot,
+            outputDir: ".artifacts/qa-e2e/artifact-atomic",
+            scenarioIds: ["control-ui-chat-flow-playwright"],
+          }),
+        ).rejects.toMatchObject({ code: "EIO" });
+      });
+
+      const selectedPath = path.join(outputDir, fileName);
+      await expect(fs.readFile(selectedPath, "utf8")).resolves.toBe(sentinels.get(fileName));
+      if (process.platform !== "win32") {
+        expect((await fs.stat(selectedPath)).mode & 0o777).toBe(0o640);
+        expect((await fs.stat(outputDir)).mode & 0o7777).toBe(0o750);
+      }
+      const selectedIndex = canonicalFileNames.indexOf(fileName);
+      expect(publicationOrder).toEqual(canonicalFileNames.slice(0, selectedIndex + 1));
+      expect(
+        (await fs.readdir(outputDir)).filter((entry) =>
+          entry.startsWith(`${fileName}.qa-artifact.`),
+        ),
+      ).toEqual([]);
+    },
+  );
 
   it("aggregates mixed-kind progress through the parent lab", async () => {
     const repoRoot = await makeTempRepo("qa-suite-mixed-progress-");
