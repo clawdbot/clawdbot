@@ -148,15 +148,7 @@ function hasExactRetiredCommitmentsSchema(
 }
 
 function assertRecognizedRetiredCommitmentsSchema(db: DatabaseSync): void {
-  if (
-    hasExactRetiredCommitmentsSchema(
-      db,
-      RETIRED_COMMITMENTS_SCHEMA_SQL,
-      RETIRED_COMMITMENTS_INDEX_NAMES,
-      RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY,
-    ) ||
-    hasExactRetiredCommitmentsSchema(db, EARLY_RETIRED_COMMITMENTS_SCHEMA_SQL, [])
-  ) {
+  if (hasRecognizedRetiredCommitmentsSchema(db)) {
     return;
   }
   assertSqliteSchemaContains(
@@ -166,6 +158,17 @@ function assertRecognizedRetiredCommitmentsSchema(db: DatabaseSync): void {
   );
   throw new Error(
     "Retired OpenClaw commitments schema has unsupported additional indexes; refusing destructive migration.",
+  );
+}
+
+function hasRecognizedRetiredCommitmentsSchema(db: DatabaseSync): boolean {
+  return (
+    hasExactRetiredCommitmentsSchema(
+      db,
+      RETIRED_COMMITMENTS_SCHEMA_SQL,
+      RETIRED_COMMITMENTS_INDEX_NAMES,
+      RETIRED_COMMITMENTS_SCHEMA_COMPATIBILITY,
+    ) || hasExactRetiredCommitmentsSchema(db, EARLY_RETIRED_COMMITMENTS_SCHEMA_SQL, [])
   );
 }
 
@@ -351,6 +354,13 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
 ): OpenClawStateDatabaseSchemaMigration[] {
   const migrations: OpenClawStateDatabaseSchemaMigration[] = [];
   const userVersion = readSqliteUserVersion(db);
+  if (
+    userVersion < OPENCLAW_STATE_SCHEMA_VERSION &&
+    tableExists(db, "commitments") &&
+    hasRecognizedRetiredCommitmentsSchema(db)
+  ) {
+    migrations.push({ kind: "commitments-retirement-v7", path: pathname });
+  }
   if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
     migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });
   }

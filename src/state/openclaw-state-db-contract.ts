@@ -64,6 +64,7 @@ export type OpenClawStateDatabaseSchemaMigration = {
   kind:
     | "agent-databases-composite-primary-key"
     | "audit-events-v2"
+    | "commitments-retirement-v7"
     | "operator-approvals-system-agent"
     | "session-watch-cursor-provenance-v4"
     | "strict-tables-v3";

@@ -180,6 +180,8 @@ function describeStateSchemaMigration(migration: OpenClawStateDatabaseSchemaMigr
       return "agent database registry primary key → agent_id,path";
     case "audit-events-v2":
       return "audit event ledger → versioned message lifecycle schema";
+    case "commitments-retirement-v7":
+      return "retired commitments storage → removed table and indexes";
     case "operator-approvals-system-agent":
       return "operator approvals → OpenClaw system changes";
     case "session-watch-cursor-provenance-v4":

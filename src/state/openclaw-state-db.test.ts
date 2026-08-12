@@ -1383,6 +1383,11 @@ describe("openclaw state database", () => {
       seedV6CommitmentSchema(legacy);
       legacy.close();
 
+      expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toContainEqual({
+        kind: "commitments-retirement-v7",
+        path: databasePath,
+      });
+
       if (migrationPath === "doctor repair") {
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
           changes: ["Retired shared state commitments table and indexes"],
@@ -1431,6 +1436,10 @@ describe("openclaw state database", () => {
         payload_json: "{}",
         created_at: 1,
         updated_at: 2,
+      });
+      expect(detectOpenClawStateDatabaseSchemaMigrations(options)).not.toContainEqual({
+        kind: "commitments-retirement-v7",
+        path: databasePath,
       });
     },
   );
