@@ -152,7 +152,9 @@ export function resolveSkillDispatchTools(params: {
     ...(beforeToolCallHookContext ? { beforeToolCallHookContext } : {}),
     modelProvider: params.provider,
     modelId: params.model,
-    pluginToolAllowlist: capabilityProfile.policy.pluginToolDiscoveryAllowlist,
+    pluginToolAllowlist:
+      capabilityProfile.policy.pluginToolDiscoveryAllowlist ??
+      capabilityProfile.policy.explicitToolAllowlist,
     pluginToolDenylist: explicitDenylist,
     cronCreatorToolAllowlist,
     inheritedToolAllowlist,

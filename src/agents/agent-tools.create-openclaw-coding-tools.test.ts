@@ -1416,6 +1416,28 @@ describe("createOpenClawCodingTools", () => {
     ]);
   });
 
+  it("accepts legacy prepared profiles without a plugin discovery allowlist", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const config: OpenClawConfig = { tools: { alsoAllow: ["lobster"] } };
+    const resolvedProfile = resolveConversationCapabilityProfile({ config });
+    const { pluginToolDiscoveryAllowlist: _omitted, ...legacyPolicy } = resolvedProfile.policy;
+
+    createOpenClawCodingTools({
+      config,
+      conversationCapabilityProfile: {
+        ...resolvedProfile,
+        policy: legacyPolicy,
+      },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    expect(latestCreateOpenClawToolsOptions().pluginToolAllowlist).toStrictEqual([
+      "lobster",
+      DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+    ]);
+  });
+
   it("materializes additive runtime tools while preserving normal deny policy", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();

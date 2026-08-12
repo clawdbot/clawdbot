@@ -186,7 +186,7 @@ export type ResolvedConversationCapabilityProfile = {
     /** Explicit config/runtime grants only; excludes built-in profile expansion. */
     explicitToolOverrideAllowlist: string[];
     /** Explicit and inherited grants used to select plugin tools before policy filtering. */
-    pluginToolDiscoveryAllowlist: string[];
+    pluginToolDiscoveryAllowlist?: string[];
     explicitToolDenylist: string[];
     runtimePluginToolGrant?: RuntimePluginToolGrant;
   };
