@@ -166,7 +166,12 @@ export function writeWrapperProofReceipt(receiptPath: string | undefined, proof:
 export function readWrapperProofReceipt(receiptPath: string): WrapperProof | null {
   try {
     const parsed = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
-    return isWrapperProof(parsed) ? parsed : null;
+    return isWrapperProof(parsed) &&
+      parsed.status === "passed" &&
+      parsed.exitCode === 0 &&
+      parsed.ranTool === true
+      ? parsed
+      : null;
   } catch {
     return null;
   }

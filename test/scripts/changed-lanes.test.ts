@@ -19,9 +19,12 @@ import {
 import {
   createCheckProofReceipt,
   createWrapperProof,
+  evaluateReusableReceipt,
   isReusableCheckProofReceipt,
-  writeWrapperProofReceipt,
   readWrapperProofReceipt,
+  writeCheckProofReceipt,
+  writeWrapperProofReceipt,
+  type CheckProofReceipt,
 } from "../../scripts/lib/check-proof-reuse.mts";
 import {
   buildChangedCheckCrabboxArgs,
@@ -147,6 +150,7 @@ function writeRepoFile(repoDir: string, filePath: string, contents: string): voi
 }
 
 const prettyJson = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
+const cloneJson = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 // Executes the exact "format changed files" plan command with the repo-pinned oxfmt,
 // reconstructing `pnpm format:check <plan args>`. Guards the runtime verdict, not just
@@ -1064,6 +1068,7 @@ describe("scripts/changed-lanes", () => {
   });
 
   it("reuses only exact passed proof receipts for the same command family", () => {
+    const receiptDir = makeTempRepoRoot(tempDirs, "changed-check-evidence-");
     const command = {
       name: "lint core changed file",
       bin: "node",
@@ -1104,6 +1109,13 @@ describe("scripts/changed-lanes", () => {
     });
 
     expect(isReusableCheckProofReceipt(stored, expected)).toBe(true);
+    writeCheckProofReceipt(receiptDir, stored);
+    expect(evaluateReusableReceipt(receiptDir, expected)).toEqual(
+      expect.objectContaining({
+        reusable: true,
+        reason: "exact-target evidence reuse",
+      }),
+    );
     expect(
       isReusableCheckProofReceipt(
         {
@@ -1123,6 +1135,271 @@ describe("scripts/changed-lanes", () => {
         expected,
       ),
     ).toBe(false);
+  });
+
+  it("invalidates changed-check evidence receipts on owner facts", () => {
+    const command = {
+      name: "typecheck scripts",
+      bin: "node",
+      args: ["scripts/run-tsgo.mjs", "-p", "scripts/tsconfig.json", "--noEmit"],
+      env: { PATH: "/usr/bin", OPENCLAW_LOCAL_CHECK: "1" },
+    };
+    const context = {
+      base: "origin/main",
+      head: "HEAD",
+      changedPaths: ["scripts/check-changed.mts"],
+      planSummary: "scripts",
+      planCommands: [command],
+      cwd: repoRoot,
+    };
+    const wrapperProof = createWrapperProof({
+      tool: "tsgo",
+      wrapper: "scripts/run-tsgo.mts",
+      argv: ["-p", "scripts/tsconfig.json", "--noEmit"],
+      cwd: repoRoot,
+    });
+    const expected = createCheckProofReceipt({
+      command,
+      context,
+      exitCode: 0,
+      expectedWrapperProof: wrapperProof,
+      wrapperProof,
+    });
+
+    const cases: Array<[string, (receipt: CheckProofReceipt) => void]> = [
+      [
+        "repo identity",
+        (receipt) => {
+          receipt.requiredInputs.repo.remoteOrigin = "https://example.invalid/openclaw.git";
+        },
+      ],
+      [
+        "head/tree",
+        (receipt) => {
+          receipt.requiredInputs.git.currentHead = "0".repeat(40);
+          receipt.requiredInputs.git.currentTree = "1".repeat(40);
+        },
+      ],
+      [
+        "base and merge-base",
+        (receipt) => {
+          receipt.requiredInputs.git.baseSha = "2".repeat(40);
+          receipt.requiredInputs.git.mergeBaseSha = "3".repeat(40);
+        },
+      ],
+      [
+        "changed paths",
+        (receipt) => {
+          receipt.requiredInputs.changedPaths.paths = ["scripts/changed-lanes.mts"];
+        },
+      ],
+      [
+        "dirty or untracked relevant input state",
+        (receipt) => {
+          receipt.requiredInputs.changedPaths.states["scripts/check-changed.mts"] = {
+            kind: "file",
+            digest: "dirty",
+          };
+        },
+      ],
+      [
+        "lane plan and commands",
+        (receipt) => {
+          receipt.requiredInputs.plan.summary = "all";
+          receipt.requiredInputs.plan.commands[0]?.args.push("--pretty");
+        },
+      ],
+      [
+        "effective command argv",
+        (receipt) => {
+          receipt.requiredInputs.command.args = ["scripts/run-tsgo.mjs", "-p", "tsconfig.core.json"];
+        },
+      ],
+      [
+        "effective environment",
+        (receipt) => {
+          receipt.requiredInputs.env.OPENCLAW_LOCAL_CHECK_MODE = "ci";
+        },
+      ],
+      [
+        "wrapper/helper/config/package/lock/toolchain inputs",
+        (receipt) => {
+          receipt.requiredInputs.invalidationInputs["scripts/check-changed.mts"] = "changed";
+          receipt.requiredInputs.invalidationInputs["package.json"] = "changed";
+          receipt.requiredInputs.invalidationInputs["pnpm-lock.yaml"] = "changed";
+        },
+      ],
+      [
+        "runtime and platform",
+        (receipt) => {
+          receipt.requiredInputs.runtime.node = "v0.0.0";
+          receipt.requiredInputs.runtime.platform = "linux";
+        },
+      ],
+      [
+        "wrapper identity and config closure",
+        (receipt) => {
+          const proof = receipt.requiredInputs.expectedWrapperProof;
+          expect(proof).not.toBeNull();
+          if (proof) {
+            proof.wrapperDigest = "changed";
+            proof.configDigests["scripts/tsconfig.json"] = "changed";
+          }
+        },
+      ],
+    ];
+
+    for (const [name, mutate] of cases) {
+      const stored = cloneJson(expected);
+      mutate(stored);
+      expect(isReusableCheckProofReceipt(stored, expected), name).toBe(false);
+    }
+  });
+
+  it("rejects malformed, partial, and old-schema changed-check evidence receipts", () => {
+    const receiptDir = makeTempRepoRoot(tempDirs, "changed-check-bad-evidence-");
+    const command = {
+      name: "lint scripts changed file",
+      bin: "node",
+      args: [
+        "scripts/run-oxlint.mjs",
+        "--tsconfig",
+        "config/tsconfig/oxlint.scripts.json",
+        "scripts/check-changed.mts",
+      ],
+      env: { PATH: "/usr/bin" },
+    };
+    const context = {
+      base: "origin/main",
+      head: "HEAD",
+      changedPaths: ["scripts/check-changed.mts"],
+      planSummary: "scripts",
+      planCommands: [command],
+      cwd: repoRoot,
+    };
+    const wrapperProof = createWrapperProof({
+      tool: "tsgolint",
+      wrapper: "scripts/run-oxlint.mts",
+      argv: [
+        "--tsconfig",
+        "config/tsconfig/oxlint.scripts.json",
+        "scripts/check-changed.mts",
+      ],
+      cwd: repoRoot,
+    });
+    const expected = createCheckProofReceipt({
+      command,
+      context,
+      exitCode: 0,
+      expectedWrapperProof: wrapperProof,
+      wrapperProof,
+    });
+    const receiptPath = path.join(receiptDir, `${expected.fingerprint}.json`);
+
+    writeFileSync(`${receiptPath}.tmp`, prettyJson(expected), "utf8");
+    expect(evaluateReusableReceipt(receiptDir, expected)).toEqual(
+      expect.objectContaining({
+        reusable: false,
+        reason: "missing changed-check evidence receipt",
+      }),
+    );
+
+    writeFileSync(receiptPath, "{", "utf8");
+    expect(evaluateReusableReceipt(receiptDir, expected)).toEqual(
+      expect.objectContaining({
+        reusable: false,
+        reason: "malformed changed-check evidence receipt",
+      }),
+    );
+
+    writeFileSync(
+      receiptPath,
+      prettyJson({ ...expected, schemaVersion: 1, artifact: "changed-check evidence receipt" }),
+      "utf8",
+    );
+    expect(evaluateReusableReceipt(receiptDir, expected)).toEqual(
+      expect.objectContaining({
+        reusable: false,
+        reason: "current-schema changed-check evidence receipt not found",
+      }),
+    );
+
+    writeFileSync(receiptPath, prettyJson({ ...expected, status: "skipped", ranTool: false }));
+    expect(evaluateReusableReceipt(receiptDir, expected)).toEqual(
+      expect.objectContaining({
+        reusable: false,
+        reason: "changed-check evidence receipt did not pass with ranTool=true",
+      }),
+    );
+  });
+
+  it("keeps tsgo evidence separate from tsgolint evidence", () => {
+    const receiptDir = makeTempRepoRoot(tempDirs, "changed-check-family-");
+    const context = {
+      base: "origin/main",
+      head: "HEAD",
+      changedPaths: ["scripts/check-changed.mts"],
+      planSummary: "scripts",
+      cwd: repoRoot,
+    };
+    const tsgolintCommand = {
+      name: "lint scripts changed file",
+      bin: "node",
+      args: [
+        "scripts/run-oxlint.mjs",
+        "--tsconfig",
+        "config/tsconfig/oxlint.scripts.json",
+        "scripts/check-changed.mts",
+      ],
+      env: { PATH: "/usr/bin" },
+    };
+    const tsgolintProof = createWrapperProof({
+      tool: "tsgolint",
+      wrapper: "scripts/run-oxlint.mts",
+      argv: [
+        "--tsconfig",
+        "config/tsconfig/oxlint.scripts.json",
+        "scripts/check-changed.mts",
+      ],
+      cwd: repoRoot,
+    });
+    const expectedTsgolint = createCheckProofReceipt({
+      command: tsgolintCommand,
+      context,
+      exitCode: 0,
+      expectedWrapperProof: tsgolintProof,
+      wrapperProof: tsgolintProof,
+    });
+    const tsgoProof = createWrapperProof({
+      tool: "tsgo",
+      wrapper: "scripts/run-tsgo.mts",
+      argv: ["-p", "scripts/tsconfig.json", "--noEmit"],
+      cwd: repoRoot,
+    });
+    const storedTsgo = createCheckProofReceipt({
+      command: {
+        name: "typecheck scripts",
+        bin: "node",
+        args: ["scripts/run-tsgo.mjs", "-p", "scripts/tsconfig.json", "--noEmit"],
+        env: { PATH: "/usr/bin" },
+      },
+      context,
+      exitCode: 0,
+      expectedWrapperProof: tsgoProof,
+      wrapperProof: tsgoProof,
+    });
+    writeFileSync(
+      path.join(receiptDir, `${expectedTsgolint.fingerprint}.json`),
+      prettyJson({ ...storedTsgo, fingerprint: expectedTsgolint.fingerprint }),
+      "utf8",
+    );
+
+    expect(evaluateReusableReceipt(receiptDir, expectedTsgolint)).toEqual(
+      expect.objectContaining({
+        reusable: false,
+        reason: "changed-check evidence receipt command family mismatch",
+      }),
+    );
   });
 
   it("rejects skipped wrapper proof markers as non-proof", () => {
