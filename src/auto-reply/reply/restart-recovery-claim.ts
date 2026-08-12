@@ -224,7 +224,24 @@ export function createReplyRestartRecoveryClaimController(params: {
       }
     }
     if (isExactRecoveryClaim) {
-      if (entry.status !== "running" || entry.abortedLastRun === true) {
+      // Abort guard: an explicit abort must never be adopted as a live run.
+      if (entry.abortedLastRun === true) {
+        throw new Error("restart recovery claim changed before agent adoption");
+      }
+      // Drift tolerance: retire stale exact claims (session drifted to
+      // non-running between claim and admission) and unwind as duplicate-source.
+      // If retirement is declined, throw to keep the claim visible for reconciliation.
+      if (entry.status !== "running") {
+        const retired = await retireTerminalRestartRecoverySourceClaim({
+          sessionId,
+          sessionKey: params.sessionKey,
+          sourceTurnId: normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) ?? "",
+          storePath: params.storePath,
+        });
+        if (retired) {
+          params.setEntry(retired);
+          return "duplicate-source";
+        }
         throw new Error("restart recovery claim changed before agent adoption");
       }
       // Clear the retry verifier as the exact admitted claim crosses into execution.

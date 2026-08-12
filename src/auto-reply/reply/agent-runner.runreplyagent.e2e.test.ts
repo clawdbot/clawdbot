@@ -3089,6 +3089,41 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
   });
 
+  it("retires a stale transcript-only claim after gateway stall instead of throwing", async () => {
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
+      abortedLastRun: false,
+      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
+      restartRecoveryDeliveryRunId: "msg",
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+      status: "done",
+    });
+    const onAdopted = vi.fn();
+    const { run } = createMinimalRun({
+      opts: { turnAdoptionLifecycle: { onAdopted } },
+      sessionCtx: {
+        Provider: "webchat",
+        OriginatingChannel: "webchat",
+      },
+      runOverrides: { messageProvider: "webchat" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    // Drifted (not aborted) — should retire the stale claim and unwind cleanly
+    // via the "duplicate-source" path rather than wedging the agent with a
+    // "claim changed" throw. The embedded agent must not run for this turn.
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(onAdopted).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    const stored = await readStoredMainSession(storePath);
+    expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(stored.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
+  });
+
   it("clears an adopted transcript-only claim after user cancellation", async () => {
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
       abortedLastRun: false,
