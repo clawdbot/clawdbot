@@ -29,12 +29,13 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
+import { readFileWindowFullySync } from "./file-read.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { isWithinDir } from "./path-safety.js";
 import {
   existsDir,
-  fileExists,
+  migrationFileExists,
   parseSessionStoreJson5,
   readSessionStoreJson5,
   safeReadDir,
@@ -42,9 +43,9 @@ import {
 } from "./state-migrations.fs.js";
 import { saveLegacySessionStore } from "./state-migrations.legacy-session-store.js";
 import {
-  getLegacySessionSurfaces,
   isLegacyGroupKey,
   isSurfaceGroupKey,
+  type PreparedLegacySessionSurfaces,
 } from "./state-migrations.session-surfaces.js";
 import type { SessionStoreAliasPlan } from "./state-migrations.types.js";
 
@@ -78,6 +79,7 @@ function canonicalizeSessionKeyForAgent(params: {
   preserveCanonicalAgentOwner?: boolean;
   preserveAmbiguousKeys?: boolean;
   preserveForeignMainAliases?: boolean;
+  legacySessionSurfaces?: PreparedLegacySessionSurfaces["surfaces"];
 }): string {
   const raw = params.key.trim();
   if (!raw) {
@@ -181,7 +183,7 @@ function canonicalizeSessionKeyForAgent(params: {
   // Channel-owned legacy shapes must win before the generic group/channel
   // fallback so plugin-specific legacy group keys can canonicalize to their
   // owning channel instead of the generic `...:unknown:group:...` bucket.
-  for (const surface of getLegacySessionSurfaces()) {
+  for (const surface of params.legacySessionSurfaces ?? []) {
     const canonicalized = surface.canonicalizeLegacySessionKey?.({
       key: raw,
       agentId,
@@ -202,6 +204,7 @@ function canonicalizeSessionKeyForAgent(params: {
 
 export function pickLatestLegacyDirectEntry(
   store: Record<string, SessionEntryLike>,
+  legacySessionSurfaces: PreparedLegacySessionSurfaces["surfaces"] = [],
 ): SessionEntryLike | null {
   let best: SessionEntryLike | null = null;
   let bestUpdated = -1;
@@ -223,7 +226,7 @@ export function pickLatestLegacyDirectEntry(
     if (normalizedLower.startsWith("subagent:")) {
       continue;
     }
-    if (isLegacyGroupKey(normalized) || isSurfaceGroupKey(normalized)) {
+    if (isLegacyGroupKey(normalized, legacySessionSurfaces) || isSurfaceGroupKey(normalized)) {
       continue;
     }
     const updatedAt = typeof entry.updatedAt === "number" ? entry.updatedAt : 0;
@@ -264,7 +267,7 @@ function resolveUpdatedAt(entry: SessionEntryLike): number {
     : 0;
 }
 
-export function mergeSessionEntry(params: {
+export function selectNewerSessionEntry(params: {
   existing: SessionEntryLike | undefined;
   incoming: SessionEntryLike;
   preferIncomingOnTie?: boolean;
@@ -292,6 +295,7 @@ export function canonicalizeSessionStore(params: {
   preserveCanonicalAgentOwner?: boolean;
   preserveAmbiguousKeys?: boolean;
   preserveForeignMainAliases?: boolean;
+  legacySessionSurfaces?: PreparedLegacySessionSurfaces["surfaces"];
 }): { store: Record<string, SessionEntryLike>; legacyKeys: string[] } {
   const canonical = Object.create(null) as Record<string, SessionEntryLike>;
   const meta = new Map<string, { isCanonical: boolean; updatedAt: number }>();
@@ -310,6 +314,7 @@ export function canonicalizeSessionStore(params: {
       preserveCanonicalAgentOwner: params.preserveCanonicalAgentOwner,
       preserveAmbiguousKeys: params.preserveAmbiguousKeys,
       preserveForeignMainAliases: params.preserveForeignMainAliases,
+      legacySessionSurfaces: params.legacySessionSurfaces,
     });
     const isCanonical = canonicalKey === key;
     if (!isCanonical) {
@@ -402,14 +407,18 @@ export function resolveStaleLegacySessionFile(params: {
     ? path.resolve(rawSessionFile)
     : path.resolve(params.legacyDir, rawSessionFile);
   const relative = path.relative(path.resolve(params.legacyDir), legacySessionFile);
-  if (relative.startsWith("..") || path.isAbsolute(relative) || fileExists(legacySessionFile)) {
+  if (
+    relative.startsWith("..") ||
+    path.isAbsolute(relative) ||
+    migrationFileExists(legacySessionFile)
+  ) {
     return undefined;
   }
   const legacyBackupHasTranscript = safeReadDir(path.dirname(params.legacyDir)).some(
     (dirent) =>
       dirent.isDirectory() &&
       dirent.name.startsWith(`${path.basename(params.legacyDir)}.legacy-`) &&
-      fileExists(
+      migrationFileExists(
         path.join(path.dirname(params.legacyDir), dirent.name, path.basename(legacySessionFile)),
       ),
   );
@@ -427,14 +436,14 @@ export function resolveStaleLegacySessionFile(params: {
     return undefined;
   }
   const targetSessionFile = path.join(params.targetDir, path.basename(legacySessionFile));
-  if (!fileExists(targetSessionFile) || typeof entry.sessionId !== "string") {
+  if (!migrationFileExists(targetSessionFile) || typeof entry.sessionId !== "string") {
     return undefined;
   }
   const readFirstLine = () => {
     const fd = fs.openSync(targetSessionFile, "r");
     try {
       const buffer = Buffer.alloc(8192);
-      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+      const bytesRead = readFileWindowFullySync(fd, buffer, 0);
       if (bytesRead <= 0) {
         return undefined;
       }
@@ -543,6 +552,7 @@ export function listLegacySessionKeys(params: {
   scope?: SessionScope;
   preserveAmbiguousKeys?: boolean;
   preserveForeignMainAliases?: boolean;
+  legacySessionSurfaces?: PreparedLegacySessionSurfaces["surfaces"];
 }): string[] {
   const legacy: string[] = [];
   for (const key of Object.keys(params.store)) {
@@ -555,6 +565,7 @@ export function listLegacySessionKeys(params: {
       preserveCanonicalAgentOwner: params.preserveAmbiguousKeys,
       preserveAmbiguousKeys: params.preserveAmbiguousKeys,
       preserveForeignMainAliases: params.preserveForeignMainAliases,
+      legacySessionSurfaces: params.legacySessionSurfaces,
     });
     if (canonical !== key) {
       legacy.push(key);
@@ -588,10 +599,17 @@ export async function migrateOrphanedSessionKeys(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   additionalAgentIds?: readonly string[];
+  legacySessionSurfaces: PreparedLegacySessionSurfaces;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
   const env = params.env ?? process.env;
+  if (params.legacySessionSurfaces.failures.length > 0) {
+    return {
+      changes,
+      warnings: [...params.legacySessionSurfaces.failures],
+    };
+  }
   const stateDir = resolveStateDir(env);
   const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
   const scope = params.cfg.session?.scope as SessionScope | undefined;
@@ -664,7 +682,7 @@ export async function migrateOrphanedSessionKeys(params: {
     // An unknown relationship may have grouped a readable store behind an
     // inaccessible pathname. Read from a usable alias so the group still gets
     // the unresolved-identity warning before any rewrite is attempted.
-    const storePath = [...storePaths].find((candidate) => fileExists(candidate));
+    const storePath = [...storePaths].find((candidate) => migrationFileExists(candidate));
     if (!storePath) {
       continue;
     }
@@ -737,6 +755,7 @@ export async function migrateOrphanedSessionKeys(params: {
         preserveCanonicalAgentOwner: true,
         preserveAmbiguousKeys,
         preserveForeignMainAliases: pluginForeignMainAliasRisk,
+        legacySessionSurfaces: params.legacySessionSurfaces.surfaces,
       });
       working = canonicalized;
       // Each pass only counts keys it changed from the current working store, so
@@ -774,10 +793,17 @@ export async function migrateLegacyAcpSessionMetadata(params: {
   env?: NodeJS.ProcessEnv;
   now?: () => number;
   pluginSessionStoreAgentIds?: readonly string[];
+  legacySessionSurfaces: PreparedLegacySessionSurfaces;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
   const env = params.env ?? process.env;
+  if (params.legacySessionSurfaces.failures.length > 0) {
+    return {
+      changes,
+      warnings: [...params.legacySessionSurfaces.failures],
+    };
+  }
   const now = params.now ?? (() => Date.now());
   const stateDir = resolveStateDir(env);
   const storeConfig = params.cfg.session?.store;
@@ -832,7 +858,7 @@ export async function migrateLegacyAcpSessionMetadata(params: {
   }> = [];
 
   for (const target of targets) {
-    if (!fileExists(target.storePath)) {
+    if (!migrationFileExists(target.storePath)) {
       continue;
     }
     const group = storeGroups.find(({ target: existing }) =>
@@ -884,8 +910,8 @@ export async function migrateLegacyAcpSessionMetadata(params: {
         isAmbiguousSharedStoreKey(key, mainKey, scope) ||
         (pluginForeignMainAliasRisk && isLegacyDefaultMainAliasKey(key, mainKey)),
     ).length;
-    const hasLegacyAcpMetadata = Object.values(parsed.store).some(
-      (entry) => normalizeSessionEntry(entry)?.acp !== undefined,
+    const hasLegacyAcpMetadata = Object.entries(parsed.store).some(
+      ([sessionKey, entry]) => normalizeSessionEntry(entry, sessionKey)?.acp !== undefined,
     );
     if (hasLegacyAcpMetadata && storeAliases.hasUnresolvedIdentity) {
       warnings.push(unresolvedSessionStoreIdentityWarning("ACP metadata migration", storePath));
@@ -936,6 +962,7 @@ export async function migrateLegacyAcpSessionMetadata(params: {
           mainKey,
           scope,
           skipCrossAgentRemap: true,
+          legacySessionSurfaces: params.legacySessionSurfaces.surfaces,
         });
         writeAcpSessionMetaForMigration({
           sessionKey: canonicalSessionKey,
@@ -1025,7 +1052,7 @@ function isManagedLegacySessionStorePathSafe(storePath: string): boolean {
   if (!agentsDir) {
     return true;
   }
-  if (!fileExists(resolvedStorePath)) {
+  if (!migrationFileExists(resolvedStorePath)) {
     return true;
   }
 

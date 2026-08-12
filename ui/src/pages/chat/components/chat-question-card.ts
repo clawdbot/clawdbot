@@ -4,6 +4,7 @@ import { property, state } from "lit/decorators.js";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { formatCountdown } from "../../../lib/format.ts";
 
 type QuestionPanelQuestion = {
   questionId: string;
@@ -50,12 +51,6 @@ type GatewayQuestionPanelOptions = {
   onNextRequest?: () => void;
 };
 
-function formatRemaining(expiresAtMs: number, nowMs: number): string {
-  const seconds = Math.max(0, Math.ceil((expiresAtMs - nowMs) / 1_000));
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
-}
-
 function promptDraftAnswers(prompt: QuestionPrompt): Record<string, string[]> {
   return Object.fromEntries(
     prompt.questions.map((question) => {
@@ -93,7 +88,7 @@ export function createGatewayQuestionPanelProps(
       submitting: prompt.submitting,
       countdown:
         prompt.status === "pending"
-          ? formatRemaining(prompt.expiresAtMs, options.nowMs)
+          ? formatCountdown(prompt.expiresAtMs, options.nowMs)
           : undefined,
       answersById: promptDraftAnswers(prompt),
       error: prompt.error,

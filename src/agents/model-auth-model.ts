@@ -1,6 +1,7 @@
 /**
  * Model-level auth diagnostics and request-header preparation.
  */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   getRuntimeConfigSnapshot,
@@ -28,13 +29,12 @@ import {
 import { isAuthModeAllowedForModel } from "./model-auth-openai.js";
 import * as authConfig from "./model-auth-provider-config.js";
 import {
-  resolveApiKeyForProvider,
+  resolveApiKeyForProviderCore,
   resolveScopedAuthProfileStore,
   type ProviderCredentialPrecedence,
 } from "./model-auth-provider.js";
 import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 import { resolveSyntheticLocalProviderAuth } from "./model-auth-runtime.js";
-import { normalizeProviderId } from "./model-selection.js";
 import {
   attachModelProviderRequestTransport,
   getModelProviderRequestTransport,
@@ -127,23 +127,6 @@ export async function hasAvailableAuthForProvider(params: {
   if (authOverride === "aws-sdk") {
     return true;
   }
-  const envAuth = authConfig.resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir);
-  if (
-    envAuth &&
-    isAuthModeAllowedForModel({
-      provider,
-      modelApi: params.modelApi,
-      mode: envAuth.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
-    })
-  ) {
-    return true;
-  }
-  if (authConfig.resolveUsableCustomProviderApiKey({ cfg, provider })) {
-    return true;
-  }
-  if (resolveSyntheticLocalProviderAuth({ cfg, provider })) {
-    return true;
-  }
   const store =
     params.store ??
     resolveScopedAuthProfileStore({
@@ -152,6 +135,49 @@ export async function hasAvailableAuthForProvider(params: {
       provider,
       preferredProfile,
     });
+  // An inline provider key inside its billing/auth cooldown is not available
+  // auth: the resolver refuses to hand it back, so reporting it as available
+  // would strand callers on a credential they cannot use.
+  const inlineUnusableUntil = authConfig.resolveInlineProviderApiKeyCooldownUntil(store, provider);
+  const inlineProviderApiKeyUsable =
+    typeof inlineUnusableUntil !== "number" || inlineUnusableUntil <= Date.now();
+  const envAuth = authConfig.resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir);
+  if (
+    envAuth &&
+    isAuthModeAllowedForModel({
+      provider,
+      modelApi: params.modelApi,
+      mode: envAuth.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
+    }) &&
+    (!authConfig.isConfigBackedInlineProviderApiKey({
+      cfg,
+      provider,
+      source: envAuth.source,
+      store,
+    }) ||
+      inlineProviderApiKeyUsable)
+  ) {
+    return true;
+  }
+  if (
+    authConfig.resolveUsableCustomProviderApiKey({ cfg, provider }) &&
+    inlineProviderApiKeyUsable
+  ) {
+    return true;
+  }
+  const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });
+  if (
+    syntheticLocalAuth &&
+    (!authConfig.isConfigBackedInlineProviderApiKey({
+      cfg,
+      provider,
+      source: syntheticLocalAuth.source,
+      store,
+    }) ||
+      inlineProviderApiKeyUsable)
+  ) {
+    return true;
+  }
   const order = resolveAuthProfileOrder({
     cfg,
     store,
@@ -206,7 +232,7 @@ export async function hasAvailableAuthForProvider(params: {
 }
 
 /** Resolves request credentials from the provider attached to a model descriptor. */
-export async function getApiKeyForModel(params: {
+export async function getApiKeyForModelCore(params: {
   model: Model;
   cfg?: OpenClawConfig;
   profileId?: string;
@@ -220,7 +246,7 @@ export async function getApiKeyForModel(params: {
   skipSetupProviderFallback?: boolean;
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
-  return resolveApiKeyForProvider({
+  return resolveApiKeyForProviderCore({
     provider: params.model.provider,
     cfg: params.cfg,
     profileId: params.profileId,

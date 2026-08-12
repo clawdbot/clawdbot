@@ -10,11 +10,7 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import {
-  clearConfigSchemaResponseCacheForTests,
-  configHandlers,
-  loadConfigSchemaResponseForTests,
-} from "./config.js";
+import { clearConfigSchemaResponseCacheForTests, configHandlers } from "./config.js";
 import { createConfigHandlerHarness, createConfigWriteSnapshot } from "./config.test-helpers.js";
 
 const configWriteMocks = vi.hoisted(() => ({
@@ -29,6 +25,35 @@ vi.mock("../../config/io.js", async () => {
     readConfigFileSnapshotForWrite: configWriteMocks.readConfigFileSnapshotForWrite,
   };
 });
+
+// This suite owns config patch/merge behavior, while plugin validation is covered by
+// config.plugin-validation.test.ts and validation.channel-metadata.test.ts.
+vi.mock("../../config/validation.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/validation.js")>(
+    "../../config/validation.js",
+  );
+  return {
+    ...actual,
+    validateConfigObjectRawWithPlugins: vi.fn((config: OpenClawConfig) => ({
+      ok: true,
+      config,
+      warnings: [],
+    })),
+    validateConfigObjectWithPlugins: vi.fn((config: OpenClawConfig) => ({
+      ok: true,
+      config,
+      warnings: [],
+    })),
+  };
+});
+
+// Secret materialization has dedicated runtime suites; keep these handler tests on
+// their config-write boundary instead of loading every provider and plugin artifact.
+vi.mock("../../secrets/runtime.js", () => ({
+  prepareSecretsRuntimeSnapshot: vi.fn(async ({ config }: { config: OpenClawConfig }) => ({
+    config,
+  })),
+}));
 
 vi.mock("./config-write-flow.js", async () => {
   const actual =
@@ -99,6 +124,15 @@ async function invokeConfigPatch(args: {
   await expectDefined(
     configHandlers["config.patch"],
     'configHandlers["config.patch"] test invariant',
+  )(harness.options);
+  return harness;
+}
+
+async function invokeConfigSchema() {
+  const harness = createConfigHandlerHarness({ method: "config.schema" });
+  await expectDefined(
+    configHandlers["config.schema"],
+    'configHandlers["config.schema"] test invariant',
   )(harness.options);
   return harness;
 }
@@ -239,11 +273,7 @@ describe("config schema response cache", () => {
       uiHints: { "gateway.port": { advanced: false } },
       version: "test-schema",
     });
-    const harness = createConfigHandlerHarness({ method: "config.schema" });
-    await expectDefined(
-      configHandlers["config.schema"],
-      'configHandlers["config.schema"] test invariant',
-    )(harness.options);
+    const harness = await invokeConfigSchema();
 
     expect(harness.respond).toHaveBeenCalledWith(
       true,
@@ -254,25 +284,33 @@ describe("config schema response cache", () => {
     );
   });
 
-  it("reuses a recent schema build across burst config requests", () => {
-    loadConfigSchemaResponseForTests();
-    loadConfigSchemaResponseForTests();
+  it("reuses a recent schema build across burst config requests", async () => {
+    await invokeConfigSchema();
+    await invokeConfigSchema();
 
     expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(1);
   });
 
-  it("can be cleared when config writes change schema inputs", () => {
-    loadConfigSchemaResponseForTests();
-    clearConfigSchemaResponseCacheForTests();
-    loadConfigSchemaResponseForTests();
+  it("rebuilds after config writes change schema inputs", async () => {
+    await invokeConfigSchema();
+    const patch = await invokeConfigPatch({ raw: { ui: { prefs: { theme: "knot" } } } });
+
+    expect(patch.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true }),
+      undefined,
+    );
+    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(1);
+
+    await invokeConfigSchema();
 
     expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(2);
   });
 
-  it("rebuilds when the active plugin registry generation changes", () => {
-    loadConfigSchemaResponseForTests();
+  it("rebuilds when the active plugin registry generation changes", async () => {
+    await invokeConfigSchema();
     setActivePluginRegistry(createTestRegistry([]));
-    loadConfigSchemaResponseForTests();
+    await invokeConfigSchema();
 
     expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(2);
   });

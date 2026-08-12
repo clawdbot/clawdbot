@@ -38,20 +38,12 @@ describe("resolveEnabledBundledManifestContractPlugins", () => {
     expect(
       resolveEnabledBundledManifestContractPlugins({
         contract: "documentExtractors",
-        compatMode: {
-          enablement: "always",
-          vitest: true,
-        },
       }).map((plugin) => plugin.id),
     ).toStrictEqual(["document-extract"]);
     expect(
       resolveEnabledBundledManifestContractPlugins({
         onlyPluginIds: [],
         contract: "documentExtractors",
-        compatMode: {
-          enablement: "always",
-          vitest: true,
-        },
       }),
     ).toStrictEqual([]);
   });

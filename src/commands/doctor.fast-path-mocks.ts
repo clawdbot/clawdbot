@@ -10,14 +10,11 @@ vi.mock("./doctor-bootstrap-size.js", () => ({
 }));
 
 vi.mock("./doctor-auth-flat-profiles.js", () => ({
-  maybeRepairCanonicalApiKeyFieldAlias: vi.fn(async (params: { cfg: unknown }) => params.cfg),
   maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn().mockResolvedValue({
     changes: [],
     warnings: [],
   }),
-  maybeRepairLegacyFlatAuthProfileStores: vi.fn().mockResolvedValue(undefined),
   maybeRepairOpenAICodexAuthConfig: vi.fn((cfg: unknown) => cfg),
-  maybeRepairOpenAICodexAuthProfileStores: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./doctor-auth-legacy-oauth.js", () => ({
@@ -31,6 +28,10 @@ vi.mock("./doctor-auth-oauth-sidecar.js", () => ({
 vi.mock("./doctor-browser.js", () => ({
   detectLegacyClawdBrowserProfileResidue: vi.fn().mockResolvedValue(null),
   maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn().mockResolvedValue({
+    changes: [],
+    warnings: [],
+  }),
+  maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
     changes: [],
     warnings: [],
   }),
@@ -59,6 +60,9 @@ vi.mock("./doctor/cron/index.js", () => ({
 }));
 
 vi.mock("./doctor/cron/legacy-repair.js", () => ({
+  collectCronCodexRuntimePolicyTargetsReadOnly: vi
+    .fn()
+    .mockResolvedValue({ targets: [], warnings: [] }),
   repairLegacyCronStoreWithoutPrompt: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
 }));
 
@@ -88,7 +92,7 @@ vi.mock("./doctor-plugin-manifests.js", () => ({
 }));
 
 vi.mock("./doctor-plugin-registry.js", () => ({
-  maybeRepairPluginRegistryState: vi.fn(async ({ config }: { config: unknown }) => config),
+  maybeRepairPluginRegistryState: vi.fn(async ({ config }: { config: unknown }) => ({ config })),
 }));
 
 vi.mock("./doctor-platform-notes.js", () => ({
@@ -112,10 +116,6 @@ vi.mock("./doctor-install-policy.js", () => ({
   noteInstallPolicyHealth: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("./doctor-session-locks.js", () => ({
-  noteSessionLockHealth: vi.fn().mockResolvedValue(undefined),
-}));
-
 vi.mock("./doctor-session-transcripts.js", () => ({
   noteSessionTranscriptHealth: vi.fn().mockResolvedValue(undefined),
 }));
@@ -129,6 +129,7 @@ vi.mock("./doctor-skills.js", () => ({
 }));
 
 vi.mock("./doctor-state-integrity.js", () => ({
+  collectWorkspaceBackupTip: vi.fn(() => null),
   noteStateIntegrity: vi.fn().mockResolvedValue(undefined),
   noteWorkspaceBackupTip: vi.fn(),
 }));

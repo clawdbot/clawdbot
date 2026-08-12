@@ -193,12 +193,19 @@ function appendCachedChatMessage(
   state: ChatState,
   sessionKey: string,
   message: unknown,
+  eventClaim: object,
   agentId?: string,
 ) {
   if (!state.chatMessagesBySession) {
     return;
   }
-  appendChatMessageToCache(state.chatMessagesBySession, state, { sessionKey, agentId }, message);
+  appendChatMessageToCache(
+    state.chatMessagesBySession,
+    state,
+    { sessionKey, agentId },
+    message,
+    eventClaim,
+  );
 }
 
 function handleChatEvent(
@@ -229,7 +236,7 @@ function handleChatEvent(
         const cacheAgentId = isUiGlobalSessionKey(payload.sessionKey)
           ? (payload.agentId ?? resolveUiDefaultAgentId(state))
           : payload.agentId;
-        appendCachedChatMessage(state, payload.sessionKey, finalMessage, cacheAgentId);
+        appendCachedChatMessage(state, payload.sessionKey, finalMessage, payload, cacheAgentId);
       }
     }
     return null;
@@ -271,17 +278,24 @@ function handleChatEvent(
     if (payload.state === "delta") {
       return null;
     }
-    if (payload.state === "error") {
+    if (payload.state === "error" || payload.state === "aborted") {
+      const pendingRunId = state.chatQueue.find(
+        (item) => item.sendState === "sending" && item.sendRunId,
+      )?.sendRunId;
+      const diagnosticOwnerRunId =
+        state.chatRunId ?? pendingRunId ?? state.lastLocalTerminalReconcile?.runId;
       if (
-        (!state.chatRunId || state.chatRunId === payload.runId) &&
+        diagnosticOwnerRunId === payload.runId &&
         payload.errorMessage?.trim() &&
         projectedRun.currentRun?.errorMessage !== previousTerminalRun.errorMessage
       ) {
-        // Completed-run diagnostics belong to an idle composer or that same run;
+        // Late diagnostics belong to the active, pending, or latest locally terminal run;
         // publishing them over a newer response falsely marks the new run failed.
         setChatRunError(state, resolveGatewayErrorText(payload, null));
       }
-      return "error";
+      if (payload.state === "error") {
+        return "error";
+      }
     }
     const incomingFinal = normalizedFinalMessage;
     if (
@@ -418,6 +432,9 @@ function handleChatEvent(
       state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, normalizedMessage);
     } else {
       state.chatMessages = materializeVisibleStream();
+    }
+    if (payload.errorMessage?.trim()) {
+      setChatRunError(state, resolveGatewayErrorText(payload, null));
     }
     reconcileTerminalRun("interrupted", "killed");
   } else if (payload.state === "error") {

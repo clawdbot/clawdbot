@@ -13,10 +13,12 @@ import {
 } from "../../../packages/media-generation-core/src/capability-model-ref.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { safeFileURLToPath } from "../../infra/local-file-access.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import type { Model } from "../../llm/types.js";
 import { resolveChannelInboundAttachmentRootsForChannel } from "../../media/channel-inbound-roots.js";
-import { getDefaultLocalRoots } from "../../media/local-media-access.js";
+import { getDefaultLocalRootsCore } from "../../media/local-media-access.js";
+import { classifyMediaReferenceSource } from "../../media/media-reference.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { loadCapabilityManifestSnapshot } from "../../plugins/capability-provider-runtime.js";
 import { listAvailableManifestContractValues } from "../../plugins/manifest-contract-eligibility.js";
@@ -30,7 +32,7 @@ import {
   ToolInputError,
   readPositiveIntegerParam,
   readStringArrayParam,
-  readStringParam,
+  readToolStringParam,
 } from "./common.js";
 import type { ImageModelConfig } from "./image-tool.helpers.js";
 import {
@@ -45,7 +47,11 @@ import {
   resolveDefaultModelRef,
   type ToolModelConfig,
 } from "./model-config.helpers.js";
-import { getApiKeyForModel, normalizeWorkspaceDir, requireApiKey } from "./tool-runtime.helpers.js";
+import {
+  getApiKeyForModelCore,
+  normalizeWorkspaceDir,
+  requireApiKey,
+} from "./tool-runtime.helpers.js";
 
 type TextToolAttempt = {
   provider: string;
@@ -482,7 +488,7 @@ export function resolveGenerateAction<TAction extends string>(params: {
   allowed: readonly TAction[];
   defaultAction: TAction;
 }): TAction {
-  const raw = readStringParam(params.args, "action");
+  const raw = readToolStringParam(params.args, "action");
   if (!raw) {
     return params.defaultAction;
   }
@@ -513,7 +519,7 @@ export function normalizeMediaReferenceInputs(params: {
   maxCount: number;
   label: string;
 }): string[] {
-  const single = readStringParam(params.args, params.singularKey);
+  const single = readToolStringParam(params.args, params.singularKey);
   const multiple = readStringArrayParam(params.args, params.pluralKey);
   const combined = [...(single ? [single] : []), ...(multiple ?? [])];
   const deduped: string[] = [];
@@ -586,10 +592,9 @@ export function buildTaskRunDetails(
 /**
  * Resolves host-local read roots for tools that accept filesystem media references.
  */
-export function resolveMediaToolLocalRoots(
+function resolveMediaToolLocalRoots(
   workspaceDirRaw: string | undefined,
   options?: MediaToolLocalRootOptions,
-  _mediaSources?: readonly string[],
 ): string[] {
   const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw);
   if (options?.workspaceOnly) {
@@ -597,7 +602,7 @@ export function resolveMediaToolLocalRoots(
   }
   // Channel inbound attachment roots stay separate: those paths are scoped to inbound media
   // access, not broad host-local file reads.
-  const roots = getDefaultLocalRoots();
+  const roots = getDefaultLocalRootsCore();
   return uniqueStrings([...roots, ...(workspaceDir ? [workspaceDir] : [])]);
 }
 
@@ -620,8 +625,8 @@ export async function resolveMediaToolReferenceAccess(params: {
           inboundFallbackDir: "media/inbound",
         })
       : {
-          resolved: params.input.startsWith("file://")
-            ? params.input.slice("file://".length)
+          resolved: classifyMediaReferenceSource(params.input).isFileUrl
+            ? safeFileURLToPath(params.input)
             : params.input,
         };
   const resolvedPath = params.isDataUrl ? null : pathInfo.resolved;
@@ -630,11 +635,7 @@ export async function resolveMediaToolReferenceAccess(params: {
   };
   return {
     resolvedPath,
-    localRoots: resolveMediaToolLocalRoots(
-      params.workspaceDir,
-      rootOptions,
-      resolvedPath ? [resolvedPath] : undefined,
-    ),
+    localRoots: resolveMediaToolLocalRoots(params.workspaceDir, rootOptions),
     ...(pathInfo.rewrittenFrom ? { rewrittenFrom: pathInfo.rewrittenFrom } : {}),
   };
 }
@@ -730,7 +731,7 @@ export async function resolveModelRuntimeApiKey(params: {
     setRuntimeApiKey: (provider: string, apiKey: string) => void;
   };
 }): Promise<string> {
-  const apiKeyInfo = await getApiKeyForModel({
+  const apiKeyInfo = await getApiKeyForModelCore({
     model: params.model,
     cfg: params.cfg,
     agentDir: params.agentDir,

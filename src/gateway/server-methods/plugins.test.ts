@@ -1,6 +1,6 @@
 // Plugin management Gateway handler tests cover DTO mapping, trust errors, and reload planning.
 
-import { expectDefined } from "@openclaw/normalization-core";
+import { coerceErrorMessage, expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const managementMocks = vi.hoisted(() => {
@@ -38,8 +38,7 @@ const searchMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../plugins/management-service.js", () => ({
   ManagedPluginLifecycleError: managementMocks.ManagedPluginLifecycleError,
-  formatManagedPluginLifecycleError: (error: unknown) =>
-    error instanceof Error ? error.message : String(error),
+  formatManagedPluginLifecycleError: coerceErrorMessage,
   installManagedPlugin: (...args: unknown[]) => managementMocks.install(...args),
   listManagedPlugins: (...args: unknown[]) => managementMocks.list(...args),
   setManagedPluginEnabled: (...args: unknown[]) => managementMocks.setEnabled(...args),

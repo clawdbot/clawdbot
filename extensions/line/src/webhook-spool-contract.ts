@@ -1,5 +1,4 @@
 // Line plugin module owns the durable webhook spool row contract.
-import { createChannelIngressError } from "openclaw/plugin-sdk/channel-outbound";
 import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const LINE_WEBHOOK_SPOOL_VERSION = 1;
@@ -19,7 +18,15 @@ export type LineWebhookSpoolPayload = {
   destination: string;
 };
 
-export const LineWebhookPayloadError = createChannelIngressError("LineWebhookPayloadError");
+/** Defined locally (not via createChannelIngressError) because this module sits
+ *  in the doctor contract closure, which must stay off the channel-outbound
+ *  runtime barrel; the spool's permanent-failure classifier matches by class. */
+export class LineWebhookPayloadError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "LineWebhookPayloadError";
+  }
+}
 
 /** Message ids preserve the shipped replay-guard keyspace; other events use LINE's delivery id. */
 export function eventIdFor(event: unknown): string {

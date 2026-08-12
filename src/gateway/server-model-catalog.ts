@@ -39,7 +39,7 @@ async function resolveLoader(
 }
 
 // Isolated gateway tests share process module state with lifecycle-owner tests.
-export async function resetPreparedModelCatalogForTest(): Promise<void> {
+export async function resetPreparedModelCatalogStateForTest(): Promise<void> {
   const [{ resetPreparedModelRuntimeSnapshotsForTest }, { resetModelCatalogBuilderCacheForTest }] =
     await Promise.all([
       import("../agents/prepared-model-runtime.test-support.js"),
@@ -81,4 +81,19 @@ export async function loadGatewayModelCatalog(
   params?: LoadGatewayModelCatalogParams,
 ): Promise<GatewayModelChoice[]> {
   return (await loadGatewayModelCatalogSnapshot(params)).entries;
+}
+
+/** Reads the already-published startup catalog without starting provider discovery. */
+export async function readPreparedGatewayModelCatalog(
+  params?: LoadGatewayModelCatalogParams,
+): Promise<GatewayModelChoice[] | undefined> {
+  const { getPreparedModelCatalogSnapshot } = await import("../agents/prepared-model-catalog.js");
+  const config = (params?.getConfig ?? getRuntimeConfig)();
+  return getPreparedModelCatalogSnapshot({
+    ...(params?.agentId ? { agentId: params.agentId } : {}),
+    ...(params?.agentDir ? { agentDir: params.agentDir } : {}),
+    config,
+    readOnly: true,
+    ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  })?.entries;
 }

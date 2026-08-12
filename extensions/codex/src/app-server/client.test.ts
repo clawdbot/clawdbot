@@ -331,7 +331,7 @@ describe("CodexAppServerClient", () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.146.0 (macOS; test)" },
+      result: { userAgent: "openclaw/0.147.0 (macOS; test)" },
     });
 
     await expect(initializing).resolves.toBeUndefined();
@@ -370,11 +370,11 @@ describe("CodexAppServerClient", () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.145.0 (macOS; test)" },
+      result: { userAgent: "openclaw/0.146.0 (macOS; test)" },
     });
 
     await expect(initializing).rejects.toThrow(
-      `Codex app-server ${CODEX_APP_SERVER_VERSION} is required, but detected 0.145.0`,
+      `Codex app-server ${CODEX_APP_SERVER_VERSION} is required, but detected 0.146.0`,
     );
     expect(harness.writes).toHaveLength(1);
   });
@@ -383,11 +383,11 @@ describe("CodexAppServerClient", () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.146.0-alpha.2 (macOS; test)" },
+      result: { userAgent: "openclaw/0.147.0-alpha.2 (macOS; test)" },
     });
 
     await expect(initializing).rejects.toThrow(
-      `Codex app-server ${CODEX_APP_SERVER_VERSION} is required, but detected 0.146.0-alpha.2`,
+      `Codex app-server ${CODEX_APP_SERVER_VERSION} is required, but detected 0.147.0-alpha.2`,
     );
     expect(harness.writes).toHaveLength(1);
   });
@@ -396,11 +396,11 @@ describe("CodexAppServerClient", () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.146.0+alpha.2 (macOS; test)" },
+      result: { userAgent: "openclaw/0.147.0+alpha.2 (macOS; test)" },
     });
 
     await expect(initializing).rejects.toThrow(
-      `Codex app-server ${CODEX_APP_SERVER_VERSION} is required, but detected 0.146.0+alpha.2`,
+      `Codex app-server ${CODEX_APP_SERVER_VERSION} is required, but detected 0.147.0+alpha.2`,
     );
     expect(harness.writes).toHaveLength(1);
   });
@@ -432,7 +432,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("blocks stable Codex app-server versions newer than generated schemas", async () => {
-    const newerVersion = "0.146.1";
+    const newerVersion = "0.146.2";
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,

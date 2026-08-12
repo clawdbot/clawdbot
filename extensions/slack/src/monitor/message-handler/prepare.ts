@@ -46,6 +46,7 @@ import { formatSlackError } from "../../errors.js";
 import { formatSlackFileReference } from "../../file-reference.js";
 import type { SlackSendIdentity } from "../../send.js";
 import { hasSlackThreadParticipationWithPersistence } from "../../sent-thread-cache.js";
+import { formatSlackTarget } from "../../target-parsing.js";
 import type { SlackAttachment, SlackFile, SlackMessageEvent } from "../../types.js";
 import { normalizeAllowListLower, normalizeSlackAllowOwnerEntry } from "../allow-list.js";
 import {
@@ -102,6 +103,20 @@ const SLACK_HISTORY_MEDIA_IDLE_TIMEOUT_MS = 1_000;
 const SLACK_HISTORY_MEDIA_TOTAL_TIMEOUT_MS = 3_000;
 const SLACK_CHANNEL_ACCESS_DOCS_URL =
   "https://docs.openclaw.ai/channels/slack#access-control-and-routing";
+
+function resolveSlackGroupSessionSubject(params: {
+  channelId: string;
+  channelName?: string;
+  workspaceId: string;
+  workspaceName?: string;
+}): string {
+  const channelName = normalizeOptionalString(params.channelName);
+  const workspaceName = normalizeOptionalString(params.workspaceName);
+  if (channelName && workspaceName) {
+    return `${workspaceName} #${channelName}`;
+  }
+  return `Slack Channel (Workspace ID: ${params.workspaceId}, Channel ID: ${params.channelId})`;
+}
 
 function recordString(
   record: Record<string, unknown> | undefined,
@@ -523,6 +538,8 @@ async function resolveSlackConversationContext(params: {
   const isRoomish = isRoom || isGroupDm;
   const channelConfig = isRoom
     ? resolveSlackChannelConfig({
+        teamId: params.eventScope?.teamId ?? ctx.teamId,
+        allowUnscoped: ctx.installationIdentity?.kind !== "enterprise",
         channelId: message.channel,
         channelName,
         channels: ctx.channelsConfig,
@@ -589,6 +606,7 @@ async function authorizeSlackInboundMessage(params: {
 
   if (
     !ctx.isChannelAllowed({
+      teamId: params.eventScope?.teamId ?? ctx.teamId,
       channelId: message.channel,
       channelName,
       channelType: resolvedChannelType,
@@ -633,6 +651,7 @@ async function authorizeSlackInboundMessage(params: {
 
   const allowFromLower = await resolveSlackEffectiveAllowFrom(ctx, {
     includePairingStore: isDirectMessage,
+    eventScope: params.eventScope,
   });
 
   if (isDirectMessage) {
@@ -645,6 +664,7 @@ async function authorizeSlackInboundMessage(params: {
       ctx,
       accountId: account.accountId,
       senderId: directUserId,
+      eventScope: params.eventScope,
       allowFromLower,
       resolveSenderName: (userId) => ctx.resolveUserName(userId, params.eventScope),
       sendPairingReply: async (text) => {
@@ -653,6 +673,7 @@ async function authorizeSlackInboundMessage(params: {
           token: ctx.botToken,
           client: params.eventScope?.client ?? ctx.app.client,
           accountId: account.accountId,
+          eventScope: params.eventScope,
         });
       },
       onDisabled: () => {
@@ -693,9 +714,10 @@ export async function prepareSlackMessage(params: {
 }): Promise<PreparedSlackMessage | null> {
   const { ctx, account, message, opts } = params;
   const slackClient = opts.eventScope?.client ?? ctx.app.client;
-  const threadStarterWorkspaceScope = opts.eventScope
-    ? { accountId: account.accountId, teamId: opts.eventScope.teamId }
-    : undefined;
+  const threadStarterWorkspaceScope = {
+    accountId: account.accountId,
+    teamId: opts.eventScope?.teamId ?? ctx.teamId,
+  };
   const cfg = ctx.cfg;
   const conversation = await resolveSlackConversationContext({
     ctx,
@@ -891,7 +913,11 @@ export async function prepareSlackMessage(params: {
   const buildPolicyMentionRegexes = (agentId: string | undefined) =>
     resolveCachedMentionRegexes(ctx, agentId, {
       provider: "slack",
-      conversationId: message.channel,
+      conversationId: formatSlackTarget({
+        teamId: opts.eventScope?.teamId,
+        kind: "channel",
+        id: message.channel,
+      }),
       providerPolicy: account.config.mentionPatterns,
     });
   let mentionRegexes = buildPolicyMentionRegexes(routing.route.agentId);
@@ -960,10 +986,10 @@ export async function prepareSlackMessage(params: {
       )
     : Promise.resolve({ ok: true, name: undefined });
   let implicitMentionKinds: ReturnType<typeof implicitMentionKindWhen> = [];
-  if (!isDirectMessage && ctx.botUserId && message.thread_ts && !wasMentioned) {
+  if (!isDirectMessage && message.thread_ts && !wasMentioned) {
     const replyToBotKinds = implicitMentionKindWhen(
       "reply_to_bot",
-      message.parent_user_id === ctx.botUserId,
+      Boolean(ctx.botUserId && message.parent_user_id === ctx.botUserId),
     );
     implicitMentionKinds =
       replyToBotKinds.length > 0
@@ -974,7 +1000,7 @@ export async function prepareSlackMessage(params: {
               accountId: account.accountId,
               channelId: message.channel,
               threadTs: message.thread_ts,
-              ...(opts.eventScope ? { teamId: opts.eventScope.teamId } : {}),
+              teamId: opts.eventScope?.teamId,
             }),
           );
   }
@@ -1113,6 +1139,7 @@ export async function prepareSlackMessage(params: {
     isRoom && Array.isArray(channelConfig?.users) && channelConfig.users.length > 0;
   const messageIngress = await resolveSlackCommandIngress({
     ctx,
+    teamId: opts.eventScope?.teamId ?? ctx.teamId,
     senderId,
     senderName: senderNameForAuth,
     channelType: conversation.resolvedChannelType ?? "channel",
@@ -1166,6 +1193,18 @@ export async function prepareSlackMessage(params: {
     cfg: ctx.cfg,
     channel: "slack",
     accountId: account.accountId,
+  });
+  const preflightChannelTarget = formatSlackTarget({
+    teamId: opts.eventScope?.teamId,
+    kind: "channel",
+    id: message.channel,
+    explicitKind: true,
+  });
+  const replyRouteTarget = formatSlackTarget({
+    teamId: opts.eventScope?.teamId,
+    kind: isDirectMessage ? "user" : "channel",
+    id: isDirectMessage ? senderId : message.channel,
+    explicitKind: true,
   });
   const commandAuthorized = messageIngress.commandAccess.authorized;
 
@@ -1231,7 +1270,7 @@ export async function prepareSlackMessage(params: {
           media: preflightMedia,
           cfg,
           accountId: account.accountId,
-          originatingTo: `channel:${message.channel}`,
+          originatingTo: preflightChannelTarget,
           sessionKey: preflightRouting.sessionKey,
           messageThreadId: preflightRouting.threadContext.messageThreadId,
         })
@@ -1431,6 +1470,22 @@ export async function prepareSlackMessage(params: {
         : null;
 
   const roomLabel = channelName ? `#${channelName}` : `#${message.channel}`;
+  const workspaceId = opts.eventScope?.teamId || ctx.teamId;
+  const workspaceName =
+    ctx.installationIdentity?.kind === "workspace" &&
+    ctx.installationIdentity.teamId === workspaceId
+      ? ctx.installationIdentity.teamName
+      : undefined;
+  // Stable Slack ids already own routing. Session presentation uses both human names or an
+  // explicit id-labelled fallback so shared metadata never has to infer Slack identifiers.
+  const groupSessionSubject = isRoomish
+    ? resolveSlackGroupSessionSubject({
+        channelId: message.channel,
+        channelName,
+        workspaceId,
+        workspaceName,
+      })
+    : undefined;
   const senderName = await resolveSenderName();
   const preview = truncateUtf16Safe(bodyForAgent.replace(/\s+/g, " "), 160);
   const inboundLabel = isDirectMessage
@@ -1537,8 +1592,6 @@ export async function prepareSlackMessage(params: {
     });
   }
 
-  const slackTo = isDirectMessage ? `user:${message.user}` : `channel:${message.channel}`;
-
   const { channelMetadata, groupSystemPrompt } = resolveSlackRoomContextHints({
     isRoomish,
     channelInfo,
@@ -1555,6 +1608,7 @@ export async function prepareSlackMessage(params: {
     ctx,
     account,
     message,
+    isGroupDm,
     isThreadReply,
     threadTs,
     threadStarter,
@@ -1620,7 +1674,7 @@ export async function prepareSlackMessage(params: {
       parentSessionKey: threadKeys.parentSessionKey,
     },
     reply: {
-      to: slackTo,
+      to: replyRouteTarget,
       replyToId: threadContext.replyToId,
       messageThreadId: directThreadRoutedToDmSession ? undefined : effectiveMessageThreadId,
       nativeChannelId: message.channel,
@@ -1665,7 +1719,7 @@ export async function prepareSlackMessage(params: {
       groupSystemPrompt,
     },
     extra: {
-      GroupSubject: isRoomish ? roomLabel : undefined,
+      GroupSubject: groupSessionSubject,
       ChannelPromptContext: channelMetadata ? [channelMetadata] : undefined,
       ChannelStructuredContext:
         agentContextEntities.length > 0
@@ -1721,7 +1775,7 @@ export async function prepareSlackMessage(params: {
   const pinnedMainDmOwner = isDirectMessage
     ? resolvePinnedMainDmOwnerFromAllowlist({
         dmScope: cfg.session?.dmScope,
-        allowFrom: ctx.allowFrom,
+        allowFrom: allowFromLower,
         normalizeEntry: normalizeSlackAllowOwnerEntry,
       })
     : null;
@@ -1730,7 +1784,7 @@ export async function prepareSlackMessage(params: {
   // received on. This avoids depending on a follow-up conversations.open
   // round-trip for the normal reply path while keeping persisted routing
   // metadata user-scoped for later session deliveries.
-  const replyTarget = isDirectMessage ? `channel:${message.channel}` : (ctxPayload.To ?? undefined);
+  const replyTarget = `channel:${message.channel}`;
   if (!replyTarget) {
     return null;
   }
@@ -1740,7 +1794,7 @@ export async function prepareSlackMessage(params: {
       transcript: preflightAudioTranscript,
       cfg,
       accountId: account.accountId,
-      originatingTo: `channel:${message.channel}`,
+      originatingTo: preflightChannelTarget,
       messageThreadId: threadContext.messageThreadId,
     });
   }
@@ -1758,7 +1812,7 @@ export async function prepareSlackMessage(params: {
     account,
     message,
     ...(opts.relayIdentity ? { relayIdentity: opts.relayIdentity } : {}),
-    ...(opts.eventScope ? { eventScope: opts.eventScope } : {}),
+    eventScope: opts.eventScope,
     route,
     channelConfig,
     replyTarget,
@@ -1766,35 +1820,37 @@ export async function prepareSlackMessage(params: {
     turn: {
       storePath,
       record: {
-        updateLastRoute: isDirectMessage
-          ? {
-              sessionKey: updateLastRouteSessionKey,
-              channel: "slack",
-              to: `user:${message.user}`,
-              accountId: route.accountId,
-              threadId: effectiveMessageThreadId,
-              mainDmOwnerPin:
-                updateLastRouteSessionKey === route.mainSessionKey &&
-                pinnedMainDmOwner &&
-                message.user
-                  ? {
-                      ownerRecipient: pinnedMainDmOwner,
-                      senderRecipient: normalizeLowercaseStringOrEmpty(message.user),
-                      onSkip: ({
-                        ownerRecipient,
-                        senderRecipient,
-                      }: {
-                        ownerRecipient: string;
-                        senderRecipient: string;
-                      }) => {
-                        logVerbose(
-                          `slack: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                        );
-                      },
-                    }
-                  : undefined,
-            }
-          : undefined,
+        updateLastRoute:
+          isDirectMessage || opts.eventScope
+            ? {
+                sessionKey: updateLastRouteSessionKey,
+                channel: "slack",
+                to: replyRouteTarget,
+                accountId: route.accountId,
+                threadId: effectiveMessageThreadId,
+                mainDmOwnerPin:
+                  isDirectMessage &&
+                  updateLastRouteSessionKey === route.mainSessionKey &&
+                  pinnedMainDmOwner &&
+                  message.user
+                    ? {
+                        ownerRecipient: pinnedMainDmOwner,
+                        senderRecipient: normalizeLowercaseStringOrEmpty(message.user),
+                        onSkip: ({
+                          ownerRecipient,
+                          senderRecipient,
+                        }: {
+                          ownerRecipient: string;
+                          senderRecipient: string;
+                        }) => {
+                          logVerbose(
+                            `slack: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                          );
+                        },
+                      }
+                    : undefined,
+              }
+            : undefined,
         onRecordError: (err: unknown) => {
           ctx.logger.warn(
             {

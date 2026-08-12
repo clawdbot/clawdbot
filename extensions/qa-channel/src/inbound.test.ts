@@ -1,6 +1,7 @@
 // Qa Channel tests cover inbound plugin behavior.
 import path from "node:path";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setQaChannelRuntime } from "../api.js";
@@ -32,6 +33,15 @@ vi.mock("openclaw/plugin-sdk/outbound-media", async (importOriginal) => {
     })),
   };
 });
+
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
+  saveMediaBuffer: vi.fn(async () => ({
+    id: "stored-audio.ogg",
+    path: "/tmp/openclaw-media/stored-audio.ogg",
+    contentType: "audio/ogg",
+  })),
+}));
 
 type HandleQaInboundParams = Parameters<typeof handleQaInbound>[0];
 
@@ -459,32 +469,41 @@ describe("handleQaInbound", () => {
     expect(ctxPayload?.SenderId).toBe("alice");
   });
 
-  it("routes native commands through a separate slash session to the conversation session", async () => {
-    const runtime = createPluginRuntimeMock();
-    setQaChannelRuntime(runtime);
+  it.each([
+    { name: "stop", text: "/stop" },
+    { name: "queue", text: "/queue Can you diagnose this?" },
+    { name: "think", text: "/think high" },
+  ])(
+    "preserves the complete /$name native command in its slash session",
+    async ({ name, text }) => {
+      const runtime = createPluginRuntimeMock();
+      setQaChannelRuntime(runtime);
 
-    await handleQaInbound(
-      createQaInboundParams({
-        message: {
-          text: "/stop",
-          nativeCommand: { name: "stop" },
+      await handleQaInbound(
+        createQaInboundParams({
+          message: {
+            text,
+            nativeCommand: { name },
+          },
+        }),
+      );
+
+      const assembled = firstRunAssembledParams(runtime);
+      expect(assembled.ctxPayload).toMatchObject({
+        BodyForCommands: text,
+        CommandAuthorized: true,
+        CommandBody: text,
+        CommandSource: "native",
+        CommandTargetSessionKey: assembled.route.sessionKey,
+        CommandTurn: {
+          body: text,
+          source: "native",
         },
-      }),
-    );
-
-    const assembled = firstRunAssembledParams(runtime);
-    expect(assembled.ctxPayload).toMatchObject({
-      CommandAuthorized: true,
-      CommandSource: "native",
-      CommandTargetSessionKey: assembled.route.sessionKey,
-      CommandTurn: {
-        body: "/stop",
-        source: "native",
-      },
-    });
-    expect(assembled.ctxPayload.SessionKey).toContain("qa-channel:slash:alice");
-    expect(assembled.ctxPayload.SessionKey).not.toBe(assembled.route.sessionKey);
-  });
+      });
+      expect(assembled.ctxPayload.SessionKey).toContain("qa-channel:slash:alice");
+      expect(assembled.ctxPayload.SessionKey).not.toBe(assembled.route.sessionKey);
+    },
+  );
 
   it("skips malformed inline attachment base64 without dropping the message", async () => {
     const runtime = createPluginRuntimeMock();
@@ -508,6 +527,37 @@ describe("handleQaInbound", () => {
     expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
     const ctxPayload = firstRunAssembledParams(runtime).ctxPayload;
     expect(ctxPayload.media?.every((fact) => fact.path === undefined)).toBe(true);
+  });
+
+  it("projects saved inline attachments through a media-store URL", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+
+    await handleQaInbound(
+      createQaInboundParams({
+        message: {
+          attachments: [
+            {
+              id: "audio-1",
+              kind: "audio",
+              mimeType: "audio/ogg",
+              fileName: "voice-note.ogg",
+              contentBase64: Buffer.alloc(2048, 0x52).toString("base64"),
+              mediaFactCarrier: "media-store-url",
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(saveMediaBuffer).toHaveBeenCalledOnce();
+    const media = firstRunAssembledParams(runtime).ctxPayload.media;
+    expect(media).toHaveLength(1);
+    expect(media?.[0]).toMatchObject({
+      path: undefined,
+      url: "media://inbound/stored-audio.ogg",
+      contentType: "audio/ogg",
+    });
   });
 
   it("rejects non-http attachment URLs without dropping the message", async () => {

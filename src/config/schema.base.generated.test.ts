@@ -89,6 +89,27 @@ function collectMetadataOnlyCompositionBranches(
   return hits;
 }
 
+function collectSchemaConsts(
+  schema: TestJsonSchema | undefined,
+  values = new Set<unknown>(),
+): Set<unknown> {
+  if (!schema) {
+    return values;
+  }
+  if (schema.const !== undefined) {
+    values.add(schema.const);
+  }
+  for (const child of [
+    ...(schema.oneOf ?? []),
+    ...(schema.anyOf ?? []),
+    ...(schema.allOf ?? []),
+    ...Object.values(schema.properties ?? {}),
+  ]) {
+    collectSchemaConsts(child, values);
+  }
+  return values;
+}
+
 describe("base config schema", () => {
   it("is deterministic for a fixed generatedAt timestamp", () => {
     expect(
@@ -170,6 +191,13 @@ describe("base config schema", () => {
     expect(uiHints).toHaveProperty("agents.defaults.mediaModels.video.fallbacks");
     expect(uiHints).toHaveProperty("agents.defaults.voiceModel.primary");
     expect(uiHints).toHaveProperty("agents.defaults.voiceModel.fallbacks");
+  });
+
+  it("publishes all four SecretRef sources in generated JSON schema", () => {
+    const apiKeySchema = schemaAt(BASE_SCHEMA, ["models", "providers", "*", "apiKey"]);
+    expect(
+      [...collectSchemaConsts(apiKeySchema)].filter((value) => typeof value === "string"),
+    ).toEqual(expect.arrayContaining(["env", "file", "exec", "store"]));
   });
 
   it("publishes accepted input shapes for transform-backed config fields", () => {

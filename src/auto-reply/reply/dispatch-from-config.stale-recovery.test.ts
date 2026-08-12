@@ -8,7 +8,6 @@ import {
   mocks,
   noAbortResult,
   resetPluginTtsAndThreadMocks,
-  runtimePluginMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -16,6 +15,7 @@ import { buildTestCtx } from "./test-ctx.js";
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
 let expireStaleReplyOperation: typeof import("./reply-run-registry.js").expireStaleReplyOperation;
+let REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS: typeof import("./reply-run-registry.js").REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS;
 let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
 let replyRunTesting: typeof import("./reply-run-registry.test-support.js").testing;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
@@ -49,8 +49,12 @@ function createVisibleDispatchParams(
 describe("dispatchReplyFromConfig stale visible admission recovery", () => {
   beforeAll(async () => {
     ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
-    ({ createReplyOperation, expireStaleReplyOperation, replyRunRegistry } =
-      await import("./reply-run-registry.js"));
+    ({
+      createReplyOperation,
+      expireStaleReplyOperation,
+      REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
+      replyRunRegistry,
+    } = await import("./reply-run-registry.js"));
     ({ testing: replyRunTesting } = await import("./reply-run-registry.test-support.js"));
     ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
   });
@@ -59,7 +63,6 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
     replyRunTesting.resetReplyRunRegistry();
     resetInboundDedupe();
     resetPluginTtsAndThreadMocks();
-    runtimePluginMocks.ensureRuntimePluginsLoaded.mockReset();
     mocks.routeReply.mockReset();
     mocks.routeReply.mockResolvedValue({ ok: true, delivered: true, messageId: "mock" });
     mocks.tryFastAbortFromMessage.mockReset();
@@ -81,6 +84,9 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
       resetTriggered: false,
     });
     activeOperation.setPhase("running");
+    activeOperation.abortSignal.addEventListener("abort", () => activeOperation.complete(), {
+      once: true,
+    });
     const waitChanges: boolean[] = [];
     const replyResolver = vi.fn(async () => ({ text: "telegram reply" }) satisfies ReplyPayload);
     const dispatchParams = {
@@ -115,7 +121,7 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
     expect(waitChanges).toEqual([true, false]);
   });
 
-  it("reclaims stale visible reply work through admission and dispatches the turn", async () => {
+  it("reclaims stale pre-backend work after bounded terminal settlement", async () => {
     vi.useFakeTimers();
     const startedAt = Date.now();
     const activeOperation = createReplyOperation({
@@ -128,7 +134,14 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
     const dispatchParams = createVisibleDispatchParams(replyResolver);
     vi.setSystemTime(startedAt + RUN_STALE_TAKEOVER_MS + 1);
 
-    const result = await dispatchReplyFromConfig(dispatchParams);
+    const resultPromise = dispatchReplyFromConfig(dispatchParams);
+    await vi.waitFor(() => {
+      expect(activeOperation.result).toEqual({ kind: "failed", code: "run_stalled" });
+    });
+    expect(replyRunRegistry.get(sessionKey)).toBe(activeOperation);
+
+    await vi.advanceTimersByTimeAsync(REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS);
+    const result = await resultPromise;
 
     expect(diagnosticMocks.requestStuckDiagnosticSessionRecovery).not.toHaveBeenCalled();
     expect(activeOperation.result).toEqual({ kind: "failed", code: "run_stalled" });
@@ -140,31 +153,34 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
     expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("sends overload feedback when stuck recovery expires the active reply", async () => {
-    let resolverStarted: () => void = () => {};
-    const resolverStartedPromise = new Promise<void>((resolve) => {
-      resolverStarted = resolve;
-    });
-    const dispatchParams = createVisibleDispatchParams(async (_ctx, options) => {
-      resolverStarted();
-      await new Promise<void>((resolve) => {
-        options?.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+  it.each(["no_activity", "stuck_recovery"] as const)(
+    "sends truthful stalled feedback when %s expires the active reply",
+    async (reason) => {
+      let resolverStarted: () => void = () => {};
+      const resolverStartedPromise = new Promise<void>((resolve) => {
+        resolverStarted = resolve;
       });
-      const error = new Error("reply expired");
-      error.name = "AbortError";
-      throw error;
-    });
+      const dispatchParams = createVisibleDispatchParams(async (_ctx, options) => {
+        resolverStarted();
+        await new Promise<void>((resolve) => {
+          options?.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        const error = new Error("reply expired");
+        error.name = "AbortError";
+        throw error;
+      });
 
-    const dispatchPromise = dispatchReplyFromConfig(dispatchParams);
-    await resolverStartedPromise;
-    const operation = replyRunRegistry.get(sessionKey);
-    expect(operation).toBeDefined();
-    expect(expireStaleReplyOperation(operation!, "stuck_recovery")).toBe(true);
+      const dispatchPromise = dispatchReplyFromConfig(dispatchParams);
+      await resolverStartedPromise;
+      const operation = replyRunRegistry.get(sessionKey);
+      expect(operation).toBeDefined();
+      expect(expireStaleReplyOperation(operation!, reason)).toBe(false);
 
-    await expect(dispatchPromise).resolves.toMatchObject({ queuedFinal: true });
-    expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledWith({
-      text: "⚠️ Your reply was dropped because the gateway was overloaded. Please retry.",
-      isError: true,
-    });
-  });
+      await expect(dispatchPromise).resolves.toMatchObject({ queuedFinal: true });
+      expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledWith({
+        text: "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
+        isError: true,
+      });
+    },
+  );
 });

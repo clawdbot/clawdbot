@@ -13,6 +13,39 @@ import {
 } from "./heartbeat.js";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "./reply/delivery-hints.js";
 
+function createHeartbeatAttentionOutcome() {
+  return {
+    outcome: "needs_attention",
+    notify: true,
+    summary: "Build is blocked.",
+    notificationText: "Build is blocked on missing credentials.",
+  };
+}
+
+function createHeartbeatNoChangeMessage() {
+  return {
+    role: "assistant",
+    content: [
+      {
+        type: "toolCall",
+        id: "call_heartbeat",
+        name: "heartbeat_respond",
+        arguments: {
+          outcome: "no_change",
+          notify: false,
+          summary: "No visible update.",
+        },
+      },
+    ],
+  };
+}
+
+const HIDDEN_REASONING_BLOCKS = [
+  ["thinking", { type: "thinking", thinking: "Checking the heartbeat." }],
+  ["reasoning", { type: "reasoning", text: "Checking the heartbeat." }],
+  ["redacted thinking", { type: "redacted_thinking", data: "opaque-reasoning" }],
+] as const;
+
 describe("isHeartbeatUserMessage", () => {
   it("matches heartbeat prompts", () => {
     expect(
@@ -93,17 +126,17 @@ describe("isHeartbeatOkResponse", () => {
     ).toBe(true);
   });
 
-  it.each([
-    ["thinking", { type: "thinking", thinking: "Checking the heartbeat." }],
-    ["redacted thinking", { type: "redacted_thinking", data: "opaque-reasoning" }],
-  ])("matches acknowledgements with hidden %s blocks", (_label, thinkingBlock) => {
-    expect(
-      isHeartbeatOkResponse({
-        role: "assistant",
-        content: [thinkingBlock, { type: "text", text: "HEARTBEAT_OK" }],
-      }),
-    ).toBe(true);
-  });
+  it.each(HIDDEN_REASONING_BLOCKS)(
+    "matches acknowledgements with hidden %s blocks",
+    (_label, reasoningBlock) => {
+      expect(
+        isHeartbeatOkResponse({
+          role: "assistant",
+          content: [reasoningBlock, { type: "text", text: "HEARTBEAT_OK" }],
+        }),
+      ).toBe(true);
+    },
+  );
 
   it("preserves meaningful or non-text responses", () => {
     expect(
@@ -170,24 +203,24 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
     ]);
   });
 
-  it.each([
-    ["thinking", { type: "thinking", thinking: "Checking the heartbeat." }],
-    ["redacted thinking", { type: "redacted_thinking", data: "opaque-reasoning" }],
-  ])("removes no-op heartbeat pairs with hidden %s blocks", (_label, thinkingBlock) => {
-    const nextUserMessage = { role: "user", content: "What time is it?" };
-    const messages = [
-      { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT },
-      {
-        role: "assistant",
-        content: [thinkingBlock, { type: "text", text: "HEARTBEAT_OK" }],
-      },
-      nextUserMessage,
-    ];
+  it.each(HIDDEN_REASONING_BLOCKS)(
+    "removes no-op heartbeat pairs with hidden %s blocks",
+    (_label, reasoningBlock) => {
+      const nextUserMessage = { role: "user", content: "What time is it?" };
+      const messages = [
+        { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT },
+        {
+          role: "assistant",
+          content: [reasoningBlock, { type: "text", text: "HEARTBEAT_OK" }],
+        },
+        nextUserMessage,
+      ];
 
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
-      nextUserMessage,
-    ]);
-  });
+      expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
+        nextUserMessage,
+      ]);
+    },
+  );
 
   it("removes OpenAI Responses input/output text heartbeat pairs", () => {
     for (const deliveryHint of MESSAGE_TOOL_DELIVERY_HINTS) {
@@ -270,21 +303,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
         toolCallId: "call_bash",
         content: [{ type: "text", text: "checked HEARTBEAT.md" }],
       },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "call_heartbeat",
-            name: "heartbeat_respond",
-            arguments: {
-              outcome: "no_change",
-              notify: false,
-              summary: "No visible update.",
-            },
-          },
-        ],
-      },
+      createHeartbeatNoChangeMessage(),
       {
         role: "toolResult",
         toolCallId: "call_heartbeat",
@@ -301,21 +320,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
   it("removes full default response-tool prompt spans", () => {
     const messages = [
       { role: "user", content: HEARTBEAT_RESPONSE_TOOL_PROMPT },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "call_heartbeat",
-            name: "heartbeat_respond",
-            arguments: {
-              outcome: "no_change",
-              notify: false,
-              summary: "No visible update.",
-            },
-          },
-        ],
-      },
+      createHeartbeatNoChangeMessage(),
       {
         role: "toolResult",
         toolCallId: "call_heartbeat",
@@ -385,21 +390,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
   it("removes assistant continuations after heartbeat response-tool results", () => {
     const messages = [
       { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "call_heartbeat",
-            name: "heartbeat_respond",
-            arguments: {
-              outcome: "no_change",
-              notify: false,
-              summary: "No visible update.",
-            },
-          },
-        ],
-      },
+      createHeartbeatNoChangeMessage(),
       {
         role: "toolResult",
         toolCallId: "call_heartbeat",
@@ -437,12 +428,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
             type: "toolCall",
             id: "call_heartbeat",
             name: "heartbeat_respond",
-            arguments: {
-              outcome: "needs_attention",
-              notify: true,
-              summary: "Build is blocked.",
-              notificationText: "Build is blocked on missing credentials.",
-            },
+            arguments: createHeartbeatAttentionOutcome(),
           },
         ],
       },
@@ -469,12 +455,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
             type: "toolCall",
             id: "call_heartbeat",
             name: "heartbeat_respond",
-            arguments: {
-              outcome: "needs_attention",
-              notify: true,
-              summary: "Build is blocked.",
-              notificationText: "Build is blocked on missing credentials.",
-            },
+            arguments: createHeartbeatAttentionOutcome(),
           },
         ],
       },
@@ -503,12 +484,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
             id: "call_heartbeat",
             function: {
               name: "heartbeat_respond",
-              arguments: JSON.stringify({
-                outcome: "needs_attention",
-                notify: true,
-                summary: "Build is blocked.",
-                notificationText: "Build is blocked on missing credentials.",
-              }),
+              arguments: JSON.stringify(createHeartbeatAttentionOutcome()),
             },
           },
         ],
@@ -538,12 +514,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
             id: "fc_item_123",
             call_id: "call_heartbeat",
             name: "heartbeat_respond",
-            arguments: JSON.stringify({
-              outcome: "needs_attention",
-              notify: true,
-              summary: "Build is blocked.",
-              notificationText: "Build is blocked on missing credentials.",
-            }),
+            arguments: JSON.stringify(createHeartbeatAttentionOutcome()),
           },
         ],
       },
@@ -575,12 +546,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
             type: "tool_use",
             id: "toolu_heartbeat",
             name: "heartbeat_respond",
-            input: {
-              outcome: "needs_attention",
-              notify: true,
-              summary: "Build is blocked.",
-              notificationText: "Build is blocked on missing credentials.",
-            },
+            input: createHeartbeatAttentionOutcome(),
           },
         ],
       },
@@ -612,12 +578,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
             type: "tool_use",
             id: "toolu_heartbeat",
             name: "heartbeat_respond",
-            input: {
-              outcome: "needs_attention",
-              notify: true,
-              summary: "Build is blocked.",
-              notificationText: "Build is blocked on missing credentials.",
-            },
+            input: createHeartbeatAttentionOutcome(),
           },
         ],
       },
@@ -650,12 +611,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
             type: "toolCall",
             id: "call_heartbeat",
             name: "heartbeat_respond",
-            arguments: {
-              outcome: "needs_attention",
-              notify: true,
-              summary: "Build is blocked.",
-              notificationText: "Build is blocked on missing credentials.",
-            },
+            arguments: createHeartbeatAttentionOutcome(),
           },
         ],
       },
@@ -677,12 +633,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
             type: "toolCall",
             id: "call_heartbeat",
             name: "heartbeat_respond",
-            arguments: {
-              outcome: "needs_attention",
-              notify: true,
-              summary: "Build is blocked.",
-              notificationText: "Build is blocked on missing credentials.",
-            },
+            arguments: createHeartbeatAttentionOutcome(),
           },
         ],
       },
@@ -710,12 +661,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
             type: "tool_use",
             id: "toolu_heartbeat",
             name: "heartbeat_respond",
-            input: {
-              outcome: "needs_attention",
-              notify: true,
-              summary: "Build is blocked.",
-              notificationText: "Build is blocked on missing credentials.",
-            },
+            input: createHeartbeatAttentionOutcome(),
           },
         ],
       },
@@ -748,12 +694,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
             type: "tool_use",
             id: "toolu_heartbeat",
             name: "heartbeat_respond",
-            input: {
-              outcome: "needs_attention",
-              notify: true,
-              summary: "Build is blocked.",
-              notificationText: "Build is blocked on missing credentials.",
-            },
+            input: createHeartbeatAttentionOutcome(),
           },
         ],
       },
@@ -791,12 +732,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
             type: "toolCall",
             id: "call_heartbeat",
             name: "heartbeat_respond",
-            arguments: {
-              outcome: "needs_attention",
-              notify: true,
-              summary: "Build is blocked.",
-              notificationText: "Build is blocked on missing credentials.",
-            },
+            arguments: createHeartbeatAttentionOutcome(),
           },
         ],
       },
@@ -919,21 +855,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
   it("does not remove across a real user message", () => {
     const messages = [
       { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "call_heartbeat",
-            name: "heartbeat_respond",
-            arguments: {
-              outcome: "no_change",
-              notify: false,
-              summary: "No visible update.",
-            },
-          },
-        ],
-      },
+      createHeartbeatNoChangeMessage(),
       {
         role: "toolResult",
         toolCallId: "call_heartbeat",

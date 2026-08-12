@@ -3,6 +3,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationNavigationPreferences } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { updateAgentIdentity } from "../../lib/agents/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { fileToAvatarDataUrl } from "./avatar-image.ts";
 import type { AgentIdentityDraft } from "./panels-overview.ts";
 
@@ -11,10 +12,6 @@ type AgentIdentityEditorHost = {
   identitySaving: boolean;
   identityError: string | null;
 };
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 const avatarSelectionEpochs = new WeakMap<AgentIdentityEditorHost, number>();
 
@@ -64,6 +61,7 @@ export async function saveIdentityDraft(params: {
   agents: ApplicationContext["agents"];
   agentIdentity: ApplicationContext["agentIdentity"];
   runtimeConfig: ApplicationContext["runtimeConfig"];
+  canDispatch: () => boolean;
   isCurrent: () => boolean;
   onSaved: () => void;
 }) {
@@ -84,12 +82,18 @@ export async function saveIdentityDraft(params: {
   host.identitySaving = true;
   host.identityError = null;
   try {
-    const mutation = await runtimeConfig.runExternalMutation((client) => {
-      if (client !== expectedClient) {
-        throw new Error("Connection changed before the agent identity update started.");
-      }
-      return updateAgentIdentity(client, { agentId, name, emoji, avatar });
-    });
+    const mutation = await runtimeConfig.runExternalMutation(
+      (client) => {
+        if (client !== expectedClient) {
+          throw new Error("Connection changed before the agent identity update started.");
+        }
+        return updateAgentIdentity(client, { agentId, name, emoji, avatar });
+      },
+      {
+        canDispatch: params.canDispatch,
+        dispatchError: "Access changed before the agent identity update started.",
+      },
+    );
     if (!mutation.ok) {
       throw new Error(mutation.error);
     }
@@ -99,14 +103,14 @@ export async function saveIdentityDraft(params: {
       await agents.refreshList();
     } catch (error) {
       refreshErrors.push(
-        `Agent identity was saved, but the agent list refresh failed: ${errorMessage(error)}`,
+        `Agent identity was saved, but the agent list refresh failed: ${formatUiError(error)}`,
       );
     }
     try {
       await agentIdentity.ensure([agentId]);
     } catch (error) {
       refreshErrors.push(
-        `Agent identity was saved, but the identity refresh failed: ${errorMessage(error)}`,
+        `Agent identity was saved, but the identity refresh failed: ${formatUiError(error)}`,
       );
     }
     if (params.isCurrent()) {

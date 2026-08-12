@@ -33,6 +33,7 @@ import type {
   TelegramMessageContextSessionRuntimeOverrides,
   TelegramPromptContextEntry,
 } from "./bot-message-context.types.js";
+import { renderTelegramTextEntities } from "./bot/inbound-text-entities.js";
 import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
 
 type TelegramMentionFacts = NonNullable<
@@ -53,7 +54,10 @@ import {
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
-import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
+import {
+  resolveTelegramDirectToolPolicy,
+  resolveTelegramGroupPromptSettings,
+} from "./group-config-helpers.js";
 import {
   isTelegramHistoryEntryAfterAmbientWatermark,
   isTelegramChatWindowPromptContext,
@@ -229,6 +233,7 @@ export async function buildTelegramInboundContextPayload(params: {
   bodyText: string;
   historyKey?: string;
   historyLimit: number;
+  dmHistoryLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
@@ -281,6 +286,7 @@ export async function buildTelegramInboundContextPayload(params: {
     bodyText,
     historyKey,
     historyLimit,
+    dmHistoryLimit,
     groupHistories,
     groupConfig,
     topicConfig,
@@ -397,8 +403,9 @@ export async function buildTelegramInboundContextPayload(params: {
   const inboundDebounceBodySegments = hasMultiMessageDebounceBatch
     ? options?.inboundDebounceMessages?.flatMap((debouncedMessage) => {
         const debouncedMedia = resolveTelegramPrimaryMedia(debouncedMessage);
+        const textParts = getTelegramTextParts(debouncedMessage);
         const segmentBody =
-          getTelegramTextParts(debouncedMessage).text ||
+          renderTelegramTextEntities(textParts.text, textParts.entities) ||
           formatMediaPlaceholderText(debouncedMedia ? [{ kind: debouncedMedia.kind }] : []);
         if (!segmentBody) {
           return [];
@@ -578,6 +585,18 @@ export async function buildTelegramInboundContextPayload(params: {
     : `telegram:${chatId}`;
   const telegramTo = buildTelegramInboundOriginTarget(chatId, threadSpec);
   const locationContext = locationData ? toLocationContext(locationData) : undefined;
+  const telegramUpdate = primaryCtx.update;
+  const providerUpdateKind = telegramUpdate
+    ? "edited_message" in telegramUpdate
+      ? "edited_message"
+      : "message" in telegramUpdate
+        ? "message"
+        : "edited_channel_post" in telegramUpdate
+          ? "edited_channel_post"
+          : "channel_post" in telegramUpdate
+            ? "channel_post"
+            : undefined
+    : undefined;
   const inboundHistory =
     hasGroupHistoryContext && historyKey && historyLimit > 0
       ? groupHistoryPromptEntries.length > 0
@@ -626,7 +645,7 @@ export async function buildTelegramInboundContextPayload(params: {
     },
     sessionTranscript: {
       chatWindow: true,
-      historyLimit: isGroup ? historyLimit : 10,
+      historyLimit: isGroup ? historyLimit : dmHistoryLimit,
       beforeTimestampMs: options?.receivedAtMs ?? (msg.date ? msg.date * 1000 : undefined),
       minTimestampMs: options?.promptContextMinTimestampMs,
       senderLabels: { assistant: "OpenClaw", user: "User" },
@@ -635,6 +654,14 @@ export async function buildTelegramInboundContextPayload(params: {
       commands: {
         authorized: commandAuthorized,
       },
+      toolPolicy: isGroup
+        ? undefined
+        : resolveTelegramDirectToolPolicy({
+            directConfig: groupConfig,
+            senderId,
+            senderName,
+            senderUsername,
+          }),
       mentions: mentionFacts,
     },
     command:
@@ -719,6 +746,18 @@ export async function buildTelegramInboundContextPayload(params: {
       StickerMediaIncluded: allMedia[0]?.stickerMetadata ? currentMediaFacts.length > 0 : undefined,
       SkipStickerMediaUnderstanding: stickerCacheHit ? true : undefined,
       ...locationContext,
+      ProviderUpdateId:
+        typeof telegramUpdate?.update_id === "number"
+          ? String(telegramUpdate.update_id)
+          : undefined,
+      ProviderUpdateKind: providerUpdateKind,
+      ProviderMessageTimestamp: primaryCtx.message?.date
+        ? primaryCtx.message.date * 1000
+        : undefined,
+      ProviderEditTimestamp: primaryCtx.message?.edit_date
+        ? primaryCtx.message.edit_date * 1000
+        : undefined,
+      LocationLivePeriodSeconds: primaryCtx.message?.location?.live_period,
       IsForum: isForum,
       TopicName: isForum && topicName ? topicName : undefined,
     },

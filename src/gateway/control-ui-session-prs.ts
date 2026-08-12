@@ -5,6 +5,7 @@ import nodePath from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { runGit } from "../agents/worktrees/git.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type {
   ControlUiSessionBranch,
@@ -18,7 +19,7 @@ import {
   githubApiToken,
   isRecord,
   optionalNumber,
-  optionalString,
+  readOptionalGitHubString,
 } from "./control-ui-github-api.js";
 import {
   gitOutput,
@@ -31,7 +32,7 @@ import {
   type SessionPullRequestGitContext,
   type SessionPullRequestLocalGitDeps,
 } from "./control-ui-session-prs-local-git.js";
-import { loadSessionEntryReadOnly } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 const SUCCESS_CACHE_MS = 60_000;
 // Back off refetches while GitHub reports quota exhaustion; the UI keeps
@@ -93,9 +94,12 @@ type LoadSessionPullRequestDeps = SessionPullRequestLocalGitDeps & {
 function resolveSessionPullRequestGitRoot(
   params: ControlUiSessionPullRequestsParams,
 ): string | null {
-  const { cfg, entry, storePath, canonicalKey } = loadSessionEntryReadOnly(params.sessionKey, {
-    agentId: params.agentId,
-  });
+  const { cfg, entry, storePath, canonicalKey } = loadGatewaySessionEntryReadOnly(
+    params.sessionKey,
+    {
+      agentId: params.agentId,
+    },
+  );
   // Same session/agent scoping as sessions.files.*: a missing entry means an
   // unknown or deleted session, which must not fall back to some agent
   // workspace and surface another checkout's PRs.
@@ -313,7 +317,7 @@ async function resolveSessionBranch(
 }
 
 function derivePullState(value: Record<string, unknown>): ControlUiSessionPullRequest["state"] {
-  if (optionalString(value, "merged_at")) {
+  if (readOptionalGitHubString(value, "merged_at")) {
     return "merged";
   }
   if (value.state !== "open") {
@@ -327,13 +331,13 @@ function parsePullListItem(value: unknown): PullListItem | null {
     return null;
   }
   const number = optionalNumber(value, "number");
-  const title = optionalString(value, "title");
-  const url = optionalString(value, "html_url");
+  const title = readOptionalGitHubString(value, "title");
+  const url = readOptionalGitHubString(value, "html_url");
   const base = isRecord(value.base) ? value.base : {};
   const baseRepo = isRecord(base.repo) ? base.repo : {};
   const baseOwner = isRecord(baseRepo.owner) ? baseRepo.owner : {};
-  const owner = optionalString(baseOwner, "login");
-  const repo = optionalString(baseRepo, "name");
+  const owner = readOptionalGitHubString(baseOwner, "login");
+  const repo = readOptionalGitHubString(baseRepo, "name");
   const head = isRecord(value.head) ? value.head : {};
   if (!number || !Number.isSafeInteger(number) || number < 1 || !title || !url || !owner || !repo) {
     return null;
@@ -345,9 +349,9 @@ function parsePullListItem(value: unknown): PullListItem | null {
     owner,
     repo,
     state: derivePullState(value),
-    headSha: optionalString(head, "sha"),
-    baseRef: optionalString(base, "ref"),
-    mergeCommitSha: optionalString(value, "merge_commit_sha"),
+    headSha: readOptionalGitHubString(head, "sha"),
+    baseRef: readOptionalGitHubString(base, "ref"),
+    mergeCommitSha: readOptionalGitHubString(value, "merge_commit_sha"),
   };
 }
 
@@ -377,8 +381,8 @@ async function fetchParentRepo(
     return null;
   }
   const parentOwner = isRecord(value.parent.owner) ? value.parent.owner : {};
-  const parentLogin = optionalString(parentOwner, "login");
-  const parentName = optionalString(value.parent, "name");
+  const parentLogin = readOptionalGitHubString(parentOwner, "login");
+  const parentName = readOptionalGitHubString(value.parent, "name");
   return parentLogin && parentName ? { owner: parentLogin, repo: parentName } : null;
 }
 
@@ -430,7 +434,7 @@ function rollupCheckRuns(value: unknown): ControlUiSessionPullRequest["checks"] 
   let running = 0;
   for (const runValue of value.check_runs) {
     const run = isRecord(runValue) ? runValue : {};
-    const conclusion = optionalString(run, "conclusion");
+    const conclusion = readOptionalGitHubString(run, "conclusion");
     if (conclusion && FAILING_CHECK_CONCLUSIONS.has(conclusion)) {
       failed += 1;
       continue;
@@ -669,12 +673,6 @@ async function cachedBranchPullRequests(
   );
   branchCache.delete(key);
   branchCache.set(key, entry);
-  while (branchCache.size > CACHE_LIMIT) {
-    const oldestKey = branchCache.keys().next().value as string | undefined;
-    if (!oldestKey) {
-      break;
-    }
-    branchCache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(branchCache, CACHE_LIMIT);
   return promise;
 }

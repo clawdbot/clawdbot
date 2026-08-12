@@ -12,4 +12,4 @@ export { withTempDir } from "../test-utils/temp-dir.js";
 export { useFrozenTime, useRealTime } from "../test-utils/frozen-time.js";
 export { withServer } from "./test-helpers/http-test-server.js";
 export { createMockIncomingRequest } from "./test-helpers/mock-incoming-request.js";
-export { withTempHome } from "./test-helpers/temp-home.js";
+export { withTempHomeCore as withTempHome } from "./test-helpers/temp-home.js";

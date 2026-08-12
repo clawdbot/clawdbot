@@ -93,7 +93,7 @@ function requireBuzzPrivateKey(
   try {
     return { value, publicKey: getPublicKey(decodeBuzzPrivateKey(value)) };
   } catch {
-    throwPayloadError(
+    return throwPayloadError(
       createFailure,
       `Credential payload for kind "buzz" must include "${key}" as an nsec or 64-character hex private key.`,
     );
@@ -163,14 +163,14 @@ function normalizeBuzzCredentialPayload(
       'Credential payload for kind "buzz" must use distinct driver and SUT identities.',
     );
   }
-  const optionalString = (key: "driverAuthTag" | "sutAuthTag") => {
+  const readOptionalBuzzAuthTag = (key: "driverAuthTag" | "sutAuthTag") => {
     if (payload[key] === undefined) {
       return undefined;
     }
     return requireBuzzAuthTag(payload, key, createFailure);
   };
-  const driverAuthTag = optionalString("driverAuthTag");
-  const sutAuthTag = optionalString("sutAuthTag");
+  const driverAuthTag = readOptionalBuzzAuthTag("driverAuthTag");
+  const sutAuthTag = readOptionalBuzzAuthTag("sutAuthTag");
 
   return {
     relayUrl,

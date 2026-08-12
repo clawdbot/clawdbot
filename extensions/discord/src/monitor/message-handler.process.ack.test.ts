@@ -11,6 +11,7 @@ import {
   deliverDiscordReply,
   discordTargetMocksForTest as discordTargetMocks,
   dispatchInboundMessageForTest as dispatchInboundMessage,
+  readAgentRunTerminalOutcomeForTest as readAgentRunTerminalOutcome,
   getLastDispatchReplyOptions,
   runProcessDiscordMessage,
   sendMocksForTest as sendMocks,
@@ -272,6 +273,27 @@ describe("processDiscordMessage ack reactions", () => {
 
     await runProcessDiscordMessage(ctx);
 
+    const emojis = getReactionEmojis();
+    expect(emojis).toContain(DEFAULT_EMOJIS.error);
+    expect(emojis).not.toContain(DEFAULT_EMOJIS.done);
+  });
+
+  it("marks a recovered agent failure as failed after delivering its visible error reply", async () => {
+    readAgentRunTerminalOutcome.mockReturnValueOnce("failed");
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "Something failed", isError: true });
+      await params?.dispatcher.waitForIdle();
+      return {
+        queuedFinal: true,
+        counts: { final: 1, tool: 0, block: 0 },
+      };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext();
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
     const emojis = getReactionEmojis();
     expect(emojis).toContain(DEFAULT_EMOJIS.error);
     expect(emojis).not.toContain(DEFAULT_EMOJIS.done);

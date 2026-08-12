@@ -1,3 +1,6 @@
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveMainSessionKey } from "../../config/sessions.js";
 import { resolveSessionEntryAccessTarget } from "../../config/sessions/session-accessor.js";
@@ -14,25 +17,14 @@ import {
 } from "../mcp-http.loopback-runtime.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
-function paramRecord(params: unknown): Record<string, unknown> {
-  return params && typeof params === "object" ? (params as Record<string, unknown>) : {};
-}
-
-function readString(params: Record<string, unknown>, key: string): string | undefined {
-  const value = params[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function readPositiveNumber(params: Record<string, unknown>, key: string): number | undefined {
-  const value = params[key];
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
-
 export const attachHandlers: GatewayRequestHandlers = {
   "attach.grant": async ({ params, respond, context }) => {
-    const grantParams = paramRecord(params);
+    const grantParams = asRecord(params);
     const cfg = context.getRuntimeConfig();
-    const sessionKey = readString(grantParams, "sessionKey") ?? resolveMainSessionKey(cfg);
+    const sessionKey =
+      normalizeOptionalString(grantParams.sessionKey) ?? resolveMainSessionKey(cfg);
+    const agentId =
+      sessionKey === "global" ? normalizeOptionalString(grantParams.agentId) : undefined;
     const harnessEntry = isAgentHarnessSessionKey(sessionKey)
       ? resolveSessionEntryAccessTarget({ cfg, sessionKey }).entry
       : undefined;
@@ -57,7 +49,11 @@ export const attachHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const grant = mintAttachGrant({ sessionKey, ttlMs: readPositiveNumber(grantParams, "ttlMs") });
+    const grant = mintAttachGrant({
+      sessionKey,
+      ...(agentId ? { agentId } : {}),
+      ttlMs: asPositiveFiniteNumber(grantParams.ttlMs),
+    });
     respond(true, {
       sessionKey: grant.sessionKey,
       token: grant.token,
@@ -69,7 +65,7 @@ export const attachHandlers: GatewayRequestHandlers = {
     });
   },
   "attach.revoke": async ({ params, respond }) => {
-    const token = readString(paramRecord(params), "token");
+    const token = normalizeOptionalString(asRecord(params).token);
     if (!token) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "token is required"));
       return;

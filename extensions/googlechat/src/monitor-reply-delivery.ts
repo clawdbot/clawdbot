@@ -1,14 +1,45 @@
 // Googlechat plugin module implements monitor reply delivery behavior.
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import { deleteGoogleChatMessage, sendGoogleChatMessage, updateGoogleChatMessage } from "./api.js";
+import {
+  deleteGoogleChatMessage,
+  GoogleChatApiError,
+  sendGoogleChatMessage,
+  updateGoogleChatMessage,
+} from "./api.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
 
-export type GoogleChatTypingMessage = {
-  name: string;
-  thread?: string;
-};
+export type GoogleChatTypingMessage =
+  | {
+      placement: "top-level";
+      name: string;
+    }
+  | {
+      placement: "thread";
+      name: string;
+      requestedThreadName: string;
+      deliveredThreadName: string;
+    };
+
+export function createGoogleChatTypingMessage(params: {
+  messageName: string;
+  requestedThreadName?: string;
+  deliveredThreadName?: string;
+}): GoogleChatTypingMessage {
+  const name = params.messageName.trim();
+  const requestedThreadName = params.requestedThreadName?.trim();
+  if (!requestedThreadName) {
+    return { placement: "top-level", name };
+  }
+  return {
+    placement: "thread",
+    name,
+    requestedThreadName,
+    deliveredThreadName: params.deliveredThreadName?.trim() || requestedThreadName,
+  };
+}
 
 export async function deliverGoogleChatReply(params: {
   payload: {
@@ -30,12 +61,18 @@ export async function deliverGoogleChatReply(params: {
   // text delivery can keep retrying a dead message and drop content.
   let typingMessage = params.typingMessage;
   const replyThreadName = payload.replyToId?.trim() || undefined;
-  const typingMessageThreadName = typingMessage?.thread?.trim() || undefined;
   const reply = resolveSendableOutboundReplyParts(payload);
   const text = reply.text;
   let firstTextChunk = true;
+  let deliveryThreadName = replyThreadName;
 
-  if (typingMessage && typingMessageThreadName !== replyThreadName) {
+  const typingMatchesReply =
+    typingMessage?.placement === "thread"
+      ? typingMessage.requestedThreadName === replyThreadName
+      : typingMessage?.placement === "top-level"
+        ? replyThreadName === undefined
+        : false;
+  if (typingMessage && !typingMatchesReply) {
     // Typing starts before reply directives are resolved. Never edit a placeholder
     // from one thread into a final reply targeted at another conversation surface.
     try {
@@ -44,6 +81,10 @@ export async function deliverGoogleChatReply(params: {
       runtime.error?.(`Google Chat typing cleanup failed: ${String(err)}`);
     }
     typingMessage = undefined;
+  } else if (typingMessage?.placement === "thread") {
+    // The requested thread decides whether the placeholder still belongs to this reply;
+    // the provider-returned thread owns every later physical send after fallback.
+    deliveryThreadName = typingMessage.deliveredThreadName;
   }
 
   if (reply.hasMedia) {
@@ -60,8 +101,11 @@ export async function deliverGoogleChatReply(params: {
     } catch (err) {
       runtime.error?.(`Google Chat typing cleanup failed: ${String(err)}`);
     }
-    throw new Error(
+    // Permanent policy rejection before any recipient-visible send; the typed
+    // contract keeps delivery custody from recording a false ambiguous attempt.
+    throw new PlatformMessageNotDispatchedError(
       "Google Chat outbound attachments require user OAuth and no text fallback is available.",
+      { cause: undefined, retryable: false },
     );
   }
 
@@ -75,12 +119,15 @@ export async function deliverGoogleChatReply(params: {
     }
   };
   const sendTextMessage = async (chunk: string) => {
-    await sendGoogleChatMessage({
+    const sent = await sendGoogleChatMessage({
       account,
       space: spaceId,
       text: chunk,
-      thread: replyThreadName,
+      thread: deliveryThreadName,
     });
+    if (replyThreadName) {
+      deliveryThreadName = sent?.threadName?.trim() || deliveryThreadName;
+    }
   };
   const chunks = core.channel.text.chunkMarkdownTextWithMode(text, chunkLimit, chunkMode);
   for (const chunk of chunks) {
@@ -94,17 +141,17 @@ export async function deliverGoogleChatReply(params: {
           messageName: typingMessage.name,
           text: chunk,
         });
-      } catch (err) {
-        // The typing placeholder may already be gone; resend the chunk as a new
-        // message below. Only the resend failing counts as a delivery failure.
-        runtime.error?.(`Google Chat message send failed: ${String(err)}`);
+      } catch (error) {
+        if (!(error instanceof GoogleChatApiError) || error.status !== 404) {
+          throw error;
+        }
+        runtime.error?.(`Google Chat typing update failed: ${String(error)}`);
         typingMessage = undefined;
+        await sendTextMessage(chunk);
       }
-      if (typingMessage) {
-        firstTextChunk = false;
-        recordOutboundStatus();
-        continue;
-      }
+      firstTextChunk = false;
+      recordOutboundStatus();
+      continue;
     }
     // Core delivery contract: a failed send must reject so the reply dispatcher
     // routes to onError instead of recording a dropped chunk as delivered.

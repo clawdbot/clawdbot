@@ -3,7 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
+import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry-read.js";
 import { sanitizeTaskStatusText } from "../../tasks/task-status.js";
 import { truncateUtf16Safe } from "../../utils.js";
 
@@ -21,18 +21,10 @@ export function formatRunLabel(entry: SubagentRunRecord, options?: { maxLength?:
   return raw.length > maxLength ? `${truncateUtf16Safe(raw, maxLength).trimEnd()}…` : raw;
 }
 
-export function formatRunStatus(entry: SubagentRunRecord) {
-  if (!entry.endedAt) {
-    return "running";
-  }
-  const status = entry.outcome?.status ?? "done";
-  return status === "ok" ? "done" : status;
-}
-
 export function sortSubagentRuns(runs: SubagentRunRecord[]) {
   return [...runs].toSorted((a, b) => {
-    const aTime = a.startedAt ?? a.createdAt ?? 0;
-    const bTime = b.startedAt ?? b.createdAt ?? 0;
+    const aTime = a.execution.startedAt ?? a.createdAt ?? 0;
+    const bTime = b.execution.startedAt ?? b.createdAt ?? 0;
     return bTime - aTime;
   });
 }
@@ -76,12 +68,15 @@ export function resolveSubagentTargetFromRuns(params: {
   if (trimmed === "last") {
     return { entry: deduped[0] };
   }
-  const isActive = params.isActive ?? ((entry: SubagentRunRecord) => !entry.endedAt);
+  const isActive = params.isActive ?? ((entry: SubagentRunRecord) => !entry.execution.endedAt);
   const recentCutoff = Date.now() - params.recentWindowMinutes * 60_000;
   const numericOrder = [
     ...deduped.filter((entry) => isActive(entry)),
     ...deduped.filter(
-      (entry) => !isActive(entry) && Boolean(entry.endedAt) && (entry.endedAt ?? 0) >= recentCutoff,
+      (entry) =>
+        !isActive(entry) &&
+        Boolean(entry.execution.endedAt) &&
+        (entry.execution.endedAt ?? 0) >= recentCutoff,
     ),
   ];
   if (/^\d+$/.test(trimmed)) {

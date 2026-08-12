@@ -4,9 +4,9 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { isRecord } from "../utils.js";
 import { readTrimmedStringAlias } from "../utils/string-readers.js";
+import { cancelUnreadResponseBody } from "./http-body.js";
 import {
   buildUsageHttpErrorSnapshot,
-  discardUsageResponseBody,
   fetchJson,
   parseFiniteNumber,
 } from "./provider-usage.fetch.shared.js";
@@ -544,7 +544,7 @@ export async function fetchMinimaxUsage(
   );
 
   if (!res.ok) {
-    await discardUsageResponseBody(res);
+    await cancelUnreadResponseBody(res);
     return buildUsageHttpErrorSnapshot({
       provider: "minimax",
       status: res.status,

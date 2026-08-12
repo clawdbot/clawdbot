@@ -61,7 +61,6 @@ const hookMocks = vi.hoisted(() => {
     listThreadBindingsBySessionKey: vi.fn((_params?: unknown): ThreadBindingRecord[] => []),
     unbindThreadBindingsBySessionKey: vi.fn(() => []),
     progressModuleFactory: vi.fn(),
-    handleDiscordSubagentProgress: vi.fn(),
     recoverDiscordSubagentProgress: vi.fn(),
   };
 });
@@ -78,10 +77,7 @@ vi.mock("./monitor/thread-bindings.js", () => ({
 }));
 vi.mock("./subagent-progress.js", () => {
   hookMocks.progressModuleFactory();
-  return {
-    handleDiscordSubagentProgress: hookMocks.handleDiscordSubagentProgress,
-    recoverDiscordSubagentProgress: hookMocks.recoverDiscordSubagentProgress,
-  };
+  return { recoverDiscordSubagentProgress: hookMocks.recoverDiscordSubagentProgress };
 });
 
 function registerHandlersForTest(
@@ -221,11 +217,10 @@ describe("discord subagent hook handlers", () => {
     hookMocks.listThreadBindingsBySessionKey.mockClear();
     hookMocks.unbindThreadBindingsBySessionKey.mockClear();
     hookMocks.progressModuleFactory.mockClear();
-    hookMocks.handleDiscordSubagentProgress.mockClear();
     hookMocks.recoverDiscordSubagentProgress.mockClear();
   });
 
-  it("keeps progress runtime lazy for unrelated subagent hooks", async () => {
+  it("keeps progress cleanup lazy for unrelated subagent hooks", async () => {
     const handlers = registerHandlersForTest();
     const handler = getRequiredHookHandler(handlers, "subagent_delivery_target");
 
@@ -244,7 +239,7 @@ describe("discord subagent hook handlers", () => {
     expect(hookMocks.progressModuleFactory).not.toHaveBeenCalled();
   });
 
-  it("loads progress runtime for gateway recovery", async () => {
+  it("loads retired progress cleanup on gateway startup", async () => {
     const handlers = registerHandlersForTest();
     const handler = getRequiredHookHandler(handlers, "gateway_start");
 

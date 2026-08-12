@@ -1,9 +1,13 @@
 import { once } from "node:events";
+import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { zstdDecompressSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { configureAiTransportHost } from "../host.js";
+import { responsesPromptObserver, type ResponsesPromptObservation } from "../internal/openai.js";
+import { cleanupSessionResources } from "../session-resources.js";
+import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type { Context, Model } from "../types.js";
 import {
   closeOpenAICodexWebSocketSessions,
@@ -312,6 +316,9 @@ describe("ChatGPT Responses cached transport", () => {
   });
 
   it("does not prepare SSE requests or serialize full bodies for cached websocket turns", async () => {
+    const prompt = "PRIVATE-CACHED-WEBSOCKET-PROMPT";
+    const observations: ResponsesPromptObservation[] = [];
+    const order: string[] = [];
     const sentPayloads: string[] = [];
 
     class CachedWebSocket extends EventTarget {
@@ -323,6 +330,7 @@ describe("ChatGPT Responses cached transport", () => {
       }
 
       send(payload: string): void {
+        order.push("send");
         sentPayloads.push(payload);
         queueMicrotask(() => {
           this.dispatchEvent(
@@ -349,11 +357,20 @@ describe("ChatGPT Responses cached transport", () => {
       sessionId: "cached-hot-path",
       transport: "websocket-cached" as const,
     };
+    responsesPromptObserver.set(options, (observation) => {
+      order.push("observe");
+      observations.push(observation);
+    });
 
-    const first = await streamOpenAICodexResponses(model, context, options).result();
+    const first = await streamOpenAICodexResponses(
+      model,
+      { ...context, systemPrompt: prompt },
+      options,
+    ).result();
     const second = await streamOpenAICodexResponses(
       model,
       {
+        systemPrompt: prompt,
         messages: [...context.messages, { role: "user", content: "follow-up", timestamp: 2 }],
       },
       options,
@@ -365,6 +382,11 @@ describe("ChatGPT Responses cached transport", () => {
     expect(headerSet).not.toHaveBeenCalledWith("accept", "text/event-stream");
     expect(headerSet).not.toHaveBeenCalledWith("content-type", "application/json");
     expect(sentPayloads).toHaveLength(2);
+    expect(order).toEqual(["observe", "send", "observe", "send"]);
+    expect(observations).toHaveLength(2);
+    expect(observations.every((entry) => entry.egress === "native-codex-websocket")).toBe(true);
+    expect(observations.every((entry) => entry.matchesAssembledPrompt)).toBe(true);
+    expect(JSON.stringify(observations)).not.toContain(prompt);
 
     const continuation = JSON.parse(sentPayloads[1] as string) as {
       input?: unknown[];
@@ -383,6 +405,108 @@ describe("ChatGPT Responses cached transport", () => {
         );
       }),
     ).toEqual([]);
+  });
+
+  it.each([
+    {
+      label: "valid UTF-8 JSON",
+      frame: new TextEncoder().encode(JSON.stringify(completion("resp_binary"))).buffer,
+    },
+    {
+      label: "malformed bytes",
+      frame: Uint8Array.from([0xff, 0xfe, 0xfd]).buffer,
+    },
+  ])("rejects $label in a binary frame and invalidates cached state", async ({ frame }) => {
+    const sockets: ProtocolFrameWebSocket[] = [];
+    const sentPayloads: Array<Record<string, unknown>> = [];
+    let connectionCount = 0;
+
+    class ProtocolFrameWebSocket extends EventTarget {
+      readonly connectionId = ++connectionCount;
+      readonly listeners = new Map<string, Set<EventListenerOrEventListenerObject>>();
+      readyState = 1;
+      sendCount = 0;
+
+      constructor() {
+        super();
+        sockets.push(this);
+        queueMicrotask(() => this.dispatchEvent(new Event("open")));
+      }
+
+      override addEventListener(
+        type: string,
+        listener: EventListenerOrEventListenerObject,
+        options?: boolean | AddEventListenerOptions,
+      ): void {
+        super.addEventListener(type, listener, options);
+        const listeners = this.listeners.get(type) ?? new Set();
+        listeners.add(listener);
+        this.listeners.set(type, listeners);
+      }
+
+      override removeEventListener(
+        type: string,
+        listener: EventListenerOrEventListenerObject,
+        options?: boolean | EventListenerOptions,
+      ): void {
+        super.removeEventListener(type, listener, options);
+        this.listeners.get(type)?.delete(listener);
+      }
+
+      send(payload: string): void {
+        this.sendCount += 1;
+        sentPayloads.push(JSON.parse(payload) as Record<string, unknown>);
+        queueMicrotask(() => {
+          const data =
+            this.connectionId === 1 && this.sendCount === 2
+              ? frame
+              : JSON.stringify(completion(`resp_${this.connectionId}_${this.sendCount}`));
+          this.dispatchEvent(Object.assign(new Event("message"), { data }));
+        });
+      }
+
+      close(): void {
+        this.readyState = 3;
+      }
+
+      activeStreamListenerCount(): number {
+        return ["message", "error", "close"].reduce(
+          (count, type) => count + (this.listeners.get(type)?.size ?? 0),
+          0,
+        );
+      }
+    }
+
+    vi.stubGlobal("WebSocket", ProtocolFrameWebSocket);
+    const options = {
+      apiKey: createJwt(),
+      sessionId: `binary-frame-${connectionCount}`,
+      transport: "websocket-cached" as const,
+    };
+    const followUpContext = {
+      messages: [...context.messages, { role: "user", content: "follow-up", timestamp: 2 }],
+    } satisfies Context;
+
+    expect((await streamOpenAICodexResponses(model, context, options).result()).stopReason).toBe(
+      "stop",
+    );
+    expect(sockets[0]?.activeStreamListenerCount()).toBe(0);
+
+    const rejected = await streamOpenAICodexResponses(model, followUpContext, options).result();
+    expect(rejected).toMatchObject({
+      stopReason: "error",
+      errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
+    });
+    expect(sockets[0]).toMatchObject({ readyState: 3, sendCount: 2 });
+    expect(sockets[0]?.activeStreamListenerCount()).toBe(0);
+    expect(sentPayloads[1]?.previous_response_id).toBe("resp_1_1");
+
+    expect(
+      (await streamOpenAICodexResponses(model, followUpContext, options).result()).stopReason,
+    ).toBe("stop");
+    expect(sockets).toHaveLength(2);
+    expect(sockets[1]?.activeStreamListenerCount()).toBe(0);
+    expect(sentPayloads[2]?.previous_response_id).toBeUndefined();
   });
 
   it("closes the concurrent acquire loser promptly without leaking its socket", async () => {
@@ -499,58 +623,175 @@ describe("ChatGPT Responses cached transport", () => {
     }
   });
 
-  it("lazily builds authenticated SSE requests after session-scoped websocket fallback", async () => {
-    let websocketAttempts = 0;
+  it("keeps SSE fallback sticky only for the active session lifecycle", async () => {
+    const websocketUpgrades: Array<{
+      method: string;
+      path: string;
+      authorization?: string;
+      accountId?: string;
+      openaiBeta?: string;
+      sessionId?: string;
+      requestId?: string;
+    }> = [];
+    const sseRequests: Array<{
+      method: string;
+      path: string;
+      authorization?: string;
+      accountId?: string;
+      sessionId?: string;
+      requestId?: string;
+      accept?: string;
+      contentType?: string;
+      contentEncoding?: string;
+      body: Buffer;
+    }> = [];
+    const server = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        const requestNumber = sseRequests.length + 1;
+        sseRequests.push({
+          method: request.method ?? "",
+          path: request.url ?? "",
+          authorization: request.headers.authorization,
+          accountId: request.headers["chatgpt-account-id"] as string | undefined,
+          sessionId: request.headers.session_id as string | undefined,
+          requestId: request.headers["x-client-request-id"] as string | undefined,
+          accept: request.headers.accept,
+          contentType: request.headers["content-type"],
+          contentEncoding: request.headers["content-encoding"],
+          body: Buffer.concat(chunks),
+        });
+        response.writeHead(200, {
+          connection: "close",
+          "content-type": "text/event-stream",
+        });
+        response.end(`data: ${JSON.stringify(completion(`resp_sse_${requestNumber}`))}\n\n`);
+      });
+    });
+    server.on("upgrade", (request, socket) => {
+      websocketUpgrades.push({
+        method: request.method ?? "",
+        path: request.url ?? "",
+        authorization: request.headers.authorization,
+        accountId: request.headers["chatgpt-account-id"] as string | undefined,
+        openaiBeta: request.headers["openai-beta"] as string | undefined,
+        sessionId: request.headers.session_id as string | undefined,
+        requestId: request.headers["x-client-request-id"] as string | undefined,
+      });
+      socket.end("HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const port = (server.address() as AddressInfo).port;
+    const loopbackModel = {
+      ...model,
+      baseUrl: `http://127.0.0.1:${port}/backend-api`,
+    } satisfies Model<"openai-chatgpt-responses">;
+    vi.stubGlobal("WebSocket", WebSocket);
+    const apiKey = createJwt();
+    const runSession = (sessionId: string) =>
+      streamOpenAICodexResponses(loopbackModel, context, { apiKey, sessionId }).result();
 
-    class FailingWebSocket {
-      constructor() {
-        websocketAttempts += 1;
-        throw new Error("websocket connect failed");
+    try {
+      const firstStickyResult = await runSession("sticky-sse-fallback");
+      expect(firstStickyResult).toMatchObject({
+        stopReason: "stop",
+        diagnostics: [
+          {
+            type: "provider_transport_failure",
+            error: { message: "Unexpected server response: 426" },
+            details: {
+              configuredTransport: "auto",
+              fallbackTransport: "sse",
+              eventsEmitted: false,
+              phase: "before_message_stream_start",
+            },
+          },
+        ],
+      });
+      const stickyResult = await runSession("sticky-sse-fallback");
+      expect(stickyResult.stopReason).toBe("stop");
+      expect(stickyResult.diagnostics).toBeUndefined();
+      expect((await runSession("unrelated-sse-fallback")).stopReason).toBe("stop");
+      expect(websocketUpgrades).toHaveLength(2);
+
+      cleanupSessionResources("sticky-sse-fallback");
+      expect((await runSession("unrelated-sse-fallback")).stopReason).toBe("stop");
+      expect(websocketUpgrades).toHaveLength(2);
+      expect((await runSession("sticky-sse-fallback")).stopReason).toBe("stop");
+      expect((await runSession("sticky-sse-fallback")).stopReason).toBe("stop");
+      expect(websocketUpgrades).toHaveLength(3);
+
+      cleanupSessionResources();
+      expect((await runSession("sticky-sse-fallback")).stopReason).toBe("stop");
+      expect((await runSession("unrelated-sse-fallback")).stopReason).toBe("stop");
+      expect(websocketUpgrades).toHaveLength(5);
+      expect(sseRequests).toHaveLength(8);
+
+      expect(websocketUpgrades.map((request) => request.sessionId)).toEqual([
+        "sticky-sse-fallback",
+        "unrelated-sse-fallback",
+        "sticky-sse-fallback",
+        "sticky-sse-fallback",
+        "unrelated-sse-fallback",
+      ]);
+      expect(sseRequests.map((request) => request.sessionId)).toEqual([
+        "sticky-sse-fallback",
+        "sticky-sse-fallback",
+        "unrelated-sse-fallback",
+        "unrelated-sse-fallback",
+        "sticky-sse-fallback",
+        "sticky-sse-fallback",
+        "sticky-sse-fallback",
+        "unrelated-sse-fallback",
+      ]);
+
+      for (const request of websocketUpgrades) {
+        expect(request).toMatchObject({
+          method: "GET",
+          path: "/backend-api/codex/responses",
+          authorization: `Bearer ${apiKey}`,
+          accountId: "acct-1",
+          openaiBeta: "responses_websockets=2026-02-06",
+          requestId: request.sessionId,
+        });
+      }
+      for (const request of sseRequests) {
+        expect(request).toMatchObject({
+          method: "POST",
+          path: "/backend-api/codex/responses",
+          authorization: `Bearer ${apiKey}`,
+          accountId: "acct-1",
+          requestId: request.sessionId,
+          accept: "text/event-stream",
+          contentType: "application/json",
+          contentEncoding: "zstd",
+        });
+        expect(request.body).not.toHaveLength(0);
+        const payload = JSON.parse(zstdDecompressSync(request.body).toString("utf8"));
+        expect(payload).toMatchObject({
+          model: model.id,
+          prompt_cache_key: request.sessionId,
+        });
       }
 
-      send(): void {}
-      close(): void {}
-      addEventListener(): void {}
-      removeEventListener(): void {}
-    }
-
-    const captured: Array<{ headers: Headers; body: BodyInit | null | undefined }> = [];
-    const fetchMock = vi.fn(async (_input: unknown, init?: RequestInit) => {
-      captured.push({ headers: new Headers(init?.headers), body: init?.body });
-      return new Response(
-        `data: ${JSON.stringify(completion(`resp_sse_${captured.length}`))}\n\n`,
-        {
-          status: 200,
-          headers: { "content-type": "text/event-stream" },
-        },
+      console.info(
+        "[behavior-evidence] chatgpt-sse-fallback-cleanup",
+        JSON.stringify({
+          transport: "real ws client and loopback HTTP server",
+          rejectedUpgradeStatus: 426,
+          websocketSessionIds: websocketUpgrades.map((request) => request.sessionId),
+          sseSessionIds: sseRequests.map((request) => request.sessionId),
+          firstFallbackError: firstStickyResult.diagnostics?.[0]?.error?.message,
+          scopedCleanupRetriedOnly: "sticky-sse-fallback",
+          globalCleanupRetried: ["sticky-sse-fallback", "unrelated-sse-fallback"],
+        }),
       );
-    });
-    vi.stubGlobal("WebSocket", FailingWebSocket);
-    vi.stubGlobal("fetch", fetchMock);
-    const apiKey = createJwt();
-    const options = { apiKey, sessionId: "sticky-sse-fallback" };
-
-    const first = await streamOpenAICodexResponses(model, context, options).result();
-    const second = await streamOpenAICodexResponses(model, context, options).result();
-
-    expect(first.stopReason).toBe("stop");
-    expect(second.stopReason).toBe("stop");
-    expect(websocketAttempts).toBe(1);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-
-    for (const { headers, body } of captured) {
-      expect(headers.get("authorization")).toBe(`Bearer ${apiKey}`);
-      expect(headers.get("chatgpt-account-id")).toBe("acct-1");
-      expect(headers.get("session_id")).toBe("sticky-sse-fallback");
-      expect(headers.get("accept")).toBe("text/event-stream");
-      expect(headers.get("content-type")).toBe("application/json");
-      expect(headers.get("content-encoding")).toBe("zstd");
-      expect(body).toBeInstanceOf(Uint8Array);
-      expect(
-        JSON.parse(Buffer.from(zstdDecompressSync(body as Uint8Array)).toString("utf8")),
-      ).toMatchObject({
-        model: model.id,
-        prompt_cache_key: "sticky-sse-fallback",
+    } finally {
+      cleanupSessionResources();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
       });
     }
   });

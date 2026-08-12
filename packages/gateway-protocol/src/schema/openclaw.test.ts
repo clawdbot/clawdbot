@@ -23,6 +23,36 @@ describe("OpenClaw chat params protocol", () => {
     ).toBe(true);
   });
 
+  it("accepts a typed wizard answer and rejects unknown answer fields", () => {
+    expect(
+      validateSystemAgentChatParams({
+        sessionId: "session-1",
+        wizardAnswer: { stepId: "channel", value: "twitch" },
+      }),
+    ).toBe(true);
+    expect(
+      validateSystemAgentChatParams({
+        sessionId: "session-1",
+        wizardAnswer: { stepId: "channel", value: "twitch", display: "Twitch" },
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts a typed wizard cancel and rejects unknown cancel fields", () => {
+    expect(
+      validateSystemAgentChatParams({
+        sessionId: "session-1",
+        wizardCancel: { stepId: "channel" },
+      }),
+    ).toBe(true);
+    expect(
+      validateSystemAgentChatParams({
+        sessionId: "session-1",
+        wizardCancel: { stepId: "channel", reason: "user" },
+      }),
+    ).toBe(false);
+  });
+
   it("rejects unsafe page ids and unknown context fields", () => {
     expect(validateSystemAgentChatParams({ ...base, context: { page: "channels?tab=all" } })).toBe(
       false,
@@ -127,6 +157,7 @@ describe("OpenClaw setup detection protocol", () => {
           brandId: "lmstudio",
           label: "LM Studio",
           hint: "Local/self-hosted LM Studio server",
+          actionLabel: "Connect server",
           icon: "https://cdn.simpleicons.org/lmstudio",
           website: "https://lmstudio.ai/download",
         },

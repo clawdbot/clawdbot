@@ -252,6 +252,38 @@ describe("processDiscordMessage draft streaming progress", () => {
     expectFinalWithProgressReceipt("done", "💬 2 notes", "🛠️ 1 tool call");
   });
 
+  it("retries an unacknowledged preamble and reports visibility after Discord accepts it", async () => {
+    const draftStream = createMockDraftStreamForTest();
+    draftStream.messageId.mockReturnValue(undefined);
+    const results: Array<boolean | void> = [];
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      const preamble = {
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "Checking source data.",
+      };
+      results.push(await params?.replyOptions?.onItemEvent?.(preamble));
+      draftStream.messageId.mockReturnValue("preview-1");
+      results.push(await params?.replyOptions?.onItemEvent?.(preamble));
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: { label: false, commentary: true },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(results).toEqual([false, true]);
+    expect(draftStream.update.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
   it.each([
     ["active", true],
     ["inactive", false],
@@ -610,7 +642,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       await elapseProgressDraftStartDelay();
       await params?.dispatcher.sendFinalReply({ text: "first answer" });
       await params?.dispatcher.waitForIdle();
-      await params?.replyOptions?.onAssistantMessageStart?.();
+      await params?.replyOptions?.onQueuedFollowupAdmitted?.();
       await params?.replyOptions?.onToolStart?.({ name: "read", phase: "start" });
       await params?.replyOptions?.onItemEvent?.({ progressText: "second tool done" });
       await elapseProgressDraftStartDelay();
@@ -645,7 +677,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       await elapseProgressDraftStartDelay();
       await params?.dispatcher.sendFinalReply({ text: "first answer" });
       await params?.dispatcher.waitForIdle();
-      await params?.replyOptions?.onAssistantMessageStart?.();
+      await params?.replyOptions?.onQueuedFollowupAdmitted?.();
       await params?.dispatcher.sendFinalReply({ text: "text-only answer" });
       await params?.dispatcher.waitForIdle();
       return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
@@ -676,7 +708,7 @@ describe("processDiscordMessage draft streaming progress", () => {
       await elapseProgressDraftStartDelay();
       await params?.dispatcher.sendFinalReply({ text: "first answer" });
       await params?.dispatcher.waitForIdle();
-      await params?.replyOptions?.onAssistantMessageStart?.();
+      await params?.replyOptions?.onQueuedFollowupAdmitted?.();
       await params?.replyOptions?.onToolStart?.({ name: "read", phase: "start" });
       await params?.replyOptions?.onItemEvent?.({ progressText: "queued work" });
       await elapseProgressDraftStartDelay();
@@ -718,6 +750,7 @@ describe("processDiscordMessage draft streaming progress", () => {
           mode: "progress",
           progress: {
             label: "Shelling",
+            commandText: "raw",
           },
         },
       },
@@ -761,6 +794,39 @@ describe("processDiscordMessage draft streaming progress", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n🛠️ Exec\n• done");
+  });
+
+  it("preserves command output text when raw Discord progress is configured", async () => {
+    const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({
+        name: "exec",
+        phase: "start",
+      });
+      await params?.replyOptions?.onCommandOutput?.({
+        phase: "end",
+        title: "pnpm test -- --watch=false",
+        name: "exec",
+        exitCode: 0,
+      });
+      await elapseProgressDraftStartDelay();
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: { label: "Shelling", commandText: "raw" },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update.mock.calls.flat().join("\n")).toContain("pnpm test -- --watch=false");
   });
 
   it("keeps Discord progress lines below the configured label", async () => {

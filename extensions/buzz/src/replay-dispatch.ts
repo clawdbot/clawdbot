@@ -2,8 +2,16 @@ const REPLAY_DISPATCH_CONCURRENCY = 8;
 export const BUZZ_REPLAY_DISPATCH_MAX_PENDING = 1_024;
 const REPLAY_HISTORY_MAX_PER_ROOM = 100;
 
+type BuzzReplayDispatchAdmission = "accepted" | "closed" | "overflow";
+
+export type BuzzReplayDispatchReservation = {
+  enqueue: (task: () => Promise<void>) => BuzzReplayDispatchAdmission;
+  release: () => void;
+};
+
 type BuzzReplayDispatchQueue = {
-  enqueue: (task: () => Promise<void>) => "accepted" | "closed" | "overflow";
+  enqueue: (task: () => Promise<void>) => BuzzReplayDispatchAdmission;
+  reserveCapacity: (slots: number) => Promise<BuzzReplayDispatchReservation | undefined>;
   close: () => Promise<void>;
 };
 
@@ -25,6 +33,14 @@ export function createBuzzReplayDispatchQueue(params: {
       resolveDrained = undefined;
     }
   };
+
+  let reserved = 0;
+  const reservationWaiters: Array<{
+    slots: number;
+    resolve: (reservation: BuzzReplayDispatchReservation | undefined) => void;
+  }> = [];
+  const availableCapacity = () =>
+    BUZZ_REPLAY_DISPATCH_MAX_PENDING - (pending.length - pendingHead) - reserved;
 
   const compactPending = () => {
     if (pendingHead > 256 && pendingHead * 2 >= pending.length) {
@@ -54,28 +70,88 @@ export function createBuzzReplayDispatchQueue(params: {
           drain();
         });
     }
+    settleReservationWaiters();
   };
 
-  return {
-    enqueue(task) {
-      if (closed) {
-        return "closed";
-      }
-      if (active < REPLAY_DISPATCH_CONCURRENCY) {
+  const enqueueTask = (task: () => Promise<void>): BuzzReplayDispatchAdmission => {
+    if (closed) {
+      return "closed";
+    }
+    if (active < REPLAY_DISPATCH_CONCURRENCY) {
+      pending.push(task);
+      drain();
+      return "accepted";
+    }
+    if (availableCapacity() <= 0) {
+      return "overflow";
+    }
+    pending.push(task);
+    return "accepted";
+  };
+
+  const createReservation = (slots: number): BuzzReplayDispatchReservation => {
+    let remaining = slots;
+    reserved += slots;
+    return {
+      enqueue(task) {
+        if (closed) {
+          return "closed";
+        }
+        if (remaining === 0) {
+          return "overflow";
+        }
+        remaining -= 1;
+        reserved -= 1;
         pending.push(task);
         drain();
         return "accepted";
+      },
+      release() {
+        reserved -= remaining;
+        remaining = 0;
+        settleReservationWaiters();
+      },
+    };
+  };
+
+  const settleReservationWaiters = () => {
+    while (reservationWaiters.length > 0) {
+      const waiter = reservationWaiters[0];
+      if (!waiter) {
+        reservationWaiters.shift();
+        continue;
       }
-      if (pending.length - pendingHead >= BUZZ_REPLAY_DISPATCH_MAX_PENDING) {
-        return "overflow";
+      if (closed) {
+        reservationWaiters.shift();
+        waiter.resolve(undefined);
+        continue;
       }
-      pending.push(task);
-      return "accepted";
+      if (availableCapacity() < waiter.slots) {
+        return;
+      }
+      reservationWaiters.shift();
+      waiter.resolve(createReservation(waiter.slots));
+    }
+  };
+
+  return {
+    enqueue: enqueueTask,
+    async reserveCapacity(slots) {
+      if (closed) {
+        return undefined;
+      }
+      if (reservationWaiters.length === 0 && availableCapacity() >= slots) {
+        return createReservation(slots);
+      }
+      return await new Promise<BuzzReplayDispatchReservation | undefined>((resolve) => {
+        reservationWaiters.push({ slots, resolve });
+      });
     },
     async close() {
       closed = true;
       pending.length = 0;
       pendingHead = 0;
+      settleReservationWaiters();
       settleDrained();
       await drained;
     },

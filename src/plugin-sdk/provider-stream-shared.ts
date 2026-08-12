@@ -1,6 +1,7 @@
 // Provider stream shared helpers implement reusable stream wrappers and payload policies.
 import { resolveOpenAIReasoningEffortForModel } from "@openclaw/ai/internal/openai";
 import { resolveOpenAIReasoningEffortMap } from "@openclaw/ai/transports";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createPromotedPlainTextToolCallBlock,
   createPromotedPlainTextToolCallEvents,
@@ -21,6 +22,7 @@ import { mapThinkingLevelToReasoningEffort } from "../llm/providers/stream-wrapp
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import { streamSimple } from "../llm/stream.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
+import { findCodeRegions } from "../shared/text/code-regions.js";
 export { applyAnthropicRefusal } from "@openclaw/ai/internal/anthropic";
 export { createDeferredEventBuffer } from "@openclaw/ai/internal/runtime";
 export { notifyLlmRequestActivity, onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
@@ -45,10 +47,6 @@ export function composeProviderStreamWrappers(
   );
 }
 
-function toRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
-
 function resolveContextToolNames(context: Parameters<StreamFn>[1]): Set<string> {
   const tools = (context as { tools?: unknown }).tools;
   if (!Array.isArray(tools)) {
@@ -56,7 +54,7 @@ function resolveContextToolNames(context: Parameters<StreamFn>[1]): Set<string> 
   }
   const names = tools
     .map((tool) => {
-      const record = toRecord(tool);
+      const record = asOptionalObjectRecord(tool);
       return typeof record?.name === "string" && record.name.trim() ? record.name : undefined;
     })
     .filter((name): name is string => Boolean(name));
@@ -67,10 +65,10 @@ function promotePlainTextToolCalls(
   message: unknown,
   toolNames: Set<string>,
 ): PlainTextToolCallMessageProjection | undefined {
-  const messageRecord = toRecord(message);
+  const messageRecord = asOptionalObjectRecord(message);
   if (
     Array.isArray(messageRecord?.content) &&
-    messageRecord.content.some((block) => toRecord(block)?.type === "toolCall")
+    messageRecord.content.some((block) => asOptionalObjectRecord(block)?.type === "toolCall")
   ) {
     return undefined;
   }
@@ -79,6 +77,7 @@ function promotePlainTextToolCalls(
     createToolCallBlock: createPromotedPlainTextToolCallBlock,
     isRetainableNonTextBlock: () => true,
     message,
+    resolveProtectedRanges: findCodeRegions,
   });
 }
 
@@ -127,6 +126,7 @@ function scrubProviderTerminalMessage(
     matcher,
     message,
     preserveEmptyTextBlocks,
+    resolveProtectedRanges: findCodeRegions,
   });
 }
 
@@ -165,6 +165,7 @@ function wrapPlainTextToolCallStream(
               matcher,
               preserveEmptyTextBlocks,
             ),
+          resolveProtectedRanges: findCodeRegions,
           stopAfterDone: true,
         },
       );
@@ -699,6 +700,7 @@ export {
 export { applyAnthropicEphemeralCacheControlMarkers } from "../llm/providers/stream-wrappers/anthropic-cache-control-payload.js";
 export {
   createMoonshotThinkingWrapper,
+  resolveMoonshotThinkingKeep,
   resolveMoonshotThinkingType,
 } from "../llm/providers/stream-wrappers/moonshot-thinking.js";
 export { streamWithPayloadPatch };

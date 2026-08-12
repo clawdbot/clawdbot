@@ -1,4 +1,5 @@
 // Kilocode tests cover provider models plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -41,12 +42,7 @@ function requireModelById(
   return model;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-record");
 
 function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
   const [call] = mock.mock.calls;
@@ -188,7 +184,9 @@ describe("discoverKilocodeModels (fetch path)", () => {
       const guardedFetch = requireRecord(guardedFetchParams, "guarded fetch params");
       expect(guardedFetch.url).toBe(KILOCODE_MODELS_URL);
       const guardedInit = requireRecord(guardedFetch.init, "guarded fetch init");
-      expect(guardedInit.headers).toEqual({ Accept: "application/json" });
+      expect(Object.fromEntries(new Headers(guardedInit.headers as HeadersInit))).toEqual({
+        accept: "application/json",
+      });
       expect(guardedFetch.policy).toEqual({ allowedHostnames: ["api.kilo.ai"] });
       expect(guardedFetch.timeoutMs).toBe(5000);
       expect(guardedFetch.auditContext).toBe("kilocode.model_discovery");
@@ -197,7 +195,9 @@ describe("discoverKilocodeModels (fetch path)", () => {
       const [fetchUrl, fetchOptions] = requireFirstMockCall(mockFetch, "mock fetch call");
       expect(fetchUrl).toBe(KILOCODE_MODELS_URL);
       const fetchInit = requireRecord(fetchOptions, "mock fetch init");
-      expect(fetchInit.headers).toEqual({ Accept: "application/json" });
+      expect(Object.fromEntries(new Headers(fetchInit.headers as HeadersInit))).toEqual({
+        accept: "application/json",
+      });
 
       expect(models.length).toBe(2);
 
@@ -274,6 +274,59 @@ describe("discoverKilocodeModels (fetch path)", () => {
         contextWindow: 1000000,
         maxTokens: 65536,
       });
+    });
+  });
+
+  it("prefers the primary provider context window over the catalog-wide value", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: [
+          makeGatewayModel({
+            id: "minimax/minimax-m3",
+            context_length: 1048576,
+            top_provider: {
+              is_moderated: false,
+              context_length: 524288,
+              max_completion_tokens: 512000,
+            },
+          }),
+        ],
+      }),
+    );
+
+    await withFetchPathTest(mockFetch, async () => {
+      const models = await discoverKilocodeModels();
+
+      expect(requireModelById(models, "minimax/minimax-m3")).toMatchObject({
+        contextWindow: 524288,
+        maxTokens: 512000,
+      });
+    });
+  });
+
+  it("falls back to the catalog window when the provider window is unusable", async () => {
+    const unusable: unknown[] = [0, -1, 4096.5, Number.POSITIVE_INFINITY, null, "131072"];
+    const mockFetch = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: unusable.map((context_length, index) =>
+          makeGatewayModel({
+            id: `some/provider-window-${index}`,
+            context_length: 200000,
+            top_provider: { is_moderated: false, context_length, max_completion_tokens: 8192 },
+          }),
+        ),
+      }),
+    );
+
+    await withFetchPathTest(mockFetch, async () => {
+      const models = await discoverKilocodeModels();
+
+      for (let index = 0; index < unusable.length; index++) {
+        expect(requireModelById(models, `some/provider-window-${index}`)).toMatchObject({
+          contextWindow: 200000,
+          maxTokens: 8192,
+        });
+      }
     });
   });
 

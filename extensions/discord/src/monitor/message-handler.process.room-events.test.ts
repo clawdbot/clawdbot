@@ -10,7 +10,7 @@ import {
   getLastDispatchCtx,
   getLastDispatchReplyOptions,
   getLastRouteUpdate,
-  notifyDiscordInboundEventOutboundSuccess,
+  discordInboundEventDelivery,
   readSessionUpdatedAt,
   runProcessDiscordMessage,
   sendMocksForTest as sendMocks,
@@ -136,7 +136,7 @@ describe("processDiscordMessage session routing and room events", () => {
   it("clears Discord room event history after a visible action send succeeds", async () => {
     const guildHistories = new Map();
     dispatchInboundMessage.mockImplementationOnce(async () => {
-      notifyDiscordInboundEventOutboundSuccess({
+      discordInboundEventDelivery.notify({
         sessionKey: BASE_CHANNEL_ROUTE.sessionKey,
         inboundEventKind: "room_event",
         to: "channel:c1",
@@ -162,7 +162,7 @@ describe("processDiscordMessage session routing and room events", () => {
   it("clears Discord group DM room event history after a visible action send succeeds", async () => {
     const guildHistories = new Map();
     dispatchInboundMessage.mockImplementationOnce(async () => {
-      notifyDiscordInboundEventOutboundSuccess({
+      discordInboundEventDelivery.notify({
         sessionKey: BASE_CHANNEL_ROUTE.sessionKey,
         inboundEventKind: "room_event",
         to: "channel:c1",
@@ -206,7 +206,7 @@ describe("processDiscordMessage session routing and room events", () => {
     const begin = getLastDispatchReplyOptions()?.queuedDeliveryCorrelations?.[0]?.begin;
     expect(begin).toBeTypeOf("function");
     const end = begin?.();
-    notifyDiscordInboundEventOutboundSuccess({
+    discordInboundEventDelivery.notify({
       sessionKey: BASE_CHANNEL_ROUTE.sessionKey,
       inboundEventKind: "room_event",
       to: "channel:c1",

@@ -11,9 +11,7 @@ import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import { persistedMessageEntryId } from "../chat-thread.ts";
-import { renderDeleteButton } from "./chat-message-confirmation.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import { persistedMessageEntryId, type AssistantMessageExpansionState } from "../chat-thread.ts";
 
 export type MessageReplyTarget = {
   messageId: string;
@@ -66,44 +64,7 @@ export function jsonSummaryLabel(parsed: unknown): string {
   return "JSON";
 }
 
-function renderExpandButton(
-  markdown: string,
-  onOpenSidebar: (content: SidebarContent) => void,
-  options?: {
-    sessionKey?: string;
-    agentId?: string;
-    messageId?: string;
-  },
-) {
-  return html`
-    <openclaw-tooltip .content=${t("chat.messages.openInCanvas")}>
-      <button
-        class="chat-expand-btn"
-        type="button"
-        aria-label=${t("chat.messages.openInCanvas")}
-        @click=${() =>
-          onOpenSidebar({
-            kind: "markdown",
-            content: markdown,
-            ...(options?.sessionKey && options?.messageId
-              ? {
-                  fullMessageRequest: {
-                    sessionKey: options.sessionKey,
-                    ...(options.agentId ? { agentId: options.agentId } : {}),
-                    messageId: options.messageId,
-                    kind: "assistant_message" as const,
-                  },
-                }
-              : {}),
-          })}
-      >
-        <span class="chat-expand-btn__icon" aria-hidden="true">${icons.panelRightOpen}</span>
-      </button>
-    </openclaw-tooltip>
-  `;
-}
-
-type MessageActionDetails = {
+export type MessageActionDetails = {
   markdown?: string;
   messageId?: string;
   replyTarget?: MessageReplyTarget;
@@ -122,25 +83,26 @@ export function resolveNormalizedMessageMarkdown(normalizedMessage: NormalizedMe
     .trim();
 }
 
+export function resolveMessageReplyText(message: unknown): string {
+  const normalizedMessage = normalizeMessage(message);
+  const markdown = resolveNormalizedMessageMarkdown(normalizedMessage);
+  const visibleMarkdown =
+    normalizeRoleForGrouping(normalizedMessage.role) === "assistant"
+      ? stripThinkingTags(markdown).trim()
+      : markdown.trim();
+  return visibleMarkdown;
+}
+
 export function resolveMessageActionDetails(params: {
   message: unknown;
   messageId: string;
-  onOpenSidebar?: (content: SidebarContent) => void;
+  canFetchFullMessage?: boolean;
+  getAssistantMessageExpansion?: (messageId: string) => AssistantMessageExpansionState | undefined;
   onReply?: (target: MessageReplyTarget) => void;
   senderLabel: string;
 }): MessageActionDetails | null {
-  const { message, messageId: renderMessageId, onOpenSidebar, onReply, senderLabel } = params;
+  const { message, messageId: renderMessageId, canFetchFullMessage, onReply, senderLabel } = params;
   const record = message as Record<string, unknown>;
-  const normalizedMessage = normalizeMessage(message);
-  const normalizedMarkdown = resolveNormalizedMessageMarkdown(normalizedMessage);
-  const role = normalizeRoleForGrouping(normalizedMessage.role);
-  const visibleMarkdown =
-    role === "assistant" ? stripThinkingTags(normalizedMarkdown).trim() : normalizedMarkdown.trim();
-  const markdown = role === "assistant" ? visibleMarkdown : undefined;
-  const replyText = onReply ? truncateUtf16Safe(visibleMarkdown, 500) : "";
-  if (!markdown && !replyText) {
-    return null;
-  }
   const transcriptMeta =
     record["__openclaw"] &&
     typeof record["__openclaw"] === "object" &&
@@ -153,9 +115,31 @@ export function resolveMessageActionDetails(params: {
       : typeof record.messageId === "string"
         ? record.messageId
         : undefined;
+  const normalizedMessage = normalizeMessage(message);
+  const role = normalizeRoleForGrouping(normalizedMessage.role);
+  const previewMarkdown = resolveMessageReplyText(message);
+  // Loaded text must not erase the preview's truncation fact or collapse its disclosure.
+  const shouldFetchFullMessage = Boolean(
+    canFetchFullMessage &&
+    messageId &&
+    !record.openclawMessageToolMirror &&
+    (transcriptMeta?.truncated === true ||
+      (role === "assistant" && previewMarkdown.includes("\n...(truncated)..."))),
+  );
+  const expansion =
+    role === "assistant" && shouldFetchFullMessage && messageId
+      ? params.getAssistantMessageExpansion?.(messageId)
+      : undefined;
+  const visibleMarkdown =
+    expansion?.status === "loaded" ? stripThinkingTags(expansion.markdown).trim() : previewMarkdown;
+  const markdown = role === "assistant" ? visibleMarkdown : undefined;
+  const replyText = onReply ? truncateUtf16Safe(visibleMarkdown, 500) : "";
+  if (!markdown && !replyText && !(role === "assistant" && shouldFetchFullMessage)) {
+    return null;
+  }
   const sourceMessageId = persistedMessageEntryId(message);
   return {
-    ...(markdown ? { markdown } : {}),
+    ...(markdown === undefined ? {} : { markdown }),
     messageId,
     ...(replyText
       ? {
@@ -167,36 +151,19 @@ export function resolveMessageActionDetails(params: {
           },
         }
       : {}),
-    shouldFetchFullMessage: Boolean(
-      onOpenSidebar &&
-      messageId &&
-      !record.openclawMessageToolMirror &&
-      (transcriptMeta?.truncated === true || markdown?.includes("\n...(truncated)...")),
-    ),
+    shouldFetchFullMessage,
   };
 }
 
 export function renderMessageActionButtons(
   details: MessageActionDetails,
   opts: {
-    sessionKey?: string;
-    agentId?: string;
     onReply?: (target: MessageReplyTarget) => void;
   },
-  onOpenSidebar?: (content: SidebarContent) => void,
-  onDelete?: () => void,
 ) {
   return html`
     ${details.replyTarget && opts.onReply
       ? renderReplyButton(details.replyTarget, opts.onReply)
-      : nothing}
-    ${onDelete ? renderDeleteButton(onDelete, "right") : nothing}
-    ${details.markdown && onOpenSidebar
-      ? renderExpandButton(details.markdown, onOpenSidebar, {
-          sessionKey: opts.sessionKey,
-          agentId: opts.agentId,
-          messageId: details.shouldFetchFullMessage ? details.messageId : undefined,
-        })
       : nothing}
     ${details.markdown ? renderCopyAsMarkdownButton(details.markdown) : nothing}
   `;
@@ -263,14 +230,14 @@ export function renderUserMessageMarkdown(
   const disclosureId = `user-message:${messageKey}`;
   const expanded = opts.isUserMessageExpanded?.(disclosureId) ?? false;
   return html`
-    <div class="chat-user-message-disclosure ${expanded ? "is-expanded" : ""}">
-      <div class="chat-user-message-disclosure__content">
+    <div class="chat-message-disclosure ${expanded ? "is-expanded" : ""}">
+      <div class="chat-message-disclosure__content">
         ${expanded
           ? renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
-          : html`<div class="chat-user-message-disclosure__preview">${preview}</div>`}
+          : html`<div class="chat-message-disclosure__preview">${preview}</div>`}
       </div>
       <button
-        class="chat-user-message-disclosure__toggle"
+        class="chat-message-disclosure__toggle"
         type="button"
         aria-expanded=${String(expanded)}
         @click=${() => opts.onToggleUserMessageExpanded?.(disclosureId)}
@@ -279,6 +246,26 @@ export function renderUserMessageMarkdown(
       </button>
     </div>
   `;
+}
+
+export type AssistantMessageDisclosure = {
+  expanded: boolean;
+  markdown?: string;
+};
+
+export function renderAssistantMessageMarkdown(
+  previewMarkdown: string,
+  isStreaming: boolean,
+  disclosure: AssistantMessageDisclosure | undefined,
+  markdownRenderOptions: MarkdownRenderOptions,
+) {
+  const markdown = disclosure?.expanded
+    ? (disclosure.markdown ?? previewMarkdown)
+    : previewMarkdown;
+  const renderOptions = disclosure?.expanded
+    ? { ...markdownRenderOptions, mode: "document" as const }
+    : markdownRenderOptions;
+  return renderMarkdownText(markdown, isStreaming, renderOptions);
 }
 
 export function renderMarkdownText(

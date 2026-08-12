@@ -188,7 +188,7 @@ Isolated automation runs resolve the active model in this order:
 
 ### Fast mode
 
-Isolated automation fast mode follows the resolved live model selection. Model config `params.fastMode` applies by default, but a stored session `fastMode` override still wins over config. When the resolved mode is `auto`, the cutoff uses the selected model's `params.fastAutoOnSeconds` value, defaulting to 60 seconds.
+Isolated automation fast mode follows the resolved live model selection. It resolves stored session `fastMode`, per-agent `agents.entries.*.fastModeDefault`, global `agents.defaults.fastModeDefault`, then selected-model `params.fastMode`. When the resolved mode is `auto`, the cutoff uses the selected model's `params.fastAutoOnSeconds` value, defaulting to 60 seconds.
 
 ### Live model switch retries
 
@@ -216,7 +216,7 @@ The scheduler does not classify final-output prose or approval-looking refusal p
 
 Retention behavior:
 
-- `cron.sessionRetention` (default `24h`, or `false` to disable) prunes completed isolated run sessions.
+- `cron.sessionRetention` (default `24h`, or `false` to disable; a zero duration such as `"0h"` also disables) prunes completed isolated run sessions.
 - Run history keeps the newest 2000 terminal rows per job. Lost rows retain the standard 24-hour lost-task cleanup window.
 
 ## Migrating older jobs
@@ -293,18 +293,20 @@ Manual run and inspection:
 openclaw automations list
 openclaw automations list --agent ops
 openclaw automations get <job-id>
+openclaw automations get <job-id> --json
 openclaw automations show <job-id>
 openclaw automations run <job-id>
 openclaw automations run <job-id> --due
 openclaw automations run <job-id> --wait --wait-timeout 10m
 openclaw automations run <job-id> --wait --wait-timeout 10m --poll-interval 2s
 openclaw automations runs --id <job-id> --limit 50
+openclaw automations runs --id <job-id> --limit 50 --json
 openclaw automations runs --id <job-id> --run-id <run-id>
 ```
 
 `openclaw automations list` shows enabled jobs by default. Pass `--all` to include disabled jobs, or `--agent <id>` to show only jobs whose effective normalized agent id matches; jobs without a stored agent id count as the configured default agent.
 
-`openclaw automations get <job-id>` returns the stored job JSON directly. Use `automations show <job-id>` when you want the human-readable view with delivery-route preview.
+`openclaw automations get <job-id>` returns the stored job JSON directly. `get` and `runs` accept `--json` as the explicit machine-output spelling. Use `automations show <job-id>` when you want the human-readable view with delivery-route preview.
 
 `automations list --json` and `automations show <job-id> --json` include a top-level `status` field on each job, computed from `enabled`, `state.runningAtMs`, and `state.lastRunStatus`. Values: `disabled`, `running`, `ok`, `error`, `skipped`, or `idle`. JSON status stays canonical and undecorated so external tooling can read job state without re-deriving it; human output may decorate repeated `error` statuses with a failure count.
 

@@ -8,7 +8,7 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  listSessionEntries: () =>
+  listSessionEntriesCore: () =>
     Object.entries(hoisted.store).map(([sessionKey, entry]) => ({
       sessionKey,
       entry,
@@ -16,7 +16,7 @@ vi.mock("../../config/sessions/session-accessor.js", () => ({
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
-  resolveStorePath: () => "/stores/main.json",
+  resolveSessionStorePathCore: () => "/stores/main.json",
 }));
 
 vi.mock("../../config/sessions/lifecycle.js", async () => {

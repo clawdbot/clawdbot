@@ -1,4 +1,4 @@
-import { patchSessionEntry } from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { captureSessionDiffBaseline } from "./session-diff.js";
 
@@ -25,7 +25,7 @@ export async function ensureSessionDiffBaseline(params: {
   if (!baseline) {
     return params.entry;
   }
-  const persisted = await patchSessionEntry(
+  const persisted = await patchSessionEntryCore(
     { sessionKey: params.sessionKey, storePath: params.storePath },
     (current) => {
       if (

@@ -1,6 +1,6 @@
 // Tests for CLI message text formatting helpers (renderMessageList, formatMessageCliText).
 import { describe, expect, it, vi } from "vitest";
-import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
+import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
 import { formatMessageCliText } from "./message-format.js";
 
 const getChannelPluginMock = vi.hoisted(() =>
@@ -99,6 +99,17 @@ describe("formatMessageCliText displayLimit", () => {
     expect(out).not.toContain("search-15");
   });
 
+  it.each([0, 1])(
+    "renders an explicit outcome for a search with no results (total: %i)",
+    (totalResults) => {
+      const result = searchResultPayload({
+        results: { messages: [], total_results: totalResults },
+      });
+
+      expect(formatMessageCliText(result)).toEqual(["Search results", "No results."]);
+    },
+  );
+
   it("defaults to 25 when no displayLimit is provided", () => {
     const messages = Array.from({ length: 50 }, (_, i) =>
       msg(`id-${i}`, `2026-01-01T00:00:0${i % 10}.000Z`, `user-${i}`, `text-${i}`),
@@ -153,30 +164,32 @@ describe("renderPaginationHint", () => {
     expect(out).toContain("More results available");
   });
 
-  it("emits hint when search results has hasMore without total_results", () => {
-    const messages = [msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello")];
-    // hasMore: true inside results — Discord does not always include total_results.
-    const wrapped = messages.map((m) => [m]);
+  it.each([0, 1])("preserves explicit search continuation with %i returned messages", (count) => {
+    const messages = Array.from({ length: count }, (_, index) =>
+      msg(`id-${index}`, "2026-01-01T00:00:00.000Z", "alice", "hello"),
+    );
     const result = searchResultPayload({
-      results: { messages: wrapped, hasMore: true },
+      results: { messages: messages.map((message) => [message]), hasMore: true },
     });
-    const out = textJoined(formatMessageCliText(result, { displayLimit: 5 }));
 
-    expect(out).toContain("More results available");
+    expect(textJoined(formatMessageCliText(result, { displayLimit: 5 }))).toContain(
+      "More results available",
+    );
   });
 
-  it("emits hint when total_results exceeds returned count (Discord search)", () => {
-    const messages = [msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello")];
-    // Discord search wraps messages and total_results inside a results object.
-    // total_results: 200 with 1 returned message → 199 more exist.
-    const wrapped = messages.map((m) => [m]);
-    const result = searchResultPayload({
-      results: { messages: wrapped, total_results: 200 },
-    });
-    const out = textJoined(formatMessageCliText(result, { displayLimit: 5 }));
+  it.each([2, 200])(
+    "does not infer more search results from approximate total %i",
+    (totalResults) => {
+      const message = msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello");
+      const result = searchResultPayload({
+        results: { messages: [[message]], total_results: totalResults },
+      });
 
-    expect(out).toContain("More results available");
-  });
+      expect(textJoined(formatMessageCliText(result, { displayLimit: 5 }))).not.toContain(
+        "More results available",
+      );
+    },
+  );
 
   it("does NOT emit hint when total_results equals returned count (completed search)", () => {
     const messages = [
@@ -227,7 +240,7 @@ describe("formatMessageCliText poll results", () => {
           pollId: "poll-1",
         },
       },
-    } satisfies MessageActionRunResult;
+    } satisfies MessageActionResult;
 
     expect(formatMessageCliText(result)).toEqual([
       "✅ Poll sent via Direct Chat. Message ID: p1 (conversation conv-1)",

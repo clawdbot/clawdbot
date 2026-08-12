@@ -1,16 +1,16 @@
 /** Builds bounded, redacted diagnostics for cron run logs and UI surfaces. */
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
-import { normalizeToolName as normalizePolicyToolName } from "../agents/tool-policy.js";
+import { normalizeToolPolicyName as normalizePolicyToolName } from "../agents/tool-policy.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import {
   formatUnknownError,
-  isRecord,
   normalizeCronRunDiagnosticSummary,
-  normalizeCronRunDiagnostics as normalizeCronRunDiagnosticsValue,
+  normalizeCronRunDiagnosticsCore as normalizeCronRunDiagnosticsValue,
   normalizeExitCode,
-  normalizeToolName,
+  normalizeDiagnosticToolName,
   tailText,
 } from "./run-diagnostics-normalize.js";
 import type {
@@ -165,16 +165,17 @@ function createCronRunDiagnosticsFromExecDetails(
     finalStatus?: "ok" | "error" | "skipped";
   },
 ): CronRunDiagnostics | undefined {
-  if (!isRecord(details)) {
+  const record = asOptionalObjectRecord(details);
+  if (!record) {
     return undefined;
   }
-  const status = typeof details.status === "string" ? details.status : undefined;
-  const exitCode = normalizeExitCode(details.exitCode);
+  const status = typeof record.status === "string" ? record.status : undefined;
+  const exitCode = normalizeExitCode(record.exitCode);
   const relevant = status === "failed" || (typeof exitCode === "number" && exitCode !== 0);
   if (!relevant) {
     return undefined;
   }
-  const aggregated = normalizeOptionalString(details.aggregated);
+  const aggregated = normalizeOptionalString(record.aggregated);
   const message = aggregated
     ? tailText(aggregated, EXEC_DIAGNOSTIC_TAIL_CHARS)
     : typeof exitCode === "number"
@@ -203,20 +204,22 @@ function createCronRunDiagnosticsFromToolPayload(
   payload: unknown,
   opts?: { nowMs?: () => number; finalStatus?: "ok" | "error" | "skipped" },
 ): CronRunDiagnostics | undefined {
-  if (!isRecord(payload)) {
+  const record = asOptionalObjectRecord(payload);
+  if (!record) {
     return undefined;
   }
-  const toolName = normalizeToolName(payload.toolName) ?? normalizeToolName(payload.name);
-  const detailsDiagnostics = createCronRunDiagnosticsFromExecDetails(payload.details, {
+  const toolName =
+    normalizeDiagnosticToolName(record.toolName) ?? normalizeDiagnosticToolName(record.name);
+  const detailsDiagnostics = createCronRunDiagnosticsFromExecDetails(record.details, {
     nowMs: opts?.nowMs,
     toolName,
     finalStatus: opts?.finalStatus,
   });
-  const isError = payload.isError === true;
-  const text = typeof payload.text === "string" ? payload.text : undefined;
+  const isError = record.isError === true;
+  const text = typeof record.text === "string" ? record.text : undefined;
   const isNonTerminalToolWarning =
     opts?.finalStatus === "ok" &&
-    getReplyPayloadMetadata(payload)?.nonTerminalToolErrorWarning === true;
+    getReplyPayloadMetadata(record)?.nonTerminalToolErrorWarning === true;
   const textDiagnostics =
     isError && text
       ? createCronRunDiagnosticsFromError("tool", text, {
@@ -233,7 +236,7 @@ export function createCronRunDiagnosticsFromAgentResult(
   result: unknown,
   opts?: { nowMs?: () => number; finalStatus?: "ok" | "error" | "skipped" },
 ): CronRunDiagnostics | undefined {
-  const record = isRecord(result) ? result : {};
+  const record = asOptionalObjectRecord(result) ?? {};
   const meta =
     record.meta && typeof record.meta === "object" ? (record.meta as Record<string, unknown>) : {};
   const diagnostics: Array<CronRunDiagnostics | undefined> = [];

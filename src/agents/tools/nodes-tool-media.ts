@@ -6,6 +6,7 @@
 import crypto from "node:crypto";
 import { extnameFromAnyPath } from "@openclaw/media-core/file-name";
 import { imageMimeFromFormat } from "@openclaw/media-core/mime";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -40,7 +41,7 @@ import {
 } from "./common.js";
 import type { GatewayCallOptions } from "./gateway.js";
 import { callGatewayTool } from "./gateway.js";
-import { resolveNode, resolveNodeId } from "./nodes-utils.js";
+import { resolveAgentNode, resolveAgentNodeId } from "./nodes-utils.js";
 
 export const MEDIA_INVOKE_ACTIONS = {
   "camera.snap": "camera_snap",
@@ -120,6 +121,29 @@ export async function executeNodeMediaAction(
   throw new Error("Unsupported node media action");
 }
 
+async function sanitizeNodePhotoResult(params: {
+  kind: "snaps" | "photos";
+  content: AgentToolResult<unknown>["content"];
+  details: Array<Record<string, unknown>>;
+  imageSanitization: ImageSanitizationLimits;
+}): Promise<AgentToolResult<unknown>> {
+  if (params.details.length === 0) {
+    params.content.push({ type: "text", text: "No photos found." });
+  }
+  const mediaUrls = params.details
+    .map((entry) => entry.path)
+    .filter((entry): entry is string => typeof entry === "string");
+  return await sanitizeToolResultImages(
+    {
+      content: params.content,
+      details:
+        params.details.length > 0 ? { [params.kind]: params.details, media: { mediaUrls } } : [],
+    },
+    params.kind === "snaps" ? "nodes:camera_snap" : "nodes:photos_latest",
+    params.imageSanitization,
+  );
+}
+
 async function executeCameraSnap({
   params,
   gatewayOpts,
@@ -127,7 +151,7 @@ async function executeCameraSnap({
   imageSanitization,
 }: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
   const node = requireString(params, "node");
-  const resolvedNode = await resolveNode(gatewayOpts, node);
+  const resolvedNode = await resolveAgentNode(gatewayOpts, node);
   const nodeId = resolvedNode.nodeId;
   const facingRaw = normalizeLowercaseStringOrEmpty(params.facing) || "front";
   const facing =
@@ -198,6 +222,8 @@ async function executeCameraSnap({
         data: payload.base64,
         mimeType: imageMimeFromFormat(payload.format) ?? (isJpeg ? "image/jpeg" : "image/png"),
       });
+    } else {
+      content.push({ type: "text", text: `Camera photo saved to ${filePath}.` });
     }
     details.push({
       facing: target.artifactFacing,
@@ -207,21 +233,7 @@ async function executeCameraSnap({
     });
   }
 
-  return await sanitizeToolResultImages(
-    {
-      content,
-      details: {
-        snaps: details,
-        media: {
-          mediaUrls: details
-            .map((entry) => entry.path)
-            .filter((path): path is string => typeof path === "string"),
-        },
-      },
-    },
-    "nodes:camera_snap",
-    imageSanitization,
-  );
+  return await sanitizeNodePhotoResult({ kind: "snaps", content, details, imageSanitization });
 }
 
 async function executePhotosLatest({
@@ -231,7 +243,7 @@ async function executePhotosLatest({
   imageSanitization,
 }: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
   const node = requireString(params, "node");
-  const resolvedNode = await resolveNode(gatewayOpts, node);
+  const resolvedNode = await resolveAgentNode(gatewayOpts, node);
   const nodeId = resolvedNode.nodeId;
   const limit = Math.min(
     readPositiveIntegerParam(params, "limit") ?? DEFAULT_PHOTOS_LIMIT,
@@ -254,32 +266,30 @@ async function executePhotosLatest({
     },
     idempotencyKey: crypto.randomUUID(),
   });
-  const payload =
-    raw?.payload && typeof raw.payload === "object" && !Array.isArray(raw.payload)
-      ? (raw.payload as Record<string, unknown>)
-      : {};
-  const photos = Array.isArray(payload.photos) ? payload.photos : [];
-
-  if (photos.length === 0) {
-    return await sanitizeToolResultImages(
-      {
-        content: [],
-        details: [],
-      },
-      "nodes:photos_latest",
-      imageSanitization,
+  const payload = raw?.payload;
+  if (!isRecord(payload) || !Array.isArray(payload.photos)) {
+    throw new Error("invalid photos.latest payload");
+  }
+  if (payload.photos.length > limit) {
+    throw new Error(
+      `photos.latest returned ${payload.photos.length} photos; requested at most ${limit}`,
     );
   }
 
   const content: AgentToolResult<unknown>["content"] = [];
   const details: Array<Record<string, unknown>> = [];
 
-  for (const [index, photoRaw] of photos.entries()) {
+  // Reject every malformed batch member before creating any capture artifact.
+  const photos = payload.photos.map((photoRaw) => {
     const photo = parseCameraSnapPayload(photoRaw);
     const normalizedFormat = normalizeLowercaseStringOrEmpty(photo.format);
     if (normalizedFormat !== "jpg" && normalizedFormat !== "jpeg" && normalizedFormat !== "png") {
       throw new Error(`unsupported photos.latest format: ${photo.format}`);
     }
+    return { photoRaw, photo, normalizedFormat };
+  });
+
+  for (const [index, { photoRaw, photo, normalizedFormat }] of photos.entries()) {
     const isJpeg = normalizedFormat === "jpg" || normalizedFormat === "jpeg";
     const filePath = cameraTempPath({
       kind: "snap",
@@ -299,12 +309,11 @@ async function executePhotosLatest({
         data: photo.base64,
         mimeType: imageMimeFromFormat(photo.format) ?? (isJpeg ? "image/jpeg" : "image/png"),
       });
+    } else {
+      content.push({ type: "text", text: `Library photo saved to ${filePath}.` });
     }
 
-    const createdAt =
-      photoRaw && typeof photoRaw === "object" && !Array.isArray(photoRaw)
-        ? (photoRaw as Record<string, unknown>).createdAt
-        : undefined;
+    const createdAt = isRecord(photoRaw) ? photoRaw.createdAt : undefined;
     details.push({
       index,
       path: filePath,
@@ -314,21 +323,7 @@ async function executePhotosLatest({
     });
   }
 
-  return await sanitizeToolResultImages(
-    {
-      content,
-      details: {
-        photos: details,
-        media: {
-          mediaUrls: details
-            .map((entry) => entry.path)
-            .filter((path): path is string => typeof path === "string"),
-        },
-      },
-    },
-    "nodes:photos_latest",
-    imageSanitization,
-  );
+  return await sanitizeNodePhotoResult({ kind: "photos", content, details, imageSanitization });
 }
 
 async function executeCameraClip({
@@ -336,7 +331,7 @@ async function executeCameraClip({
   gatewayOpts,
 }: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
   const node = requireString(params, "node");
-  const resolvedNode = await resolveNode(gatewayOpts, node);
+  const resolvedNode = await resolveAgentNode(gatewayOpts, node);
   const nodeId = resolvedNode.nodeId;
   const facing = normalizeLowercaseStringOrEmpty(params.facing) || "front";
   if (facing !== "front" && facing !== "back") {
@@ -389,7 +384,7 @@ async function executeScreenRecord({
   gatewayOpts,
 }: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
   const node = requireString(params, "node");
-  const nodeId = await resolveNodeId(gatewayOpts, node);
+  const nodeId = await resolveAgentNodeId(gatewayOpts, node);
   const durationMs = Math.min(
     readPositiveIntegerParam(params, "durationMs") ??
       (typeof params.duration === "string" ? parseDurationMs(params.duration) : 10_000),
@@ -440,7 +435,7 @@ async function executeScreenSnapshot({
   gatewayOpts,
 }: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
   const node = requireString(params, "node");
-  const nodeId = await resolveNodeId(gatewayOpts, node);
+  const nodeId = await resolveAgentNodeId(gatewayOpts, node);
   const screenIndex = readNonNegativeIntegerParam(params, "screenIndex") ?? 0;
   const maxWidth = readPositiveIntegerParam(params, "maxWidth");
   const outPath = normalizeOptionalString(params.outPath);

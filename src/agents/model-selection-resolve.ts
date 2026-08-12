@@ -25,14 +25,18 @@ export {
   resolveModelRefFromString,
 } from "./model-selection-shared.js";
 
-function resolveDefaultFallbackModels(cfg: OpenClawConfig, agentId?: string): string[] {
-  if (agentId) {
-    const override = resolveAgentModelFallbacksOverride(cfg, agentId);
+/** Resolve agent-owned fallback overrides without loading the full selection facade. */
+export function resolveConfiguredModelFallbacks(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+}): string[] {
+  if (params.agentId) {
+    const override = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
     if (override !== undefined) {
       return override;
     }
   }
-  return resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
+  return resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
 }
 
 /** Returns whether a normalized model ref is available, allowed, or fallback-backed. */
@@ -54,13 +58,13 @@ export function getModelRefStatus(
     defaultProvider,
     defaultModel,
     agentId,
-    fallbackModels: resolveDefaultFallbackModels(cfg, agentId),
+    fallbackModels: resolveConfiguredModelFallbacks({ cfg, agentId }),
     manifestPlugins,
   });
 }
 
 /** Resolves a raw model string into an allowed model ref or an explanatory error. */
-export function resolveAllowedModelRef(
+export function resolveAllowedModelRefCore(
   params: {
     cfg: OpenClawConfig;
     catalog: ModelCatalogEntry[];

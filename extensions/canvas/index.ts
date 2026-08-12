@@ -41,6 +41,7 @@ function createLazyCanvasTool(params: {
   return {
     label: "Canvas",
     name: "canvas",
+    resultContentSource: "network",
     description:
       "Control node canvases (present/hide/navigate/eval/snapshot/A2UI). Use snapshot to capture the rendered UI.",
     parameters: CanvasToolSchema,
@@ -116,10 +117,7 @@ export default definePluginEntry({
       defaultPlatforms: ["ios", "android", "macos", "windows", "linux", "unknown"],
       foregroundRestrictedOnIos: true,
       handle: async (ctx) => {
-        const params =
-          ctx.params && typeof ctx.params === "object" && !Array.isArray(ctx.params)
-            ? (ctx.params as Record<string, unknown>)
-            : {};
+        const params = asNonArrayRecord(ctx.params);
         // Native nodes also accept JSONL under `push` when messages[] is absent.
         // Validate that fallback here so callers cannot bypass the JSONL policy.
         const usesJsonl =
@@ -167,3 +165,4 @@ export default definePluginEntry({
     );
   },
 });
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";

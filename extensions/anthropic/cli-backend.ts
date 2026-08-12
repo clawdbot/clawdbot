@@ -11,6 +11,7 @@ import {
   CLI_FRESH_WATCHDOG_DEFAULTS,
   CLI_RESUME_WATCHDOG_DEFAULTS,
 } from "openclaw/plugin-sdk/cli-backend";
+import { parseClaudeCliJsonlEvent } from "./cli-output.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
@@ -135,6 +136,14 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       entrypoint: "command",
       nativeExecutableNames: ["claude", "claude.exe"],
     },
+    // Claude Code 2.1.206 first shipped per-input lifecycle correlation. The
+    // runtime checks the advertised capability so backports and wrappers work.
+    liveSessionRequirement: {
+      capability: "msg_lifecycle_v1",
+      minimumVersion: "2.1.206",
+      versionArgs: ["--version"],
+      updateCommand: "claude update",
+    },
     bundleMcp: true,
     bundleMcpMode: "claude-config-file",
     nativeToolMode: "selectable",
@@ -229,6 +238,7 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
           }
         : undefined;
     },
+    parseJsonlEvent: parseClaudeCliJsonlEvent,
     resolveExecutionArgs: resolveClaudeCliExecutionArgs,
   };
 }

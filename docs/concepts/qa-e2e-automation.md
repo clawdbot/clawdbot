@@ -685,8 +685,9 @@ Slack YAML module scenarios (`qa/scenarios/channels/slack-*.yaml`):
 
 - `slack-canary`
 - `slack-mention-gating`
-- `slack-mpim-app-mention-dedupe` - opens a real C-prefixed group DM, sends one
-  mention, verifies exactly one SUT reply in that MPIM, then closes it.
+- `slack-mpim-app-mention-dedupe` - opens a real C-prefixed group DM, verifies
+  exactly one SUT reply after message/app-mention twin delivery, confirms a
+  native threaded follow-up can recall that bot reply, then closes the MPIM.
 - `slack-allowlist-block`
 - `slack-channel-disabled-warning` - opt-in real-Slack probe that confirms a
   configured disabled channel emits a structured warning without replying.
@@ -723,7 +724,7 @@ Slack YAML module scenarios (`qa/scenarios/channels/slack-*.yaml`):
   scenario. Enables the Codex plugin in Guardian mode, routes a
   Slack-originated Gateway agent turn through the Codex app-server harness,
   waits for the native Slack plugin approval prompt for
-  `openclaw-codex-app-server`, resolves it, and verifies the Codex turn
+  `codex`, resolves it, and verifies the Codex turn
   finishes with the expected command-output and assistant markers.
 - `slack-codex-approval-plugin-native` - opt-in Codex Guardian file approval
   scenario. Uses an outside-workspace `apply_patch` instruction so Codex emits
@@ -1229,12 +1230,16 @@ The minimum adoption bar for a new channel:
 4. Mount the runner as `openclaw qa <runner>` instead of registering a
    competing root command. Runner plugins should declare `qaRunners` in
    `openclaw.plugin.json` and export a matching `qaRunnerCliRegistrations`
-   array from `runtime-api.ts`. Keep `runtime-api.ts` light; lazy CLI and
-   runner execution should stay behind separate entrypoints. An optional
-   `adapterFactory` exposes the transport to shared scenarios without changing
-   the command's existing scenario catalog. Same-channel partitions are serial
-   unless the factory declares that every instance owns isolated credentials or
-   disposable servers, Gateway state, and artifact paths.
+   array from a lightweight `qa-runner-api.ts` surface. Installed plugins using
+   the shipped `runtime-api.ts` contract remain supported through 2026-10-01
+   while authors migrate. Keep runner execution behind lazy entrypoints. An
+   optional `adapterFactory` exposes the transport to shared scenarios without
+   changing the command's existing scenario catalog. Same-channel partitions
+   are serial unless the factory declares that every instance owns isolated
+   credentials or disposable servers, Gateway state, and artifact paths.
+   Module-backed flow scenarios additionally require
+   `adapterFactory.supportsModuleFlows: true`; those factories must return
+   adapters that implement `prepareFlow`.
 5. Author or adapt YAML scenarios under the themed `qa/scenarios/`
    directories.
 6. Use the generic scenario helpers for new scenarios.

@@ -7,7 +7,7 @@ import {
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { listSessionEntryKeysReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -53,7 +53,10 @@ export function listSandboxWorkspaceDirs(params: {
     const sessionKeys = listSessionEntryKeysReadOnly({
       agentId,
       env: params.env,
-      storePath: resolveStorePath(params.cfg.session?.store, { agentId, env: params.env }),
+      storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
+        agentId,
+        env: params.env,
+      }),
     });
     for (const sessionKey of sessionKeys) {
       const sessionAgentId = parseAgentSessionKey(sessionKey)?.agentId;

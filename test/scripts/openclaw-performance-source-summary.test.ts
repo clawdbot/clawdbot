@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildMarkdown, parseArgs } from "../../scripts/openclaw-performance-source-summary.mjs";
+import { buildMarkdown, parseArgs } from "../../scripts/openclaw-performance-source-summary.mts";
 
 const tmpRoots: string[] = [];
 
@@ -19,10 +19,14 @@ function writeJson(filePath: string, value: unknown) {
 }
 
 function runCli(...args: string[]) {
-  return spawnSync(process.execPath, ["scripts/openclaw-performance-source-summary.mjs", ...args], {
-    cwd: path.resolve("."),
-    encoding: "utf8",
-  });
+  return spawnSync(
+    process.execPath,
+    ["--import", "tsx", "scripts/openclaw-performance-source-summary.mts", ...args],
+    {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+    },
+  );
 }
 
 function expectNoNodeStack(stderr: string) {
@@ -73,6 +77,9 @@ function writeSourceFixture(sourceDir: string) {
     },
   });
   writeJson(path.join(sourceDir, "extension-memory.json"), {
+    baseline: { maxRssMb: 50, status: "ok" },
+    combined: { maxRssMb: 180, status: "ok" },
+    counts: { totalEntries: 12 },
     topByDeltaMb: [
       { dir: "extensions/browser", maxRssMb: 80, deltaFromBaselineMb: 12, status: "ok" },
     ],
@@ -171,6 +178,13 @@ describe("buildMarkdown", () => {
     expect(buildMarkdown(sourceDir, null)).not.toContain("phase.load.total");
     expect(buildMarkdown(sourceDir, null)).not.toContain("phase.load.itemCount");
     expect(buildMarkdown(sourceDir, null)).not.toContain("memory.ready.heapUsedMb");
+    expect(buildMarkdown(sourceDir, null)).toContain(
+      "Per-plugin rows are isolated cold imports and are not additive.",
+    );
+    expect(buildMarkdown(sourceDir, null)).toContain(
+      "| all 12 bundled plugins | 180.0MB | 130.0MB | ok |",
+    );
+    expect(buildMarkdown(sourceDir, null)).toContain("isolated delta from empty process");
   });
 
   it("rejects a missing source directory", () => {
@@ -227,6 +241,20 @@ describe("buildMarkdown", () => {
 
     expect(() => buildMarkdown(sourceDir, null)).toThrow(
       "[source-performance] incomplete gateway startup metrics for default:",
+    );
+  });
+
+  it("rejects extension memory artifacts without combined-process context", () => {
+    const sourceDir = mkTmpRoot();
+    writeSourceFixture(sourceDir);
+    writeJson(path.join(sourceDir, "extension-memory.json"), {
+      topByDeltaMb: [
+        { dir: "extensions/browser", maxRssMb: 80, deltaFromBaselineMb: 12, status: "ok" },
+      ],
+    });
+
+    expect(() => buildMarkdown(sourceDir, null)).toThrow(
+      "[source-performance] incomplete extension memory context:",
     );
   });
 

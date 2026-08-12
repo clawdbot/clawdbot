@@ -3,6 +3,11 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  loadControlUiTranslationMemory,
+  materializeControlUiLocaleCatalog,
+  mergeControlUiTranslationMaps,
+} from "./lib/control-ui-i18n-catalog.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 import { syncControlUiRawCopyBaseline } from "./lib/control-ui-i18n-raw-copy.ts";
 import type { TranslationMap } from "./lib/control-ui-i18n-sync-plan.ts";
@@ -17,6 +22,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const LOCALES_DIR = path.join(ROOT, "ui", "src", "i18n", "locales");
 const I18N_ASSETS_DIR = path.join(ROOT, "ui", "src", "i18n", ".i18n");
 const SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en.ts");
+const ACTIVITY_SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en-activity.ts");
 const FALLBACK_BASELINE_PATH = path.join(I18N_ASSETS_DIR, "catalog-fallbacks.json");
 const FALLBACK_BASELINE_VERSION = 1;
 
@@ -48,8 +54,24 @@ async function loadLocaleMap(filePath: string, exportName: string): Promise<Tran
   return mod[exportName] ?? null;
 }
 
-function localeFilePath(fileName: string): string {
-  return path.join(LOCALES_DIR, fileName);
+async function loadSourceLocaleMap(): Promise<TranslationMap> {
+  const source = await loadLocaleMap(SOURCE_LOCALE_PATH, "en");
+  const activitySource = (
+    await importLocaleModule<{
+      registerActivityEnglish: { catalog: TranslationMap };
+    }>(ACTIVITY_SOURCE_LOCALE_PATH)
+  ).registerActivityEnglish.catalog;
+  if (!source || !activitySource) {
+    throw new Error("Control UI English source catalogs are incomplete");
+  }
+  return mergeControlUiTranslationMaps(source, activitySource);
+}
+
+async function readSourceLocaleRaw(): Promise<string> {
+  const sources = await Promise.all(
+    [SOURCE_LOCALE_PATH, ACTIVITY_SOURCE_LOCALE_PATH].map((filePath) => readFile(filePath, "utf8")),
+  );
+  return sources.join("\n");
 }
 
 function extractPlaceholders(text: string): string[] {
@@ -136,19 +158,19 @@ async function buildCatalogFallbackBaseline(
     allowCatalogDrift?: boolean;
   } = {},
 ): Promise<CatalogFallbackBaseline> {
-  const sourceRaw = await readFile(SOURCE_LOCALE_PATH, "utf8");
-  const sourceMap = await loadLocaleMap(SOURCE_LOCALE_PATH, "en");
-  if (!sourceMap) {
-    throw new Error("ui/src/i18n/locales/en.ts does not export en");
-  }
+  const sourceRaw = await readSourceLocaleRaw();
+  const sourceMap = await loadSourceLocaleMap();
   const sourceFlat = flattenControlUiCatalog(sourceMap, "en");
   const localeFlats = new Map<string, Map<string, string>>();
   for (const entry of CONTROL_UI_LOCALE_ENTRIES) {
-    const filePath = localeFilePath(entry.fileName);
-    const localeMap = await loadLocaleMap(filePath, entry.exportName);
-    if (!localeMap) {
-      throw new Error(`${toRepoPath(filePath)} does not export ${entry.exportName}`);
+    const memoryPath = path.join(I18N_ASSETS_DIR, `${entry.locale}.tm.jsonl`);
+    if (!existsSync(memoryPath)) {
+      throw new Error(`${toRepoPath(memoryPath)} does not contain ${entry.locale} translations`);
     }
+    const localeMap = materializeControlUiLocaleCatalog(
+      sourceFlat,
+      loadControlUiTranslationMemory(memoryPath),
+    );
     localeFlats.set(entry.locale, flattenControlUiCatalog(localeMap, entry.locale));
   }
 
@@ -188,10 +210,7 @@ function printCatalogFallbackSummary(baseline: CatalogFallbackBaseline) {
 }
 
 async function verifyControlUiSourceCatalogShape() {
-  const sourceMap = await loadLocaleMap(SOURCE_LOCALE_PATH, "en");
-  if (!sourceMap) {
-    throw new Error("ui/src/i18n/locales/en.ts does not export en");
-  }
+  const sourceMap = await loadSourceLocaleMap();
   const sourceFlat = flattenControlUiCatalog(sourceMap, "en");
   process.stdout.write(`control-ui-i18n: source: keys=${sourceFlat.size}\n`);
 }

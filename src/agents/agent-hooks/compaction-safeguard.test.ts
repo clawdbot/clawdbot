@@ -1,10 +1,11 @@
-/** Tests compaction safeguard summaries, quality audit, providers, and runtime settings. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { AgentMessage, StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ExtensionAPI, ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
+/** Tests compaction safeguard summaries, quality audit, providers, and runtime settings. */
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -230,12 +231,7 @@ function latestMockCallArg(
   return mockCallArg(mock, mock.mock.calls.length - 1, argIndex);
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-record");
 
 function requireArray(value: unknown): unknown[] {
   if (!Array.isArray(value)) {
@@ -1096,6 +1092,20 @@ describe("compaction-safeguard recent-turn preservation", () => {
     ).toBe(1);
   });
 
+  it("keeps valid host/port identifiers after a long non-identifier token", () => {
+    const identifiers = extractOpaqueIdentifiers(
+      `${"x".repeat(120_000)} host.local:18789 ` +
+        "api.example.com/v1:443 127.0.0.1:8080 sub-domain.example.test:65535",
+    );
+
+    expect(identifiers).toStrictEqual([
+      "host.local:18789",
+      "api.example.com/v1:443",
+      "127.0.0.1:8080",
+      "sub-domain.example.test:65535",
+    ]);
+  });
+
   it("dedupes identifiers before applying the result cap", () => {
     const noisyPrefix = Array.from({ length: 10 }, () => "a0b0c0d0").join(" ");
     const uniqueTail = Array.from(
@@ -1439,9 +1449,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
   });
 
   it("does not force policy-off marker in fallback exact identifiers section", () => {
-    const summary = buildStructuredFallbackSummary(undefined, {
-      identifierPolicy: "off",
-    });
+    const summary = buildStructuredFallbackSummary(undefined);
     expect(summary).toContain("## Exact identifiers");
     expect(summary).toContain("None captured.");
     expect(summary).not.toContain("N/A (identifier policy off).");
@@ -2143,6 +2151,9 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(summary).toContain("latest ask status");
     expect(summary).toContain("latest assistant reply");
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(3);
+    expect(requireRecord(mockCallArg(mockSummarizeInStages, 1)).customInstructions).toContain(
+      "Additional requirements:",
+    );
   });
 
   it("keeps required headings when all turns are preserved and history is carried forward", async () => {
@@ -2845,70 +2856,86 @@ describe("compaction-safeguard double-compaction guard", () => {
     ).toBe(true);
   });
 
-  it("does not replay inter-session sessions_send branch turns as fallback history", async () => {
-    mockSummarizeInStages.mockReset();
-    mockSummarizeInStages.mockResolvedValue(summaryResult("branch summary"));
+  it.each([
+    { assistantText: "bee reply", completed: true },
+    { assistantText: " \t\n ", completed: false },
+  ])(
+    "drops delegated branch turns only after meaningful terminal output ($completed)",
+    async ({ assistantText, completed }) => {
+      mockSummarizeInStages.mockReset();
+      mockSummarizeInStages.mockResolvedValue(summaryResult("branch summary"));
 
-    const now = Date.now();
-    const sessionManager = {
-      ...stubSessionManager(),
-      getBranch: () => [
-        {
-          type: "message",
-          id: "user-1",
-          parentId: null,
-          timestamp: new Date(now).toISOString(),
-          message: {
-            role: "user",
-            content: "say bee",
-            provenance: {
-              kind: "inter_session",
-              sourceSessionKey: "agent:pm",
-              sourceTool: "sessions_send",
+      const now = Date.now();
+      const sessionManager = {
+        ...stubSessionManager(),
+        getBranch: () => [
+          {
+            type: "message",
+            id: "user-1",
+            parentId: null,
+            timestamp: new Date(now).toISOString(),
+            message: {
+              role: "user",
+              content: "say bee",
+              provenance: {
+                kind: "inter_session",
+                sourceSessionKey: "agent:pm",
+                sourceTool: "sessions_send",
+              },
+              timestamp: now,
             },
-            timestamp: now,
           },
-        },
-        {
-          type: "message",
-          id: "assistant-1",
-          parentId: "user-1",
-          timestamp: new Date(now + 1).toISOString(),
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "bee reply" }],
-            timestamp: now + 1,
+          {
+            type: "message",
+            id: "assistant-1",
+            parentId: "user-1",
+            timestamp: new Date(now + 1).toISOString(),
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: assistantText }],
+              timestamp: now + 1,
+            },
           },
+        ],
+      } as ExtensionContext["sessionManager"];
+      const model = createAnthropicModelFixture();
+      setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+      const mockEvent = {
+        preparation: {
+          messagesToSummarize: [] as AgentMessage[],
+          turnPrefixMessages: [] as AgentMessage[],
+          firstKeptEntryId: "entry-7",
+          tokensBefore: 38085,
+          fileOps: { read: [], edited: [], written: [] },
+          settings: { reserveTokens: 4000 },
+          isSplitTurn: true,
         },
-      ],
-    } as ExtensionContext["sessionManager"];
-    const model = createAnthropicModelFixture();
-    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+        customInstructions: "",
+        signal: new AbortController().signal,
+      };
+      const { result, getApiKeyAndHeadersMock } = await runCompactionScenario({
+        sessionManager,
+        event: mockEvent,
+        apiKey: "dummy",
+      });
 
-    const mockEvent = {
-      preparation: {
-        messagesToSummarize: [] as AgentMessage[],
-        turnPrefixMessages: [] as AgentMessage[],
-        firstKeptEntryId: "entry-7",
-        tokensBefore: 38085,
-        fileOps: { read: [], edited: [], written: [] },
-        settings: { reserveTokens: 4000 },
-        isSplitTurn: true,
-      },
-      customInstructions: "",
-      signal: new AbortController().signal,
-    };
-    const { result, getApiKeyAndHeadersMock } = await runCompactionScenario({
-      sessionManager,
-      event: mockEvent,
-      apiKey: "dummy",
-    });
-
-    const compaction = expectCompactionResult(result);
-    expect(compaction.summary).toContain("No prior history.");
-    expect(mockSummarizeInStages).not.toHaveBeenCalled();
-    expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
-  });
+      const compaction = expectCompactionResult(result);
+      if (completed) {
+        expect(compaction.summary).toContain("No prior history.");
+        expect(mockSummarizeInStages).not.toHaveBeenCalled();
+        expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
+        return;
+      }
+      expect(compaction.summary).toContain("branch summary");
+      expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+      expect(getApiKeyAndHeadersMock).toHaveBeenCalledTimes(1);
+      const summarizeCall = requireRecord(mockCallArg(mockSummarizeInStages));
+      expect(
+        requireArray(summarizeCall.messages).map((message) => requireRecord(message).role),
+      ).toEqual(["user", "assistant"]);
+    },
+  );
 
   it.each([
     { toolName: "read", expectedRoles: ["user", "assistant", "toolResult"] },

@@ -67,10 +67,9 @@ observation side effects.
 
 Trigger eligibility is enforced by the host before it invokes the handler. A
 hook registered with `eligibleTriggers: ["heartbeat", "cron"]` is therefore
-inactive for user turns and does not block recovery of an interrupted user
-turn. Omitted, empty, malformed, or partly unknown lists remain unrestricted
-so dispatch and recovery fail closed. Other hook kinds do not accept this
-option.
+inactive for user turns, including a recovered user turn. Omitted, empty,
+malformed, or partly unknown lists remain unrestricted, so the hook runs for
+those turns. Other hook kinds do not accept this option.
 
 Operators can set hook budgets without patching plugin code:
 
@@ -191,6 +190,12 @@ turn with a synthetic reply or silence, use `before_agent_reply`.
 | `session_start` / `session_end`          | Track session lifecycle boundaries. `reason` is one of `new`, `reset`, `idle`, `daily`, `compaction`, `deleted`, `shutdown`, `restart`, or `unknown`. `shutdown`/`restart` fire from the Gateway shutdown finalizer when the process stops or restarts with active sessions, so plugins (memory, transcript stores) can finalize ghost rows instead of leaving them open across restarts. The finalizer is bounded so a slow plugin cannot block SIGTERM/SIGINT. |
 | `before_compaction` / `after_compaction` | Observe or annotate compaction cycles                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `before_reset`                           | Observe session-reset events (`/reset`, programmatic resets)                                                                                                                                                                                                                                                                                                                                                                                                     |
+
+Shutdown and restart share one **2-second total `session_end` drain budget**
+across all active sessions and plugin handlers; the budget is not per handler.
+Return quickly or keep finalization bounded and persistence crash-consistent.
+If the budget expires, OpenClaw logs `session-end-drain timed out` and continues
+shutdown, so unfinished plugin work can be interrupted.
 
 For `sessions.create` calls with `parentSessionKey` and `emitCommandHooks: true`, a distinct child always receives `session_start`. Callers declare whether the parent also receives terminal `session_end` with `succeedsParent`: `true` means successor, `false` means parallel child. Omission preserves the legacy parent-rollover behavior. The `command:new` and `before_reset` hooks still describe the requested `/new` action in both cases.
 
@@ -448,12 +453,12 @@ Load the file directly and restart the Gateway:
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "maintenance-agent",
+    entries: {
+      "maintenance-agent": {
+        default: true,
         workspace: "~/.openclaw/workspace-maintenance",
       },
-    ],
+    },
   },
   bindings: [
     {
@@ -750,7 +755,8 @@ Use message hooks for channel-level routing and delivery policy:
 
 - `message_received`: observe inbound content, sender, `threadId`,
   `messageId`, `senderId`, optional run/session correlation, ordered `media`,
-  and metadata.
+  normalized `location`, stable `providerUpdate` identity when supplied by the
+  channel, and metadata.
 - `message_sending`: rewrite `content` or return `{ cancel: true }`.
 - `reply_payload_sending`: rewrite normalized `ReplyPayload` objects
   (including `presentation`, `delivery`, media refs, and text) or return

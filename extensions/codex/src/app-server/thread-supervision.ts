@@ -1,7 +1,7 @@
 import {
   embeddedAgentLog,
   formatErrorMessage,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "../incognito-session.js";
 import {
@@ -43,6 +43,7 @@ import type { CodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timin
 import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle-types.js";
 import { buildDeveloperInstructions } from "./thread-prompt.js";
 import {
+  attestCodexRestrictedToolSurfaceMcpServersDisabled,
   buildCodexRuntimeThreadConfigForRun,
   buildThreadStartParams,
   codexThreadSandboxOrPermissions,
@@ -69,6 +70,9 @@ type PendingSupervisionMaterializationParams = {
   nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
   nativeCodeModeOnlyEnabled?: boolean;
   webSearchAllowed?: boolean;
+  hostSystemAgentActive: boolean;
+  restrictedToolSurface: boolean;
+  restrictedToolSurfaceInheritedMcpServerNames: string[];
   environmentSelection?: CodexTurnEnvironmentParams[];
   signal?: AbortSignal;
   provisionalAppIds?: readonly string[];
@@ -147,6 +151,16 @@ export async function materializePendingSupervisionBranch(
     pending = await trackPendingSupervisionArtifacts(params, pending, [probeThreadId]);
     params.throwIfAborted();
     const probeResponse = assertCodexThreadForkResponse(rawProbeResponse);
+    if (params.restrictedToolSurface) {
+      await params.lifecycleTiming.measure("restricted-tool-surface-mcp-attestation", () =>
+        attestCodexRestrictedToolSurfaceMcpServersDisabled(
+          params.client,
+          probeThreadId,
+          probeParams.config ?? undefined,
+          params.signal,
+        ),
+      );
+    }
     const nativeModel = requireNonBlankSupervisionValue(probeResponse.model, "native model");
     const nativeModelProvider = requireNativeSupervisionModelProvider({
       responseModelProvider: probeResponse.modelProvider,
@@ -167,6 +181,9 @@ export async function materializePendingSupervisionBranch(
       environmentSelection: params.environmentSelection,
       model: nativeModel,
       modelProvider: nativeModelProvider,
+      hostSystemAgentActive: params.hostSystemAgentActive,
+      restrictedToolSurfaceInheritedMcpServerNames:
+        params.restrictedToolSurfaceInheritedMcpServerNames,
     });
     assertExactSupervisionModelSelection(startParams, {
       model: nativeModel,
@@ -208,6 +225,16 @@ export async function materializePendingSupervisionBranch(
       modelProvider: nativeModelProvider,
       operation: "thread/start response",
     });
+    if (params.restrictedToolSurface) {
+      await params.lifecycleTiming.measure("restricted-tool-surface-mcp-attestation", () =>
+        attestCodexRestrictedToolSurfaceMcpServersDisabled(
+          params.client,
+          finalThreadId,
+          startParams.config,
+          params.signal,
+        ),
+      );
+    }
     if (params.provisionalAppIds?.length) {
       try {
         await params.lifecycleTiming.measure("plugin-app-attestation", () =>
@@ -403,6 +430,9 @@ function buildPendingSupervisionProbeForkParams(
     nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
     webSearchAllowed: params.webSearchAllowed,
     appServer: params.appServer,
+    hostSystemAgentActive: params.hostSystemAgentActive,
+    restrictedToolSurfaceInheritedMcpServerNames:
+      params.restrictedToolSurfaceInheritedMcpServerNames,
   });
   return {
     threadId: pending.sourceThreadId,

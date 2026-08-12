@@ -49,6 +49,21 @@ export function parseAgentSessionKey(
   return { agentId, rest };
 }
 
+export function parseSessionKeyParts(
+  key: string,
+): { agentId: string; channel: string; accountId: string } | null {
+  const match = /^agent:([^:]+):([^:]+):(.+)$/.exec(key);
+  return match
+    ? { agentId: match[1] as string, channel: match[2] as string, accountId: match[3] as string }
+    : null;
+}
+
+export function resolveUiSessionNavigationParentKey(
+  row: { parentSessionKey?: string | null; spawnedBy?: string | null } | null | undefined,
+): string | undefined {
+  return normalizeOptionalString(row?.parentSessionKey) ?? normalizeOptionalString(row?.spawnedBy);
+}
+
 function normalizeMainKey(value: string | undefined | null): string {
   return normalizeOptionalLowercaseString(value) ?? DEFAULT_MAIN_KEY;
 }
@@ -275,12 +290,14 @@ export function uiSessionEventMatches(
     : selectedAgentId === resolveUiDefaultAgentId(host);
 }
 
-export function isUiSelectedGlobalSessionKey(sessionKey: string | undefined | null): boolean {
+export function isUiSelectedGlobalSessionKey(
+  host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
+  sessionKey: string | undefined | null,
+): boolean {
   if (isUiGlobalSessionKey(sessionKey)) {
     return true;
   }
-  const parsed = parseAgentSessionKey(sessionKey);
-  return normalizeLowercaseStringOrEmpty(parsed?.rest) === DEFAULT_MAIN_KEY;
+  return resolveUiMainAliasAgentId(host, sessionKey) !== null;
 }
 
 export function resolveUiSelectedSessionAgentId(
@@ -356,21 +373,51 @@ export function resolveAgentIdFromSessionKey(sessionKey: string | undefined | nu
   return normalizeAgentId(parsed?.agentId ?? DEFAULT_AGENT_ID);
 }
 
-// Archive policy shared by the chat picker, sidebar recents, and Sessions
-// table: agent main sessions must stay reachable, live runs must finish
-// first, and global/unknown scopes are not archivable conversation threads.
-export function canArchiveSessionRow(
-  row: { key: string; kind?: string; hasActiveRun?: boolean },
+function isProtectedSessionLifecycleKey(
+  row: { key: string; kind?: string },
   configuredMainKey: string,
 ): boolean {
-  if (row.hasActiveRun === true || row.kind === "global" || row.kind === "unknown") {
-    return false;
+  const normalizedKey = normalizeLowercaseStringOrEmpty(row.key);
+  if (
+    row.kind === "global" ||
+    row.kind === "unknown" ||
+    normalizedKey === "global" ||
+    normalizedKey === "unknown"
+  ) {
+    return true;
   }
-  const isMainSession =
+  return (
     row.key === "main" ||
     normalizeLowercaseStringOrEmpty(parseAgentSessionKey(row.key)?.rest) ===
-      normalizeMainKey(configuredMainKey);
-  return !isMainSession;
+      normalizeMainKey(configuredMainKey)
+  );
+}
+
+// Archive policy shared by the chat picker, sidebar recents, and Sessions
+// table: Gateway drains live work; main/global/unknown rows stay protected.
+export function canArchiveSessionRow(
+  row: { key: string; kind?: string; sessionId?: string },
+  configuredMainKey: string,
+): boolean {
+  return Boolean(row.sessionId?.trim() && !isProtectedSessionLifecycleKey(row, configuredMainKey));
+}
+
+/** Preserve Delete's prior all-idle-or-all-archived batch policy independently of Archive. */
+export function canDeleteSessionRows(
+  rows: ReadonlyArray<{
+    key: string;
+    kind?: string;
+    hasActiveRun?: boolean;
+    archived?: boolean;
+  }>,
+  configuredMainKey: string,
+): boolean {
+  return (
+    rows.every((row) => row.archived === true) ||
+    rows.every(
+      (row) => row.hasActiveRun !== true && !isProtectedSessionLifecycleKey(row, configuredMainKey),
+    )
+  );
 }
 
 export function isSessionKeyTiedToAgent(

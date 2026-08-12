@@ -7,10 +7,13 @@ import {
   renderSettingsToggle,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { formatDurationCompact, formatTimeMs } from "../../lib/format.ts";
 import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../../lib/string-coerce.ts";
 import "../../styles/activity.css";
 import type { ActivityEntry, ActivityStatus } from "./tool-activity.ts";
+
+registerActivityEnglish();
 
 const STATUS_ORDER: ActivityStatus[] = ["running", "done", "error"];
 
@@ -32,7 +35,7 @@ type ActivityProps = {
   onScroll: (event: Event) => void;
 };
 
-function formatTime(value: number): string {
+function formatActivityTime(value: number): string {
   return formatTimeMs(
     value,
     {
@@ -48,7 +51,7 @@ function formatDuration(value: number): string {
   if (!Number.isFinite(value) || value < 0) {
     return t("common.na");
   }
-  return formatDurationCompact(value, { spaced: true }) ?? "0ms";
+  return formatDurationCompact(value) ?? "0ms";
 }
 
 function statusLabel(status: ActivityStatus): string {
@@ -166,7 +169,7 @@ function renderEntry(props: ActivityProps, entry: ActivityEntry) {
           <span class="activity-entry__text">${buildEntrySummary(entry)}</span>
         </span>
         <span class="activity-entry__meta">
-          <span>${formatTime(entry.updatedAt)}</span>
+          <span>${formatActivityTime(entry.updatedAt)}</span>
           <span>${formatDuration(entry.durationMs)}</span>
         </span>
       </summary>

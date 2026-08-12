@@ -215,11 +215,11 @@ describe("Ollama provider", () => {
       if (url.endsWith("/api/show")) {
         const rawBody = init?.body;
         const bodyText = typeof rawBody === "string" ? rawBody : "{}";
-        const parsed = JSON.parse(bodyText) as { name?: string };
-        if (parsed.name === "qwen3:32b") {
+        const parsed = JSON.parse(bodyText) as { model?: string };
+        if (parsed.model === "qwen3:32b") {
           return jsonResponse({ model_info: { "qwen3.context_length": 131072 } });
         }
-        if (parsed.name === "llama3.3:70b") {
+        if (parsed.model === "llama3.3:70b") {
           return jsonResponse({ model_info: { "llama.context_length": 65536 } });
         }
       }

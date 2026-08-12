@@ -23,7 +23,6 @@ import {
 } from "./reply-parameters.js";
 import { TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS } from "./retry-after.js";
 import type { TelegramRichMessageContextParams } from "./rich-message.js";
-import { isTelegramHtmlParseError } from "./rich-plain-fallback.js";
 import { requireRuntimeConfig, type OpenClawConfig } from "./send.runtime.js";
 import { maybePersistResolvedTelegramTarget } from "./target-writeback.js";
 import { normalizeTelegramChatId, normalizeTelegramLookupTarget } from "./targets.js";
@@ -390,29 +389,6 @@ export function isTelegramMessageDeleteNoopError(err: unknown): boolean {
   return MESSAGE_DELETE_NOOP_RE.test(formatErrorMessage(err));
 }
 
-export async function withTelegramHtmlParseFallback<T>(params: {
-  label: string;
-  verbose?: boolean;
-  requestHtml: (label: string) => Promise<T>;
-  requestPlain: (label: string) => Promise<T>;
-}): Promise<T> {
-  try {
-    return await params.requestHtml(params.label);
-  } catch (err) {
-    if (!isTelegramHtmlParseError(err)) {
-      throw err;
-    }
-    if (params.verbose) {
-      sendLogger.warn(
-        `telegram ${params.label} failed with HTML parse error, retrying as plain text: ${formatErrorMessage(
-          err,
-        )}`,
-      );
-    }
-    return await params.requestPlain(`${params.label}-plain`);
-  }
-}
-
 export async function withTelegramNativeQuoteFallback<T>(params: {
   label: string;
   requestParams: Record<string, unknown>;
@@ -575,8 +551,12 @@ export function createRequestWithChatNotFound(params: {
   chatId: string;
   input: string;
 }) {
-  return async <T>(fn: () => Promise<T>, label: string) =>
-    params.requestWithDiag(fn, label).catch((err: unknown) => {
+  return async <T>(
+    fn: () => Promise<T>,
+    label: string,
+    options?: { shouldLog?: (err: unknown) => boolean },
+  ) =>
+    params.requestWithDiag(fn, label, options).catch((err: unknown) => {
       throw wrapTelegramChatNotFoundError(err, {
         chatId: params.chatId,
         input: params.input,

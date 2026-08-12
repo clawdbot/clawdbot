@@ -747,6 +747,7 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
   npmRoot: string;
   runCommand?: ManagedNpmRootRunCommand;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<Record<string, string>> {
   const manifest = await readManagedNpmRootManifest(path.join(params.npmRoot, "package.json"));
   const dependencies = readDependencyRecord(manifest.dependencies);
@@ -787,6 +788,8 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
     const npmPlanOptions = {
       cwd: tempRoot,
       timeoutMs: Math.max(params.timeoutMs ?? 300_000, 300_000),
+      signal: params.signal,
+      killProcessTree: true,
       env: createSafeNpmInstallEnv(process.env, {
         legacyPeerDeps: false,
         npmConfigCwd: tempRoot,
@@ -900,6 +903,7 @@ export async function syncManagedNpmRootPeerDependencies(params: {
   overrideOmissions?: ManagedNpmOverrideOmissions;
   runCommand?: ManagedNpmRootRunCommand;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<boolean> {
   const manifestPath = path.join(params.npmRoot, "package.json");
   const manifest = await readManagedNpmRootManifest(manifestPath);
@@ -910,6 +914,7 @@ export async function syncManagedNpmRootPeerDependencies(params: {
     npmRoot: params.npmRoot,
     runCommand: params.runCommand,
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
   });
   const managedPeerDependencyNames = new Set(
     Object.keys(peerPins).filter(
@@ -977,6 +982,7 @@ export async function repairManagedNpmRootOpenClawPeer(params: {
   npmRoot: string;
   packageRoot?: string | null;
   timeoutMs?: number;
+  signal?: AbortSignal;
   logger?: ManagedNpmRootLogger;
   runCommand?: ManagedNpmRootRunCommand;
 }): Promise<boolean> {
@@ -1034,6 +1040,8 @@ export async function repairManagedNpmRootOpenClawPeer(params: {
     const result = await command(npmArgs, {
       cwd: params.npmRoot,
       timeoutMs: Math.max(params.timeoutMs ?? 300_000, 300_000),
+      signal: params.signal,
+      killProcessTree: true,
       env: createSafeNpmInstallEnv(process.env, {
         legacyPeerDeps: true,
         npmConfigCwd: params.npmRoot,

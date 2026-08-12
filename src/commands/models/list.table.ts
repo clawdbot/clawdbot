@@ -2,9 +2,8 @@
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import { formatTag, isRich, pad, truncate } from "./list.format.js";
+import { formatTag, formatTokenK, isRich, padTerminalCell, truncate } from "./list.format.js";
 import type { ModelRow } from "./list.types.js";
-import { formatTokenK } from "./shared.js";
 
 const MODEL_PAD = 42;
 const INPUT_PAD = 10;
@@ -47,23 +46,23 @@ export function printModelTable(
 
   const rich = isRich(opts);
   const header = [
-    pad("Model", MODEL_PAD),
-    pad("Input", INPUT_PAD),
-    pad("Ctx", CTX_PAD),
-    pad("Local", LOCAL_PAD),
-    pad("Auth", AUTH_PAD),
+    padTerminalCell("Model", MODEL_PAD),
+    padTerminalCell("Input", INPUT_PAD),
+    padTerminalCell("Ctx", CTX_PAD),
+    padTerminalCell("Local", LOCAL_PAD),
+    padTerminalCell("Auth", AUTH_PAD),
     "Tags",
   ].join(" ");
   runtime.log(rich ? theme.heading(header) : header);
 
   for (const row of rows) {
-    const keyLabel = pad(truncate(sanitizeTerminalText(row.key), MODEL_PAD), MODEL_PAD);
-    const inputLabel = pad(sanitizeTerminalText(row.input) || "-", INPUT_PAD);
-    const ctxLabel = pad(formatContextLabel(row), CTX_PAD);
+    const keyLabel = padTerminalCell(truncate(sanitizeTerminalText(row.key), MODEL_PAD), MODEL_PAD);
+    const inputLabel = padTerminalCell(sanitizeTerminalText(row.input) || "-", INPUT_PAD);
+    const ctxLabel = padTerminalCell(formatContextLabel(row), CTX_PAD);
     const localText = row.local === null ? "-" : row.local ? "yes" : "no";
-    const localLabel = pad(localText, LOCAL_PAD);
+    const localLabel = padTerminalCell(localText, LOCAL_PAD);
     const authText = row.available === null ? "-" : row.available ? "yes" : "no";
-    const authLabel = pad(authText, AUTH_PAD);
+    const authLabel = padTerminalCell(authText, AUTH_PAD);
     const tags = row.tags.map(sanitizeTerminalText);
     const tagsLabel =
       tags.length > 0

@@ -95,16 +95,7 @@ function buildOmittedAssistantReasoningContent(): AssistantContentBlock[] {
 }
 
 function parseTimestampMs(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Date.parse(value);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-  }
-  return null;
+  return parseDateFirstTimestampMs(value) ?? null;
 }
 
 function stripSignatureFieldsFromThinkingBlock(
@@ -765,3 +756,4 @@ export function wrapAnthropicStreamWithRecovery(
     return createRecoveryStream(stream, requestMeta, retry, notify);
   };
 }
+import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";

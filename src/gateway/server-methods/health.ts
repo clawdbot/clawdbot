@@ -33,27 +33,13 @@ function shouldScheduleRequestRefresh(
   return true;
 }
 
-function cachedAccountForRuntimeSnapshot(params: {
-  cachedChannel: ChannelHealthSummary | undefined;
-  accountId: string | undefined;
-}): ChannelHealthSummary | undefined {
-  const accountId = params.accountId;
-  if (accountId && params.cachedChannel?.accounts?.[accountId]) {
-    return params.cachedChannel.accounts[accountId];
-  }
-  return undefined;
-}
-
 function cachedLifecycleDiffersFromRuntime(params: {
   cachedAccount: ChannelHealthSummary | undefined;
   runtimeSnapshot: ChannelAccountSnapshot;
 }): boolean {
-  for (const key of ["running", "connected"] as const) {
+  for (const key of ["running", "connected", "lifecycle"] as const) {
     const runtimeValue = params.runtimeSnapshot[key];
-    if (typeof runtimeValue !== "boolean") {
-      continue;
-    }
-    if (params.cachedAccount?.[key] !== runtimeValue) {
+    if (runtimeValue !== undefined && params.cachedAccount?.[key] !== runtimeValue) {
       return true;
     }
   }
@@ -85,16 +71,19 @@ function cachedHealthDiffersFromRuntime(
       continue;
     }
     const cachedChannel = cached.channels[channelId];
+    const cachedAccounts = cachedChannel?.accounts;
+    if (
+      Object.keys(cachedAccounts ?? {}).some((accountId) => !Object.hasOwn(accounts, accountId))
+    ) {
+      return true;
+    }
     for (const [accountId, runtimeSnapshot] of Object.entries(accounts)) {
       if (!runtimeSnapshot) {
         continue;
       }
       if (
         cachedLifecycleDiffersFromRuntime({
-          cachedAccount: cachedAccountForRuntimeSnapshot({
-            cachedChannel,
-            accountId,
-          }),
+          cachedAccount: cachedAccounts?.[accountId],
           runtimeSnapshot,
         })
       ) {

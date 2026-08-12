@@ -1,11 +1,9 @@
 // Line plugin module implements flex templates behavior.
 export {
   createActionCard,
-  createCarousel,
   createImageCard,
   createInfoCard,
   createListCard,
-  createNotificationBubble,
 } from "./flex-templates/basic-cards.js";
 export {
   createAgendaCard,
@@ -24,7 +22,6 @@ export type {
   FlexBox,
   FlexBubble,
   FlexButton,
-  FlexCarousel,
   FlexComponent,
   FlexContainer,
   FlexImage,

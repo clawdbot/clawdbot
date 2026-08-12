@@ -28,6 +28,7 @@ import {
 } from "../server-constants.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
+import { cleanupTalkConnection } from "../talk-session-registry.js";
 import { formatForLog, logWs } from "../ws-log.js";
 import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
 import type { PreauthConnectionBudget } from "./preauth-connection-budget.js";
@@ -39,6 +40,10 @@ import {
 } from "./ws-connection/handshake-auth-log-limiter.js";
 import type { WsOriginCheckMetrics } from "./ws-connection/message-handler.js";
 import {
+  GatewayNodeLifecycleDispatchTracker,
+  NODE_LIFECYCLE_DISPATCH_DRAIN_TIMEOUT_MS,
+} from "./ws-connection/node-lifecycle-dispatch.js";
+import {
   attachWorkerWsMessageHandler,
   type WorkerConnectionService,
 } from "./ws-connection/worker-connection.js";
@@ -46,6 +51,7 @@ import { resolveSharedGatewaySessionGeneration } from "./ws-shared-generation.js
 import {
   GATEWAY_WS_CONNECTION_KIND_PROPERTY,
   GATEWAY_WS_PREAUTH_BUDGET_PROPERTY,
+  GATEWAY_WS_WORKER_INGRESS_PROPERTY,
   WS_HANDSHAKE_PHASES,
   type GatewayIngressWebSocket,
   type GatewayWsClient,
@@ -155,8 +161,12 @@ type GatewayWsSharedHandlerParams = {
   gatewayHost?: string;
   pluginSurfaceScheme?: "http" | "https";
   getPluginNodeCapabilities?: () => PluginNodeCapabilitySurface[];
-  resolvedAuth: ResolvedGatewayAuth;
-  getResolvedAuth?: () => ResolvedGatewayAuth;
+  /**
+   * Auth is read per connection, not per process: a reload can rotate it while
+   * this handler stays attached. One getter keeps that the only source, so no
+   * caller can hand over a snapshot that silently outlives the config it came from.
+   */
+  getResolvedAuth: () => ResolvedGatewayAuth;
   getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
@@ -235,8 +245,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     port,
     pluginSurfaceScheme,
     getPluginNodeCapabilities,
-    resolvedAuth,
-    getResolvedAuth = () => resolvedAuth,
+    getResolvedAuth,
     getRequiredSharedGatewaySessionGeneration = () =>
       resolveSharedGatewaySessionGeneration(
         getResolvedAuth(),
@@ -266,11 +275,11 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     let closed = false;
     const openedAt = Date.now();
     const connId = randomUUID();
-    const connectionKind =
-      (socket as GatewayIngressWebSocket)[GATEWAY_WS_CONNECTION_KIND_PROPERTY] ?? "gateway";
+    const ingressSocket = socket as GatewayIngressWebSocket;
+    const connectionKind = ingressSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] ?? "gateway";
+    const workerIngress = ingressSocket[GATEWAY_WS_WORKER_INGRESS_PROPERTY] ?? "loopback";
     const connectionPreauthBudget =
-      (socket as GatewayIngressWebSocket)[GATEWAY_WS_PREAUTH_BUDGET_PROPERTY] ??
-      preauthConnectionBudget;
+      ingressSocket[GATEWAY_WS_PREAUTH_BUDGET_PROPERTY] ?? preauthConnectionBudget;
     const { remoteAddr, remotePort, localAddr, localPort, endpoint } = resolveSocketAddress(socket);
     const preauthBudgetKey = (
       socket as WebSocket & {
@@ -316,6 +325,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     let lastFrameMethod: string | undefined;
     let lastFrameId: string | undefined;
     let hasReceivedPreauthFrame = false;
+    const nodeLifecycleDispatch = new GatewayNodeLifecycleDispatchTracker();
 
     socket.once("message", () => {
       hasReceivedPreauthFrame = true;
@@ -355,6 +365,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     let pingTimer: ReturnType<typeof setInterval> | undefined;
     let cleanupWorkerConnection: (() => void) | undefined;
     let awaitingPong = false;
+    let retainClientUntilNodeDrain = false;
     const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs({
       configuredTimeoutMs: params.preauthHandshakeTimeoutMs,
     });
@@ -377,24 +388,26 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
     }, handshakeTimeoutMs);
 
-    const close = (code = 1000, reason?: string) => {
+    const retireTransport = (code = 1000, reason?: string) => {
       if (closed) {
         return;
       }
       closed = true;
       clearTimeout(handshakeTimer);
-      if (pingTimer !== undefined) {
-        clearInterval(pingTimer);
-      }
+      clearInterval(pingTimer);
       cleanupWorkerConnection?.();
       releasePreauthBudget();
-      if (client) {
-        clients.delete(client);
-      }
       try {
         socket.close(code, reason);
       } catch {
         /* ignore */
+      }
+    };
+
+    const close = (code = 1000, reason?: string) => {
+      retireTransport(code, reason);
+      if (client && !retainClientUntilNodeDrain) {
+        clients.delete(client);
       }
     };
 
@@ -474,7 +487,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       normalizeLowercaseStringOrEmpty(requestUserAgent).startsWith("openclaw/") &&
       isLoopbackAddress(remoteAddr);
 
-    socket.once("close", (code, reason) => {
+    const handleSocketClose = async (code: number, reason: Buffer) => {
       const durationMs = Date.now() - openedAt;
       const logForwardedFor = sanitizeLogValue(forwardedFor);
       const logOrigin = sanitizeLogValue(requestOrigin);
@@ -554,6 +567,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
       if (connectionKind === "gateway") {
         const context = buildRequestContext();
+        cleanupTalkConnection(connId, logGateway);
         context.unsubscribeAllSessionEvents(connId);
         // Detach (or, with a zero grace period, kill) any PTY shells this
         // connection owned; detached sessions stay reattachable via
@@ -561,7 +575,23 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         context.terminalSessions?.handleDisconnect(connId);
         let currentDisconnectedNodeId: string | null = null;
         if (client?.connect?.role === "node") {
-          currentDisconnectedNodeId = context.nodeRegistry.unregister(connId);
+          // Retire I/O immediately, but keep the client revocable until admitted
+          // lifecycle work drains; pairing/token removal must still fence it.
+          retainClientUntilNodeDrain = true;
+          retireTransport();
+          try {
+            if (nodeLifecycleDispatch.hasActive()) {
+              const drained = await nodeLifecycleDispatch.drain();
+              if (!drained) {
+                logGateway.warn(
+                  `node lifecycle dispatch drain timed out after ${NODE_LIFECYCLE_DISPATCH_DRAIN_TIMEOUT_MS}ms conn=${connId}`,
+                );
+              }
+            }
+            currentDisconnectedNodeId = context.nodeRegistry.unregister(connId);
+          } finally {
+            retainClientUntilNodeDrain = false;
+          }
         }
         if (
           client?.presenceKey &&
@@ -593,6 +623,12 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         endpoint,
       });
       close();
+    };
+    socket.once("close", (code, reason) => {
+      void handleSocketClose(code, reason).catch((error: unknown) => {
+        logGateway.error(`websocket close cleanup failed conn=${connId}: ${formatError(error)}`);
+        close();
+      });
     });
 
     const setClient = (next: GatewayWsClient) => {
@@ -646,6 +682,9 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         connId,
         service: workerConnectionService,
         isStartupPending,
+        ingress: workerIngress,
+        rateLimiter: workerIngress === "public" ? rateLimiter : undefined,
+        rateLimitClientIp: workerIngress === "public" ? preauthBudgetKey : undefined,
         send,
         close,
         isClosed: () => closed,
@@ -693,6 +732,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       extraHandlers,
       getMethodRegistry,
       buildRequestContext,
+      nodeLifecycleDispatch,
       refreshHealthSnapshot,
       send,
       close,

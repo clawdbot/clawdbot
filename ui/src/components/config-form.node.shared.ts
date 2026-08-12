@@ -1,4 +1,5 @@
 // Control UI helpers shared by config form node renderers.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { ConfigUiHints } from "../api/types.ts";
@@ -44,11 +45,14 @@ export type ConfigNodeRenderParams = {
   rowIdentity?: unknown;
   structuredDraftOwner?: boolean;
   showLabel?: boolean;
+  /** Section shells own the title while collection rows still own help/default metadata. */
+  showHeaderMeta?: boolean;
   searchCriteria?: ConfigSearchCriteria;
   revealSensitive?: boolean;
   isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
   onToggleSensitivePath?: (path: Array<string | number>) => void;
   onPatch: (path: Array<string | number>, value: unknown) => boolean | void;
+  onRemove?: (path: Array<string | number>) => boolean | void;
 };
 
 export type ConfigNodeRenderer = (
@@ -78,6 +82,10 @@ export function jsonValue(value: unknown): string {
   }
 }
 
+export function schemaWithDefault(schema: JsonSchema, value: unknown): JsonSchema {
+  return { ...schema, default: value };
+}
+
 function formatComparablePrimitive(value: unknown): string | null {
   if (
     typeof value === "string" ||
@@ -104,7 +112,7 @@ export function isSecretRefObject(value: unknown): value is {
   id: string;
   provider?: string;
 } {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return false;
   }
   const candidate = value as Record<string, unknown>;
@@ -192,6 +200,7 @@ export function renderFieldRow(params: {
   label: unknown;
   help?: unknown;
   helpId?: string;
+  defaultDescription?: unknown;
   tags: string[];
   showLabel: boolean;
   control: TemplateResult | typeof nothing;
@@ -202,8 +211,13 @@ export function renderFieldRow(params: {
   // wildcard segments collapse), so their help is the parent's. Showing it again
   // per item is noise; a row with no label of its own gets no help of its own.
   const help = params.showLabel ? params.help : undefined;
+  const defaultDescription = params.showLabel ? params.defaultDescription : undefined;
   const hasText =
-    params.showLabel || Boolean(help) || params.tags.length > 0 || Boolean(params.error);
+    params.showLabel ||
+    Boolean(help) ||
+    Boolean(defaultDescription) ||
+    params.tags.length > 0 ||
+    Boolean(params.error);
   // Control-only rows (array/map item values) stack so the control gets full width.
   const stacked = params.stacked || !hasText;
   const className = stacked ? "settings-row settings-row--stacked" : "settings-row";
@@ -220,6 +234,9 @@ export function renderFieldRow(params: {
                     >${help}</span
                   >`
                 : nothing}
+              ${defaultDescription
+                ? html`<span class="settings-row__desc">${defaultDescription}</span>`
+                : nothing}
               ${renderTags(params.tags)}
               ${params.error
                 ? html`<span class="cfg-field__error" role="alert">${params.error}</span>`
@@ -231,6 +248,99 @@ export function renderFieldRow(params: {
         ? html`<div class="settings-row__control">${params.control}</div>`
         : nothing}
     </div>
+  `;
+}
+
+export function renderFlatDefaultRow(presentation: {
+  description: TemplateResult | typeof nothing;
+  action: TemplateResult | typeof nothing;
+}): TemplateResult | typeof nothing {
+  if (presentation.description === nothing && presentation.action === nothing) {
+    return nothing;
+  }
+  return html`
+    <div class="settings-row">
+      ${presentation.description === nothing
+        ? nothing
+        : html`
+            <div class="settings-row__text">
+              <span class="settings-row__desc">${presentation.description}</span>
+            </div>
+          `}
+      ${presentation.action === nothing
+        ? nothing
+        : html`<div class="settings-row__control">${presentation.action}</div>`}
+    </div>
+  `;
+}
+
+export function renderCollectionDefaultPresentation(
+  params: ConfigNodeRenderParams,
+  effectiveValue: unknown,
+): {
+  description: TemplateResult | typeof nothing;
+  action: TemplateResult | typeof nothing;
+} {
+  const redacted = getSensitiveRenderState({
+    path: params.path,
+    value: effectiveValue,
+    hints: params.hints,
+    revealSensitive: params.revealSensitive ?? false,
+    isSensitivePathRevealed: params.isSensitivePathRevealed,
+  }).isRedacted;
+  return {
+    description: redacted ? nothing : renderSchemaDefaultDescription(params.schema, params.value),
+    action: renderRestoreDefaultButton({
+      ...params,
+      disabled: params.disabled || redacted,
+    }),
+  };
+}
+
+export function renderSchemaDefaultDescription(
+  schema: JsonSchema,
+  value: unknown,
+): TemplateResult | typeof nothing {
+  if (schema.default === undefined) {
+    return nothing;
+  }
+  return html`${t(value === undefined ? "configForm.usingDefault" : "configForm.defaultValue", {
+    value: formatUnknownText(schema.default),
+  })}`;
+}
+
+export function renderRestoreDefaultButton(
+  params: Pick<
+    ConfigNodeRenderParams,
+    "schema" | "value" | "path" | "disabled" | "isRequired" | "onPatch" | "onRemove"
+  >,
+): TemplateResult | typeof nothing {
+  if (params.schema.default === undefined || params.value === undefined) {
+    return nothing;
+  }
+  return html`
+    <openclaw-tooltip .content=${t("configForm.resetToDefault")}>
+      <button
+        type="button"
+        class="btn btn--icon"
+        aria-label=${t("configForm.resetToDefault")}
+        ?disabled=${params.disabled}
+        @click=${(event: Event) => {
+          event.stopPropagation();
+          if (params.isRequired) {
+            params.onPatch(params.path, structuredClone(params.schema.default));
+            return;
+          }
+          if (params.onRemove) {
+            params.onRemove(params.path);
+            return;
+          }
+          params.onPatch(params.path, undefined);
+        }}
+      >
+        ${icons.refresh}
+      </button>
+    </openclaw-tooltip>
   `;
 }
 
@@ -248,7 +358,7 @@ export function renderSegmentedControl(params: {
     value: selectedIndex < 0 ? "" : String(selectedIndex),
     options: params.options.map((option, index) => ({
       value: String(index),
-      label: formatUnknownText(option),
+      label: configEnumOptionLabel(option, params.options),
     })),
     disabled: params.disabled,
     ariaLabel: params.ariaLabel,
@@ -259,6 +369,20 @@ export function renderSegmentedControl(params: {
       }
     },
   });
+}
+
+export function configEnumOptionLabel(option: unknown, options: readonly unknown[]): string {
+  const presentsBooleanState = options.includes(true) && options.includes(false);
+  if (!presentsBooleanState) {
+    return formatUnknownText(option);
+  }
+  if (option === true) {
+    return t("configForm.enumOn");
+  }
+  if (option === false) {
+    return t("configForm.enumOff");
+  }
+  return option === "auto" ? t("configForm.enumAuto") : formatUnknownText(option);
 }
 
 export function renderJsonTextareaControl(params: {

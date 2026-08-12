@@ -12,6 +12,7 @@ import { resolveGatewayReloadSettings } from "../gateway/config-reload-settings.
 import { danger, info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
+import { toDotPath } from "../shared/dot-path.js";
 import { shortenHomePath } from "../utils.js";
 import {
   ConfigSetDryRunValidationError,
@@ -28,7 +29,6 @@ import {
   getAtPath,
   mergeAtPath,
   setAtPath,
-  toDotPath,
   type JsonSchemaRecord,
   type PathSegment,
   unsetAtPath,
@@ -301,8 +301,10 @@ export async function runConfigOperations(params: {
   const explicitSetPaths: PathSegment[][] = [];
   for (const operation of operations) {
     if (operation.mutation === "delete") {
-      unsetAtPath(next, operation.setPath);
-      unsetPaths.push(operation.setPath);
+      const unsetResult = unsetAtPath(next, operation.setPath);
+      if (!unsetResult.removed || unsetResult.leafContainer !== "array") {
+        unsetPaths.push(operation.setPath);
+      }
       continue;
     }
     explicitSetPaths.push(operation.setPath);

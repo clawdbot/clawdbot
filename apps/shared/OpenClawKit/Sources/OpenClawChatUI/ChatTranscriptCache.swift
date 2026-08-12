@@ -1421,6 +1421,8 @@ extension OpenClawChatSQLiteTranscriptCache {
                         isError: item.isError)
                 },
                 timestamp: message.timestamp,
+                transcriptMessageID: message.transcriptMessageID,
+                isTruncated: message.isTruncated,
                 idempotencyKey: message.idempotencyKey,
                 toolCallId: message.toolCallId,
                 toolName: message.toolName,
@@ -1428,7 +1430,9 @@ extension OpenClawChatSQLiteTranscriptCache {
                 stopReason: message.stopReason,
                 errorMessage: message.errorMessage,
                 details: self.cacheableDetails(message.details),
-                isError: message.isError)
+                isError: message.isError,
+                provenance: message.provenance,
+                historyMarker: message.historyMarker)
         }
     }
 

@@ -10,7 +10,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
-vi.mock("../config/sessions/paths.js", () => ({ resolveStorePath: () => "/tmp/sessions.json" }));
+vi.mock("../config/sessions/paths.js", () => ({
+  resolveSessionStorePathCore: () => "/tmp/sessions.json",
+}));
 vi.mock("../config/sessions/session-accessor.js", () => ({
   deleteSessionEntryLifecycle: mocks.deleteEntry,
   loadSessionEntry: mocks.loadEntry,

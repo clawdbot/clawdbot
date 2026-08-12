@@ -44,6 +44,10 @@ async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T
   }
 }
 
+function openIngressStateDatabase(stateDir: string) {
+  return openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+}
+
 describe("channel ingress queue", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
@@ -289,6 +293,114 @@ describe("channel ingress queue", () => {
     });
   });
 
+  it("preserves durable lanes when a channel derives ephemeral claim lanes", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 1;
+      const queue = createTestIngressQueue<{ text: string }>(stateDir, { now: () => clock++ });
+
+      await queue.enqueue("message-1", { text: "debounced" }, { laneKey: "chat:123" });
+
+      const claimed = await queue.claimNext({
+        ownerId: "imessage-worker",
+        deriveLaneKey: (record) => `${record.laneKey ?? "event"}:${record.id}`,
+      });
+
+      expect(claimed?.laneKey).toBe("chat:123");
+      expect((await queue.listClaims())[0]?.laneKey).toBe("chat:123");
+    });
+  });
+
+  it("reconciles opted-in persisted lanes before blocking and claiming", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 1;
+      const queue = createTestIngressQueue<{ lane: string }>(stateDir, { now: () => clock++ });
+
+      await queue.enqueue(
+        "a",
+        { lane: "chat:123" },
+        { laneKey: "chat:123:topic:7", receivedAt: 1 },
+      );
+      await queue.enqueue(
+        "b",
+        { lane: "chat:456" },
+        { laneKey: "chat:456:topic:9", receivedAt: 2 },
+      );
+
+      const claimed = await queue.claimNext({
+        ownerId: "worker",
+        blockedLaneKeys: ["chat:123"],
+        deriveLaneKey: (record) => record.payload.lane,
+        reconcileStoredLaneKey: (_record, storedLaneKey, derivedLaneKey) =>
+          storedLaneKey === `${derivedLaneKey}:topic:7` ||
+          storedLaneKey === `${derivedLaneKey}:topic:9`,
+      });
+
+      expect(claimed?.id).toBe("b");
+      expect(claimed?.laneKey).toBe("chat:456");
+      expect((await queue.listClaims())[0]?.laneKey).toBe("chat:456");
+      expect((await queue.listPending())[0]?.laneKey).toBe("chat:123:topic:7");
+    });
+  });
+
+  it("blocks opted-in legacy candidate lanes using their canonical owner", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 1;
+      const queue = createTestIngressQueue<{ lane: string }>(stateDir, { now: () => clock++ });
+
+      await queue.enqueue(
+        "a",
+        { lane: "chat:123" },
+        { laneKey: "chat:123:topic:7", receivedAt: 1 },
+      );
+      await queue.enqueue(
+        "b",
+        { lane: "chat:123" },
+        { laneKey: "chat:123:topic:8", receivedAt: 2 },
+      );
+      await queue.enqueue(
+        "c",
+        { lane: "chat:456" },
+        { laneKey: "chat:456:topic:9", receivedAt: 3 },
+      );
+      await queue.claim("a", { ownerId: "sibling-worker" });
+
+      const claimed = await queue.claimNext({
+        ownerId: "worker",
+        candidateIds: ["a", "b", "c"],
+        orderBy: "id",
+        deriveLaneKey: (record) => record.payload.lane,
+        reconcileStoredLaneKey: (_record, storedLaneKey, derivedLaneKey) =>
+          storedLaneKey.startsWith(`${derivedLaneKey}:topic:`),
+      });
+
+      expect(claimed?.id).toBe("c");
+      expect(claimed?.laneKey).toBe("chat:456");
+      expect((await queue.listClaims()).find((record) => record.id === "a")?.laneKey).toBe(
+        "chat:123:topic:7",
+      );
+      expect((await queue.listPending())[0]?.laneKey).toBe("chat:123:topic:8");
+    });
+  });
+
+  it("preserves persisted lanes when an owner rejects their reconciliation", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 1;
+      const queue = createTestIngressQueue<{ lane: string }>(stateDir, { now: () => clock++ });
+
+      await queue.enqueue("a", { lane: "chat:123" }, { laneKey: "chat:999:topic:7" });
+
+      const claimed = await queue.claimNext({
+        ownerId: "worker",
+        deriveLaneKey: (record) => record.payload.lane,
+        reconcileStoredLaneKey: (_record, storedLaneKey, derivedLaneKey) =>
+          storedLaneKey === `${derivedLaneKey}:topic:7`,
+      });
+
+      expect(claimed?.laneKey).toBe("chat:999:topic:7");
+      expect((await queue.listClaims())[0]?.laneKey).toBe("chat:999:topic:7");
+    });
+  });
+
   it("blocks lanes claimed by candidate rows before claiming later candidates", async () => {
     await withTempState(async (stateDir) => {
       let clock = 1;
@@ -446,9 +558,7 @@ describe("channel ingress queue", () => {
       await queue.release("retry", { lastError: "stale retry text", releasedAt: 26 });
       await queue.complete("retry", { completedAt: 27 });
 
-      const database = openOpenClawStateDatabase({
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      });
+      const database = openIngressStateDatabase(stateDir);
       const kysely = getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db);
       const rows = executeSqliteQuerySync(
         database.db,
@@ -504,9 +614,7 @@ describe("channel ingress queue", () => {
         completed_at: number;
       }>,
     ) {
-      const { db } = openOpenClawStateDatabase({
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      });
+      const { db } = openIngressStateDatabase(stateDir);
       const kysely = getNodeSqliteKysely<ChannelIngressTestDatabase>(db);
       const claimValue = overrides.claim_token ?? null;
       executeSqliteQuerySync(
@@ -632,9 +740,7 @@ describe("channel ingress queue", () => {
         await queue.complete("comp-1", { metadata: { handler: "worker" }, completedAt: 150 });
 
         // Corrupt the completed_metadata_json
-        const { db } = openOpenClawStateDatabase({
-          env: { OPENCLAW_STATE_DIR: stateDir },
-        });
+        const { db } = openIngressStateDatabase(stateDir);
         db.prepare(
           `UPDATE channel_ingress_events
              SET completed_metadata_json = ?
@@ -661,9 +767,7 @@ describe("channel ingress queue", () => {
         });
         // Override the bad row's received_at to be earlier.
         {
-          const { db } = openOpenClawStateDatabase({
-            env: { OPENCLAW_STATE_DIR: stateDir },
-          });
+          const { db } = openIngressStateDatabase(stateDir);
           db.prepare(
             `UPDATE channel_ingress_events SET received_at = ? WHERE queue_name = ? AND event_id = ?`,
           ).run(earlyTime, '["test","account"]', "bad-claim");
@@ -674,7 +778,7 @@ describe("channel ingress queue", () => {
         expect(claimed).not.toBeNull();
         expect(claimed!.id).toBe("good-1");
 
-        const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+        const database = openIngressStateDatabase(stateDir);
         const failed = executeSqliteQueryTakeFirstSync(
           database.db,
           getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db)
@@ -718,7 +822,7 @@ describe("channel ingress queue", () => {
 
         await expect(queue.claimNext({ scanLimit: 200 })).resolves.toBeNull();
 
-        const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+        const database = openIngressStateDatabase(stateDir);
         const counts = executeSqliteQuerySync(
           database.db,
           getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db)
@@ -752,7 +856,7 @@ describe("channel ingress queue", () => {
         expect(goodClaim).not.toBeNull();
         expect(goodClaim!.payload.text).toBe("hello");
 
-        const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+        const database = openIngressStateDatabase(stateDir);
         const failed = executeSqliteQueryTakeFirstSync(
           database.db,
           getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db)
@@ -793,9 +897,7 @@ describe("channel ingress queue", () => {
         }
 
         // Verify the corrupt row was actually tombstoned in the DB.
-        const { db } = openOpenClawStateDatabase({
-          env: { OPENCLAW_STATE_DIR: stateDir },
-        });
+        const { db } = openIngressStateDatabase(stateDir);
         const row = executeSqliteQuerySync(
           db,
           getNodeSqliteKysely<ChannelIngressTestDatabase>(db)
@@ -827,9 +929,7 @@ describe("channel ingress queue", () => {
           "Corrupt payload_json in claimed channel ingress event",
         );
 
-        const { db } = openOpenClawStateDatabase({
-          env: { OPENCLAW_STATE_DIR: stateDir },
-        });
+        const { db } = openIngressStateDatabase(stateDir);
         const row = executeSqliteQueryTakeFirstSync(
           db,
           getNodeSqliteKysely<ChannelIngressTestDatabase>(db)
@@ -867,9 +967,7 @@ describe("channel ingress queue", () => {
         expect(recovered).toBe(1);
 
         // The corrupt claimed row should now be tombstoned as failed.
-        const { db } = openOpenClawStateDatabase({
-          env: { OPENCLAW_STATE_DIR: stateDir },
-        });
+        const { db } = openIngressStateDatabase(stateDir);
         const row = executeSqliteQuerySync(
           db,
           getNodeSqliteKysely<ChannelIngressTestDatabase>(db)
@@ -922,9 +1020,7 @@ describe("channel ingress queue", () => {
           },
         });
 
-        const { db } = openOpenClawStateDatabase({
-          env: { OPENCLAW_STATE_DIR: stateDir },
-        });
+        const { db } = openIngressStateDatabase(stateDir);
         const row = executeSqliteQueryTakeFirstSync(
           db,
           getNodeSqliteKysely<ChannelIngressTestDatabase>(db)

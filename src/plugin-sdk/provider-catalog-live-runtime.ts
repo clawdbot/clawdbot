@@ -1,7 +1,12 @@
+import { normalizeOptionalString as readLiveModelCatalogString } from "../../packages/normalization-core/src/string-coerce.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
-import { readResponseWithLimit } from "../infra/http-body.js";
+import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
-import type { ProviderCatalogContext, ProviderCatalogResult } from "../plugins/types.js";
+import type {
+  ProviderCatalogContext,
+  ProviderCatalogResult,
+  ProviderPlugin,
+} from "../plugins/types.js";
 import {
   buildOpenAICompatibleLiveModels,
   readLiveModelCatalogRecord,
@@ -11,6 +16,7 @@ import {
   clearLiveCatalogCacheForTests,
   getCachedLiveCatalogValue,
 } from "./provider-catalog-shared.js";
+import type { ManifestProviderCatalogEntry } from "./provider-catalog-shared.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "./provider-model-shared.js";
 import {
   fetchWithSsrFGuard,
@@ -193,12 +199,6 @@ function buildHeaders(
   return headers;
 }
 
-async function cancelUnreadResponseBody(response: Response): Promise<void> {
-  if (!response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
-}
-
 async function readLiveModelCatalogJson(response: Response, timeoutMs: number): Promise<unknown> {
   const buffer = await readResponseWithLimit(response, LIVE_MODEL_CATALOG_BODY_MAX_BYTES, {
     chunkTimeoutMs: timeoutMs,
@@ -208,10 +208,6 @@ async function readLiveModelCatalogJson(response: Response, timeoutMs: number): 
       new Error(`Live model catalog response stalled: no data received for ${chunkTimeoutMs}ms`),
   });
   return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer));
-}
-
-function readLiveModelCatalogString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function readLiveModelCatalogNextUrl(body: unknown): string | undefined {
@@ -591,6 +587,46 @@ export async function buildOpenAICompatibleLiveModelProviderConfig(params: {
       ((rows, fallbackProvider) =>
         buildOpenAICompatibleLiveModels(rows, fallbackProvider, acceptUnknownModel)),
   });
+}
+
+/** Builds the shared authenticated live/static hooks for an ordered provider family. */
+export function buildOpenAICompatibleProviderFamilyCatalog(params: {
+  credentialProviderId: string;
+  entries: readonly ManifestProviderCatalogEntry[];
+  staticCatalog: () => Promise<{ providers: Record<string, ModelProviderConfig> }>;
+  augmentModelCatalog: NonNullable<ProviderPlugin["augmentModelCatalog"]>;
+}) {
+  return {
+    catalog: {
+      order: "paired" as const,
+      run: async (ctx: ProviderCatalogContext) => {
+        const auth = ctx.resolveProviderApiKey(params.credentialProviderId);
+        if (!auth.apiKey) {
+          return null;
+        }
+        return {
+          providers: Object.fromEntries(
+            await Promise.all(
+              params.entries.map(
+                async ({ id, buildProvider }) =>
+                  [
+                    id,
+                    await buildOpenAICompatibleLiveModelProviderConfig({
+                      providerId: id,
+                      providerConfig: buildProvider(),
+                      apiKey: auth.apiKey,
+                      discoveryApiKey: auth.discoveryApiKey,
+                    }),
+                  ] as const,
+              ),
+            ),
+          ),
+        };
+      },
+      staticRun: params.staticCatalog,
+    },
+    augmentModelCatalog: params.augmentModelCatalog,
+  };
 }
 
 export async function buildOpenAICompatibleProviderCatalog(

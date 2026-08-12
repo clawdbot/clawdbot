@@ -7,7 +7,6 @@ import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { describeBinding } from "./agents.bindings.js";
-import { requireValidConfig } from "./agents.command-shared.js";
 import type { AgentSummary } from "./agents.config.js";
 import { buildAgentSummaries } from "./agents.config.js";
 import {
@@ -16,6 +15,7 @@ import {
   listProvidersForAgent,
   summarizeBindings,
 } from "./agents.providers.js";
+import { requireValidConfig } from "./config-validation.js";
 
 type AgentsListOptions = {
   json?: boolean;

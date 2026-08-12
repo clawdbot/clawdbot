@@ -8,8 +8,8 @@ import {
   addTimerTimeoutGraceMs,
   clampTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { resolveNpmRunner } from "../../npm-runner.mjs";
-import { resolvePnpmRunner } from "../../pnpm-runner.mjs";
+import { resolveNpmRunner } from "../../npm-runner.mts";
+import { resolvePnpmRunner } from "../../pnpm-runner.mts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../windows-cmd-helpers.mjs";
 import type { CommandResult, RunOptions } from "./types.ts";
 
@@ -79,17 +79,33 @@ function signalHostCommandProcess(pid: number | undefined, signal: NodeJS.Signal
   if (!pid) {
     return;
   }
-  try {
-    if (process.platform === "win32") {
+  if (process.platform === "win32") {
+    try {
       process.kill(pid, signal);
-    } else {
-      process.kill(-pid, signal);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ESRCH") {
+        warn(`failed to send ${signal} to host command process ${pid}: ${code ?? String(error)}`);
+      }
     }
+    return;
+  }
+  try {
+    process.kill(-pid, signal);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "ESRCH") {
+    if (code === "ESRCH") {
+      return;
+    }
+    try {
+      process.kill(pid, signal);
+    } catch (fallbackError) {
+      const fallbackCode = (fallbackError as NodeJS.ErrnoException).code;
+      if (fallbackCode === "ESRCH") {
+        return;
+      }
       warn(
-        `failed to send ${signal} to timed host command process ${pid}: ${code ?? String(error)}`,
+        `failed to send ${signal} to host command process ${pid}: group ${code ?? String(error)}, leader ${fallbackCode ?? String(fallbackError)}`,
       );
     }
   }
@@ -115,8 +131,8 @@ writeSync(
 );
 
 let timedOut = false;
-let killTimer;
 let killDeadlineAt = 0;
+let timedOutCleanupStarted = false;
 let outputExceeded = false;
 let forwardedSignal;
 let forwardedSignalKillTimer;
@@ -137,9 +153,17 @@ function signalGroup(signal) {
   }
   try {
     process.kill(-child.pid, signal);
+    return;
   } catch (error) {
-    if (error && error.code !== "ESRCH") {
-      process.stderr.write("failed to send " + signal + " to timed host command process " + child.pid + ": " + (error.code || String(error)) + "\n");
+    if (error && error.code === "ESRCH") {
+      return;
+    }
+    try {
+      process.kill(child.pid, signal);
+    } catch (fallbackError) {
+      if (!fallbackError || fallbackError.code !== "ESRCH") {
+        process.stderr.write("failed to send " + signal + " to host command process " + child.pid + ": group " + ((error && error.code) || String(error)) + ", leader " + ((fallbackError && fallbackError.code) || String(fallbackError)) + "\n");
+      }
     }
   }
 }
@@ -152,19 +176,31 @@ function groupAlive() {
     process.kill(-child.pid, 0);
     return true;
   } catch (error) {
-    return Boolean(error && error.code === "EPERM");
+    if (!error || error.code !== "EPERM") {
+      return false;
+    }
+    if (child.exitCode !== null || child.signalCode !== null) {
+      return false;
+    }
+    try {
+      process.kill(child.pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 
 function finishTimedOut() {
-  if (killTimer) {
-    clearTimeout(killTimer);
-  }
   writeSync(3, ${JSON.stringify(HOST_COMMAND_TIMEOUT_PREFIX)} + "{}\n");
   process.exit(124);
 }
 
 function finishTimedOutAfterCleanup() {
+  if (timedOutCleanupStarted) {
+    return;
+  }
+  timedOutCleanupStarted = true;
   if (!groupAlive()) {
     finishTimedOut();
     return;
@@ -273,8 +309,7 @@ const timeout = setTimeout(() => {
   timedOut = true;
   signalGroup("SIGTERM");
   killDeadlineAt = Date.now() + payload.timeoutKillGraceMs;
-  killTimer = setTimeout(() => signalGroup("SIGKILL"), payload.timeoutKillGraceMs);
-  killTimer.unref();
+  finishTimedOutAfterCleanup();
 }, payload.timeoutMs);
 timeout.unref();
 
@@ -287,9 +322,6 @@ child.stdin.on("error", (error) => {
 });
 child.on("error", (error) => {
   clearTimeout(timeout);
-  if (killTimer) {
-    clearTimeout(killTimer);
-  }
   writeSync(
     3,
     ${JSON.stringify(HOST_COMMAND_SPAWN_ERROR_PREFIX)} + JSON.stringify({
@@ -309,9 +341,6 @@ child.on("close", (code, signal) => {
   if (timedOut) {
     finishTimedOutAfterCleanup();
     return;
-  }
-  if (killTimer) {
-    clearTimeout(killTimer);
   }
   if (outputExceeded) {
     process.exit(1);
@@ -583,7 +612,18 @@ export async function runStreaming(
         process.kill(-childPid, 0);
         return true;
       } catch (error) {
-        return (error as NodeJS.ErrnoException).code === "EPERM";
+        if ((error as NodeJS.ErrnoException).code !== "EPERM") {
+          return false;
+        }
+        if (child.exitCode !== null || child.signalCode !== null) {
+          return false;
+        }
+        try {
+          process.kill(childPid, 0);
+          return true;
+        } catch {
+          return false;
+        }
       }
     };
     const waitForStreamingProcessGroupExit = async (timeoutBudgetMs: number): Promise<boolean> => {
@@ -703,6 +743,7 @@ export async function runStreaming(
     let timedOut = false;
     let killTimer: NodeJS.Timeout | undefined;
     let killDeadlineAt = 0;
+    let forceKillSent = false;
     const waitForStreamingTimeoutCleanup = async (): Promise<void> => {
       if (!detached) {
         signalStreamingChild("SIGKILL");
@@ -712,7 +753,12 @@ export async function runStreaming(
       if (remainingGraceMs > 0) {
         await waitForStreamingProcessGroupExit(remainingGraceMs);
       }
-      if (streamingProcessGroupAlive()) {
+      if (streamingProcessGroupAlive() && !forceKillSent) {
+        if (killTimer) {
+          clearTimeout(killTimer);
+          killTimer = undefined;
+        }
+        forceKillSent = true;
         signalStreamingChild("SIGKILL");
         await waitForStreamingProcessGroupExit(HOST_COMMAND_POST_FORCE_KILL_WAIT_MS);
       }
@@ -724,10 +770,10 @@ export async function runStreaming(
             timedOut = true;
             signalHostCommandProcess(childPid, "SIGTERM");
             killDeadlineAt = Date.now() + HOST_COMMAND_STREAMING_TIMEOUT_KILL_GRACE_MS;
-            killTimer = setTimeout(
-              () => signalHostCommandProcess(childPid, "SIGKILL"),
-              HOST_COMMAND_STREAMING_TIMEOUT_KILL_GRACE_MS,
-            );
+            killTimer = setTimeout(() => {
+              forceKillSent = true;
+              signalHostCommandProcess(childPid, "SIGKILL");
+            }, HOST_COMMAND_STREAMING_TIMEOUT_KILL_GRACE_MS);
             killTimer.unref();
           }, timeoutMs);
 

@@ -133,7 +133,7 @@ describe("models cli", () => {
     }
   }
 
-  it("declares --status-json as machine output", async () => {
+  it.each(["--json", "--status-json"])("declares %s as machine output", async (flag) => {
     const program = createProgram();
     let detected = false;
     program.hook("preAction", (_command, actionCommand) => {
@@ -141,14 +141,38 @@ describe("models cli", () => {
     });
 
     const originalArgv = process.argv;
-    process.argv = ["node", "openclaw", "models", "--status-json"];
+    process.argv = ["node", "openclaw", "models", flag];
     try {
-      await program.parseAsync(["models", "--status-json"], { from: "user" });
+      await program.parseAsync(["models", flag], { from: "user" });
     } finally {
       process.argv = originalArgv;
     }
 
     expect(detected).toBe(true);
+  });
+
+  it("does not apply the parent status alias to a child action", async () => {
+    const program = createProgram();
+    let detected = true;
+    program.hook("preAction", (_command, actionCommand) => {
+      detected = isCommandJsonOutputMode(actionCommand, process.argv);
+    });
+
+    const originalArgv = process.argv;
+    process.argv = ["node", "openclaw", "models", "--status-json", "list"];
+    try {
+      await program.parseAsync(["models", "--status-json", "list"], { from: "user" });
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    expect(detected).toBe(false);
+  });
+
+  it("forwards bare --json to the default status report", async () => {
+    await runModelsCommand(["models", "--json"]);
+
+    expectCommandOptions(modelsStatusCommand, { json: true });
   });
 
   it("registers github-copilot login command", async () => {

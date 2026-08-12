@@ -1,6 +1,7 @@
 /** Shared inbound message context types used by prompt templating and reply dispatch. */
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { DmScope, ReplyToMode } from "../config/types.base.js";
+import type { GroupToolPolicyConfig } from "../config/types.tools.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
@@ -276,6 +277,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   Prompt?: string;
   MaxChars?: number;
   ChatType?: string;
+  /** Trusted channel-configured policy for this admitted conversation turn. */
+  ConversationToolPolicy?: GroupToolPolicyConfig;
   /** Human label for envelope headers (conversation label, not sender). */
   ConversationLabel?: string;
   GroupSubject?: string;
@@ -322,7 +325,16 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   LocationAddress?: string;
   LocationSource?: string;
   LocationIsLive?: boolean;
+  LocationLivePeriodSeconds?: number;
   LocationCaption?: string;
+  /** Stable identity of the provider update that carried this message. */
+  ProviderUpdateId?: string;
+  /** Provider update kind, for example `message` or `edited_message`. */
+  ProviderUpdateKind?: string;
+  /** Provider-native timestamp for the original message. */
+  ProviderMessageTimestamp?: number;
+  /** Provider-native timestamp for an edited message update. */
+  ProviderEditTimestamp?: number;
   /** Provider label. */
   Provider?: string;
   /** Provider surface label. Prefer this over `Provider` when available. */
@@ -345,6 +357,7 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   CommandAuthorized?: boolean;
   CommandTurn?: CommandTurnContext;
   CommandSource?: "text" | "native";
+  CommandInterpretationSuppressed?: boolean;
   CommandTargetSessionKey?: string;
   /**
    * Internal flag: command handling prepared trailing prompt text for ACP dispatch.

@@ -417,6 +417,10 @@ describe("resolveToolCallView", () => {
     });
 
     expect(view.target).toBe("2 files");
+    expect(view.fileOperations).toEqual([
+      { operation: "update", path: "src/a.ts" },
+      { operation: "add", path: "src/b.ts" },
+    ]);
     expect(view.stat).toEqual({ added: 2, removed: 1 });
     expect(view.diff).toContainEqual({ kind: "file", text: "Update src/a.ts" });
     expect(view.diff).toContainEqual({ kind: "file", text: "Add src/b.ts" });
@@ -493,6 +497,7 @@ describe("resolveToolCallView", () => {
 
     expect(view.kind).toBe("edit");
     expect(view.target).toBe("notes.md");
+    expect(view.fileOperations).toEqual([{ operation: "add", path: "notes.md" }]);
     expect(view.stat).toEqual({ added: 1, removed: 0 });
   });
 
@@ -616,5 +621,24 @@ describe("resolveToolCallView", () => {
     const source = { name: "edit", args: { path: "/repo/a.ts", oldText: "x", newText: "y" } };
 
     expect(resolveToolCallView(source)).toBe(resolveToolCallView(source));
+  });
+
+  it("keeps tool-name presentation authoritative when different calls share args", () => {
+    const args = { path: "/repo/a.ts", oldText: "before", newText: "after" };
+
+    expect(resolveToolCallView({ name: "read", args })).toMatchObject({
+      kind: "read",
+      target: "a.ts",
+    });
+    expect(resolveToolCallView({ name: "edit", args })).toMatchObject({
+      kind: "edit",
+      target: "a.ts",
+      stat: { added: 1, removed: 1 },
+    });
+    expect(resolveToolCallView({ name: "write", args })).toMatchObject({
+      kind: "write",
+      target: "a.ts",
+    });
+    expect(resolveToolCallView({ name: "READ", args }).kind).toBe("read");
   });
 });

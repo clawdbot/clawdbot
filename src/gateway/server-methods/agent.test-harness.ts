@@ -1,11 +1,12 @@
 // Agent method tests cover run/steer/reset/wait behavior, task/subagent state,
 // approval followups, lifecycle hooks, and emitted gateway events.
 import { expectDefined } from "@openclaw/normalization-core";
+import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { expect, vi } from "vitest";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
-import { setSubagentRegistryDepsForTest } from "../../agents/subagent-registry-deps.js";
-import { resetSubagentRegistryForTests } from "../../agents/subagent-registry.test-helpers.js";
+import { setSubagentRegistryDepsForTest } from "../../agents/subagents/registry/subagent-registry-deps.js";
+import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SessionTranscriptStats } from "../../config/sessions/session-accessor.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
@@ -14,6 +15,7 @@ import {
   resetTaskRegistryForTests,
 } from "../../tasks/task-runtime.test-helpers.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { installInMemoryTaskRegistryRuntime } from "../../test-utils/task-registry-runtime.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { agentIdentityHandlers } from "./agent-identity.js";
 import { agentHandlers } from "./agent.js";
@@ -215,12 +217,25 @@ vi.mock("../../infra/agent-events.js", () => ({
   registerAgentRunContext: mocks.registerAgentRunContext,
   onAgentEvent: vi.fn(),
 }));
+vi.mock("../../infra/agent-run-registry.js", () => ({
+  claimAgentRunContext: mocks.registerAgentRunContext,
+  clearAgentRunContext: mocks.clearAgentRunContext,
+  getAgentRunContext: vi.fn(() => undefined),
+  hasProjectedAgentRunForSession: vi.fn(() => false),
+  registerAgentRunContext: mocks.registerAgentRunContext,
+}));
 
-vi.mock("../../agents/subagent-registry-read.js", () => ({
+// Only the lookup this harness asserts on is stubbed; the rest of the read
+// surface stays real so registry paths reached through the gateway (paused-run
+// adoption, descendant queries) observe the runs these tests seed.
+vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../agents/subagents/registry/subagent-registry-read.js")
+  >()),
   getLatestSubagentRunByChildSessionKey: mocks.getLatestSubagentRunByChildSessionKey,
 }));
 
-vi.mock("../session-subagent-reactivation.runtime.js", () => ({
+vi.mock("../../agents/subagents/registry/subagent-registry-runtime.js", () => ({
   replaceSubagentRunAfterSteer: mocks.replaceSubagentRunAfterSteer,
 }));
 
@@ -274,24 +289,16 @@ vi.mock("../../channels/message/runtime.js", async () => {
   );
   return {
     ...actual,
-    sendDurableMessageBatch: (...args: Parameters<typeof actual.sendDurableMessageBatch>) => {
+    sendDurableMessageBatchCore: (
+      ...args: Parameters<typeof actual.sendDurableMessageBatchCore>
+    ) => {
       const override = mocks.sendDurableMessageBatch.getMockImplementation();
       return override
         ? (mocks.sendDurableMessageBatch(...args) as ReturnType<
-            typeof actual.sendDurableMessageBatch
+            typeof actual.sendDurableMessageBatchCore
           >)
-        : actual.sendDurableMessageBatch(...args);
+        : actual.sendDurableMessageBatchCore(...args);
     },
-  };
-});
-
-vi.mock("../../utils/delivery-context.js", async () => {
-  const actual = await vi.importActual<typeof import("../../utils/delivery-context.js")>(
-    "../../utils/delivery-context.js",
-  );
-  return {
-    ...actual,
-    normalizeSessionDeliveryFields: () => ({}),
   };
 });
 
@@ -906,46 +913,37 @@ export async function invokeAgentIdentityGet(
   return respond;
 }
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
-
 /**
- * Pins subagent-registry deps for gateway handler tests, always keeping
- * `ensureRuntimePluginsLoaded` a no-op. Real ended-run hooks reload the
- * standalone plugin runtime in the background, and `loadOpenClawPlugins`
- * starts by wiping process-wide plugin registrations — including the detached
- * task lifecycle runtime a later test just installed via
- * `setDetachedTaskLifecycleRuntime`. Without this pin, a prior test's async
- * subagent completion can silently uninstall a later test's runtime seam
- * between install and finalize, so the finalize spy is never called.
+ * Keep subagent registry dependencies deterministic across gateway tests.
+ * Real ended-run hooks load a plugin bundle in the background, which can
+ * replace registrations installed by the next test before it finalizes.
  */
 export function applyGatewaySubagentRegistryTestDeps(
   overrides?: Parameters<typeof setSubagentRegistryDepsForTest>[0],
 ) {
   setSubagentRegistryDepsForTest({
-    ensureRuntimePluginsLoaded: () => {},
+    loadAgentRuntimePluginRegistryHandle: () => undefined,
     ...overrides,
   });
 }
 
 applyGatewaySubagentRegistryTestDeps();
 
+/** Keep handler tests on the real task lifecycle without paying for SQLite durability. */
+export function resetAgentTaskRegistryForTests(): void {
+  resetTaskRegistryForTests({ persist: false });
+  installInMemoryTaskRegistryRuntime();
+}
+
+export function restoreAgentTaskRegistryRuntimeAfterTests(): void {
+  resetTaskRegistryForTests({ persist: false });
+}
+
 export const describe0AfterEach0 = () => {
   envSnapshot.restore();
   resetDetachedTaskLifecycleRuntimeForTests();
   resetDiagnosticEventsForTest();
-  resetTaskRegistryForTests();
+  resetAgentTaskRegistryForTests();
   resetSubagentRegistryForTests({ persist: false });
   applyGatewaySubagentRegistryTestDeps();
   mocks.loadConfigReturn = {};
@@ -975,7 +973,7 @@ export const describe0AfterEach0 = () => {
 function resetIntegrationState() {
   envSnapshot.restore();
   resetDetachedTaskLifecycleRuntimeForTests();
-  resetTaskRegistryForTests();
+  resetAgentTaskRegistryForTests();
   mocks.agentCommand.mockReset();
   mocks.loadConfigReturn = {};
   mocks.loadGatewaySessionRow.mockReset();

@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
+import type { LegacyConfigMigrationContext } from "../../../config/legacy.shared.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { legacyCodexProviderIdentityKey } from "./codex-route-model-ref.js";
 import { pruneBindingsForMissingAgents } from "./legacy-config-binding-repair.js";
@@ -14,7 +15,10 @@ function repairBindingsForTest(config: OpenClawConfig) {
   return { config: pruneBindingsForMissingAgents(config, changes), changes };
 }
 
-function migrateLegacyConfigForTest(raw: unknown): {
+function migrateLegacyConfigForTest(
+  raw: unknown,
+  context?: LegacyConfigMigrationContext,
+): {
   config: OpenClawConfig | null;
   changes: string[];
 } {
@@ -24,7 +28,7 @@ function migrateLegacyConfigForTest(raw: unknown): {
   const next = structuredClone(raw) as Record<string, unknown>;
   const changes: string[] = [];
   for (const migration of LEGACY_CONFIG_MIGRATIONS) {
-    migration.apply(next, changes);
+    migration.apply(next, changes, context);
   }
   const visibleChanges = changes.filter(
     (change) => change !== "Moved agents.list → keyed agents.entries.",
@@ -1608,6 +1612,193 @@ describe("legacy session parent fork migrate", () => {
   });
 });
 
+describe("legacy diagnostics OTel protocol migrate", () => {
+  it("removes unsupported grpc protocol and disables enabled telemetry", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        otel: {
+          enabled: true,
+          endpoint: "http://otel-collector:4317",
+          protocol: "grpc",
+        },
+      },
+    });
+
+    expect(res.config?.diagnostics?.otel).toEqual({
+      enabled: false,
+      endpoint: "http://otel-collector:4317",
+    });
+    expect(res.changes).toStrictEqual([
+      'Removed unsupported diagnostics.otel.protocol "grpc"; use "http/protobuf" with an OTLP/HTTP collector.',
+      "Disabled diagnostics.otel.enabled because legacy grpc configs with OTLP signals cannot export telemetry; re-enable it after choosing an OTLP/HTTP collector.",
+    ]);
+  });
+
+  it("keeps enabled stdout-only logs when removing grpc protocol", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        otel: {
+          enabled: true,
+          traces: false,
+          metrics: false,
+          logs: true,
+          logsExporter: "stdout",
+          protocol: "grpc",
+        },
+      },
+    });
+
+    expect(res.config?.diagnostics?.otel).toEqual({
+      enabled: true,
+      traces: false,
+      metrics: false,
+      logs: true,
+      logsExporter: "stdout",
+    });
+    expect(res.changes).toStrictEqual([
+      'Removed unsupported diagnostics.otel.protocol "grpc"; use "http/protobuf" with an OTLP/HTTP collector.',
+    ]);
+  });
+
+  it("uses resolved interpolated stdout-only logging without replacing the authored reference", () => {
+    const authored = {
+      diagnostics: {
+        otel: {
+          enabled: true,
+          traces: false,
+          metrics: false,
+          logs: true,
+          logsExporter: "${OTEL_LOGS_EXPORTER}",
+          protocol: "grpc",
+        },
+      },
+    };
+    const resolved = {
+      diagnostics: {
+        otel: {
+          enabled: true,
+          traces: false,
+          metrics: false,
+          logs: true,
+          logsExporter: "stdout",
+          protocol: "grpc",
+        },
+      },
+    };
+
+    const res = migrateLegacyConfigForTest(authored, {
+      authoredRaw: authored,
+      resolvedRaw: resolved,
+    });
+
+    expect(res.config?.diagnostics?.otel).toEqual({
+      enabled: true,
+      traces: false,
+      metrics: false,
+      logs: true,
+      logsExporter: "${OTEL_LOGS_EXPORTER}",
+    });
+  });
+
+  it.each(["otlp", "both"])("disables enabled %s log export", (logsExporter) => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        otel: {
+          enabled: true,
+          traces: false,
+          metrics: false,
+          logs: true,
+          logsExporter,
+          protocol: "grpc",
+        },
+      },
+    });
+
+    expect(res.config?.diagnostics?.otel?.enabled).toBe(false);
+  });
+
+  it("keeps telemetry enabled when no signals are enabled", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        otel: {
+          enabled: true,
+          traces: false,
+          metrics: false,
+          logs: false,
+          protocol: "grpc",
+        },
+      },
+    });
+
+    expect(res.config?.diagnostics?.otel).toEqual({
+      enabled: true,
+      traces: false,
+      metrics: false,
+      logs: false,
+    });
+  });
+
+  it("repairs a config-interpolated grpc protocol using the resolved value", () => {
+    const authored = {
+      diagnostics: {
+        otel: {
+          enabled: true,
+          traces: false,
+          metrics: false,
+          logs: true,
+          logsExporter: "stdout",
+          protocol: "${OTEL_PROTOCOL}",
+        },
+      },
+    };
+    const resolved = {
+      diagnostics: {
+        otel: {
+          enabled: true,
+          traces: false,
+          metrics: false,
+          logs: true,
+          logsExporter: "stdout",
+          protocol: "grpc",
+        },
+      },
+    };
+
+    const res = migrateLegacyConfigForTest(authored, {
+      authoredRaw: authored,
+      resolvedRaw: resolved,
+    });
+
+    expect(res.config?.diagnostics?.otel).toEqual({
+      enabled: true,
+      traces: false,
+      metrics: false,
+      logs: true,
+      logsExporter: "stdout",
+    });
+  });
+
+  it("only removes grpc protocol when telemetry was already disabled", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        otel: {
+          enabled: false,
+          endpoint: "http://otel-collector:4317",
+          protocol: "grpc",
+        },
+      },
+    });
+
+    expect(res.config?.diagnostics?.otel).toEqual({
+      enabled: false,
+      endpoint: "http://otel-collector:4317",
+    });
+    expect(res.changes).toStrictEqual([
+      'Removed unsupported diagnostics.otel.protocol "grpc"; use "http/protobuf" with an OTLP/HTTP collector.',
+    ]);
+  });
+});
+
 describe("legacy WebChat channel config migrate", () => {
   it("removes retired WebChat channel config", () => {
     const raw = {
@@ -2108,7 +2299,10 @@ describe("legacy migrate sandbox scope aliases", () => {
             fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
           },
           models: {
-            "anthropic/claude-opus-4-7": { alias: "Opus" },
+            "anthropic/claude-opus-4-7": {
+              alias: "Opus",
+              agentRuntime: { id: "auto", mode: "strict" },
+            },
           },
         },
         list: [
@@ -2136,7 +2330,7 @@ describe("legacy migrate sandbox scope aliases", () => {
       models: {
         "anthropic/claude-opus-4-7": {
           alias: "Opus",
-          agentRuntime: { id: "claude-cli" },
+          agentRuntime: { id: "claude-cli", mode: "strict" },
         },
         "anthropic/claude-sonnet-4-6": {
           agentRuntime: { id: "claude-cli" },
@@ -3470,6 +3664,40 @@ describe("legacy model compat migrate", () => {
     expect(res.config?.models?.providers?.google?.models?.[0]?.id).toBe("gemini-3.1-pro-preview");
     expect(res.config?.models?.providers?.myproxy?.models?.[0]?.id).toBe(canonical);
     expect(res.config?.models?.providers?.openai?.models?.[0]?.id).toBe("gpt-5.5");
+  });
+
+  it("canonicalizes persisted OpenAI GPT-5.6 aliases without affecting GitHub Copilot", () => {
+    const copilot = "github-copilot/gpt-5.6";
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6@openai:work" },
+          modelPolicy: { allow: ["openai/gpt-5.6", copilot] },
+          models: {
+            "openai/gpt-5.6": { alias: "GPT" },
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+            [copilot]: { alias: "Copilot GPT" },
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: { models: [{ id: "gpt-5.6", name: "GPT alias" }] },
+          "github-copilot": { models: [{ id: "gpt-5.6", name: "Copilot GPT" }] },
+        },
+      },
+    });
+    const defaults = res.config?.agents?.defaults;
+    expect(defaults).toMatchObject({
+      model: { primary: "openai/gpt-5.6-sol@openai:work" },
+      modelPolicy: { allow: ["openai/gpt-5.6-sol", copilot] },
+    });
+    expect(defaults?.models).toEqual({
+      "openai/gpt-5.6-sol": { alias: "GPT", agentRuntime: { id: "openclaw" } },
+      [copilot]: { alias: "Copilot GPT" },
+    });
+    expect(res.config?.models?.providers?.openai?.models?.[0]?.id).toBe("gpt-5.6-sol");
+    expect(res.config?.models?.providers?.["github-copilot"]?.models?.[0]?.id).toBe("gpt-5.6");
   });
 
   it("merges provider catalog rows that normalize to an explicitly canonical id", () => {

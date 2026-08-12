@@ -1,8 +1,12 @@
 // Doctor cron repair orchestration for legacy stores, run logs, payloads, and warnings.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../../../packages/terminal-core/src/note.js";
+import { resolveStaticSessionMcpServerNames } from "../../../agents/agent-bundle-mcp-runtime-config.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../../agents/agent-scope.js";
+import { resolveCodexMcpToolOverridesForAgent } from "../../../agents/cli-runner/bundle-mcp-codex.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { loadCronQuarantineFile, resolveCronJobsStorePath } from "../../../cron/store.js";
+import { loadCronQuarantinedJobs, resolveCronJobsStorePath } from "../../../cron/store.js";
 import type { HealthFinding } from "../../../flows/health-checks.js";
 import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
@@ -17,6 +21,7 @@ import {
 } from "./legacy-repair.js";
 import {
   formatLegacyIssuePreview,
+  formatIncompleteInheritedAuthorityAdvisory,
   formatScheduledToolPolicyAdvisory,
   formatUnresolvedCommandPromptAdvisory,
   formatUnresolvedShellPromptAdvisory,
@@ -85,6 +90,44 @@ function countChronicallyFailingCronJobs(jobs: Array<Record<string, unknown>>): 
   }).length;
 }
 
+type AutoDisabledCronJob = {
+  id: string;
+  name: string;
+  reason: "consecutive-failures" | "schedule-errors";
+  consecutiveErrors: number;
+};
+
+function collectAutoDisabledCronJobs(jobs: Array<Record<string, unknown>>): AutoDisabledCronJob[] {
+  const autoDisabledJobs: AutoDisabledCronJob[] = [];
+  for (const job of jobs) {
+    if (job.enabled !== false || typeof job.id !== "string") {
+      continue;
+    }
+    const state = job.state;
+    if (!isRecord(state)) {
+      continue;
+    }
+    const autoDisabled = state.autoDisabled;
+    if (!isRecord(autoDisabled)) {
+      continue;
+    }
+    if (
+      (autoDisabled.reason !== "consecutive-failures" &&
+        autoDisabled.reason !== "schedule-errors") ||
+      typeof autoDisabled.consecutiveErrors !== "number"
+    ) {
+      continue;
+    }
+    autoDisabledJobs.push({
+      id: job.id,
+      name: typeof job.name === "string" && job.name.trim() ? job.name.trim() : job.id,
+      reason: autoDisabled.reason,
+      consecutiveErrors: autoDisabled.consecutiveErrors,
+    });
+  }
+  return autoDisabledJobs;
+}
+
 const LEGACY_CRON_STORE_CHECK_ID = "core/doctor/legacy-cron-store";
 
 function legacyCronStoreFinding(params: {
@@ -133,33 +176,45 @@ export async function collectLegacyCronStoreHealthFindings(params: {
   const findings: HealthFinding[] = [];
   const {
     storePath,
-    quarantinePath,
     legacyStoreDetected,
     legacyRunLogDetected,
+    legacyQuarantine,
     legacyImportCount,
     sqliteProjectionBackfillCount,
     rawJobs,
   } = state;
+  const sqliteStorePath = resolveOpenClawStateSqlitePath();
 
   try {
-    const quarantine = await loadCronQuarantineFile(quarantinePath);
-    if (quarantine.jobs.length > 0) {
+    const quarantine = loadCronQuarantinedJobs(storePath);
+    if (quarantine.length > 0) {
       findings.push(
         legacyCronStoreFinding({
-          message: `${pluralize(quarantine.jobs.length, "quarantined cron job row")} found at ${shortenHomePath(quarantinePath)}.`,
-          path: quarantinePath,
+          message: `${pluralize(quarantine.length, "quarantined cron job row")} found in SQLite at ${shortenHomePath(sqliteStorePath)}.`,
+          path: sqliteStorePath,
           requirement: "quarantined-cron-rows",
-          fixHint: `Review or repair the quarantined rows manually before copying any job back into ${shortenHomePath(storePath)}.`,
+          fixHint:
+            "Review or repair quarantined rows before restoring any job to the active cron store.",
         }),
       );
     }
   } catch (err) {
     findings.push(
       legacyCronStoreFinding({
-        message: `Unable to read quarantined cron rows at ${shortenHomePath(quarantinePath)}.`,
-        path: quarantinePath,
+        message: `Unable to read quarantined cron rows in SQLite at ${shortenHomePath(sqliteStorePath)}.`,
+        path: sqliteStorePath,
         requirement: "cron-quarantine-readable",
-        fixHint: `Fix the quarantine file's permissions or contents. Details: ${errorMessage(err)}`,
+        fixHint: `Check the shared state database permissions and contents. Details: ${errorMessage(err)}`,
+      }),
+    );
+  }
+
+  if (legacyQuarantine) {
+    findings.push(
+      legacyCronStoreFinding({
+        message: `Legacy JSON cron quarantine will be imported into SQLite from ${shortenHomePath(legacyQuarantine.path)}.`,
+        path: legacyQuarantine.path,
+        requirement: "legacy-cron-quarantine",
       }),
     );
   }
@@ -190,7 +245,6 @@ export async function collectLegacyCronStoreHealthFindings(params: {
     return findings;
   }
 
-  const sqliteStorePath = resolveOpenClawStateSqlitePath();
   const normalized = normalizeStoredCronJobs(rawJobs);
   for (const line of formatLegacyIssuePreview(normalized.issues)) {
     findings.push(
@@ -296,21 +350,23 @@ export async function maybeRepairLegacyCronStore(params: {
   }
   const {
     storePath,
-    quarantinePath,
     legacyStoreDetected,
     legacyRunLogDetected,
+    legacyQuarantine,
     legacyImportCount,
     sqliteProjectionBackfillCount,
+    invalidConfigRows,
     rawJobs,
   } = state;
+  const sqliteStorePath = resolveOpenClawStateSqlitePath();
   try {
-    const quarantine = await loadCronQuarantineFile(quarantinePath);
-    if (quarantine.jobs.length > 0) {
+    const quarantine = loadCronQuarantinedJobs(storePath);
+    if (quarantine.length > 0) {
       note(
         [
-          `Quarantined cron job rows found at ${shortenHomePath(quarantinePath)}.`,
-          `- ${pluralize(quarantine.jobs.length, "row")} was removed from the active cron store after runtime validation failed.`,
-          `- Review or repair the quarantined rows manually before copying any job back into ${shortenHomePath(storePath)}.`,
+          `Quarantined cron job rows found in SQLite at ${shortenHomePath(sqliteStorePath)}.`,
+          `- ${pluralize(quarantine.length, "row")} was removed from the active cron store after runtime validation failed.`,
+          "- Review or repair quarantined rows before restoring any job to the active cron store.",
         ].join("\n"),
         "Cron",
       );
@@ -319,14 +375,19 @@ export async function maybeRepairLegacyCronStore(params: {
     const reason = err instanceof Error ? err.message : String(err);
     note(
       [
-        `Unable to read quarantined cron rows at ${shortenHomePath(quarantinePath)}.`,
+        `Unable to read quarantined cron rows in SQLite at ${shortenHomePath(sqliteStorePath)}.`,
         `- ${reason}`,
       ].join("\n"),
       "Cron",
     );
   }
   if (rawJobs.length === 0) {
-    if (!legacyStoreDetected && !legacyRunLogDetected) {
+    if (
+      !legacyStoreDetected &&
+      !legacyRunLogDetected &&
+      !legacyQuarantine &&
+      invalidConfigRows.length === 0
+    ) {
       return;
     }
     const previewLines: string[] = [];
@@ -335,6 +396,14 @@ export async function maybeRepairLegacyCronStore(params: {
     }
     if (legacyRunLogDetected) {
       previewLines.push("- legacy JSON cron run logs will be imported into SQLite");
+    }
+    if (legacyQuarantine) {
+      previewLines.push("- legacy JSON cron quarantine will be imported into SQLite");
+    }
+    if (invalidConfigRows.length > 0) {
+      previewLines.push(
+        `- ${pluralize(invalidConfigRows.length, "malformed cron row")} will be quarantined in SQLite`,
+      );
     }
     note(
       [
@@ -382,6 +451,20 @@ export async function maybeRepairLegacyCronStore(params: {
     );
   }
 
+  const autoDisabledJobs = collectAutoDisabledCronJobs(rawJobs);
+  if (autoDisabledJobs.length > 0) {
+    note(
+      [
+        `${pluralize(autoDisabledJobs.length, "automation")} ${autoDisabledJobs.length === 1 ? "is" : "are"} auto-disabled after repeated failures.`,
+        ...autoDisabledJobs.map(
+          (job) =>
+            `- ${job.name} (${job.id}): recorded reason \`${job.reason}\` after ${job.consecutiveErrors} consecutive errors. Fix the cause, then re-enable with ${formatCliCommand(`openclaw automations enable ${job.id}`)}.`,
+        ),
+      ].join("\n"),
+      "Cron",
+    );
+  }
+
   const normalized = normalizeStoredCronJobs(rawJobs);
   const notifyCount = rawJobs.filter((job) => job.notify === true).length;
   const dreamingStaleCount = countStaleDreamingJobs(rawJobs);
@@ -406,6 +489,52 @@ export async function maybeRepairLegacyCronStore(params: {
   if (scheduledToolPolicyAdvisory) {
     note(scheduledToolPolicyAdvisory, "Cron");
   }
+  const staticMcpByAgentWorkspace = new Map<string, boolean>();
+  const incompleteInheritedAuthorityAdvisory = formatIncompleteInheritedAuthorityAdvisory(
+    rawJobs
+      .filter((job) => {
+        const payload = isRecord(job.payload) ? job.payload : undefined;
+        const provenance = isRecord(job.toolsAllowProvenance)
+          ? job.toolsAllowProvenance
+          : undefined;
+        if (
+          payload?.toolsAllowIsDefault !== true ||
+          (provenance?.version === 1 && provenance.source === "final-executable-surface")
+        ) {
+          return false;
+        }
+        const agentId =
+          typeof job.agentId === "string" && job.agentId.trim()
+            ? job.agentId.trim()
+            : resolveDefaultAgentId(params.cfg);
+        const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
+        const cacheKey = `${agentId}\0${workspaceDir}`;
+        let hasStaticMcp = staticMcpByAgentWorkspace.get(cacheKey);
+        if (hasStaticMcp === undefined) {
+          hasStaticMcp =
+            resolveStaticSessionMcpServerNames({
+              workspaceDir,
+              cfg: params.cfg,
+              toolOverrides: resolveCodexMcpToolOverridesForAgent(params.cfg, {
+                agentId,
+                toolOverrides: undefined,
+              }),
+            }).length > 0;
+          staticMcpByAgentWorkspace.set(cacheKey, hasStaticMcp);
+        }
+        return hasStaticMcp;
+      })
+      .map((job) =>
+        typeof job.name === "string" && job.name.trim()
+          ? job.name.trim()
+          : typeof job.id === "string"
+            ? job.id
+            : "unknown automation",
+      ),
+  );
+  if (incompleteInheritedAuthorityAdvisory) {
+    note(incompleteInheritedAuthorityAdvisory, "Cron");
+  }
   const previewLines = formatLegacyIssuePreview(normalized.issues);
   if (legacyStoreDetected) {
     previewLines.unshift(
@@ -416,6 +545,14 @@ export async function maybeRepairLegacyCronStore(params: {
   }
   if (legacyRunLogDetected) {
     previewLines.push("- legacy JSON cron run logs will be imported into SQLite");
+  }
+  if (legacyQuarantine) {
+    previewLines.push("- legacy JSON cron quarantine will be imported into SQLite");
+  }
+  if (invalidConfigRows.length > 0) {
+    previewLines.push(
+      `- ${pluralize(invalidConfigRows.length, "malformed cron row")} will be quarantined in SQLite`,
+    );
   }
   if (sqliteProjectionBackfillCount > 0) {
     previewLines.push(

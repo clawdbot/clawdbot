@@ -38,7 +38,10 @@ import { createShouldEmitVerboseProgress } from "./dispatch-from-config.harness-
 import { createDispatchReplyOperationCoordinator } from "./dispatch-from-config.lifecycle.js";
 import { createFinalizationAwareTtsPayloadApplier } from "./dispatch-from-config.payloads.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
-import { loadRuntimePlugins } from "./dispatch-from-config.runtime-loaders.js";
+import {
+  loadPreparedModelRuntime,
+  loadRuntimePlugins,
+} from "./dispatch-from-config.runtime-loaders.js";
 import { createReplyHotPathTimingTracker } from "./dispatch-from-config.timing.js";
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
@@ -61,8 +64,16 @@ export async function gatherDispatchRequest(
   const ctx = isFinalizedInboundContext(params.ctx)
     ? params.ctx
     : finalizeInboundContext(params.ctx);
-  const normalizedParams = ctx === params.ctx ? params : { ...params, ctx };
-  const state = { params: normalizedParams, messageAuditTerminal };
+  const normalizedParams: DispatchFromConfigParams = {
+    ...params,
+    ctx,
+    replyOptions: { ...params.replyOptions },
+  };
+  const state = {
+    params: normalizedParams,
+    messageAuditTerminal,
+    inboundDedupeReplayUnsafe: false,
+  };
   const { cfg, dispatcher } = normalizedParams;
   const replyOperationRunState: ReplyOperationRunState =
     resolveReplyOperationRunState(normalizedParams.replyOptions) ?? {};
@@ -183,9 +194,8 @@ export async function gatherDispatchRequest(
     messageLifecycle.markIdle(reason);
   };
 
-  let inboundDedupeReplayUnsafe = false;
   const markInboundDedupeReplayUnsafe = () => {
-    inboundDedupeReplayUnsafe = true;
+    state.inboundDedupeReplayUnsafe = true;
   };
 
   const boundAcpDispatchSessionKey = resolveBoundAcpDispatchSessionKey({ ctx, cfg });
@@ -318,7 +328,21 @@ export async function gatherDispatchRequest(
   const routeReplyThreadId = replyRoute.threadId ?? routeThreadId;
   const inboundAudio = hasInboundAudio(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, sessionAgentId);
+  // A bound ACP key names an external harness, not a configured model-runtime owner.
+  // Keep the source owner for Gateway dispatch while ACP execution uses the bound target below.
+  const preparedReplyDispatchAgentId = boundAcpDispatchSessionKey
+    ? resolveSessionAgentId({ sessionKey, config: cfg, fallbackAgentId: ctx.AgentId })
+    : sessionAgentId;
+  const preparedReplyDispatchRuntime = params.usePublishedModelRuntime
+    ? await traceReplyPhase("reply.load_prepared_dispatch_runtime", async () => {
+        const { loadPublishedGatewayReplyDispatchRuntime } = await loadPreparedModelRuntime();
+        return await loadPublishedGatewayReplyDispatchRuntime({
+          agentId: preparedReplyDispatchAgentId,
+        });
+      })
+    : undefined;
+  const workspaceDir =
+    preparedReplyDispatchRuntime?.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const replyOperationCoordinator = createDispatchReplyOperationCoordinator({
     ctx,
     dispatcher,
@@ -326,7 +350,7 @@ export async function gatherDispatchRequest(
     initialDispatchReplyOperation,
     messageAuditTerminal,
     operationSessionStoreEntry,
-    replyOptions: params.replyOptions,
+    replyOptions: normalizedParams.replyOptions,
     resolveOperationExpectedSessionId,
     routeThreadId,
   });
@@ -335,6 +359,7 @@ export async function gatherDispatchRequest(
     dispatchHookDispatcher,
     ensureDispatchReplyOperation,
     failDispatchReplyOperation,
+    getAgentRunTerminalOutcome,
     getDispatchAbortOperation,
     getDispatchAbortSignal,
     getDispatchReplyOperation,
@@ -355,12 +380,19 @@ export async function gatherDispatchRequest(
     hasInboundAudio: () =>
       inboundAudio || getDispatchReplyOperation()?.acceptedSteeredInboundAudio === true,
   });
-  const { ensureRuntimePluginsLoaded } = await traceReplyPhase("reply.load_runtime_plugins", () =>
-    loadRuntimePlugins(),
-  );
-  await traceReplyPhase("reply.ensure_runtime_plugins", () => {
-    ensureRuntimePluginsLoaded({ config: cfg, workspaceDir });
-  });
+  const pluginRegistry =
+    preparedReplyDispatchRuntime?.inboundPluginRegistry ??
+    (await traceReplyPhase("reply.load_runtime_plugin_registry_handle", async () => {
+      const { loadAgentRuntimePluginRegistryHandle } = await traceReplyPhase(
+        "reply.load_runtime_plugins",
+        loadRuntimePlugins,
+      );
+      return loadAgentRuntimePluginRegistryHandle({
+        config: cfg,
+        workspaceDir,
+        allowGatewaySubagentBinding: true,
+      });
+    }));
   const hookRunner = getGlobalHookRunner();
   // Extract message context for hooks (plugin and internal)
   const timestamp =
@@ -383,8 +415,8 @@ export async function gatherDispatchRequest(
       inboundClaimEvent: inboundClaim.event,
     };
   };
-  let { hookContext, inboundClaimContext, inboundClaimEvent } = buildHookState(hookCtx);
-  const { isGroup, groupId } = hookContext;
+  const hookState = buildHookState(hookCtx);
+  const { isGroup, groupId } = hookState.hookContext;
   let hookMediaPrepared = false;
   let hookMediaMetadataStaged = false;
   const prepareHookMediaMetadata = async () => {
@@ -406,11 +438,12 @@ export async function gatherDispatchRequest(
     );
     if (staged) {
       hookMediaMetadataStaged = true;
-      ({ hookContext, inboundClaimContext, inboundClaimEvent } = buildHookState(hookCtx));
+      Object.assign(hookState, buildHookState(hookCtx));
     }
   };
   const buildMessageReceivedHookContext = () => {
     const mediaRemoteHost = normalizeOptionalString(ctx.MediaRemoteHost);
+    const { hookContext } = hookState;
     const hasUnstagedRemoteMediaMetadata = Boolean(hookContext.media?.length);
     if (hookMediaMetadataStaged || !mediaRemoteHost || !hasUnstagedRemoteMediaMetadata) {
       return hookContext;
@@ -433,88 +466,63 @@ export async function gatherDispatchRequest(
       originalMediaTypes: hookContext.mediaTypes,
     };
   };
-  const nextState = extendPreparedDispatchState(
-    state,
-    {
-      ctx,
-      cfg,
-      dispatcher,
-      sessionKey,
-      traceReplyPhase,
-      recordProcessed,
-      recordAgentDispatchStarted,
-      recordAgentDispatchCompleted,
-      markProcessing,
-      markIdle,
-      markInboundDedupeReplayUnsafe,
-      acpDispatchSessionKey,
-      markProgress,
-      sessionStoreEntry,
-      notePreparedSession,
-      resolvePreparedTranscriptBinding,
-      sessionAgentId,
-      shouldEmitVerboseProgress,
-      shouldEmitFullVerboseProgress,
-      replyRoute,
-      routeReplyThreadId,
-      inboundAudio,
-      sessionTtsAuto,
-      workspaceDir,
-      replyOperationRunState,
-      completeDispatchReplyOperation,
-      dispatchHookDispatcher,
-      ensureDispatchReplyOperation,
-      failDispatchReplyOperation,
-      getDispatchAbortOperation,
-      getDispatchAbortSignal,
-      getDispatchReplyOperation,
-      getObservedReplyDelivery,
-      getPreDispatchAbortSignal,
-      getReplyOptions,
-      isDispatchOperationAborted,
-      isPreDispatchOperationAborted,
-      markObservedReplyDelivery,
-      releasePreDispatchLifecycleAdmission,
-      runWithDispatchLifecycleAdmission,
-      throwIfDispatchOperationAborted,
-      trackDispatchLifecycleWork,
-      turnLedger,
-      maybeApplyTtsWithFinalizationLease,
-      hookRunner,
-      timestamp,
-      messageIdForHook,
-      isGroup,
-      groupId,
-      prepareHookMediaMetadata,
-      buildMessageReceivedHookContext,
-    },
-    {
-      inboundDedupeReplayUnsafe: {
-        get: () => inboundDedupeReplayUnsafe,
-        set: (value: boolean) => {
-          inboundDedupeReplayUnsafe = value;
-        },
-      },
-      hookContext: {
-        get: () => hookContext,
-        set: (value: typeof hookContext) => {
-          hookContext = value;
-        },
-      },
-      inboundClaimContext: {
-        get: () => inboundClaimContext,
-        set: (value: typeof inboundClaimContext) => {
-          inboundClaimContext = value;
-        },
-      },
-      inboundClaimEvent: {
-        get: () => inboundClaimEvent,
-        set: (value: typeof inboundClaimEvent) => {
-          inboundClaimEvent = value;
-        },
-      },
-    },
-  );
+  const nextState = extendPreparedDispatchState(state, {
+    ctx,
+    cfg,
+    dispatcher,
+    sessionKey,
+    traceReplyPhase,
+    recordProcessed,
+    recordAgentDispatchStarted,
+    recordAgentDispatchCompleted,
+    markProcessing,
+    markIdle,
+    markInboundDedupeReplayUnsafe,
+    acpDispatchSessionKey,
+    markProgress,
+    sessionStoreEntry,
+    notePreparedSession,
+    resolvePreparedTranscriptBinding,
+    sessionAgentId,
+    shouldEmitVerboseProgress,
+    shouldEmitFullVerboseProgress,
+    replyRoute,
+    routeReplyThreadId,
+    inboundAudio,
+    sessionTtsAuto,
+    workspaceDir,
+    preparedReplyDispatchRuntime,
+    pluginRegistry,
+    replyOperationRunState,
+    completeDispatchReplyOperation,
+    dispatchHookDispatcher,
+    ensureDispatchReplyOperation,
+    failDispatchReplyOperation,
+    getAgentRunTerminalOutcome,
+    getDispatchAbortOperation,
+    getDispatchAbortSignal,
+    getDispatchReplyOperation,
+    getObservedReplyDelivery,
+    getPreDispatchAbortSignal,
+    getReplyOptions,
+    isDispatchOperationAborted,
+    isPreDispatchOperationAborted,
+    markObservedReplyDelivery,
+    releasePreDispatchLifecycleAdmission,
+    runWithDispatchLifecycleAdmission,
+    throwIfDispatchOperationAborted,
+    trackDispatchLifecycleWork,
+    turnLedger,
+    maybeApplyTtsWithFinalizationLease,
+    hookRunner,
+    timestamp,
+    messageIdForHook,
+    isGroup,
+    groupId,
+    hookState,
+    prepareHookMediaMetadata,
+    buildMessageReceivedHookContext,
+  });
   return { status: "ready" as const, state: nextState };
 }
 

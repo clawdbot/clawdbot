@@ -35,6 +35,23 @@ describe("config validation allowed-values metadata", () => {
     }
   });
 
+  it("reports the supported diagnostics OTel protocol when grpc is configured", () => {
+    const result = validateConfigObjectRaw({
+      diagnostics: {
+        otel: {
+          protocol: "grpc",
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = requireIssue(result.issues, "diagnostics.otel.protocol");
+      expect(issue.allowedValues).toEqual(["http/protobuf"]);
+      expect(issue.allowedValuesHiddenCount).toBe(0);
+    }
+  });
+
   it("skips allowed-values hints for unions with open-ended branches", () => {
     const result = validateConfigObjectRaw({
       cron: { sessionRetention: true },

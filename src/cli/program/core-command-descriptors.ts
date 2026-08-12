@@ -49,6 +49,12 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "database",
+    description: "Inspect shared-state schema compatibility and write ownership",
+    hasSubcommands: true,
+    parentDefaultHelp: true,
+  },
+  {
     name: "migrate",
     description: "Import state from another agent system",
     hasSubcommands: true,
@@ -112,17 +118,12 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "audit",
-    description: "Inspect metadata-only run, tool, and message lifecycle records",
+    description: "Inspect activity records and exact-run identity context",
     hasSubcommands: false,
   },
   {
     name: "sessions",
     description: "List stored conversation sessions",
-    hasSubcommands: true,
-  },
-  {
-    name: "commitments",
-    description: "List and manage inferred follow-up commitments",
     hasSubcommands: true,
   },
   {
@@ -147,7 +148,7 @@ export function getCoreCliCommandDescriptors(): ReadonlyArray<CoreCliCommandDesc
 }
 
 /** Return names for all core root commands. */
-export function getCoreCliCommandNames(): string[] {
+export function getCoreCliCommandNamesCore(): string[] {
   return visibleCoreCliCommandDescriptors().map((descriptor) => descriptor.name);
 }
 

@@ -146,7 +146,6 @@ function makeRunReplyAgentParams(
     shouldSteer: false,
     shouldFollowup: false,
     isActive: false,
-    isStreaming: false,
     typing: createMockTypingController(),
     sessionCtx: {
       Provider: provider,

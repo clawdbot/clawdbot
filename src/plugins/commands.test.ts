@@ -11,8 +11,10 @@ import {
   matchPluginCommand,
   registerPluginCommand,
 } from "./commands.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { createPluginRegistry } from "./registry.js";
-import { setActivePluginRegistry } from "./runtime.js";
+import { setActivePluginRegistry, withPluginRegistrationContext } from "./runtime.js";
+import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createBundledPluginRecord } from "./status.test-fixtures.js";
 
@@ -61,6 +63,7 @@ function registerHostTrustedReservedCommandForTest(
     activateGlobalSideEffects: true,
   });
   pluginRegistry.registerCommand(createBundledPluginRecord(command.name), command);
+  setActivePluginRegistry(pluginRegistry.registry);
 }
 
 function registerVoiceCommandForTest(
@@ -284,6 +287,21 @@ afterEach(() => {
 });
 
 describe("registerPluginCommand", () => {
+  it("writes direct registrations into the synchronous builder context", () => {
+    const active = createEmptyPluginRegistry();
+    const building = createEmptyPluginRegistry();
+    setActivePluginRegistry(active);
+
+    expect(
+      withPluginRegistrationContext(building, "demo-plugin", () =>
+        registerPluginCommand("spoofed-plugin", createVoiceCommand()),
+      ),
+    ).toEqual({ ok: true });
+    expect(active.commands).toStrictEqual([]);
+    expect(building.commands.map((entry) => entry.command.name)).toEqual(["voice"]);
+    expect(building.commands[0]?.pluginId).toBe("demo-plugin");
+  });
+
   it.each([
     {
       name: "rejects invalid command names",
@@ -404,6 +422,49 @@ describe("registerPluginCommand", () => {
       },
     ]);
     expect(listRegisteredPluginAgentPromptGuidance()).toEqual(["Use /demo_cmd for demo routing."]);
+  });
+
+  it("prefers a request-scoped registry over ambient compatibility state", async () => {
+    const ambientHandler = vi.fn(async () => ({ text: "ambient" }));
+    const scopedHandler = vi.fn(async () => ({ text: "scoped" }));
+    expect(
+      registerPluginCommand("ambient", {
+        name: "same",
+        description: "Ambient command",
+        agentPromptGuidance: ["Ambient guidance"],
+        handler: ambientHandler,
+      }),
+    ).toEqual({ ok: true });
+    const scoped = createEmptyPluginRegistry();
+
+    await withPluginRuntimeRegistryScope(scoped, async () => {
+      expect(
+        registerPluginCommand("scoped", {
+          name: "same",
+          description: "Scoped command",
+          agentPromptGuidance: ["Scoped guidance"],
+          handler: scopedHandler,
+        }),
+      ).toEqual({ ok: true });
+      expect(listProviderPluginCommandSpecs().map((entry) => entry.description)).toEqual([
+        "Scoped command",
+      ]);
+      expect(listRegisteredPluginAgentPromptGuidance()).toEqual(["Scoped guidance"]);
+      const match = matchPluginCommand("/same");
+      expect(match?.command.pluginId).toBe("scoped");
+      await executePluginCommand({
+        command: match!.command,
+        senderId: "user-1",
+        channel: "telegram",
+        isAuthorizedSender: true,
+        commandBody: "/same",
+        config: {},
+      });
+    });
+
+    expect(scopedHandler).toHaveBeenCalledOnce();
+    expect(ambientHandler).not.toHaveBeenCalled();
+    expect(listRegisteredPluginAgentPromptGuidance()).toEqual(["Ambient guidance"]);
   });
 
   it.each([
@@ -825,6 +886,7 @@ describe("registerPluginCommand", () => {
         },
       },
     );
+    setActivePluginRegistry(pluginRegistry.registry);
     const match = requirePluginCommandMatch("/external");
 
     await executePluginCommand({
@@ -860,6 +922,7 @@ describe("registerPluginCommand", () => {
         return { text: "ok" };
       },
     });
+    setActivePluginRegistry(pluginRegistry.registry);
     const match = requirePluginCommandMatch("/pair_test");
 
     await executePluginCommand({

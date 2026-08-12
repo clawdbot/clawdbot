@@ -22,7 +22,7 @@ import {
   resolveNpmLockJobs,
   shouldUseLegacyPeerDepsForNpmLock,
   npmLockPackageDirsForChangedPaths,
-} from "../../scripts/generate-npm-package-lock.mjs";
+} from "../../scripts/generate-npm-package-lock.mts";
 
 describe("generate-npm-package-lock", () => {
   function repoRelativePath(value: string): string {
@@ -32,6 +32,8 @@ describe("generate-npm-package-lock", () => {
   it("omits workspace packages that are published beside the package", () => {
     const normalized = packageJsonForNpmLock(
       {
+        bundleDependencies: ["chalk"],
+        bundledDependencies: ["chalk"],
         dependencies: { "@openclaw/ai": "workspace:2026.6.11", chalk: "5.6.2" },
         devDependencies: { local: "workspace:*" },
         peerDependencies: { host: "workspace:^1.2.3" },
@@ -39,6 +41,8 @@ describe("generate-npm-package-lock", () => {
       {},
     );
 
+    expect(normalized).not.toHaveProperty("bundleDependencies");
+    expect(normalized).not.toHaveProperty("bundledDependencies");
     expect(normalized).not.toHaveProperty("devDependencies");
     expect(normalized.dependencies).toEqual({ chalk: "5.6.2" });
     expect(normalized.peerDependencies).toEqual({});

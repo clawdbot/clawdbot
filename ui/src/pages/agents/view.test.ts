@@ -192,6 +192,7 @@ describe("renderAgents", () => {
   });
 
   it("loads and renders the selected agent's 51st cron job when Load more is clicked", async () => {
+    const snapshotRevision = "agents-view-cron-fixture";
     const jobs = Array.from({ length: 50 }, (_, index) =>
       createCronJob(`main-${index}`, { agentId: "alpha" }),
     );
@@ -201,8 +202,10 @@ describe("renderAgents", () => {
     });
     const request = vi.fn(async () => ({
       jobs: [lastJob],
+      snapshotRevision,
       total: 51,
       offset: 50,
+      limit: 50,
       nextOffset: null,
       hasMore: false,
     }));
@@ -211,6 +214,7 @@ describe("renderAgents", () => {
       ...createInitialCronState({ client, connected: true }),
       cronAgentId: "alpha",
       cronJobs: jobs,
+      cronJobsSnapshotRevision: snapshotRevision,
       cronJobsTotal: 51,
       cronJobsHasMore: true,
       cronJobsNextOffset: 50,
@@ -234,10 +238,7 @@ describe("renderAgents", () => {
               error: cronState.cronError,
             },
             onCronLoadMore: () => {
-              const nextPage = loadCronJobsPage(cronState, {
-                append: true,
-                tableFilters: true,
-              });
+              const nextPage = loadCronJobsPage(cronState, { append: true, tableFilters: true });
               renderCurrentPage();
               void nextPage.then(renderCurrentPage);
             },
@@ -314,7 +315,7 @@ describe("renderAgents", () => {
             "openai/gpt-5.4": {},
           },
         },
-        list: [{ id: "alpha" }, { id: "beta" }],
+        entries: { alpha: {}, beta: {} },
       },
     };
 
@@ -327,6 +328,7 @@ describe("renderAgents", () => {
             loading: false,
             saving: false,
             dirty: false,
+            error: null,
           },
         }),
       ),
@@ -349,6 +351,7 @@ describe("renderAgents", () => {
             loading: false,
             saving: false,
             dirty: false,
+            error: null,
           },
         }),
       ),
@@ -378,7 +381,7 @@ describe("renderAgents", () => {
             "local/unlisted-model": { alias: "My local model" },
           },
         },
-        list: [{ id: "alpha" }, { id: "beta" }],
+        entries: { alpha: {}, beta: {} },
       },
     };
 
@@ -391,6 +394,7 @@ describe("renderAgents", () => {
             loading: false,
             saving: false,
             dirty: false,
+            error: null,
           },
           modelCatalog: [
             {
@@ -449,12 +453,13 @@ describe("renderAgents", () => {
                 defaults: {
                   model: { primary: "openai/gpt-5.4", fallbacks: [fallback] },
                 },
-                list: [{ id: "alpha" }, { id: "beta", model }],
+                entries: { alpha: {}, beta: { model } },
               },
             },
             loading: false,
             saving: false,
             dirty: false,
+            error: null,
           },
         }),
       ),
@@ -477,10 +482,10 @@ describe("renderAgents", () => {
             "openai/gpt-5.4": {},
           },
         },
-        list: [
-          { id: "alpha", model: { primary: "anthropic/claude-sonnet-4-6" } },
-          { id: "beta", model: { primary: "openai/gpt-5.4" } },
-        ],
+        entries: {
+          alpha: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+          beta: { model: { primary: "openai/gpt-5.4" } },
+        },
       },
     };
 
@@ -493,6 +498,7 @@ describe("renderAgents", () => {
             loading: false,
             saving: false,
             dirty: false,
+            error: null,
           },
         }),
       ),
@@ -516,6 +522,7 @@ describe("renderAgents", () => {
             loading: false,
             saving: false,
             dirty: false,
+            error: null,
           },
         }),
       ),
@@ -543,7 +550,7 @@ describe("renderAgents", () => {
           agentsList: {
             defaultId: "alpha",
             mainKey: "main",
-            scope: "workspace",
+            scope: "per-sender",
             agents: [
               { id: "alpha", name: "Alpha", thinkingDefault: "off" } as never,
               { id: "beta", name: "Beta", thinkingDefault: "xhigh" } as never,
@@ -739,6 +746,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",
@@ -785,6 +793,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",
@@ -853,6 +862,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",
@@ -905,6 +915,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",
@@ -922,11 +933,10 @@ describe("renderAgentFiles", () => {
         agentFilesError: null,
         agentFileActive: "USER.md",
         agentFileContents: {
-          "USER.md": "# User Profile\n\nHello world",
+          "USER.md":
+            "# User Profile\n\nHello world\n\n```ts\nconst answer = 42;\n```\n\n<script>alert('unsafe')</script>\n\n![Remote](https://e.co/i)",
         },
-        agentFileDrafts: {
-          "USER.md": "# User Profile\n\nHello world",
-        },
+        agentFileDrafts: {},
         agentFileSaving: false,
         onLoadFiles: () => undefined,
         onSelectFile: () => undefined,
@@ -937,9 +947,6 @@ describe("renderAgentFiles", () => {
       container,
     );
 
-    expect(container.querySelectorAll(".md-preview-dialog__reader.sidebar-markdown")).toHaveLength(
-      1,
-    );
     expect(container.querySelector(".md-preview-dialog__path")?.textContent?.trim()).toBe(
       "USER.md",
     );
@@ -949,6 +956,10 @@ describe("renderAgentFiles", () => {
     expect(container.querySelector(".md-preview-dialog__eyebrow span")?.textContent?.trim()).toBe(
       "Markdown Preview",
     );
+    const reader = container.querySelector(".md-preview-dialog__reader.sidebar-markdown");
+    expect(reader?.querySelector("img")?.getAttribute("src")).toBe("https://e.co/i");
+    expect(reader?.querySelector("pre code")?.textContent).toBe("const answer = 42;\n");
+    expect(reader?.querySelector(".code-block-copy, script")).toBeNull();
   });
 
   it("renders preview header controls as icon-only buttons with accessible labels", () => {
@@ -957,6 +968,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",
@@ -1008,6 +1020,7 @@ describe("renderAgentFiles", () => {
     render(
       renderAgentFiles({
         agentId: "alpha",
+        canWrite: true,
         agentFilesList: {
           agentId: "alpha",
           workspace: "/tmp/workspace",

@@ -60,6 +60,7 @@ jobs:
               "scripts/periphery-intersection.mjs",
               "scripts/ios-configure-signing.sh",
               "scripts/ios-write-swift-filelist.mjs",
+              "scripts/ios-write-swift-filelist.mts",
               "scripts/ios-write-version-xcconfig.sh",
               "test/scripts/periphery-intersection.test.ts",
             ], { ignoreReturnCode: true, silent: true });

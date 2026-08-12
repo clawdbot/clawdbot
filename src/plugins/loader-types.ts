@@ -9,6 +9,7 @@ import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 import type { PluginLogger } from "./types.js";
 
 export type PluginRuntimeSubagentMode = "default" | "explicit" | "gateway-bindable";
+export type ChannelPluginLoadIntent = "full" | "setup";
 
 /** Inputs shared by runtime, snapshot, and CLI-metadata plugin loading. */
 export type PluginLoadOptions = {
@@ -36,10 +37,8 @@ export type PluginLoadOptions = {
   includeSetupOnlyChannelPlugins?: boolean;
   forceSetupOnlyChannelPlugins?: boolean;
   requireSetupEntryForSetupOnlyChannelPlugins?: boolean;
-  /** Prefer opted-in channel setup entries for the pre-listen startup surface. */
-  preferSetupRuntimeForChannelPlugins?: boolean;
-  /** Load channel runtime entries even when setup entries are available. */
-  forceFullRuntimeForChannelPlugins?: boolean;
+  /** Select full runtime registration or the lightweight unconfigured-channel setup path. */
+  channelPluginLoadIntent?: ChannelPluginLoadIntent;
   /** Prefer bundled JavaScript artifacts over source TypeScript entrypoints. */
   preferBuiltPluginArtifacts?: boolean;
   toolDiscovery?: boolean;

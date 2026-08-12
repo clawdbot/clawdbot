@@ -10,15 +10,16 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import type { SessionEntry } from "../config/sessions/types.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { scheduleGatewayHandlerPrewarm } from "./server-startup-handler-prewarm.js";
+import type { SessionsListResult } from "./session-utils.types.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
   seedSessionTranscript,
   sessionStoreEntry,
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
 const LIST_PARAMS = {
   agentId: "main",
@@ -45,11 +46,11 @@ async function countMaterializedEntriesForRows(rows: number): Promise<number> {
 
   let materialized = 0;
   // Only the lookup-store path used by sharing resolution goes through
-  // `listSessionEntries`; the listing itself and ACP metadata use the read-only
+  // `listSessionEntriesCore`; the listing itself and ACP metadata use the read-only
   // variant, so this isolates the per-row store loads under test.
-  const original = sessionAccessor.listSessionEntries;
+  const original = sessionAccessor.listSessionEntriesCore;
   const spies = [
-    vi.spyOn(sessionAccessor, "listSessionEntries").mockImplementation(((...args: never[]) => {
+    vi.spyOn(sessionAccessor, "listSessionEntriesCore").mockImplementation(((...args: never[]) => {
       const result = (original as (...inner: never[]) => unknown[])(...args);
       materialized += Array.isArray(result) ? result.length : 0;
       return result;
@@ -114,6 +115,7 @@ test("startup prewarm fills session snapshot and title caches before the first l
     sessionKey,
     storePath,
   });
+  const titleBatchSpy = vi.spyOn(sessionAccessor, "readSessionTranscriptTitleProbeBatch");
   const titlePageSpy = vi.spyOn(sessionAccessor, "readSessionTranscriptMessageEventPage");
   let sidecar: ReturnType<typeof scheduleGatewayHandlerPrewarm> | undefined;
   vi.useFakeTimers();
@@ -144,7 +146,9 @@ test("startup prewarm fills session snapshot and title caches before the first l
     await vi.advanceTimersToNextTimerAsync();
     await sessionPrewarm;
     sidecar.stop();
-    expect(titlePageSpy).toHaveBeenCalled();
+    expect(titleBatchSpy).toHaveBeenCalled();
+    expect(titlePageSpy).not.toHaveBeenCalled();
+    titleBatchSpy.mockClear();
     titlePageSpy.mockClear();
     vi.useRealTimers();
     const cachedEntries = sessionAccessor.listSessionEntriesReadOnly({
@@ -154,12 +158,16 @@ test("startup prewarm fills session snapshot and title caches before the first l
       storePath,
     });
 
-    const result = await directSessionReq("sessions.list", {
+    const result = await directSessionReq<SessionsListResult>("sessions.list", {
       ...LIST_PARAMS,
       includeDerivedTitles: true,
     });
 
     expect(result.ok).toBe(true);
+    expect(result.payload?.sessions).toContainEqual(
+      expect.objectContaining({ key: sessionKey, derivedTitle: "Warm title" }),
+    );
+    expect(titleBatchSpy).not.toHaveBeenCalled();
     expect(titlePageSpy).not.toHaveBeenCalled();
     const afterListEntries = sessionAccessor.listSessionEntriesReadOnly({
       agentId: "main",
@@ -171,7 +179,64 @@ test("startup prewarm fills session snapshot and title caches before the first l
   } finally {
     sidecar?.stop();
     vi.useRealTimers();
+    titleBatchSpy.mockRestore();
     titlePageSpy.mockRestore();
+  }
+});
+
+test("startup skips a large session prewarm while request-time listing remains available", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: Object.fromEntries(
+      Array.from({ length: 2_001 }, (_, index) => [
+        `agent:main:large-${index}`,
+        sessionStoreEntry(`large-${index}`, { updatedAt: 1_781_000_000_000 - index }),
+      ]),
+    ),
+  });
+  const info = vi.fn();
+  const listSpy = vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly");
+  let sidecar: ReturnType<typeof scheduleGatewayHandlerPrewarm> | undefined;
+  vi.useFakeTimers();
+  try {
+    let resolveSessionPrewarm!: () => void;
+    const sessionPrewarm = new Promise<void>((resolve) => {
+      resolveSessionPrewarm = resolve;
+    });
+    sidecar = scheduleGatewayHandlerPrewarm({
+      cfgAtStart: {
+        agents: { list: [{ id: "main", default: true }] },
+        session: { store: storePath },
+      } as never,
+      log: { info, warn: vi.fn() },
+      startupTrace: {
+        measure: async (name, run) => {
+          try {
+            return await run();
+          } finally {
+            if (name === "post-ready.gateway-data.sessions.main") {
+              resolveSessionPrewarm();
+            }
+          }
+        },
+      },
+    });
+
+    await vi.advanceTimersToNextTimerAsync();
+    await sessionPrewarm;
+    sidecar.stop();
+    expect(info).toHaveBeenCalledWith(
+      "skipping optional dashboard session prewarm: combined stores exceed 2000 rows",
+    );
+    expect(listSpy).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+    const result = await directSessionReq("sessions.list", LIST_PARAMS);
+    expect(result.ok).toBe(true);
+  } finally {
+    sidecar?.stop();
+    vi.useRealTimers();
+    listSpy.mockRestore();
   }
 });
 
@@ -220,13 +285,13 @@ test("sessions.list projects out prompt snapshots without changing full entry re
 
   const projections: Array<string | undefined> = [];
   const originalReadOnly = sessionAccessor.listSessionEntriesReadOnly;
-  const originalWritable = sessionAccessor.listSessionEntries;
+  const originalWritable = sessionAccessor.listSessionEntriesCore;
   const spies = [
     vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly").mockImplementation((scope) => {
       projections.push(scope?.projection);
       return originalReadOnly(scope);
     }),
-    vi.spyOn(sessionAccessor, "listSessionEntries").mockImplementation((scope) => {
+    vi.spyOn(sessionAccessor, "listSessionEntriesCore").mockImplementation((scope) => {
       projections.push(scope?.projection);
       return originalWritable(scope);
     }),

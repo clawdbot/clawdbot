@@ -9,13 +9,15 @@ import {
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessBeforeCompactionHook,
   type AgentHarness,
-  type AgentHarnessAttemptParams,
+  type AgentHarnessAttemptParamsV2,
+  type AgentHarnessV2,
   type AgentHarnessAttemptResult,
   type AgentHarnessCompactParams,
   type AgentHarnessCompactResult,
   type AgentHarnessResetParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CopilotSessionConfig } from "./src/attempt.js";
 import { createCopilotByokAuth, resolveCopilotAuth, tokenFingerprint } from "./src/auth-bridge.js";
 import { createCopilotByokProxy } from "./src/byok-proxy.js";
@@ -32,9 +34,21 @@ import type {
   PoolKey,
 } from "./src/runtime.js";
 
-type AgentHarnessIsolatedCompletion = NonNullable<AgentHarness["runIsolatedCompletion"]>;
+type AgentHarnessIsolatedCompletion = NonNullable<AgentHarness["runIsolatedCompletionV2"]>;
 type AgentHarnessIsolatedCompletionParams = Parameters<AgentHarnessIsolatedCompletion>[0];
 type AgentHarnessIsolatedCompletionResult = Awaited<ReturnType<AgentHarnessIsolatedCompletion>>;
+type CopilotSettledTurnFinalizationAttemptParams = Parameters<
+  NonNullable<AgentHarnessV2["finalizeSettledTurn"]>
+>[0]["attempt"];
+type CopilotHarnessAttemptParams = (
+  | AgentHarnessAttemptParamsV2
+  | CopilotSettledTurnFinalizationAttemptParams
+) & {
+  initialReplayState?: AgentHarnessAttemptParamsV2["initialReplayState"] & {
+    journalValidated?: boolean;
+    sdkSessionId?: string;
+  };
+};
 
 const COPILOT_PROVIDER_IDS: ReadonlySet<string> = new Set(["github-copilot"]);
 
@@ -338,7 +352,7 @@ async function compactTrackedSdkSession(params: {
 // the token (see `tokenFingerprint` in `src/auth-bridge.ts`), so
 // rotating the token under the same profile id still invalidates
 // the compat key without ever serializing the raw credential.
-type CopilotSessionCompatParams = AgentHarnessAttemptParams | AgentHarnessCompactParams;
+type CopilotSessionCompatParams = CopilotHarnessAttemptParams | AgentHarnessCompactParams;
 
 function readAgentIdFromSessionKey(sessionKey: unknown): string | undefined {
   if (typeof sessionKey !== "string") {
@@ -441,10 +455,10 @@ function computeSessionKey(
     (typeof p.model === "string" ? p.model : "");
   const requestTransport =
     p.model && typeof p.model === "object" ? getModelProviderRequestTransport(p.model) : undefined;
-  const requestAuthMode = readSessionString(
+  const requestAuthMode = normalizeOptionalString(
     requestTransport?.auth?.mode ?? modelObj.request?.auth?.mode,
   );
-  const azureApiVersion = readSessionString(
+  const azureApiVersion = normalizeOptionalString(
     modelObj.azureApiVersion ?? modelObj.params?.azureApiVersion,
   );
   // resolveCopilotAuth can throw when an explicit `auth.gitHubToken`
@@ -546,10 +560,6 @@ function computeSessionKey(
   return parts.join("|");
 }
 
-function readSessionString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function fingerprintSessionValue(value: unknown): string {
   return typeof value === "string" && value ? tokenFingerprint(value) : "";
 }
@@ -578,7 +588,7 @@ function buildCopilotCompactionHookContext(params: AgentHarnessCompactParams) {
 
 export function createCopilotAgentHarness(
   options?: CreateCopilotAgentHarnessOptions,
-): AgentHarness {
+): AgentHarnessV2 {
   let poolPromise: Promise<CopilotClientPool> | undefined;
   let createdPool: CopilotClientPool | undefined;
   let disposed = false;
@@ -667,7 +677,7 @@ export function createCopilotAgentHarness(
   }
 
   async function runHarnessAttempt(
-    params: AgentHarnessAttemptParams,
+    params: CopilotHarnessAttemptParams,
     operation: "attempt" | "settled-tool-finalization",
   ): Promise<AgentHarnessAttemptResult> {
     const attemptPromise = (async () => {
@@ -727,7 +737,7 @@ export function createCopilotAgentHarness(
           "[copilot] cannot safely finalize a settled tool turn without its compatible SDK session",
         );
       }
-      const effectiveParams: AgentHarnessAttemptParams = resumableSessionId
+      const effectiveParams: CopilotHarnessAttemptParams = resumableSessionId
         ? ({
             ...params,
             ...(operation === "settled-tool-finalization"
@@ -760,7 +770,7 @@ export function createCopilotAgentHarness(
                     ...(resumableBinding?.journalVersion === 1 ? { journalValidated: true } : {}),
                     sdkSessionId: resumableSessionId,
                   },
-          } as AgentHarnessAttemptParams)
+          } as CopilotHarnessAttemptParams)
         : params;
 
       const result = await runCopilotAttempt(effectiveParams, {
@@ -886,7 +896,7 @@ export function createCopilotAgentHarness(
     }
   }
 
-  async function runIsolatedCompletion(
+  async function runIsolatedCompletionV2(
     params: AgentHarnessIsolatedCompletionParams,
   ): Promise<AgentHarnessIsolatedCompletionResult> {
     const completionPromise = (async () => {
@@ -917,6 +927,7 @@ export function createCopilotAgentHarness(
     id: options?.id ?? "copilot",
     label: options?.label ?? "GitHub Copilot agent runtime",
     autoSelection: { providerIds: [] },
+    conversationToolPolicySupport: "exact",
 
     supports(ctx) {
       const requestedRuntime = String(ctx.requestedRuntime ?? "")
@@ -963,7 +974,7 @@ export function createCopilotAgentHarness(
 
     runAttempt: (params) => runHarnessAttempt(params, "attempt"),
 
-    runIsolatedCompletion,
+    runIsolatedCompletionV2,
 
     finalizeSettledTurn: async ({ attempt }) => {
       const result = await runHarnessAttempt(attempt, "settled-tool-finalization");

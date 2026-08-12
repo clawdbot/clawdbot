@@ -134,6 +134,7 @@ export async function queryBuzzDirectoryRooms(params: {
   relayPublicKey: string;
   state: BuzzDirectoryState;
   channelIds: string[];
+  onRoomChanged?: () => void;
   onTimeout?: (error: Error) => void;
   signal?: AbortSignal;
 }): Promise<void> {
@@ -147,8 +148,11 @@ export async function queryBuzzDirectoryRooms(params: {
         limit: roomIds.length,
       },
       onEvent: (event) => {
-        if (event.pubkey.toLowerCase() === params.relayPublicKey) {
-          params.state.applyRoomEvent(event);
+        if (
+          event.pubkey.toLowerCase() === params.relayPublicKey &&
+          params.state.applyRoomEvent(event)
+        ) {
+          params.onRoomChanged?.();
         }
       },
       onTimeout: params.onTimeout,
@@ -165,6 +169,7 @@ export function startBuzzDirectoryRelay(params: {
   signal?: AbortSignal;
   onError?: (error: Error) => void;
   onFatalError?: (error: Error) => void;
+  onRoomChanged?: () => void;
 }): {
   replaceProfilePublicKeys: (publicKeys: string[]) => void;
   refreshRooms: (channelIds: string[]) => Promise<void>;
@@ -339,6 +344,7 @@ export function startBuzzDirectoryRelay(params: {
           relayPublicKey: params.relayPublicKey,
           state: params.state,
           channelIds: nextRoomIds,
+          onRoomChanged: params.onRoomChanged,
           onTimeout: reportFatalError,
           signal: params.signal,
         });

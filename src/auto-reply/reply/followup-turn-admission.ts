@@ -34,6 +34,10 @@ import {
 } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
+import {
+  createReplySessionEntryHandle,
+  ReplySessionGenerationInvalidatedError as FollowupSessionGenerationInvalidatedError,
+} from "./session-entry-handle.js";
 import type { TypingController } from "./typing.js";
 
 export type FollowupRunnerParams = {
@@ -61,25 +65,11 @@ export async function settleQueuedFollowupPresentation(
   }
 }
 
-type FollowupSessionOwner =
-  | {
-      kind: "detached";
-      current(): SessionEntry | undefined;
-      publish(entry: SessionEntry | undefined): void;
-      adopt(entry: SessionEntry): void;
-    }
-  | {
-      kind: "session";
-      key: string;
-      storePath?: string;
-      current(): SessionEntry | undefined;
-      publish(entry: SessionEntry | undefined): void;
-      adopt(entry: SessionEntry): void;
-    };
-
-type FollowupSessionStoreOwner = FollowupSessionOwner & {
-  clear(): void;
-};
+type FollowupSessionOwner = {
+  current: () => SessionEntry | undefined;
+  publish(entry: SessionEntry | undefined): void;
+  adopt(entry: SessionEntry): void;
+} & ({ kind: "detached" } | { kind: "session"; key: string; storePath?: string });
 
 export type AdmittedFollowupTurn = {
   runId: string;
@@ -104,113 +94,6 @@ type FollowupAdmissionResult =
       operation?: ReplyOperation;
     };
 
-class FollowupSessionGenerationInvalidatedError extends Error {}
-
-function createFollowupSessionOwner(params: {
-  admittedSessionId: string;
-  entry?: SessionEntry;
-  expectedStoreEntry?: SessionEntry;
-  key?: string;
-  store?: Record<string, SessionEntry>;
-  storePath?: string;
-}): FollowupSessionStoreOwner {
-  let ownedSessionId = params.admittedSessionId;
-  let ownedLifecycleRevision =
-    params.entry?.sessionId === ownedSessionId ? params.entry.lifecycleRevision : undefined;
-  const matchesGeneration = (entry: SessionEntry | undefined) =>
-    entry?.sessionId === ownedSessionId && entry.lifecycleRevision === ownedLifecycleRevision
-      ? entry
-      : undefined;
-  let currentEntry = matchesGeneration(params.entry);
-  const current = () => {
-    const storedEntry = matchesGeneration(params.key ? params.store?.[params.key] : undefined);
-    if (storedEntry && (!currentEntry || storedEntry.updatedAt >= currentEntry.updatedAt)) {
-      currentEntry = storedEntry;
-    }
-    return currentEntry;
-  };
-  const publish = (entry: SessionEntry | undefined) => {
-    const nextEntry = matchesGeneration(entry);
-    if (nextEntry && (!currentEntry || nextEntry.updatedAt >= currentEntry.updatedAt)) {
-      currentEntry = nextEntry;
-    }
-    if (nextEntry && params.key && params.store) {
-      const storedEntry = params.store[params.key];
-      if (!storedEntry && params.expectedStoreEntry) {
-        return;
-      }
-      if (
-        !storedEntry ||
-        (matchesGeneration(storedEntry) && nextEntry.updatedAt >= storedEntry.updatedAt)
-      ) {
-        params.store[params.key] = nextEntry;
-      }
-    }
-  };
-  const clear = () => {
-    currentEntry = undefined;
-    if (params.key && params.store && matchesGeneration(params.store[params.key])) {
-      delete params.store[params.key];
-    }
-  };
-  const adopt = (entry: SessionEntry) => {
-    const storedEntry = params.key ? params.store?.[params.key] : undefined;
-    const storedMatchesOwnedGeneration = Boolean(matchesGeneration(storedEntry));
-    const storedMatchesAdoptedGeneration = Boolean(
-      storedEntry &&
-      storedEntry.sessionId === entry.sessionId &&
-      storedEntry.lifecycleRevision === entry.lifecycleRevision,
-    );
-    const storedEntryWasDeleted = Boolean(
-      params.key && params.store && !storedEntry && params.expectedStoreEntry,
-    );
-    if (
-      storedEntryWasDeleted ||
-      (storedEntry && !storedMatchesOwnedGeneration && !storedMatchesAdoptedGeneration)
-    ) {
-      throw new FollowupSessionGenerationInvalidatedError(
-        "Follow-up session generation was replaced during admission",
-      );
-    }
-    const adoptedEntry =
-      storedMatchesAdoptedGeneration && storedEntry && storedEntry.updatedAt >= entry.updatedAt
-        ? storedEntry
-        : entry;
-    ownedSessionId = adoptedEntry.sessionId;
-    ownedLifecycleRevision = adoptedEntry.lifecycleRevision;
-    currentEntry = adoptedEntry;
-    if (
-      params.key &&
-      params.store &&
-      (!storedEntry || storedMatchesOwnedGeneration || adoptedEntry !== storedEntry)
-    ) {
-      params.store[params.key] = adoptedEntry;
-    }
-  };
-  if (
-    currentEntry &&
-    params.key &&
-    params.store?.[params.key] &&
-    ((params.store[params.key] === params.expectedStoreEntry &&
-      !matchesGeneration(params.store[params.key])) ||
-      (matchesGeneration(params.store[params.key]) &&
-        currentEntry.updatedAt >= params.store[params.key]!.updatedAt))
-  ) {
-    params.store[params.key] = currentEntry;
-  }
-  return params.key
-    ? {
-        kind: "session",
-        key: params.key,
-        storePath: params.storePath,
-        current,
-        clear,
-        publish,
-        adopt,
-      }
-    : { kind: "detached", current, clear, publish, adopt };
-}
-
 function resolveFollowupCurrentMessageId(queued: FollowupRun): string | undefined {
   return queued.run.inputProvenance?.kind === "internal_system" &&
     queued.run.inputProvenance.sourceTool === "restart-sentinel"
@@ -228,45 +111,6 @@ function isSameSessionGeneration(
     left.sessionId === right.sessionId &&
     left.lifecycleRevision === right.lifecycleRevision,
   );
-}
-
-function createFollowupSessionStoreView(params: {
-  key?: string;
-  owner: FollowupSessionStoreOwner;
-  store?: Record<string, SessionEntry>;
-}): Record<string, SessionEntry> | undefined {
-  if (!params.key) {
-    return params.store;
-  }
-  const view = { ...params.store };
-  Object.defineProperty(view, params.key, {
-    configurable: true,
-    enumerable: true,
-    get: () => params.owner.current(),
-    set: (entry: SessionEntry | undefined) => {
-      if (!entry) {
-        params.owner.clear();
-        return;
-      }
-      const current = params.owner.current();
-      if (!isSameSessionGeneration(entry, current)) {
-        params.owner.adopt(entry);
-        return;
-      }
-      params.owner.publish(entry);
-    },
-  });
-  return new Proxy(view, {
-    deleteProperty: (target, key) => {
-      if (key === params.key) {
-        // CAS failures invalidate only the owned generation; a concurrent replacement
-        // remains in the backing store while this view forgets its stale snapshot.
-        params.owner.clear();
-        return true;
-      }
-      return Reflect.deleteProperty(target, key);
-    },
-  });
 }
 
 /** Resolves one queued item into an immutable admitted turn. */
@@ -290,6 +134,13 @@ export async function admitFollowupTurn(params: {
     initialStoredEntry ??
     (replySessionKey === params.defaults.sessionKey ? params.defaults.sessionEntry : undefined);
   let run = { ...params.queued.run, config };
+  const resolveRunSessionFile = (source: FollowupRun["run"], sessionId: string) =>
+    resolveAdmittedRunSessionFile({
+      agentId: source.agentId,
+      sessionId,
+      sessionKey: replySessionKey,
+      storePath: params.defaults.storePath,
+    }) ?? source.sessionFile;
   const admission = await admitReplyTurn({
     sessionId: params.queued.admissionSessionId ?? run.sessionId,
     sessionKey: replySessionKey ?? "",
@@ -298,6 +149,7 @@ export async function admitFollowupTurn(params: {
     kind: "queued_followup",
     resetTriggered: false,
     routeThreadId: params.queued.originatingThreadId,
+    originatingLeafEntryId: params.queued.turnAdoptionLifecycle?.originatingLeafEntryId,
     upstreamAbortSignal: resolveFollowupAbortSignal(params.queued),
     onReplyAdmissionWaitChange: params.queued.onReplyAdmissionWaitChange,
   });
@@ -323,13 +175,7 @@ export async function admitFollowupTurn(params: {
       run = {
         ...run,
         sessionId: operation.sessionId,
-        sessionFile:
-          resolveAdmittedRunSessionFile({
-            agentId: run.agentId,
-            sessionId: operation.sessionId,
-            sessionKey: replySessionKey,
-            storePath: params.defaults.storePath,
-          }) ?? run.sessionFile,
+        sessionFile: resolveRunSessionFile(run, operation.sessionId),
         cliSessionBindingFacts: undefined,
         autoFallbackPrimaryProbe: undefined,
         modelSelectionLocked: false,
@@ -388,13 +234,7 @@ export async function admitFollowupTurn(params: {
     if (activeEntry?.sessionId === operation.sessionId) {
       run = {
         ...run,
-        sessionFile:
-          resolveAdmittedRunSessionFile({
-            agentId: run.agentId,
-            sessionId: operation.sessionId,
-            sessionKey: replySessionKey,
-            storePath: params.defaults.storePath,
-          }) ?? run.sessionFile,
+        sessionFile: resolveRunSessionFile(run, operation.sessionId),
         modelSelectionLocked: activeEntry.modelSelectionLocked === true,
         ...(lifecycleRevisionChanged
           ? {
@@ -410,30 +250,38 @@ export async function admitFollowupTurn(params: {
       sessionKey: replySessionKey,
     });
     const queued: FollowupRun = { ...params.queued, run };
-    const session = createFollowupSessionOwner({
-      admittedSessionId: operation.sessionId,
-      entry: activeEntry,
-      expectedStoreEntry: initialStoredEntry,
-      key: replySessionKey,
-      store: params.defaults.sessionStore,
-      storePath: params.defaults.storePath,
+    const sessionEntryHandle = createReplySessionEntryHandle({
+      sessionEntry: activeEntry,
+      sessionKey: replySessionKey,
+      sessionStore: params.defaults.sessionStore,
+      generationFence: {
+        sessionId: operation.sessionId,
+        expectedStoreEntry: initialStoredEntry,
+      },
     });
-    const sessionStore = createFollowupSessionStoreView({
-      key: replySessionKey,
-      owner: session,
-      store: params.defaults.sessionStore,
-    });
-    let sendPolicy = resolveSendPolicy({
-      cfg: config,
-      entry: activeEntry,
-      sessionKey: run.runtimePolicySessionKey ?? replySessionKey,
-      channel:
-        queued.originatingChannel ?? run.messageProvider ?? sessionDeliveryChannel(activeEntry),
-      chatType: normalizeChatType(
-        queued.originatingChatType ?? run.chatType ?? activeEntry?.chatType,
-      ),
-    });
-    let currentInboundContext =
+    const session: FollowupSessionOwner = {
+      ...(replySessionKey
+        ? { kind: "session" as const, key: replySessionKey, storePath: params.defaults.storePath }
+        : { kind: "detached" as const }),
+      current: () => sessionEntryHandle.getCurrent(),
+      publish: (entry) => entry && sessionEntryHandle.replaceCurrent(entry),
+      adopt: (entry) => sessionEntryHandle.adoptCurrent(entry),
+    };
+    const sessionStore = replySessionKey
+      ? sessionEntryHandle.toCompatSessionStore()
+      : params.defaults.sessionStore;
+    const resolveTurnSendPolicy = (entry: SessionEntry | undefined, source: FollowupRun = queued) =>
+      resolveSendPolicy({
+        cfg: config,
+        entry,
+        sessionKey: source.run.runtimePolicySessionKey ?? replySessionKey,
+        channel:
+          source.originatingChannel ?? source.run.messageProvider ?? sessionDeliveryChannel(entry),
+        chatType: normalizeChatType(
+          source.originatingChatType ?? source.run.chatType ?? entry?.chatType,
+        ),
+      });
+    const currentInboundContext =
       params.defaults.opts?.isHeartbeat === true
         ? queued.currentInboundContext
         : refreshActiveGoalContext(queued.currentInboundContext, activeEntry);
@@ -447,30 +295,27 @@ export async function admitFollowupTurn(params: {
       session,
       sessionStore,
       currentInboundContext,
-      sendPolicy,
+      sendPolicy: resolveTurnSendPolicy(activeEntry),
       preflightCompactionApplied: false,
     };
     const refreshTurnSessionState = (entry: SessionEntry | undefined) => {
-      sendPolicy = resolveSendPolicy({
-        cfg: config,
-        entry,
-        sessionKey: turn.queued.run.runtimePolicySessionKey ?? replySessionKey,
-        channel:
-          turn.queued.originatingChannel ??
-          turn.queued.run.messageProvider ??
-          sessionDeliveryChannel(entry),
-        chatType: normalizeChatType(
-          turn.queued.originatingChatType ?? turn.queued.run.chatType ?? entry?.chatType,
-        ),
-      });
-      currentInboundContext =
+      const refreshedInboundContext =
         params.defaults.opts?.isHeartbeat === true
           ? params.queued.currentInboundContext
           : refreshActiveGoalContext(params.queued.currentInboundContext, entry);
-      turn.sendPolicy = sendPolicy;
-      turn.currentInboundContext = currentInboundContext;
-      turn.queued = { ...turn.queued, currentInboundContext };
+      turn.sendPolicy = resolveTurnSendPolicy(entry, turn.queued);
+      turn.currentInboundContext = refreshedInboundContext;
+      turn.queued = { ...turn.queued, currentInboundContext: refreshedInboundContext };
     };
+    const readTurnSessionEntry = () =>
+      replySessionKey && params.defaults.storePath
+        ? loadSessionEntry({
+            storePath: params.defaults.storePath,
+            sessionKey: replySessionKey,
+          })
+        : replySessionKey && params.defaults.sessionStore
+          ? params.defaults.sessionStore[replySessionKey]
+          : session.current();
     const synchronizeTurnGeneration = (
       entry: SessionEntry | undefined,
       previousEntry: SessionEntry | undefined,
@@ -483,13 +328,7 @@ export async function admitFollowupTurn(params: {
           run: {
             ...turn.queued.run,
             sessionId: entry.sessionId,
-            sessionFile:
-              resolveAdmittedRunSessionFile({
-                agentId: turn.queued.run.agentId,
-                sessionId: entry.sessionId,
-                sessionKey: replySessionKey,
-                storePath: params.defaults.storePath,
-              }) ?? turn.queued.run.sessionFile,
+            sessionFile: resolveRunSessionFile(turn.queued.run, entry.sessionId),
             cliSessionBindingFacts: undefined,
             autoFallbackPrimaryProbe: undefined,
             modelSelectionLocked: entry.modelSelectionLocked === true,
@@ -502,7 +341,7 @@ export async function admitFollowupTurn(params: {
     let pendingTerminalCompactionNotice: Exclude<CompactionNoticePhase, "start"> | undefined;
     let compactionNoticeGenerationInvalidated = false;
     const notifyPreflightCompaction =
-      sendPolicy === "allow" &&
+      turn.sendPolicy === "allow" &&
       queued.currentInboundEventKind !== "room_event" &&
       shouldNotifyUserAboutCompaction(config)
         ? async (phase: CompactionNoticePhase) => {
@@ -510,15 +349,7 @@ export async function admitFollowupTurn(params: {
               pendingTerminalCompactionNotice = phase;
               return;
             }
-            const noticeEntry =
-              replySessionKey && params.defaults.storePath
-                ? loadSessionEntry({
-                    storePath: params.defaults.storePath,
-                    sessionKey: replySessionKey,
-                  })
-                : replySessionKey && params.defaults.sessionStore
-                  ? params.defaults.sessionStore[replySessionKey]
-                  : session.current();
+            const noticeEntry = readTurnSessionEntry();
             try {
               assertPersistedGeneration(noticeEntry);
             } catch (error) {
@@ -529,21 +360,7 @@ export async function admitFollowupTurn(params: {
               }
               throw error;
             }
-            const noticeSendPolicy = resolveSendPolicy({
-              cfg: config,
-              entry: noticeEntry,
-              sessionKey: turn.queued.run.runtimePolicySessionKey ?? replySessionKey,
-              channel:
-                turn.queued.originatingChannel ??
-                turn.queued.run.messageProvider ??
-                sessionDeliveryChannel(noticeEntry),
-              chatType: normalizeChatType(
-                turn.queued.originatingChatType ??
-                  turn.queued.run.chatType ??
-                  noticeEntry?.chatType,
-              ),
-            });
-            if (noticeSendPolicy === "deny") {
+            if (resolveTurnSendPolicy(noticeEntry, turn.queued) === "deny") {
               return;
             }
             await params.onCompactionNoticePayload?.(
@@ -577,10 +394,7 @@ export async function admitFollowupTurn(params: {
         );
       }
       if (replySessionKey && params.defaults.storePath) {
-        const persistedEntry = loadSessionEntry({
-          storePath: params.defaults.storePath,
-          sessionKey: replySessionKey,
-        });
+        const persistedEntry = readTurnSessionEntry();
         if (
           (!persistedEntry && preflightEntry) ||
           (persistedEntry &&
@@ -609,15 +423,7 @@ export async function admitFollowupTurn(params: {
       turn.preflightCompactionApplied =
         generationRotated || (activeEntry?.compactionCount ?? 0) > previousCompactionCount;
     } catch (error) {
-      const failureEntry =
-        replySessionKey && params.defaults.storePath
-          ? loadSessionEntry({
-              storePath: params.defaults.storePath,
-              sessionKey: replySessionKey,
-            })
-          : replySessionKey && params.defaults.sessionStore
-            ? params.defaults.sessionStore[replySessionKey]
-            : session.current();
+      const failureEntry = readTurnSessionEntry();
       if (!isSameSessionGeneration(failureEntry, session.current())) {
         assertPersistedGeneration(failureEntry);
       }

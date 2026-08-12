@@ -1,4 +1,3 @@
-// Records system-level session events for restarts, forks, and resets.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -12,6 +11,8 @@ import {
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
 import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
+// Records system-level session events for restarts, forks, and resets.
+import { selectAgentSystemEvents } from "../../infra/system-event-ownership.js";
 import {
   consumeSelectedSystemEventEntries,
   peekSystemEventEntries,
@@ -104,6 +105,7 @@ function formatSystemEventTimestamp(ts: number, cfg: OpenClawConfig) {
 /** Drain queued system events, format as `System:` lines, return the block text (or undefined). */
 export async function drainFormattedSystemEvents(params: {
   cfg: OpenClawConfig;
+  agentId: string;
   sessionKey: string;
   isMainSession: boolean;
   isNewSession: boolean;
@@ -115,9 +117,10 @@ export async function drainFormattedSystemEvents(params: {
   // so the heartbeat path can consume and deliver them.
   const queued = consumeSelectedSystemEventEntries(
     params.sessionKey,
-    selectGenericSystemEvents(peekSystemEventEntries(params.sessionKey), {
-      suppressHeartbeatOwnedEvents: params.suppressHeartbeatOwnedEvents,
-    }),
+    selectGenericSystemEvents(
+      selectAgentSystemEvents(peekSystemEventEntries(params.sessionKey), params.agentId),
+      { suppressHeartbeatOwnedEvents: params.suppressHeartbeatOwnedEvents },
+    ),
   );
   const sessionStateTargets = queued
     .map((event) =>

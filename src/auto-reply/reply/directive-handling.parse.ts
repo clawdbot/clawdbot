@@ -1,5 +1,6 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Parses inline reply directives into typed execution and routing options.
+import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ExecAsk, ExecSecurity, ExecTarget } from "../../infra/exec-approvals.js";
 import { extractModelDirective } from "../model.js";
 import { isSessionDefaultDirectiveValue } from "../thinking.js";
@@ -21,7 +22,7 @@ import {
   extractVerboseDirective,
 } from "./directives.js";
 import { extractQueueDirective } from "./queue/directive.js";
-import type { QueueDropPolicy, QueueMode } from "./queue/types.js";
+import type { QueueDropPolicy } from "./queue/types.js";
 
 const NATIVE_REPLY_DIRECTIVE_COMMANDS = {
   think: true,
@@ -96,6 +97,8 @@ export type InlineDirectives = {
   rawModelDirective?: string;
   rawModelProfile?: string;
   rawModelRuntime?: string;
+  modelDirectiveSource?: "alias" | "model";
+  modelSessionOnly: boolean;
   hasQueueDirective: boolean;
   queueMode?: QueueMode;
   queueReset: boolean;
@@ -110,7 +113,7 @@ export type InlineDirectives = {
 };
 
 /** Parses supported inline directives in the same order they are stripped from text. */
-export function parseInlineDirectives(
+export function parseInlineSessionDirectives(
   body: string,
   options?: {
     modelAliases?: string[];
@@ -120,186 +123,116 @@ export function parseInlineDirectives(
   },
 ): InlineDirectives {
   const nativeCommand = options?.nativeCommand;
+  let cleaned = body;
+  let hasAnyDirective = false;
   const parseScopedDirective = <T extends { cleaned: string; hasDirective: boolean }>(
-    currentBody: string,
     commandName: NativeReplyDirectiveCommand,
     extract: (value: string) => T,
-  ): T =>
-    !nativeCommand || nativeCommand === commandName
-      ? extract(currentBody)
-      : ({ cleaned: currentBody, hasDirective: false } as T);
-  const {
-    cleaned: thinkCleaned,
-    thinkLevel,
-    rawLevel: rawThinkLevel,
-    hasDirective: hasThinkDirective,
-  } = parseScopedDirective(body, "think", (value) =>
+    enabled = true,
+  ): T => {
+    const parsed =
+      enabled && (!nativeCommand || nativeCommand === commandName)
+        ? extract(cleaned)
+        : ({ cleaned, hasDirective: false } as T);
+    cleaned = parsed.cleaned;
+    hasAnyDirective ||= parsed.hasDirective;
+    return parsed;
+  };
+  const think = parseScopedDirective("think", (value) =>
     extractThinkDirective(value, { strict: nativeCommand === "think" }),
   );
-  const {
-    cleaned: verboseCleaned,
-    verboseLevel,
-    rawLevel: rawVerboseLevel,
-    hasDirective: hasVerboseDirective,
-  } = parseScopedDirective(thinkCleaned, "verbose", (value) =>
+  const verbose = parseScopedDirective("verbose", (value) =>
     extractVerboseDirective(value, { strict: nativeCommand === "verbose" }),
   );
-  const {
-    cleaned: traceCleaned,
-    traceLevel,
-    rawLevel: rawTraceLevel,
-    hasDirective: hasTraceDirective,
-  } = parseScopedDirective(verboseCleaned, "trace", (value) =>
+  const trace = parseScopedDirective("trace", (value) =>
     extractTraceDirective(value, { strict: nativeCommand === "trace" }),
   );
-  const {
-    cleaned: fastCleaned,
-    fastMode,
-    rawLevel: rawFastMode,
-    hasDirective: hasFastDirective,
-  } = parseScopedDirective(traceCleaned, "fast", (value) =>
+  const fast = parseScopedDirective("fast", (value) =>
     extractFastDirective(value, { strict: nativeCommand === "fast" }),
   );
-  const {
-    cleaned: reasoningCleaned,
-    reasoningLevel,
-    rawLevel: rawReasoningLevel,
-    hasDirective: hasReasoningDirective,
-  } = parseScopedDirective(fastCleaned, "reasoning", (value) =>
+  const reasoning = parseScopedDirective("reasoning", (value) =>
     extractReasoningDirective(value, { strict: nativeCommand === "reasoning" }),
   );
-  const {
-    cleaned: elevatedCleaned,
-    elevatedLevel,
-    rawLevel: rawElevatedLevel,
-    hasDirective: hasElevatedDirective,
-  } = options?.disableElevated
-    ? {
-        cleaned: reasoningCleaned,
-        elevatedLevel: undefined,
-        rawLevel: undefined,
-        hasDirective: false,
-      }
-    : parseScopedDirective(reasoningCleaned, "elevated", (value) =>
-        extractElevatedDirective(value, { strict: nativeCommand === "elevated" }),
-      );
-  const {
-    cleaned: execCleaned,
-    execHost,
-    execSecurity,
-    execAsk,
-    execNode,
-    rawExecHost,
-    rawExecSecurity,
-    rawExecAsk,
-    rawExecNode,
-    hasExecOptions,
-    invalidHost: invalidExecHost,
-    invalidSecurity: invalidExecSecurity,
-    invalidAsk: invalidExecAsk,
-    invalidNode: invalidExecNode,
-    hasDirective: hasExecDirective,
-  } = parseScopedDirective(elevatedCleaned, "exec", extractExecDirective);
+  const elevated = parseScopedDirective(
+    "elevated",
+    (value) => extractElevatedDirective(value, { strict: nativeCommand === "elevated" }),
+    !options?.disableElevated,
+  );
+  const exec = parseScopedDirective("exec", extractExecDirective);
   const allowStatusDirective = options?.allowStatusDirective !== false && !nativeCommand;
   const { cleaned: statusCleaned, hasDirective: hasStatusDirective } = allowStatusDirective
-    ? extractStatusDirective(execCleaned)
-    : { cleaned: execCleaned, hasDirective: false };
-  const {
-    cleaned: modelCleaned,
-    rawModel,
-    rawProfile,
-    rawRuntime,
-    hasDirective: hasModelDirective,
-  } = parseScopedDirective(statusCleaned, "model", (value) =>
+    ? extractStatusDirective(cleaned)
+    : { cleaned, hasDirective: false };
+  cleaned = statusCleaned;
+  hasAnyDirective ||= hasStatusDirective;
+  const model = parseScopedDirective("model", (value) =>
     extractModelDirective(value, {
       aliases: options?.modelAliases,
     }),
   );
-  const {
-    cleaned: queueCleaned,
-    queueMode,
-    queueReset,
-    rawMode,
-    debounceMs,
-    cap,
-    dropPolicy,
-    rawDebounce,
-    rawCap,
-    rawDrop,
-    hasDirective: hasQueueDirective,
-    hasOptions: hasQueueOptions,
-  } = parseScopedDirective(modelCleaned, "queue", extractQueueDirective);
-  const hasAnyDirective =
-    hasThinkDirective ||
-    hasVerboseDirective ||
-    hasTraceDirective ||
-    hasFastDirective ||
-    hasReasoningDirective ||
-    hasElevatedDirective ||
-    hasExecDirective ||
-    hasStatusDirective ||
-    hasModelDirective ||
-    hasQueueDirective;
+  const queue = parseScopedDirective("queue", extractQueueDirective);
   // Later directives see text cleaned by earlier directives; preserve that ordering.
   return {
-    cleaned: hasAnyDirective ? queueCleaned : body.trim(),
+    cleaned: hasAnyDirective ? cleaned : body.trim(),
     ...(nativeCommand && hasAnyDirective
       ? {
           nativeCommand: {
             name: nativeCommand,
-            ...(queueCleaned ? { unconsumedArguments: queueCleaned } : {}),
+            ...(cleaned ? { unconsumedArguments: cleaned } : {}),
           },
         }
       : {}),
-    hasThinkDirective,
-    thinkLevel,
-    rawThinkLevel,
-    clearThinkLevel: hasThinkDirective && isSessionDefaultDirectiveValue(rawThinkLevel),
-    hasVerboseDirective,
-    verboseLevel,
-    rawVerboseLevel,
-    hasTraceDirective,
-    traceLevel,
-    rawTraceLevel,
-    hasFastDirective,
-    fastMode,
-    rawFastMode,
-    clearFastMode: hasFastDirective && isSessionDefaultDirectiveValue(rawFastMode),
-    hasReasoningDirective,
-    reasoningLevel,
-    rawReasoningLevel,
-    hasElevatedDirective,
-    elevatedLevel,
-    rawElevatedLevel,
-    hasExecDirective,
-    execHost,
-    execSecurity,
-    execAsk,
-    execNode,
-    rawExecHost,
-    rawExecSecurity,
-    rawExecAsk,
-    rawExecNode,
-    hasExecOptions,
-    invalidExecHost,
-    invalidExecSecurity,
-    invalidExecAsk,
-    invalidExecNode,
+    hasThinkDirective: think.hasDirective,
+    thinkLevel: think.thinkLevel,
+    rawThinkLevel: think.rawLevel,
+    clearThinkLevel: think.hasDirective && isSessionDefaultDirectiveValue(think.rawLevel),
+    hasVerboseDirective: verbose.hasDirective,
+    verboseLevel: verbose.verboseLevel,
+    rawVerboseLevel: verbose.rawLevel,
+    hasTraceDirective: trace.hasDirective,
+    traceLevel: trace.traceLevel,
+    rawTraceLevel: trace.rawLevel,
+    hasFastDirective: fast.hasDirective,
+    fastMode: fast.fastMode,
+    rawFastMode: fast.rawLevel,
+    clearFastMode: fast.hasDirective && isSessionDefaultDirectiveValue(fast.rawLevel),
+    hasReasoningDirective: reasoning.hasDirective,
+    reasoningLevel: reasoning.reasoningLevel,
+    rawReasoningLevel: reasoning.rawLevel,
+    hasElevatedDirective: elevated.hasDirective,
+    elevatedLevel: elevated.elevatedLevel,
+    rawElevatedLevel: elevated.rawLevel,
+    hasExecDirective: exec.hasDirective,
+    execHost: exec.execHost,
+    execSecurity: exec.execSecurity,
+    execAsk: exec.execAsk,
+    execNode: exec.execNode,
+    rawExecHost: exec.rawExecHost,
+    rawExecSecurity: exec.rawExecSecurity,
+    rawExecAsk: exec.rawExecAsk,
+    rawExecNode: exec.rawExecNode,
+    hasExecOptions: exec.hasExecOptions,
+    invalidExecHost: exec.invalidHost,
+    invalidExecSecurity: exec.invalidSecurity,
+    invalidExecAsk: exec.invalidAsk,
+    invalidExecNode: exec.invalidNode,
     hasStatusDirective,
-    hasModelDirective,
-    rawModelDirective: rawModel,
-    rawModelProfile: rawProfile,
-    rawModelRuntime: rawRuntime,
-    hasQueueDirective,
-    queueMode,
-    queueReset,
-    rawQueueMode: rawMode,
-    debounceMs,
-    cap,
-    dropPolicy,
-    rawDebounce,
-    rawCap,
-    rawDrop,
-    hasQueueOptions,
+    hasModelDirective: model.hasDirective,
+    rawModelDirective: model.rawModel,
+    rawModelProfile: model.rawProfile,
+    rawModelRuntime: model.rawRuntime,
+    modelDirectiveSource: model.source,
+    modelSessionOnly: model.sessionOnly,
+    hasQueueDirective: queue.hasDirective,
+    queueMode: queue.queueMode,
+    queueReset: queue.queueReset,
+    rawQueueMode: queue.rawMode,
+    debounceMs: queue.debounceMs,
+    cap: queue.cap,
+    dropPolicy: queue.dropPolicy,
+    rawDebounce: queue.rawDebounce,
+    rawCap: queue.rawCap,
+    rawDrop: queue.rawDrop,
+    hasQueueOptions: queue.hasOptions,
   };
 }

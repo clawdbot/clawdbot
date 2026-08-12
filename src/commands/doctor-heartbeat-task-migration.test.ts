@@ -318,7 +318,7 @@ tasks:
   it("tolerates a crash after the state transaction and before legacy timestamp cleanup", async () => {
     const fixture = await createFixture(2_000_000_000_000);
     const cleanup = vi
-      .spyOn(sessionAccessor, "patchSessionEntry")
+      .spyOn(sessionAccessor, "patchSessionEntryCore")
       .mockRejectedValueOnce(new Error("simulated post-commit crash"));
     const result = await maybeMigrateHeartbeatTasksToCron({
       cfg: fixture.cfg,

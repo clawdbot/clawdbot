@@ -10,7 +10,7 @@ import { resolveModelRefFromString, type ModelRef } from "../agents/model-select
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-  resolveHeartbeatPrompt as resolveHeartbeatPromptText,
+  resolveHeartbeatPromptCore as resolveHeartbeatPromptText,
   resolveHeartbeatPromptForResponseTool,
 } from "../auto-reply/heartbeat.js";
 import { resolveDefaultModel } from "../auto-reply/reply/directive-handling.defaults.js";
@@ -52,7 +52,10 @@ export function resolveHeartbeatTimeoutOverrideSeconds(
     typeof agentDefaultTimeoutSeconds === "number" &&
     Number.isFinite(agentDefaultTimeoutSeconds)
   ) {
-    return Math.max(1, Math.floor(agentDefaultTimeoutSeconds));
+    // Preserve the unlimited sentinel consumed by resolveAgentTimeoutMs.
+    return agentDefaultTimeoutSeconds === 0
+      ? 0
+      : Math.max(1, Math.floor(agentDefaultTimeoutSeconds));
   }
   // The wake dispatcher awaits heartbeat turns serially. Keep unset heartbeat
   // timeouts tied to the cadence instead of the 48h built-in agent default.
@@ -68,10 +71,6 @@ type HeartbeatAgent = {
   agentId: string;
   heartbeat?: HeartbeatConfig;
 };
-
-export function canHeartbeatDeliverCommitments(heartbeat?: HeartbeatConfig): boolean {
-  return (normalizeOptionalString(heartbeat?.target) ?? "none") !== "none";
-}
 
 type ActiveHoursSchedule = {
   start?: string;
@@ -214,7 +213,7 @@ function resolveHeartbeatPromptRaw(cfg: OpenClawConfig, heartbeat?: HeartbeatCon
   return heartbeat?.prompt ?? cfg.agents?.defaults?.heartbeat?.prompt;
 }
 
-export function resolveHeartbeatPrompt(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
+export function resolveConfiguredHeartbeatPrompt(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
   return resolveHeartbeatPromptText(resolveHeartbeatPromptRaw(cfg, heartbeat));
 }
 

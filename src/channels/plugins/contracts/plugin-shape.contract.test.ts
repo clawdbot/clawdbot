@@ -1,3 +1,4 @@
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 // Plugin-shape coherence contract for bundled channel plugins.
 //
 // Catalog routing keys off plugin ids, docs surfaces render `meta.docsPath`,
@@ -14,21 +15,12 @@
 //   slash commands through gateway HTTP routes).
 // - blockStreaming=true does not imply a streaming adapter (coalesce tuning
 //   is optional).
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { listBundledPackageChannelMetadata } from "../../../plugins/bundled-package-channel-metadata.js";
 import {
   getBundledChannelPluginAsync,
   listBundledChannelPluginIds,
 } from "./test-helpers/bundled-channel-plugin-loader.js";
-
-const sanitizeAssistantVisibleTextMock = vi.hoisted(() =>
-  vi.fn((text: string) => `shared-sanitizer:${text}`),
-);
-
-vi.mock("openclaw/plugin-sdk/text-chunking", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-chunking")>();
-  return { ...actual, sanitizeAssistantVisibleText: sanitizeAssistantVisibleTextMock };
-});
 
 const CHAT_TYPES = new Set(["direct", "group", "channel", "thread"]);
 const bundledChannelPluginIds = listBundledChannelPluginIds();
@@ -60,18 +52,25 @@ describe("bundled channel plugin shape coherence", () => {
   });
 
   it.each(SHARED_SANITIZER_CHANNEL_IDS)(
-    "%s wires outbound sanitizeText through the shared sanitizer",
+    "%s applies shared sanitizer semantics to outbound text",
     (id) => {
       const sanitizeText = plugins.get(id)?.outbound?.sanitizeText;
       if (!sanitizeText) {
         throw new Error(`Missing outbound sanitizeText hook for ${id}`);
       }
-      const text = `visible:${id}`;
+      const visible = `Visible answer: ${id}`;
+      const text = [
+        '<invoke name="read">payload</invoke></minimax:tool_call>',
+        '<tool_result>{"output":"hidden"}</tool_result>',
+        "[Tool Call: read (ID: toolu_1)]",
+        'Arguments: {"path":"/tmp/x"}',
+        "<think>secret</think>",
+        visible,
+      ].join("\n");
+      const expected = sanitizeAssistantVisibleText(text);
 
-      sanitizeAssistantVisibleTextMock.mockClear();
-
-      expect(sanitizeText({ text, payload: { text } })).toBe(`shared-sanitizer:${text}`);
-      expect(sanitizeAssistantVisibleTextMock).toHaveBeenCalledExactlyOnceWith(text);
+      expect(expected).toBe(visible);
+      expect(sanitizeText({ text, payload: { text } })).toBe(expected);
     },
   );
 
@@ -97,6 +96,10 @@ describe("bundled channel plugin shape coherence", () => {
         return;
       }
       expect(plugin?.setupContract, `${id} must expose setupContract`).toBeDefined();
+      expect(
+        plugin?.setup,
+        `${id} must not duplicate the released legacy setup adapter`,
+      ).toBeUndefined();
       expect(packageSetup, `${id} must expose package setup metadata`).toBeDefined();
       expect(plugin?.setupContract?.metadata).toEqual(packageSetup);
     });

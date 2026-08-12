@@ -1,3 +1,4 @@
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -8,17 +9,19 @@ import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import {
   getSessionDisplaySubagentRunByChildSessionKey,
+  getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
   isSubagentRunLive,
   resolveSubagentSessionStatus,
-} from "../agents/subagent-registry-read.js";
-import { resolveQueueSettings } from "../auto-reply/reply/queue/settings.js";
+} from "../agents/subagents/registry/subagent-registry-read.js";
+import { resolveQueueSettingsCore } from "../auto-reply/reply/queue/settings.js";
 import { resolveEffectiveResponseUsage } from "../auto-reply/thinking.js";
 import {
   buildGroupDisplayName,
   buildGroupDisplayTitle,
   resolveFreshSessionTotalTokens,
   resolveSessionGoalDisplayState,
+  SESSION_TOTAL_TOKENS_VERSION,
   type SessionEntry,
 } from "../config/sessions.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
@@ -27,11 +30,11 @@ import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.j
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
-import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
-import { getUserProfileListItem } from "../state/user-profiles.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
+import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
+import { sessionClassificationForRow } from "./session-classification.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 import type {
@@ -47,7 +50,6 @@ import {
   resolvePositiveNumber,
   resolveProjectableCompactionCheckpoints,
   resolveRuntimeChildSessionKeys,
-  resolveSessionRuntimeMs,
 } from "./session-utils-core.js";
 import {
   resolveGatewaySessionThinkingProjectionInternal,
@@ -61,7 +63,6 @@ import {
 } from "./session-utils-projection.js";
 import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-store.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
-import { formatUserProfileAvatarPath } from "./user-profiles-http-path.js";
 
 /** Adds current durable human profile display data without persisting rename-prone metadata. */
 export function projectSessionActor(
@@ -77,21 +78,14 @@ export function projectSessionActor(
   }
   let identity = userProfileIdentityById.get(id);
   if (!userProfileIdentityById.has(id)) {
-    try {
-      const profile = getUserProfileListItem(id);
-      const label = normalizeOptionalString(profile.displayName);
-      identity = {
-        ...(label ? { label } : {}),
-        ...(profile.hasAvatar
-          ? {
-              avatarUrl: `${formatUserProfileAvatarPath(profile.id)}?v=${profile.updatedAt}`,
-            }
-          : {}),
-      };
-    } catch {
-      // Human actors can also be channel sender ids; only profile ids resolve here.
-      identity = undefined;
-    }
+    const display = resolveCurrentUserProfileDisplay(id);
+    identity =
+      display.kind === "unresolved"
+        ? undefined
+        : {
+            ...(display.label ? { label: display.label } : {}),
+            ...(display.hasUploadedAvatar ? { avatarUrl: display.avatarUrl } : {}),
+          };
     userProfileIdentityById.set(id, identity);
   }
   return { type: actor.type, id, ...identity };
@@ -182,7 +176,7 @@ export function buildGatewaySessionRow(params: {
   const subagentRunState = subagentRun
     ? liveSubagentRunActive
       ? "active"
-      : typeof subagentRun.endedAt === "number" ||
+      : typeof subagentRun.execution.endedAt === "number" ||
           persistedSessionStatus === "done" ||
           persistedSessionStatus === "failed" ||
           persistedSessionStatus === "killed" ||
@@ -197,7 +191,7 @@ export function buildGatewaySessionRow(params: {
       : persistedSessionStatus === "running"
         ? undefined
         : (persistedSessionStatus ??
-          (typeof subagentRun.endedAt === "number"
+          (typeof subagentRun.execution.endedAt === "number"
             ? resolveSubagentSessionStatus(subagentRun)
             : undefined))
     : undefined;
@@ -208,15 +202,15 @@ export function buildGatewaySessionRow(params: {
     : undefined;
   const subagentEndedAt = subagentRun
     ? liveSubagentRunActive
-      ? subagentRun.endedAt
-      : (persistedSessionEndedAt ?? subagentRun.endedAt)
+      ? subagentRun.execution.endedAt
+      : (persistedSessionEndedAt ?? subagentRun.execution.endedAt)
     : undefined;
   const subagentRuntimeMs = subagentRun
     ? liveSubagentRunActive
-      ? resolveSessionRuntimeMs(subagentRun, now)
+      ? getSubagentSessionRuntimeMs(subagentRun, now)
       : (persistedSessionRuntimeMs ??
-        (typeof subagentRun.endedAt === "number"
-          ? resolveSessionRuntimeMs(subagentRun, now)
+        (typeof subagentRun.execution.endedAt === "number"
+          ? getSubagentSessionRuntimeMs(subagentRun, now)
           : undefined))
     : undefined;
   const selectedModel = resolveSessionSelectedModelRef({
@@ -235,7 +229,7 @@ export function buildGatewaySessionRow(params: {
   );
   const runtimeModelPresent =
     Boolean(entry?.model?.trim()) || Boolean(entry?.modelProvider?.trim());
-  const freshSessionTotalTokens = resolveNonNegativeNumber(resolveFreshSessionTotalTokens(entry));
+  const freshSessionTotalTokens = asNonNegativeFiniteNumber(resolveFreshSessionTotalTokens(entry));
   const needsTranscriptTotalTokens = freshSessionTotalTokens === undefined;
   const needsTranscriptContextTokens = resolvePositiveNumber(entry?.contextTokens) === undefined;
   const needsTranscriptEstimatedCostUsd =
@@ -280,7 +274,7 @@ export function buildGatewaySessionRow(params: {
     : resolvedModelIdentity;
   const { provider: modelProvider, model } = modelIdentity;
   const totalTokens =
-    freshSessionTotalTokens ?? resolveNonNegativeNumber(transcriptUsage?.totalTokens);
+    freshSessionTotalTokens ?? asNonNegativeFiniteNumber(transcriptUsage?.totalTokens);
   const totalTokensFresh =
     freshSessionTotalTokens !== undefined ||
     (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0)
@@ -292,6 +286,7 @@ export function buildGatewaySessionRow(params: {
           goal: entry.goal,
           totalTokens,
           totalTokensFresh,
+          totalTokensVersion: totalTokensFresh ? SESSION_TOTAL_TOKENS_VERSION : undefined,
         },
         now,
         // Session listing is read-only; stale goal baselines are adopted only
@@ -331,14 +326,14 @@ export function buildGatewaySessionRow(params: {
     sessionKey: key,
   });
   const estimatedCostUsd = lightweight
-    ? resolveNonNegativeNumber(entry?.estimatedCostUsd)
+    ? asNonNegativeFiniteNumber(entry?.estimatedCostUsd)
     : (resolveEstimatedSessionCostUsd({
         cfg,
         provider: rowModelProvider,
         model: rowModel,
         entry,
         rowContext: params.rowContext,
-      }) ?? resolveNonNegativeNumber(transcriptUsage?.estimatedCostUsd));
+      }) ?? asNonNegativeFiniteNumber(transcriptUsage?.estimatedCostUsd));
   const contextTokens = lightweight
     ? (resolvePositiveNumber(entry?.contextTokens) ??
       resolvePositiveNumber(
@@ -431,6 +426,7 @@ export function buildGatewaySessionRow(params: {
     label: entry?.label,
     category: entry?.category,
     boardFace: entry?.boardFace,
+    ...sessionClassificationForRow(cfg, key, sessionAgentId, entry),
     displayName,
     derivedTitle,
     lastMessagePreview,
@@ -446,7 +442,6 @@ export function buildGatewaySessionRow(params: {
     archivedBy: projectSessionActor(entry?.archivedBy, rowContext?.userProfileIdentityById),
     pinned: entry?.pinnedAt !== undefined,
     pinnedAt: entry?.pinnedAt,
-    icon: entry?.icon,
     unread: deriveSessionUnread(entry),
     lastReadAt: entry?.lastReadAt,
     agentStatus,
@@ -503,7 +498,7 @@ export function buildGatewaySessionRow(params: {
       channel,
     ),
     queueMode: entry?.queueMode,
-    effectiveQueueMode: resolveQueueSettings({
+    effectiveQueueMode: resolveQueueSettingsCore({
       cfg,
       channel: INTERNAL_MESSAGE_CHANNEL,
       sessionEntry: entry,

@@ -42,7 +42,10 @@ import {
   setNativeHookRelayPermissionApprovalRequesterForTests as setNativeHookRelayPermissionApprovalRequesterForTestsImpl,
 } from "./native-hook-relay-permissions.js";
 import type { NativeHookRelayDeferredToolApprovalRequester } from "./native-hook-relay-permissions.js";
-import { nativeHookRelayState } from "./native-hook-relay-state.js";
+import {
+  MAX_NATIVE_HOOK_RELAY_INVOCATIONS,
+  nativeHookRelayState,
+} from "./native-hook-relay-state.js";
 import type {
   ActiveNativeHookRelayRegistration,
   ActiveNativeHookRelayRegistrationHandle,
@@ -75,7 +78,6 @@ export type {
 } from "./native-hook-relay-types.js";
 
 const DEFAULT_RELAY_TTL_MS = 30 * 60 * 1000;
-const MAX_NATIVE_HOOK_RELAY_INVOCATIONS = 200;
 const log = createSubsystemLogger("agents/harness/native-hook-relay");
 
 const { relays, relayBridges, invocations } = nativeHookRelayState;
@@ -122,6 +124,8 @@ export function registerNativeHookRelay(
     expiresAtMs,
     preToolUseFailureProjections: new Map(),
     ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.runBeforeToolCall ? { runBeforeToolCall: params.runBeforeToolCall } : {}),
+    ...(params.assertActive ? { assertActive: params.assertActive } : {}),
     ...(params.onPreToolUseFailure ? { onPreToolUseFailure: params.onPreToolUseFailure } : {}),
   };
   relays.set(relayId, registration);
@@ -263,6 +267,9 @@ export async function invokeNativeHookRelay(
     event,
     rawPayload: params.rawPayload,
   });
+  if (event === "pre_tool_use" || event === "permission_request") {
+    registration.assertActive?.();
+  }
   recordNativeHookRelayInvocation(normalized);
   const startedAt = Date.now();
   const response = await processNativeHookRelayInvocation({
@@ -270,6 +277,11 @@ export async function invokeNativeHookRelay(
     invocation: normalized,
     adapter: getNativeHookRelayProviderAdapter(provider),
   });
+  // Policy and approval callbacks may yield while their admitted run closes.
+  // Never let a late allow cross back into the native runtime.
+  if (event === "pre_tool_use" || event === "permission_request") {
+    registration.assertActive?.();
+  }
   if (
     normalized.toolUseId &&
     response.failureDisposition &&

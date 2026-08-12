@@ -1,4 +1,5 @@
 // Support log redaction helpers scrub sensitive fields from diagnostic log payloads.
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import {
@@ -14,7 +15,7 @@ const LOG_SCALAR_FIELD_RE =
 const OMITTED_LOG_FIELD_RE =
   /(?:authorization|body|chat|content|cookie|credential|detail|error|header|instruction|message|password|payload|prompt|result|secret|session[-_]?id|session[-_]?key|text|token|tool|transcript|url)/iu;
 const UNSAFE_LOG_MESSAGE_RE =
-  /(?:\b(?:ai response|assistant said|chat text|message contents|prompt|raw webhook body|tool output|tool result|transcript|user said|webhook body)\b|auto-responding\b.*:\s*["']|partial for\b.*:)/iu;
+  /(?:\blastAssistant\s*=|\b(?:ai response|assistant said|chat text|message contents|prompt|raw webhook body|tool output|tool result|transcript|user said|webhook body)\b|auto-responding\b.*:\s*["']|partial for\b.*:)/iu;
 const MAX_LOG_STRING_LENGTH = 240;
 const LOGTAPE_META_FIELD = "_meta";
 const LOGTAPE_ARG_FIELD_RE = /^\d+$/u;
@@ -160,11 +161,7 @@ function parseJsonRecord(value: string): Record<string, unknown> | undefined {
   if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
     return undefined;
   }
-  try {
-    return asOptionalRecord(JSON.parse(trimmed));
-  } catch {
-    return undefined;
-  }
+  return safeParseJsonRecord(trimmed);
 }
 
 function addLogObjectFields(

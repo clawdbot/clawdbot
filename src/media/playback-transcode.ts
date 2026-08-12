@@ -6,8 +6,10 @@ import { maxBytesForKind, type MediaKind } from "@openclaw/media-core/constants"
 import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import { fileStore } from "../infra/file-store.js";
 import { openLocalFileSafely } from "../infra/fs-safe.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { runFfmpeg } from "./ffmpeg-exec.js";
 import { probePlaybackMediaFileDescriptor, type PlaybackMediaProbeResult } from "./media-probe.js";
 import { resolveNativePlaybackCodecCompatibility } from "./playback-codec-policy.js";
@@ -133,7 +135,7 @@ const PLAYBACK_TRANSCODE_MAX_INPUT_PIXELS = 4096 * 4096;
 const PLAYBACK_TRANSCODE_THREADS = 2;
 const PLAYBACK_TRANSCODE_FAILURE_COOLDOWN_MS = 60_000;
 const MAX_PLAYBACK_ENTRIES = { failures: 32, inspections: 32, inspectionJobs: 2 } as const;
-const playbackJobs = new Map<string, true>();
+const playbackJobs = new Map<string, Promise<void>>();
 const playbackFailures = new Map<string, number>();
 const playbackInspections = new Map<string, PlaybackInspection>();
 const playbackInspectionJobs = new Map<string, Promise<PlaybackInspection>>();
@@ -201,6 +203,7 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
     PLAYBACK_TRANSCODE_POLICY,
     readPlaybackSourceBounded,
     resolvePlaybackMode,
+    getPlaybackTranscodeJobs: (): Promise<void>[] => [...playbackJobs.values()],
   };
 }
 
@@ -222,18 +225,6 @@ function playbackSourceIdentityMatches(
   );
 }
 
-function setBoundedMapEntry<K, V>(map: Map<K, V>, key: K, value: V, maxEntries: number): void {
-  map.delete(key);
-  while (map.size >= maxEntries) {
-    const oldestKey = map.keys().next().value as K | undefined;
-    if (oldestKey === undefined) {
-      break;
-    }
-    map.delete(oldestKey);
-  }
-  map.set(key, value);
-}
-
 function readPlaybackInspection(cacheKey: string): PlaybackInspection | undefined {
   const inspection = playbackInspections.get(cacheKey);
   if (inspection) {
@@ -243,7 +234,9 @@ function readPlaybackInspection(cacheKey: string): PlaybackInspection | undefine
 }
 
 function cachePlaybackInspection(cacheKey: string, inspection: PlaybackInspection): void {
-  setBoundedMapEntry(playbackInspections, cacheKey, inspection, MAX_PLAYBACK_ENTRIES.inspections);
+  playbackInspections.delete(cacheKey);
+  playbackInspections.set(cacheKey, inspection);
+  pruneMapToMaxSize(playbackInspections, MAX_PLAYBACK_ENTRIES.inspections);
 }
 
 function playbackInspectionCacheKey(params: {
@@ -351,13 +344,9 @@ async function inspectPlaybackSource(params: PlaybackSourceParams): Promise<Play
     return { mode: "fallback" };
   }
 
-  const inspectionJob = computeInspection();
-  playbackInspectionJobs.set(cacheKey, inspectionJob);
-  try {
-    return await inspectionJob;
-  } finally {
-    playbackInspectionJobs.delete(cacheKey);
-  }
+  return await getOrCreatePromise(playbackInspectionJobs, cacheKey, computeInspection, {
+    evictOnSettled: true,
+  });
 }
 
 /** Resolves source-aware playback metadata and caches codec classification by file identity. */
@@ -679,8 +668,7 @@ export async function resolvePlaybackTranscode(
     return { kind: "preparing" };
   }
 
-  playbackJobs.set(operationKey, true);
-  void transcodePlaybackSource({
+  const job = transcodePlaybackSource({
     ...(inspection.audioStreamIndex !== undefined
       ? { audioStreamIndex: inspection.audioStreamIndex }
       : {}),
@@ -693,14 +681,19 @@ export async function resolvePlaybackTranscode(
     ...(inspection.videoStreamIndex !== undefined
       ? { videoStreamIndex: inspection.videoStreamIndex }
       : {}),
-  }).then(
+  });
+  // Pool admission and test synchronization must observe the same completion boundary.
+  playbackJobs.set(operationKey, job);
+  void job.then(
     () => {
       playbackJobs.delete(operationKey);
       playbackFailures.delete(operationKey);
     },
     () => {
       playbackJobs.delete(operationKey);
-      setBoundedMapEntry(playbackFailures, operationKey, Date.now(), MAX_PLAYBACK_ENTRIES.failures);
+      playbackFailures.delete(operationKey);
+      playbackFailures.set(operationKey, Date.now());
+      pruneMapToMaxSize(playbackFailures, MAX_PLAYBACK_ENTRIES.failures);
     },
   );
   return { kind: "preparing" };

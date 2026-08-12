@@ -4,6 +4,7 @@ import { resolveAgentConfig, resolveHumanDelayConfig } from "openclaw/plugin-sdk
 import {
   dispatchChannelInboundTurn,
   hasFinalInboundReplyDispatch,
+  readAgentRunTerminalOutcome,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   bindIngressLifecycleToReplyOptions,
@@ -91,18 +92,14 @@ async function processDiscordMessageInner(
     accountId,
     token,
     runtime,
-    guildHistories,
-    historyLimit,
     textLimit,
     replyToMode,
     message,
     messageChannelId,
-    canonicalMessageId,
     isGuildMessage,
     isDirectMessage,
     isGroupDm,
     messageText,
-    channelConfig,
     threadBindings,
     route,
     abortSignal,
@@ -172,7 +169,7 @@ async function processDiscordMessageInner(
     sessionKey: ctxPayload.SessionKey,
     accountId,
     sourceChannelId: messageChannelId,
-    sourceMessageId: canonicalMessageId ?? message.id,
+    sourceMessageId: ctx.canonicalMessageId ?? message.id,
     sourceReplyReference,
     log: logVerbose,
   });
@@ -271,7 +268,10 @@ async function processDiscordMessageInner(
 
   const deliverDiscordPayload = async (
     payload: ReplyPayload,
-    info: { kind: ReplyDispatchKind },
+    info: {
+      kind: ReplyDispatchKind;
+      bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
+    },
     options?: {
       allowFallbackOnlyToolWarning?: boolean;
       allowProgressBlock?: boolean;
@@ -328,6 +328,7 @@ async function processDiscordMessageInner(
         threadBindings,
         mediaLocalRoots,
         kind: "block",
+        bindPendingFinalDelivery: info.bindPendingFinalDelivery,
       });
       if (result.visibleReplySent) {
         replyReference.markSent();
@@ -484,6 +485,7 @@ async function processDiscordMessageInner(
             mediaLocalRoots,
             allowedMentions,
             kind: info.kind,
+            bindPendingFinalDelivery: info.bindPendingFinalDelivery,
           });
           return deliveryResult.visibleReplySent;
         },
@@ -542,6 +544,7 @@ async function processDiscordMessageInner(
       threadBindings,
       mediaLocalRoots,
       kind: info.kind,
+      bindPendingFinalDelivery: info.bindPendingFinalDelivery,
     });
     if (!result.visibleReplySent) {
       return result;
@@ -638,13 +641,13 @@ async function processDiscordMessageInner(
         : {
             isGroup: isGuildMessage,
             historyKey: messageChannelId,
-            historyMap: guildHistories,
-            limit: historyLimit,
+            historyMap: ctx.guildHistories,
+            limit: ctx.historyLimit,
           },
       replyOptions: {
         ...(turnAdoptionLifecycle ? bindIngressLifecycleToReplyOptions(turnAdoptionLifecycle) : {}),
         abortSignal,
-        skillFilter: channelConfig?.skills,
+        skillFilter: ctx.channelConfig?.skills,
         sourceReplyDeliveryMode,
         typingKeepalive: shouldDisableCoreTypingKeepalive ? false : undefined,
         // The primary turn already owns one correlation; each queued followup
@@ -711,6 +714,7 @@ async function processDiscordMessageInner(
     activeThreadRoute.end();
     endDeliveryCorrelation();
     await draftPreview.cleanup();
+    dispatchError ||= readAgentRunTerminalOutcome(dispatchResult) === "failed";
     const finalDeliveryFailed = (dispatchResult?.failedCounts?.final ?? 0) > 0;
     await reactions.finish({ dispatchAborted, dispatchError, finalDeliveryFailed });
   }

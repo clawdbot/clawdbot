@@ -10,7 +10,7 @@ import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { listOpenClawPluginManifestMetadata } from "../../plugins/manifest-metadata-scan.js";
 import { passesManifestOwnerBasePolicy } from "../../plugins/manifest-owner-policy.js";
-import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "../../plugins/manifest-registry.js";
 import { loadPluginManifest } from "../../plugins/manifest.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
@@ -385,12 +385,14 @@ function resolveBundledProviderStaticCatalogPluginIds(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): string[] {
   const pluginIds = resolveOwningPluginIdsForProviderRef({
     provider: params.provider,
     config: params.cfg,
     workspaceDir: params.workspaceDir,
     env: params.env,
+    ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
   });
   if (!pluginIds || pluginIds.length === 0) {
     return [];
@@ -400,6 +402,12 @@ function resolveBundledProviderStaticCatalogPluginIds(params: {
     config: params.cfg,
     workspaceDir: params.workspaceDir,
     env: params.env,
+    ...(params.metadataSnapshot
+      ? {
+          registry: params.metadataSnapshot.index,
+          manifestRegistry: params.metadataSnapshot.manifestRegistry,
+        }
+      : {}),
   });
   if (activatablePluginIds.length === 0) {
     return [];
@@ -409,6 +417,9 @@ function resolveBundledProviderStaticCatalogPluginIds(params: {
       config: params.cfg,
       workspaceDir: params.workspaceDir,
       env: params.env,
+      ...(params.metadataSnapshot
+        ? { manifestRegistry: params.metadataSnapshot.manifestRegistry }
+        : {}),
     }),
   );
   return activatablePluginIds.filter((pluginId) => bundledPluginIds.has(pluginId)).toSorted();
@@ -421,6 +432,7 @@ async function loadBundledProviderStaticCatalogModels(params: {
   env: NodeJS.ProcessEnv;
   preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
   providerMetadataOwners?: PluginMetadataSnapshot["owners"];
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<Map<string, ProviderRuntimeModel[]>> {
   const pluginIds = new Set(params.pluginIds);
   const preparedProviders = (params.preparedStaticProviderCatalog?.providers ?? []).filter(
@@ -444,6 +456,9 @@ async function loadBundledProviderStaticCatalogModels(params: {
           requireCompleteDiscoveryEntryCoverage: true,
           discoveryEntriesOnly: true,
           includeManifestModelCatalogProviders: false,
+          ...(params.pluginMetadataSnapshot
+            ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+            : {}),
         });
   const providers = [...preparedProviders, ...discoveredProviders];
   const preparedEntries = params.preparedStaticProviderCatalog?.entries.filter(
@@ -505,7 +520,7 @@ export async function loadBundledProviderStaticCatalogContextModels(
   const discoveryEntryPluginIds = new Set(
     (
       metadataSnapshot?.manifestRegistry?.plugins ??
-      loadPluginManifestRegistry({
+      loadPluginManifestRegistryCore({
         config: params.cfg,
         workspaceDir: params.workspaceDir,
         env,
@@ -520,6 +535,7 @@ export async function loadBundledProviderStaticCatalogContextModels(
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
       env,
+      ...(metadataSnapshot ? { metadataSnapshot } : {}),
     }),
   );
   const candidatePluginIds =
@@ -528,6 +544,7 @@ export async function loadBundledProviderStaticCatalogContextModels(
           config: params.cfg,
           workspaceDir: params.workspaceDir,
           env,
+          ...(metadataSnapshot ? { manifestRegistry: metadataSnapshot.manifestRegistry } : {}),
         })
       : providerScopedPluginIds;
   const pluginIds = [...new Set(candidatePluginIds)]
@@ -548,6 +565,7 @@ export async function loadBundledProviderStaticCatalogContextModels(
             ? { preparedStaticProviderCatalog: params.preparedStaticProviderCatalog }
             : {}),
           ...(metadataSnapshot ? { providerMetadataOwners: metadataSnapshot.owners } : {}),
+          ...(metadataSnapshot ? { pluginMetadataSnapshot: metadataSnapshot } : {}),
         }),
     ),
   );
@@ -583,6 +601,7 @@ function createScopedBundledProviderStaticCatalogModelResolver(
         cfg: params.cfg,
         workspaceDir: params.workspaceDir,
         env,
+        ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
       });
       providerPluginIds.set(provider, pluginIds);
     }
@@ -597,6 +616,15 @@ function createScopedBundledProviderStaticCatalogModelResolver(
         cfg: params.cfg,
         workspaceDir: params.workspaceDir,
         env,
+        ...(params.preparedStaticProviderCatalog
+          ? { preparedStaticProviderCatalog: params.preparedStaticProviderCatalog }
+          : {}),
+        ...(params.metadataSnapshot
+          ? {
+              providerMetadataOwners: params.metadataSnapshot.owners,
+              pluginMetadataSnapshot: params.metadataSnapshot,
+            }
+          : {}),
       });
       pluginCatalogs.set(catalogKey, catalog);
     }
@@ -643,6 +671,9 @@ function resolveOwnedNestedProviderLookup(params: {
       cfg: params.resolverParams.cfg,
       workspaceDir: params.resolverParams.workspaceDir,
       env: params.env,
+      ...(params.resolverParams.metadataSnapshot
+        ? { metadataSnapshot: params.resolverParams.metadataSnapshot }
+        : {}),
     });
   const nestedProviderOwners = new Set(resolveBundledOwners(nestedProvider));
   const sharedPluginIds = resolveBundledOwners(provider).filter((pluginId) =>

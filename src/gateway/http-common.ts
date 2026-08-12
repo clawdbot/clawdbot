@@ -28,6 +28,24 @@ export function setDefaultSecurityHeaders(
   }
 }
 
+/** Finish a failed request without rewriting committed headers or orphaning its transport. */
+export function finishFailedGatewayHttpResponse(res: ServerResponse): void {
+  if (res.destroyed || res.writableEnded) {
+    return;
+  }
+  if (!res.headersSent) {
+    res.statusCode = 500;
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.end("Internal Server Error");
+    return;
+  }
+
+  // Flush committed bytes before closing; truncated fixed-length bodies cannot reuse this socket.
+  const socket = res.socket;
+  res.end();
+  socket?.end();
+}
+
 export function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");

@@ -12,13 +12,16 @@ let cleanup: (() => Promise<void>) | undefined;
 async function createRealtimeServer(
   onRequest: (url: URL) => void,
   transcriptionEvents: readonly Record<string, unknown>[] = [],
+  eventsByConnection?: readonly (readonly Record<string, unknown>[])[],
 ) {
   const server = createServer();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   const clients = new Set<WebSocket>();
+  let connectionCount = 0;
   server.on("upgrade", (request, socket, head) => {
     onRequest(new URL(request.url ?? "/", "http://127.0.0.1"));
     wss.handleUpgrade(request, socket, head, (ws) => {
+      const connectionIndex = connectionCount++;
       clients.add(ws);
       ws.on("close", () => {
         clients.delete(ws);
@@ -31,8 +34,11 @@ async function createRealtimeServer(
             : Buffer.from(data);
         const message = JSON.parse(bytes.toString("utf8")) as { type?: unknown };
         if (message.type === "session.update") {
-          for (const event of transcriptionEvents) {
+          for (const event of eventsByConnection?.[connectionIndex] ?? transcriptionEvents) {
             ws.send(JSON.stringify(event));
+          }
+          if (eventsByConnection && connectionIndex === 0) {
+            setTimeout(() => ws.terminate(), 10);
           }
         }
       });
@@ -336,5 +342,165 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
     });
 
     expect(onPartial.mock.calls.map(([text]) => text)).toEqual(partials);
+  });
+
+  it.each([
+    {
+      name: "preserves the replacement session's terminal-only speech",
+      firstEvents: [{ type: "transcription.segment", text: "earlier turn" }],
+      secondEvents: [{ type: "transcription.done", text: "replacement final" }],
+      partials: [],
+    },
+    {
+      name: "does not mix the interrupted session's partial text into replacement speech",
+      firstEvents: [
+        { type: "transcription.segment", text: "earlier turn" },
+        { type: "transcription.text.delta", text: "old fragment " },
+      ],
+      secondEvents: [
+        { type: "transcription.text.delta", text: "new fragment" },
+        { type: "transcription.done", text: "replacement final" },
+      ],
+      partials: ["old fragment ", "new fragment"],
+    },
+  ])("$name after a real provider reconnect", async ({ firstEvents, secondEvents, partials }) => {
+    const requests: URL[] = [];
+    const baseUrl = await createRealtimeServer(
+      (url) => requests.push(url),
+      [],
+      [firstEvents, secondEvents],
+    );
+    const onPartial = vi.fn();
+    const onTranscript = vi.fn();
+    const onError = vi.fn();
+    const session = buildMistralRealtimeTranscriptionProvider().createSession({
+      providerConfig: { apiKey: "fixture-value", baseUrl },
+      onPartial,
+      onTranscript,
+      onError,
+    });
+
+    await session.connect();
+    await vi.waitFor(
+      () => {
+        expect(requests).toHaveLength(2);
+        expect(session.isConnected()).toBe(false);
+      },
+      { timeout: 3_000 },
+    );
+
+    expect(onTranscript.mock.calls.map(([text]) => text)).toEqual([
+      "earlier turn",
+      "replacement final",
+    ]);
+    expect(onPartial.mock.calls.map(([text]) => text)).toEqual(partials);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("tracks the in-progress transcript limit as aggregate UTF-8 bytes", async () => {
+    const exactUtf8Limit = "🙂".repeat((256 * 1024) / 4);
+    const splitSurrogatePrefix = "x".repeat(256 * 1024 - 4);
+    const splitSurrogateTranscript = `${splitSurrogatePrefix}🙂`;
+    const baseUrl = await createRealtimeServer(() => {}, [
+      { type: "transcription.text.delta", text: exactUtf8Limit },
+      { type: "transcription.segment", text: "first segment", start: 0, end: 1 },
+      { type: "transcription.text.delta", text: `${splitSurrogatePrefix}\ud83d` },
+      { type: "transcription.text.delta", text: "\ude42" },
+      { type: "transcription.done" },
+    ]);
+    const onError = vi.fn();
+    const onTranscript = vi.fn();
+    const session = buildMistralRealtimeTranscriptionProvider().createSession({
+      providerConfig: { apiKey: "fixture-value", baseUrl },
+      onError,
+      onTranscript,
+    });
+
+    await session.connect();
+    await vi.waitFor(() => {
+      expect(onTranscript.mock.calls.map(([text]) => text)).toEqual([
+        "first segment",
+        splitSurrogateTranscript,
+      ]);
+      expect(session.isConnected()).toBe(false);
+    });
+
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("fails once and ignores late terminal events after 10,000 runaway deltas", async () => {
+    const baseUrl = await createRealtimeServer(() => {}, [
+      ...Array.from({ length: 10_000 }, () => ({
+        type: "transcription.text.delta",
+        text: "x".repeat(32),
+      })),
+      { type: "transcription.segment", text: "late segment", start: 0, end: 1 },
+      { type: "transcription.done", text: "late done" },
+    ]);
+    let resolveError: (() => void) | undefined;
+    const errorReceived = new Promise<void>((resolve) => {
+      resolveError = resolve;
+    });
+    const onError = vi.fn(() => resolveError?.());
+    const onTranscript = vi.fn();
+    let lastPartialLength = 0;
+    let partialCalls = 0;
+    const session = buildMistralRealtimeTranscriptionProvider().createSession({
+      providerConfig: { apiKey: "fixture-value", baseUrl },
+      onError,
+      onPartial: (partial) => {
+        lastPartialLength = partial.length;
+        partialCalls += 1;
+      },
+      onTranscript,
+    });
+
+    await session.connect();
+    await errorReceived;
+    await vi.waitFor(() => {
+      expect(onError).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          message:
+            "Mistral realtime transcription exceeded the 256 KiB in-progress transcript limit",
+        }),
+      );
+      expect(session.isConnected()).toBe(false);
+    });
+
+    expect(partialCalls).toBe(8_192);
+    expect(lastPartialLength).toBe(256 * 1024);
+    expect(onTranscript).not.toHaveBeenCalled();
+  });
+
+  it("makes a ready-state provider error terminal and ignores late events", async () => {
+    const baseUrl = await createRealtimeServer(() => {}, [
+      { type: "transcription.text.delta", text: "draft" },
+      { type: "error", error: { message: "provider failed" } },
+      { type: "transcription.text.delta", text: "x".repeat(256 * 1024 + 1) },
+      { type: "transcription.segment", text: "late segment", start: 0, end: 1 },
+      { type: "transcription.done", text: "late done" },
+    ]);
+    const onError = vi.fn(() => {
+      throw new Error("observer failed");
+    });
+    const onPartial = vi.fn();
+    const onTranscript = vi.fn();
+    const session = buildMistralRealtimeTranscriptionProvider().createSession({
+      providerConfig: { apiKey: "fixture-value", baseUrl },
+      onError,
+      onPartial,
+      onTranscript,
+    });
+
+    await session.connect();
+    await vi.waitFor(() => {
+      expect(onError).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ message: "provider failed" }),
+      );
+      expect(session.isConnected()).toBe(false);
+    });
+
+    expect(onPartial).toHaveBeenCalledExactlyOnceWith("draft");
+    expect(onTranscript).not.toHaveBeenCalled();
   });
 });

@@ -1,11 +1,13 @@
 import * as config from "./config.js";
 import * as devices from "./devices.js";
 import * as frames from "./frames.js";
+import * as hooks from "./hooks.js";
 import * as logsChat from "./logs-chat.js";
 import * as pluginApprovals from "./plugin-approvals.js";
 import * as plugins from "./plugins.js";
 
 export const PluginLifecycleProtocolSchemas = {
+  HooksStatusParams: hooks.HooksStatusParamsSchema,
   PluginApprovalRequestParams: pluginApprovals.PluginApprovalRequestParamsSchema,
   PluginApprovalResolveParams: pluginApprovals.PluginApprovalResolveParamsSchema,
   PluginCatalogClawHubInstall: plugins.PluginCatalogClawHubInstallSchema,
@@ -61,6 +63,11 @@ export const PluginLifecycleProtocolSchemas = {
   ChatErrorEvent: logsChat.ChatErrorEventSchema,
   ChatEvent: logsChat.ChatEventSchema,
   UpdateStatusParams: config.UpdateStatusParamsSchema,
+  UpdateStatusResult: config.UpdateStatusResultSchema,
+  UpdateAvailable: config.UpdateAvailableSchema,
+  UpdateScheduleState: config.UpdateScheduleStateSchema,
+  UpdateHoldParams: config.UpdateHoldParamsSchema,
+  UpdateHoldResult: config.UpdateHoldResultSchema,
   UpdateRunParams: config.UpdateRunParamsSchema,
   TickEvent: frames.TickEventSchema,
   ShutdownEvent: frames.ShutdownEventSchema,

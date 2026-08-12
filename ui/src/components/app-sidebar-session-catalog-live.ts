@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   SessionCatalog,
   SessionsCatalogHostEvent,
@@ -16,10 +17,6 @@ import { sessionCatalogHostKey } from "./app-sidebar-session-types.ts";
 
 export const SESSION_CATALOG_CHANGED_REFRESH_MS = 5_000;
 const SESSION_CATALOG_STABLE_REFRESH_MS = 30_000;
-
-function sessionCatalogSnapshot(catalogs: readonly SessionCatalog[]): string {
-  return JSON.stringify(catalogs);
-}
 
 function sessionCatalogMaterialSnapshot(catalogs: readonly SessionCatalog[]): string {
   // Fast follow-up polls cover catalog/host/session identity sets, labels, connectivity,
@@ -65,40 +62,6 @@ export function sessionCatalogListClient(
   return snapshot.client;
 }
 
-async function requestSessionCatalogList(params: {
-  client: GatewayBrowserClient;
-  agentId: string;
-  progressId: string;
-  progressive: boolean;
-}): Promise<{ result: SessionsCatalogListResult; progressive: boolean }> {
-  const baseParams = { agentId: params.agentId, limitPerHost: 40 };
-  if (!params.progressive) {
-    return {
-      result: await params.client.request("sessions.catalog.list", baseParams),
-      progressive: false,
-    };
-  }
-  try {
-    return {
-      result: await params.client.request("sessions.catalog.list", {
-        ...baseParams,
-        progressId: params.progressId,
-      }),
-      progressive: true,
-    };
-  } catch (error) {
-    if (!isLegacyProgressIdRejection(error)) {
-      throw error;
-    }
-    // Older Gateways advertise the list method but reject the additive field.
-    // Retry once without streaming, then keep that connection on final pages.
-    return {
-      result: await params.client.request("sessions.catalog.list", baseParams),
-      progressive: false,
-    };
-  }
-}
-
 function isLegacyProgressIdRejection(error: unknown): boolean {
   if (!(error instanceof GatewayRequestError) || error.gatewayCode !== "INVALID_REQUEST") {
     return false;
@@ -106,40 +69,30 @@ function isLegacyProgressIdRejection(error: unknown): boolean {
   const message = error.message.toLowerCase();
   return (
     message.includes("progressid") &&
-    (message.includes("unexpected property") ||
-      message.includes("additional property") ||
-      message.includes("additional properties") ||
-      message.includes("unknown property") ||
-      message.includes("unrecognized property"))
+    /(?:unexpected|unknown|unrecognized) property|additional propert(?:y|ies)/.test(message)
   );
 }
 
 function isSessionsCatalogHostEvent(value: unknown): value is SessionsCatalogHostEvent {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const event = value as Record<string, unknown>;
-  const catalog = event.catalog;
-  if (!catalog || typeof catalog !== "object") {
-    return false;
-  }
-  const catalogRecord = catalog as Record<string, unknown>;
-  const hosts = Array.isArray(catalogRecord.hosts) ? catalogRecord.hosts : [];
-  const host = hosts[0];
-  return (
+  const event = asNullableRecord(value);
+  const catalog = asNullableRecord(event?.catalog);
+  const hosts = Array.isArray(catalog?.hosts) ? catalog.hosts : [];
+  const host = asNullableRecord(hosts[0]);
+  return Boolean(
+    event &&
+    catalog &&
+    host &&
     typeof event.progressId === "string" &&
     event.progressId.length > 0 &&
     typeof event.agentId === "string" &&
     event.agentId.length > 0 &&
-    typeof catalogRecord.id === "string" &&
-    typeof catalogRecord.label === "string" &&
-    catalogRecord.capabilities !== null &&
-    typeof catalogRecord.capabilities === "object" &&
+    typeof catalog.id === "string" &&
+    typeof catalog.label === "string" &&
+    catalog.capabilities !== null &&
+    typeof catalog.capabilities === "object" &&
     hosts.length === 1 &&
-    host !== null &&
-    typeof host === "object" &&
-    typeof (host as Record<string, unknown>).hostId === "string" &&
-    Array.isArray((host as Record<string, unknown>).sessions)
+    typeof host.hostId === "string" &&
+    Array.isArray(host.sessions),
   );
 }
 
@@ -158,15 +111,16 @@ export class SessionCatalogLiveState {
   private progressSequence = 0;
   private readonly progressSequences = new Map<string, number>();
   private readonly hostProgressSequences = new Map<string, number>();
-  private readonly hostIdsByCatalog = new Map<string, ReadonlySet<string>>();
+  private knownHostKeys = new Set<string>();
   private readonly requestChangedHostKeys = new Set<string>();
   private readonly warnedRequestErrors = new Set<string>();
   private requestOwner: symbol | null = null;
 
-  cancelTimer() {
-    if (this.timer !== null) {
-      globalThis.clearTimeout(this.timer);
-      this.timer = null;
+  cancelTimer(timer: "timer" | "activationTimer" = "timer") {
+    const handle = this[timer];
+    if (handle !== null) {
+      globalThis.clearTimeout(handle);
+      this[timer] = null;
     }
   }
 
@@ -176,7 +130,7 @@ export class SessionCatalogLiveState {
     this.requestOwner = null;
     this.progressSequences.clear();
     this.hostProgressSequences.clear();
-    this.hostIdsByCatalog.clear();
+    this.knownHostKeys.clear();
     this.requestChangedHostKeys.clear();
     this.presenceSignature = null;
     this.sawChange = false;
@@ -185,17 +139,15 @@ export class SessionCatalogLiveState {
   }
 
   resetConnection() {
-    this.clear();
-    this.connectionEpoch += 1;
-    this.progressive = true;
+    this.retireConnection(true);
   }
 
   retireConnection(reset = false): void {
-    if (reset) {
-      this.resetConnection();
-      return;
-    }
     this.clear();
+    if (reset) {
+      this.connectionEpoch += 1;
+      this.progressive = true;
+    }
   }
 
   async requestList(
@@ -204,37 +156,50 @@ export class SessionCatalogLiveState {
     progressId: string,
   ): Promise<SessionsCatalogListResult> {
     const connectionEpoch = this.connectionEpoch;
-    const response = await requestSessionCatalogList({
-      client,
-      agentId,
-      progressId,
-      progressive: this.progressive,
-    });
-    if (connectionEpoch === this.connectionEpoch) {
-      this.progressive = response.progressive;
+    const baseParams = { agentId, limitPerHost: 40 };
+    let progressive = this.progressive;
+    let result: SessionsCatalogListResult;
+    try {
+      result = await client.request("sessions.catalog.list", {
+        ...baseParams,
+        ...(progressive ? { progressId } : {}),
+      });
+    } catch (error) {
+      if (!progressive || !isLegacyProgressIdRejection(error)) {
+        throw error;
+      }
+      // Older Gateways advertise the list method but reject the additive field.
+      // Retry once without streaming, then keep that connection on final pages.
+      result = await client.request("sessions.catalog.list", baseParams);
+      progressive = false;
     }
-    return response.result;
+    if (connectionEpoch === this.connectionEpoch) {
+      this.progressive = progressive;
+    }
+    return result;
   }
 
   mergeFinal(catalogs: SessionCatalog[], currentCatalogs: readonly SessionCatalog[]) {
-    const current = new Map(currentCatalogs.map((catalog) => [catalog.id, catalog]));
-    return catalogs.map((catalog) => {
-      const currentHosts = new Map(
-        current.get(catalog.id)?.hosts.map((host) => [host.hostId, host]) ?? [],
-      );
-      return {
-        ...catalog,
-        hosts: catalog.hosts.map((host) => {
-          const progressiveHost = currentHosts.get(host.hostId);
-          const changed = this.requestChangedHostKeys.has(
-            sessionCatalogHostKey(catalog.id, host.hostId),
-          );
-          return host.error && changed && progressiveHost && !progressiveHost.error
-            ? progressiveHost
-            : host;
-        }),
-      };
-    });
+    const currentHosts = new Map(
+      currentCatalogs.flatMap((catalog) =>
+        catalog.hosts.map(
+          (host) => [sessionCatalogHostKey(catalog.id, host.hostId), host] as const,
+        ),
+      ),
+    );
+    return catalogs.map((catalog) => ({
+      ...catalog,
+      hosts: catalog.hosts.map((host) => {
+        const hostKey = sessionCatalogHostKey(catalog.id, host.hostId);
+        const progressiveHost = currentHosts.get(hostKey);
+        return host.error &&
+          this.requestChangedHostKeys.has(hostKey) &&
+          progressiveHost &&
+          !progressiveHost.error
+          ? progressiveHost
+          : host;
+      }),
+    }));
   }
 
   get refetching() {
@@ -307,58 +272,39 @@ export class SessionCatalogLiveState {
       params.hadCatalogs &&
       (this.sawChange ||
         params.previousMaterialSnapshot !== sessionCatalogMaterialSnapshot(params.catalogs));
-    const finalCatalogIds = new Set(params.catalogs.map((catalog) => catalog.id));
-    for (const [catalogId, previousHostIds] of this.hostIdsByCatalog) {
-      if (finalCatalogIds.has(catalogId)) {
-        continue;
-      }
-      for (const hostId of previousHostIds) {
-        this.hostProgressSequences.set(
-          sessionCatalogHostKey(catalogId, hostId),
-          params.progressSequence,
-        );
-      }
-      this.hostIdsByCatalog.delete(catalogId);
-    }
+    const finalHostKeys = new Set<string>();
     for (const catalog of params.catalogs) {
-      const previousHostIds = this.hostIdsByCatalog.get(catalog.id) ?? new Set<string>();
-      const finalHostIds = new Set(catalog.hosts.map((host) => host.hostId));
-      for (const hostId of previousHostIds) {
-        if (!finalHostIds.has(hostId)) {
-          this.hostProgressSequences.set(
-            sessionCatalogHostKey(catalog.id, hostId),
-            params.progressSequence,
-          );
-        }
-      }
       for (const host of catalog.hosts) {
+        const key = sessionCatalogHostKey(catalog.id, host.hostId);
+        finalHostKeys.add(key);
         if (host.error) {
           continue;
         }
-        const key = sessionCatalogHostKey(catalog.id, host.hostId);
         this.hostProgressSequences.set(
           key,
           Math.max(this.hostProgressSequences.get(key) ?? -1, params.progressSequence),
         );
       }
-      this.hostIdsByCatalog.set(catalog.id, finalHostIds);
     }
+    for (const hostKey of this.knownHostKeys) {
+      if (!finalHostKeys.has(hostKey)) {
+        this.hostProgressSequences.set(hostKey, params.progressSequence);
+      }
+    }
+    this.knownHostKeys = finalHostKeys;
   }
 
   observePresence(payload: unknown): boolean {
-    const presence =
-      payload && typeof payload === "object"
-        ? (payload as { presence?: unknown }).presence
-        : undefined;
+    const presence = asNullableRecord(payload)?.presence;
     if (!Array.isArray(presence)) {
       return false;
     }
     const states = new Map<string, "connected" | "offline">();
     for (const entry of presence) {
-      if (!entry || typeof entry !== "object") {
+      const record = asNullableRecord(entry);
+      if (!record) {
         continue;
       }
-      const record = entry as Record<string, unknown>;
       const rawId = typeof record.deviceId === "string" ? record.deviceId : record.instanceId;
       const id = typeof rawId === "string" ? rawId.trim().toLowerCase() : "";
       const mode = typeof record.mode === "string" ? record.mode.trim().toLowerCase() : "";
@@ -426,7 +372,7 @@ export class SessionCatalogLiveState {
           : catalog,
       );
     }
-    if (sessionCatalogSnapshot(catalogs) === sessionCatalogSnapshot(params.catalogs)) {
+    if (JSON.stringify(catalogs) === JSON.stringify(params.catalogs)) {
       return null;
     }
     const materialChange =
@@ -464,10 +410,7 @@ export class SessionCatalogLiveState {
   }
 
   cancelActivation() {
-    if (this.activationTimer !== null) {
-      globalThis.clearTimeout(this.activationTimer);
-      this.activationTimer = null;
-    }
+    this.cancelTimer("activationTimer");
   }
 
   cancelScheduledRefreshes() {
@@ -536,11 +479,10 @@ export async function refreshSessionCatalogsLive(params: {
     if (!revisionIsCurrent()) {
       return;
     }
-    const revisedCatalogIds = new Set([
-      ...params.catalogs().map((catalog) => catalog.id),
-      ...catalogs.map((catalog) => catalog.id),
-    ]);
-    params.applyFinal(catalogs, revisedCatalogIds);
+    params.applyFinal(
+      catalogs,
+      new Set([...params.catalogs(), ...catalogs].map((catalog) => catalog.id)),
+    );
     live.markFinal({ catalogs, hadCatalogs, previousMaterialSnapshot, progressSequence });
   } catch (error) {
     // A transient poll failure must not collapse already visible or expanded pages.
@@ -555,17 +497,13 @@ export async function refreshSessionCatalogsLive(params: {
       live.requestGeneration = null;
     }
     if (ownsRequest && requestIsCurrent() && params.connected()) {
-      const pending = live.refreshPending;
+      const delayMs = live.refreshPending
+        ? 0
+        : live.sawChange
+          ? SESSION_CATALOG_CHANGED_REFRESH_MS
+          : SESSION_CATALOG_STABLE_REFRESH_MS;
       live.refreshPending = false;
-      live.schedule(
-        pending
-          ? 0
-          : live.sawChange
-            ? SESSION_CATALOG_CHANGED_REFRESH_MS
-            : SESSION_CATALOG_STABLE_REFRESH_MS,
-        params.connected(),
-        params.refresh,
-      );
+      live.schedule(delayMs, params.connected(), params.refresh);
     }
   }
 }

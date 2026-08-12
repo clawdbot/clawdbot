@@ -475,6 +475,21 @@ describe("browser manage output", () => {
     );
   });
 
+  it("rejects unsupported profile drivers before creating a profile", async () => {
+    const program = createBrowserManageProgram();
+
+    await expect(
+      program.parseAsync(["browser", "create-profile", "--name", "test", "--driver", "chromium"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(getBrowserCliRuntimeCapture().runtimeErrors.at(-1)).toContain(
+      "--driver must be openclaw or existing-session",
+    );
+    expect(getBrowserManageCallBrowserRequestMock()).not.toHaveBeenCalled();
+  });
+
   it("prints a readable browser doctor report", async () => {
     getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
       if (req.path === "/") {

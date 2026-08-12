@@ -24,11 +24,11 @@ import { isRecoverableTerminalSessionStatus } from "../../config/sessions/termin
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
-import { loadSessionEntry } from "../session-utils.js";
 import {
   respondDeletedAgentSession,
   type RestoredCronContinuation,
-} from "./agent-handler-helpers.js";
+} from "../agent-turn/agent-handler-helpers.js";
+import { loadSessionEntry } from "../session-utils.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 

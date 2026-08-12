@@ -111,6 +111,29 @@ Capability-gated agent tools are a separate use of the same declaration. If an
 agent tool requires a client capability, the Gateway omits that tool unless the
 originating client advertised every required capability.
 
+## Validate attachments before sending
+
+Attachment limits are operator-tunable, so do not hardcode them. Read
+`hello-ok.policy.attachments` and validate locally before uploading:
+
+```ts
+const attachments = hello.policy.attachments;
+if (attachments) {
+  const ceiling = isImage ? attachments.maxImageBytes : attachments.maxBytes;
+  if (file.byteLength > ceiling) rejectLocally();
+}
+```
+
+Both values are decoded per-attachment ceilings. Still check the serialized
+request against `policy.maxPayload`: attachments travel as base64, so a file near
+`maxBytes` can exceed the frame limit on its own. Older gateways omit
+`policy.attachments`; when it is absent, send and handle the server outcome.
+Accepted MIME types and per-message handling are not advertised because they
+depend on the entrypoint and the resolved model. The gateway can return a typed
+rejection, while text-only model runs can omit additional images after their
+offload cap and still complete the request. The values are a connection-time
+snapshot, so re-read them on every reconnect.
+
 ## Recover state after reconnect
 
 Treat every successful reconnect as a new projection over durable history and
@@ -172,6 +195,9 @@ Rows returned by `chat.history` can carry an `__openclaw` metadata envelope:
 - `kind` identifies synthetic rows. A compaction boundary uses
   `kind: "compaction"` and may include `tokensBefore` and `tokensAfter` when a
   matching checkpoint recorded those metrics.
+
+  A session reset boundary uses `kind: "reset"`. It has no checkpoint token
+  metrics.
 
 Page backward with the response's `hasMore` and `nextOffset` values. Numeric
 offsets describe the current transcript projection, so do not persist them as

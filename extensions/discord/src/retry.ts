@@ -24,10 +24,11 @@ const DISCORD_RETRY_DEFAULTS = {
 } satisfies RetryConfig;
 const DISCORD_GATEWAY_RECONNECT_EXTRA_ATTEMPTS = 2;
 
-const DISCORD_RETRYABLE_STATUS_CODES = new Set([408, 429]);
 const DISCORD_TRANSIENT_MESSAGE_RE =
   /\b(?:bad gateway|fetch failed|network error|networkerror|service unavailable|socket hang up|temporarily unavailable|timed out|timeout)\b|connection (?:closed|reset|refused)/i;
+const ambiguousDiscordMessageCreates = new WeakSet<object>();
 type DiscordRetrySafety = "idempotent" | "nonce-protected-create" | "non-idempotent-create";
+type DiscordDeliveryFailure = "rejected" | "pre-connect" | "ambiguous" | "unknown";
 
 export type DiscordRetryRunner = <T>(
   fn: () => Promise<T>,
@@ -48,50 +49,88 @@ function readDiscordErrorStatus(err: unknown): number | undefined {
   return parseStrictNonNegativeInteger(raw);
 }
 
-function isRetryableDiscordTransientError(err: unknown): boolean {
-  if (err instanceof RateLimitError) {
-    return true;
-  }
-  for (const candidate of collectErrorGraphCandidates(err, (current) => [
+export function classifyDiscordDeliveryFailure(error: unknown): DiscordDeliveryFailure {
+  const candidates = collectErrorGraphCandidates(error, (current) => [
     current.cause,
     current.error,
-  ])) {
+  ]);
+
+  // An HTTP response proves the request reached Discord, even with a nested transport error.
+  for (const candidate of candidates) {
     const status = readDiscordErrorStatus(candidate);
-    if (status !== undefined && (DISCORD_RETRYABLE_STATUS_CODES.has(status) || status >= 500)) {
-      return true;
-    }
-    if (classifyTransientNetworkErrorCode(extractErrorCode(candidate))) {
-      return true;
-    }
-    if (readErrorName(candidate) === "AbortError") {
-      return true;
-    }
-    if (
-      (candidate instanceof Error || (candidate !== null && typeof candidate === "object")) &&
-      DISCORD_TRANSIENT_MESSAGE_RE.test(formatErrorMessage(candidate))
-    ) {
-      return true;
+    if (status !== undefined) {
+      if (status === 408 || status >= 500) {
+        return "ambiguous";
+      }
+      if (status >= 400) {
+        return "rejected";
+      }
     }
   }
-  return false;
+
+  if (
+    candidates.some(
+      (candidate) =>
+        readErrorName(candidate) === "AbortError" ||
+        classifyTransientNetworkErrorCode(extractErrorCode(candidate)) === "ambiguous",
+    )
+  ) {
+    return "ambiguous";
+  }
+  // A confirmed connect/DNS failure is safer than generic outer "fetch failed" wording.
+  if (
+    candidates.some(
+      (candidate) =>
+        classifyTransientNetworkErrorCode(extractErrorCode(candidate)) === "pre-connect",
+    )
+  ) {
+    return "pre-connect";
+  }
+  return candidates.some(
+    (candidate) =>
+      (candidate instanceof Error || (candidate !== null && typeof candidate === "object")) &&
+      DISCORD_TRANSIENT_MESSAGE_RE.test(formatErrorMessage(candidate)),
+  )
+    ? "ambiguous"
+    : "unknown";
 }
 
-function isRetryableDiscordPreConnectError(err: unknown): boolean {
-  if (err instanceof RateLimitError) {
-    return true;
+export function recordDiscordMessageCreateAmbiguity(error: unknown): void {
+  if (error !== null && typeof error === "object") {
+    ambiguousDiscordMessageCreates.add(error);
   }
-  for (const candidate of collectErrorGraphCandidates(err, (current) => [
-    current.cause,
-    current.error,
-  ])) {
-    if (readDiscordErrorStatus(candidate) === 429) {
-      return true;
-    }
-    if (classifyTransientNetworkErrorCode(extractErrorCode(candidate)) === "pre-connect") {
-      return true;
-    }
-  }
-  return false;
+}
+
+export function hasDiscordMessageCreateAmbiguity(error: unknown): boolean {
+  return collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).some(
+    (candidate) =>
+      candidate !== null &&
+      typeof candidate === "object" &&
+      ambiguousDiscordMessageCreates.has(candidate),
+  );
+}
+
+function hasDiscordRateLimitRejection(error: unknown): boolean {
+  return (
+    error instanceof RateLimitError ||
+    collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).some(
+      (candidate) => readDiscordErrorStatus(candidate) === 429,
+    )
+  );
+}
+
+function isRetryableDiscordTransientError(error: unknown): boolean {
+  const failure = classifyDiscordDeliveryFailure(error);
+  return (
+    failure === "ambiguous" || failure === "pre-connect" || hasDiscordRateLimitRejection(error)
+  );
+}
+
+function isRetryableDiscordPreConnectError(error: unknown): boolean {
+  const failure = classifyDiscordDeliveryFailure(error);
+  return (
+    failure === "pre-connect" || (failure === "rejected" && hasDiscordRateLimitRejection(error))
+  );
 }
 
 function resolveDiscordRetryPredicate(safety: DiscordRetrySafety) {

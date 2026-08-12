@@ -53,7 +53,7 @@ async function resolveQaInboundMediaFacts(attachments: QaBusMessage["attachments
   if (!Array.isArray(attachments) || attachments.length === 0) {
     return [];
   }
-  const mediaList: Array<{ path: string; contentType?: string | null }> = [];
+  const mediaList: Array<{ path?: string; url?: string; contentType?: string | null }> = [];
   for (const attachment of attachments) {
     if (!attachment?.mimeType) {
       continue;
@@ -71,10 +71,17 @@ async function resolveQaInboundMediaFacts(attachments: QaBusMessage["attachments
         undefined,
         attachment.fileName,
       );
-      mediaList.push({
-        path: saved.path,
-        contentType: saved.contentType,
-      });
+      mediaList.push(
+        attachment.mediaFactCarrier === "media-store-url"
+          ? {
+              url: `media://inbound/${saved.id}`,
+              contentType: saved.contentType,
+            }
+          : {
+              path: saved.path,
+              contentType: saved.contentType,
+            },
+      );
       continue;
     }
     if (typeof attachment.url === "string" && attachment.url.trim()) {
@@ -200,7 +207,7 @@ function createQaReplyPreview(params: {
     currentText = "";
   };
 
-  const sendDurable = async (text: string) => {
+  const sendDurable = async (text: string, isError?: boolean) => {
     if (!text.trim()) {
       return;
     }
@@ -210,6 +217,7 @@ function createQaReplyPreview(params: {
       accountId: params.account.accountId,
       to: params.target,
       text,
+      isError,
       senderId: params.account.botUserId,
       senderName: params.account.botDisplayName,
       threadId: params.inbound.threadId,
@@ -222,8 +230,15 @@ function createQaReplyPreview(params: {
 
   return {
     clear,
-    async deliver(text: string, kind: string) {
+    async deliver(text: string, kind: string, isError?: boolean) {
       await pending;
+      if (isError === true) {
+        // Preview edits cannot add the typed failure marker. Replace any preview
+        // with one durable marked message so QA Lab cannot accept it as success.
+        await clear();
+        await sendDurable(text, true);
+        return;
+      }
       // Core may close a streamed block with an identical final payload.
       // The block is already durable, so posting the final again duplicates the reply.
       if (
@@ -349,8 +364,6 @@ export async function handleQaInbound(params: {
         targetSessionKey: route.sessionKey,
       })
     : undefined;
-  const commandBody = nativeCommand ? `/${nativeCommand.name}` : inbound.text;
-
   const sessionKey = commandTargets?.sessionKey ?? route.sessionKey;
   const ctxPayload = buildChannelInboundEventContext({
     channel: params.channelId,
@@ -385,14 +398,14 @@ export async function handleQaInbound(params: {
       messageThreadId: inbound.threadId,
       threadParentId: inbound.threadId ? inbound.conversation.id : undefined,
     },
-    message: { body, bodyForAgent: inbound.text, rawBody: inbound.text, commandBody },
+    message: { body, bodyForAgent: inbound.text, rawBody: inbound.text, commandBody: inbound.text },
     media,
     access: {
       commands: { authorized: true },
       mentions: { canDetectMention: isGroup, wasMentioned: Boolean(wasMentioned) },
     },
     command: nativeCommand
-      ? { kind: "native", name: nativeCommand.name, body: commandBody, authorized: true }
+      ? { kind: "native", name: nativeCommand.name, body: inbound.text, authorized: true }
       : undefined,
     extra: {
       CommandTargetSessionKey: commandTargets?.commandTargetSessionKey,
@@ -414,7 +427,12 @@ export async function handleQaInbound(params: {
       deliver: async (payload, info) => {
         const reply =
           payload && typeof payload === "object"
-            ? (payload as { text?: string; mediaUrl?: string; mediaUrls?: string[] })
+            ? (payload as {
+                text?: string;
+                mediaUrl?: string;
+                mediaUrls?: string[];
+                isError?: boolean;
+              })
             : undefined;
         const text = reply?.text ?? "";
         const mediaUrls = Array.from(
@@ -439,6 +457,7 @@ export async function handleQaInbound(params: {
             accountId: params.account.accountId,
             to: target,
             text,
+            isError: reply?.isError,
             mediaUrls,
             mediaLocalRoots: getAgentScopedMediaLocalRoots(
               params.config as OpenClawConfig,
@@ -452,7 +471,7 @@ export async function handleQaInbound(params: {
         if (!text.trim()) {
           return;
         }
-        await preview.deliver(text, info?.kind ?? "final");
+        await preview.deliver(text, info?.kind ?? "final", reply?.isError);
       },
       onError: (error) => {
         void preview.clear().catch((clearError: unknown) => {

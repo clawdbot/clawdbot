@@ -11,12 +11,6 @@ export type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>[
 
 export { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
 
-export function isStoppableCloudWorkerPlacement(
-  placement: GatewaySessionRow["placement"],
-): boolean {
-  return placement?.state === "active";
-}
-
 function pullRequestStateLabel(state: SessionCatalogPullRequestSummary["state"]): string {
   switch (state) {
     case "open":
@@ -66,6 +60,7 @@ export function renderSessionRowBadges(params: {
   pullRequest?: SessionCatalogPullRequestSummary;
   hasApproval?: boolean;
   outboxCount?: number;
+  hasComposerDraft?: boolean;
   placementState?: SessionPlacementState;
   workspaceConflictCount?: number;
 }) {
@@ -96,6 +91,7 @@ export function renderSessionRowBadges(params: {
     !pullRequestLabel &&
     !params.hasApproval &&
     outboxCount === 0 &&
+    !params.hasComposerDraft &&
     !displayedPlacementState &&
     !hasWorkspaceConflict
   ) {
@@ -150,6 +146,13 @@ export function renderSessionRowBadges(params: {
       : nothing}
     ${outboxCount > 0
       ? renderSessionRowBadge(outboxLabel, icons.clock, "session-row-badge--queued", outboxCount)
+      : nothing}
+    ${params.hasComposerDraft
+      ? renderSessionRowBadge(
+          t("sessionsView.unsentDraft"),
+          icons.pencil,
+          "session-row-badge--draft",
+        )
       : nothing}
     ${displayedPlacementState || hasWorkspaceConflict
       ? renderSessionRowBadge(

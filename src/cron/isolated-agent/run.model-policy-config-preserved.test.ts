@@ -1,7 +1,7 @@
 // Cron policy tests cover per-agent defaults flattening before model resolution.
 import { describe, expect, it } from "vitest";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
-import { resolveAllowedModelRef } from "../../agents/model-selection-resolve.js";
+import { resolveAllowedModelRefCore } from "../../agents/model-selection-resolve.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildCronAgentDefaultsConfig } from "./run-config.js";
 
@@ -17,7 +17,7 @@ function buildCronConfig(cfg: OpenClawConfig, agentId: string): OpenClawConfig {
 }
 
 function resolveCronPayloadModel(cfg: OpenClawConfig, raw: string) {
-  return resolveAllowedModelRef({
+  return resolveAllowedModelRefCore({
     cfg,
     catalog: [
       { provider: "openai", id: "gpt-5.5", name: "GPT 5.5" },

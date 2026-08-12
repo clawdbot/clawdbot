@@ -1,5 +1,9 @@
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
 // Verifies node camera/photo tool payloads, media URLs, and vision gating.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cameraTempPath } from "../cli/nodes-camera.js";
 import {
   readFileUtf8AndCleanup,
   stubFetchTextResponse,
@@ -74,12 +78,7 @@ async function executeNodes(
 type NodesToolResult = Awaited<ReturnType<typeof executeNodes>>;
 type GatewayMockResult = Record<string, unknown> | null | undefined;
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label");
 
 function expectInvokeParams(
   invokeParams: unknown,
@@ -257,8 +256,11 @@ describe("nodes camera_snap", () => {
     );
 
     expectNoImages(result);
-    expect(result.content ?? []).toStrictEqual([]);
-    expect(expectFirstMediaUrl(result)).toMatch(/openclaw-camera-snap-front-.*\.jpg$/);
+    const mediaUrl = expectFirstMediaUrl(result);
+    expect(mediaUrl).toMatch(/openclaw-camera-snap-front-.*\.jpg$/);
+    expect(result.content).toStrictEqual([
+      { type: "text", text: `Camera photo saved to ${mediaUrl}.` },
+    ]);
   });
 
   it("passes deviceId when provided", async () => {
@@ -309,8 +311,11 @@ describe("nodes camera_snap", () => {
       facing: "front",
     });
 
-    expect(result.content ?? []).toStrictEqual([]);
-    await expect(readFileUtf8AndCleanup(expectFirstMediaUrl(result))).resolves.toBe("url-image");
+    const mediaUrl = expectFirstMediaUrl(result);
+    expect(result.content).toStrictEqual([
+      { type: "text", text: `Camera photo saved to ${mediaUrl}.` },
+    ]);
+    await expect(readFileUtf8AndCleanup(mediaUrl)).resolves.toBe("url-image");
   });
 
   it("rejects camera_snap url payloads when node remoteIp is missing", async () => {
@@ -380,7 +385,71 @@ describe("nodes camera_clip", () => {
 });
 
 describe("nodes photos_latest", () => {
-  it("returns empty content/details when no photos are available", async () => {
+  it.each([
+    ["missing gateway response", null],
+    ["missing payload", {}],
+    ["missing photos collection", { payload: {} }],
+    ["null photos collection", { payload: { photos: null } }],
+    ["non-array photos collection", { payload: { photos: {} } }],
+  ])("rejects a %s instead of reporting an empty photo library", async (_label, response) => {
+    setupNodeInvokeMock({ onInvoke: () => response });
+
+    await expect(executePhotosLatest({ modelHasVision: false })).rejects.toThrow(
+      "invalid photos.latest payload",
+    );
+  });
+
+  it("rejects more photos than the node was asked to return", async () => {
+    setupNodeInvokeMock({
+      invokePayload: { photos: [PHOTOS_LATEST_PAYLOAD.photos[0], PHOTOS_LATEST_PAYLOAD.photos[0]] },
+    });
+
+    await expect(executePhotosLatest({ modelHasVision: false })).rejects.toThrow(
+      "photos.latest returned 2 photos; requested at most 1",
+    );
+  });
+
+  it.each([
+    {
+      name: "missing image data",
+      photo: { format: "jpeg", width: 1, height: 1 },
+      expectedError: /invalid camera\.snap payload/i,
+    },
+    {
+      name: "unsupported image format",
+      photo: { ...PHOTOS_LATEST_PAYLOAD.photos[0], format: "webp" },
+      expectedError: /unsupported photos\.latest format/i,
+    },
+  ])("rejects a second photo with $name before writing the first", async (testCase) => {
+    setupNodeInvokeMock({
+      invokePayload: { photos: [PHOTOS_LATEST_PAYLOAD.photos[0], testCase.photo] },
+    });
+    const firstPhotoId = "00000000-0000-4000-8000-000000000022";
+    const firstPhotoPath = cameraTempPath({ kind: "snap", ext: "jpg", id: firstPhotoId });
+    const randomUUID = vi
+      .spyOn(crypto, "randomUUID")
+      .mockReturnValueOnce("00000000-0000-4000-8000-000000000001")
+      .mockReturnValueOnce(firstPhotoId);
+
+    try {
+      await expect(
+        executeNodes(
+          {
+            action: "photos_latest",
+            node: NODE_ID,
+            limit: 2,
+          },
+          { modelHasVision: false },
+        ),
+      ).rejects.toThrow(testCase.expectedError);
+      await expect(fs.stat(firstPhotoPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      randomUUID.mockRestore();
+      await fs.unlink(firstPhotoPath).catch(() => undefined);
+    }
+  });
+
+  it("returns an explicit model-facing result when no photos are available", async () => {
     setupNodeInvokeMock({
       onInvoke: (invokeParams) => {
         expectInvokeParams(invokeParams, {
@@ -407,7 +476,7 @@ describe("nodes photos_latest", () => {
       { modelHasVision: false },
     );
 
-    expect(result.content ?? []).toStrictEqual([]);
+    expect(result.content).toStrictEqual([{ type: "text", text: "No photos found." }]);
     expect(result.details).toStrictEqual([]);
   });
 
@@ -417,13 +486,16 @@ describe("nodes photos_latest", () => {
     const result = await executePhotosLatest({ modelHasVision: false });
 
     expectNoImages(result);
-    expect(result.content ?? []).toStrictEqual([]);
     const details =
       (result.details as { photos?: Array<Record<string, unknown>> } | undefined)?.photos ?? [];
     expect(details[0]?.width).toBe(1);
     expect(details[0]?.height).toBe(1);
     expect(details[0]?.createdAt).toBe("2026-03-04T00:00:00Z");
-    expect(expectFirstMediaUrl(result)).toMatch(/openclaw-camera-snap-.*\.jpg$/);
+    const mediaUrl = expectFirstMediaUrl(result);
+    expect(mediaUrl).toMatch(/openclaw-camera-snap-.*\.jpg$/);
+    expect(result.content).toStrictEqual([
+      { type: "text", text: `Library photo saved to ${mediaUrl}.` },
+    ]);
   });
 
   it("includes inline image blocks when model has vision", async () => {

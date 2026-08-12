@@ -6,8 +6,12 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { DEFAULT_MODEL } from "../agents/defaults.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
-import { getSessionDisplaySubagentRunByChildSessionKey } from "../agents/subagent-registry-read.js";
-import { buildGroupDisplayName, type SessionEntry } from "../config/sessions.js";
+import { getSessionDisplaySubagentRunByChildSessionKey } from "../agents/subagents/registry/subagent-registry-read.js";
+import {
+  buildGroupDisplayName,
+  type InternalSessionEntry,
+  type SessionEntry,
+} from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.shared.js";
@@ -23,7 +27,7 @@ import {
 import { buildGatewaySessionRow } from "./session-utils-row.js";
 import {
   isGroupOrChannelDisplaySession,
-  loadSessionEntryReadOnly,
+  loadGatewaySessionEntryReadOnly,
   parseGroupKey,
 } from "./session-utils-store.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
@@ -147,24 +151,29 @@ export function resolveSessionListSearchModelFields(params: {
   return fields;
 }
 
-export function loadGatewaySessionRow(
+type LoadGatewaySessionRowOptions = {
+  agentId?: string;
+  includeDerivedTitles?: boolean;
+  includeLastMessage?: boolean;
+  now?: number;
+  transcriptUsageMaxBytes?: number;
+};
+
+export function loadGatewaySessionLifecycleSnapshot(
   sessionKey: string,
-  options?: {
-    agentId?: string;
-    includeDerivedTitles?: boolean;
-    includeLastMessage?: boolean;
-    now?: number;
-    transcriptUsageMaxBytes?: number;
-  },
-): GatewaySessionRow | null {
+  options?: LoadGatewaySessionRowOptions,
+): { lifecycleRunId?: string; row: GatewaySessionRow | null } {
   const now = options?.now ?? Date.now();
-  const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntryReadOnly(sessionKey, {
-    clone: false,
-    includeStoreChildEntries: true,
-    ...(options?.agentId ? { agentId: options.agentId } : {}),
-  });
+  const { cfg, storePath, store, entry, canonicalKey } = loadGatewaySessionEntryReadOnly(
+    sessionKey,
+    {
+      clone: false,
+      includeStoreChildEntries: true,
+      ...(options?.agentId ? { agentId: options.agentId } : {}),
+    },
+  );
   if (!entry) {
-    return null;
+    return { row: null };
   }
   const storeChildSessionsByKey = buildSingleRowStoreChildSessionsByKey({
     storePath,
@@ -172,19 +181,30 @@ export function loadGatewaySessionRow(
     key: canonicalKey,
     now,
   });
-  return buildGatewaySessionRow({
-    cfg,
-    storePath,
-    store,
-    key: canonicalKey,
-    entry,
-    now,
-    includeDerivedTitles: options?.includeDerivedTitles,
-    includeLastMessage: options?.includeLastMessage,
-    transcriptUsageMaxBytes: options?.transcriptUsageMaxBytes,
-    storeChildSessionsByKey,
-    ...(options?.agentId ? { agentId: options.agentId } : {}),
-  });
+  const lifecycleRunId = (entry as InternalSessionEntry).lifecycleRunId;
+  return {
+    ...(lifecycleRunId === undefined ? {} : { lifecycleRunId }),
+    row: buildGatewaySessionRow({
+      cfg,
+      storePath,
+      store,
+      key: canonicalKey,
+      entry,
+      now,
+      includeDerivedTitles: options?.includeDerivedTitles,
+      includeLastMessage: options?.includeLastMessage,
+      transcriptUsageMaxBytes: options?.transcriptUsageMaxBytes,
+      storeChildSessionsByKey,
+      ...(options?.agentId ? { agentId: options.agentId } : {}),
+    }),
+  };
+}
+
+export function loadGatewaySessionRow(
+  sessionKey: string,
+  options?: LoadGatewaySessionRowOptions,
+): GatewaySessionRow | null {
+  return loadGatewaySessionLifecycleSnapshot(sessionKey, options).row;
 }
 
 export function buildGatewaySessionInfo(params: {

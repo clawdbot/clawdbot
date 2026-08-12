@@ -1,15 +1,10 @@
 import { readFileSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-
-function optionalString(value: unknown, maxLength: number): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed && trimmed.length <= maxLength ? trimmed : undefined;
-}
+import {
+  isRecord,
+  normalizeBoundedOptionalString as readBoundedString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 function piHome(env: NodeJS.ProcessEnv): string {
   const configured = process.platform === "win32" ? env.USERPROFILE?.trim() : env.HOME?.trim();
@@ -52,7 +47,7 @@ function resolveConfiguredPath(
 function settingsSessionDir(file: string): string | undefined {
   try {
     const value = JSON.parse(readFileSync(file, "utf8")) as unknown;
-    return isRecord(value) ? optionalString(value.sessionDir, 4_096) : undefined;
+    return isRecord(value) ? readBoundedString(value.sessionDir, 4_096) : undefined;
   } catch {
     return undefined;
   }

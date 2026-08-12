@@ -4,7 +4,11 @@ import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { buildAuthProfileId } from "../agents/auth-profiles/identity.js";
-import { upsertAuthProfile, upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
+import {
+  upsertAuthProfile,
+  upsertAuthProfileWithLock,
+  upsertAuthProfileWithLockOrThrow,
+} from "../agents/auth-profiles/profiles.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -15,13 +19,12 @@ import {
   type SecretInput,
   type SecretRef,
 } from "../config/types.secrets.js";
+import { safeRealpathSync } from "../infra/boundary-path.js";
 import type { OAuthCredentials } from "../llm/oauth.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
-
-type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 
 const resolveAuthAgentDir = (agentDir?: string, config?: OpenClawConfig) =>
   agentDir ?? resolveDefaultAgentDir(config ?? {});
@@ -137,15 +140,6 @@ export function upsertApiKeyProfile(params: {
     agentDir: resolveAuthAgentDir(params.agentDir, params.options?.config),
   });
   return profileId;
-}
-
-async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
-  const updated = await upsertAuthProfileWithLock(params);
-  if (!updated) {
-    throw new Error(
-      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
-    );
-  }
 }
 
 export function applyAuthProfileConfig(
@@ -284,15 +278,6 @@ export function removeAuthProfileConfig(cfg: OpenClawConfig, profileId: string):
   };
 }
 
-/** Resolve real path, returning null if the target doesn't exist. */
-function safeRealpathSync(dir: string): string | null {
-  try {
-    return fs.realpathSync(path.resolve(dir));
-  } catch {
-    return null;
-  }
-}
-
 function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
   const normalized = path.resolve(primaryAgentDir);
   const parentOfAgent = path.dirname(normalized);
@@ -318,7 +303,7 @@ function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
   for (const dir of [normalized, ...discovered]) {
-    const real = safeRealpathSync(dir);
+    const real = safeRealpathSync(path.resolve(dir));
     if (real && !seen.has(real)) {
       seen.add(real);
       result.push(real);
@@ -358,9 +343,9 @@ export async function writeOAuthCredentials(
   });
 
   if (options?.syncSiblingAgents) {
-    const primaryReal = safeRealpathSync(resolvedAgentDir);
+    const primaryReal = safeRealpathSync(path.resolve(resolvedAgentDir));
     for (const targetAgentDir of targetAgentDirs) {
-      const targetReal = safeRealpathSync(targetAgentDir);
+      const targetReal = safeRealpathSync(path.resolve(targetAgentDir));
       if (targetReal && primaryReal && targetReal === primaryReal) {
         continue;
       }

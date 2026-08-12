@@ -24,7 +24,9 @@ import {
   patchMcpServers,
   summarizeMcpServers,
 } from "../../lib/config/mcp-servers.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
@@ -36,32 +38,14 @@ import { loadSkillStatusReport } from "../../lib/skills/index.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import type {
-  ChatComposerMenuSkill,
-  ChatComposerPlusMenuProps,
-} from "./components/chat-composer-plus-menu.ts";
-
-type CapabilityMenuProps = Omit<
-  ChatComposerPlusMenuProps,
-  | "attachments"
-  | "disabled"
-  | "open"
-  | "view"
-  | "toolOverrides"
-  | "onOpenChange"
-  | "onViewChange"
-  | "showCapabilities"
->;
+import type { ChatComposerMenuSkill } from "./components/chat-composer-plus-menu.ts";
+import type { CapabilityMenuProps } from "./components/chat-composer-types.ts";
 
 type ComposerMcpServerScope = "session" | "everywhere";
 
 type CapabilityMutationResult =
   | { ok: true }
   | { ok: false; error: string; stage: "config" | "session" };
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function webSearchBaseEnabled(config: Record<string, unknown> | null): boolean {
   return asRecord(asRecord(asRecord(config?.tools)?.web)?.search)?.enabled !== false;
@@ -129,7 +113,11 @@ export class ChatComposerCapabilityHost {
     try {
       globalResult = await options.patchGlobal(globalConfig);
     } catch (error) {
-      return { ok: false, error: errorMessage(error), stage: "config" };
+      return {
+        ok: false,
+        error: formatUiError(error),
+        stage: "config",
+      };
     }
     if (!globalResult.ok) {
       return { ...globalResult, stage: "config" };
@@ -141,7 +129,11 @@ export class ChatComposerCapabilityHost {
     try {
       loaded = await options.loadSessionOverrides();
     } catch (error) {
-      return { ok: false, error: errorMessage(error), stage: "session" };
+      return {
+        ok: false,
+        error: formatUiError(error),
+        stage: "session",
+      };
     }
     if (!loaded.ok) {
       return { ...loaded, stage: "session" };
@@ -157,7 +149,11 @@ export class ChatComposerCapabilityHost {
     try {
       sessionResult = await options.patchSession(next);
     } catch (error) {
-      return { ok: false, error: errorMessage(error), stage: "session" };
+      return {
+        ok: false,
+        error: formatUiError(error),
+        stage: "session",
+      };
     }
     return sessionResult.ok ? sessionResult : { ...sessionResult, stage: "session" };
   }
@@ -290,8 +286,12 @@ export class ChatComposerCapabilityHost {
     if (!state.connected || !state.client) {
       return { ok: false, error: t("chat.composer.menu.offlineBlocked") };
     }
-    if (!readGatewayOperatorAccess(context.gateway.snapshot).canWrite) {
-      return { ok: false, error: t("chat.composer.menu.readOnlyBlocked") };
+    const access = readSessionMethodAccess(context.gateway.snapshot, {
+      method: "sessions.patch",
+      params: { key: state.sessionKey, toolOverrides: next },
+    });
+    if (!access.allowed) {
+      return { ok: false, error: access.reason };
     }
     const sessionKey = state.sessionKey;
     if (this.patchTokens.has(sessionKey)) {
@@ -395,7 +395,7 @@ export class ChatComposerCapabilityHost {
     } catch (error) {
       return {
         ok: false as const,
-        error: errorMessage(error),
+        error: formatUiError(error),
       };
     }
     if (!identityMatches()) {
@@ -585,12 +585,16 @@ export class ChatComposerCapabilityHost {
     const toolsEffectiveError =
       effectiveToolsKey !== null && this.effectiveToolsErrorKey === effectiveToolsKey;
     const capabilitiesReady = gatewayAvailable && session !== undefined && runtimeConfig !== null;
+    const toolPatchAccess = readSessionMethodAccess(context.gateway.snapshot, {
+      method: "sessions.patch",
+      params: { key: state.sessionKey, toolOverrides: null },
+    });
     const mutationBlockedReason = !gatewayAvailable
       ? t("chat.composer.menu.offlineBlocked")
       : !capabilitiesReady
         ? t("common.loading")
-        : !access.canWrite
-          ? t("chat.composer.menu.readOnlyBlocked")
+        : !toolPatchAccess.allowed
+          ? toolPatchAccess.reason
           : this.patchTokens.has(state.sessionKey)
             ? t("chat.composer.menu.savingBlocked")
             : null;

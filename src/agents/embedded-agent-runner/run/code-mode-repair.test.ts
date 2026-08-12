@@ -92,6 +92,30 @@ describe("installCodeModeRepairHook", () => {
     });
   });
 
+  it("leaves steering skips unchanged without spending repair", async () => {
+    const agent = createAgent();
+    const skipped = {
+      content: [{ type: "text" as const, text: "Skipped due to queued user message." }],
+      details: { status: "skipped", deniedReason: "steering" },
+    };
+
+    await expect(
+      agent.afterToolOutcome?.(
+        outcome({
+          result: skipped,
+          isError: true,
+          executionStarted: false,
+        }),
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      agent.afterToolOutcome?.(outcome({ result: failedResult() })),
+    ).resolves.toMatchObject({
+      terminate: false,
+      details: { repair: { allowed: true, remainingAttempts: 1 } },
+    });
+  });
+
   it("does not spend the repair token on successful pure computation", async () => {
     const agent = createAgent();
 
@@ -99,6 +123,30 @@ describe("installCodeModeRepairHook", () => {
     const result = await agent.afterToolOutcome?.(outcome({ result: failedResult() }));
 
     expect(result).toMatchObject({
+      terminate: false,
+      details: { repair: { allowed: true, remainingAttempts: 1 } },
+    });
+  });
+
+  it("leaves critical tool-loop recovery to agent core without spending repair", async () => {
+    const agent = createAgent();
+
+    await expect(
+      agent.afterToolOutcome?.(
+        outcome({
+          result: {
+            content: [{ type: "text", text: "choose a different action" }],
+            details: { status: "blocked", deniedReason: "tool-loop" },
+          },
+          isError: true,
+          executionStarted: false,
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    await expect(
+      agent.afterToolOutcome?.(outcome({ result: failedResult() })),
+    ).resolves.toMatchObject({
       terminate: false,
       details: { repair: { allowed: true, remainingAttempts: 1 } },
     });
@@ -400,6 +448,28 @@ describe("installCodeModeRepairHook", () => {
       isError: true,
       terminate: true,
       details: { repair: { allowed: false } },
+    });
+  });
+
+  it("preserves a wait skipped by abort without spending the repair token", async () => {
+    const previous = vi.fn(async () => undefined);
+    const agent = createAgent(previous);
+    const controller = new AbortController();
+    controller.abort();
+    const context = outcome({
+      toolName: "wait",
+      result: { content: [{ type: "text", text: "Operation aborted" }], details: {} },
+      isError: true,
+      executionStarted: false,
+    });
+
+    await expect(agent.afterToolOutcome?.(context, controller.signal)).resolves.toBeUndefined();
+    expect(previous).toHaveBeenCalledWith(context, controller.signal);
+    await expect(
+      agent.afterToolOutcome?.(outcome({ result: failedResult() })),
+    ).resolves.toMatchObject({
+      terminate: false,
+      details: { repair: { allowed: true, remainingAttempts: 1 } },
     });
   });
 

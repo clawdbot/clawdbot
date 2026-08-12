@@ -92,6 +92,7 @@ export const DevicePairSetupCodeParamsSchema = closedObject({
   preferRemoteUrl: Type.Optional(Type.Boolean()),
   includeQr: Type.Optional(Type.Boolean()),
   bootstrapProfile: Type.Optional(Type.String({ enum: ["limited", "node"] })),
+  joinUrl: Type.Optional(Type.Literal(true)),
 });
 
 /**
@@ -102,6 +103,7 @@ export const DevicePairSetupCodeParamsSchema = closedObject({
  */
 export const DevicePairSetupCodeResultSchema = closedObject({
   setupCode: NonEmptyString,
+  joinUrl: Type.Optional(NonEmptyString),
   qrDataUrl: Type.Optional(SetupCodeQrDataUrlSchema),
   gatewayUrl: NonEmptyString,
   gatewayUrls: Type.Optional(
@@ -113,6 +115,7 @@ export const DevicePairSetupCodeResultSchema = closedObject({
     Type.Union([Type.Literal("full"), Type.Literal("limited"), Type.Literal("node")]),
   ),
   accessDowngraded: Type.Optional(Type.Boolean()),
+  expiresAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
 // Wire types derive directly from local schema consts so public d.ts graphs never

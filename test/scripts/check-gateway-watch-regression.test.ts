@@ -19,11 +19,11 @@ import {
   updateWatchBuildDetection,
   WATCH_LOG_CAPTURE_MAX_CHARS,
   writeBuildAndRuntimePostBuildStamps,
-} from "../../scripts/check-gateway-watch-regression.mjs";
+} from "../../scripts/check-gateway-watch-regression.mts";
 import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
-} from "../../scripts/lib/local-build-metadata-paths.mjs";
+} from "../../scripts/lib/local-build-metadata-paths.mts";
 
 describe("check-gateway-watch-regression", () => {
   it("accepts package-manager argument separators before script options", () => {

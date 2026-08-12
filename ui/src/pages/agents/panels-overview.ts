@@ -23,7 +23,7 @@ import {
   resolveModelPrimary,
 } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
-import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
+import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 
 export type AgentIdentityDraft = {
   name: string | null;
@@ -43,6 +43,8 @@ export function renderAgentOverview(params: {
   identityDraft: AgentIdentityDraft;
   identitySaving: boolean;
   identityError: string | null;
+  canUpdateConfig: boolean;
+  canUpdateIdentity: boolean;
   configLoading: boolean;
   configSaving: boolean;
   configDirty: boolean;
@@ -102,7 +104,7 @@ export function renderAgentOverview(params: {
   const fallbackChips = modelFallbacks ?? [];
   const skillFilter = Array.isArray(config.entry?.skills) ? config.entry?.skills : null;
   const skillCount = skillFilter?.length ?? null;
-  const disabled = !configForm || configLoading || configSaving;
+  const disabled = !params.canUpdateConfig || !configForm || configLoading || configSaving;
   const thinkingDefault = agent.thinkingDefault ?? "-";
 
   const identityDraft = params.identityDraft;
@@ -113,13 +115,13 @@ export function renderAgentOverview(params: {
   const identityAvatarUrl =
     identityDraft.avatar ?? resolveAgentAvatarUrl(agent, params.agentIdentity);
   const identityAvatarText =
-    resolveAgentTextAvatar(agent) ?? (identityName || agent.id).slice(0, 1).toUpperCase();
+    resolveAgentTextAvatar(agent) ?? (deriveAvatarInitial(identityName || agent.id) || "?");
   const identityDirty =
     identityDraft.name !== null || identityDraft.emoji !== null || identityDraft.avatar !== null;
   const identityInvalid =
     (identityDraft.name !== null && !identityDraft.name.trim()) ||
     (identityDraft.emoji !== null && !identityDraft.emoji.trim());
-  const identityBusy = params.identitySaving;
+  const identityBusy = params.identitySaving || !params.canUpdateIdentity;
 
   const handleAvatarFileSelect = (e: Event) => {
     const input = e.target as HTMLInputElement;
@@ -270,7 +272,7 @@ export function renderAgentOverview(params: {
           <button
             type="button"
             class="btn btn--sm primary"
-            ?disabled=${configSaving || !configDirty}
+            ?disabled=${!params.canUpdateConfig || configSaving || !configDirty}
             @click=${onConfigSave}
           >
             ${configSaving ? t("common.saving") : t("common.save")}

@@ -127,15 +127,14 @@ Example:
       // Start with 0; enable later.
       heartbeat: { every: "0m" },
     },
-    list: [
-      {
-        id: "main",
+    entries: {
+      main: {
         default: true,
         groupChat: {
           mentionPatterns: ["@openclaw", "openclaw"],
         },
       },
-    ],
+    },
   },
   channels: {
     whatsapp: {
@@ -211,6 +210,12 @@ Outbound attachments from the agent use structured media fields on the message t
 ```
 
 OpenClaw sends structured media alongside the text. Legacy final assistant replies may still be normalized for compatibility, but tool output, browser output, streaming blocks, and message actions do not parse text as attachment commands.
+
+If you must use a legacy final-reply `MEDIA:` line, keep it as standalone plain
+text. Markdown wrappers, code fences, and inline prose such as
+`**MEDIA:/path.png**`, `` `MEDIA:/path.png` ``, or
+`Here is the image: MEDIA:/path.png` stay text and do not attach media. See
+[Rich output protocol](/reference/rich-output-protocol#legacy-media-lines).
 
 Local-path behavior follows the same file-read trust model as the agent:
 

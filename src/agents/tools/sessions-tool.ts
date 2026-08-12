@@ -1,31 +1,37 @@
 /** Session self-service tool. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
-import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../../../packages/gateway-protocol/src/session-icon.js";
+import type { SessionsPatchResult } from "../../../packages/gateway-protocol/src/index.js";
+import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayTransportError } from "../../gateway/call.js";
 import { withAgentSessionModelPatchOrigin } from "../../gateway/session-model-patch-origin.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { isTransientNetworkError } from "../../infra/unhandled-rejections.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   getCurrentSessionWorkAdmissionRelease,
   getSessionWorkAdmissionRelease,
-  SESSION_ARCHIVE_ACTIVE_RUN_ERROR,
 } from "../../sessions/session-lifecycle-admission.js";
 import { resolveDefaultAgentId } from "../agent-scope-config.js";
 import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringParam, ToolAuthorizationError, ToolInputError } from "./common.js";
 import {
-  callInProcessGatewayTool,
+  jsonResult,
+  readToolStringParam,
+  ToolAuthorizationError,
+  ToolInputError,
+} from "./common.js";
+import {
+  callAgentToolGatewayRequest,
   hasInProcessGatewayToolContext,
-  type InProcessGatewayCaller,
+  type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
 import {
   createAgentToAgentPolicy,
@@ -47,23 +53,54 @@ const ACTIONS = [
 const GROUP_NAME_MAX_LENGTH = 512;
 const GROUP_NAMES_MAX_ITEMS = 200;
 const SELF_ARCHIVE_MAX_RETRY_DELAY_MS = 5_000;
+const SESSIONS_TOOL_RESULT_MAX_BYTES = 3_840;
+const RESOLVED_OMITTED_REASON = "response_budget_exceeded";
 const log = createSubsystemLogger("agents/sessions");
+
+type SessionsResolved = NonNullable<SessionsPatchResult["resolved"]>;
+
+function sessionsToolResultFitsBudget(payload: Record<string, unknown>): boolean {
+  const compactSize = boundedJsonUtf8Bytes(payload, SESSIONS_TOOL_RESULT_MAX_BYTES);
+  if (!compactSize.complete || compactSize.bytes > SESSIONS_TOOL_RESULT_MAX_BYTES) {
+    return false;
+  }
+  return (
+    Buffer.byteLength(JSON.stringify(payload, null, 2), "utf8") <= SESSIONS_TOOL_RESULT_MAX_BYTES
+  );
+}
+
+function withBoundedSessionsResolved(
+  acknowledgement: Record<string, unknown>,
+  resolved: SessionsResolved | undefined,
+): Record<string, unknown> {
+  if (!resolved) {
+    return acknowledgement;
+  }
+  const completeResult = { ...acknowledgement, resolved };
+  if (sessionsToolResultFitsBudget(completeResult)) {
+    return completeResult;
+  }
+  return {
+    ...acknowledgement,
+    resolvedOmitted: { reason: RESOLVED_OMITTED_REASON },
+  };
+}
 
 const SessionsToolSchema = Type.Object(
   {
     action: stringEnum(ACTIONS, { description: "Action" }),
     sessionKey: Type.Optional(Type.String({ description: "Target session. Default: current" })),
+    expectedSessionId: Type.Optional(
+      Type.String({
+        description:
+          "Durable identity returned by sessions_list; required for archive, restore, or delete of another session.",
+      }),
+    ),
     deleteTranscript: Type.Optional(
       Type.Boolean({ description: "Archive the deleted session transcript. Default: true." }),
     ),
     label: Type.Optional(
       Type.String({ description: "Sidebar title override. Empty string clears it." }),
-    ),
-    icon: Type.Optional(
-      Type.String({
-        description:
-          "Sidebar icon: an emoji, name:<curated-id>, or svg:<svg …> you draw yourself (tiny, sanitized). Empty string removes it.",
-      }),
     ),
     statusNote: Type.Optional(
       Type.String({
@@ -100,13 +137,14 @@ const SessionsToolSchema = Type.Object(
 
 type SessionsToolOptions = {
   agentSessionKey?: string;
+  agentSessionId?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
-  callGateway?: InProcessGatewayCaller;
+  callGateway?: AgentToolGatewayRequestCaller;
   hasInProcessGatewayContext?: () => boolean;
 };
 
-function readBoolean(params: Record<string, unknown>, key: string): boolean | undefined {
+function readBooleanParam(params: Record<string, unknown>, key: string): boolean | undefined {
   const value = params[key];
   if (value === undefined) {
     return undefined;
@@ -163,6 +201,7 @@ function readGroupNames(value: unknown): string[] {
 async function resolvePatchTarget(
   opts: SessionsToolOptions,
   sessionKey: string | undefined,
+  callGateway: AgentToolGatewayRequestCaller,
 ): Promise<{ cfg: OpenClawConfig; key: string; requesterKey: string }> {
   const context = resolveSessionToolContext(opts);
   const rawKey = sessionKey ?? context.effectiveRequesterKey;
@@ -172,6 +211,7 @@ async function resolvePatchTarget(
     mainKey: context.mainKey,
     requesterInternalKey: context.effectiveRequesterKey,
     restrictToSpawned: context.restrictToSpawned,
+    callGateway,
   });
   if (!resolved.ok) {
     throw new ToolInputError(resolved.error);
@@ -195,6 +235,7 @@ async function resolvePatchTarget(
         sandboxed: opts.sandboxed === true,
       }),
       a2aPolicy: createAgentToAgentPolicy(context.cfg),
+      callGateway,
     });
     const access = guard.check(resolved.key);
     if (!access.allowed) {
@@ -209,21 +250,26 @@ async function resolvePatchTarget(
 }
 
 export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool {
-  const gatewayCall = opts.callGateway ?? callInProcessGatewayTool;
+  const gatewayRequest = opts.callGateway ?? callAgentToolGatewayRequest;
+  const callGateway = <T = Record<string, unknown>>(
+    method: string,
+    params: Record<string, unknown>,
+  ) => gatewayRequest<T>({ method, params });
   return {
     label: "Sessions",
     name: "sessions",
     description:
-      "Session settings, reset, delete, and groups: patch label/icon/status, pin, archive/restore, model/thinking override; reset/delete visible sessions; group_list/group_set/group_rename/group_delete.",
+      "Session settings, reset, delete, and groups: patch label/status, pin, archive/restore, model/thinking override; reset/delete visible sessions; group_list/group_set/group_rename/group_delete.",
     parameters: SessionsToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
-      const action = readStringParam(params, "action", { required: true });
+      const action = readToolStringParam(params, "action", { required: true });
       if (action === "reset" || action === "delete") {
-        const rawKey = readStringParam(params, "sessionKey", { required: true });
+        const rawKey = readToolStringParam(params, "sessionKey", { required: true });
         const { key } = await resolvePatchTarget(
           { ...opts, config: opts.config ?? getRuntimeConfig() },
           rawKey,
+          gatewayRequest,
         );
         const context = resolveSessionToolContext({
           ...opts,
@@ -233,41 +279,51 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
           throw new ToolInputError(`Cannot ${action} the session running this tool`);
         }
         if (action === "reset") {
-          return jsonResult(await gatewayCall("sessions.reset", { key, reason: "reset" }));
+          return jsonResult(await callGateway("sessions.reset", { key, reason: "reset" }));
         }
         // Archive returns the exact row generation. Carry it into the locked
         // delete so a concurrent reset cannot delete a replacement session.
-        const archived = await gatewayCall<{
-          entry?: { sessionId?: string; lifecycleRevision?: string };
-        }>("sessions.patch", { key, archived: true });
-        const expectedSessionId = normalizeOptionalString(archived.entry?.sessionId);
+        const expectedSessionId = normalizeOptionalString(
+          readToolStringParam(params, "expectedSessionId"),
+        );
         if (!expectedSessionId) {
+          throw new ToolInputError("Session lifecycle action requires a durable session identity");
+        }
+        const archived = await callGateway<{
+          entry?: { sessionId?: string; lifecycleRevision?: string };
+        }>("sessions.patch", {
+          key,
+          expectedSessionId,
+          archived: true,
+        });
+        const archivedSessionId = normalizeOptionalString(archived.entry?.sessionId);
+        if (!archivedSessionId) {
           throw new ToolInputError("Session archive did not return its session identity");
         }
         const expectedLifecycleRevision = normalizeOptionalString(
           archived.entry?.lifecycleRevision,
         );
         return jsonResult(
-          await gatewayCall("sessions.delete", {
+          await callGateway("sessions.delete", {
             key,
             archivedOnly: true,
-            expectedSessionId,
+            expectedSessionId: archivedSessionId,
             ...(expectedLifecycleRevision ? { expectedLifecycleRevision } : {}),
-            deleteTranscript: readBoolean(params, "deleteTranscript") ?? true,
+            deleteTranscript: readBooleanParam(params, "deleteTranscript") ?? true,
           }),
         );
       }
       if (action === "group_list") {
-        return jsonResult(await gatewayCall("sessions.groups.list", {}));
+        return jsonResult(await callGateway("sessions.groups.list", {}));
       }
       // Group catalog is global by contract. Owner-only tool gating protects mutations.
       if (action === "group_set") {
         const names = readGroupNames(params.names);
-        return jsonResult(await gatewayCall("sessions.groups.put", { names }));
+        return jsonResult(await callGateway("sessions.groups.put", { names }));
       }
       if (action === "group_rename") {
         return jsonResult(
-          await gatewayCall("sessions.groups.rename", {
+          await callGateway("sessions.groups.rename", {
             name: readGroupName(params.name, "name"),
             to: readGroupName(params.to, "to"),
           }),
@@ -275,7 +331,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       }
       if (action === "group_delete") {
         return jsonResult(
-          await gatewayCall("sessions.groups.delete", {
+          await callGateway("sessions.groups.delete", {
             name: readGroupName(params.name, "name"),
           }),
         );
@@ -286,33 +342,48 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
 
       const { cfg, key, requesterKey } = await resolvePatchTarget(
         { ...opts, config: opts.config ?? getRuntimeConfig() },
-        normalizeOptionalString(readStringParam(params, "sessionKey")),
+        normalizeOptionalString(readToolStringParam(params, "sessionKey")),
+        gatewayRequest,
       );
+      const archived =
+        params.archived !== undefined ? readBooleanParam(params, "archived") : undefined;
+      let lifecycleIdentity:
+        | { expectedSessionId: string; expectedLifecycleRevision?: string }
+        | undefined;
+      if (typeof archived === "boolean") {
+        const expectedSessionId =
+          normalizeOptionalString(readToolStringParam(params, "expectedSessionId")) ??
+          (key === requesterKey ? normalizeOptionalString(opts.agentSessionId) : undefined);
+        if (!expectedSessionId) {
+          throw new ToolInputError("Session lifecycle action requires a durable session identity");
+        }
+        lifecycleIdentity = { expectedSessionId };
+      }
       const patch = {
         key,
+        ...lifecycleIdentity,
         ...(params.label !== undefined ? { label: readClearableString(params, "label") } : {}),
-        ...(params.icon !== undefined ? { icon: readClearableString(params, "icon") } : {}),
         ...(params.statusNote !== undefined
           ? { statusNote: readClearableString(params, "statusNote") }
           : {}),
         ...(params.attention !== undefined
           ? {
               attention:
-                readStringParam(params, "attention", { required: true }) === "clear"
+                readToolStringParam(params, "attention", { required: true }) === "clear"
                   ? null
-                  : readStringParam(params, "attention", { required: true }),
+                  : readToolStringParam(params, "attention", { required: true }),
             }
           : {}),
         ...(params.ttlMinutes !== undefined
           ? { ttlMinutes: readInteger(params, "ttlMinutes") }
           : {}),
-        ...(params.pinned !== undefined ? { pinned: readBoolean(params, "pinned") } : {}),
-        ...(params.archived !== undefined ? { archived: readBoolean(params, "archived") } : {}),
+        ...(params.pinned !== undefined ? { pinned: readBooleanParam(params, "pinned") } : {}),
+        ...(archived !== undefined ? { archived } : {}),
         ...(params.model !== undefined
-          ? { model: readStringParam(params, "model", { required: true }) }
+          ? { model: readToolStringParam(params, "model", { required: true }) }
           : {}),
         ...(params.thinkingLevel !== undefined
-          ? { thinkingLevel: readStringParam(params, "thinkingLevel", { required: true }) }
+          ? { thinkingLevel: readToolStringParam(params, "thinkingLevel", { required: true }) }
           : {}),
       };
       if (Object.keys(patch).length === 1) {
@@ -327,33 +398,42 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
           error: "Model patch needs in-process gateway.",
         });
       }
-      const callSessionPatch = async (sessionPatch: typeof patch) =>
+      const callSessionPatch = async (sessionPatch: typeof patch): Promise<SessionsPatchResult> =>
         sessionPatch.model === undefined
-          ? await gatewayCall("sessions.patch", sessionPatch)
+          ? await callGateway<SessionsPatchResult>("sessions.patch", sessionPatch)
           : await withAgentSessionModelPatchOrigin(
-              async () => await gatewayCall("sessions.patch", sessionPatch),
+              async () => await callGateway<SessionsPatchResult>("sessions.patch", sessionPatch),
             );
+      const includeResolved = patch.model !== undefined || patch.thinkingLevel !== undefined;
 
       if (patch.archived === true && key === requesterKey && key !== "global") {
         const agentId = resolveAgentIdFromSessionKey(key, resolveDefaultAgentId(cfg));
         if (key !== resolveAgentMainSessionKey({ cfg, agentId })) {
-          const storePath = resolveStorePath(cfg.session?.store, { agentId });
+          const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
           const currentEntry = loadSessionEntry({ agentId, sessionKey: key, storePath });
           const released = getCurrentSessionWorkAdmissionRelease({
             scope: storePath,
             identities: [key, currentEntry?.sessionId],
           });
 
-          if (currentEntry && released) {
-            const expectedSessionIdentity = {
-              expectedSessionId: currentEntry.sessionId,
-              ...(currentEntry.lifecycleRevision
-                ? { expectedLifecycleRevision: currentEntry.lifecycleRevision }
-                : {}),
-            };
-            const { archived: _archived, ...immediatePatch } = patch;
+          if (
+            currentEntry?.sessionId === lifecycleIdentity?.expectedSessionId &&
+            released &&
+            lifecycleIdentity
+          ) {
+            const expectedSessionIdentity = lifecycleIdentity;
+            const {
+              archived: _archived,
+              expectedSessionId: _expectedSessionId,
+              expectedLifecycleRevision: _expectedLifecycleRevision,
+              ...immediatePatch
+            } = patch;
+            let immediateResult: SessionsPatchResult | undefined;
             if (Object.keys(immediatePatch).length > 1) {
-              await callSessionPatch({ ...immediatePatch, ...expectedSessionIdentity });
+              immediateResult = await callSessionPatch({
+                ...immediatePatch,
+                ...expectedSessionIdentity,
+              });
             }
 
             // Archive only after the final tool result, transcript, and every
@@ -361,7 +441,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
             // keeps a reset replacement from being archived between checks.
             void released
               .then(async () => {
-                const archiveIdentities = [key, currentEntry.sessionId];
+                const archiveIdentities = [key, expectedSessionIdentity.expectedSessionId];
                 const archivePatch = {
                   key,
                   archived: true,
@@ -372,7 +452,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                 while (true) {
                   const latestEntry = loadSessionEntry({ agentId, sessionKey: key, storePath });
                   if (
-                    latestEntry?.sessionId !== currentEntry.sessionId ||
+                    latestEntry?.sessionId !== expectedSessionIdentity.expectedSessionId ||
                     (expectedSessionIdentity.expectedLifecycleRevision !== undefined &&
                       latestEntry.lifecycleRevision !==
                         expectedSessionIdentity.expectedLifecycleRevision)
@@ -391,14 +471,13 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                   }
 
                   try {
-                    await gatewayCall("sessions.patch", archivePatch);
+                    await callGateway("sessions.patch", archivePatch);
                     return;
                   } catch (error) {
                     // A new turn can enter after the idle check. Wait for that
                     // admitted owner, or retry a transient gateway disconnect,
                     // instead of losing an archive that was already scheduled.
                     const message = formatErrorMessage(error);
-                    const activeRun = message.includes(SESSION_ARCHIVE_ACTIVE_RUN_ERROR);
                     const retryableGatewayFailure =
                       error instanceof GatewayTransportError ||
                       isTransientNetworkError(error) ||
@@ -406,12 +485,10 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                         error !== null &&
                         "retryable" in error &&
                         error.retryable === true);
-                    if (!activeRun && !retryableGatewayFailure) {
+                    if (!retryableGatewayFailure) {
                       throw error;
                     }
-                    if (!activeRun) {
-                      log.warn(`retrying deferred self-archive for ${key}: ${message}`);
-                    }
+                    log.warn(`retrying deferred self-archive for ${key}: ${message}`);
                     const retryAfterRelease = getSessionWorkAdmissionRelease({
                       scope: storePath,
                       identities: archiveIdentities,
@@ -442,17 +519,31 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                 log.warn(`deferred self-archive failed for ${key}: ${formatErrorMessage(error)}`);
               });
 
-            return jsonResult({
-              status: "scheduled",
-              sessionKey: key,
-              message: "Session will be archived after the current agent run finishes.",
-            });
+            return jsonResult(
+              withBoundedSessionsResolved(
+                {
+                  status: "scheduled",
+                  sessionKey: key,
+                  message: "Session will be archived after the current agent run finishes.",
+                },
+                includeResolved ? immediateResult?.resolved : undefined,
+              ),
+            );
           }
         }
       }
 
       const result = await callSessionPatch(patch);
-      return jsonResult(result);
+      return jsonResult(
+        withBoundedSessionsResolved(
+          {
+            status: "updated",
+            sessionKey: key,
+            updated: Object.keys(patch).filter((field) => field !== "key"),
+          },
+          includeResolved ? result.resolved : undefined,
+        ),
+      );
     },
   };
 }

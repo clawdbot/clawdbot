@@ -1,15 +1,14 @@
 // Cron service job tests cover job creation, updates, and runtime scheduling.
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import {
-  applyDeclarativeJobSpec,
-  applyJobPatch,
   computeJobNextRunAtMs,
   computeJobPreviousRunAtOrBeforeMs,
-  createJob,
   nextWakeAtMs,
   recomputeNextRuns,
   recomputeNextRunsForMaintenance,
-} from "./service/jobs.js";
+} from "./service/jobs-scheduling.js";
+import { applyDeclarativeJobSpec, applyJobPatch, createJob } from "./service/jobs.js";
 import type { CronServiceState } from "./service/state.js";
 import type { CronJob, CronJobPatch } from "./types.js";
 
@@ -558,6 +557,151 @@ function createMockState(
   } as unknown as CronServiceState;
 }
 
+describe("time schedule validation", () => {
+  const now = Date.parse("2026-08-10T00:00:00.000Z");
+  const input = (anchorMs?: number) => ({
+    name: "Date boundary interval",
+    enabled: true,
+    schedule: { kind: "every" as const, everyMs: MAX_DATE_TIMESTAMP_MS, anchorMs },
+    sessionTarget: "main" as const,
+    wakeMode: "now" as const,
+    payload: { kind: "systemEvent" as const, text: "tick" },
+  });
+
+  it("rejects intervals with no representable next run while preserving the inclusive boundary", () => {
+    expect(() => createJob(createMockState(now), input())).toThrow(
+      "cron every schedule has no upcoming run time and would never fire",
+    );
+    expect(createJob(createMockState(now), input(0)).state.nextRunAtMs).toBe(MAX_DATE_TIMESTAMP_MS);
+  });
+
+  it("rejects invalid one-shot timestamps at the service boundary", () => {
+    const maxAt = new Date(MAX_DATE_TIMESTAMP_MS).toISOString();
+    expect(
+      createJob(createMockState(now), {
+        name: "Maximum one-shot",
+        enabled: true,
+        schedule: { kind: "at", at: maxAt },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "tick" },
+      }).state.nextRunAtMs,
+    ).toBe(MAX_DATE_TIMESTAMP_MS);
+    expect(() =>
+      createJob(createMockState(now), {
+        name: "Invalid one-shot",
+        enabled: true,
+        schedule: { kind: "at", at: String(MAX_DATE_TIMESTAMP_MS + 1) },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "tick" },
+      }),
+    ).toThrow("Date-valid absolute timestamp");
+  });
+});
+
+describe("announce delivery channel validation", () => {
+  const now = Date.parse("2026-08-02T12:00:00.000Z");
+  const configuredChannels = ["reef", "discord"];
+  const input = (delivery: CronJob["delivery"], overrides?: { sessionKey?: string }) => ({
+    name: "multi-channel announce",
+    enabled: true,
+    schedule: { kind: "every" as const, everyMs: 60_000 },
+    sessionTarget: "isolated" as const,
+    wakeMode: "now" as const,
+    payload: { kind: "agentTurn" as const, message: "report" },
+    delivery,
+    ...overrides,
+  });
+
+  it("rejects creation when an isolated announce has no deterministic channel", () => {
+    expect(() =>
+      createJob(createMockState(now), input({ mode: "announce", channel: "last" }), {
+        configuredChannels,
+      }),
+    ).toThrow(
+      "cron announce delivery requires an explicit channel when multiple channels are configured (discord, reef): set --channel <id> or use --best-effort-deliver",
+    );
+  });
+
+  it("accepts creation with an explicit channel", () => {
+    expect(() =>
+      createJob(createMockState(now), input({ mode: "announce", channel: "discord" }), {
+        configuredChannels,
+      }),
+    ).not.toThrow();
+  });
+
+  it("accepts creation when best-effort delivery is explicit", () => {
+    expect(() =>
+      createJob(
+        createMockState(now),
+        input({ mode: "announce", channel: "last", bestEffort: true }),
+        { configuredChannels },
+      ),
+    ).not.toThrow();
+  });
+
+  it("accepts creation when only one channel is configured", () => {
+    expect(() =>
+      createJob(createMockState(now), input({ mode: "announce", channel: "last" }), {
+        configuredChannels: ["discord"],
+      }),
+    ).not.toThrow();
+  });
+
+  it.each([
+    [
+      "a preserved session route",
+      input(
+        { mode: "announce", channel: "last" },
+        { sessionKey: "agent:main:discord:channel:ops" },
+      ),
+    ],
+    [
+      "a provider-prefixed target",
+      input({ mode: "announce", channel: "last", to: "telegram:123" }),
+    ],
+  ])("accepts creation with %s", (_name, jobInput) => {
+    expect(() => createJob(createMockState(now), jobInput, { configuredChannels })).not.toThrow();
+  });
+
+  it("keeps enabled-only patches working for stored ambiguous jobs", () => {
+    const job = createJob(createMockState(now), input({ mode: "announce", channel: "discord" }), {
+      configuredChannels,
+    });
+    // Simulate a job persisted before service-level ambiguity validation shipped.
+    job.delivery = { mode: "announce", channel: "last" };
+
+    expect(() => applyJobPatch(job, { enabled: false }, { configuredChannels })).not.toThrow();
+    expect(job.enabled).toBe(false);
+  });
+
+  it("revalidates patches that change delivery resolution", () => {
+    const job = createJob(createMockState(now), input({ mode: "announce", channel: "discord" }), {
+      configuredChannels,
+    });
+
+    expect(() =>
+      applyJobPatch(job, { delivery: { channel: "last" } }, { configuredChannels }),
+    ).toThrow("cron announce delivery requires an explicit channel");
+  });
+
+  it("rejects ambiguous declarative convergence", () => {
+    const job = createJob(createMockState(now), input({ mode: "announce", channel: "discord" }), {
+      configuredChannels,
+    });
+
+    expect(() =>
+      applyDeclarativeJobSpec(job, input({ mode: "announce", channel: "last" }), {
+        enabledExplicit: true,
+        nowMs: now,
+        configuredChannels,
+      }),
+    ).toThrow("cron announce delivery requires an explicit channel");
+  });
+});
+
 describe("cron tool authority defaults", () => {
   const now = Date.parse("2026-07-21T12:00:00.000Z");
 
@@ -659,6 +803,35 @@ describe("cron tool authority defaults", () => {
     });
   });
 
+  it("repairs a missing anchor when converging an unchanged every schedule", () => {
+    const createdAtMs = now - 30_000;
+    const job = createJob(createMockState(now), {
+      name: "legacy declaration",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+    job.createdAtMs = createdAtMs;
+    job.schedule = { kind: "every", everyMs: 60_000 };
+
+    applyDeclarativeJobSpec(
+      job,
+      {
+        name: job.name,
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "tick" },
+      },
+      { enabledExplicit: false, nowMs: now },
+    );
+
+    expect(job.schedule).toEqual({ kind: "every", everyMs: 60_000, anchorMs: createdAtMs });
+  });
+
   it("adopts explicit authority when a declaration becomes tool-bearing", () => {
     const job: CronJob = {
       id: "declared-trigger",
@@ -697,7 +870,10 @@ describe("cron tool authority defaults", () => {
 
 describe("script payload validation", () => {
   const now = Date.parse("2026-07-18T12:00:00.000Z");
-  const input = (sessionTarget: CronJob["sessionTarget"] = "isolated") => ({
+  const input = (
+    sessionTarget: CronJob["sessionTarget"] = "isolated",
+    script = "return { state: { count: 1 } }",
+  ) => ({
     name: "script-job",
     enabled: true,
     schedule: { kind: "every" as const, everyMs: 60_000 },
@@ -705,7 +881,7 @@ describe("script payload validation", () => {
     wakeMode: "now" as const,
     payload: {
       kind: "script" as const,
-      script: "return { state: { count: 1 } }",
+      script,
       timeoutSeconds: 4_000,
       toolBudget: 4_000,
     },
@@ -715,6 +891,47 @@ describe("script payload validation", () => {
     expect(() =>
       createJob(createMockState(now, { scriptPayloadsEnabled: false }), input()),
     ).toThrow("cron.triggers.enabled=true");
+  });
+
+  it("rejects malformed scripts on creation with a user-relative location", () => {
+    expect(() =>
+      createJob(
+        createMockState(now, { scriptPayloadsEnabled: true }),
+        input("isolated", "const x = ;"),
+      ),
+    ).toThrow("cron script payload has a syntax error: Unexpected token (line 1, column 10)");
+  });
+
+  it("rejects malformed scripts on patch", () => {
+    const job = createJob(createMockState(now, { scriptPayloadsEnabled: true }), input());
+
+    expect(() =>
+      applyJobPatch(
+        job,
+        { payload: { kind: "script", script: "const x = ;" } },
+        { cronConfig: { triggers: { enabled: true } } },
+      ),
+    ).toThrow("cron script payload has a syntax error");
+  });
+
+  it("still allows disabling a job stored with a malformed script", () => {
+    const job = createJob(createMockState(now, { scriptPayloadsEnabled: true }), input());
+    // Simulate a job persisted before syntax validation shipped.
+    job.payload = { ...job.payload, kind: "script", script: "const x = ;" };
+
+    expect(() =>
+      applyJobPatch(job, { enabled: false }, { cronConfig: { triggers: { enabled: true } } }),
+    ).not.toThrow();
+    expect(job.enabled).toBe(false);
+  });
+
+  it.each([
+    ["top-level await", "await tools.wait(1); return 1"],
+    ["top-level return", "return 1"],
+  ])("accepts %s", (_name, script) => {
+    expect(() =>
+      createJob(createMockState(now, { scriptPayloadsEnabled: true }), input("isolated", script)),
+    ).not.toThrow();
   });
 
   it.each(["current", "session:reporting"] as const)(
@@ -1021,7 +1238,7 @@ describe("cron stagger defaults", () => {
     expectCronStaggerMs(job, 0);
   });
 
-  it("preserves existing stagger when editing cron expression without stagger", () => {
+  it("derives a fresh top-of-hour stagger when replacing the cron expression", () => {
     const now = Date.now();
     const job: CronJob = {
       id: "job-keep-stagger",
@@ -1043,8 +1260,89 @@ describe("cron stagger defaults", () => {
     expect(job.schedule.kind).toBe("cron");
     if (job.schedule.kind === "cron") {
       expect(job.schedule.expr).toBe("0 */2 * * *");
-      expect(job.schedule.staggerMs).toBe(120_000);
+      expect(job.schedule.staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
     }
+  });
+
+  it("drops an old stagger when the replacement expression has no stagger default", () => {
+    const now = Date.now();
+    const job: CronJob = {
+      id: "job-drop-stagger",
+      name: "job-drop-stagger",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 120_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {},
+    };
+
+    applyJobPatch(job, {
+      schedule: { kind: "cron", expr: "30 9 * * *", tz: "UTC" },
+    });
+
+    expect(job.schedule).toEqual({ kind: "cron", expr: "30 9 * * *", tz: "UTC" });
+  });
+
+  it("preserves explicit staggering for a metadata-only cron schedule edit", () => {
+    const now = Date.now();
+    const job: CronJob = {
+      id: "job-keep-stagger",
+      name: "job-keep-stagger",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 120_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {},
+    };
+
+    applyJobPatch(job, {
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "America/Los_Angeles" },
+    });
+
+    expect(job.schedule).toEqual({
+      kind: "cron",
+      expr: "0 * * * *",
+      tz: "America/Los_Angeles",
+      staggerMs: 120_000,
+    });
+  });
+
+  it("preserves staggering when declarative convergence keeps the cron expression", () => {
+    const now = Date.now();
+    const job = createJob(createMockState(now), {
+      name: "declared hourly",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 120_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+
+    applyDeclarativeJobSpec(
+      job,
+      {
+        name: job.name,
+        enabled: true,
+        schedule: { kind: "cron", expr: "0 * * * *", tz: "America/Los_Angeles" },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "tick" },
+      },
+      { enabledExplicit: false, nowMs: now },
+    );
+
+    expect(job.schedule).toEqual({
+      kind: "cron",
+      expr: "0 * * * *",
+      tz: "America/Los_Angeles",
+      staggerMs: 120_000,
+    });
   });
 
   it("applies default stagger when switching from every to top-of-hour cron", () => {
@@ -1089,12 +1387,16 @@ describe("computeJobPreviousRunAtOrBeforeMs", () => {
     };
   }
 
-  it("includes an exact boundary and keeps the prior slot between boundaries", () => {
-    const job = createCronJob({ kind: "cron", expr: "* * * * * *", tz: "UTC", staggerMs: 0 });
+  it.each([
+    ["five-field", "* * * * *"],
+    ["six-field", "* * * * * *"],
+  ])("includes exact and subsecond boundaries for %s schedules", (_label, expr) => {
+    const job = createCronJob({ kind: "cron", expr, tz: "UTC", staggerMs: 0 });
     const boundary = Date.parse("2025-12-13T04:02:00.000Z");
 
     expect(computeJobPreviousRunAtOrBeforeMs(job, boundary)).toBe(boundary);
     expect(computeJobPreviousRunAtOrBeforeMs(job, boundary + 500)).toBe(boundary);
+    expect(computeJobPreviousRunAtOrBeforeMs(job, boundary + 999)).toBe(boundary);
   });
 
   it("includes an exact effective boundary after per-job staggering", () => {
@@ -1109,6 +1411,9 @@ describe("computeJobPreviousRunAtOrBeforeMs", () => {
 
     expect(effectiveBoundary).toBeTypeOf("number");
     expect(computeJobPreviousRunAtOrBeforeMs(job, effectiveBoundary!)).toBe(effectiveBoundary);
+    expect(computeJobPreviousRunAtOrBeforeMs(job, effectiveBoundary! + 500)).toBe(
+      effectiveBoundary,
+    );
   });
 });
 

@@ -63,8 +63,8 @@ async function loadFreshHealthModulesForTest() {
     loadConfig: () => testConfig,
   }));
   vi.doMock("../config/sessions.js", () => ({
-    resolveStorePath: () => "/tmp/sessions.json",
-    resolveSessionFilePath: vi.fn(() => "/tmp/sessions.json"),
+    resolveSessionStorePathCore: () => "/tmp/sessions.json",
+    resolveSessionFilePathCore: vi.fn(() => "/tmp/sessions.json"),
     loadSessionStore: () => testStore,
     saveSessionStore: vi.fn().mockResolvedValue(undefined),
     readSessionUpdatedAt: vi.fn(() => undefined),
@@ -72,7 +72,7 @@ async function loadFreshHealthModulesForTest() {
     updateLastRoute: vi.fn().mockResolvedValue(undefined),
   }));
   vi.doMock("../config/sessions/paths.js", () => ({
-    resolveStorePath: () => "/tmp/sessions.json",
+    resolveSessionStorePathCore: () => "/tmp/sessions.json",
   }));
   vi.doMock("../config/sessions/session-accessor.js", () => ({
     listSessionEntriesReadOnly: (scope?: { agentId?: string; storePath?: string }) => {
@@ -695,31 +695,34 @@ describe("collectGatewayHealthSnapshot", () => {
         channels: {
           telegram: {
             accountId: "default",
+            running: true,
             connected: true,
             lastConnectedAt: 123,
+            healthState: "reconnecting",
           },
         },
         channelAccounts: {},
       },
     });
-    const telegram = snap.channels.telegram as {
+    type RuntimeStateFields = {
+      running?: boolean;
       connected?: boolean;
       lastConnectedAt?: number;
+      healthState?: string;
       probe?: { ok?: boolean; bot?: { username?: string } };
-      accounts?: Record<
-        string,
-        {
-          connected?: boolean;
-          lastConnectedAt?: number;
-          probe?: { ok?: boolean; bot?: { username?: string } };
-        }
-      >;
+    };
+    const telegram = snap.channels.telegram as RuntimeStateFields & {
+      accounts?: Record<string, RuntimeStateFields>;
     };
 
+    expect(telegram.running).toBe(true);
     expect(telegram.connected).toBe(true);
     expect(telegram.lastConnectedAt).toBe(123);
+    expect(telegram.healthState).toBe("reconnecting");
     expect(telegram.probe?.bot?.username).toBe("runtime_bot");
+    expect(telegram.accounts?.default?.running).toBe(true);
     expect(telegram.accounts?.default?.connected).toBe(true);
+    expect(telegram.accounts?.default?.healthState).toBe("reconnecting");
     expect(telegram.accounts?.default?.probe?.ok).toBe(true);
   });
 

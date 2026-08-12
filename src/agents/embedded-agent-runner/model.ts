@@ -8,6 +8,7 @@ import { modelKey } from "../model-ref-shared.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import { buildSuppressedBuiltInModelError } from "../model-suppression.js";
 import {
+  PreparedModelRuntimeOwnerNotPublishedError,
   getPreparedModelRuntimeSnapshot,
   loadPreparedModelRuntimeSnapshot,
   type PreparedModelRuntimeSnapshot,
@@ -19,7 +20,7 @@ import {
   type ModelRegistry,
 } from "../sessions/index.js";
 import { mergeModelMediaInput } from "./model.compat.js";
-import { resolveConfiguredFallbackModel } from "./model.configured-fallback.js";
+import { buildConfiguredFallbackModel } from "./model.configured-fallback.js";
 import {
   applyConfiguredProviderOverrides,
   resolveConfiguredProviderConfig,
@@ -61,7 +62,6 @@ type CommonModelResolutionOptions = {
 type AsyncModelResolutionOptions = CommonModelResolutionOptions & {
   allowBundledStaticCatalogFallback?: boolean;
   preferBundledStaticCatalogTransport?: boolean;
-  retryTransientProviderRuntimeMiss?: boolean;
   agentRuntimeId?: string;
   skipAgentDiscovery?: boolean;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
@@ -135,7 +135,7 @@ export function resolveModel(
   if ((!options?.authStorage || !options?.modelRegistry) && !preparedSnapshot) {
     // Synchronous callers must enter through a lifecycle that already published discovery.
     // Falling back to an empty registry turns a stale/pending generation into a false model miss.
-    throw new Error(
+    throw new PreparedModelRuntimeOwnerNotPublishedError(
       `prepared model runtime is not published for synchronous model resolution (${resolvedAgentDir}); use resolveModelAsync before lifecycle publication`,
     );
   }
@@ -411,17 +411,11 @@ export async function resolveModelAsync(
       ? explicitModel.model
       : undefined;
   model ??= await resolveDynamicAttempt();
-  if (!model && !explicitModel && options?.retryTransientProviderRuntimeMiss) {
-    // Startup can race the first provider-runtime snapshot load on a fresh
-    // gateway boot. Retry once before surfacing a user-visible "Unknown model"
-    // that disappears on the next message.
-    model = await resolveDynamicAttempt();
-  }
   if (!model && !explicitModel && options?.allowBundledStaticCatalogFallback) {
     model = await resolveStaticCatalogFallbackModel();
   }
   if (!model && !explicitModel && options?.allowBundledStaticCatalogFallback) {
-    model = resolveConfiguredFallbackModel({
+    model = buildConfiguredFallbackModel({
       provider: normalizedRef.provider,
       modelId: normalizedRef.model,
       cfg,
