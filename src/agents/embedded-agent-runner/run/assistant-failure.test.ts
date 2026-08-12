@@ -196,7 +196,7 @@ describe("handleEmbeddedAssistantFailure", () => {
     }
     fixture.input.attemptAssistant.errorCode = PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE;
     fixture.input.attemptAssistant.errorMessage = "reasoning is required";
-    fixture.input.resolveAuthProfileFailureReason = vi.fn(() => "timeout");
+    fixture.input.resolveAuthProfileFailureReason = vi.fn(() => "timeout" as const);
 
     const outcome = await handleEmbeddedAssistantFailure(fixture.input);
 

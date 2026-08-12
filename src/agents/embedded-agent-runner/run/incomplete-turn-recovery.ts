@@ -2,7 +2,6 @@
 import { isReplayUnsafeAssistantError } from "../../../llm/utils/retry.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
-import type { AgentMessage } from "../../runtime/index.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
   hasCompletedMessagingToolDeliveryEvidence,
@@ -192,7 +191,9 @@ export function resolveReasoningOnlyRetryInstruction(params: {
 
 type SettledToolCall = { id: string | null; name: string | null };
 
-function readSettledToolCalls(message: AgentMessage | null | undefined): SettledToolCall[] {
+function readSettledToolCalls(
+  message: EmbeddedRunAttemptResult["currentAttemptAssistant"] | null | undefined,
+): SettledToolCall[] {
   if (!Array.isArray(message?.content)) {
     return [];
   }
@@ -226,7 +227,7 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   const currentAttemptAssistant = params.attempt.currentAttemptAssistant;
   const snapshot = params.attempt.messagesSnapshot ?? [];
   const latestUserIndex = snapshot.findLastIndex((message) => message.role === "user");
-  let assistant: AgentMessage | undefined = currentAttemptAssistant;
+  let assistant: EmbeddedRunAttemptResult["currentAttemptAssistant"] = currentAttemptAssistant;
   let assistantIndex = assistant ? snapshot.indexOf(assistant) : -1;
   if (assistantIndex <= latestUserIndex || readSettledToolCalls(assistant).length === 0) {
     assistantIndex = snapshot.findLastIndex(
@@ -235,7 +236,8 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
         message.role === "assistant" &&
         readSettledToolCalls(message).length > 0,
     );
-    assistant = assistantIndex >= 0 ? snapshot[assistantIndex] : undefined;
+    const assistantCandidate = assistantIndex >= 0 ? snapshot[assistantIndex] : undefined;
+    assistant = assistantCandidate?.role === "assistant" ? assistantCandidate : undefined;
   }
   const terminal = params.attempt.terminal;
   const idlePromptTimeout =
