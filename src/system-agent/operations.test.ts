@@ -200,6 +200,7 @@ vi.mock("./overview.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: () => mockConfig.currentConfig(),
   mutateConfigFile: mockConfig.mutateConfigFile,
   readConfigFileSnapshot: mockConfig.readConfigFileSnapshot,
 }));
@@ -367,6 +368,26 @@ describe("parseSystemAgentOperation", () => {
         value: "/private/model-cache",
       }),
     ).toBe("set config models.providers.local.localService.env.HF_HOME to <redacted>");
+  });
+
+  it("redacts config values marked sensitive only by active plugin metadata", async () => {
+    const authorization = "Bearer plugin-only-secret";
+    mockConfig.setConfig({
+      plugins: {
+        entries: {
+          codex: { config: { appServer: { headers: { Authorization: authorization } } } },
+        },
+      },
+    });
+    const { runtime, lines } = createSystemAgentTestRuntime();
+
+    await executeSystemAgentOperation(
+      { kind: "config-get", path: "plugins.entries.codex.config.appServer" },
+      runtime,
+    );
+
+    expect(lines.join("\n")).toContain('"headers": "<redacted>"');
+    expect(lines.join("\n")).not.toContain(authorization);
   });
 
   it("keeps sensitive channel callback URLs out of model-visible config reads", async () => {

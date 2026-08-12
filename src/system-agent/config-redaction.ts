@@ -6,7 +6,7 @@ import {
 } from "@openclaw/net-policy/redact-sensitive-url";
 import { parseConfigSetPath } from "../cli/config-cli-path.js";
 import { REDACTED_SENTINEL, redactConfigObject } from "../config/redact-snapshot.js";
-import { buildConfigSchemaCore } from "../config/schema.js";
+import { loadGatewayRuntimeConfigSchema } from "../config/runtime-schema.js";
 import { findWildcardHintMatch } from "../config/schema.shared.js";
 import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
 import type { ConfigUiHint } from "../shared/config-ui-hints-types.js";
@@ -20,7 +20,7 @@ function splitConfigHintPath(path: string): string[] {
 function resolveConfigUiHint(path: string): ConfigUiHint | undefined {
   return (
     findWildcardHintMatch({
-      uiHints: buildConfigSchemaCore().uiHints,
+      uiHints: loadGatewayRuntimeConfigSchema().uiHints,
       path,
       splitPath: splitConfigHintPath,
     })?.hint ?? undefined
@@ -66,5 +66,7 @@ function replaceRedactionSentinels(value: unknown): unknown {
 
 /** Redact a config object before any subtree is projected into a model-visible result. */
 export function redactSystemAgentConfig(value: unknown): unknown {
-  return replaceRedactionSentinels(redactConfigObject(value, buildConfigSchemaCore().uiHints));
+  return replaceRedactionSentinels(
+    redactConfigObject(value, loadGatewayRuntimeConfigSchema().uiHints),
+  );
 }
