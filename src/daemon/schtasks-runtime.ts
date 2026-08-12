@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
+import { mergeProcessEnv } from "../infra/process-env.js";
 import {
   getWindowsCmdExePath,
   getWindowsPowerShellExePath,
@@ -200,7 +201,7 @@ export async function launchFallbackTaskScript(
     const child = spawn(expectDefined(executable, "schtasks executable"), args, {
       cwd: command.workingDirectory || undefined,
       detached: true,
-      env: { ...process.env, ...command.environment },
+      env: mergeProcessEnv([process.env, command.environment]),
       stdio: "ignore",
       windowsHide: true,
     });
