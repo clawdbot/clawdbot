@@ -2,7 +2,11 @@
 import { installChannelDmPolicyContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { describe, expect, it, vi } from "vitest";
-import { promptTelegramAllowFromForAccount, telegramSetupAdapter } from "./setup-core.js";
+import {
+  promptTelegramAllowFromForAccount,
+  telegramSetupAdapter,
+  telegramSetupContract,
+} from "./setup-core.js";
 import {
   buildTelegramDmAccessWarningLines,
   ensureTelegramDefaultGroupMentionGate,
@@ -15,6 +19,15 @@ describe("Telegram setup promotion contract", () => {
   it("exposes webhookSecret without widening named-account promotion", () => {
     expect(telegramSetupAdapter.singleAccountKeysToMove).toEqual(["streaming", "webhookSecret"]);
     expect(telegramSetupAdapter.namedAccountPromotionKeys).toEqual(["botToken", "tokenFile"]);
+  });
+
+  // Core rejects headless setup from this declaration; dropping it silently
+  // restores the pre-#122530 behavior of writing an unusable Telegram account.
+  it("declares TELEGRAM_BOT_TOKEN as the --use-env contract", () => {
+    const useEnvField = telegramSetupContract.metadata.fields.find(
+      (field) => field.key === "useEnv",
+    );
+    expect(useEnvField).toMatchObject({ envVars: ["TELEGRAM_BOT_TOKEN"] });
   });
 });
 

@@ -1,5 +1,4 @@
 // Channels add tests cover guided setup, plugin install paths, and channel account config writes.
-import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
@@ -372,17 +371,36 @@ function registerExternalChatSetupPlugin(pluginId = "@vendor/external-chat-plugi
   );
 }
 
-async function registerBundledSetupPlugin(channelId: string): Promise<void> {
-  // Exercise the checked-in declarations, not a stale local dist tree left by an earlier build.
-  vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
-  const actual = await vi.importActual<typeof import("../channels/plugins/bundled.js")>(
-    "../channels/plugins/bundled.js",
+// Env-contract rejection is core policy over a plugin-declared field, so a fixture
+// contract proves it. Loading a real bundled setup plugin here would run the plugin
+// source loader, whose cost and resolved artifact depend on the local build tree.
+function registerEnvContractSetupPlugin(envVars: readonly string[]): void {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "typed-chat",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "typed-chat", label: "Typed Chat" }),
+          setupContract: defineChannelSetupContract({
+            fields: {
+              useEnv: {
+                kind: "boolean",
+                cli: { flags: "--use-env", description: "Use environment credentials" },
+                envVars,
+              },
+            },
+            adapter: {
+              applyAccountConfig: ({ cfg }) => ({
+                ...cfg,
+                channels: { ...cfg.channels, "typed-chat": { enabled: true } },
+              }),
+            },
+          }),
+        } as ChannelPlugin,
+        source: "test",
+      },
+    ]),
   );
-  const plugin = actual.getBundledChannelSetupPlugin(channelId as never);
-  if (!plugin) {
-    throw new Error(`Expected bundled setup plugin: ${channelId}`);
-  }
-  setActivePluginRegistry(createTestRegistry([{ pluginId: channelId, plugin, source: "test" }]));
 }
 
 type SignalAfterAccountConfigWritten = NonNullable<
@@ -522,98 +540,29 @@ describe("channelsAddCommand", () => {
     expect(channelWizardMocks.setupChannels).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      channel: "telegram",
-      options: {},
-      env: { TELEGRAM_BOT_TOKEN: "" },
-      missing: ["TELEGRAM_BOT_TOKEN"],
-    },
-    {
-      channel: "slack",
-      options: {},
-      env: { SLACK_BOT_TOKEN: "xoxb-token", SLACK_APP_TOKEN: "" },
-      missing: ["SLACK_APP_TOKEN"],
-    },
-    {
-      channel: "buzz",
-      options: { relayUrl: "wss://buzz.example.com" },
-      env: { BUZZ_PRIVATE_KEY: "" },
-      missing: ["BUZZ_PRIVATE_KEY"],
-    },
-  ])("rejects $channel --use-env when declared env vars are missing", async (testCase) => {
-    for (const [name, value] of Object.entries(testCase.env)) {
-      vi.stubEnv(name, value);
-    }
-    await registerBundledSetupPlugin(testCase.channel);
+  it("rejects --use-env when every declared env var is missing", async () => {
+    vi.stubEnv("TYPED_CHAT_TOKEN", "");
+    vi.stubEnv("TYPED_CHAT_SECRET", "");
+    registerEnvContractSetupPlugin(["TYPED_CHAT_TOKEN", "TYPED_CHAT_SECRET"]);
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
 
-    await channelsAddCommand(
-      { channel: testCase.channel, useEnv: true, ...testCase.options },
-      runtime,
-      { hasFlags: true },
-    );
+    await channelsAddCommand({ channel: "typed-chat", useEnv: true }, runtime, { hasFlags: true });
 
-    for (const missing of testCase.missing) {
+    for (const missing of ["TYPED_CHAT_TOKEN", "TYPED_CHAT_SECRET"]) {
       expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(missing));
     }
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      channel: "telegram",
-      env: { TELEGRAM_BOT_TOKEN: "telegram-token" },
-    },
-    {
-      channel: "slack",
-      env: { SLACK_BOT_TOKEN: "xoxb-token", SLACK_APP_TOKEN: "xapp-token" },
-    },
-  ])("commits $channel --use-env config when declared env vars are present", async (testCase) => {
-    for (const [name, value] of Object.entries(testCase.env)) {
-      vi.stubEnv(name, value);
-    }
-    await registerBundledSetupPlugin(testCase.channel);
+  it("commits --use-env config when the declared env vars are present", async () => {
+    vi.stubEnv("TYPED_CHAT_TOKEN", "typed-chat-token");
+    registerEnvContractSetupPlugin(["TYPED_CHAT_TOKEN"]);
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
 
-    await channelsAddCommand({ channel: testCase.channel, useEnv: true }, runtime, {
-      hasFlags: true,
-    });
+    await channelsAddCommand({ channel: "typed-chat", useEnv: true }, runtime, { hasFlags: true });
 
-    expect(writtenChannel(testCase.channel)).toEqual({ enabled: true });
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
-  });
-
-  it("commits Slack HTTP --use-env config without SLACK_APP_TOKEN", async () => {
-    vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-token");
-    vi.stubEnv("SLACK_APP_TOKEN", "");
-    await registerBundledSetupPlugin("slack");
-    const config: OpenClawConfig = {
-      channels: {
-        slack: {
-          mode: "http",
-          signingSecret: "test-signing-secret",
-        },
-      },
-    };
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      sourceConfig: config,
-      config,
-    });
-
-    await channelsAddCommand({ channel: "slack", useEnv: true }, runtime, {
-      hasFlags: true,
-    });
-
-    expect(writtenChannel("slack")).toMatchObject({
-      enabled: true,
-      mode: "http",
-      signingSecret: "test-signing-secret",
-    });
-    expect(writtenChannel("slack").appToken).toBeUndefined();
+    expect(writtenChannel("typed-chat")).toEqual({ enabled: true });
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });

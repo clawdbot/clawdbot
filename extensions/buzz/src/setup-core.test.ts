@@ -7,6 +7,13 @@ describe("buzzSetupContract", () => {
     vi.unstubAllEnvs();
   });
 
+  // Core rejects headless setup from this declaration; dropping it silently
+  // restores the pre-#122530 behavior of writing an unusable Buzz account.
+  it("declares BUZZ_PRIVATE_KEY as the --use-env contract", () => {
+    const useEnvField = buzzSetupContract.metadata.fields.find((field) => field.key === "useEnv");
+    expect(useEnvField).toMatchObject({ envVars: ["BUZZ_PRIVATE_KEY"] });
+  });
+
   it("removes a stored private key when switching to BUZZ_PRIVATE_KEY", () => {
     vi.stubEnv("BUZZ_PRIVATE_KEY", "22".repeat(32));
     const cfg = {
