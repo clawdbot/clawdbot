@@ -1649,7 +1649,7 @@ describe("Codex supervision catalog", () => {
     ).rejects.toThrow("Codex reconciliation catalog is unavailable");
   });
 
-  it("delivers projected reconciliation transcripts only to the explicit consumer", async () => {
+  it("rejects archived reconciliation transcripts without a provenance route", async () => {
     const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async (request) => {
       if (request.command === CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND) {
         return {
@@ -1707,15 +1707,13 @@ describe("Codex supervision catalog", () => {
     registerCodexSessionReconciliationRuntime({ api, control: createControl() });
     expect(invoke).not.toHaveBeenCalled();
 
-    const consume = vi.fn(async () => undefined);
-    await reconciliationProvider?.withTranscript(
-      { hostId: "node:devbox", threadId: "archived-thread", limit: 1 },
-      consume,
-    );
-    expect(consume).toHaveBeenCalledWith([
-      { id: "item-1", type: "userMessage", text: "private prompt" },
-    ]);
-    expect(invoke).toHaveBeenCalledOnce();
+    await expect(
+      reconciliationProvider?.withTranscript(
+        { hostId: "node:devbox", threadId: "archived-thread", archived: true, limit: 1 },
+        async () => undefined,
+      ),
+    ).rejects.toThrow("Codex reconciliation transcript is unavailable");
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it("bounds reconciliation transcript demand to one safe page and forwards cancellation", async () => {
@@ -1759,14 +1757,20 @@ describe("Codex supervision catalog", () => {
     registerCodexSessionReconciliationRuntime({ api, control: createControl() });
     await expect(
       reconciliationProvider?.withTranscript(
-        { hostId: "node:devbox", threadId: "thread-1", limit: 51 },
+        { hostId: "node:devbox", threadId: "thread-1", archived: false, limit: 51 },
         async () => undefined,
       ),
     ).rejects.toThrow("Codex reconciliation transcript is unavailable");
     controller.abort();
     await expect(
       reconciliationProvider?.withTranscript(
-        { hostId: "node:devbox", threadId: "thread-1", limit: 1, signal: controller.signal },
+        {
+          hostId: "node:devbox",
+          threadId: "thread-1",
+          archived: false,
+          limit: 1,
+          signal: controller.signal,
+        },
         async () => undefined,
       ),
     ).rejects.toThrow();

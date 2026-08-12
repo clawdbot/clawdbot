@@ -754,6 +754,9 @@ async function enumerateCodexSessionHistory(params: {
       if (!nextCursor) {
         return { sessions };
       }
+      if (nextCursor === cursor) {
+        throw new Error("history cursor loop");
+      }
       if (params.pageLimit !== undefined && pageIndex + 1 >= maxPages) {
         return { sessions, nextCursor };
       }
@@ -796,6 +799,9 @@ async function enumerateLocalCodexSessionHistory(params: {
     const nextCursor = page.nextCursor?.trim();
     if (!nextCursor) {
       return { sessions };
+    }
+    if (nextCursor === cursor) {
+      throw new Error("history cursor loop");
     }
     if (params.pageLimit !== undefined && pageIndex + 1 >= maxPages) {
       return { sessions, nextCursor };
@@ -966,15 +972,19 @@ function readReconciliationTranscriptRequest(value: unknown) {
   if (!isRecord(value)) {
     throw new CatalogParamsError("Codex reconciliation parameters must be an object");
   }
-  requireOnlyKeys(value, new Set(["hostId", "threadId", "cursor", "limit"]));
+  requireOnlyKeys(value, new Set(["hostId", "threadId", "archived", "cursor", "limit"]));
   const threadId = readOptionalString(value, "threadId", MAX_SESSION_ID_LENGTH);
   if (!threadId) {
     throw new CatalogParamsError("Codex reconciliation threadId is required");
   }
   const cursor = readOptionalString(value, "cursor", MAX_CURSOR_LENGTH);
+  if (value.archived !== false) {
+    throw new CatalogParamsError("Codex reconciliation transcripts require a current session");
+  }
   return {
     hostId: readReconciliationHostId(value.hostId),
     threadId,
+    archived: false as const,
     limit: normalizeReconciliationTranscriptLimit(value.limit),
     ...(cursor ? { cursor } : {}),
   };
@@ -1138,6 +1148,9 @@ function registerCodexSessionReconciliation(params: {
   api: OpenClawPluginApi;
   control: CodexSessionCatalogControl;
 }): void {
+  const transcriptEligibility = new Set<string>();
+  const transcriptEligibilityKey = (hostId: string, threadId: string, archived: boolean) =>
+    `${hostId}\u0000${threadId}\u0000${archived}`;
   params.api.runtime.codexReconciliation.register({
     list: async (input) => {
       try {
@@ -1169,9 +1182,17 @@ function registerCodexSessionReconciliation(params: {
                 signal: input.signal,
               });
         assertReconciliationNotAborted(input.signal);
+        const sessions = projectCodexReconciliationSessions(page.sessions, request.archived);
+        if (!request.archived) {
+          for (const session of sessions) {
+            transcriptEligibility.add(
+              transcriptEligibilityKey(request.hostId, session.threadId, false),
+            );
+          }
+        }
         return {
           hostId: request.hostId,
-          sessions: projectCodexReconciliationSessions(page.sessions, request.archived),
+          sessions,
           ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
           complete: !page.nextCursor,
         };
@@ -1181,15 +1202,24 @@ function registerCodexSessionReconciliation(params: {
     },
     withTranscript: async (input, consume) => {
       try {
+        const provenance = readReconciliationTranscriptRequest({
+          hostId: input.hostId,
+          threadId: input.threadId,
+          archived: input.archived,
+          ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
+          ...(input.limit !== undefined ? { limit: input.limit } : {}),
+        });
+        if (
+          !transcriptEligibility.has(
+            transcriptEligibilityKey(provenance.hostId, provenance.threadId, provenance.archived),
+          )
+        ) {
+          throw new Error("reconciliation transcript provenance is unavailable");
+        }
         const page = await readCodexReconciliationTranscript({
           runtime: params.api.runtime,
           control: params.control,
-          request: readReconciliationTranscriptRequest({
-            hostId: input.hostId,
-            threadId: input.threadId,
-            ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
-            ...(input.limit !== undefined ? { limit: input.limit } : {}),
-          }),
+          request: provenance,
           signal: input.signal,
         });
         if (page.items.length > MAX_RECONCILIATION_TRANSCRIPT_ITEMS) {

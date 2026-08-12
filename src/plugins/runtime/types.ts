@@ -157,6 +157,7 @@ export type CodexReconciliationProvider = {
     params: {
       hostId: string;
       threadId: string;
+      archived: boolean;
       cursor?: string;
       limit?: number;
       signal?: AbortSignal;
