@@ -99,7 +99,7 @@ const loadConfigMock = vi.fn(() => ({
 vi.mock("../../../config/sessions.js", () => ({
   loadSessionStore: vi.fn(() => sessionStore),
   resolveAgentIdFromSessionKey: (key: string) => key.match(/^agent:([^:]+)/)?.[1] ?? "main",
-  resolveStorePath: () => "/tmp/test-store",
+  resolveSessionStorePathCore: () => "/tmp/test-store",
   resolveMainSessionKey: () => "agent:main:main",
   updateSessionStore: vi.fn(),
 }));
@@ -203,7 +203,7 @@ describe("subagent registry lifecycle error grace", () => {
         loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
       readSubagentSessionEntry: (_storePath, sessionKey) => sessionStore[sessionKey],
       resolveAgentIdFromSessionKey: (key) => key?.match(/^agent:([^:]+)/)?.[1] ?? "main",
-      resolveStorePath: () => "/tmp/test-store",
+      resolveSessionStorePathCore: () => "/tmp/test-store",
     });
   });
 

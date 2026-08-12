@@ -1,3 +1,4 @@
+import { render, type TemplateResult } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
@@ -21,6 +22,12 @@ type TestNewSessionPage = {
   gatewayConnected: boolean;
   gatewayRecoveryScope: string;
   gatewayUrl: string;
+  projectRecents: unknown;
+  projectsTask: {
+    run(
+      args: readonly [ApplicationContext["gateway"]["snapshot"]["client"], boolean, number],
+    ): Promise<unknown>;
+  };
   pendingCloud: { capture(): CloudSessionRecovery | null };
   attachmentDraft: {
     attachments: ChatAttachment[];
@@ -30,6 +37,7 @@ type TestNewSessionPage = {
   submissionAccess(): { allowed: true };
   submit(): Promise<void>;
   setMessageFromUser(message: string): void;
+  renderPlaceSelect(): TemplateResult;
   updated(): void;
 };
 
@@ -186,5 +194,68 @@ describe("new session draft route ownership", () => {
     expect(setSessionKey).toHaveBeenCalledWith(start.mock.calls[0]?.[0].recovery.sessionKey);
     expect(selectAgent).toHaveBeenCalledWith("cloud");
     expect(navigate).toHaveBeenCalledOnce();
+  });
+});
+
+describe("new session project recents", () => {
+  const recentSession = { execCwd: "/workspace/recent" };
+
+  function createRecentsPage(request: (method: string) => Promise<unknown>) {
+    const page = document.createElement(
+      "openclaw-new-session-page",
+    ) as unknown as TestNewSessionPage;
+    const client = { request } as unknown as ApplicationContext["gateway"]["snapshot"]["client"];
+    page.agentId = "main";
+    page.gatewayClient = client;
+    page.gatewayConnected = true;
+    page.gatewayUrl = "ws://gateway.example";
+    page.context = {
+      gateway: {
+        connection: { gatewayUrl: page.gatewayUrl },
+        snapshot: {
+          phase: "connected",
+          client,
+          selfUser: { id: "profile-a" },
+          hello: { auth: { role: "operator", scopes: ["operator.read"] } },
+        },
+      },
+      agents: {
+        state: {
+          agentsList: {
+            defaultId: "main",
+            mainKey: "main",
+            agents: [{ id: "main", workspace: "/workspace" }],
+          },
+        },
+      },
+      sessions: { state: { result: { sessions: [recentSession] } } },
+      config: { current: {} },
+    } as unknown as ApplicationContext;
+    return { client, page };
+  }
+
+  async function expectRosterRecent(page: TestNewSessionPage) {
+    expect(page.projectRecents).toBeUndefined();
+    const host = document.createElement("div");
+    render(page.renderPlaceSelect(), host);
+    expect(host.querySelector('[data-value="recent::/workspace/recent"]')).not.toBeNull();
+  }
+
+  it("falls back to roster recents when projects.list omits server recents", async () => {
+    const { client, page } = createRecentsPage(async () => ({ projects: [] }));
+
+    await page.projectsTask.run([client, true, 1]);
+
+    await expectRosterRecent(page);
+  });
+
+  it("falls back to roster recents when projects.list fails", async () => {
+    const { client, page } = createRecentsPage(async () => {
+      throw new Error("projects unavailable");
+    });
+
+    await page.projectsTask.run([client, true, 1]);
+
+    await expectRosterRecent(page);
   });
 });

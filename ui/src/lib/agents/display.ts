@@ -23,6 +23,8 @@ import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../str
 type AgentRosterEntry = {
   id: string;
   kind?: "agent" | "system";
+  name?: string;
+  identity?: { name?: string };
 };
 
 /** Ordinary agent targets; system rows remain available to diagnostic surfaces. */
@@ -319,13 +321,16 @@ type ConfigSnapshot = {
   };
 };
 
-export function normalizeAgentLabel(agent: {
-  id: string;
-  name?: string;
-  identity?: { name?: string };
-}) {
+export function normalizeAgentLabel(
+  agent: AgentRosterEntry,
+  hydratedIdentity?: { name?: string } | null,
+) {
+  // Roster labels own operator target identity; workspace identity only fills gaps.
   return (
-    normalizeOptionalString(agent.name) ?? normalizeOptionalString(agent.identity?.name) ?? agent.id
+    normalizeOptionalString(agent.name) ??
+    normalizeOptionalString(agent.identity?.name) ??
+    normalizeOptionalString(hydratedIdentity?.name) ??
+    agent.id
   );
 }
 

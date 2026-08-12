@@ -7,7 +7,7 @@ import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 
 export function readUpdateAvailable(hello: GatewayHelloOk | null): UpdateAvailable | null {
   const snapshot = hello?.snapshot;
-  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+  if (!isRecord(snapshot)) {
     return null;
   }
   const update = (snapshot as { updateAvailable?: unknown }).updateAvailable;

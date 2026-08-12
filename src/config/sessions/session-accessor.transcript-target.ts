@@ -1,7 +1,7 @@
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { getRuntimeConfig } from "../io.js";
-import { resolveStorePath } from "./paths.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 import { resolveSessionEntrySelection } from "./session-accessor.entry.js";
 import {
   resolveSqliteTranscriptScope,
@@ -30,7 +30,7 @@ function resolveRuntimeContext(
   }
   const configuredStorePath =
     resolveConcreteSessionStorePath(scope.storePath) ??
-    resolveStorePath(getRuntimeConfig().session?.store, { agentId, env: scope.env });
+    resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId, env: scope.env });
   const storePath = resolveSessionStorePathForScope({
     agentId,
     env: scope.env,
@@ -76,7 +76,7 @@ export function resolveSessionTranscriptReadTarget(
   }
   const configuredStorePath =
     resolveConcreteSessionStorePath(scope.storePath) ??
-    resolveStorePath(getRuntimeConfig().session?.store, { agentId, env: scope.env });
+    resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId, env: scope.env });
   const storePath = resolveSessionStorePathForScope({
     agentId,
     env: scope.env,

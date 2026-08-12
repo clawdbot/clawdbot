@@ -190,7 +190,7 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
   return spec;
 }
 
-export function resolveOpenClawMetadata(
+export function resolveSkillManifestMetadata(
   frontmatter: ParsedSkillFrontmatter,
 ): OpenClawSkillMetadata | undefined {
   const metadataObj = resolveOpenClawManifestBlock({ frontmatter });

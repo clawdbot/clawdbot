@@ -1,4 +1,4 @@
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asFiniteNumber, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CodexThread, CodexThreadTurnsListResponse } from "./app-server/protocol.js";
@@ -305,10 +305,6 @@ export function parseJsonParams(paramsJSON?: string | null): unknown {
   }
 }
 
-function readFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
 function parseOptionalCatalogString(
   value: unknown,
   field: string,
@@ -385,9 +381,9 @@ function parseCatalogSession(
   const sessionKey = options.allowSessionKey
     ? parseOptionalCatalogString(value.sessionKey, "OpenClaw session key", MAX_SESSION_KEY_LENGTH)
     : undefined;
-  const createdAt = readFiniteNumber(value.createdAt);
-  const updatedAt = readFiniteNumber(value.updatedAt);
-  const recencyAt = value.recencyAt === null ? null : readFiniteNumber(value.recencyAt);
+  const createdAt = asFiniteNumber(value.createdAt);
+  const updatedAt = asFiniteNumber(value.updatedAt);
+  const recencyAt = value.recencyAt === null ? null : asFiniteNumber(value.recencyAt);
   return {
     threadId: value.threadId,
     status,

@@ -11,7 +11,7 @@ export type { ResolvedPublishedModelCatalogOwner } from "../../agents/prepared-m
 export {
   getModelRefStatus,
   normalizeModelSelection,
-  resolveAllowedModelRef,
+  resolveAllowedModelRefCore,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
 } from "../../agents/model-selection-resolve.js";

@@ -26,7 +26,7 @@ import {
   resolveTtsSettingsSnapshot,
   type ResolvedTtsConfig,
 } from "./tts-settings.js";
-import { textToSpeech, type TtsAudioPersistence } from "./tts-synthesis.js";
+import { textToSpeechCore, type TtsAudioPersistence } from "./tts-synthesis.js";
 
 let lastTtsAttempt: TtsStatusEntry | undefined;
 
@@ -217,7 +217,7 @@ export async function maybeApplyTtsToPayloadCore(
   }
 
   const ttsStart = Date.now();
-  const result = await textToSpeech(
+  const result = await textToSpeechCore(
     {
       text: textForAudio,
       cfg,

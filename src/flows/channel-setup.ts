@@ -13,6 +13,7 @@ import type {
   SetupChannelsOptions,
 } from "../channels/plugins/setup-wizard-types.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { normalizeExternalChannelSetupConfig } from "../commands/channel-setup/config-compatibility.js";
 import {
   resolveChannelSetupEntries,
   shouldShowChannelInSetup,
@@ -429,7 +430,7 @@ export async function setupChannels(
 
   const applySetupResult = async (channel: ChannelChoice, result: ChannelSetupResult) => {
     const previousCfg = next;
-    next = result.cfg;
+    next = normalizeExternalChannelSetupConfig({ cfg: result.cfg, channel });
     if (result.completion === "paused") {
       // Persist partial setup state, but do not run configured-account hooks,
       // routing, or DM policy prompts until setup actually completes.

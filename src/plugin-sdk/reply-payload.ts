@@ -2,7 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import type { ReplyPayload as InternalReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/outbound.types.js";
-import { normalizeOutboundReplyPayload as normalizeCoreOutboundReplyPayload } from "../infra/outbound/reply-payload-normalize.js";
+import { normalizeOutboundReplyPayloadCore as normalizeCoreOutboundReplyPayload } from "../infra/outbound/reply-payload-normalize.js";
 import {
   countOutboundMedia,
   hasOutboundMedia,

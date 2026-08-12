@@ -58,6 +58,8 @@ import {
   buildFtsQuery,
   mergeHybridResults,
   scoreExactPathTieForTemporalDecay,
+  selectHybridSearchResults,
+  type HybridSearchResult,
 } from "./hybrid.js";
 import { applyImportanceMultiplier } from "./importance.js";
 import { awaitPendingManagerWork, startAsyncSearchSync } from "./manager-async-state.js";
@@ -1446,28 +1448,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         temporalDecay: hybrid.temporalDecay,
         activeProjectKeys: opts?.activeProjectKeys,
       });
-      const strict = merged.filter((entry) => entry.score >= minScore);
-      if (strict.length > 0 || keywordResults.length === 0) {
-        return strict.slice(0, maxResults);
-      }
-
-      // Hybrid defaults can produce keyword-only matches below minScore after
-      // BM25 normalization and textWeight scaling. Preserve FTS-backed lexical
-      // hits when they are the only relevant results.
-      const relaxedMinScore = 0;
-      const keywordKeys = new Set(
-        keywordResults.map(
-          (entry) => `${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`,
-        ),
-      );
-      return this.selectScoredResults(
-        merged.filter((entry) =>
-          keywordKeys.has(`${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`),
-        ),
+      return selectHybridSearchResults({
+        merged,
+        keyword: keywordResults,
         maxResults,
         minScore,
-        relaxedMinScore,
-      );
+      });
     });
   }
 
@@ -1858,7 +1844,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     mmr?: { enabled: boolean; lambda: number };
     temporalDecay?: { enabled: boolean; halfLifeDays: number };
     activeProjectKeys?: readonly string[];
-  }): Promise<MemorySearchResult[]> {
+  }): Promise<HybridSearchResult<MemorySource>[]> {
     return mergeHybridResults({
       vector: params.vector.map((r) => ({
         id: r.id,
@@ -1898,7 +1884,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       temporalDecay: params.temporalDecay,
       activeProjectKeys: params.activeProjectKeys,
       workspaceDir: this.workspaceDir,
-    }).then((entries) => entries.map((entry) => entry as MemorySearchResult));
+    });
   }
 
   async sync(params?: MemorySyncParams): Promise<void> {

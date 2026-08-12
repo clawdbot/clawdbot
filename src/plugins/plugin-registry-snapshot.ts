@@ -9,7 +9,7 @@ import { buildLegacyBundledRootPath } from "./bundled-load-path-aliases.js";
 import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
-import type { PluginDiscoveryResult } from "./discovery.js";
+import { discoverConfiguredPluginLoadPaths, type PluginDiscoveryResult } from "./discovery.js";
 import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
 import { safeFileSignature, safeHashFile } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
@@ -22,6 +22,7 @@ import {
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store.js";
 import {
+  extractPluginInstallRecordsFromInstalledPluginIndex,
   getInstalledPluginRecord,
   hasMissingConfigPathActivationMetadata,
   isInstalledPluginEnabled,
@@ -32,10 +33,14 @@ import {
   type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
-import type { PluginManifestRegistry } from "./manifest-registry.js";
+import {
+  loadPluginManifestRegistryCore,
+  type PluginManifestRegistry,
+} from "./manifest-registry.js";
 import { getPackageManifestMetadata, type PackageManifest } from "./manifest.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
 import type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
+import { resolvePluginSourceRoots } from "./roots.js";
 
 function resolvePluginRegistryContent(
   index: InstalledPluginIndex,
@@ -405,8 +410,59 @@ function requiresDerivedRegistryValidation(
     ) ||
     hasMismatchedPersistedBundledRoot(index, env) ||
     hasStalePluginFiles() ||
-    hasRecoveredInstallRecordsMissingFromPersistedIndex(index, params, env)
+    hasRecoveredInstallRecordsMissingFromPersistedIndex(index, params, env) ||
+    hasConfiguredGlobalSourcePluginMissingFromPersistedIndex(params, index, env)
   );
+}
+
+function collectConfiguredPluginIds(config: LoadPluginRegistryParams["config"]): Set<string> {
+  const plugins = normalizePluginsConfig(config?.plugins);
+  const pluginIds = new Set<string>();
+  for (const pluginId of Object.keys(plugins.entries)) {
+    pluginIds.add(pluginId);
+  }
+  for (const pluginId of plugins.allow) {
+    pluginIds.add(pluginId);
+  }
+  for (const pluginId of Object.values(plugins.slots)) {
+    if (typeof pluginId === "string" && pluginId.trim() && pluginId !== "none") {
+      pluginIds.add(pluginId);
+    }
+  }
+  return pluginIds;
+}
+
+function hasConfiguredGlobalSourcePluginMissingFromPersistedIndex(
+  params: LoadPluginRegistryParams,
+  index: InstalledPluginIndex,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const configuredPluginIds = collectConfiguredPluginIds(params.config);
+  const persistedPluginIds = new Set(index.plugins.map((plugin) => plugin.pluginId));
+  const missingConfiguredPluginIds = new Set(
+    [...configuredPluginIds].filter((pluginId) => !persistedPluginIds.has(pluginId)),
+  );
+  if (missingConfiguredPluginIds.size === 0) {
+    return false;
+  }
+  const globalExtensionsRoot = resolvePluginSourceRoots({
+    workspaceDir: params.workspaceDir,
+    env,
+  }).global;
+  const discovery = discoverConfiguredPluginLoadPaths({
+    loadPaths: [globalExtensionsRoot],
+    workspaceDir: params.workspaceDir,
+    env,
+  });
+  const registry = loadPluginManifestRegistryCore({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env,
+    candidates: discovery.candidates,
+    diagnostics: discovery.diagnostics,
+    installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(index),
+  });
+  return registry.plugins.some((plugin) => missingConfiguredPluginIds.has(plugin.id));
 }
 
 export function loadPluginRegistrySnapshotWithMetadata(

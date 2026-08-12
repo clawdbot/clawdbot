@@ -4,7 +4,7 @@ import { suppressPendingFinalDelivery } from "../../auto-reply/reply/dispatch-fr
 import type { DispatchFromConfigResult } from "../../auto-reply/reply/dispatch-from-config.types.js";
 import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import { runWithSessionInitConflictRetry } from "../../auto-reply/reply/session-init-conflict-retry.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   deriveInboundMessageHookContext,
   resolveInboundReplyHookTarget,
@@ -91,7 +91,7 @@ export function assembleResolvedChannelTurn<
       ...turn,
       ctxPayload: route.dmScope ? { ...turn.ctxPayload, DmScope: route.dmScope } : turn.ctxPayload,
       routeSessionKey: route.sessionKey,
-      storePath: resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
+      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: route.agentId }),
       recordInboundSession,
     };
   }
@@ -102,7 +102,7 @@ export function assembleResolvedChannelTurn<
     cfg,
     agentId: route.agentId,
     routeSessionKey: route.sessionKey,
-    storePath: resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
+    storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: route.agentId }),
     recordInboundSession,
   };
   return assembled;

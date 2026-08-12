@@ -8,7 +8,6 @@ export { getApiKeyForModelCore, requireApiKey } from "../model-auth.js";
 export { runWithImageModelFallback } from "../model-fallback-image.js";
 export {
   createSandboxBridgeReadFile,
-  resolveSandboxedBridgeMediaPath,
   type SandboxedBridgeMediaPathConfig,
 } from "../sandbox-media-paths.js";
 export type { SandboxFsBridge } from "../sandbox/fs-bridge.js";

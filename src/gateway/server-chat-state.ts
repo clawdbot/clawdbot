@@ -104,7 +104,7 @@ type ChatRunToolRecipientState = {
   finalizedAt?: number;
 };
 
-type PendingChatDeltaFlush = {
+type PendingLiveTextFlush = {
   timer: NodeJS.Timeout;
   flush: () => void;
 };
@@ -133,7 +133,7 @@ type ChatRunRecord = {
 
 type InternalChatRunRecord = ChatRunRecord & {
   /** Fixed-deadline trailing wake-up owned by this run's buffered state. */
-  pendingDeltaFlush?: PendingChatDeltaFlush;
+  pendingTextFlushes?: Partial<Record<"chat" | "agent", PendingLiveTextFlush>>;
 };
 
 type ChatRunRecordStore = {
@@ -167,13 +167,12 @@ function internalChatRunRecord(record: ChatRunRecord): InternalChatRunRecord {
   return record;
 }
 
-function clearPendingChatDeltaFlush(record: ChatRunRecord): void {
+function clearPendingLiveTextFlushes(record: ChatRunRecord): void {
   const internal = internalChatRunRecord(record);
-  if (!internal.pendingDeltaFlush) {
-    return;
+  for (const pending of Object.values(internal.pendingTextFlushes ?? {})) {
+    clearTimeout(pending.timer);
   }
-  clearTimeout(internal.pendingDeltaFlush.timer);
-  delete internal.pendingDeltaFlush;
+  delete internal.pendingTextFlushes;
 }
 
 export type ChatRunRegistry = {
@@ -297,14 +296,14 @@ export function createChatRunState(): ChatRunState {
     delete record.deltaSentAt;
     delete record.deltaLastBroadcastLen;
     delete record.deltaLastBroadcastText;
-    clearPendingChatDeltaFlush(record);
+    clearPendingLiveTextFlushes(record);
     delete record.agentText;
     store.releaseIfEmpty(runId);
   };
 
   const clear = () => {
     for (const record of store.runs.values()) {
-      clearPendingChatDeltaFlush(record);
+      clearPendingLiveTextFlushes(record);
     }
     store.runs.clear();
   };

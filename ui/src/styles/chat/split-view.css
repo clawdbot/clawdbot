@@ -35,6 +35,8 @@ openclaw-chat-pane {
 /* One cell = pane header + pane; the header lives in-flow with its pane, so
    split geometry needs no mirrored toolbar layer. */
 .chat-split-view__cell {
+  --chat-surface: var(--bg-content, var(--bg));
+
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -154,8 +156,7 @@ openclaw-chat-pane {
      line up with the sidebar across the top of the shell. */
   min-height: 48px;
   padding: 0 6px 0 12px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
-  background: color-mix(in srgb, var(--panel) 62%, transparent);
+  background: var(--chat-surface);
   /* Chrome row, not content: a selectable title would fight the native
      window drag the macOS app starts from this row. */
   user-select: none;
@@ -507,12 +508,76 @@ openclaw-chat-pane {
   flex: 0 0 auto;
 }
 
+.chat-pane__sharing-menu::part(menu) {
+  width: 260px;
+  min-width: min(260px, calc(100vw - 24px));
+  max-width: min(260px, calc(100vw - 24px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.chat-pane__sharing-menu--capped::part(menu) {
+  height: min(420px, 60vh);
+}
+
 .chat-pane__sharing-title,
 .chat-pane__sharing-status {
-  padding: 6px 12px;
   color: var(--muted);
   font-size: 11px;
   font-weight: 600;
+}
+
+.chat-pane__sharing-title {
+  padding: 5px 8px 7px;
+}
+
+.chat-pane__sharing-status {
+  padding: 6px 12px;
+}
+
+.chat-pane__sharing-visibility-item[disabled] {
+  opacity: 1;
+  color: var(--muted);
+}
+
+.chat-pane__sharing-members-title {
+  margin-top: 8px;
+}
+
+.chat-pane__sharing-member {
+  gap: 0;
+  font-size: 12px;
+}
+
+.chat-pane__sharing-member::part(icon) {
+  display: flex;
+  align-items: center;
+}
+
+.chat-pane__sharing-member-icon {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-pane__sharing-channel-icon {
+  border-radius: var(--radius-full);
+  background: var(--bg-muted);
+  color: var(--muted);
+}
+
+.chat-pane__sharing-channel-icon svg {
+  width: 13px;
+  height: 13px;
+}
+
+.chat-pane__sharing-member-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-pane__sharing-status--error {

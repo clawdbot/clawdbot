@@ -302,7 +302,6 @@ describe("tsdown config", () => {
       expect(neverBundle("@vitest/expect")).toBe(true);
       expect(neverBundle("jimp")).toBe(true);
       expect(neverBundle("matrix-js-sdk/lib/client.js")).toBe(true);
-      expect(neverBundle("qrcode-terminal/lib/main.js")).toBe(true);
       expect(neverBundle("sharp")).toBe(true);
       expect(neverBundle("vitest")).toBe(true);
       expect(neverBundle("not-a-runtime-dependency")).toBe(false);
@@ -317,7 +316,6 @@ describe("tsdown config", () => {
         "@vitest/expect",
         "jimp",
         "matrix-js-sdk",
-        "qrcode-terminal",
         "sharp",
         "vitest",
       ]) {
@@ -329,7 +327,6 @@ describe("tsdown config", () => {
     }
     const externalize = external;
     expect(externalize("jimp", undefined, false)).toBe(true);
-    expect(externalize("qrcode-terminal/lib/main.js", undefined, false)).toBe(true);
     expect(externalize("sharp", undefined, false)).toBe(true);
   });
 

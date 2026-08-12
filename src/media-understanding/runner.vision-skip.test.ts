@@ -5,7 +5,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePluginRegistryLoadCacheKey } from "../plugins/loader.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
@@ -73,7 +73,7 @@ function setCompatibleActiveMediaUnderstandingRegistry(
   pluginRegistry: ReturnType<typeof createEmptyPluginRegistry>,
   cfg: OpenClawConfig,
 ) {
-  const pluginIds = loadPluginManifestRegistry({
+  const pluginIds = loadPluginManifestRegistryCore({
     config: cfg,
     env: process.env,
   })

@@ -99,27 +99,7 @@ describe("plugin npm runtime build planning", () => {
     }
   });
 
-  it("includes top-level public runtime surfaces and root-build-excluded plugins", () => {
-    const qqbotPlan = resolvePluginNpmRuntimeBuildPlan({
-      repoRoot,
-      packageDir: path.join(repoRoot, "extensions", "qqbot"),
-    });
-    const qqbotRuntimePlan = expectPluginNpmRuntimeBuildPlan(qqbotPlan);
-    expect(qqbotRuntimePlan.entry).toEqual({
-      api: path.join(repoRoot, "extensions", "qqbot", "api.ts"),
-      "channel-entry-api": path.join(repoRoot, "extensions", "qqbot", "channel-entry-api.ts"),
-      "channel-plugin-api": path.join(repoRoot, "extensions", "qqbot", "channel-plugin-api.ts"),
-      "doctor-contract-api": path.join(repoRoot, "extensions", "qqbot", "doctor-contract-api.ts"),
-      index: path.join(repoRoot, "extensions", "qqbot", "index.ts"),
-      "runtime-api": path.join(repoRoot, "extensions", "qqbot", "runtime-api.ts"),
-      "secret-contract-api": path.join(repoRoot, "extensions", "qqbot", "secret-contract-api.ts"),
-      "setup-entry": path.join(repoRoot, "extensions", "qqbot", "setup-entry.ts"),
-      "setup-plugin-api": path.join(repoRoot, "extensions", "qqbot", "setup-plugin-api.ts"),
-      "tools-api": path.join(repoRoot, "extensions", "qqbot", "tools-api.ts"),
-    });
-    expect(qqbotRuntimePlan.runtimeExtensions).toEqual(["./dist/index.js"]);
-    expect(qqbotRuntimePlan.runtimeSetupEntry).toBe("./dist/setup-entry.js");
-
+  it("includes top-level public runtime surfaces", () => {
     const diffsPlan = resolvePluginNpmRuntimeBuildPlan({
       repoRoot,
       packageDir: path.join(repoRoot, "extensions", "diffs"),

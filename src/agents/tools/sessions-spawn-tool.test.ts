@@ -3,8 +3,8 @@ import path from "node:path";
 // dispatch, and result details for spawned child sessions.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
@@ -433,7 +433,7 @@ describe("sessions_spawn tool", () => {
   });
 
   it("creates visible worktree sessions and registers completion announce", async () => {
-    await withTempDir({ prefix: "openclaw-visible-spawn-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-visible-spawn-" }, async (dir) => {
       const callGateway = vi.fn(async () => ({
         key: "agent:main:dashboard:child",
         runStarted: true,
@@ -515,10 +515,10 @@ describe("sessions_spawn tool", () => {
   });
 
   it("rejects a visible spawn before creation when the exact parent incarnation changed", async () => {
-    await withTempDir({ prefix: "openclaw-visible-spawn-parent-race-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-visible-spawn-parent-race-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const parentSessionKey = "agent:main:main";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: parentSessionKey, storePath },
         { sessionId: "replacement-parent", updatedAt: 2 },
       );
@@ -652,7 +652,7 @@ describe("sessions_spawn tool", () => {
   });
 
   it("rejects cwd escape for sandboxed visible sessions", async () => {
-    await withTempDir({ prefix: "openclaw-visible-sandbox-cwd-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-visible-sandbox-cwd-" }, async (dir) => {
       const callGateway = vi.fn();
       const tool = createSessionsSpawnTool({
         agentSessionKey: "agent:main:main",
@@ -682,7 +682,7 @@ describe("sessions_spawn tool", () => {
   });
 
   it("allows cwd within a sandboxed visible session workspace", async () => {
-    await withTempDir({ prefix: "openclaw-visible-sandbox-cwd-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-visible-sandbox-cwd-" }, async (dir) => {
       const workspace = path.join(dir, "workspace");
       const cwd = path.join(workspace, "packages", "app");
       const callGateway = vi.fn(async () => ({
@@ -1078,14 +1078,14 @@ describe("sessions_spawn tool", () => {
   });
 
   it("applies spawn depth limits to visible dashboard descendants", async () => {
-    await withTempDir({ prefix: "openclaw-visible-depth-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-visible-depth-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const childKey = "agent:main:dashboard:child";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:main", storePath },
         { sessionId: "root", updatedAt: 1 },
       );
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: childKey, storePath },
         // Canonical spawn-child shape: sessions.create persists explicit
         // spawnDepth; parentSessionKey alone is UI threading and adds no depth.

@@ -5,13 +5,16 @@ import {
   createContext,
   createDirectSessionPayload,
   createReasoningStreamContext,
+  createStatusReactionController,
   createTelegramDraftStream,
   deliverReplies,
   dispatchReplyWithBufferedBlockDispatcher,
   dispatchWithContext,
   editMessageTelegram,
+  emitTelegramMessageSentHooks,
   expectDeliveredReply,
   expectDeliverRepliesParams,
+  expectRecordFields,
   expectWindowCollapsedTo,
   mockCallArg,
   requireInvocationOrder,
@@ -120,6 +123,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
   ])(
     "finalizes the default streamed draft in place after an unexpected reply failure in a $label",
     async ({ createMessageContext }) => {
+      const statusReactionController = createStatusReactionController();
       const answerDraftStream = createTestDraftStream({
         onWaitForInFlight: () => answerDraftStream.setMessageId(2001),
       });
@@ -133,14 +137,17 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
         return await dispatchReplyWithBufferedBlockDispatcherRuntime({
           ...params,
           replyResolver: async (_ctx, opts) => {
+            opts?.onAgentRunStart?.("failed-run");
             partialAccepted = await opts?.onPartialReply?.({ text: "partial answer" });
             throw new Error("unexpected model failure");
           },
         });
       });
+      const messageContext = createMessageContext();
+      messageContext.statusReactionController = statusReactionController as never;
 
       await dispatchWithContext({
-        context: createMessageContext(),
+        context: messageContext,
         streamMode: "partial",
         telegramCfg: { streaming: { mode: "partial" } },
       });
@@ -157,6 +164,39 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       );
       expect(answerDraftStream.clear).not.toHaveBeenCalled();
       expect(deliverReplies).not.toHaveBeenCalled();
+      expect(emitTelegramMessageSentHooks).toHaveBeenCalledTimes(1);
+      expectRecordFields(mockCallArg(emitTelegramMessageSentHooks), { success: true });
+      await vi.waitFor(() => {
+        expect(statusReactionController.restoreInitial).toHaveBeenCalledTimes(1);
+      });
+      expect(statusReactionController.setError).toHaveBeenCalledTimes(1);
+      expect(statusReactionController.setDone).not.toHaveBeenCalled();
+      expect(
+        requireInvocationOrder(
+          statusReactionController.setThinking,
+          0,
+          "initial thinking status reaction",
+        ),
+      ).toBeLessThan(
+        requireInvocationOrder(
+          statusReactionController.setError,
+          0,
+          "terminal error status reaction",
+        ),
+      );
+      expect(
+        requireInvocationOrder(
+          statusReactionController.setError,
+          0,
+          "terminal error status reaction",
+        ),
+      ).toBeLessThan(
+        requireInvocationOrder(
+          statusReactionController.restoreInitial,
+          0,
+          "initial status reaction restoration",
+        ),
+      );
     },
   );
 

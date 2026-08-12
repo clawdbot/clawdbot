@@ -2282,7 +2282,11 @@ describe("Claude session catalog", () => {
     const binDir = path.join(home, "bin");
     await fs.mkdir(binDir);
     await fs.writeFile(path.join(binDir, "claude"), "#!/bin/sh\n");
-    await fs.chmod(path.join(binDir, "claude"), 0o755);
+    if (process.platform === "win32") {
+      await fs.writeFile(path.join(binDir, "claude.cmd"), "@echo off\r\n");
+    } else {
+      await fs.chmod(path.join(binDir, "claude"), 0o755);
+    }
     expect(
       commands[2]?.isAvailable?.({ config: {}, env: { HOME: home, PATH: binDir } } as never),
     ).toBe(true);
@@ -2316,6 +2320,9 @@ describe("Claude session catalog", () => {
     const binDir = path.join(home, "bin");
     await fs.mkdir(binDir);
     const executable = path.join(binDir, process.platform === "win32" ? "claude.cmd" : "claude");
+    if (process.platform === "win32") {
+      await fs.writeFile(path.join(binDir, "claude"), "#!/bin/sh\n");
+    }
     await fs.writeFile(executable, process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\n");
     if (process.platform !== "win32") {
       await fs.chmod(executable, 0o755);

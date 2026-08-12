@@ -566,7 +566,7 @@ vi.mock("../config/sessions/main-session.js", () => ({
   resolveMainSessionKey: mocks.resolveMainSessionKey,
 }));
 vi.mock("../config/sessions/paths.js", () => ({
-  resolveStorePath: mocks.resolveStorePath,
+  resolveSessionStorePathCore: mocks.resolveStorePath,
 }));
 vi.mock("../config/sessions/session-accessor.js", () => ({
   listSessionEntriesCore: (opts?: { storePath?: string }) =>

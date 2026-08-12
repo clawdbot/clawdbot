@@ -6,6 +6,7 @@ import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   fetchWithSsrFGuard,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asNullableObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES } from "./google-auth-limits.js";
@@ -76,10 +77,6 @@ function installGoogleAuthHeaderCompatibilityInterceptor(
     resolved: async (response) => normalizeGoogleAuthResponseHeaders(response),
   });
   return transport;
-}
-
-function asNullableObjectRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
 }
 
 function hasProxyAgentShape(value: unknown): value is ProxyAgentLike {

@@ -11,6 +11,7 @@ import {
   runDevicePairingHealth,
   runGatewayDaemonHealth,
   runGatewayServicesHealth,
+  runGitHubProjectHealth,
   runOpenAIOAuthTlsHealth,
   runSecurityHealth,
   runStartupChannelMaintenanceHealth,
@@ -119,6 +120,11 @@ export function resolveFinalDoctorHealthContributions(params: {
       id: "doctor:web-fetch-proxy",
       label: "Web fetch proxy",
       run: runWebFetchProxyHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:github-projects",
+      label: "GitHub projects",
+      run: runGitHubProjectHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:browser",

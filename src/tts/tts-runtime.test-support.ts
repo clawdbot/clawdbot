@@ -136,7 +136,7 @@ export const {
   textToSpeechTelephony,
 } = await import("./runtime-api.js");
 export const { maybeApplyTtsToPayloadCore } = await import("./tts-payload.js");
-export const { textToSpeech: textToSpeechCore } = await import("./tts-synthesis.js");
+export const { textToSpeechCore } = await import("./tts-synthesis.js");
 
 export const CODE_HEAVY_SPOKEN_FALLBACK = CODE_HEAVY_SPOKEN_FALLBACK_CORE;
 export const MAX_TIMER_TIMEOUT_MS = MAX_TIMER_TIMEOUT_MS_CORE;

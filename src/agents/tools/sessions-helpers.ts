@@ -94,6 +94,7 @@ export type GatewaySessionListRow = {
 /** Focused model-facing row returned by sessions_list. */
 export type SessionListRow = {
   key: string;
+  sessionId?: string;
   agentId: string;
   kind: SessionKind;
   channel: string;

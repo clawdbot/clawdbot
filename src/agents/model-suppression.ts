@@ -133,7 +133,7 @@ export function shouldSuppressBuiltInModelFromManifest(params: {
 }
 
 /** Return true when any built-in suppression rule applies to a model entry. */
-export function shouldSuppressBuiltInModel(params: {
+export function shouldSuppressBuiltInModelCore(params: {
   provider?: string | null;
   id?: string | null;
   baseUrl?: string | null;

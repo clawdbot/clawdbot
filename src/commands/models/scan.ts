@@ -4,7 +4,7 @@ import { getEnvApiKey } from "@openclaw/ai/internal/runtime";
 import { styleSelectParams } from "../../../packages/terminal-core/src/prompt-select-styled-params.js";
 import { stylePromptTitle } from "../../../packages/terminal-core/src/prompt-style.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
-import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
+import { resolveApiKeyForProviderCore } from "../../agents/model-auth.js";
 import { type ModelScanResult, scanOpenRouterModels } from "../../agents/model-scan.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { withProgressTotals } from "../../cli/progress.js";
@@ -223,7 +223,7 @@ export async function modelsScanCommand(
     if (!storedKey) {
       try {
         const cfg = await loadModelsConfig({ commandName: "models scan" });
-        const resolved = await resolveApiKeyForProvider({
+        const resolved = await resolveApiKeyForProviderCore({
           provider: "openrouter",
           cfg,
         });

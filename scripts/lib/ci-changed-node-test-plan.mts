@@ -148,6 +148,52 @@ export function hasPromptSnapshotAffectingChange(changedPaths: string[], options
   return hasImportGraphImpactOnTargets(sourcePaths, [PROMPT_SNAPSHOT_ENTRY], cwd);
 }
 
+// The lifecycle proof crosses dynamic Gateway method registration, doctor
+// migrations, shared session coordination, the public session SDK, and the
+// built CLI. Keep those owners on the direct surface; use the import graph only
+// inside the embedded-runner neighborhood, whose session reachability is not
+// apparent from filenames.
+const SQLITE_SESSION_LIFECYCLE_PREFIX_RE =
+  /^(?:src\/(?:agents\/(?:sessions\/|[^/]*(?:session|transcript|compaction)[^/]*)|commands\/doctor-session-|config\/sessions\/|gateway\/(?:agent-turn\/agent-session-persist|server-chat\.(?:load-gateway-session-row|persist-session-lifecycle)|server-methods\/sessions|server\.sessions|session-|sessions-)|plugin-sdk\/session-|sessions\/|state\/openclaw-agent-(?:db|schema))|\.github\/actions\/setup-node-env\/)/u;
+const SQLITE_SESSION_LIFECYCLE_EXACT_RE =
+  /^(?:src\/config\/sessions\.ts|test\/helpers\/(?:openclaw-test-instance|sqlite-sessions-transcripts-flip-proof(?:-assertions)?)\.ts|test\/scripts\/(?:sqlite-sessions-transcripts-flip-proof(?:\.built-cli)?\.e2e\.test|vitest-e2e-global-setup\.test)\.ts|test\/vitest\/vitest\.e2e\.(?:config|global-setup)\.ts|scripts\/lib\/ci-changed-node-test-plan\.mts|\.github\/workflows\/ci\.yml|openclaw\.mjs|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$/u;
+const SQLITE_SESSION_LIFECYCLE_ENTRY =
+  "test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts";
+const SQLITE_SESSION_LIFECYCLE_IMPORT_CANDIDATE_RE = /^src\/agents\/embedded-agent-runner\/run\//u;
+
+/**
+ * True when a changed path touches a SQLite session lifecycle owner or reaches
+ * the proof from the embedded-runner neighborhood.
+ */
+export function hasSqliteSessionLifecycleAffectingChange(
+  changedPaths: string[],
+  options: CwdOptions = {},
+) {
+  const cwd = options.cwd ?? process.cwd();
+  if (
+    changedPaths.some(
+      (changedPath) =>
+        (!isTestFileTarget(changedPath) && SQLITE_SESSION_LIFECYCLE_PREFIX_RE.test(changedPath)) ||
+        SQLITE_SESSION_LIFECYCLE_EXACT_RE.test(changedPath),
+    )
+  ) {
+    return true;
+  }
+  const sourcePaths = changedPaths.filter(
+    (changedPath) =>
+      SQLITE_SESSION_LIFECYCLE_IMPORT_CANDIDATE_RE.test(changedPath) &&
+      !isTestFileTarget(changedPath),
+  );
+  // Deleted sources cannot be graphed; fail safe to running the lifecycle proof.
+  if (sourcePaths.some((changedPath) => !existsSync(path.join(cwd, changedPath)))) {
+    return true;
+  }
+  if (sourcePaths.length === 0) {
+    return false;
+  }
+  return hasImportGraphImpactOnTargets(sourcePaths, [SQLITE_SESSION_LIFECYCLE_ENTRY], cwd);
+}
+
 function createBoundaryShard() {
   // Boundary tests scan the source tree (including test files) and build
   // their own fixtures; they do not consume the built dist artifact. When the

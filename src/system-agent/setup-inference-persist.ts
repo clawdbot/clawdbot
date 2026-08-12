@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
 import { normalizeAuthProfileCredential } from "../agents/auth-profiles/credential-normalize.js";
@@ -212,7 +213,7 @@ export async function reloadCodexRegistryAfterActivation(params: {
 }
 
 function isMergePatchObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
+  return isRecord(value);
 }
 
 function mergePatchConflicts(base: unknown, current: unknown, patch: unknown): boolean {

@@ -940,7 +940,7 @@ describe("sessions.files RPC handlers", () => {
 
   it.each([
     { format: "RTF", mimeType: "application/rtf", content: "{\\rtf1\\ansi hello}" },
-    { format: "XML", mimeType: "application/xml", content: '<?xml version="1.0"?><root/>' },
+    { format: "XML", mimeType: "text/xml", content: '<?xml version="1.0"?><root/>' },
     { format: "WebVTT", mimeType: "text/vtt", content: "WEBVTT\n\n00:00.000 --> 00:01.000\nHi" },
     { format: "vCard", mimeType: "text/vcard", content: "BEGIN:VCARD\nVERSION:4.0\nEND:VCARD\n" },
     {

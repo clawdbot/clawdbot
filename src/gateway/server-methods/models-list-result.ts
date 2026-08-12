@@ -2,6 +2,7 @@
 // strips runtime-only provider params before sending the browse API payload.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asPositiveSafeInteger as resolvePositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
+import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credentials.js";
 import {
   resolveAgentEffectiveModelPrimary,
@@ -55,18 +56,15 @@ import { resolveManifestProviderAuthChoices } from "../../plugins/provider-auth-
 import type { ProviderCatalogOutcome } from "../../plugins/provider-catalog.types.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayAgentRuntime } from "../../shared/session-types.js";
+import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
 import { createModelsListAuthResolver } from "./models-list-auth-resolver.js";
 import type { GatewayRequestContext } from "./types.js";
 
-type ModelsListView = ModelCatalogBrowseView;
 type ModelsListEntry = Pick<
-  ModelCatalogEntry,
+  ModelChoice,
   "alias" | "contextWindow" | "id" | "input" | "name" | "provider" | "reasoning"
 > & { available?: boolean; supportsTools?: boolean };
-type ModelsListEntryWithCapabilities = ModelsListEntry & {
-  agentRuntime?: GatewayAgentRuntime;
-  apiKeySupported?: boolean;
-};
+type ModelsListEntryWithCapabilities = ModelChoice;
 type ApiKeyProviderCapabilities = {
   providers: ReadonlyMap<string, boolean>;
   resolveProvider(provider: string): string;
@@ -82,7 +80,7 @@ let loggedSlowModelsListCatalog = false;
 
 // Unknown views are rejected by protocol validation first; this helper keeps the
 // handler default explicit for older clients that omit the field.
-function resolveModelsListView(params: Record<string, unknown>): ModelsListView {
+function resolveModelsListView(params: Record<string, unknown>): ModelCatalogBrowseView {
   const view = params.view;
   return view === "configured" || view === "provider-config" || view === "all" ? view : "default";
 }
@@ -425,10 +423,9 @@ async function buildPublicModelsListEntries(params: {
   preserveUnknownAvailability?: boolean;
   apiKeyCapabilities?: ApiKeyProviderCapabilities;
 }): Promise<ModelsListEntryWithCapabilities[]> {
-  return await Promise.all(
+  return Promise.all(
     params.catalog.map(async (entry): Promise<ModelsListEntryWithCapabilities> => {
       const evaluation = await params.evaluateEntry(entry);
-      const publicEntry = buildPublicModelProjection(entry);
       const syntheticLocalAvailable =
         evaluation.availability === undefined &&
         evaluation.routeResolution === null &&
@@ -443,9 +440,23 @@ async function buildPublicModelsListEntries(params: {
         agentId: params.agentId,
         entry,
       });
+      const thinkingProfile =
+        typeof entry.reasoning === "boolean"
+          ? resolveGatewayModelThinkingProfile({
+              cfg: params.cfg,
+              agentId: params.agentId,
+              provider: entry.provider,
+              model: entry.id,
+              modelCatalog: params.catalog,
+            })
+          : undefined;
       return {
-        ...publicEntry,
+        ...buildPublicModelProjection(entry),
         ...(agentRuntime ? { agentRuntime } : {}),
+        ...(thinkingProfile && {
+          thinkingLevels: thinkingProfile.levels,
+          thinkingDefault: thinkingProfile.defaultLevel,
+        }),
         ...(capabilityProvider && params.apiKeyCapabilities?.providers.has(capabilityProvider)
           ? {
               apiKeySupported: params.apiKeyCapabilities.providers.get(capabilityProvider) === true,

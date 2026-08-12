@@ -2,6 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -31,6 +32,7 @@ import type {
 import {
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+  normalizeRealtimeVoiceResponseOutcome,
   RealtimeVoiceSessionLifecycle,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { sleepWithAbort, warn } from "openclaw/plugin-sdk/runtime-env";
@@ -40,6 +42,8 @@ import {
 } from "openclaw/plugin-sdk/secret-input";
 import {
   asFiniteNumber,
+  asFiniteNumberInRange,
+  asSafeIntegerInRange,
   isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -293,13 +297,11 @@ function normalizeProviderConfig(
 }
 
 function asNonNegativeInteger(value: unknown): number | undefined {
-  const number = asFiniteNumber(value);
-  return number !== undefined && Number.isSafeInteger(number) && number >= 0 ? number : undefined;
+  return asSafeIntegerInRange(value, { min: 0 });
 }
 
 function asUnitInterval(value: unknown): number | undefined {
-  const number = asFiniteNumber(value);
-  return number !== undefined && number >= 0 && number <= 1 ? number : undefined;
+  return asFiniteNumberInRange(value, { min: 0, max: 1 });
 }
 
 type OpenAIRealtimeApiKeyResolution =
@@ -994,7 +996,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
             try {
               this.handleEvent(event, lifecycleConnection);
             } catch (error) {
-              const readyError = error instanceof Error ? error : new Error(String(error));
+              const readyError = toStringifiedError(error);
               attempt.reject(readyError);
               this.failConnection(readyError, ws, lifecycleConnection, {
                 code: 1011,
@@ -1035,7 +1037,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           },
         });
         if (!attempt.ready) {
-          const startupError = error instanceof Error ? error : new Error(String(error));
+          const startupError = toStringifiedError(error);
           rejectStartup(
             isDirectOpenAIRealtimeWebSocketUrl(url) &&
               isOpenAIRealtimeStartupAuthFailure(startupError)
@@ -1044,7 +1046,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           );
           return;
         }
-        this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
+        this.config.onError?.(toStringifiedError(error));
       });
 
       ws.on("close", (code, reasonBuffer) => {
@@ -1090,7 +1092,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     try {
       connectionOrPromise = this.resolveConnectionParams();
     } catch (error) {
-      attempt.reject(error instanceof Error ? error : new Error(String(error)));
+      attempt.reject(toStringifiedError(error));
       return attempt.promise;
     }
     if (connectionOrPromise instanceof Promise) {
@@ -1102,13 +1104,13 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           attempt.resolve();
           return;
         }
-        attempt.reject(error instanceof Error ? error : new Error(String(error)));
+        attempt.reject(toStringifiedError(error));
       });
     } else {
       try {
         openWebSocket(connectionOrPromise);
       } catch (error) {
-        attempt.reject(error instanceof Error ? error : new Error(String(error)));
+        attempt.reject(toStringifiedError(error));
       }
     }
     await attempt.promise;
@@ -1276,7 +1278,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       if (!this.lifecycle.acceptsEvents(nextConnection)) {
         return;
       }
-      this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
+      this.config.onError?.(toStringifiedError(error));
       await this.attemptReconnect(reason, nextConnection);
     }
   }
@@ -1430,6 +1432,18 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.ws?.close(1000, "max-duration rotation");
       return;
     }
+    if (event.type === "response.done") {
+      this.handleResponseDone(event, connection, emitServerEvent);
+      return;
+    }
+    if (event.type === "response.cancelled") {
+      try {
+        emitServerEvent();
+      } finally {
+        this.releaseResponseState();
+      }
+      return;
+    }
     emitServerEvent();
     switch (event.type) {
       case "session.created":
@@ -1521,29 +1535,6 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         // is the sole execution boundary.
         return;
 
-      case "response.cancelled":
-      case "response.done":
-        if (this.handleCompletedResponse(event, connection)) {
-          return;
-        }
-        this.responseActive = false;
-        this.responseCreateInFlight = false;
-        this.manualResponseCreateEventId = null;
-        this.responseCancelInFlight = false;
-        this.manualResponseCancelEventId = null;
-        if (this.standaloneSpeechActive) {
-          this.standaloneSpeechActive = false;
-          this.standaloneSpeechEventId = null;
-        }
-        if (this.standaloneSpeechQueue.length > 0) {
-          this.flushStandaloneSpeech();
-        } else if (this.responseCreatePending) {
-          this.flushPendingResponseCreate();
-        } else {
-          this.restoreAutoRespondAfterManualResponse();
-        }
-        return;
-
       case "error": {
         const detail = readRealtimeErrorDetail(event.error);
         const rejectedEventId = readRealtimeErrorEventId(event.error);
@@ -1602,6 +1593,28 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       }
 
       default:
+    }
+  }
+
+  private releaseResponseState(options: { drain?: boolean } = {}): void {
+    this.responseActive = false;
+    this.responseCreateInFlight = false;
+    this.manualResponseCreateEventId = null;
+    this.responseCancelInFlight = false;
+    this.manualResponseCancelEventId = null;
+    if (this.standaloneSpeechActive) {
+      this.standaloneSpeechActive = false;
+      this.standaloneSpeechEventId = null;
+    }
+    if (options.drain === false) {
+      return;
+    }
+    if (this.standaloneSpeechQueue.length > 0) {
+      this.flushStandaloneSpeech();
+    } else if (this.responseCreatePending) {
+      this.flushPendingResponseCreate();
+    } else {
+      this.restoreAutoRespondAfterManualResponse();
     }
   }
 
@@ -1749,6 +1762,47 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.config.onToolCall({ itemId: itemId ?? callId, callId, name, args });
     }
     return false;
+  }
+
+  private handleResponseDone(
+    event: RealtimeEvent,
+    connection: RealtimeVoiceSessionConnection,
+    emitServerEvent: () => void,
+  ): void {
+    const outcome = normalizeRealtimeVoiceResponseOutcome({
+      providerLabel: "OpenAI realtime voice",
+      response: event.response,
+      responseId: event.response_id,
+    });
+    let callbackError: unknown;
+    let providerTerminated = false;
+    const invoke = (callback: () => void) => {
+      try {
+        callback();
+      } catch (error) {
+        callbackError ??= error;
+      }
+    };
+    try {
+      invoke(() => this.config.onResponseDone?.(outcome));
+      invoke(emitServerEvent);
+      invoke(() => {
+        providerTerminated = this.handleCompletedResponse(event, connection);
+      });
+    } finally {
+      // response.done owns response state regardless of observer success. A fatal tool
+      // boundary still clears state, but must not start queued work on a closing socket.
+      const canDrain =
+        !providerTerminated &&
+        this.lifecycle.acceptsEvents(connection) &&
+        this.ws?.readyState === WebSocket.OPEN;
+      this.releaseResponseState({ drain: canDrain });
+    }
+    if (callbackError) {
+      throw callbackError instanceof Error
+        ? callbackError
+        : new Error("OpenAI realtime response callback failed", { cause: callbackError });
+    }
   }
 
   private rejectToolCallArguments(params: {
@@ -2185,6 +2239,7 @@ async function createOpenAIRealtimeBrowserSession(
               onAudio: () => undefined,
               onClearAudio: () => undefined,
               onEvent: gatewayControl.onEvent,
+              onResponseDone: gatewayControl.onResponseDone,
               onTranscript: gatewayControl.onTranscript,
               onToolCall: gatewayControl.onToolCall,
               onReady: gatewayControl.onReady,

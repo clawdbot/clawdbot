@@ -4048,14 +4048,3 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     opacity: 1;
   }
 }
-
-.sidebar-recent-session--draft {
-  border: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--accent-subtle) 60%, transparent);
-}
-
-.sidebar-recent-session--draft .sidebar-recent-session__name {
-  color: var(--text-strong);
-  font-style: italic;
-}

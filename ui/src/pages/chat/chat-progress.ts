@@ -50,6 +50,24 @@ export function buildCompactionDividerItem(
   };
 }
 
+export function buildResetDividerItem(
+  marker: Record<string, unknown>,
+  timestamp: number,
+  index: number,
+): Extract<ChatItem, { kind: "divider" }> {
+  return {
+    kind: "divider",
+    key:
+      typeof marker.id === "string"
+        ? `divider:reset:${marker.id}`
+        : `divider:reset:${timestamp}:${index}`,
+    label: t("chat.sessionReset.label"),
+    icon: "rotateCcw",
+    description: t("chat.sessionReset.description"),
+    timestamp,
+  };
+}
+
 export function shouldRenderQueuedSendInThread(item: ChatQueueItem): boolean {
   // Page-local submit timing is not persisted; durable attempts keep restored prompts visible.
   const sendStarted = typeof item.sendSubmittedAtMs === "number" || (item.sendAttempts ?? 0) > 0;

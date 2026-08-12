@@ -7,10 +7,13 @@ import {
   renderSettingsToggle,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { formatDurationCompact, formatTimeMs } from "../../lib/format.ts";
 import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../../lib/string-coerce.ts";
 import "../../styles/activity.css";
 import type { ActivityEntry, ActivityStatus } from "./tool-activity.ts";
+
+registerActivityEnglish();
 
 const STATUS_ORDER: ActivityStatus[] = ["running", "done", "error"];
 

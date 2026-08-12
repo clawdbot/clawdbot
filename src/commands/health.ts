@@ -6,7 +6,7 @@ import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
 import { withProgress } from "../cli/progress.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildGatewayConnectionDetails,
@@ -312,7 +312,9 @@ export async function healthCommand(
         ? agents
         : await Promise.all(
             localAgents.ordered.map(async (entry) => {
-              const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
+              const storePath = resolveSessionStorePathCore(cfg.session?.store, {
+                agentId: entry.id,
+              });
               return {
                 agentId: entry.id,
                 name: entry.name,

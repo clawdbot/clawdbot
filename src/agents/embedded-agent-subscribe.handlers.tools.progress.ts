@@ -3,11 +3,11 @@ import {
   asOptionalRecord as readRecordField,
 } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
-import type {
-  AgentCommandOutputEventData,
-  AgentItemEventData,
+import {
+  emitAgentActivityEvent,
+  type AgentCommandOutputEventData,
+  type AgentItemEventData,
 } from "../infra/agent-activity-events.js";
-import { emitAgentCommandOutputEvent } from "../infra/agent-activity-events.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { extractLiveExecOutput } from "./embedded-agent-subscribe.handlers.tools.results.js";
 import {
@@ -24,7 +24,7 @@ import {
   capLiveExecResult,
   sanitizeToolResult,
   truncateLiveExecOutput,
-} from "./embedded-agent-subscribe.tools.js";
+} from "./embedded-agent-tool-results.js";
 import type { AgentEvent } from "./runtime/index.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 
@@ -146,9 +146,10 @@ export function handleToolExecutionUpdate(
         output,
         status: "running",
       };
-      emitAgentCommandOutputEvent({
+      emitAgentActivityEvent({
         runId: ctx.params.runId,
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+        stream: "command_output",
         data: outputData,
       });
       emitAgentEventCallbackBestEffort(ctx, {

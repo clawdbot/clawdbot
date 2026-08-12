@@ -25,7 +25,7 @@ const hasSyntheticLocalProviderAuthConfig = vi.fn().mockReturnValue(false);
 const loadModelCatalog = vi.fn<(_params?: unknown) => Promise<Array<Record<string, unknown>>>>(
   async () => [],
 );
-const shouldSuppressBuiltInModel = vi.fn().mockReturnValue(false);
+const shouldSuppressBuiltInModelCore = vi.fn().mockReturnValue(false);
 const shouldSuppressBuiltInModelFromManifest = vi.fn().mockReturnValue(false);
 const normalizeProviderResolvedModelWithPlugin = vi.hoisted(() =>
   vi.fn(({ context }) => {
@@ -205,7 +205,7 @@ vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
 
 vi.mock("../agents/model-suppression.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/model-suppression.js")>()),
-  shouldSuppressBuiltInModel,
+  shouldSuppressBuiltInModelCore,
   shouldSuppressBuiltInModelFromManifest,
 }));
 
@@ -280,8 +280,8 @@ beforeEach(() => {
   listProfilesForProvider.mockReturnValue([]);
   loadModelCatalog.mockReset();
   loadModelCatalog.mockResolvedValue([]);
-  shouldSuppressBuiltInModel.mockReset();
-  shouldSuppressBuiltInModel.mockReturnValue(false);
+  shouldSuppressBuiltInModelCore.mockReset();
+  shouldSuppressBuiltInModelCore.mockReturnValue(false);
   normalizeProviderResolvedModelWithPlugin.mockClear();
   readConfigFileSnapshotForWrite.mockClear();
   readConfigFileSnapshotForWrite.mockResolvedValue({
@@ -735,7 +735,7 @@ describe("models list/status", () => {
     const suppressSpark = ({ provider, id }: { provider?: string | null; id?: string | null }) =>
       id === "gpt-5.3-codex-spark" &&
       (provider === "openai" || provider === "azure-openai-responses" || provider === "openai");
-    shouldSuppressBuiltInModel.mockImplementation(suppressSpark);
+    shouldSuppressBuiltInModelCore.mockImplementation(suppressSpark);
     shouldSuppressBuiltInModelFromManifest.mockImplementation(suppressSpark);
     setDefaultModel("openai/gpt-5.5");
     modelRegistryState.models = [OPENAI_MODEL, OPENAI_SPARK_MODEL, AZURE_OPENAI_SPARK_MODEL];

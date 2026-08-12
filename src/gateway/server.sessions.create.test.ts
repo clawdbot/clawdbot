@@ -21,7 +21,7 @@ import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combi
 import {
   loadSessionEntry,
   loadTranscriptEvents,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -359,7 +359,7 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
       error: { code: "INVALID_REQUEST", message: "incognito sessions are web-only" },
     });
     const durableSubagentKey = "agent:main:subagent:durable-existing";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey: durableSubagentKey, storePath },
       { sessionId: "durable-subagent", updatedAt: Date.now() },
     );
@@ -404,7 +404,7 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
     );
     expect(afterReset.payload?.sessions.some((session) => session.key === key)).toBe(false);
 
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey: key, storePath },
       { sessionId: "rematerialized-incognito", updatedAt: Date.now() },
     );

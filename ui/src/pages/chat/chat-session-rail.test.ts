@@ -206,23 +206,36 @@ describe("ChatSessionRailState", () => {
 
 describe("ChatSessionCompanionThreads", () => {
   it("uses the exact companion RPC methods and payloads", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.companion.ask") {
-        return { answer: "Answer", ts: 1 };
-      }
-      if (method === "sessions.companion.state") {
-        return { exchanges: [] };
-      }
-      return { ok: true as const };
-    });
+    const onPrepared = vi.fn();
+    const request = vi.fn(
+      async (
+        method: string,
+        _params: Record<string, unknown>,
+        options?: { onAccepted?: (payload: unknown) => void },
+      ) => {
+        if (method === "sessions.companion.ask") {
+          options?.onAccepted?.({ status: "accepted", empty: false });
+          return { answer: "Answer", ts: 1 };
+        }
+        if (method === "sessions.companion.state") {
+          return { exchanges: [] };
+        }
+        return { ok: true as const };
+      },
+    );
     const client = { request: request as GatewayBrowserClient["request"] };
 
-    await requestSessionCompanionAnswer(client, "one", "Question");
+    await requestSessionCompanionAnswer(client, "one", "Question", onPrepared);
     await requestSessionCompanionState(client, "one");
     await resetSessionCompanion(client, "one");
 
+    expect(onPrepared).toHaveBeenCalledOnce();
     expect(request.mock.calls).toEqual([
-      ["sessions.companion.ask", { sessionKey: "one", question: "Question" }],
+      [
+        "sessions.companion.ask",
+        { sessionKey: "one", question: "Question" },
+        { expectFinal: true, onAccepted: onPrepared },
+      ],
       ["sessions.companion.state", { sessionKey: "one" }],
       ["sessions.companion.reset", { sessionKey: "one" }],
     ]);
@@ -248,25 +261,32 @@ describe("ChatSessionCompanionThreads", () => {
   });
 
   it("moves a composer submission through pending to a timestamped answer", async () => {
+    let markPrepared!: () => void;
     let resolveAnswer!: (value: { answer: string; ts: number }) => void;
     const threads = new ChatSessionCompanionThreads();
     threads.setDraft("one", "Why is it rerunning that test?");
     const pending = threads.submit(
       "one",
       threads.view("one").draft,
-      () =>
-        new Promise((resolve) => {
+      (_sessionKey, _question, onPrepared) => {
+        markPrepared = onPrepared;
+        return new Promise((resolve) => {
           resolveAnswer = resolve;
-        }),
+        });
+      },
     );
 
     expect(threads.view("one").pendingQuestion).toBe("Why is it rerunning that test?");
+    expect(threads.view("one").phase).toBe("reading");
     expect(threads.view("one").draft).toBe("");
+    markPrepared();
+    await vi.waitFor(() => expect(threads.view("one").phase).toBe("answering"));
     resolveAnswer({ answer: "It is verifying the focused regression.", ts: 42 });
     await pending;
 
     expect(threads.view("one")).toMatchObject({
       pendingQuestion: null,
+      phase: null,
       exchanges: [
         {
           question: "Why is it rerunning that test?",
@@ -282,14 +302,210 @@ describe("ChatSessionCompanionThreads", () => {
     await threads.submit("one", "Is it stuck?", async () => {
       throw Object.assign(new Error("busy"), {
         details: { code: "SESSION_COMPANION_BUSY" },
+        retryable: true,
       });
     });
 
     expect(threads.view("one")).toMatchObject({
       failedQuestion: "Is it stuck?",
       hint: "busy",
+      retryable: true,
     });
   });
+
+  it.each([
+    {
+      reason: "rate-limited",
+      retryable: true,
+      hint: "rate-limited",
+    },
+    {
+      reason: "utility-model-unavailable",
+      retryable: false,
+      hint: "model-unavailable",
+    },
+    {
+      reason: "unavailable",
+      retryable: false,
+      hint: "unavailable",
+    },
+  ] as const)("maps $reason without falsely blaming session history", async (expected) => {
+    const threads = new ChatSessionCompanionThreads();
+    await threads.submit("one", "What changed?", async () => {
+      throw Object.assign(new Error(expected.reason), {
+        details: { reason: expected.reason },
+        retryable: expected.retryable,
+      });
+    });
+
+    expect(threads.view("one")).toMatchObject({
+      hint: expected.hint,
+      retryable: expected.retryable,
+    });
+  });
+
+  it("preserves an unavailable question for an explicit retry", async () => {
+    const threads = new ChatSessionCompanionThreads();
+    await threads.submit("one", "What changed?", async () => {
+      throw Object.assign(new Error("unavailable"), {
+        details: { reason: "context-unavailable" },
+        retryable: true,
+      });
+    });
+    expect(threads.view("one")).toMatchObject({
+      failedQuestion: "What changed?",
+      hint: "history-unavailable",
+      pendingQuestion: null,
+      retryable: true,
+    });
+    await threads.hydrate("one", async () => ({ exchanges: [] }));
+    expect(threads.view("one")).toMatchObject({
+      failedQuestion: "What changed?",
+      hint: "history-unavailable",
+    });
+
+    await threads.submit(
+      "one",
+      threads.view("one").failedQuestion ?? "",
+      async (_sessionKey, _question, prepared) => {
+        prepared();
+        return { answer: "The focused test changed.", ts: 2 };
+      },
+    );
+    expect(threads.view("one")).toMatchObject({
+      failedQuestion: null,
+      hint: null,
+      exchanges: [
+        {
+          question: "What changed?",
+          answer: "The focused test changed.",
+          ts: 2,
+        },
+      ],
+    });
+  });
+
+  it("clears a retry error when hydration confirms that exact answer committed", async () => {
+    const threads = new ChatSessionCompanionThreads();
+    await threads.submit("one", "What changed?", async () => {
+      throw Object.assign(new Error("disconnected"), {
+        details: { reason: "context-unavailable" },
+        retryable: true,
+      });
+    });
+
+    await threads.hydrate("one", async () => ({
+      exchanges: [{ question: "What changed?", answer: "The fix committed.", ts: 4 }],
+    }));
+
+    expect(threads.view("one")).toMatchObject({
+      failedQuestion: null,
+      hint: null,
+      exchanges: [{ question: "What changed?", answer: "The fix committed.", ts: 4 }],
+    });
+  });
+
+  it("rejects an answer that settles after the owning connection changes", async () => {
+    let current = true;
+    let resolveAnswer!: (value: { answer: string; ts: number }) => void;
+    const threads = new ChatSessionCompanionThreads();
+    const pending = threads.submit(
+      "one",
+      "Which connection owns this?",
+      (_sessionKey, _question, prepared) => {
+        prepared();
+        return new Promise((resolve) => {
+          resolveAnswer = resolve;
+        });
+      },
+      () => current,
+      async () => ({
+        exchanges: [
+          {
+            question: "Which connection owns this?",
+            answer: "stale answer",
+            ts: 3,
+          },
+        ],
+      }),
+    );
+    await vi.waitFor(() => expect(threads.view("one").phase).toBe("answering"));
+    current = false;
+    resolveAnswer({ answer: "stale answer", ts: 3 });
+    await pending;
+
+    expect(threads.view("one")).toMatchObject({
+      exchanges: [
+        {
+          question: "Which connection owns this?",
+          answer: "stale answer",
+          ts: 3,
+        },
+      ],
+      failedQuestion: null,
+      hint: null,
+      pendingQuestion: null,
+      retryable: false,
+    });
+  });
+
+  it("makes a rejected stale connection settlement retryable", async () => {
+    let current = true;
+    let rejectAnswer!: (error: Error) => void;
+    const threads = new ChatSessionCompanionThreads();
+    const pending = threads.submit(
+      "one",
+      "Which connection rejected this?",
+      (_sessionKey, _question, prepared) => {
+        prepared();
+        return new Promise((_resolve, reject) => {
+          rejectAnswer = reject;
+        });
+      },
+      () => current,
+      async () => ({ exchanges: [] }),
+    );
+    await vi.waitFor(() => expect(threads.view("one").phase).toBe("answering"));
+    current = false;
+    rejectAnswer(new Error("old socket closed"));
+    await pending;
+
+    expect(threads.view("one")).toMatchObject({
+      exchanges: [],
+      failedQuestion: "Which connection rejected this?",
+      hint: "history-unavailable",
+      retryable: true,
+    });
+  });
+
+  it.each(["resolve", "reject"] as const)(
+    "does not resurrect a reset pending request after late $outcome",
+    async (outcome) => {
+      let resolveAnswer!: (value: { answer: string; ts: number }) => void;
+      let rejectAnswer!: (error: Error) => void;
+      const threads = new ChatSessionCompanionThreads();
+      const pending = threads.submit("one", "Will reset keep this?", () => {
+        return new Promise((resolve, reject) => {
+          resolveAnswer = resolve;
+          rejectAnswer = reject;
+        });
+      });
+
+      await threads.reset("one", async () => ({ ok: true }));
+      if (outcome === "resolve") {
+        resolveAnswer({ answer: "late answer", ts: 5 });
+      } else {
+        rejectAnswer(new Error("late error"));
+      }
+      await pending;
+
+      expect(threads.view("one")).toMatchObject({
+        exchanges: [],
+        failedQuestion: null,
+        pendingQuestion: null,
+      });
+    },
+  );
 
   it("clears local state only after the reset RPC succeeds", async () => {
     const threads = new ChatSessionCompanionThreads();
@@ -365,6 +581,50 @@ describe("ChatSessionRailElement", () => {
     expect(element.querySelector(".chat-session-rail__answer strong")?.textContent).toBe("Only");
     expect(element.querySelector("script")).toBeNull();
     expect(element.querySelector(".chat-session-rail__timestamp")?.textContent).toContain("as of");
+  });
+
+  it("renders truthful reading and answering phases", async () => {
+    const element = await mount({
+      companion: {
+        exchanges: [],
+        pendingQuestion: "What changed?",
+        failedQuestion: null,
+        hint: null,
+        phase: "reading",
+        draft: "",
+      },
+    });
+
+    expect(element.textContent).toContain("Reading this session…");
+    expect((element.querySelector(".chat-session-rail__input") as HTMLInputElement).disabled).toBe(
+      true,
+    );
+
+    element.companion = { ...element.companion, phase: "answering" };
+    await element.updateComplete;
+    expect(element.textContent).toContain("Answering…");
+  });
+
+  it("keeps a failed question visible and retries it from the error state", async () => {
+    const onSubmit = vi.fn();
+    const element = await mount({
+      onSubmit,
+      companion: {
+        exchanges: [],
+        pendingQuestion: null,
+        failedQuestion: "What changed?",
+        hint: "history-unavailable",
+        retryable: true,
+        phase: null,
+        draft: "",
+      },
+    });
+
+    expect(element.textContent).toContain("Couldn't load this session's history.");
+    const retry = element.querySelector(".chat-session-rail__retry") as HTMLButtonElement;
+    expect(retry.textContent?.trim()).toBe("Retry");
+    retry.click();
+    expect(onSubmit).toHaveBeenCalledWith("What changed?");
   });
 
   it("freezes terminal relative time from digest.updatedAt", async () => {

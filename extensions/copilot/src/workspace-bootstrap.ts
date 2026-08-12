@@ -8,7 +8,7 @@ import {
   resolveBootstrapContextForRun,
   resolveUserPath,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { hasNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 // Filenames the Copilot SDK already loads natively from the working
 // directory / instructionDirectories (per
@@ -88,10 +88,10 @@ export async function resolveCopilotWorkspaceBootstrapContext(params: {
     const bootstrapContext = await resolveBootstrapContextForRun({
       workspaceDir,
       config: attempt.config,
-      sessionKey: readNonEmptyString((attempt as { sessionKey?: unknown }).sessionKey),
-      sessionId: readNonEmptyString(attempt.sessionId),
+      sessionKey: readNonBlankString((attempt as { sessionKey?: unknown }).sessionKey),
+      sessionId: readNonBlankString(attempt.sessionId),
       chatType: attempt.chatType,
-      agentId: readNonEmptyString(attempt.agentId),
+      agentId: readNonBlankString(attempt.agentId),
       warn: params.warn,
       contextMode: attempt.bootstrapContextMode,
       runKind: attempt.bootstrapContextRunKind,
@@ -235,12 +235,8 @@ function getCopilotContextFileBasename(filePath: string): string {
   return normalizeCopilotContextFilePath(filePath).split("/").pop() ?? "";
 }
 
-function readNonEmptyString(value: unknown): string | undefined {
-  return hasNonEmptyString(value) ? value : undefined;
-}
-
 function readResolvedWorkspacePath(value: unknown): string | undefined {
-  const raw = readNonEmptyString(value);
+  const raw = readNonBlankString(value);
   if (!raw) {
     return undefined;
   }

@@ -13,6 +13,7 @@ import {
   type NativeHookRelayProcessResponse,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { coerceErrorMessage as formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   normalizeTrimmedStringList,
   readStringField as readString,
@@ -1332,7 +1333,4 @@ function joinDescriptionLinesWithinLimit(lines: string[], maxLength: number): st
   return description;
 }
 
-function formatErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

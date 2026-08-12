@@ -39,6 +39,7 @@ import {
   buildMoreDetailsCompanionQuestion,
 } from "../../../lib/chat/companion-question.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
+import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
@@ -81,6 +82,8 @@ import { getToolTitlesVersion } from "../tool-titles.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import { renderChatDivider, renderChatNotice } from "./chat-divider.ts";
+import { resolveMessageGroupSenderLabel } from "./chat-message-group.ts";
+import { resolveMessageReplyText } from "./chat-message-markdown.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import {
   dismissConfirmedActionPopovers,
@@ -110,7 +113,18 @@ type ChatThreadState = {
   searchReturnFocusOwner: HTMLElement | null;
   pinnedExpanded: boolean;
   transcriptRenderDependencies: readonly unknown[];
-  transcriptRenderContext: { onSetReply?: ChatThreadProps["onSetReply"] };
+  transcriptRenderContext: {
+    onSetReply?: ChatThreadProps["onSetReply"];
+    onOpenReply?: (replyToId: string) => void;
+  };
+};
+
+export type ChatReplyMessageAccess = {
+  revision: number;
+  navigationId: string | null;
+  read: (messageId: string) => unknown;
+  request: (messageId: string) => void;
+  open: (messageId: string) => void;
 };
 
 type ChatThreadProps = {
@@ -177,6 +191,7 @@ type ChatThreadProps = {
   onDraftChange: (next: string) => void;
   onSend: () => void;
   onSetReply?: (target: MessageReplyTarget) => void;
+  replyMessageAccess?: ChatReplyMessageAccess;
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
   onForkMessage?: (entryId: string) => Promise<void> | void;
   onFocusComposer?: () => void;
@@ -204,6 +219,40 @@ type ChatTranscriptAnnouncement = {
   key: string;
   text: string;
 };
+
+type LoadedReplySource = {
+  rowKey: string;
+  preview: MessageReplyTarget & { sourceMessageId: string };
+};
+
+function projectResolvedReplyPreview(
+  message: unknown,
+  replyToId: string,
+  props: Pick<ChatThreadProps, "assistantName" | "userAvatar" | "userId" | "userName">,
+): LoadedReplySource["preview"] | undefined {
+  const normalized = normalizeMessage(message);
+  const text = resolveMessageReplyText(message);
+  if (!text) {
+    return undefined;
+  }
+  const group: MessageGroup = {
+    kind: "group",
+    key: replyToId,
+    role: normalized.role,
+    senderLabel: normalized.senderLabel,
+    ...(normalized.sender ? { sender: normalized.sender } : {}),
+    messages: [{ key: replyToId, message }],
+    timestamp: normalized.timestamp,
+    isStreaming: false,
+  };
+  const sourceMessageId = persistedMessageEntryId(message) ?? replyToId;
+  return {
+    messageId: sourceMessageId,
+    sourceMessageId,
+    senderLabel: resolveMessageGroupSenderLabel(group, props),
+    text,
+  };
+}
 
 const CHAT_TRANSCRIPT_ESTIMATED_ROW_PX = 120;
 const CHAT_TRANSCRIPT_OVERSCAN = 6;
@@ -317,6 +366,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
   }
   private rowKeys: readonly string[] = [];
   private rowIndexesByKey = new Map<string, number>();
+  private messageRowKeysById = new Map<string, string>();
   private focusedRowKey: string | null = null;
   private announcementInitialized = false;
   private announcementKey: string | null = null;
@@ -458,6 +508,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
     this.measureRowRefs.clear();
     this.rowKeys = [];
     this.rowIndexesByKey.clear();
+    this.messageRowKeysById.clear();
     this.focusedRowKey = null;
     this.pendingScrollOffset = null;
   }
@@ -536,6 +587,42 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost {
       this.scrollElement.scrollTop = offset;
     }
     this.virtualizerController.getVirtualizer().scrollToOffset(offset);
+  }
+
+  syncMessageRows(messageRowKeysById: ReadonlyMap<string, string>): void {
+    this.messageRowKeysById = new Map(messageRowKeysById);
+  }
+
+  revealMessage(messageId: string): boolean {
+    const rowKey = this.messageRowKeysById.get(messageId);
+    if (!rowKey) {
+      return false;
+    }
+    const rowIndex = this.rowIndexesByKey.get(rowKey);
+    if (rowIndex === undefined) {
+      return false;
+    }
+    this.virtualizerController.getVirtualizer().scrollToIndex(rowIndex, { align: "center" });
+    this.host.requestUpdate();
+    void this.host.updateComplete.then(() => {
+      const bubble = [
+        ...(this.threadInnerElement?.querySelectorAll<HTMLElement>(".chat-bubble") ?? []),
+      ].find((candidate) => candidate.dataset.entryId === messageId);
+      if (!bubble) {
+        return;
+      }
+      this.threadInnerElement
+        ?.querySelector(".chat-bubble--reply-target")
+        ?.classList.remove("chat-bubble--reply-target");
+      bubble.scrollIntoView?.({ behavior: "smooth", block: "center" });
+      bubble.classList.add("chat-bubble--reply-target");
+      bubble.addEventListener(
+        "animationend",
+        () => bubble.classList.remove("chat-bubble--reply-target"),
+        { once: true },
+      );
+    });
+    return true;
   }
 
   getScrollOffset(): number | null {
@@ -755,6 +842,10 @@ export class ChatTranscriptController implements ReactiveController {
 
   scrollToOffset(offset: number, onSettled?: (position: ChatSessionScrollPosition) => void): void {
     this.sessionVirtualizer?.restoreScrollOffset(offset, onSettled);
+  }
+
+  revealMessage(messageId: string): boolean {
+    return this.sessionVirtualizer?.revealMessage(messageId) ?? false;
   }
 
   pendingScrollOffsetFor(sessionKey: string): number | null {
@@ -1582,6 +1673,21 @@ function renderChatThreadContents(
     { parts: StreamGroupPart[]; options: StreamGroupOptions }
   >();
   const turnRecapByGroupKey = new Map<string, TurnRecap>();
+  const loadedReplySources = new Map<string, LoadedReplySource>();
+  const resolvedReplyPreviews = new Map<string, LoadedReplySource["preview"] | undefined>();
+  const resolveReplyPreview = (replyToId: string) => {
+    const loaded = loadedReplySources.get(replyToId)?.preview;
+    if (loaded) {
+      return loaded;
+    }
+    if (resolvedReplyPreviews.has(replyToId)) {
+      return resolvedReplyPreviews.get(replyToId);
+    }
+    const message = props.replyMessageAccess?.read(replyToId);
+    const preview = message ? projectResolvedReplyPreview(message, replyToId, props) : undefined;
+    resolvedReplyPreviews.set(replyToId, preview);
+    return preview;
+  };
   const sharedMessageRenderOptions = {
     onOpenSidebar: props.onOpenSidebar,
     sessionKey: props.sessionKey,
@@ -1646,6 +1752,10 @@ function renderChatThreadContents(
       onReply: props.onSetReply
         ? (target) => state.transcriptRenderContext.onSetReply?.(target)
         : undefined,
+      resolveReplyPreview,
+      onResolveReply: props.replyMessageAccess?.request,
+      onOpenReply: (replyToId: string) => state.transcriptRenderContext.onOpenReply?.(replyToId),
+      replyNavigationId: props.replyMessageAccess?.navigationId,
       onRewind:
         rewindEntryId && props.onRewindMessage
           ? () => {
@@ -1779,6 +1889,35 @@ function renderChatThreadContents(
     });
     return false;
   });
+  for (const item of transcriptItems) {
+    if (item.kind !== "group") {
+      continue;
+    }
+    const senderLabel = resolveMessageGroupSenderLabel(item, {
+      assistantName: props.assistantName,
+      userId: props.userId,
+      userName: props.userName,
+      userAvatar: props.userAvatar,
+    });
+    for (const source of item.messages) {
+      const sourceMessageId = persistedMessageEntryId(source.message);
+      const text = resolveMessageReplyText(source.message);
+      if (sourceMessageId && text) {
+        loadedReplySources.set(sourceMessageId, {
+          rowKey: item.key,
+          preview: {
+            messageId: source.key,
+            sourceMessageId,
+            senderLabel,
+            text,
+          },
+        });
+      }
+    }
+  }
+  transcript.syncMessageRows(
+    new Map([...loadedReplySources].map(([messageId, source]) => [messageId, source.rowKey])),
+  );
   let turnRecapOwnerKey: string | null = null;
   if (turnRecap !== null) {
     const lastItem = transcriptItems.at(-1);
@@ -1860,9 +1999,21 @@ function renderChatThreadContents(
     props.allowExternalEmbedUrls ?? false,
     threadContextWindow,
     Boolean(props.onSetReply),
+    props.replyMessageAccess?.revision ?? 0,
+    props.replyMessageAccess?.navigationId ?? "",
     turnRecap === null ? "" : `${turnRecap.runtimeMs}:${turnRecap.outputTokens ?? ""}`,
   ]);
   state.transcriptRenderContext.onSetReply = props.onSetReply;
+  state.transcriptRenderContext.onOpenReply = (replyToId) => {
+    if (loadedReplySources.has(replyToId)) {
+      transcript.revealMessage(replyToId);
+      return;
+    }
+    if (searchFiltering) {
+      closeChatThreadSearch(state, requestUpdate);
+    }
+    props.replyMessageAccess?.open(replyToId);
+  };
   const transcriptContents =
     showLoadingSkeleton || isEmpty
       ? html`

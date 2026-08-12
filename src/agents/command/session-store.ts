@@ -1,6 +1,7 @@
 /**
  * Updates persisted session metadata after agent command runs.
  */
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   SESSION_TOTAL_TOKENS_VERSION,
@@ -12,7 +13,6 @@ import { projectSessionSnapshotChanges } from "../../config/sessions/session-sna
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
 import {
   clearCliSession,
   getCliSessionBinding,
@@ -212,7 +212,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
       contextTokens,
       promptTokens,
     });
-    const runEstimatedCostUsd = resolveNonNegativeNumber(
+    const runEstimatedCostUsd = asNonNegativeFiniteNumber(
       estimateUsageCost({
         usage,
         cost: resolveModelCostConfig({
@@ -521,7 +521,7 @@ export async function recordCliCompactionInStore(params: {
       new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, newSessionId]),
     );
   }
-  const tokensAfterCompaction = resolveNonNegativeNumber(params.tokensAfter);
+  const tokensAfterCompaction = asNonNegativeFiniteNumber(params.tokensAfter);
   next.contextBudgetStatus = undefined;
   if (tokensAfterCompaction !== undefined) {
     next.totalTokens = Math.floor(tokensAfterCompaction);

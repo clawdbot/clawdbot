@@ -17,12 +17,15 @@ export type {
   RealtimeVoiceProviderConfiguredContext,
   RealtimeVoiceProviderId,
   RealtimeVoiceProviderResolveConfigContext,
+  RealtimeVoiceResponseError,
+  RealtimeVoiceResponseOutcome,
   RealtimeVoiceRole,
   RealtimeVoiceTool,
   RealtimeVoiceToolCallEvent,
   RealtimeVoiceToolResultOptions,
 } from "../talk/provider-types.js";
 export {
+  normalizeRealtimeVoiceResponseOutcome,
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
 } from "../talk/provider-types.js";

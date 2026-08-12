@@ -5,7 +5,7 @@ import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as modelThinkingDefault from "../agents/model-thinking-default.js";
 import { SessionManager } from "../agents/sessions/index.js";
-import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
   makeCfg,
@@ -394,7 +394,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
     await useRealCronSessionState();
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { storePath, sessionKey: "agent:main:cron:job-1" },
         {
           sessionId: "old",

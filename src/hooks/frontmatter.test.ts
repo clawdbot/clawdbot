@@ -3,7 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   parseHookFrontmatter,
-  resolveOpenClawMetadata,
+  resolveHookManifestMetadata,
   resolveHookInvocationPolicy,
 } from "./frontmatter.js";
 import type { OpenClawHookMetadata } from "./types.js";
@@ -163,7 +163,7 @@ description: 'single-quoted'
   });
 });
 
-describe("resolveOpenClawMetadata", () => {
+describe("resolveHookManifestMetadata", () => {
   it("extracts openclaw metadata from parsed frontmatter", () => {
     const frontmatter = {
       name: "test-hook",
@@ -179,7 +179,7 @@ describe("resolveOpenClawMetadata", () => {
       }),
     };
 
-    const result = resolveOpenClawMetadata(frontmatter);
+    const result = resolveHookManifestMetadata(frontmatter);
     const openclaw = requireOpenClawMetadata(result);
     expect(openclaw.emoji).toBe("🔥");
     expect(openclaw.events).toEqual(["command:new", "command:reset"]);
@@ -189,7 +189,7 @@ describe("resolveOpenClawMetadata", () => {
 
   it("returns undefined when metadata is missing", () => {
     const frontmatter = { name: "no-metadata" };
-    const result = resolveOpenClawMetadata(frontmatter);
+    const result = resolveHookManifestMetadata(frontmatter);
     expect(result).toBeUndefined();
   });
 
@@ -197,7 +197,7 @@ describe("resolveOpenClawMetadata", () => {
     const frontmatter = {
       metadata: JSON.stringify({ other: "data" }),
     };
-    const result = resolveOpenClawMetadata(frontmatter);
+    const result = resolveHookManifestMetadata(frontmatter);
     expect(result).toBeUndefined();
   });
 
@@ -205,7 +205,7 @@ describe("resolveOpenClawMetadata", () => {
     const frontmatter = {
       metadata: "not valid json {",
     };
-    const result = resolveOpenClawMetadata(frontmatter);
+    const result = resolveHookManifestMetadata(frontmatter);
     expect(result).toBeUndefined();
   });
 
@@ -222,7 +222,7 @@ describe("resolveOpenClawMetadata", () => {
       }),
     };
 
-    const result = resolveOpenClawMetadata(frontmatter);
+    const result = resolveHookManifestMetadata(frontmatter);
     expect(result?.install).toHaveLength(2);
     expect(expectDefined(result?.install?.[0], "result?.install?.[0] test invariant").kind).toBe(
       "bundled",
@@ -245,7 +245,7 @@ describe("resolveOpenClawMetadata", () => {
       }),
     };
 
-    const result = resolveOpenClawMetadata(frontmatter);
+    const result = resolveHookManifestMetadata(frontmatter);
     expect(result?.os).toEqual(["darwin", "linux"]);
   });
 
@@ -276,7 +276,7 @@ metadata:
       '"command:reset"',
     );
 
-    const openclaw = requireOpenClawMetadata(resolveOpenClawMetadata(frontmatter));
+    const openclaw = requireOpenClawMetadata(resolveHookManifestMetadata(frontmatter));
     expect(openclaw.emoji).toBe("💾");
     expect(openclaw.events).toEqual(["command:new", "command:reset", "session:auto-reset"]);
     expect(openclaw.requires?.config).toEqual(["workspace.dir"]);
@@ -296,7 +296,7 @@ metadata:
 ---
 `;
     const frontmatter = parseHookFrontmatter(content);
-    const openclaw = resolveOpenClawMetadata(frontmatter);
+    const openclaw = resolveHookManifestMetadata(frontmatter);
     expect(openclaw?.emoji).toBe("disk");
     expect(openclaw?.events).toEqual(["command:new"]);
   });

@@ -18,6 +18,9 @@ const WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
 const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MAX_SQLITE_SNAPSHOT_EXTRACT_BYTES = 64 * 1024 * 1024 * 1024;
 const SQLITE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES = 256 * 1024 * 1024;
+// DEFLATE can legitimately encode zero-filled sparse ranges just over 1000:1.
+// Keep bounded headroom without disabling node-tar's decompression bomb guard.
+const BACKUP_MAX_DECOMPRESSION_RATIO = 1100;
 const SQLITE_SNAPSHOT_SIDECAR_SUFFIXES = ["-wal", "-shm", "-journal"] as const;
 
 type BackupManifestAsset = {
@@ -205,6 +208,7 @@ async function listArchiveEntries(archivePath: string): Promise<ArchiveEntry[]> 
   await tar.t({
     file: archivePath,
     gzip: true,
+    maxDecompressionRatio: BACKUP_MAX_DECOMPRESSION_RATIO,
     onReadEntry: (entry) => {
       entries.push({
         path: entry.path,
@@ -226,6 +230,7 @@ async function extractManifest(params: {
   await tar.t({
     file: params.archivePath,
     gzip: true,
+    maxDecompressionRatio: BACKUP_MAX_DECOMPRESSION_RATIO,
     filter: (entryPath) => entryPath === params.manifestEntryPath,
     onReadEntry: (entry) => {
       manifestContentPromise =
@@ -649,6 +654,7 @@ async function verifySqliteSnapshots(params: {
     await tar.x({
       file: params.archivePath,
       gzip: true,
+      maxDecompressionRatio: BACKUP_MAX_DECOMPRESSION_RATIO,
       cwd: tempDir,
       strict: true,
       preserveOwner: false,

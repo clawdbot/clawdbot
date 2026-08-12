@@ -596,6 +596,8 @@ extension OpenClawChatViewModel {
             role: message.role,
             content: message.content,
             timestamp: Date().timeIntervalSince1970 * 1000,
+            transcriptMessageID: message.transcriptMessageID,
+            isTruncated: message.isTruncated,
             idempotencyKey: message.idempotencyKey,
             toolCallId: message.toolCallId,
             toolName: message.toolName,
@@ -603,7 +605,9 @@ extension OpenClawChatViewModel {
             stopReason: message.stopReason,
             errorMessage: message.errorMessage,
             details: message.details,
-            isError: message.isError)
+            isError: message.isError,
+            provenance: message.provenance,
+            historyMarker: message.historyMarker)
     }
 
     private func handleAgentEvent(_ evt: OpenClawAgentEventPayload) {
