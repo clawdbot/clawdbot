@@ -57,6 +57,34 @@ function withSendNormalization(
   return normalization && result.kind === "send" ? { ...result, normalization } : result;
 }
 
+function deriveBroadcastEntryOutcome(
+  sendResult?: MessageSendResult,
+): { ok: true } | { ok: false; error: string; sentBeforeError?: true } {
+  if (
+    !sendResult ||
+    sendResult.deliveryStatus === undefined ||
+    sendResult.deliveryStatus === "sent"
+  ) {
+    return { ok: true };
+  }
+  switch (sendResult.deliveryStatus) {
+    case "suppressed":
+      return {
+        ok: false,
+        error: `Broadcast send suppressed: ${sendResult.suppressionReason ?? "unknown reason"}.`,
+      };
+    case "failed":
+      return { ok: false, error: sendResult.error ?? "Broadcast send failed." };
+    case "partial_failed":
+      return {
+        ok: false,
+        error: sendResult.error ?? "Broadcast send partially failed.",
+        sentBeforeError: true,
+      };
+  }
+  return sendResult.deliveryStatus satisfies never;
+}
+
 async function handleBroadcastAction(
   input: MessageActionInput,
   params: Record<string, unknown>,
@@ -147,7 +175,9 @@ async function handleBroadcastAction(
         results.push({
           channel: targetChannel,
           to: resolved.to,
-          ok: true,
+          ...deriveBroadcastEntryOutcome(
+            sendResult.kind === "send" ? sendResult.sendResult : undefined,
+          ),
           payload: sendResult.kind === "send" ? sendResult.payload : undefined,
           result: sendResult.kind === "send" ? sendResult.sendResult : undefined,
         });
