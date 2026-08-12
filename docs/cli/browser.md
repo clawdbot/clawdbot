@@ -163,6 +163,10 @@ reported by `extension pair` or `extension cdp` after that wakeup. Browser-node
 pairings continue to use the relay on the browser-node host, while explicit
 `--gateway-url` pairings remain direct-remote and manual-only.
 
+The advanced manual `extension pair` command without `--gateway-url` retains
+the host-local `/extension` relay URL. It does not wake Browser control, so the
+selected profile relay must already be running before the extension connects.
+
 `extension cdp --legacy-bearer` is a temporary migration escape hatch. It
 prints the old Bearer header with a warning only while
 `browser.extensionRelay.allowLegacyAuth=true`; otherwise it exits with an error

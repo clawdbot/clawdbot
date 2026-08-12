@@ -7,7 +7,7 @@ const RELAY_KEY = relayTestKey(5);
 const ensureToken = async () => RELAY_KEY;
 
 describe("buildBrowserExtensionPairing", () => {
-  it("routes local bootstrap through the Gateway while retaining relay metadata", async () => {
+  it("preserves the standalone host relay for local manual pairing compatibility", async () => {
     await withEnvAsync({ OPENCLAW_GATEWAY_PORT: undefined }, async () => {
       await expect(
         buildBrowserExtensionPairing({
@@ -17,6 +17,27 @@ describe("buildBrowserExtensionPairing", () => {
               profiles: { chrome: { driver: "extension", cdpPort: 19_199 } },
             },
           },
+          ensureToken,
+        }),
+      ).resolves.toEqual({
+        pairingString: `ws://127.0.0.1:19199/extension?gateway=ws%3A%2F%2F127.0.0.1%3A19089#${RELAY_KEY}`,
+        relayPort: 19_199,
+        topology: "local",
+      });
+    });
+  });
+
+  it("routes local native bootstrap through the Gateway while retaining relay metadata", async () => {
+    await withEnvAsync({ OPENCLAW_GATEWAY_PORT: undefined }, async () => {
+      await expect(
+        buildBrowserExtensionPairing({
+          cfg: {
+            gateway: { port: 19_089 },
+            browser: {
+              profiles: { chrome: { driver: "extension", cdpPort: 19_199 } },
+            },
+          },
+          localTransport: "gateway",
           ensureToken,
         }),
       ).resolves.toEqual({

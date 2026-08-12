@@ -59,6 +59,7 @@ function buildGatewayExtensionRelayUrl(raw: string): string {
 export async function buildBrowserExtensionPairing(params: {
   cfg: PairingConfig;
   gatewayUrl?: string;
+  localTransport?: "relay" | "gateway";
   ensureToken?: typeof ensureExtensionRelayToken;
 }): Promise<BrowserExtensionPairing> {
   const relayPort = firstExtensionRelayPort(params.cfg);
@@ -80,11 +81,12 @@ export async function buildBrowserExtensionPairing(params: {
     throw new Error("Gateway TLS pairing requires --gateway-url wss://<certificate-host>[:port]");
   }
   const gatewayHint = configuredRemote || `ws://127.0.0.1:${resolveGatewayPort(params.cfg)}`;
-  // The local Gateway route owns lazy Browser startup. Browser nodes already
-  // own their relay runtime, so they keep connecting to the host-local port.
-  const relayUrl = configuredRemote
-    ? new URL(`ws://127.0.0.1:${relayPort}/extension`)
-    : new URL(buildGatewayExtensionRelayUrl(gatewayHint));
+  // Native local bootstrap needs the Gateway to wake Browser control. Manual
+  // local pairing and browser nodes target an already-running host relay.
+  const relayUrl =
+    !configuredRemote && params.localTransport === "gateway"
+      ? new URL(buildGatewayExtensionRelayUrl(gatewayHint))
+      : new URL(`ws://127.0.0.1:${relayPort}/extension`);
   relayUrl.searchParams.set("gateway", gatewayHint);
   return {
     pairingString: `${relayUrl.toString()}#${token}`,

@@ -141,7 +141,7 @@ describe("browser extension pairing Gateway URL", () => {
     await program.parseAsync(["browser", "extension", "pair", "--json"], { from: "user" });
 
     expect(writeJsonSpy).toHaveBeenCalledWith({
-      pairingString: expect.stringContaining("127.0.0.1:18789/browser/extension"),
+      pairingString: expect.stringContaining("127.0.0.1:18798/extension"),
       relayPort: 18798,
       remote: false,
     });

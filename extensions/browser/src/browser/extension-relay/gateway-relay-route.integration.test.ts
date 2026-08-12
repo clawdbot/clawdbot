@@ -96,6 +96,7 @@ describe.sequential("local Gateway extension relay wakeup", () => {
 
             const pairing = await buildBrowserExtensionPairing({
               cfg: config,
+              localTransport: "gateway",
               ensureToken: async () => RELAY_KEY,
             });
             expect(pairing).toMatchObject({ relayPort, topology: "local" });

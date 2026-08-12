@@ -195,6 +195,10 @@ openclaw browser extension pair
 Manual pairing remains useful on Windows and for recovery. Treat the complete
 pairing string as a password.
 
+Without `--gateway-url`, this command retains the host-local `/extension` relay
+for standalone manual pairing. It does not wake Browser control; the selected
+profile relay must already be running before the extension connects.
+
 For a laptop that has Chrome but does not run OpenClaw or a browser node, pair
 directly to a remote Gateway:
 
