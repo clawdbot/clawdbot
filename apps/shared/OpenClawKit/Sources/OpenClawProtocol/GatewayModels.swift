@@ -3795,7 +3795,7 @@ public struct NodeInvokeRequestEvent: Codable, Sendable {
     public let id: String
     public let nodeid: String
     public let command: String
-    public let paramsjson: AnyCodable?
+    public let paramsjson: String?
     public let timeoutms: Int?
     public let idempotencykey: String?
     public let sessionkey: String?
@@ -3804,7 +3804,7 @@ public struct NodeInvokeRequestEvent: Codable, Sendable {
         id: String,
         nodeid: String,
         command: String,
-        paramsjson: AnyCodable? = nil,
+        paramsjson: String? = nil,
         timeoutms: Int? = nil,
         idempotencykey: String? = nil,
         sessionkey: String? = nil)

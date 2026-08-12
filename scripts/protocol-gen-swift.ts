@@ -187,6 +187,10 @@ function namedSchema(schema: JsonSchema, allowStructuralFallback = false): strin
   );
 }
 
+// Preserve the first-party native nullable-string API for this serialized JSON wire field.
+const nodeInvokeParamsJsonSchema = (ProtocolSchemas.NodeInvokeRequestEvent as JsonSchema).properties
+  ?.paramsJSON;
+
 function swiftType(schema: JsonSchema, required: boolean, allowStructuralNamed = false): string {
   const t = schema.type;
   const isOptional = !required;
@@ -194,7 +198,7 @@ function swiftType(schema: JsonSchema, required: boolean, allowStructuralNamed =
   const named = namedSchema(schema, allowStructuralNamed);
   if (named) {
     base = named;
-  } else if (t === "string") {
+  } else if (schema === nodeInvokeParamsJsonSchema || t === "string") {
     base = "String";
   } else if (t === "integer") {
     base = "Int";

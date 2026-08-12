@@ -238,10 +238,15 @@ function emitWireModels(): string[] {
   }
 
   const nestedModels = new Map<string, JsonSchema>();
+  // Preserve the first-party native nullable-string API for this serialized JSON wire field.
+  const nodeInvokeParamsJsonSchema = protocolSchemas.NodeInvokeRequestEvent?.properties?.paramsJSON;
   const kotlinType = (schema: JsonSchema, nestedName: string): string => {
     const selected = selectedSchemas.get(schema) ?? selectedSignatures.get(schemaSignature(schema));
     if (selected) {
       return selected;
+    }
+    if (schema === nodeInvokeParamsJsonSchema) {
+      return "String";
     }
     const stringUnion = schema.anyOf?.map(literalValue);
     if (stringUnion?.length && stringUnion.every((value) => typeof value === "string")) {

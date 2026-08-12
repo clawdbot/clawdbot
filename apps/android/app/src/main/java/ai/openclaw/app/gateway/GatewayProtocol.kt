@@ -69,7 +69,7 @@ data class GatewayNodeInvokeRequest(
   val nodeId: String,
   val command: String,
   @SerialName("paramsJSON")
-  val paramsJson: JsonElement? = null,
+  val paramsJson: String? = null,
   val timeoutMs: Long? = null,
   val idempotencyKey: String? = null,
   val sessionKey: String? = null,
