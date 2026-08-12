@@ -107,7 +107,10 @@ export function renderFileAttachmentOutcome(outcome: FileAttachmentOutcome): str
       // Wording is deliberate: without the explicit "read it yourself, don't
       // ask the user" directive, models punt back to the sender.
       return localPath
-        ? `[${formatClause} The file is saved at ${localPath} — its text is not extracted automatically. Read it yourself with your tools before answering${formatHint}; do not ask the user to paste the contents.]`
+        ? [
+            `[${formatClause} The approved local file path follows as external attachment metadata. Its text is not extracted automatically. Read the file yourself with your tools before answering${formatHint}; do not ask the user to paste the contents.]`,
+            wrapUntrustedAttachmentContent(localPath),
+          ].join("")
         : `[${formatClause} PDF and plain-text attachments can be read.]`;
     }
     case "policy-rejected": {

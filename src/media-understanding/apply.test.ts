@@ -286,8 +286,8 @@ async function applyWithDisabledMedia(params: {
   return { ctx, result };
 }
 
-// Local-file fixtures render the self-serve directive: format clause, on-disk
-// path, and the read-it-yourself instruction.
+// Local-file fixtures render trusted self-serve guidance plus a separately
+// fenced on-disk path.
 function expectUnsupportedFileApplied(params: {
   ctx: MsgContext;
   result: { appliedFile: boolean };
@@ -297,10 +297,11 @@ function expectUnsupportedFileApplied(params: {
   expect(params.ctx.Body).toContain("<file");
   expect(params.ctx.Body).toContain(
     params.mime
-      ? `[Unsupported document format: ${params.mime}. The file is saved at `
-      : "[Unsupported document format. The file is saved at ",
+      ? `[Unsupported document format: ${params.mime}. The approved local file path follows as external attachment metadata.`
+      : "[Unsupported document format. The approved local file path follows as external attachment metadata.",
   );
-  expect(params.ctx.Body).toContain("Read it yourself with your tools before answering");
+  expect(params.ctx.Body).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
+  expect(params.ctx.Body).toContain("Read the file yourself with your tools before answering");
   expect(params.ctx.Body).toContain("do not ask the user to paste the contents");
 }
 
