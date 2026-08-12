@@ -20,11 +20,11 @@ import { openEditor } from "../../../lib/editor-links.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { renderDiffBlock, renderDiffStatChips } from "./chat-diff-render.ts";
-import {
-  type SessionDiffMenuAction,
-  type SessionDiffMenuData,
-  type SessionDiffMenuDraft,
-  type SessionDiffScope,
+import type {
+  SessionDiffMenuAction,
+  SessionDiffMenuData,
+  SessionDiffMenuDraft,
+  SessionDiffScope,
 } from "./session-diff-menus.ts";
 import "./session-diff-menus.ts";
 import { renderSessionSplitDiff } from "./session-diff-render.ts";
@@ -396,12 +396,13 @@ class SessionDiffPanel extends OpenClawLightDomElement {
   }
 
   private scopeTitle(result: SessionsDiffResult): string {
-    if (this.scope.scope === "uncommitted") {
+    const scope = this.scope;
+    if (scope.scope === "uncommitted") {
       return t("chat.sessionDiff.uncommitted");
     }
-    if (this.scope.scope === "commit") {
-      const commit = result.commits?.find((entry) => entry.sha === this.scope.commit);
-      return commit ? `${commit.sha} ${commit.subject}` : this.scope.commit;
+    if (scope.scope === "commit") {
+      const commit = result.commits?.find((entry) => entry.sha === scope.commit);
+      return commit ? `${commit.sha} ${commit.subject}` : scope.commit;
     }
     return t("chat.sessionDiff.allChanges");
   }
