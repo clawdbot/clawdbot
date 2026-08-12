@@ -120,7 +120,13 @@ async function collectBridgeArtifacts(
       continue;
     }
     collected.push({
-      syncKey: scopeImportedSourceSyncKey("bridge", artifactKey),
+      // The binding mirrors page identity (workspaceDir + relativePath), not
+      // the physical file: aliased workspaces import one file into distinct
+      // pages, and each page needs its own ownership row (#118370).
+      syncKey: scopeImportedSourceSyncKey(
+        "bridge",
+        `${path.resolve(artifact.workspaceDir)}\0${artifact.relativePath}`,
+      ),
       artifactType: artifact.kind === "event-log" ? "memory-events" : "markdown",
       workspaceDir: artifact.workspaceDir,
       relativePath: artifact.relativePath,

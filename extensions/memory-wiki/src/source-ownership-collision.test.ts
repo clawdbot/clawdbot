@@ -9,7 +9,10 @@ import {
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { syncMemoryWikiBridgeSources } from "./bridge.js";
-import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
+import {
+  readMemoryWikiSourceSyncState,
+  writeMemoryWikiSourceSyncState,
+} from "./source-sync-state.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 import { syncMemoryWikiUnsafeLocalSources } from "./unsafe-local.js";
 
@@ -172,5 +175,153 @@ describe("memory wiki source ownership across import modes", () => {
     expect(remainingKeys).toHaveLength(1);
     expect(remainingKeys[0]).toMatch(/^unsafe-local:/);
     await fs.access(path.join(vaultDir, remaining.entries[remainingKeys[0] ?? ""]?.pagePath ?? ""));
+  });
+
+  it("keeps aliased bridge workspace bindings distinct for one physical source", async () => {
+    const realWorkspace = nextCaseRoot("workspace-real");
+    await fs.mkdir(realWorkspace, { recursive: true });
+    const realSourcePath = path.join(realWorkspace, "MEMORY.md");
+    await fs.writeFile(realSourcePath, "# Durable Memory\n", "utf8");
+    // A symlinked workspace alias imports the same physical file under a
+    // second page binding.
+    const aliasWorkspace = nextCaseRoot("workspace-alias");
+    await fs.symlink(realWorkspace, aliasWorkspace, "dir");
+    const aliasSourcePath = path.join(aliasWorkspace, "MEMORY.md");
+    const vaultDir = nextCaseRoot("vault");
+
+    const bridgeConfig = {
+      vaultMode: "bridge" as const,
+      bridge: { enabled: true, readMemoryArtifacts: true, indexMemoryRoot: true },
+    };
+    const bridgeVault = await createVault({ rootDir: vaultDir, config: bridgeConfig });
+    const artifactFor = (workspaceDir: string, absolutePath: string) => ({
+      kind: "memory-root" as const,
+      workspaceDir,
+      relativePath: "MEMORY.md",
+      absolutePath,
+      agentIds: ["main"],
+      contentType: "markdown",
+    });
+    registerMemoryCapability("memory-core", {
+      publicArtifacts: {
+        async listArtifacts() {
+          return [
+            artifactFor(realWorkspace, realSourcePath),
+            artifactFor(aliasWorkspace, aliasSourcePath),
+          ];
+        },
+      },
+    });
+    const appConfig: OpenClawConfig = {
+      agents: { list: [{ id: "main", default: true, workspace: realWorkspace }] },
+    };
+    const first = await syncMemoryWikiBridgeSources({ config: bridgeVault.config, appConfig });
+    expect(first.importedCount).toBe(2);
+
+    // Each workspace binding owns its own generated page for the same file.
+    const state = await readMemoryWikiSourceSyncState(vaultDir);
+    const entries = Object.values(state.entries);
+    expect(entries).toHaveLength(2);
+    expect(Object.keys(state.entries).every((key) => key.startsWith("bridge:"))).toBe(true);
+    const pagePaths = entries.map((entry) => entry.pagePath);
+    expect(new Set(pagePaths).size).toBe(2);
+    const pagePathFor = (sourcePath: string) =>
+      entries.find((entry) => entry.sourcePath === sourcePath)?.pagePath ?? "";
+    const aliasPagePath = pagePathFor(aliasSourcePath);
+    const realPagePath = pagePathFor(realSourcePath);
+    for (const pagePath of pagePaths) {
+      await fs.access(path.join(vaultDir, pagePath));
+    }
+
+    // Dropping one workspace alias prunes only its page and row; the surviving
+    // binding keeps its page.
+    clearMemoryPluginState();
+    registerMemoryCapability("memory-core", {
+      publicArtifacts: {
+        async listArtifacts() {
+          return [artifactFor(realWorkspace, realSourcePath)];
+        },
+      },
+    });
+    const realOnlyVault = await createVault({ rootDir: vaultDir, config: bridgeConfig });
+    const second = await syncMemoryWikiBridgeSources({
+      config: realOnlyVault.config,
+      appConfig,
+    });
+    expect(second.removedCount).toBe(1);
+
+    const remaining = await readMemoryWikiSourceSyncState(vaultDir);
+    const remainingEntries = Object.values(remaining.entries);
+    expect(remainingEntries).toHaveLength(1);
+    expect(remainingEntries[0]?.sourcePath).toBe(realSourcePath);
+    await fs.access(path.join(vaultDir, realPagePath));
+    await expect(fs.access(path.join(vaultDir, aliasPagePath))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("retires a translated bridge row without deleting its page on the next sync", async () => {
+    const workspaceDir = nextCaseRoot("workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const sourcePath = path.join(workspaceDir, "MEMORY.md");
+    await fs.writeFile(sourcePath, "# Durable Memory\n", "utf8");
+    const vaultDir = nextCaseRoot("vault");
+
+    const bridgeConfig = {
+      vaultMode: "bridge" as const,
+      bridge: { enabled: true, readMemoryArtifacts: true, indexMemoryRoot: true },
+    };
+    const bridgeVault = await createVault({ rootDir: vaultDir, config: bridgeConfig });
+    registerMemoryCapability("memory-core", {
+      publicArtifacts: {
+        async listArtifacts() {
+          return [
+            {
+              kind: "memory-root",
+              workspaceDir,
+              relativePath: "MEMORY.md",
+              absolutePath: sourcePath,
+              agentIds: ["main"],
+              contentType: "markdown",
+            },
+          ];
+        },
+      },
+    });
+    const appConfig: OpenClawConfig = {
+      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+    };
+    const first = await syncMemoryWikiBridgeSources({ config: bridgeVault.config, appConfig });
+    expect(first.importedCount).toBe(1);
+
+    // Simulate the post-upgrade pass: the doctor migration's translated row
+    // (canonical-path key) is the page's only owner; the binding row is
+    // re-created during this next sync.
+    const state = await readMemoryWikiSourceSyncState(vaultDir);
+    const bindingKey = Object.keys(state.entries)[0] ?? "";
+    const bindingEntry = state.entries[bindingKey];
+    expect(bindingEntry).toBeDefined();
+    if (!bindingEntry) {
+      return;
+    }
+    const translatedKey = `bridge:${await fs.realpath(sourcePath)}`;
+    expect(translatedKey).not.toBe(bindingKey);
+    await writeMemoryWikiSourceSyncState(vaultDir, {
+      version: 1,
+      entries: { [translatedKey]: { ...bindingEntry } },
+    });
+
+    const secondVault = await createVault({ rootDir: vaultDir, config: bridgeConfig });
+    const second = await syncMemoryWikiBridgeSources({
+      config: secondVault.config,
+      appConfig,
+    });
+
+    // The binding row re-owns the page mid-sync, so the shared-page guard
+    // retires only the translated row; the page file survives.
+    expect(second.removedCount).toBe(1);
+    const remaining = await readMemoryWikiSourceSyncState(vaultDir);
+    expect(Object.keys(remaining.entries)).toEqual([bindingKey]);
+    await fs.access(path.join(vaultDir, bindingEntry.pagePath));
   });
 });

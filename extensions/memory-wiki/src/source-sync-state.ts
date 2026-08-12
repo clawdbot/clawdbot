@@ -59,8 +59,10 @@ export const MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES = 20_000;
 // Ownership rows shipped in v2026.7.1 keyed only by canonical source path, so
 // bridge and unsafe-local imports of one physical file overwrote each other's
 // row and orphaned the losing page (#118370). Group-scoped keys keep both
-// bindings owned; unsafe-local additionally binds the configured root so
-// moving a root re-keys instead of orphaning the previous page.
+// bindings owned, and each group binds the inputs that own its page identity:
+// bridge binds workspaceDir + relativePath so aliased workspaces keep distinct
+// pages; unsafe-local binds the configured root so moving a root re-keys
+// instead of orphaning the previous page.
 export function scopeImportedSourceSyncKey(
   group: MemoryWikiImportedSourceGroup,
   bindingKey: string,
@@ -652,6 +654,10 @@ export function translateLegacyImportedSourceSyncKey(params: {
   unsafeLocalConfiguredRoots: readonly string[];
 }): string | undefined {
   if (params.entry.group === "bridge") {
+    // Legacy rows carry no workspace binding, so they cannot be re-keyed to
+    // the page binding here. The translated row keeps the page owned until the
+    // next bridge sync re-owns it under the binding key; the shared-page prune
+    // guard then retires this row without deleting the page.
     return scopeImportedSourceSyncKey("bridge", params.syncKey);
   }
   // The translated row must own the page the legacy row recorded: when nested
