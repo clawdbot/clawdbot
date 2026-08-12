@@ -128,6 +128,7 @@ export function fanInChannelIngressLifecycles(
   lifecycle: ChannelIngressLifecycle | undefined;
   settle: () => Promise<void>;
   abandon: (error?: unknown) => Promise<void>;
+  cancel: () => Promise<void>;
 } {
   const lifecycles = inputs.filter((lifecycle) => lifecycle !== undefined);
   const first = lifecycles[0];
@@ -136,6 +137,7 @@ export function fanInChannelIngressLifecycles(
       lifecycle: undefined,
       settle: async () => {},
       abandon: async () => {},
+      cancel: async () => {},
     };
   }
 
@@ -159,7 +161,6 @@ export function fanInChannelIngressLifecycles(
   const cancelAll =
     cancellationHandlers.length === lifecycles.length
       ? async () => {
-          handedOff = true;
           await Promise.all(cancellationHandlers.map(async (cancel) => await cancel()));
         }
       : undefined;
@@ -188,7 +189,14 @@ export function fanInChannelIngressLifecycles(
         handedOff = true;
         await failAll(error);
       },
-      ...(cancelAll ? { onCancelled: cancelAll } : {}),
+      ...(cancelAll
+        ? {
+            onCancelled: async () => {
+              handedOff = true;
+              await cancelAll();
+            },
+          }
+        : {}),
       onAbandoned: async () => {
         handedOff = true;
         await abandonAll();
@@ -205,6 +213,18 @@ export function fanInChannelIngressLifecycles(
       if (!handedOff) {
         handedOff = true;
         await abandonAll();
+      }
+    },
+    // Source-compatible lifecycles predate onCancelled. Settle each source through
+    // its strongest release callback so mixed fan-in cannot strand a durable claim.
+    cancel: async () => {
+      if (!handedOff) {
+        handedOff = true;
+        await Promise.all(
+          lifecycles.map(async (lifecycle) =>
+            lifecycle.onCancelled ? await lifecycle.onCancelled() : await lifecycle.onAbandoned(),
+          ),
+        );
       }
     },
   };

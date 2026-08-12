@@ -76,25 +76,33 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
     expect(fanInChannelIngressLifecycles([]).lifecycle).toBeUndefined();
   });
 
-  it("does not expose cancellation when a source cannot cancellation-settle", async () => {
+  it("cancellation-settles every source in mixed capable and legacy fan-in", async () => {
     const adopted = vi.fn(async () => {});
     const cancelled = vi.fn(async () => {});
-    const createLifecycle = (onCancelled?: () => Promise<void>) => ({
+    const legacyAbandoned = vi.fn(async () => {});
+    const createLifecycle = (
+      onCancelled?: () => Promise<void>,
+      onAbandoned = vi.fn(async () => {}),
+    ) => ({
       abortSignal: new AbortController().signal,
       onAdopted: adopted,
       onDeferred: vi.fn(),
       onAdoptionFinalizing: vi.fn(),
       onFailed: vi.fn(async () => {}),
-      onAbandoned: vi.fn(async () => {}),
+      onAbandoned,
       ...(onCancelled ? { onCancelled } : {}),
     });
-    const combined = fanInChannelIngressLifecycles([createLifecycle(cancelled), createLifecycle()]);
+    const combined = fanInChannelIngressLifecycles([
+      createLifecycle(cancelled),
+      createLifecycle(undefined, legacyAbandoned),
+    ]);
 
     expect(combined.lifecycle).not.toHaveProperty("onCancelled");
-    await combined.settle();
+    await combined.cancel();
 
-    expect(adopted).toHaveBeenCalledTimes(2);
-    expect(cancelled).not.toHaveBeenCalled();
+    expect(adopted).not.toHaveBeenCalled();
+    expect(cancelled).toHaveBeenCalledOnce();
+    expect(legacyAbandoned).toHaveBeenCalledOnce();
   });
 
   it("can abandon claims after terminal settlement adoption fails", async () => {

@@ -422,6 +422,30 @@ describe("createDiscordMessageHandler queue behavior", () => {
     expect(lifecycle.onAdopted).not.toHaveBeenCalled();
   });
 
+  it("settles every buffered claim when cancellation fan-in includes a legacy lifecycle", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+    const params = createDiscordHandlerParams();
+    params.cfg.messages = { inbound: { debounceMs: 60_000 } };
+    const handler = createDiscordMessageHandler(params);
+    const cancellable = createIngressLifecycle();
+    const legacy = createIngressLifecycle();
+    delete (legacy as Partial<typeof legacy>).onCancelled;
+
+    await handler(createTextMessageData("m-cancel-modern") as never, {} as never, {
+      turnAdoptionLifecycle: cancellable,
+    });
+    await handler(createTextMessageData("m-cancel-legacy") as never, {} as never, {
+      turnAdoptionLifecycle: legacy,
+    });
+    await handler.deactivate();
+
+    expect(preflightDiscordMessageMock).not.toHaveBeenCalled();
+    expect(cancellable.onCancelled).toHaveBeenCalledTimes(1);
+    expect(legacy.onAbandoned).toHaveBeenCalledTimes(1);
+    expect(legacy.onAdopted).not.toHaveBeenCalled();
+  });
+
   it("waits for an active debounce flush and cancels it after shutdown", async () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();

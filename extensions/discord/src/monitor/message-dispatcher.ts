@@ -139,7 +139,7 @@ export function createDiscordMessageDispatcher(
           }
           const abortSignal = last.abortSignal;
           if (abortSignal?.aborted) {
-            await ingress.lifecycle?.onCancelled?.();
+            await ingress.cancel();
             return;
           }
           try {
@@ -157,7 +157,7 @@ export function createDiscordMessageDispatcher(
                 turnAdoptionLifecycle: admissionLifecycle,
               });
               if (abortSignal?.aborted) {
-                await ingress.lifecycle?.onCancelled?.();
+                await ingress.cancel();
                 return;
               }
               if (!ctx) {
@@ -211,7 +211,7 @@ export function createDiscordMessageDispatcher(
               turnAdoptionLifecycle: admissionLifecycle,
             });
             if (abortSignal?.aborted) {
-              await ingress.lifecycle?.onCancelled?.();
+              await ingress.cancel();
               return;
             }
             if (!ctx) {
@@ -233,7 +233,7 @@ export function createDiscordMessageDispatcher(
             messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { ingressSettlement: ingress }));
           } catch (error) {
             if (abortSignal?.aborted) {
-              await ingress.lifecycle?.onCancelled?.();
+              await ingress.cancel();
               return;
             }
             throw error;
@@ -247,7 +247,8 @@ export function createDiscordMessageDispatcher(
     onCancel: (entries) => {
       for (const entry of entries) {
         pendingDebounceEntries.delete(entry);
-        const settlement = Promise.resolve(entry.turnAdoptionLifecycle?.onCancelled?.())
+        const settlement = fanInChannelIngressLifecycles([entry.turnAdoptionLifecycle])
+          .cancel()
           .catch((error: unknown) => {
             params.runtime.error(
               danger(`discord ingress cancellation settlement failed: ${String(error)}`),
@@ -274,8 +275,8 @@ export function createDiscordMessageDispatcher(
         const reason = dispatcherShutdown.signal.aborted
           ? (dispatcherShutdown.signal.reason ?? new Error("discord dispatcher shut down"))
           : (options?.abortSignal?.reason ?? new Error("discord dispatch aborted"));
-        if (options?.turnAdoptionLifecycle?.onCancelled) {
-          await options.turnAdoptionLifecycle.onCancelled();
+        if (options?.turnAdoptionLifecycle) {
+          await fanInChannelIngressLifecycles([options.turnAdoptionLifecycle]).cancel();
           return { kind: "deferred" };
         }
         return { kind: "failed-retryable", error: reason };
