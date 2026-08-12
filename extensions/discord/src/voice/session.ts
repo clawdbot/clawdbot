@@ -73,7 +73,14 @@ export type VoiceRealtimeSession = {
   isBargeInEnabled: () => boolean;
 };
 
+export type VoiceRealtimeLifecycle =
+  | { status: "inactive"; generation: number }
+  | { status: "starting"; generation: number; instance: VoiceRealtimeSession }
+  | { status: "active"; generation: number; instance: VoiceRealtimeSession }
+  | { status: "stopped"; generation: number; reason: string };
+
 export type VoiceSessionEntry = {
+  generation: number;
   guildId: string;
   guildName?: string;
   channelId: string;
@@ -88,6 +95,7 @@ export type VoiceSessionEntry = {
   capture: VoiceCaptureState;
   pendingRealtime?: VoiceRealtimeSession;
   realtime?: VoiceRealtimeSession;
+  realtimeLifecycle: VoiceRealtimeLifecycle;
   transcripts?: {
     sessionId: string;
     onUtterance: (utterance: TranscriptUtterance) => void | Promise<void>;

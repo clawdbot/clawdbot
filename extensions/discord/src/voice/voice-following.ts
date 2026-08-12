@@ -93,6 +93,7 @@ export class DiscordVoiceFollowing {
   private followUsersReconcileGuildCursor = 0;
   private followUsersReconcileBotGuildCursor = 0;
   private readonly followUsersReconcileUserCursors = new Map<string, number>();
+  private readonly followEventGenerations = new Map<string, number>();
 
   constructor(
     private readonly params: {
@@ -110,6 +111,7 @@ export class DiscordVoiceFollowing {
       }) => void;
       getRecoveryAttempt: (guildId: string) => number | undefined;
       getSession: (guildId: string) => VoiceSessionEntry | undefined;
+      hasVoiceLifecycle: (guildId: string) => boolean;
       isAllowedVoiceChannel: (entry: VoiceChannelResidency) => boolean;
       join: (
         entry: VoiceChannelResidency,
@@ -198,6 +200,9 @@ export class DiscordVoiceFollowing {
     }
     const { guildId, channelId, userId } = params;
     const followKey = this.formatFollowedUserKey({ guildId, userId });
+    const eventGeneration = (this.followEventGenerations.get(followKey) ?? 0) + 1;
+    this.followEventGenerations.set(followKey, eventGeneration);
+    const isCurrentEvent = () => this.followEventGenerations.get(followKey) === eventGeneration;
     const previousFollowedChannelId = this.followedUserChannels.get(followKey)?.channelId;
     const existing = this.params.getSession(guildId);
     const wasFollowedVoiceSession =
@@ -211,6 +216,8 @@ export class DiscordVoiceFollowing {
           existing,
           reason: "disconnected",
         });
+      } else if (!existing && wasFollowedVoiceSession && this.params.hasVoiceLifecycle(guildId)) {
+        await this.params.leave({ guildId });
       }
       return;
     }
@@ -248,6 +255,9 @@ export class DiscordVoiceFollowing {
       `discord voice: following user guild=${guildId} user=${userId} channel=${channelId}`,
     );
     const result = await this.params.join({ guildId, channelId }, { preserveFollowState: true });
+    if (!isCurrentEvent()) {
+      return;
+    }
     if (!result.ok) {
       const current = this.params.getSession(guildId);
       if (current?.channelId === channelId) {
@@ -270,6 +280,7 @@ export class DiscordVoiceFollowing {
     }
     this.followedUserChannels.clear();
     this.followedVoiceGuilds.clear();
+    this.followEventGenerations.clear();
   }
 
   isFollowOwnedGuild(guildId: string): boolean {
@@ -310,7 +321,7 @@ export class DiscordVoiceFollowing {
   }
 
   private ensureFollowUsersReconcileTimer(): void {
-    if (this.followUserIds.size === 0) {
+    if (this.followUserIds.size === 0 || this.params.destroyed()) {
       return;
     }
     if (this.followUsersReconcileTimer) {

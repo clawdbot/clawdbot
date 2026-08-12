@@ -55,6 +55,12 @@ const DISCORD_REALTIME_VERBOSE_OMITTED_EVENTS = new Set([
 
 type DiscordRealtimeVoiceConfig = NonNullable<DiscordAccountConfig["voice"]>["realtime"];
 
+type DiscordRealtimeLifecycle =
+  | { status: "inactive"; generation: number }
+  | { status: "starting"; generation: number; instance: DiscordRealtimeVoiceSession }
+  | { status: "active"; generation: number; instance: DiscordRealtimeVoiceSession }
+  | { status: "stopped"; generation: number; reason: string };
+
 function resolveDiscordRealtimeVoiceAgentConsultTools(policy: RealtimeVoiceAgentConsultToolPolicy) {
   const tools = resolveRealtimeVoiceAgentConsultTools(policy);
   if (
@@ -193,6 +199,8 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   private readonly playback: DiscordRealtimePlayback<AgentProxyConsultState>;
   private readonly turns: DiscordRealtimeTurns;
   private readonly consults: DiscordRealtimeConsults;
+  private lifecycle: DiscordRealtimeLifecycle = { status: "inactive", generation: 0 };
+  private nextLifecycleGeneration = 0;
   private stopped = false;
   private consultToolPolicy: RealtimeVoiceAgentConsultToolPolicy = "safe-read-only";
   private consultToolsAllow: string[] | undefined;
@@ -242,7 +250,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     });
     this.playback = new DiscordRealtimePlayback({
       bridge: () => this.bridge,
-      bridgeReady: () => this.bridgeReady,
+      bridgeReady: () => this.isReady(),
       buildSpeakExactMessage: buildDiscordSpeakExactUserMessage,
       entry: this.params.entry,
       harness: this.harness,
@@ -252,11 +260,10 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       providerId: () => this.realtimeProviderId,
       realtimeConfig: () => this.realtimeConfig,
       stopTerminally: () => {
-        this.stopped = true;
-        this.bridgeReady = false;
+        this.stopLifecycle("exact-speech overflow");
         this.consults.close();
       },
-      stopped: () => this.stopped,
+      stopped: () => this.isStopped(),
       wakeNameRequired: () => this.isWakeNameRequired(),
     });
     this.turns = new DiscordRealtimeTurns({
@@ -270,7 +277,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       providerId: () => this.realtimeProviderId,
       realtimeConfig: () => this.realtimeConfig,
       recordInputAudio: (audio) => this.harness.recordInputAudio(audio),
-      stopped: () => this.stopped,
+      stopped: () => this.isStopped(),
       wakeNamePolicy: () => this.wakeNamePolicy,
       wakeNames: () => this.wakeNames,
     });
@@ -287,7 +294,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       playback: this.playback,
       providerEpoch: () => this.providerContinuityEpoch,
       runAgentTurn: this.params.runAgentTurn,
-      stopped: () => this.stopped,
+      stopped: () => this.isStopped(),
       turns: this.turns,
       usesRealtimeAgentHandoff: () =>
         this.params.mode === "bidi" || this.consultToolPolicy !== "none",
@@ -296,6 +303,14 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   }
 
   async connect(): Promise<void> {
+    const lifecycleGeneration = ++this.nextLifecycleGeneration;
+    this.lifecycle = {
+      status: "starting",
+      generation: lifecycleGeneration,
+      instance: this,
+    };
+    this.stopped = false;
+    this.bridgeReady = false;
     const resolved = resolveConfiguredRealtimeVoiceProvider({
       configuredProviderId: this.realtimeConfig?.provider,
       providerConfigs: buildProviderConfigs(this.realtimeConfig),
@@ -361,7 +376,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
         ? resolveDiscordRealtimeVoiceAgentConsultTools(toolPolicy)
         : [],
       audioSink: {
-        isOpen: () => !this.stopped,
+        isOpen: () => !this.isStopped(),
         sendAudio: (audio) => this.playback.sendOutputAudio(audio),
         clearAudio: () => {
           this.markProviderGenerationObserved();
@@ -393,8 +408,9 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       },
       onReady: () => {
         this.markProviderGenerationObserved();
-        this.bridgeReady = true;
-        this.playback.drainQueuedExactSpeechMessages("provider-ready");
+        if (this.markLifecycleReady(lifecycleGeneration)) {
+          this.playback.drainQueuedExactSpeechMessages("provider-ready");
+        }
       },
       onEvent: (event) => this.handleBridgeEvent(event),
       onResponseDone: (outcome) => {
@@ -423,8 +439,11 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     );
     this.playback.attachPlayer();
     await this.bridge.connect();
+    if (!this.markLifecycleReady(lifecycleGeneration)) {
+      this.bridge?.close();
+      return;
+    }
     this.markProviderGenerationObserved();
-    this.bridgeReady = true;
     this.playback.drainQueuedExactSpeechMessages("provider-connected");
     logger.info(
       `discord voice: realtime bridge ready mode=${this.params.mode} provider=${resolved.provider.id} model=${resolvedModel ?? "default"} voice=${resolvedVoice ?? "default"}`,
@@ -432,8 +451,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   }
 
   close(): void {
-    this.stopped = true;
-    this.bridgeReady = false;
+    this.stopLifecycle("session close");
     this.providerContinuityEpoch += 1;
     this.flushSuppressedRealtimeErrors();
     this.consults.close();
@@ -470,6 +488,33 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
 
   private get realtimeConfig(): DiscordRealtimeVoiceConfig {
     return this.params.discordConfig.voice?.realtime;
+  }
+
+  private isStopped(): boolean {
+    return this.lifecycle.status === "stopped";
+  }
+
+  private isReady(): boolean {
+    return this.lifecycle.status === "active";
+  }
+
+  private markLifecycleReady(generation: number): boolean {
+    if (
+      (this.lifecycle.status !== "starting" && this.lifecycle.status !== "active") ||
+      this.lifecycle.generation !== generation
+    ) {
+      return false;
+    }
+    this.lifecycle = { status: "active", generation, instance: this };
+    this.bridgeReady = true;
+    return true;
+  }
+
+  private stopLifecycle(reason: string): void {
+    const generation = this.lifecycle.generation;
+    this.lifecycle = { status: "stopped", generation, reason };
+    this.stopped = true;
+    this.bridgeReady = false;
   }
 
   private humanParticipantCount(): number {
@@ -515,6 +560,13 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     }
     this.providerGenerationObserved = false;
     this.bridgeReady = false;
+    if (this.lifecycle.status === "active") {
+      this.lifecycle = {
+        status: "starting",
+        generation: this.lifecycle.generation,
+        instance: this,
+      };
+    }
     this.providerContinuityEpoch += 1;
     this.consults.resetProviderContinuity();
     this.turns.resetProviderContinuity();

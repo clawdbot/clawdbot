@@ -56,8 +56,16 @@ function isFatalAutoJoinFailure(message: string): boolean {
   );
 }
 
+type VoiceGuildLifecycle =
+  | { status: "inactive"; generation: number }
+  | { status: "starting"; generation: number; instance: { guildId: string; channelId: string } }
+  | { status: "active"; generation: number; instance: VoiceSessionEntry }
+  | { status: "stopped"; generation: number; reason: string };
+
 export class DiscordVoiceManager {
   private sessions = new Map<string, VoiceSessionEntry>();
+  private readonly guildLifecycles = new Map<string, VoiceGuildLifecycle>();
+  private nextGuildGeneration = 0;
   private readonly joinTasks = new Map<string, Promise<VoiceOperationResult>>();
   private botUserId?: string;
   private readonly voiceEnabled: boolean;
@@ -114,6 +122,7 @@ export class DiscordVoiceManager {
       client: params.client,
       discordConfig: params.discordConfig,
       getSession: (guildId) => this.sessions.get(guildId),
+      isEntryCurrent: (entry) => this.isEntryCurrent(entry),
       isFollowOwnedGuild: (guildId) => this.following.isFollowOwnedGuild(guildId),
       join: (entry, options) => this.join(entry, options),
       leave: (entry, options) => this.leave(entry, options),
@@ -132,6 +141,10 @@ export class DiscordVoiceManager {
       discordConfig: params.discordConfig,
       getRecoveryAttempt: (guildId) => this.receive.getRecoveryAttempt(guildId),
       getSession: (guildId) => this.sessions.get(guildId),
+      hasVoiceLifecycle: (guildId) => {
+        const lifecycle = this.guildLifecycles.get(guildId);
+        return lifecycle?.status === "starting" || lifecycle?.status === "active";
+      },
       isAllowedVoiceChannel: (entry) => this.isAllowedVoiceChannel(entry),
       join: (entry, options) => this.join(entry, options),
       leave: (entry, options) => this.leave(entry, options),
@@ -149,6 +162,16 @@ export class DiscordVoiceManager {
       onLeaveFollowState: (guildId) => {
         this.following.followedVoiceGuilds.delete(guildId);
         this.following.deleteFollowedUserChannelsForGuild(guildId);
+      },
+      onSessionStopped: (entry, reason) => {
+        const lifecycle = this.guildLifecycles.get(entry.guildId);
+        if (lifecycle?.status === "active" && lifecycle.instance === entry) {
+          this.guildLifecycles.set(entry.guildId, {
+            status: "stopped",
+            generation: lifecycle.generation,
+            reason,
+          });
+        }
       },
       receive: this.receive,
       sessions: this.sessions,
@@ -239,12 +262,17 @@ export class DiscordVoiceManager {
   }
 
   status(): VoiceOperationResult[] {
-    return Array.from(this.sessions.values()).map((session) => ({
-      ok: true,
-      message: `connected: guild ${session.guildId} channel ${session.channelId}`,
-      guildId: session.guildId,
-      channelId: session.channelId,
-    }));
+    return Array.from(this.guildLifecycles.values())
+      .filter(
+        (lifecycle): lifecycle is Extract<VoiceGuildLifecycle, { status: "active" }> =>
+          lifecycle.status === "active",
+      )
+      .map(({ instance: session }) => ({
+        ok: true,
+        message: `connected: guild ${session.guildId} channel ${session.channelId}`,
+        guildId: session.guildId,
+        channelId: session.channelId,
+      }));
   }
 
   isAllowedVoiceChannel(params: { guildId: string; channelId: string }): boolean {
@@ -298,12 +326,38 @@ export class DiscordVoiceManager {
       }
     }
 
-    const joinTask = this.voiceSessions.joinUnlocked({ guildId, channelId }, options);
+    const generation = ++this.nextGuildGeneration;
+    const starting: VoiceGuildLifecycle = {
+      status: "starting",
+      generation,
+      instance: { guildId, channelId },
+    };
+    this.guildLifecycles.set(guildId, starting);
+    const isCurrent = () => {
+      const lifecycle = this.guildLifecycles.get(guildId);
+      return lifecycle?.status === "starting" && lifecycle.generation === generation;
+    };
+    const joinTask = this.voiceSessions.joinUnlocked({ guildId, channelId }, options, {
+      generation,
+      isCurrent,
+    });
     this.joinTasks.set(guildId, joinTask);
     try {
       const result = await joinTask;
-      if (result.ok) {
+      if (result.ok && isCurrent()) {
+        const entry = this.sessions.get(guildId);
+        if (!entry) {
+          this.guildLifecycles.set(guildId, {
+            status: "stopped",
+            generation,
+            reason: "join completed without a session",
+          });
+          return { ...result, ok: false, message: "Discord voice join was cancelled." };
+        }
+        this.guildLifecycles.set(guildId, { status: "active", generation, instance: entry });
         this.fatalAutoJoinFailures.delete(formatAutoJoinFailureKey({ guildId, channelId }));
+      } else if (!result.ok && isCurrent()) {
+        this.guildLifecycles.set(guildId, { status: "inactive", generation });
       }
       return result;
     } finally {
@@ -313,11 +367,58 @@ export class DiscordVoiceManager {
     }
   }
 
-  leave(
+  async leave(
     params: { guildId: string; channelId?: string },
     options?: { preserveFollowState?: boolean; transcriptsSessionId?: string },
   ): Promise<VoiceOperationResult> {
-    return this.voiceSessions.leave(params, options);
+    const guildId = params.guildId.trim();
+    const lifecycle = this.guildLifecycles.get(guildId);
+    if (lifecycle?.status === "starting") {
+      if (options?.transcriptsSessionId && this.sessions.has(guildId)) {
+        return await this.voiceSessions.leave(params, options);
+      }
+      this.guildLifecycles.set(guildId, {
+        status: "stopped",
+        generation: lifecycle.generation,
+        reason: "leave requested during join",
+      });
+      if (this.sessions.has(guildId)) {
+        return await this.voiceSessions.leave(params, options);
+      }
+      if (!options?.preserveFollowState) {
+        this.following.followedVoiceGuilds.delete(guildId);
+        this.following.deleteFollowedUserChannelsForGuild(guildId);
+      }
+      return {
+        ok: true,
+        message: `Cancelled pending voice join${params.channelId ? ` for ${formatMention({ channelId: params.channelId })}` : ""}.`,
+        guildId,
+        channelId: params.channelId,
+      };
+    }
+    const result = await this.voiceSessions.leave(params, options);
+    if (result.ok) {
+      const activeEntry = this.sessions.get(guildId);
+      if (options?.transcriptsSessionId && activeEntry) {
+        this.guildLifecycles.set(guildId, {
+          status: "active",
+          generation: activeEntry.generation,
+          instance: activeEntry,
+        });
+        return result;
+      }
+      const currentLifecycle = this.guildLifecycles.get(guildId);
+      if (lifecycle && currentLifecycle && currentLifecycle.generation !== lifecycle.generation) {
+        return result;
+      }
+      const generation = lifecycle?.generation ?? ++this.nextGuildGeneration;
+      this.guildLifecycles.set(guildId, {
+        status: "stopped",
+        generation,
+        reason: "leave completed",
+      });
+    }
+    return result;
   }
 
   async handleVoiceStateUpdate(
@@ -346,8 +447,24 @@ export class DiscordVoiceManager {
     for (const entry of this.sessions.values()) {
       entry.stop();
     }
+    for (const [guildId, lifecycle] of this.guildLifecycles) {
+      this.guildLifecycles.set(guildId, {
+        status: "stopped",
+        generation: lifecycle.generation,
+        reason: "manager destroyed",
+      });
+    }
     this.sessions.clear();
     this.receive.clearRecoveryAttempts();
+  }
+
+  private isEntryCurrent(entry: VoiceSessionEntry): boolean {
+    const lifecycle = this.guildLifecycles.get(entry.guildId);
+    return (
+      lifecycle?.status === "active" &&
+      lifecycle.generation === entry.generation &&
+      lifecycle.instance === entry
+    );
   }
 
   private handleSpeakingStart(entry: VoiceSessionEntry, userId: string): Promise<void> {

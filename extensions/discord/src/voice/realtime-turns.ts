@@ -154,7 +154,7 @@ export class DiscordRealtimeTurns {
       const pendingWakeNameFollowup = this.consumePendingWakeNameFollowup();
       transcriptAttribution ??= pendingWakeNameFollowup;
       if (!pendingWakeNameFollowup) {
-        this.recordTranscriptUtterance(trimmed, transcriptAttribution);
+        this.recordTranscriptUtterance(trimmed, transcriptAttribution, providerEpoch);
         this.rememberIgnoredWakeNameSpeakerContext(this.consumePendingSpeakerContext());
         logger.info(
           `discord voice: realtime wake-name gate ignored transcript chars=${trimmed.length} humanParticipants=${humanParticipantCount} voiceSession=${this.params.entry.voiceSessionKey} agent=${this.params.entry.route.agentId} wakeNames=${this.params.wakeNames().join(",") || "none"}`,
@@ -166,7 +166,7 @@ export class DiscordRealtimeTurns {
         `discord voice: realtime wake-name follow-up accepted chars=${trimmed.length} speaker=${forcedSpeakerContext.speakerLabel} voiceSession=${this.params.entry.voiceSessionKey} agent=${this.params.entry.route.agentId}`,
       );
     }
-    this.recordTranscriptUtterance(trimmed, transcriptAttribution);
+    this.recordTranscriptUtterance(trimmed, transcriptAttribution, providerEpoch);
     const acceptedText = wakeNameResult.allowed ? wakeNameResult.text || trimmed : trimmed;
     if (wakeNameResult.allowed && !wakeNameResult.text.trim()) {
       this.armWakeNameFollowup();
@@ -328,6 +328,7 @@ export class DiscordRealtimeTurns {
   private recordTranscriptUtterance(
     text: string,
     attribution: TranscriptUtteranceAttribution | undefined,
+    providerEpoch: number,
   ): void {
     const transcripts = this.params.entry.transcripts;
     if (!transcripts || !attribution) {
@@ -348,7 +349,12 @@ export class DiscordRealtimeTurns {
       },
     };
     void Promise.resolve()
-      .then(() => transcripts.onUtterance(utterance))
+      .then(() => {
+        if (providerEpoch !== this.params.providerEpoch()) {
+          return;
+        }
+        return transcripts.onUtterance(utterance);
+      })
       .catch((error: unknown) => {
         logger.warn(
           `discord voice: realtime transcripts utterance failed: ${formatErrorMessage(error)}`,

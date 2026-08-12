@@ -31,6 +31,16 @@ const DISCORD_REALTIME_OUTPUT_PREROLL_FRAMES = 25;
 
 type DiscordRealtimeVoiceConfig = NonNullable<DiscordAccountConfig["voice"]>["realtime"];
 
+type RealtimePlaybackState =
+  | { status: "idle" }
+  | { status: "buffering"; stream: PassThrough }
+  | { status: "playing"; stream: PassThrough }
+  | { status: "backpressured"; stream: PassThrough; token: symbol };
+
+type RealtimeExactSpeechState =
+  | { status: "idle" }
+  | { status: "active"; message: string; audioStarted: boolean };
+
 function readProviderConfigBoolean(
   config: Record<string, unknown> | undefined,
   key: string,
@@ -102,10 +112,12 @@ export class DiscordRealtimePlayback<TState> {
   private outputPlaybackWatchdog: ReturnType<typeof setTimeout> | undefined;
   private outputPacedBuffer: Buffer = Buffer.alloc(0);
   private outputBackpressure: { token: symbol } | undefined;
+  private playbackState: RealtimePlaybackState = { status: "idle" };
   private queuedExactSpeechMessages: string[] = [];
   private exactSpeechResponseActive = false;
   private exactSpeechAudioStarted = false;
   private activeExactSpeechMessage: string | undefined;
+  private exactSpeechState: RealtimeExactSpeechState = { status: "idle" };
   private wakeNameAckIndex = 0;
   private lastControlSpeech:
     | { normalizedText: string; sentAt: number; assistantTranscriptCount: number }
@@ -143,10 +155,12 @@ export class DiscordRealtimePlayback<TState> {
 
   close(): void {
     this.outputBackpressure = undefined;
+    this.playbackState = { status: "idle" };
     this.queuedExactSpeechMessages = [];
     this.exactSpeechResponseActive = false;
     this.exactSpeechAudioStarted = false;
     this.activeExactSpeechMessage = undefined;
+    this.exactSpeechState = { status: "idle" };
     this.clearOutputAudio("session-close");
     const voiceSdk = loadDiscordVoiceSdk();
     this.params.entry.player.off(voiceSdk.AudioPlayerStatus.Idle, this.playerIdleHandler);
@@ -194,7 +208,7 @@ export class DiscordRealtimePlayback<TState> {
 
   sendOutputAudio(realtimePcm24kMono: Buffer): void {
     this.params.markProviderGenerationObserved();
-    if (this.params.stopped() || this.outputBackpressure) {
+    if (this.params.stopped() || this.playbackState.status === "backpressured") {
       return;
     }
     const discordPcm = convertRealtimePcm24kMonoToDiscordPcm48kStereo(realtimePcm24kMono);
@@ -209,7 +223,8 @@ export class DiscordRealtimePlayback<TState> {
       return;
     }
     const stream = this.ensureOutputStream();
-    if (this.exactSpeechResponseActive) {
+    if (this.exactSpeechState.status === "active") {
+      this.exactSpeechState = { ...this.exactSpeechState, audioStarted: true };
       this.exactSpeechAudioStarted = true;
     }
     this.params.harness.recordOutputAudio(realtimePcm24kMono, {
@@ -251,13 +266,19 @@ export class DiscordRealtimePlayback<TState> {
 
   handleProviderEvent(event: RealtimeVoiceBridgeEvent): void {
     const responseCancellationRaced =
-      this.outputBackpressure !== undefined && isRealtimeResponseCancellationRace(event);
+      this.playbackState.status === "backpressured" && isRealtimeResponseCancellationRace(event);
     if (!responseCancellationRaced) {
       return;
     }
-    const outputBackpressured = this.outputBackpressure !== undefined;
+    const outputBackpressured = this.playbackState.status === "backpressured";
     this.outputBackpressure = undefined;
-    if (this.exactSpeechResponseActive && (outputBackpressured || !this.exactSpeechAudioStarted)) {
+    if (outputBackpressured) {
+      this.playbackState = { status: "idle" };
+    }
+    if (
+      this.exactSpeechState.status === "active" &&
+      (outputBackpressured || !this.exactSpeechState.audioStarted)
+    ) {
       this.completeExactSpeechResponse(event.type);
     }
     this.finishOutputAudioStream(event.type, { playBuffered: false });
@@ -266,9 +287,15 @@ export class DiscordRealtimePlayback<TState> {
   handleResponseDone(outcome: {
     status: "completed" | "cancelled" | "failed" | "incomplete";
   }): void {
-    const outputBackpressured = this.outputBackpressure !== undefined;
+    const outputBackpressured = this.playbackState.status === "backpressured";
     this.outputBackpressure = undefined;
-    if (this.exactSpeechResponseActive && (outputBackpressured || !this.exactSpeechAudioStarted)) {
+    if (outputBackpressured) {
+      this.playbackState = { status: "idle" };
+    }
+    if (
+      this.exactSpeechState.status === "active" &&
+      (outputBackpressured || !this.exactSpeechState.audioStarted)
+    ) {
       this.completeExactSpeechResponse(outcome.status);
     }
     this.finishOutputAudioStream(outcome.status, {
@@ -281,12 +308,16 @@ export class DiscordRealtimePlayback<TState> {
       return;
     }
     const retainedMessages =
-      this.queuedExactSpeechMessages.length + (this.activeExactSpeechMessage ? 1 : 0);
+      this.queuedExactSpeechMessages.length + (this.exactSpeechState.status === "active" ? 1 : 0);
     const retainedBytes =
       this.queuedExactSpeechMessages.reduce(
         (total, message) => total + Buffer.byteLength(message, "utf8"),
         0,
-      ) + Buffer.byteLength(this.activeExactSpeechMessage ?? "", "utf8");
+      ) +
+      Buffer.byteLength(
+        this.exactSpeechState.status === "active" ? this.exactSpeechState.message : "",
+        "utf8",
+      );
     const incomingBytes = Buffer.byteLength(text, "utf8");
     if (
       retainedMessages >= DISCORD_REALTIME_MAX_RETAINED_EXACT_SPEECH_MESSAGES ||
@@ -300,6 +331,7 @@ export class DiscordRealtimePlayback<TState> {
       this.exactSpeechResponseActive = false;
       this.exactSpeechAudioStarted = false;
       this.activeExactSpeechMessage = undefined;
+      this.exactSpeechState = { status: "idle" };
       this.clearOutputAudio("exact-speech-overflow");
       this.params.onTerminalError(
         new Error(
@@ -310,7 +342,7 @@ export class DiscordRealtimePlayback<TState> {
     }
     if (
       !this.params.bridgeReady() ||
-      this.exactSpeechResponseActive ||
+      this.exactSpeechState.status === "active" ||
       this.hasInterruptibleOutputAudio()
     ) {
       this.queuedExactSpeechMessages.push(text);
@@ -326,7 +358,7 @@ export class DiscordRealtimePlayback<TState> {
     if (
       this.params.stopped() ||
       !this.params.bridgeReady() ||
-      this.exactSpeechResponseActive ||
+      this.exactSpeechState.status === "active" ||
       this.queuedExactSpeechMessages.length === 0 ||
       this.hasInterruptibleOutputAudio()
     ) {
@@ -343,7 +375,7 @@ export class DiscordRealtimePlayback<TState> {
   }
 
   sendWakeNameAck(result: RealtimeVoiceActivationNameTranscriptResult): void {
-    if (!result.allowed || this.params.stopped() || this.exactSpeechResponseActive) {
+    if (!result.allowed || this.params.stopped() || this.exactSpeechState.status === "active") {
       return;
     }
     if (this.hasInterruptibleOutputAudio()) {
@@ -407,13 +439,14 @@ export class DiscordRealtimePlayback<TState> {
     this.outputBackpressure = undefined;
     this.lastControlSpeech = undefined;
     const replayExactSpeech =
-      this.exactSpeechResponseActive &&
+      this.exactSpeechState.status === "active" &&
       !this.params.harness.outputActivity.snapshot().playbackStarted
-        ? this.activeExactSpeechMessage
+        ? this.exactSpeechState.message
         : undefined;
     this.exactSpeechResponseActive = false;
     this.exactSpeechAudioStarted = false;
     this.activeExactSpeechMessage = undefined;
+    this.exactSpeechState = { status: "idle" };
     if (replayExactSpeech) {
       this.queuedExactSpeechMessages.unshift(replayExactSpeech);
     }
@@ -441,6 +474,7 @@ export class DiscordRealtimePlayback<TState> {
     }
     const stream = new PassThrough({ highWaterMark: DISCORD_RAW_PCM_FRAME_BYTES * 128 });
     this.outputStream = stream;
+    this.playbackState = { status: "buffering", stream };
     this.outputPacedBuffer = Buffer.alloc(0);
     this.params.harness.outputActivity.markStreamOpened();
     stream.once("close", () => {
@@ -461,6 +495,9 @@ export class DiscordRealtimePlayback<TState> {
     this.logOutputAudioStopped(reason);
     this.clearOutputPlaybackWatchdog();
     this.outputStream = null;
+    if (this.playbackState.status !== "backpressured") {
+      this.playbackState = { status: "idle" };
+    }
     this.outputPacedBuffer = Buffer.alloc(0);
     this.params.harness.outputActivity.reset();
     // The Opus resource can close without Discord emitting player idle. This
@@ -470,7 +507,7 @@ export class DiscordRealtimePlayback<TState> {
   }
 
   private queueOutputAudio(stream: PassThrough, discordPcm: Buffer): void {
-    if (this.params.harness.outputActivity.snapshot().playbackStarted) {
+    if (this.playbackState.status === "playing") {
       if (!stream.write(discordPcm)) {
         this.handleOutputBackpressure(stream);
       }
@@ -489,18 +526,23 @@ export class DiscordRealtimePlayback<TState> {
   }
 
   private handleOutputBackpressure(stream: PassThrough): void {
-    if (this.outputBackpressure || this.outputStream !== stream) {
+    if (this.playbackState.status === "backpressured" || this.outputStream !== stream) {
       return;
     }
     const token = Symbol("output-backpressure");
     this.outputBackpressure = { token };
+    this.playbackState = { status: "backpressured", stream, token };
     const bufferedBytes = stream.writableLength + stream.readableLength;
     logger.warn(
       `discord voice: realtime audio playback backpressured guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} bufferedBytes=${bufferedBytes}`,
     );
     this.clearOutputAudio("output-backpressure");
     queueMicrotask(() => {
-      if (this.params.stopped() || this.outputBackpressure?.token !== token) {
+      if (
+        this.params.stopped() ||
+        this.playbackState.status !== "backpressured" ||
+        this.playbackState.token !== token
+      ) {
         return;
       }
       this.params.harness.handleBargeIn({ audioPlaybackActive: true, force: true }, () => {});
@@ -538,6 +580,7 @@ export class DiscordRealtimePlayback<TState> {
     });
     this.params.entry.player.play(resource);
     this.params.harness.outputActivity.markPlaybackStarted();
+    this.playbackState = { status: "playing", stream };
     const realtimeConfig = this.params.realtimeConfig();
     logger.info(
       `discord voice: realtime audio playback started guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} mode=${this.params.mode} model=${realtimeConfig?.model ?? "provider-default"} voice=${realtimeConfig?.speakerVoice ?? realtimeConfig?.speakerVoiceId ?? "provider-default"}`,
@@ -549,6 +592,9 @@ export class DiscordRealtimePlayback<TState> {
     this.clearOutputPlaybackWatchdog();
     this.logOutputAudioStopped(reason);
     this.outputStream = null;
+    if (this.playbackState.status !== "backpressured") {
+      this.playbackState = { status: "idle" };
+    }
     this.outputPacedBuffer = Buffer.alloc(0);
     this.params.harness.outputActivity.reset();
     stream?.end();
@@ -595,16 +641,18 @@ export class DiscordRealtimePlayback<TState> {
     this.exactSpeechResponseActive = true;
     this.exactSpeechAudioStarted = false;
     this.activeExactSpeechMessage = text;
+    this.exactSpeechState = { status: "active", message: text, audioStarted: false };
     this.params.bridge()?.sendUserMessage(this.params.buildSpeakExactMessage(text));
   }
 
   private completeExactSpeechResponse(reason: string, options?: { drain?: boolean }): void {
-    if (!this.exactSpeechResponseActive && this.queuedExactSpeechMessages.length === 0) {
+    if (this.exactSpeechState.status === "idle" && this.queuedExactSpeechMessages.length === 0) {
       return;
     }
     this.exactSpeechResponseActive = false;
     this.exactSpeechAudioStarted = false;
     this.activeExactSpeechMessage = undefined;
+    this.exactSpeechState = { status: "idle" };
     if (options?.drain === false) {
       return;
     }

@@ -54,6 +54,7 @@ export class DiscordVoiceReceive {
       client: Client;
       discordConfig: DiscordAccountConfig;
       getSession: (guildId: string) => VoiceSessionEntry | undefined;
+      isEntryCurrent: (entry: VoiceSessionEntry) => boolean;
       isFollowOwnedGuild: (guildId: string) => boolean;
       join: (
         params: { guildId: string; channelId: string },
@@ -164,6 +165,9 @@ export class DiscordVoiceReceive {
       );
       return;
     }
+    if (!this.params.isEntryCurrent(entry)) {
+      return;
+    }
     if (entry.player.state.status === voiceSdk.AudioPlayerStatus.Playing && realtime) {
       if (!realtime.isBargeInEnabled()) {
         logger.info(
@@ -235,6 +239,9 @@ export class DiscordVoiceReceive {
       if (receiveFailureHandled) {
         return;
       }
+      if (!this.params.isEntryCurrent(entry)) {
+        return;
+      }
       if (pcm.length === 0) {
         logVoiceVerbose(
           `capture empty: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
@@ -243,6 +250,9 @@ export class DiscordVoiceReceive {
       }
       this.resetDecryptFailureState(entry);
       const { path: wavPath, durationSeconds } = await writeVoiceWavFile(pcm);
+      if (!this.params.isEntryCurrent(entry)) {
+        return;
+      }
       const minimumDurationSeconds = streamAborted ? 0.2 : MIN_SEGMENT_SECONDS;
       if (durationSeconds < minimumDurationSeconds) {
         logVoiceVerbose(
@@ -254,6 +264,9 @@ export class DiscordVoiceReceive {
         `capture ready (${durationSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
       );
       this.enqueueProcessing(entry, async () => {
+        if (!this.params.isEntryCurrent(entry)) {
+          return;
+        }
         await this.processSegment({ entry, wavPath, userId, durationSeconds });
       });
     } catch (err) {

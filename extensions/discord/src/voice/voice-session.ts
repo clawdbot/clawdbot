@@ -124,6 +124,11 @@ export type VoiceJoinOptions = {
   transcripts?: VoiceSessionEntry["transcripts"];
 };
 
+export type VoiceSessionGeneration = {
+  generation: number;
+  isCurrent: () => boolean;
+};
+
 export class DiscordVoiceSessions {
   constructor(
     private readonly params: {
@@ -135,6 +140,7 @@ export class DiscordVoiceSessions {
       discordConfig: DiscordAccountConfig;
       membership: DiscordVoiceMembershipTracker;
       onLeaveFollowState: (guildId: string) => void;
+      onSessionStopped: (entry: VoiceSessionEntry, reason: string) => void;
       receive: DiscordVoiceReceive;
       sessions: Map<string, VoiceSessionEntry>;
     },
@@ -151,6 +157,7 @@ export class DiscordVoiceSessions {
   async joinUnlocked(
     params: { guildId: string; channelId: string },
     options?: VoiceJoinOptions,
+    authority?: VoiceSessionGeneration,
   ): Promise<VoiceOperationResult> {
     const { guildId, channelId } = params;
     const voiceConfig = this.params.discordConfig.voice;
@@ -158,12 +165,21 @@ export class DiscordVoiceSessions {
 
     const existing = this.params.sessions.get(guildId);
     if (existing && existing.channelId === channelId) {
+      if (authority) {
+        existing.generation = authority.generation;
+      }
       if (options?.transcripts) {
         existing.transcripts = options.transcripts;
       }
-      if (!options?.transcripts && isDiscordRealtimeVoiceMode(voiceMode) && !existing.realtime) {
+      if (
+        !options?.transcripts &&
+        isDiscordRealtimeVoiceMode(voiceMode) &&
+        existing.realtimeLifecycle.status !== "active" &&
+        existing.realtimeLifecycle.status !== "starting"
+      ) {
         const realtimeResult = await this.attachRealtimeSession(existing, voiceMode, {
           requireLiveEntry: true,
+          isCurrent: authority?.isCurrent,
         });
         if (!realtimeResult.ok) {
           return {
@@ -188,6 +204,14 @@ export class DiscordVoiceSessions {
     }
 
     const channelInfo = await this.params.client.fetchChannel(channelId).catch(() => null);
+    if (authority && !authority.isCurrent()) {
+      return {
+        ok: false,
+        message: "Discord voice join was cancelled.",
+        guildId,
+        channelId,
+      };
+    }
     if (!channelInfo || ("type" in channelInfo && !isVoiceChannel(channelInfo.type))) {
       return { ok: false, message: `Channel ${channelId} is not a voice channel.` };
     }
@@ -282,6 +306,19 @@ export class DiscordVoiceSessions {
     if (!connection) {
       return { ok: false, message: "Failed to join voice channel." };
     }
+    if (authority && !authority.isCurrent()) {
+      destroyVoiceConnectionSafely({
+        connection,
+        voiceSdk,
+        reason: `cancelled join guild ${guildId} channel ${channelId}`,
+      });
+      return {
+        ok: false,
+        message: "Discord voice join was cancelled.",
+        guildId,
+        channelId,
+      };
+    }
     if (this.params.destroyed()) {
       destroyVoiceConnectionSafely({
         connection,
@@ -365,6 +402,15 @@ export class DiscordVoiceSessions {
       if (playerErrorHandler) {
         player.off("error", playerErrorHandler);
       }
+      const realtimeLifecycle = entry.realtimeLifecycle;
+      if (realtimeLifecycle.status === "starting" || realtimeLifecycle.status === "active") {
+        realtimeLifecycle.instance.close();
+      }
+      entry.realtimeLifecycle = {
+        status: "stopped",
+        generation: realtimeLifecycle.generation,
+        reason: optionsLocal.reason,
+      };
       entry.pendingRealtime?.close();
       entry.pendingRealtime = undefined;
       entry.realtime?.close();
@@ -377,9 +423,11 @@ export class DiscordVoiceSessions {
           reason: optionsLocal.reason,
         });
       }
+      this.params.onSessionStopped(entry, optionsLocal.reason);
     };
 
     const entry: VoiceSessionEntry = {
+      generation: authority?.generation ?? 0,
       guildId,
       guildName:
         channelInfo &&
@@ -403,6 +451,7 @@ export class DiscordVoiceSessions {
       capture: createVoiceCaptureState(),
       transcripts: options?.transcripts,
       receiveRecovery: createVoiceReceiveRecoveryState(),
+      realtimeLifecycle: { status: "inactive", generation: 0 },
       isStopped: () => stopped,
       stop: () => {
         clearSessionIfCurrent();
@@ -414,7 +463,9 @@ export class DiscordVoiceSessions {
     };
 
     if (!options?.transcripts && isDiscordRealtimeVoiceMode(voiceMode)) {
-      const realtimeResult = await this.attachRealtimeSession(entry, voiceMode);
+      const realtimeResult = await this.attachRealtimeSession(entry, voiceMode, {
+        isCurrent: authority?.isCurrent,
+      });
       if (!realtimeResult.ok) {
         destroyVoiceConnectionSafely({
           connection,
@@ -429,14 +480,16 @@ export class DiscordVoiceSessions {
         };
       }
     }
-    if (this.params.destroyed()) {
+    if (this.params.destroyed() || (authority && !authority.isCurrent())) {
       stopEntry(entry, {
         destroyConnection: true,
-        reason: `manager stopped during setup guild ${guildId} channel ${channelId}`,
+        reason: `${this.params.destroyed() ? "manager stopped" : "join cancelled"} during setup guild ${guildId} channel ${channelId}`,
       });
       return {
         ok: false,
-        message: "Discord voice manager is stopped.",
+        message: this.params.destroyed()
+          ? "Discord voice manager is stopped."
+          : "Discord voice join was cancelled.",
         guildId,
         channelId,
       };
@@ -539,7 +592,10 @@ export class DiscordVoiceSessions {
           channelId: entry.channelId,
         };
       }
-      if (entry.realtime || entry.pendingRealtime) {
+      if (
+        entry.realtimeLifecycle.status === "active" ||
+        entry.realtimeLifecycle.status === "starting"
+      ) {
         entry.transcripts = undefined;
         return {
           ok: true,
@@ -569,7 +625,7 @@ export class DiscordVoiceSessions {
   private async attachRealtimeSession(
     entry: VoiceSessionEntry,
     voiceMode: Exclude<DiscordVoiceMode, "stt-tts">,
-    options?: { requireLiveEntry?: boolean },
+    options?: { requireLiveEntry?: boolean; isCurrent?: () => boolean },
   ): Promise<{ ok: true } | { ok: false; message: string }> {
     const bootstrapContextInstructions = await resolveDiscordVoiceRealtimeBootstrapContext({
       entry,
@@ -578,6 +634,7 @@ export class DiscordVoiceSessions {
     });
     if (
       entry.isStopped() ||
+      options?.isCurrent?.() === false ||
       (options?.requireLiveEntry === true && this.params.sessions.get(entry.guildId) !== entry)
     ) {
       return {
@@ -609,12 +666,18 @@ export class DiscordVoiceSessions {
           userId,
         }),
     });
+    const generation = entry.realtimeLifecycle.generation + 1;
+    entry.realtimeLifecycle = { status: "starting", generation, instance: realtime };
     entry.pendingRealtime = realtime;
     try {
       await realtime.connect();
       if (
+        entry.realtimeLifecycle.status !== "starting" ||
+        entry.realtimeLifecycle.generation !== generation ||
+        entry.realtimeLifecycle.instance !== realtime ||
         entry.pendingRealtime !== realtime ||
         entry.isStopped() ||
+        options?.isCurrent?.() === false ||
         (options?.requireLiveEntry === true && this.params.sessions.get(entry.guildId) !== entry)
       ) {
         realtime.close();
@@ -625,12 +688,23 @@ export class DiscordVoiceSessions {
       }
       entry.pendingRealtime = undefined;
       entry.realtime = realtime;
+      entry.realtimeLifecycle = { status: "active", generation, instance: realtime };
       return { ok: true };
     } catch (err) {
       if (entry.pendingRealtime === realtime) {
         entry.pendingRealtime = undefined;
       }
       realtime.close();
+      if (
+        entry.realtimeLifecycle.status === "starting" &&
+        entry.realtimeLifecycle.generation === generation
+      ) {
+        entry.realtimeLifecycle = {
+          status: "stopped",
+          generation,
+          reason: "connect failed",
+        };
+      }
       return {
         ok: false,
         message: `Failed to start Discord realtime voice: ${formatErrorMessage(err)}`,
