@@ -128,9 +128,10 @@ function loadDefaultRequesterSessionEntry(
 }
 
 const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
-  callGateway,
-  dispatchGatewayMethodInProcess,
-  getRuntimeConfig,
+  callGateway: ((...args) => callGateway(...args)) as typeof callGateway,
+  dispatchGatewayMethodInProcess: ((...args) =>
+    dispatchGatewayMethodInProcess(...args)) as typeof dispatchGatewayMethodInProcess,
+  getRuntimeConfig: () => getRuntimeConfig(),
   getRequesterSessionActivity: (requesterSessionKey: string, requesterAgentId?: string) => {
     const cfg = getRuntimeConfig();
     const resolvedAgentId = tryResolveSubagentRequesterAgentId(
@@ -156,10 +157,11 @@ const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
   },
   isRequesterSessionAbandoned: (requesterSessionKey, sessionId) =>
     isEmbeddedRunAbandoned({ sessionKey: requesterSessionKey, sessionId }),
-  loadSessionEntry,
+  loadSessionEntry: (...args) => loadSessionEntry(...args),
   loadRequesterSessionEntry: loadDefaultRequesterSessionEntry,
-  queueEmbeddedAgentMessageWithOutcome: queueEmbeddedAgentMessageWithOutcomeAsync,
-  sendMessage,
+  queueEmbeddedAgentMessageWithOutcome: (...args) =>
+    queueEmbeddedAgentMessageWithOutcomeAsync(...args),
+  sendMessage: (...args) => sendMessage(...args),
 };
 
 let subagentAnnounceDeliveryDeps = defaultSubagentAnnounceDeliveryDeps;
