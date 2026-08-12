@@ -1,7 +1,7 @@
 import { encodeResumeHandoff } from "../../../../src/shared/resume-handoff.js";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 
-export type ContinueInTerminalCommandResult =
+type ContinueInTerminalCommandResult =
   | { ok: true; command: string; qualifiedSessionKey: string }
   | { ok: false; reason: "query-routed" | "unavailable" };
 
