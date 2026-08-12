@@ -8,7 +8,7 @@ vi.mock("../plugins/manifest-registry-installed.js", () => ({
 }));
 
 describe("prepared model catalog worker input", () => {
-  it("preserves the complete materialized auth generation without transferring SecretRefs", () => {
+  it("strips only SecretRefs replaced by materialized literals", () => {
     const authStore = {
       version: 1,
       profiles: {
@@ -25,6 +25,16 @@ describe("prepared model catalog worker input", () => {
           provider: "unrelated",
           key: "materialized-key",
           keyRef: { source: "env" as const, provider: "default", id: "UNRELATED_KEY" },
+        },
+        "ref-api:default": {
+          type: "api_key" as const,
+          provider: "ref-api",
+          keyRef: { source: "env" as const, provider: "default", id: "REF_API_KEY" },
+        },
+        "ref-token:default": {
+          type: "token" as const,
+          provider: "ref-token",
+          tokenRef: { source: "env" as const, provider: "default", id: "REF_TOKEN" },
         },
       },
       order: { shared: ["shared:named"] },
@@ -58,6 +68,8 @@ describe("prepared model catalog worker input", () => {
         provider: "unrelated",
         key: "materialized-key",
       },
+      "ref-api:default": authStore.profiles["ref-api:default"],
+      "ref-token:default": authStore.profiles["ref-token:default"],
     });
     expect(cloned.authStore.order).toEqual(authStore.order);
     expect(cloned.authStore.lastGood).toEqual(authStore.lastGood);

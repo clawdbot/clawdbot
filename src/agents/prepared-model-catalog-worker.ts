@@ -67,11 +67,14 @@ function projectWorkerAuthStore(store: AuthProfileStore): AuthProfileStore {
     ...store,
     profiles: Object.fromEntries(
       Object.entries(store.profiles).map(([profileId, credential]) => {
-        // SecretRefs have already been materialized by the lifecycle owner. Do not transfer the
-        // original reference descriptors to a worker that only needs the resolved credential.
+        // Ref-only profiles still need their descriptor for discovery. Once a matching literal
+        // exists, omit the descriptor so the worker receives only the materialized credential.
         const projected = { ...credential } as AuthProfileCredential & Record<string, unknown>;
-        delete projected.keyRef;
-        delete projected.tokenRef;
+        if (projected.type === "api_key" && projected.key?.trim()) {
+          delete projected.keyRef;
+        } else if (projected.type === "token" && projected.token?.trim()) {
+          delete projected.tokenRef;
+        }
         return [profileId, projected];
       }),
     ),

@@ -13,7 +13,13 @@ import {
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
   replacePersistedPluginModelCatalogs,
 } from "./plugin-model-catalog.js";
+import {
+  createPreparedModelCatalogWorkerInput,
+  runPreparedModelCatalogWorker,
+} from "./prepared-model-catalog-worker.js";
 import { startSerializedSnapshotBuild } from "./prepared-model-runtime.build.js";
+import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.facts.js";
+import { AuthStorage } from "./sessions/auth-storage.js";
 
 const PROVIDER_ID = "worker-catalog-fixture";
 const SHARED_AUTH_PROVIDER_ID = `${PROVIDER_ID}-shared-auth`;
@@ -21,6 +27,10 @@ const PLUGIN_ID = "worker-catalog-fixture";
 const PROFILE_ID = `${SHARED_AUTH_PROVIDER_ID}:named`;
 const MATERIALIZED_SECRET = "materialized-worker-secret-not-real";
 const UNRELATED_SECRET = "unrelated-worker-secret-not-real";
+const REF_ONLY_API_PROVIDER_ID = `${PROVIDER_ID}-ref-api`;
+const REF_ONLY_API_ENV = "OPENCLAW_WORKER_REF_ONLY_API_KEY";
+const REF_ONLY_TOKEN_PROVIDER_ID = `${PROVIDER_ID}-ref-token`;
+const REF_ONLY_TOKEN_ENV = "OPENCLAW_WORKER_REF_ONLY_TOKEN";
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
@@ -43,6 +53,25 @@ module.exports = {
       id: ${JSON.stringify(PROVIDER_ID)},
       label: "Worker catalog fixture",
       auth: [],
+      catalog: {
+        run(context) {
+          const refOnlyApi = context.resolveProviderApiKey(${JSON.stringify(REF_ONLY_API_PROVIDER_ID)}).apiKey;
+          const refOnlyToken = context.resolveProviderApiKey(${JSON.stringify(REF_ONLY_TOKEN_PROVIDER_ID)}).apiKey;
+          const hasRefOnlyApi = refOnlyApi === ${JSON.stringify(REF_ONLY_API_ENV)} || refOnlyApi === process.env[${JSON.stringify(REF_ONLY_API_ENV)}];
+          const hasRefOnlyToken = refOnlyToken === ${JSON.stringify(REF_ONLY_TOKEN_ENV)} || refOnlyToken === process.env[${JSON.stringify(REF_ONLY_TOKEN_ENV)}];
+          return { provider: {
+            baseUrl: "https://worker-catalog.invalid/v1",
+            api: "openai-completions",
+            models: [
+              { id: "sqlite-model", name: "SQLite model" },
+              {
+                id: \`ref-proof-api-\${hasRefOnlyApi}-token-\${hasRefOnlyToken}\`,
+                name: "Ref-only worker proof",
+              },
+            ],
+          } };
+        },
+      },
       augmentModelCatalog(context) {
         const marker = process.env.OPENCLAW_WORKER_CATALOG_MARKER;
         const invocation = fs.existsSync(marker)
@@ -95,6 +124,8 @@ async function createStaticSnapshot(spinMs: number) {
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_WORKER_CATALOG_MARKER: marker,
+    [REF_ONLY_API_ENV]: "ref-only-api-secret-not-real",
+    [REF_ONLY_TOKEN_ENV]: "ref-only-token-secret-not-real",
   };
   const config = {
     agents: { defaults: { model: `${PROVIDER_ID}/sqlite-model` } },
@@ -151,7 +182,16 @@ async function createStaticSnapshot(spinMs: number) {
     "static",
     () => current,
   ).pending;
-  return { marker, snapshot: build.snapshot, supersede: () => (current = false) };
+  return {
+    agentDir,
+    config,
+    env,
+    marker,
+    pluginMetadataSnapshot: build.pluginGeneration.pluginMetadataSnapshot,
+    snapshot: build.snapshot,
+    supersede: () => (current = false),
+    workspaceDir,
+  };
 }
 
 async function waitForMarker(marker: string): Promise<void> {
@@ -201,5 +241,53 @@ describe("prepared model catalog worker boundary", () => {
       setTimeout(resolve, 100);
     });
     expect(fs.readFileSync(fixture.marker, "utf8")).toBe("start\n");
+  });
+
+  it("preserves ref-only api-key and token profiles through the real worker", async () => {
+    const fixture = await createStaticSnapshot(0);
+    const authStore = {
+      version: 1,
+      profiles: {
+        [`${REF_ONLY_API_PROVIDER_ID}:default`]: {
+          type: "api_key" as const,
+          provider: REF_ONLY_API_PROVIDER_ID,
+          keyRef: { source: "env" as const, provider: "default", id: REF_ONLY_API_ENV },
+        },
+        [`${REF_ONLY_TOKEN_PROVIDER_ID}:default`]: {
+          type: "token" as const,
+          provider: REF_ONLY_TOKEN_PROVIDER_ID,
+          tokenRef: { source: "env" as const, provider: "default", id: REF_ONLY_TOKEN_ENV },
+        },
+      },
+    };
+    const input = createPreparedModelCatalogWorkerInput({
+      agentFacts: {
+        input: {
+          agentId: "main",
+          agentDir: fixture.agentDir,
+          workspaceDir: fixture.workspaceDir,
+          config: fixture.config,
+          env: fixture.env,
+        },
+        env: fixture.env,
+        authStore,
+        credentials: {},
+        providerIds: [PROVIDER_ID],
+        configuredModelRefs: [],
+        configuredRuntimeModels: [],
+        configuredGeneratedCatalogPluginIds: [],
+        templateAuthStorage: AuthStorage.inMemory({}),
+      } satisfies PreparedModelRuntimeAgentFacts,
+      pluginMetadataSnapshot: fixture.pluginMetadataSnapshot,
+    });
+
+    const catalog = await runPreparedModelCatalogWorker({ input, isCurrent: () => true });
+
+    expect(catalog.entries).toContainEqual(
+      expect.objectContaining({
+        provider: PROVIDER_ID,
+        id: "ref-proof-api-true-token-true",
+      }),
+    );
   });
 });
