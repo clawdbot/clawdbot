@@ -151,12 +151,32 @@ describe("chat pane session access", () => {
       features: { methods: ["sessions.patch"] },
     } as ApplicationContext["gateway"]["snapshot"]["hello"];
 
-    await pane.restoreArchivedSession(state.sessionKey);
+    await pane.restoreArchivedSession(state.sessionKey, "session-a");
 
     expect(state.chatError).toBeTruthy();
     expect(state.lastError).toBe(state.chatError);
     expect(requestUpdate).toHaveBeenCalledOnce();
     expect(patch).not.toHaveBeenCalled();
+  });
+
+  it("restores the exact durable session observed by the composer", async () => {
+    const patch = vi.fn(async () => ({ ok: true }));
+    const { pane, state } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: { patch } as unknown as SessionCapability,
+    });
+    pane.context.gateway.snapshot.hello = {
+      auth: { role: "operator", scopes: ["operator.write"] },
+      features: { methods: ["sessions.patch"] },
+    } as ApplicationContext["gateway"]["snapshot"]["hello"];
+
+    await pane.restoreArchivedSession(state.sessionKey, "session-a");
+
+    expect(patch).toHaveBeenCalledWith(
+      state.sessionKey,
+      { archived: false },
+      { agentId: "main", expectedSessionId: "session-a" },
+    );
   });
 
   it("keeps sharing hidden when legacy Gateways omit method metadata", () => {

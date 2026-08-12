@@ -537,6 +537,8 @@ enum class GatewayMethod(
   SecretsStoreList("secrets.store.list"),
   SecretsStoreSet("secrets.store.set"),
   SecretsStoreDelete("secrets.store.delete"),
+  UsersPrefsGet("users.prefs.get"),
+  UsersPrefsSet("users.prefs.set"),
 }
 
 enum class GatewayEvent(

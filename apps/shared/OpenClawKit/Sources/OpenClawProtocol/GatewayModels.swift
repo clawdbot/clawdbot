@@ -1803,6 +1803,28 @@ public struct GatewaySuspendResumeResult: Codable, Sendable {
     }
 }
 
+public struct UserPrefsLimitExceededErrorDetails: Codable, Sendable {
+    public let code: String
+    public let limit: Int
+    public let currentcount: Int
+
+    public init(
+        code: String,
+        limit: Int,
+        currentcount: Int)
+    {
+        self.code = code
+        self.limit = limit
+        self.currentcount = currentcount
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case code
+        case limit
+        case currentcount = "currentCount"
+    }
+}
+
 public struct WorkerEnvironmentMetadata: Codable, Sendable {
     public let providerid: String
     public let leaseid: String?
@@ -3077,19 +3099,71 @@ public struct ProjectRecord: Codable, Sendable {
     }
 }
 
+public struct ProjectRecentFolder: Codable, Sendable {
+    public let kind: String
+    public let folder: String
+    public let displayname: String
+    public let execnode: String?
+
+    public init(
+        kind: String,
+        folder: String,
+        displayname: String,
+        execnode: String? = nil)
+    {
+        self.kind = kind
+        self.folder = folder
+        self.displayname = displayname
+        self.execnode = execnode
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case folder
+        case displayname = "displayName"
+        case execnode = "execNode"
+    }
+}
+
+public struct ProjectRecentProject: Codable, Sendable {
+    public let kind: String
+    public let projectid: String
+    public let displayname: String
+
+    public init(
+        kind: String,
+        projectid: String,
+        displayname: String)
+    {
+        self.kind = kind
+        self.projectid = projectid
+        self.displayname = displayname
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case projectid = "projectId"
+        case displayname = "displayName"
+    }
+}
+
 public struct ProjectsListParams: Codable, Sendable {}
 
 public struct ProjectsListResult: Codable, Sendable {
     public let projects: [ProjectsRegisterResult]
+    public let recents: [ProjectRecent]?
 
     public init(
-        projects: [ProjectsRegisterResult])
+        projects: [ProjectsRegisterResult],
+        recents: [ProjectRecent]? = nil)
     {
         self.projects = projects
+        self.recents = recents
     }
 
     private enum CodingKeys: String, CodingKey {
         case projects
+        case recents
     }
 }
 
@@ -18689,6 +18763,7 @@ public enum BoardCommand: Codable, Sendable {
 public enum GatewayErrorDetails: Codable, Sendable {
     case missingScope(MissingScopeErrorDetails)
     case mcpAppViewExpired(McpAppViewExpiredErrorDetails)
+    case userPrefsLimitExceeded(UserPrefsLimitExceededErrorDetails)
     case unknownAgentId(UnknownAgentIdErrorDetails)
     case wizardNotFound(WizardNotFoundErrorDetails)
 
@@ -18706,6 +18781,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         switch self {
         case .missingScope(let value): value.code
         case .mcpAppViewExpired(let value): value.code
+        case .userPrefsLimitExceeded(let value): value.code
         case .unknownAgentId(let value): value.code
         case .wizardNotFound(let value): value.code
         }
@@ -18731,6 +18807,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         switch discriminator {
         case "MISSING_SCOPE": self = try .missingScope(MissingScopeErrorDetails(from: decoder))
         case "MCP_APP_VIEW_EXPIRED": self = try .mcpAppViewExpired(McpAppViewExpiredErrorDetails(from: decoder))
+        case "USER_PREFS_LIMIT_EXCEEDED": self = try .userPrefsLimitExceeded(UserPrefsLimitExceededErrorDetails(from: decoder))
         case "UNKNOWN_AGENT_ID": self = try .unknownAgentId(UnknownAgentIdErrorDetails(from: decoder))
         case "WIZARD_NOT_FOUND": self = try .wizardNotFound(WizardNotFoundErrorDetails(from: decoder))
         default:
@@ -18746,6 +18823,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         switch self {
         case .missingScope(let value): try value.encode(to: encoder)
         case .mcpAppViewExpired(let value): try value.encode(to: encoder)
+        case .userPrefsLimitExceeded(let value): try value.encode(to: encoder)
         case .unknownAgentId(let value): try value.encode(to: encoder)
         case .wizardNotFound(let value): try value.encode(to: encoder)
         }
@@ -18810,6 +18888,37 @@ public enum GatewaySuspendStatusResult: Codable, Sendable {
         switch self {
         case .running(let value): try value.encode(to: encoder)
         case .ready(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public enum ProjectRecent: Codable, Sendable {
+    case project(ProjectRecentProject)
+    case folder(ProjectRecentFolder)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "kind"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "project": self = try .project(ProjectRecentProject(from: decoder))
+        case "folder": self = try .folder(ProjectRecentFolder(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown ProjectRecent discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .project(let value): try value.encode(to: encoder)
+        case .folder(let value): try value.encode(to: encoder)
         }
     }
 }

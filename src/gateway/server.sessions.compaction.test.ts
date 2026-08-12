@@ -1604,12 +1604,14 @@ test("sessions.patch waits for terminal compaction before archiving the session"
     expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledTimes(1);
   });
   let archiveSettled = false;
-  const archiveResult = rpcReq(ws, "sessions.patch", { key: sessionKey, archived: true }).then(
-    (result) => {
-      archiveSettled = true;
-      return result;
-    },
-  );
+  const archiveResult = rpcReq(ws, "sessions.patch", {
+    key: sessionKey,
+    archived: true,
+    expectedSessionId: "sess-compact-archive",
+  }).then((result) => {
+    archiveSettled = true;
+    return result;
+  });
   await Promise.resolve();
   expect(archiveSettled).toBe(false);
 

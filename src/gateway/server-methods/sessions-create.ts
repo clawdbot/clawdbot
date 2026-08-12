@@ -525,6 +525,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       generatedDisplayName,
       ...(catalogTarget ? { catalogTarget: catalogTarget.target } : { model: p.model }),
       thinkingLevel: p.thinkingLevel,
+      projectId: requestedProjectId,
       incognito: p.incognito,
       ...(client?.connect ? { requestingOperatorScopes: clientScopes } : {}),
       visibility: p.visibility,

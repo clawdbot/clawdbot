@@ -3641,6 +3641,7 @@ extension NodeAppModel {
             do {
                 try await transport.patchSession(
                     key: sessionKey,
+                    expectedSessionID: nil,
                     label: nil,
                     category: nil,
                     pinned: nil,

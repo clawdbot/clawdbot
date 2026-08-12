@@ -125,6 +125,7 @@ describe("sessions-list-tool", () => {
       sessions: [
         {
           key: "agent:main:subagent:child",
+          sessionId: "session-child",
           agentId: "main",
           kind: "other",
           channel: "discord",
@@ -154,13 +155,14 @@ describe("sessions-list-tool", () => {
     expect(tool.outputSchema).toBeDefined();
     expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ count: number; sessions: Array<{ agentId: string; archived: boolean; channel: string; key: string; kind: "main" | "group" | "cron" | "hook" | "node" | "other"; pinned: boolean; abortedLastRun?: boolean; childSessions?: Array<string>; contextTokens?: number; derivedTitle?: string; displayName?: string; label?: string; lastMessagePreview?: string; messages?: Array<unknown>; model?: string; parentSessionKey?: string; stateVersion?: number; status?: "running" | "done" | "failed" | "killed" | "timeout"; totalTokens?: number; updatedAt?: number }>; visibility?: { mode: "self" | "tree" | "agent"; restricted: true; warning: string } }',
+      '{ count: number; sessions: Array<{ agentId: string; archived: boolean; channel: string; key: string; kind: "main" | "group" | "cron" | "hook" | "node" | "other"; pinned: boolean; abortedLastRun?: boolean; childSessions?: Array<string>; contextTokens?: number; derivedTitle?: string; displayName?: string; label?: string; lastMessagePreview?: string; messages?: Array<unknown>; model?: string; parentSessionKey?: string; sessionId?: string; stateVersion?: number; status?: "running" | "done" | "failed" | "killed" | "timeout"; totalTokens?: number; updatedAt?: number }>; visibility?: { mode: "self" | "tree" | "agent"; restricted: true; warning: string } }',
     );
     expect(result.details).toEqual({
       count: 1,
       sessions: [
         {
           key: "agent:main:subagent:child",
+          sessionId: "session-child",
           agentId: "main",
           kind: "other",
           channel: "discord",
@@ -333,6 +335,7 @@ describe("sessions-list-tool", () => {
     const session = details.sessions?.[0];
     expect(session).toEqual({
       key: "main",
+      sessionId: "sess-main",
       agentId: "main",
       kind: "main",
       channel: "unknown",

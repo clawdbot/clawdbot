@@ -1,16 +1,21 @@
+import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   MOVED_WORKSPACE,
   PICKED,
+  SESSION_LIST_DEFAULTS,
   TARGET_REPO,
   WORKSPACE,
+  captureProjectUiProof,
   captureUiProof,
+  captureUiProofEnabled,
   choosePackagesFolder,
   createNewSessionPageE2eSuite,
   installMockGateway,
   navigateInApp,
   pollLocatorText,
+  projectProofArtifactDir,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
 
@@ -388,6 +393,240 @@ suite.define(() => {
       await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("false");
       const storedWorktree = (await readMainPreference(page))?.worktree;
       expect(storedWorktree).toBe(false);
+    });
+  });
+
+  it("uses identity-scoped server project recents instead of the shared roster", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      ...(captureUiProofEnabled
+        ? {
+            recordVideo: {
+              dir: projectProofArtifactDir,
+              size: { height: 900, width: 1280 },
+            },
+            viewport: { height: 900, width: 1280 },
+          }
+        : {}),
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      presenceUsers: [{ self: true, id: "profile-alice", name: "Alice" }],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "projects.list",
+        "sessions.create",
+        "users.prefs.get",
+        "users.prefs.set",
+      ],
+      methodResponses: {
+        "projects.list": {
+          projects: [{ id: "registered", displayName: "Registered", source: "registered" }],
+          recents: [{ kind: "project", projectId: "registered", displayName: "Registered" }],
+        },
+        "sessions.list": {
+          count: 1,
+          defaults: SESSION_LIST_DEFAULTS,
+          path: "",
+          sessions: [
+            { key: "agent:main:shared", kind: "direct", updatedAt: 99, execCwd: "/shared" },
+          ],
+          ts: Date.now(),
+        },
+        "sessions.create": { key: "agent:main:identity-project" },
+        "users.prefs.get": { status: "ok", entries: {} },
+        "users.prefs.set": { status: "ok" },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      const trigger = page.locator("#new-session-place-trigger");
+      await trigger.click();
+      expect(await page.locator('[data-value="recent::/shared"]').count()).toBe(0);
+      const recent = page.locator('[data-value="recent-project:registered"]');
+      await recent.waitFor();
+      await captureProjectUiProof(page, "identity-project-recents.png");
+      await recent.click();
+      await page.locator(".new-session-page__message").fill("continue registered work");
+      await page.getByRole("button", { name: "Start session" }).click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        projectId: "registered",
+        message: "continue registered work",
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("migrates identity preferences once and mirrors gateway-first writes", async () => {
+    await withNewSessionPage(
+      {
+        ...DESKTOP_CONTEXT,
+        ...(captureUiProofEnabled
+          ? {
+              recordVideo: {
+                dir: projectProofArtifactDir,
+                size: { height: 900, width: 1280 },
+              },
+            }
+          : {}),
+      },
+      async (page) => {
+        const appUrl = new URL(suite.server.baseUrl);
+        const gatewayUrl = `${appUrl.protocol === "https:" ? "wss:" : "ws:"}//${appUrl.host}`;
+        const storageKey = `openclaw.new-session.preferences.v1:${gatewayOriginScope(gatewayUrl)}`;
+        await page.addInitScript(
+          ({ key, folder, workspace }) => {
+            localStorage.setItem(
+              key,
+              JSON.stringify({
+                agents: {
+                  main: {
+                    folder,
+                    workspace,
+                    worktree: true,
+                    model: "anthropic/claude-sonnet-4-6",
+                  },
+                },
+              }),
+            );
+          },
+          { key: storageKey, folder: PICKED, workspace: WORKSPACE },
+        );
+        const gateway = await installMockGateway(page, {
+          workspaceGit: true,
+          models: MODELS,
+          presenceUsers: [{ self: true, id: "profile-alice", name: "Alice" }],
+          featureMethods: [
+            "chat.metadata",
+            "chat.startup",
+            "fs.listDir",
+            "projects.list",
+            "sessions.create",
+            "users.prefs.get",
+            "users.prefs.set",
+            "worktrees.branches",
+          ],
+          methodResponses: {
+            "agents.list": mainAgentList(),
+            "fs.listDir": FOLDER_LISTINGS,
+            "projects.list": { projects: [], recents: [] },
+            "users.prefs.get": {
+              sequence: [
+                { status: "ok", entries: {} },
+                {
+                  status: "ok",
+                  entries: {
+                    "new-session.migration.v1": true,
+                    "new-session.v1:main": {
+                      folder: PICKED,
+                      workspace: WORKSPACE,
+                      worktree: true,
+                      model: "anthropic/claude-sonnet-4-6",
+                    },
+                  },
+                },
+              ],
+            },
+            "users.prefs.set": { status: "ok" },
+            "worktrees.branches": GIT_BRANCHES,
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}new`);
+        const migrated = await gateway.waitForRequest("users.prefs.set");
+        expect(migrated.params).toMatchObject({
+          entries: {
+            "new-session.v1:main": {
+              folder: PICKED,
+              workspace: WORKSPACE,
+              worktree: true,
+              model: "anthropic/claude-sonnet-4-6",
+            },
+          },
+        });
+        const trigger = page.locator("#new-session-place-trigger");
+        await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("packages");
+        await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
+        await captureProjectUiProof(page, "identity-preferences-migrated.png");
+
+        await navigateInApp(page, "chat");
+        await waitForCommittedChatRoute(page);
+        await navigateInApp(page, "new-session");
+        await expect
+          .poll(async () => (await gateway.getRequests("users.prefs.get")).length)
+          .toBe(2);
+        await expect
+          .poll(async () => (await gateway.getRequests("users.prefs.set")).length)
+          .toBe(1);
+
+        await gateway.deferNext("users.prefs.set");
+        const modelSelect = page.locator('[data-chat-model-select="true"]');
+        await modelSelect.click();
+        await page.locator('[data-chat-model-option="openai/gpt-5.5"]').click();
+        await expect
+          .poll(async () => (await gateway.getRequests("users.prefs.set")).length)
+          .toBe(2);
+        expect((await gateway.getRequests("users.prefs.set")).at(-1)?.params).toMatchObject({
+          entries: { "new-session.v1:main": { model: "" } },
+        });
+        expect((await readMainPreference(page))?.model).toBe("anthropic/claude-sonnet-4-6");
+        await gateway.resolveDeferred("users.prefs.set", { status: "ok" });
+        await expect.poll(async () => (await readMainPreference(page))?.model).toBeUndefined();
+      },
+    );
+  });
+
+  it("resumes a partial multi-batch identity preference migration", async () => {
+    await withNewSessionPage(BASE_CONTEXT, async (page) => {
+      const appUrl = new URL(suite.server.baseUrl);
+      const gatewayUrl = `${appUrl.protocol === "https:" ? "wss:" : "ws:"}//${appUrl.host}`;
+      const storageKey = `openclaw.new-session.preferences.v1:${gatewayOriginScope(gatewayUrl)}`;
+      const agentIds = ["main", ...Array.from({ length: 32 }, (_, index) => `agent${index + 1}`)];
+      const browserAgents = Object.fromEntries(
+        agentIds.map((agentId) => [agentId, { workspace: WORKSPACE, folder: WORKSPACE }]),
+      );
+      const remoteEntries = Object.fromEntries(
+        agentIds
+          .slice(0, 32)
+          .map((agentId) => [`new-session.v1:${agentId}`, browserAgents[agentId]]),
+      );
+      await page.addInitScript(
+        ({ key, agents }) => {
+          localStorage.setItem(key, JSON.stringify({ agents }));
+        },
+        { key: storageKey, agents: browserAgents },
+      );
+      const gateway = await installMockGateway(page, {
+        presenceUsers: [{ self: true, id: "profile-alice", name: "Alice" }],
+        featureMethods: [
+          "chat.metadata",
+          "chat.startup",
+          "sessions.create",
+          "users.prefs.get",
+          "users.prefs.set",
+        ],
+        methodResponses: {
+          "agents.list": mainAgentList(),
+          "users.prefs.get": { status: "ok", entries: remoteEntries },
+          "users.prefs.set": { status: "ok" },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}new`);
+      const resumed = await gateway.waitForRequest("users.prefs.set");
+      expect(resumed.params).toEqual({
+        entries: {
+          "new-session.v1:agent32": { workspace: WORKSPACE, folder: WORKSPACE },
+          "new-session.migration.v1": true,
+        },
+      });
+      await expect.poll(async () => (await gateway.getRequests("users.prefs.set")).length).toBe(1);
     });
   });
 

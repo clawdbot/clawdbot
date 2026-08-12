@@ -3,8 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { expect, test } from "vitest";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerProjectRegistry } from "../../projects/project-registry.js";
+import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { projectsHandlers } from "./projects.js";
 
@@ -35,6 +37,7 @@ async function invokeProjectMethod(
   params: Record<string, unknown>,
   cfg = {},
   scopes: string[] = ["operator.write"],
+  profileId?: string,
 ) {
   const capture: {
     result: {
@@ -50,7 +53,10 @@ async function invokeProjectMethod(
       capture.result = { ok, payload, error };
     },
     context: { getRuntimeConfig: () => cfg as OpenClawConfig } as never,
-    client: { connect: { scopes } } as never,
+    client: {
+      connect: { scopes },
+      ...(profileId ? { authenticatedUserProfile: { profileId } } : {}),
+    } as never,
     isWebchatConnect: () => false,
   });
   return capture.result;
@@ -137,6 +143,88 @@ test("projects.remove returns INVALID_REQUEST for an unknown id", async () => {
       ok: false,
       error: { code: "INVALID_REQUEST", message: "unknown project id: missing" },
     });
+  } finally {
+    await state.cleanup();
+  }
+});
+
+test("projects.list returns only the caller's deterministic resolved recents", async () => {
+  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
+  try {
+    const repo = await initializeRepository(state.root);
+    const project = await registerProjectRegistry({ path: repo, name: "Registered" });
+    const sourceProfile = ensureProfileForEmail("source@example.test");
+    const targetProfile = ensureProfileForEmail("target@example.test");
+    const actor = { type: "human" as const, id: sourceProfile.id };
+    const entries: Array<{
+      key: string;
+      updatedAt: number;
+      projectId?: string;
+      spawnedCwd?: string;
+    }> = [
+      { key: "agent:main:a", updatedAt: 500, projectId: project.id },
+      { key: "agent:main:b", updatedAt: 500, projectId: project.id },
+      { key: "agent:main:c", updatedAt: 400, projectId: "stale", spawnedCwd: "/work/scratch" },
+      ...Array.from({ length: 8 }, (_, index) => ({
+        key: `agent:main:folder-${index}`,
+        updatedAt: 300 - index,
+        spawnedCwd: `/work/folder-${index}`,
+      })),
+    ];
+    for (const entry of entries) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: entry.key },
+        {
+          sessionId: `session-${entry.key.split(":").at(-1)}`,
+          updatedAt: entry.updatedAt,
+          createdActor: actor,
+          ...(entry.projectId ? { projectId: entry.projectId } : {}),
+          ...(entry.spawnedCwd ? { spawnedCwd: entry.spawnedCwd } : {}),
+        },
+      );
+    }
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: "agent:main:other" },
+      {
+        sessionId: "session-other",
+        updatedAt: 1_000,
+        createdActor: { type: "human", id: "profile-bob" },
+        spawnedCwd: "/work/private-bob",
+      },
+    );
+    const cfg = { agents: { list: [{ id: "main", default: true, workspace: "/workspace" }] } };
+    linkEmail("source@example.test", targetProfile.id);
+    const readResult = await invokeProjectMethod(
+      "projects.list",
+      {},
+      cfg,
+      ["operator.read"],
+      targetProfile.id,
+    );
+    if (!readResult?.payload) {
+      throw new Error("projects.list did not return recents");
+    }
+    expect((readResult.payload as { recents?: unknown[] }).recents).toEqual([
+      { kind: "project", projectId: project.id, displayName: "Registered" },
+    ]);
+    const writeResult = await invokeProjectMethod(
+      "projects.list",
+      {},
+      cfg,
+      ["operator.write"],
+      targetProfile.id,
+    );
+    expect((writeResult?.payload as { recents?: unknown[] } | undefined)?.recents).toEqual([
+      { kind: "project", projectId: project.id, displayName: "Registered" },
+      { kind: "folder", folder: "/work/scratch", displayName: "scratch" },
+      ...Array.from({ length: 6 }, (_, index) => ({
+        kind: "folder",
+        folder: `/work/folder-${index}`,
+        displayName: `folder-${index}`,
+      })),
+    ]);
+    const anonymous = await invokeProjectMethod("projects.list", {}, cfg, ["operator.read"]);
+    expect(anonymous?.payload).not.toHaveProperty("recents");
   } finally {
     await state.cleanup();
   }

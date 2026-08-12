@@ -17,6 +17,7 @@ export {
   type GatewayErrorDetails,
   type McpAppViewExpiredErrorDetails,
   type MissingScopeErrorDetails,
+  type UserPrefsLimitExceededErrorDetails,
   type UnknownAgentIdErrorDetails,
   type WizardNotFoundErrorDetails,
   isMcpAppViewExpiredError,
@@ -35,6 +36,12 @@ export const McpAppViewExpiredErrorDetailsSchema = closedObject({
   code: Type.Literal(GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED),
 });
 
+export const UserPrefsLimitExceededErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED),
+  limit: Type.Integer({ minimum: 1 }),
+  currentCount: Type.Integer({ minimum: 0 }),
+});
+
 export const UnknownAgentIdErrorDetailsSchema = closedObject({
   code: Type.Literal(GatewayErrorDetailCodes.UNKNOWN_AGENT_ID),
   agentId: NonEmptyString,
@@ -48,6 +55,7 @@ export const WizardNotFoundErrorDetailsSchema = closedObject({
 export const GatewayErrorDetailsSchema = Type.Union([
   MissingScopeErrorDetailsSchema,
   McpAppViewExpiredErrorDetailsSchema,
+  UserPrefsLimitExceededErrorDetailsSchema,
   UnknownAgentIdErrorDetailsSchema,
   WizardNotFoundErrorDetailsSchema,
 ]);

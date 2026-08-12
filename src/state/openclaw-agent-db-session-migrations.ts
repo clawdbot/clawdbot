@@ -275,6 +275,15 @@ export function readSqliteTableColumns(db: DatabaseSync, tableName: string): Set
   return new Set(rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])));
 }
 
+/** Installs the same-version project identity projection on first updated-binary open. */
+export function ensureSessionProjectColumn(db: DatabaseSync): void {
+  const columns = readSqliteTableColumns(db, "session_nodes");
+  if (!columns || columns.has("project_id")) {
+    return;
+  }
+  db.exec("ALTER TABLE session_nodes ADD COLUMN project_id TEXT;");
+}
+
 /** Adds the v11 exact delivery target before the conversation backfill writes canonical rows. */
 export function migrateConversationDeliveryTargetColumn(db: DatabaseSync): void {
   const columns = readSqliteTableColumns(db, "conversations");

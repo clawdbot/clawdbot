@@ -42,7 +42,7 @@ export type TestChatPane = HTMLElement & {
   connectionGeneration: number;
   createSession: () => Promise<boolean>;
   prepareForEviction: () => void;
-  restoreArchivedSession: (sessionKey: string) => Promise<void>;
+  restoreArchivedSession: (sessionKey: string, expectedSessionId: string) => Promise<void>;
   disconnectedCallback: () => void;
   discardStagedAttachments?: () => void;
   resumeStagedAttachments?: () => void;
