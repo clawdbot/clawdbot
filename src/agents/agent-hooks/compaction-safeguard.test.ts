@@ -17,6 +17,7 @@ import { buildEmbeddedExtensionFactories } from "../embedded-agent-runner/extens
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { jsonResult } from "../tools/common.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../workspace-bootstrap-read.js";
+import * as compactionQualityModule from "./compaction-safeguard-quality.js";
 import {
   consumeCompactionSafeguardCancelReason,
   getCompactionSafeguardRuntime,
@@ -25,6 +26,37 @@ import {
 } from "./compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "./compaction-safeguard.js";
 import { testing } from "./compaction-safeguard.test-support.js";
+
+const { compactionLogger } = vi.hoisted(() => {
+  const logger = {
+    subsystem: "compaction-safeguard",
+    isEnabled: vi.fn(() => false),
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    fatal: vi.fn(),
+    raw: vi.fn(),
+    child: vi.fn(),
+  };
+  logger.child.mockReturnValue(logger);
+  return { compactionLogger: logger };
+});
+
+vi.mock("../../logging/subsystem.js", async () => {
+  const actual = await vi.importActual<typeof import("../../logging/subsystem.js")>(
+    "../../logging/subsystem.js",
+  );
+  return { ...actual, createSubsystemLogger: () => compactionLogger };
+});
+
+vi.mock("./compaction-safeguard-quality.js", async () => {
+  const actual = await vi.importActual<typeof compactionQualityModule>(
+    "./compaction-safeguard-quality.js",
+  );
+  return { ...actual, auditSummaryQuality: vi.fn(actual.auditSummaryQuality) };
+});
 
 vi.mock("../compaction.js", async () => {
   const actual = await vi.importActual<typeof compactionModule>("../compaction.js");
@@ -36,6 +68,10 @@ vi.mock("../compaction.js", async () => {
 
 const mockSummarizeInStages = vi.mocked(compactionModule.summarizeInStages);
 const actualCompactionModule = await vi.importActual<typeof compactionModule>("../compaction.js");
+const actualCompactionQualityModule = await vi.importActual<typeof compactionQualityModule>(
+  "./compaction-safeguard-quality.js",
+);
+const mockAuditSummaryQuality = vi.mocked(compactionQualityModule.auditSummaryQuality);
 
 function summaryResult(text: string) {
   return { kind: "summary" as const, text };
@@ -70,6 +106,9 @@ const {
 
 beforeEach(() => {
   testing.setSummarizeInStagesForTest(mockSummarizeInStages);
+  mockAuditSummaryQuality.mockImplementation(actualCompactionQualityModule.auditSummaryQuality);
+  mockAuditSummaryQuality.mockClear();
+  compactionLogger.warn.mockClear();
 });
 
 afterEach(() => {
@@ -2078,9 +2117,45 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     expect(result).toEqual({ cancel: true });
     expect(mockSummarizeInStages).not.toHaveBeenCalled();
+    expect(mockAuditSummaryQuality).toHaveBeenCalledTimes(1);
+    const auditInput = requireRecord(mockCallArg(mockAuditSummaryQuality));
+    expect(auditInput.latestAsk).toBe(sourceText);
+    expect(auditInput.identifiers).toEqual([identifier]);
+    expect(auditInput.summary).toBe(
+      [
+        "## Decisions",
+        "No prior history.",
+        "",
+        "## Open TODOs",
+        "None.",
+        "",
+        "## Constraints/Rules",
+        "None.",
+        "",
+        "## Pending user asks",
+        "None.",
+        "",
+        "## Exact identifiers",
+        "None captured.",
+        "",
+        "## Recent turns preserved verbatim",
+        `- User: ${"x".repeat(600)}...`,
+      ].join("\n"),
+    );
+    expect(mockAuditSummaryQuality.mock.results[0]?.value).toEqual({
+      ok: false,
+      reasons: [`missing_identifiers:${identifier}`, "latest_user_ask_not_reflected"],
+    });
     expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBe(
       "Compaction safeguard finalized summary failed quality checks.",
     );
+    const terminalWarnings = compactionLogger.warn.mock.calls.flat().join("\n");
+    expect(terminalWarnings).toContain(
+      "reasonCodes=missing_identifiers,latest_user_ask_not_reflected",
+    );
+    expect(terminalWarnings).toContain("reasonCount=2");
+    expect(terminalWarnings).not.toContain(identifier);
+    expect(terminalWarnings).not.toContain(sourceText);
   });
 
   it("retries when generated summary misses headings even if preserved turns contain them", async () => {

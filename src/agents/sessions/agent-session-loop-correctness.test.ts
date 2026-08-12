@@ -1,10 +1,19 @@
+import path from "node:path";
 import {
   createAssistantMessageEventStream,
   type Context,
   type Model,
 } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  appendTranscriptMessage,
+  loadTranscriptEvents,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
 import { agentSessionAutomaticCompaction } from "./agent-session-compaction.js";
 import {
@@ -30,6 +39,7 @@ import { SettingsManager } from "./settings-manager.js";
 import { getSteeringMessageIdentity } from "./steering-message-identity.js";
 
 registerAgentSessionLoopTestLifecycle();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("AgentSession loop correctness", () => {
   it("publishes a queued user message only after its transcript entry is committed", async () => {
@@ -361,10 +371,24 @@ describe("AgentSession loop correctness", () => {
   });
 
   it("does not append when a compaction extension rejects the finalized summary", async () => {
-    const sessionManager = SessionManager.inMemory();
-    appendHistory(
-      sessionManager,
-      createAssistant(testModel, [{ type: "text", text: "authoritative history" }]),
+    const dir = tempDirs.make("openclaw-rejected-compaction-");
+    const target = {
+      agentId: "main",
+      sessionId: "rejected-compaction-reopen",
+      sessionKey: "agent:main:rejected-compaction-reopen",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(target, {
+      sessionId: target.sessionId,
+      updatedAt: 1,
+    });
+    await appendTranscriptMessage(target, {
+      cwd: dir,
+      message: { role: "user", content: "authoritative question", timestamp: 1 },
+    });
+    const sessionManager = SessionManager.open(target, dir);
+    sessionManager.appendMessage(
+      createAssistant(testModel, [{ type: "text", text: "authoritative answer" }]),
     );
     const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
       ["session_before_compact", [async () => ({ cancel: true })]],
@@ -373,12 +397,30 @@ describe("AgentSession loop correctness", () => {
       sessionManager,
       resourceLoader: createResourceLoader(handlers),
     });
-    const before = sessionManager.getBranch();
+    const persistedBefore = await loadTranscriptEvents(target);
+    const contextBefore = sessionManager.buildSessionContext();
 
     await expect(session.compact()).rejects.toThrow("Compaction cancelled");
 
-    expect(sessionManager.getBranch()).toEqual(before);
-    expect(sessionManager.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
+    sessionManager.flushPendingPersistence();
+    const persistedAfterRejection = await loadTranscriptEvents(target);
+    expect(JSON.stringify(persistedAfterRejection)).toBe(JSON.stringify(persistedBefore));
+    expect(
+      persistedAfterRejection.some(
+        (entry) =>
+          typeof entry === "object" &&
+          entry !== null &&
+          "type" in entry &&
+          entry.type === "compaction",
+      ),
+    ).toBe(false);
+
+    const databasePath = resolveSqliteTargetFromSessionStorePath(target.storePath).path;
+    expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+    const reopened = SessionManager.open(target, dir);
+    expect(reopened.getBranch()).toEqual(persistedBefore.slice(1));
+    expect(reopened.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
+    expect(reopened.buildSessionContext()).toEqual(contextBefore);
   });
 
   it("keeps a successful high-usage response and performs threshold maintenance without retry", async () => {
