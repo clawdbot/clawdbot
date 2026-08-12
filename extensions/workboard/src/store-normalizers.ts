@@ -669,6 +669,12 @@ function normalizeLink(value: unknown): WorkboardLink | null {
     typeof record.sourceUpdatedAt === "number" && Number.isFinite(record.sourceUpdatedAt)
       ? normalizeTimestamp(record.sourceUpdatedAt, 0)
       : undefined;
+  const reconciliationAssociationKey = normalizeBoundedString(
+    record.reconciliationAssociationKey,
+    undefined,
+    160,
+    "reconciliation association key",
+  );
   const consecutiveSuccessfulFullScanMisses =
     typeof record.consecutiveSuccessfulFullScanMisses === "number" &&
     Number.isInteger(record.consecutiveSuccessfulFullScanMisses) &&
@@ -712,6 +718,7 @@ function normalizeLink(value: unknown): WorkboardLink | null {
     type: normalizeLinkType(record.type, "relates_to"),
     createdAt,
     ...(sourceUpdatedAt !== undefined ? { sourceUpdatedAt } : {}),
+    ...(reconciliationAssociationKey ? { reconciliationAssociationKey } : {}),
     ...(consecutiveSuccessfulFullScanMisses !== undefined
       ? { consecutiveSuccessfulFullScanMisses }
       : {}),

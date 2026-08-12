@@ -1,4 +1,5 @@
 // Workboard reconciliation facade accepts safe external execution observations.
+import { randomUUID } from "node:crypto";
 import type {
   WorkboardCard,
   WorkboardExternalExecutionLink,
@@ -15,6 +16,7 @@ const MAX_PAGE_SIZE = 100;
 const MAX_OBJECTIVE_KEY_LENGTH = 160;
 const MAX_STALE_AFTER_MISSES = 1000;
 const MAX_OBSERVATION_ID_LENGTH = 200;
+const MAX_ASSOCIATION_KEY_LENGTH = 160;
 const DEFAULT_PAGE_SIZE = 50;
 const RECONCILIATION_PROTECTED_STATUSES = new Set<WorkboardStatus>(["blocked", "review", "done"]);
 
@@ -92,6 +94,7 @@ function linkFor(observation: WorkboardReconciliationObservation): WorkboardExte
     tenant: readRequiredString(observation.tenant, "tenant"),
     idempotencyKey: readRequiredString(observation.idempotencyKey, "idempotencyKey"),
     sourceUpdatedAt: readTimestamp(observation.sourceUpdatedAt, "sourceUpdatedAt"),
+    reconciliationAssociationKey: randomUUID().replaceAll("-", ""),
     ...(typeof observation.link?.title === "string" && observation.link.title.trim()
       ? { title: observation.link.title.trim() }
       : {}),
@@ -116,6 +119,7 @@ const SOURCE_OBSERVATION_FIELDS = new Set([
   "objectiveKey",
   "sourceUrl",
   "idempotencyKey",
+  "reconciliationAssociationKey",
   "observationId",
   "sourceState",
   "staleAfterMisses",
@@ -215,6 +219,15 @@ export function projectReconciliationSourceObservation(
     objectiveKey: readBoundedString(input.objectiveKey, "objectiveKey", MAX_OBJECTIVE_KEY_LENGTH),
     sourceUrl: readBoundedString(input.sourceUrl, "sourceUrl", 2000),
     idempotencyKey: readBoundedString(input.idempotencyKey, "idempotencyKey", 160),
+    ...(input.reconciliationAssociationKey === undefined
+      ? {}
+      : {
+          reconciliationAssociationKey: readBoundedString(
+            input.reconciliationAssociationKey,
+            "reconciliationAssociationKey",
+            MAX_ASSOCIATION_KEY_LENGTH,
+          ),
+        }),
     observationId: readBoundedString(
       input.observationId,
       "observationId",

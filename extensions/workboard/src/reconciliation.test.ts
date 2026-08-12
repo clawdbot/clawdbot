@@ -53,6 +53,71 @@ describe("WorkboardReconciler", () => {
     ).toHaveLength(2);
   });
 
+  it("lists a stable machine association key for every external link", async () => {
+    const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
+    const first = await reconciler.apply({
+      sourceUrl: "https://example.test/runs/a",
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      idempotencyKey: "a",
+      sourceUpdatedAt: 100,
+      card: { title: "Deploy API" },
+    });
+    await reconciler.apply({
+      cardId: first.card.id,
+      sourceUrl: "https://example.test/runs/b",
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      idempotencyKey: "b",
+      sourceUpdatedAt: 101,
+      card: { title: "Deploy API" },
+    });
+
+    const listed = await reconciler.list({ tenant: "acme" });
+    const externalLinks = listed.cards[0]?.metadata?.links?.filter((link) =>
+      link.id.startsWith("external:"),
+    );
+
+    expect(externalLinks).toHaveLength(2);
+    expect(externalLinks?.map((link) => link.reconciliationAssociationKey)).toEqual([
+      expect.stringMatching(/^[A-Za-z0-9_-]{16,160}$/),
+      expect.stringMatching(/^[A-Za-z0-9_-]{16,160}$/),
+    ]);
+    expect(externalLinks?.[0]?.reconciliationAssociationKey).not.toBe(
+      externalLinks?.[1]?.reconciliationAssociationKey,
+    );
+
+    const a = externalLinks?.find((link) => link.url?.endsWith("/a"));
+    const b = externalLinks?.find((link) => link.url?.endsWith("/b"));
+    const firstObservation = await reconciler.observeSource({
+      cardId: first.card.id,
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      sourceUrl: "https://example.test/runs/a",
+      idempotencyKey: "a",
+      reconciliationAssociationKey: a?.reconciliationAssociationKey,
+      observationId: "a-present",
+      sourceState: "present",
+      staleAfterMisses: 2,
+      observedAt: 102,
+      expectedRevision: listed.cards[0]?.updatedAt,
+    });
+    const secondObservation = await reconciler.observeSource({
+      cardId: first.card.id,
+      tenant: "acme",
+      objectiveKey: "deploy-api",
+      sourceUrl: "https://example.test/runs/b",
+      idempotencyKey: "b",
+      reconciliationAssociationKey: b?.reconciliationAssociationKey,
+      observationId: "b-present",
+      sourceState: "present",
+      staleAfterMisses: 2,
+      observedAt: 103,
+      expectedRevision: firstObservation.revision,
+    });
+    expect(secondObservation.evidence.lastSourceObservationId).toBe("b-present");
+  });
+
   it("keeps matching objective keys isolated by tenant and fails closed for an explicit mismatch", async () => {
     const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
     const acme = await reconciler.apply({
@@ -258,7 +323,7 @@ describe("WorkboardReconciler", () => {
     };
 
     const first = await reconciler.observeSource(observation);
-    const replay = await reconciler.observeSource(observation);
+    const replay = await reconciler.observeSource({ ...observation, expectedRevision: 999_999 });
 
     expect(first).toMatchObject({
       observationId: "scan-42:replay:missing",
@@ -496,6 +561,7 @@ describe("WorkboardReconciler", () => {
         objectiveKey: "deploy-api",
         sourceUrl: "https://example.test/runs/sqlite",
         idempotencyKey: "sqlite",
+        reconciliationAssociationKey: created.link.reconciliationAssociationKey,
         observationId: "sqlite-scan-1",
         sourceState: "missing-after-successful-full-scan" as const,
         staleAfterMisses: 2,
@@ -512,6 +578,9 @@ describe("WorkboardReconciler", () => {
           consecutiveSuccessfulFullScanMisses: 1,
           lastSourceObservationId: "sqlite-scan-1",
         });
+        expect(replay.association.reconciliationAssociationKey).toBe(
+          created.link.reconciliationAssociationKey,
+        );
       } finally {
         reopened.close();
       }

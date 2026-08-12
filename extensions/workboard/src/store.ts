@@ -65,6 +65,8 @@ function reconciliationLinkFor(
     tenant: card.metadata?.automation?.tenant ?? fallback.tenant,
     idempotencyKey: fallback.idempotencyKey,
     sourceUpdatedAt: link?.sourceUpdatedAt ?? fallback.sourceUpdatedAt,
+    reconciliationAssociationKey:
+      link?.reconciliationAssociationKey ?? fallback.reconciliationAssociationKey,
     ...(link?.title ? { title: link.title } : {}),
   };
 }
@@ -106,6 +108,8 @@ function appendExternalLink(card: WorkboardCard, link: WorkboardExternalExecutio
       type: "relates_to" as const,
       createdAt: Date.now(),
       sourceUpdatedAt: link.sourceUpdatedAt,
+      reconciliationAssociationKey:
+        link.reconciliationAssociationKey ?? randomUUID().replaceAll("-", ""),
       url: link.sourceUrl,
       ...(link.title ? { title: link.title } : {}),
     },
@@ -133,11 +137,11 @@ function sourceObservationRequestJson(
     objectiveKey: observation.objectiveKey,
     sourceUrl: observation.sourceUrl,
     idempotencyKey: observation.idempotencyKey,
+    reconciliationAssociationKey: observation.reconciliationAssociationKey ?? null,
     observationId: observation.observationId,
     sourceState: observation.sourceState,
     staleAfterMisses: observation.staleAfterMisses,
     observedAt: observation.observedAt,
-    expectedRevision: observation.expectedRevision ?? null,
   });
 }
 
@@ -155,6 +159,9 @@ function sourceObservationResult(
       objectiveKey: observation.objectiveKey,
       sourceUrl: observation.sourceUrl,
       idempotencyKey: observation.idempotencyKey,
+      ...(observation.reconciliationAssociationKey === undefined
+        ? {}
+        : { reconciliationAssociationKey: observation.reconciliationAssociationKey }),
     },
     observationId: observation.observationId,
     revision: evidence.lastSourceObservationRevision ?? card.updatedAt,
@@ -312,6 +319,8 @@ export class WorkboardStore extends WorkboardNotificationStore {
                 type: "relates_to",
                 createdAt: Date.now(),
                 sourceUpdatedAt: link.sourceUpdatedAt,
+                reconciliationAssociationKey:
+                  link.reconciliationAssociationKey ?? randomUUID().replaceAll("-", ""),
                 url: link.sourceUrl,
                 ...(link.title ? { title: link.title } : {}),
               },
@@ -348,11 +357,16 @@ export class WorkboardStore extends WorkboardNotificationStore {
         sourceUpdatedAt: 0,
       });
       const links = card.metadata?.links ?? [];
-      const index = links.findIndex((link) => link.id === linkId);
+      const index = observation.reconciliationAssociationKey
+        ? links.findIndex(
+            (link) =>
+              link.reconciliationAssociationKey === observation.reconciliationAssociationKey,
+          )
+        : links.findIndex((link) => link.id === linkId);
       if (index === -1)
         throw new Error("source observation does not match an external association.");
       const current = links[index]!;
-      if (current.url !== observation.sourceUrl) {
+      if (current.id !== linkId || current.url !== observation.sourceUrl) {
         throw new Error("source observation does not match an external association.");
       }
       const requestJson = sourceObservationRequestJson(observation);

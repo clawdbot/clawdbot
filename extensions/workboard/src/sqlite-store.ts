@@ -30,7 +30,7 @@ import type {
   WorkboardKeyedStore,
 } from "./persistence-types.js";
 const WORKBOARD_DB_RELATIVE_PATH = ["plugins", "workboard", "workboard.sqlite"] as const;
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 const WORKBOARD_SQLITE_BUSY_TIMEOUT_MS = 5000;
 const WORKBOARD_SQLITE_DIR_MODE = 0o700;
 const WORKBOARD_SQLITE_FILE_MODE = 0o600;
@@ -247,6 +247,7 @@ const WORKBOARD_SCHEMA_SQL = `
       title TEXT,
       url TEXT,
       source_updated_at INTEGER,
+      reconciliation_association_key TEXT,
       consecutive_successful_full_scan_misses INTEGER,
       stale_at INTEGER,
       stale_state TEXT,
@@ -368,6 +369,17 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
     "lifecycle_status_source_updated_at INTEGER",
   );
   ensureColumn(db, "workboard_card_links", "source_updated_at", "source_updated_at INTEGER");
+  ensureColumn(
+    db,
+    "workboard_card_links",
+    "reconciliation_association_key",
+    "reconciliation_association_key TEXT",
+  );
+  db.prepare(
+    `UPDATE workboard_card_links
+     SET reconciliation_association_key = replace(id, ':', '_')
+     WHERE reconciliation_association_key IS NULL AND id LIKE 'external:%'`,
+  ).run();
   ensureColumn(
     db,
     "workboard_card_links",
@@ -693,6 +705,7 @@ function readMetadata(
     const title = stringValue(child, "title");
     const url = stringValue(child, "url");
     const sourceUpdatedAt = numberValue(child, "source_updated_at");
+    const reconciliationAssociationKey = stringValue(child, "reconciliation_association_key");
     const consecutiveSuccessfulFullScanMisses = numberValue(
       child,
       "consecutive_successful_full_scan_misses",
@@ -721,6 +734,8 @@ function readMetadata(
     if (sourceUpdatedAt !== undefined) {
       entry.sourceUpdatedAt = sourceUpdatedAt;
     }
+    if (reconciliationAssociationKey)
+      entry.reconciliationAssociationKey = reconciliationAssociationKey;
     if (consecutiveSuccessfulFullScanMisses !== undefined)
       entry.consecutiveSuccessfulFullScanMisses = consecutiveSuccessfulFullScanMisses;
     if (staleAt !== undefined) entry.staleAt = staleAt;
@@ -1107,8 +1122,8 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
     db.prepare(
       `
         INSERT INTO workboard_card_links
-          (id, card_id, ordinal, type, target_card_id, title, url, source_updated_at, consecutive_successful_full_scan_misses, stale_at, stale_state, last_source_observation_id, last_source_observation_request_json, last_source_observation_revision, last_source_observation_evidence_json, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (id, card_id, ordinal, type, target_card_id, title, url, source_updated_at, reconciliation_association_key, consecutive_successful_full_scan_misses, stale_at, stale_state, last_source_observation_id, last_source_observation_request_json, last_source_observation_revision, last_source_observation_evidence_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     ).run(
       entry.id,
@@ -1119,6 +1134,7 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
       bindNull(entry.title),
       bindNull(entry.url),
       bindNull(entry.sourceUpdatedAt),
+      bindNull(entry.reconciliationAssociationKey),
       bindNull(entry.consecutiveSuccessfulFullScanMisses),
       bindNull(entry.staleAt),
       bindNull(entry.staleState),
