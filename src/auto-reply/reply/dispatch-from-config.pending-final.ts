@@ -15,11 +15,9 @@ type PendingFinalDeliveryIdentity = NonNullable<
 export async function suppressPendingFinalDelivery(payload: ReplyPayload): Promise<void> {
   const completion = getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion;
   if (completion) {
-    await settlePendingFinalDelivery(
-      { kind: "pending-final", ...completion },
-      "suppressed",
+    await settlePendingFinalDelivery({ kind: "pending-final", ...completion }, "suppressed", [
       "prepared",
-    );
+    ]);
     await clearPendingFinalDeliveryAfterSuccess(completion);
   }
 }

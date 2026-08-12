@@ -774,6 +774,7 @@ describe("iMessage approval reactions", () => {
         approvalId: "exec-self",
         decision: "allow-once",
         channel: "imessage",
+        accountId: "default",
         senderId: "+15551230000",
         gatewayRuntime,
       }),
@@ -857,6 +858,7 @@ describe("iMessage approval reactions", () => {
       approvalKind: "exec",
       decision: "allow-once",
       channel: "imessage",
+      accountId: "default",
       senderId: "+15551230000",
       gatewayUrl: undefined,
     });
@@ -901,6 +903,7 @@ describe("iMessage approval reactions", () => {
       approvalKind: "exec",
       decision: "allow-once",
       channel: "imessage",
+      accountId: "default",
       senderId: "+15551230000",
       gatewayUrl: undefined,
     });
@@ -959,6 +962,7 @@ describe("iMessage approval reactions", () => {
       approvalKind: "exec",
       decision: "allow-once",
       channel: "imessage",
+      accountId: "default",
       senderId: "+15551230000",
       gatewayUrl: undefined,
     });
@@ -1027,6 +1031,7 @@ describe("iMessage approval reactions", () => {
       approvalKind: "plugin",
       decision: "allow-once",
       channel: "imessage",
+      accountId: "default",
       senderId: "+15551230000",
       gatewayUrl: undefined,
     });
@@ -1067,6 +1072,7 @@ describe("iMessage approval reactions", () => {
       approvalKind: "exec",
       decision: "deny",
       channel: "imessage",
+      accountId: "default",
       senderId: "+15551239999",
       gatewayUrl: undefined,
     });

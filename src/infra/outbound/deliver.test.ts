@@ -837,7 +837,7 @@ describe("deliverOutboundPayloads", () => {
     });
     const messageSendText = vi.fn(async (ctx: ChannelMessageSendTextContext) => {
       order.push("send");
-      expect(ctx.onPlatformSendDispatch).toBeUndefined();
+      await ctx.onPlatformSendDispatch?.();
       return {
         messageId: "message-adapter-1",
         receipt: createMessageReceiptFromOutboundResults({
@@ -888,8 +888,8 @@ describe("deliverOutboundPayloads", () => {
     expect(order).toEqual([
       "queue",
       "before",
-      "dispatch",
       "send",
+      "dispatch",
       "after:pending-1:message-adapter-1",
       "mark-unknown",
       "complete",
@@ -1177,7 +1177,8 @@ describe("deliverOutboundPayloads", () => {
     queueMocks.markDeliveryPlatformSendDispatched.mockRejectedValueOnce(
       new Error("dispatch state unavailable"),
     );
-    const messageSendText = vi.fn(async () => {
+    const messageSendText = vi.fn(async (ctx: ChannelMessageSendTextContext) => {
+      await ctx.onPlatformSendDispatch?.();
       return {
         messageId: "message-adapter-1",
         receipt: createMessageReceiptFromOutboundResults({
@@ -1197,7 +1198,7 @@ describe("deliverOutboundPayloads", () => {
         queuePolicy: "best_effort",
       }),
     ).rejects.toThrow("dispatch state unavailable");
-    expect(messageSendText).not.toHaveBeenCalled();
+    expect(messageSendText).toHaveBeenCalledOnce();
     expect(logMocks.warn).not.toHaveBeenCalledWith(
       expect.stringContaining("continuing best-effort send: dispatch state unavailable"),
     );
@@ -2410,18 +2411,19 @@ describe("deliverOutboundPayloads", () => {
       unsubscribe();
     }
 
-    const errorEvent = events.find((event) => event.type === "message.delivery.error") as
-      | Record<string, unknown>
-      | undefined;
+    const deliveryEvents = events.filter((event) => event.type.startsWith("message.delivery."));
+    expect(deliveryEvents.map((event) => event.type)).toEqual([
+      "message.delivery.started",
+      "message.delivery.error",
+    ]);
+    const errorEvent = deliveryEvents[1] as Record<string, unknown> | undefined;
     expect(errorEvent?.type).toBe("message.delivery.error");
     expect(errorEvent?.channel).toBe("matrix");
     expect(errorEvent?.deliveryKind).toBe("text");
     expect(typeof errorEvent?.durationMs).toBe("number");
     expect(errorEvent?.errorCategory).toBe("TypeError");
     expect(errorEvent?.sessionKey).toBe("session-1");
-    expect(
-      JSON.stringify(events.filter((event) => event.type.startsWith("message.delivery."))),
-    ).not.toContain("secret delivery body");
+    expect(JSON.stringify(deliveryEvents)).not.toContain("secret delivery body");
   });
 
   it("emits one metadata-only audit terminal for a successful logical payload", async () => {

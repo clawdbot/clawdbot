@@ -416,6 +416,14 @@ export interface ConfigMachineState {
   value_json: string;
 }
 
+export interface CronJobRuntimeAuthorities {
+  authority_input_fingerprint: string | null;
+  authority_json: string | null;
+  job_id: string;
+  recovery_required: number;
+  store_key: string;
+}
+
 export interface CronJobScratch {
   content: string | null;
   job_id: string;
@@ -802,6 +810,12 @@ export interface ManagedOutgoingImageRecords {
   updated_at: string | null;
 }
 
+export interface McpOauthPendingAuthorizations {
+  create_time: number;
+  state: string;
+  store_key: string;
+}
+
 export interface McpOauthStores {
   format_version: number;
   store_json: string;
@@ -961,6 +975,12 @@ export interface OnboardingRecommendations {
   updated_at_ms: number;
 }
 
+export interface OperatorApprovalExecutionIdentities {
+  approval_id: string;
+  source_context_id: string;
+  source_execution_id: string;
+}
+
 export interface OperatorApprovals {
   approval_id: string;
   audience_session_keys_json: string;
@@ -1028,6 +1048,16 @@ export interface PluginStateEntries {
   value_json: string;
 }
 
+export interface Projects {
+  created_at_ms: number;
+  display_name: string;
+  id: string;
+  origin_url: string | null;
+  repo_root: string;
+  source: string;
+  updated_at_ms: number;
+}
+
 export interface SandboxRegistryEntries {
   backend_id: string | null;
   cdp_port: number | null;
@@ -1053,6 +1083,18 @@ export interface SchemaMeta {
   role: string;
   schema_version: number;
   updated_at: number;
+}
+
+export interface SecretStoreEntries {
+  created_at_ms: number;
+  deleted_at_ms: number | null;
+  kind: string;
+  name: string;
+  scope_id: string;
+  scope_kind: string;
+  updated_at_ms: number;
+  updated_by: string | null;
+  value: string;
 }
 
 export interface SessionGroups {
@@ -1354,6 +1396,13 @@ export interface UpdateCheckState {
   updated_at_ms: number;
 }
 
+export interface UserPreferences {
+  pref_key: string;
+  profile_id: string;
+  updated_at_ms: number;
+  value_json: string;
+}
+
 export interface VoicewakeRoutingConfig {
   config_key: string;
   default_target_agent_id: string | null;
@@ -1483,6 +1532,21 @@ export interface WorkerSessionPlacements {
   workspace_base_manifest_ref: string | null;
 }
 
+export interface WorkerSessionToolOperations {
+  child_session_key: string | null;
+  created_at_ms: number;
+  gateway_instance_id: string;
+  operation_seed: string;
+  request_digest: string;
+  result_json: string | null;
+  source_claim_id: string;
+  source_session_id: string;
+  status: string;
+  tool_call_id: string;
+  tool_name: string;
+  updated_at_ms: number;
+}
+
 export interface WorkerTranscriptCommitHeads {
   environment_id: string;
   next_seq: number;
@@ -1499,6 +1563,17 @@ export interface WorkerTranscriptCommits {
   seq: number;
   session_id: string;
   state: string;
+  updated_at_ms: number;
+}
+
+export interface WorkerTurnToolAuthorities {
+  claim_id: string;
+  environment_id: string;
+  owner_epoch: number;
+  placement_generation: number;
+  run_id: string;
+  session_id: string;
+  tool_names_json: string;
   updated_at_ms: number;
 }
 
@@ -1614,6 +1689,7 @@ export interface DB {
   commitments: Commitments;
   config_health_entries: ConfigHealthEntries;
   config_machine_state: ConfigMachineState;
+  cron_job_runtime_authorities: CronJobRuntimeAuthorities;
   cron_job_scratch: CronJobScratch;
   cron_jobs: CronJobs;
   current_conversation_bindings: CurrentConversationBindings;
@@ -1637,6 +1713,7 @@ export interface DB {
   installed_plugin_index: InstalledPluginIndex;
   macos_port_guardian_records: MacosPortGuardianRecords;
   managed_outgoing_image_records: ManagedOutgoingImageRecords;
+  mcp_oauth_pending_authorizations: McpOauthPendingAuthorizations;
   mcp_oauth_stores: McpOauthStores;
   media_blobs: MediaBlobs;
   meeting_transcript_sessions: MeetingTranscriptSessions;
@@ -1650,13 +1727,16 @@ export interface DB {
   node_host_config: NodeHostConfig;
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
   onboarding_recommendations: OnboardingRecommendations;
+  operator_approval_execution_identities: OperatorApprovalExecutionIdentities;
   operator_approvals: OperatorApprovals;
   outbound_media_provenance: OutboundMediaProvenance;
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;
+  projects: Projects;
   sandbox_registry_entries: SandboxRegistryEntries;
   schema_meta: SchemaMeta;
+  secret_store_entries: SecretStoreEntries;
   session_groups: SessionGroups;
   session_state_events: SessionStateEvents;
   session_state_heads: SessionStateHeads;
@@ -1678,6 +1758,7 @@ export interface DB {
   task_runs: TaskRuns;
   tui_last_sessions: TuiLastSessions;
   update_check_state: UpdateCheckState;
+  user_preferences: UserPreferences;
   voicewake_routing_config: VoicewakeRoutingConfig;
   voicewake_routing_routes: VoicewakeRoutingRoutes;
   voicewake_triggers: VoicewakeTriggers;
@@ -1688,8 +1769,10 @@ export interface DB {
   worker_environments: WorkerEnvironments;
   worker_inference_turns: WorkerInferenceTurns;
   worker_session_placements: WorkerSessionPlacements;
+  worker_session_tool_operations: WorkerSessionToolOperations;
   worker_transcript_commit_heads: WorkerTranscriptCommitHeads;
   worker_transcript_commits: WorkerTranscriptCommits;
+  worker_turn_tool_authorities: WorkerTurnToolAuthorities;
   worker_workspace_pending_results: WorkerWorkspacePendingResults;
   worker_workspace_reconciliations: WorkerWorkspaceReconciliations;
   workspace_attestations: WorkspaceAttestations;

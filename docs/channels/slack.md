@@ -268,12 +268,16 @@ the enterprise account with the same Request URL path:
       allowFrom: ["*"],
       groupPolicy: "allowlist",
       channels: {
-        C0123456789: { requireMention: true },
+        "team:T0123456789:channel:C0123456789": { requireMention: true },
       },
     },
   },
 }
 ```
+
+For each selected workspace, open it in Slack's web app and copy the `T...`
+workspace ID from `https://app.slack.com/client/T.../...`. Use that workspace ID
+with the channel's `C...` ID in every qualified policy key, as shown above.
 
 At startup, OpenClaw uses Slack `auth.test` to detect whether the token belongs
 to a workspace installation or an Enterprise Grid org-wide installation. No
@@ -324,14 +328,18 @@ validated listener-owned client remains in the active event turn. The
 in-memory send queue and thread-participation records are partitioned by that
 event's workspace; the client itself is never serialized or persisted.
 
-Channel policy keys accept raw stable Slack channel IDs, `channel:<id>`, or the
-`"*"` wildcard. `dm.groupChannels` accepts raw stable channel IDs or
-`channel:<id>`, but not `"*"`. OpenClaw normalizes the ID forms to the raw
-channel ID for runtime matching; the channel prefixes `slack:`, `group:`, and
-`mpim:` fail startup.
+Enterprise channel policy keys must use
+`team:<team-id>:channel:<channel-id>` or the `"*"` wildcard.
+`dm.groupChannels` requires the workspace-qualified form and does not accept
+`"*"`. A delivered Enterprise event never falls back from its qualified
+workspace and channel identity to a bare channel ID. Workspace installations
+retain raw stable channel IDs and `channel:<id>` compatibility. The channel
+prefixes `slack:`, `group:`, and `mpim:` fail startup.
 
-User policy entries in `allowFrom`, `reactionAllowlist`, and per-channel `users`
-accept raw stable Slack user IDs, `slack:<user-id>`, `user:<user-id>`, or `"*"`.
+Enterprise user policy entries in `allowFrom`, `reactionAllowlist`, and
+per-channel `users` must use `team:<team-id>:user:<user-id>` or `"*"`. A
+workspace-scoped sender never matches a bare user ID. Workspace installations
+retain raw stable user IDs, `slack:<user-id>`, and `user:<user-id>` compatibility.
 Enterprise `toolsBySender` keys accept raw stable user IDs, `id:<user-id>`,
 `channel:slack:<user-id>`, or `"*"`. Names, slugs, display names, and email
 addresses fail startup. IDs must use Slack's canonical uppercase prefix and body
@@ -351,8 +359,9 @@ rejected before authorization or system-event handling.
 Enterprise DMs support the same `disabled`, `open`, `allowlist`, and `pairing`
 policies as workspace installs. Pairing approvals are stored as
 `team:<team-id>:user:<user-id>` and are applied only to events from that
-workspace. Explicit account `allowFrom` entries remain organization-wide;
-channel and sender policy continues to apply to channel messages.
+workspace. Explicit account `allowFrom` entries use the same qualified form and
+apply only to that workspace; channel and sender policy continues to apply to
+channel messages.
 
 ## Install
 
@@ -848,7 +857,7 @@ Socket Mode configuration:
 {
   channels: {
     slack: {
-      identity: "user",
+      postAs: "user",
       userToken: "<xoxp>",
       appToken: "<xapp>",
     },
@@ -862,7 +871,7 @@ HTTP Request URL configuration:
 {
   channels: {
     slack: {
-      identity: "user",
+      postAs: "user",
       mode: "http",
       userToken: "<xoxp>",
       signingSecret: "<signing-secret>",
@@ -1242,7 +1251,7 @@ Status snapshot behavior:
   `userTokenStatus` + `appTokenStatus` for user identity.
 
 <Tip>
-For bot identity, actions and directory reads can prefer an optional user token; writes continue to use the bot token unless `userTokenReadOnly: false` allows fallback. For `identity: "user"`, reads and writes always use `userToken`.
+For bot identity, actions and directory reads can prefer an optional user token; writes continue to use the bot token unless `userTokenReadOnly: false` allows fallback. For `postAs: "user"`, reads and writes always use `userToken`.
 </Tip>
 
 ## Actions and gates
@@ -1303,7 +1312,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     - `allowlist`
     - `disabled`
 
-    Channel allowlist lives under `channels.slack.channels` and **must use stable Slack channel IDs** (for example `C12345678`) as config keys.
+    Channel allowlist lives under `channels.slack.channels` and **must use stable Slack channel IDs** (for example `C12345678`) as config keys. Enterprise Grid org installs require `team:<team-id>:channel:<channel-id>` so policies cannot cross workspace boundaries.
 
     Runtime note: if `channels.slack` is completely missing (env-only setup), runtime falls back to `groupPolicy="allowlist"` and logs a warning (even if `channels.defaults.groupPolicy` is set).
 
@@ -1487,7 +1496,7 @@ The default scope (`"group-mentions"`) does not fire ack reactions in direct mes
 - `block`: append chunked preview updates.
 - `progress`: show progress status text while generating, then send final text.
 - `streaming.preview.toolProgress`: when draft preview is active, route tool/progress updates into the same edited preview message (default: `true`). Set `false` to keep separate tool/progress messages.
-- `streaming.preview.commandText` / `streaming.progress.commandText`: set to `status` to keep compact tool-progress lines while hiding raw command/exec text (default: `raw`).
+- `streaming.preview.commandText` / `streaming.progress.commandText`: `status` keeps compact tool-progress lines while hiding raw command/exec text (default); set `raw` to opt into command text.
 
 Hide raw command/exec text while keeping compact progress lines:
 
@@ -1936,7 +1945,7 @@ Primary reference: [Configuration reference - Slack](/gateway/config-channels#sl
     Check, in order:
 
     - `groupPolicy`
-    - channel allowlist (`channels.slack.channels`) — **keys must be channel IDs** (`C12345678`), not names (`#channel-name`). Name-based keys silently fail under `groupPolicy: "allowlist"` because channel routing is ID-first by default. To find an ID: right-click the channel in Slack → **Copy link** — the `C...` value at the end of the URL is the channel ID.
+    - channel allowlist (`channels.slack.channels`) — **keys must be channel IDs** (`C12345678`) or workspace-qualified channel targets (`team:<team-id>:channel:<channel-id>`), not names (`#channel-name`). Name-based keys silently fail under `groupPolicy: "allowlist"` because channel routing is ID-first by default. To find an ID: right-click the channel in Slack → **Copy link** — the `C...` value at the end of the URL is the channel ID.
     - `requireMention`
     - per-channel `users` allowlist
     - `messages.groupChat.visibleReplies`: normal group/channel requests default to `"automatic"`. If you opted into `"message_tool"` and logs show assistant text with no `message(action=send)` call, the model missed the visible message-tool path. Final text stays private in this mode; inspect the gateway verbose log for suppressed payload metadata, or set it to `"automatic"` if you want every normal assistant final reply posted through the legacy path.

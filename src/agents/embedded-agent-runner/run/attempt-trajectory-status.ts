@@ -71,7 +71,7 @@ function hasNonEmptyAssistantText(texts: string[]): boolean {
   return texts.some((text) => text.trim().length > 0);
 }
 
-function hasNonEmptyString(values: string[]): boolean {
+function hasAnyNonBlankString(values: string[]): boolean {
   return values.some((value) => value.trim().length > 0);
 }
 
@@ -82,8 +82,8 @@ function hasCommittedMessagingDeliveryEvidence(
   >,
 ): boolean {
   return (
-    hasNonEmptyString(params.messagingToolSentTexts) ||
-    hasNonEmptyString(params.messagingToolSentMediaUrls) ||
+    hasAnyNonBlankString(params.messagingToolSentTexts) ||
+    hasAnyNonBlankString(params.messagingToolSentMediaUrls) ||
     params.messagingToolSentTargets.length > 0
   );
 }

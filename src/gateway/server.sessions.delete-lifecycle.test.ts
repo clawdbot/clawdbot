@@ -16,7 +16,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { replaceSqliteTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
@@ -320,7 +320,7 @@ test("sessions.delete removes a locked plugin-owned session from its persisted a
     }),
   );
   for (const sessionId of [canonicalSessionId, aliasSessionId]) {
-    await replaceSqliteTranscriptEvents({ sessionKey: requestedKey, sessionId, storePath }, [
+    await replaceTranscriptEvents({ sessionKey: requestedKey, sessionId, storePath }, [
       { type: "session", id: sessionId, content: sessionId },
     ]);
   }

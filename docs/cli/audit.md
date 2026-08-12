@@ -124,6 +124,16 @@ ingress, an absent invoker, and
 `unattributed` coverage. Its admission receipt says `not-applicable` because no
 identity-aware policy or grant evaluation was proven.
 
+For Gateway runs, a resolved authenticated profile can make the invoker
+`present` and coverage `attribution-only`. Paired devices and shared credentials
+do not establish a person: without a durable profile the invoker stays absent,
+or `unknown` when authenticated user evidence promised a profile that could not
+be resolved. Session creation retains the live canonical durable profile id so
+profile linking does not orphan ownership, while run inspection consumes the
+immutable connection-time audit fact. Ordinary session provenance stores no
+display label. An optional bounded, secret-redacted label can be retained only
+in execution identity after that audit storage is explicitly enabled.
+
 JSON output is the Gateway result without lossy reformatting. An exact result contains one
 bounded V1 context (maximum 16 KiB), up to 100 decision receipts, coverage and
 missing-evidence codes, and an optional `nextDecisionCursor`. An ambiguous run

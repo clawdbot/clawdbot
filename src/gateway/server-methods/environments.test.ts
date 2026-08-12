@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
+import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import type { WorkerEnvironmentRecord } from "../worker-environments/store.js";
-import type { WorkerTunnelStatus } from "../worker-environments/tunnel-contract.js";
 import { environmentsHandlers, summarizeWorkerEnvironment } from "./environments.js";
 
 vi.mock("../../infra/device-pairing.js", () => ({
@@ -20,11 +20,11 @@ vi.mock("../../infra/device-pairing-node.js", () => ({
 
 const NOW = 10_000;
 
-type TestWorkerRecord = WorkerEnvironmentRecord & {
-  desktopAvailable: boolean;
-  tunnelStatus: WorkerTunnelStatus;
-  error?: string;
-};
+type TestWorkerRecord = WorkerEnvironmentRecord &
+  Pick<
+    WorkerEnvironmentServiceRecord,
+    "desktopAvailable" | "desktopApps" | "tunnelStatus" | "error"
+  >;
 
 type TestWorkerService = {
   list: () => TestWorkerRecord[];
@@ -39,6 +39,10 @@ type TestWorkerService = {
     control: boolean;
     vncPassword?: string;
   }>;
+  launchDesktopApp: (request: {
+    environmentId: string;
+    app: "browser" | "terminal";
+  }) => Promise<{ app: "browser" | "terminal"; status: "ready" }>;
 };
 
 function mockContext(
@@ -112,6 +116,7 @@ function workerRecord(overrides: Partial<TestWorkerRecord> = {}): TestWorkerReco
     lastError: null,
     tunnelStatus: "stopped",
     desktopAvailable: false,
+    desktopApps: [],
     ...overrides,
   } as TestWorkerRecord;
 }
@@ -125,10 +130,11 @@ function workerService(overrides: Partial<TestWorkerService> = {}) {
     destroyUnattached: vi.fn(async () => workerRecord({ state: "destroyed" })),
     observeDesktop: vi.fn(async ({ control }) => ({
       transport: "rfb" as const,
-      wsPath: "/worker-desktop/observe?token=abc",
+      wsPath: "/desktop/observe?token=abc",
       expiresAtMs: 70_000,
       control,
     })),
+    launchDesktopApp: vi.fn(async ({ app }) => ({ app, status: "ready" as const })),
     ...overrides,
   };
 }
@@ -139,7 +145,8 @@ async function callEnvironmentMethod(
     | "environments.status"
     | "environments.create"
     | "environments.destroy"
-    | "worker.desktop.observe",
+    | "worker.desktop.observe"
+    | "worker.desktop.launch",
   params: unknown,
   options: {
     service?: TestWorkerService;
@@ -295,11 +302,15 @@ describe("environment gateway methods", () => {
 
   it("projects desktop metadata only when the service reports it available", () => {
     expect(
-      summarizeWorkerEnvironment(workerRecord({ desktopAvailable: true }), NOW).worker,
-    ).toMatchObject({ desktop: true });
+      summarizeWorkerEnvironment(
+        workerRecord({ desktopAvailable: true, desktopApps: ["browser", "terminal"] }),
+        NOW,
+      ).worker,
+    ).toMatchObject({ desktop: true, desktopApps: ["browser", "terminal"] });
     expect(
-      summarizeWorkerEnvironment(workerRecord({ desktopAvailable: false }), NOW).worker,
-    ).not.toHaveProperty("desktop");
+      summarizeWorkerEnvironment(workerRecord({ desktopAvailable: false, desktopApps: [] }), NOW)
+        .worker,
+    ).not.toHaveProperty("desktopApps");
   });
 
   it("returns status for one node environment", async () => {
@@ -463,7 +474,7 @@ describe("environment gateway methods", () => {
   it("starts desktop observation with explicit and default control modes", async () => {
     const observeDesktop = vi.fn(async ({ control }: { control: boolean }) => ({
       transport: "rfb" as const,
-      wsPath: "/worker-desktop/observe?token=abc",
+      wsPath: "/desktop/observe?token=abc",
       expiresAtMs: 70_000,
       control,
     }));
@@ -482,7 +493,7 @@ describe("environment gateway methods", () => {
       true,
       {
         transport: "rfb",
-        wsPath: "/worker-desktop/observe?token=abc",
+        wsPath: "/desktop/observe?token=abc",
         expiresAtMs: 70_000,
         control: true,
       },
@@ -532,6 +543,73 @@ describe("environment gateway methods", () => {
       undefined,
       { code: ErrorCodes.UNAVAILABLE, message: "worker desktop observe unavailable" },
     ]);
+  });
+
+  it("launches only a closed advertised desktop app and returns readiness", async () => {
+    const launchDesktopApp = vi.fn(async ({ app }: { app: "browser" | "terminal" }) => ({
+      app,
+      status: "ready" as const,
+    }));
+    const service = workerService({ launchDesktopApp });
+    const result = await callEnvironmentMethod(
+      "worker.desktop.launch",
+      { environmentId: "worker-1", app: "browser" },
+      { service },
+    );
+
+    expect(result).toEqual([true, { app: "browser", status: "ready" }, undefined]);
+    expect(launchDesktopApp).toHaveBeenCalledExactlyOnceWith({
+      environmentId: "worker-1",
+      app: "browser",
+    });
+    const rejected = await callEnvironmentMethod(
+      "worker.desktop.launch",
+      { environmentId: "worker-1", app: "editor" },
+      { service },
+    );
+    expect(rejected[0]).toBe(false);
+    expect(launchDesktopApp).toHaveBeenCalledOnce();
+  });
+
+  it("maps typed desktop launcher errors without exposing unknown runtime details", async () => {
+    const cases = [
+      [
+        "desktop_app_not_found",
+        ErrorCodes.INVALID_REQUEST,
+        "environment does not advertise desktop app: browser",
+      ],
+      [
+        "unsupported_platform",
+        ErrorCodes.INVALID_REQUEST,
+        "desktop app launch is not supported on Windows gateway hosts",
+      ],
+      [
+        "launcher_failure",
+        ErrorCodes.UNAVAILABLE,
+        "worker desktop browser launcher failed; verify the app is installed and retry",
+      ],
+      [
+        "provider_failure",
+        ErrorCodes.UNAVAILABLE,
+        "worker desktop app launch unavailable; try again",
+      ],
+    ] as const;
+    for (const [serviceCode, gatewayCode, message] of cases) {
+      const service = workerService({
+        launchDesktopApp: vi.fn(async () => {
+          throw new FakeWorkerServiceError(
+            serviceCode,
+            serviceCode === "provider_failure" ? "private SSH detail" : message,
+          );
+        }),
+      });
+      const response = await callEnvironmentMethod(
+        "worker.desktop.launch",
+        { environmentId: "worker-1", app: "browser" },
+        { service },
+      );
+      expect(response[2]).toEqual({ code: gatewayCode, message });
+    }
   });
 
   it("destroys an environment idempotently", async () => {

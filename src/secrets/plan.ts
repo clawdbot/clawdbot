@@ -4,8 +4,9 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import type { SecretProviderConfig, SecretRef } from "../config/types.secrets.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { toDotPath } from "../shared/dot-path.js";
 import { isValidSecretProviderAlias, isValidSecretRef } from "./ref-contract.js";
-import { parseDotPath, toDotPath } from "./shared.js";
+import { parseDotPath } from "./shared.js";
 import { resolvePlanTargetAgainstRegistry, type ResolvedPlanTarget } from "./target-registry.js";
 
 /** Registry target id accepted by a secrets apply plan. */
@@ -130,7 +131,10 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
       !resolved ||
       !ref ||
       typeof ref !== "object" ||
-      (ref.source !== "env" && ref.source !== "file" && ref.source !== "exec") ||
+      (ref.source !== "env" &&
+        ref.source !== "file" &&
+        ref.source !== "exec" &&
+        ref.source !== "store") ||
       typeof ref.provider !== "string" ||
       ref.provider.trim().length === 0 ||
       typeof ref.id !== "string" ||

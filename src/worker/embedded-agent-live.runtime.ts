@@ -1,4 +1,5 @@
 import type { WorkerLiveEvent } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { redactAgentDiagnosticPayload } from "../agents/diagnostic-redaction.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AgentSessionEvent } from "../agents/sessions/agent-session.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
@@ -38,6 +39,11 @@ function boundLiveValue(value: unknown): unknown {
   } catch {
     return { truncated: true, preview: "[unserializable live payload]" };
   }
+}
+
+function redactLiveText(value: string): string {
+  const redacted = redactAgentDiagnosticPayload(value);
+  return truncateLiveText(typeof redacted === "string" ? redacted : "[unreadable diagnostic text]");
 }
 
 function boundLiveEvent(event: WorkerLiveEvent): WorkerLiveEvent {
@@ -98,45 +104,6 @@ function boundLiveEvent(event: WorkerLiveEvent): WorkerLiveEvent {
   return bounded;
 }
 
-function coalescePendingLiveEvent(pending: WorkerLiveEvent[], event: WorkerLiveEvent): boolean {
-  const index = pending.length - 1;
-  const previous = pending[index];
-  if (!previous) {
-    return false;
-  }
-  if (previous.kind === "assistant" && event.kind === "assistant") {
-    pending[index] = boundLiveEvent({
-      kind: "assistant",
-      payload: { ...event.payload, delta: event.payload.text, replace: true },
-    });
-    return true;
-  }
-  if (previous.kind === "thinking" && event.kind === "thinking") {
-    if (event.payload.text === "" && event.payload.delta === "") {
-      return false;
-    }
-    pending[index] = boundLiveEvent({
-      kind: "thinking",
-      payload: {
-        text: event.payload.text,
-        delta: `${previous.payload.delta}${event.payload.delta}`,
-      },
-    });
-    return true;
-  }
-  if (
-    previous.kind === "tool" &&
-    previous.payload.phase === "update" &&
-    event.kind === "tool" &&
-    event.payload.phase === "update" &&
-    previous.payload.toolCallId === event.payload.toolCallId
-  ) {
-    pending[index] = boundLiveEvent(event);
-    return true;
-  }
-  return false;
-}
-
 function readAssistantText(message: AgentMessage): string {
   if (message.role !== "assistant") {
     return "";
@@ -164,57 +131,22 @@ type WorkerLiveClient = {
 type WorkerLiveRuntime = {
   handleSessionEvent: (event: AgentSessionEvent) => void;
   enqueueRunFailure: (failure: { aborted: boolean; error: Error }) => void;
-  flush: () => Promise<void>;
   emitTerminal: () => Promise<void>;
 };
 
 export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRuntime {
-  const pendingLiveEvents: WorkerLiveEvent[] = [];
-  let liveDrain: Promise<void> | undefined;
   let liveDegraded = false;
-  const startLiveDrain = () => {
-    if (liveDrain || liveDegraded || pendingLiveEvents.length === 0) {
-      return;
-    }
-    liveDrain = (async () => {
-      while (true) {
-        const event = pendingLiveEvents.shift();
-        if (!event) {
-          return;
-        }
-        await client.emit(event);
-      }
-    })()
-      .catch(() => {
-        // Live events are preview-only; transcript commits and inference stay authoritative.
-        liveDegraded = true;
-        pendingLiveEvents.length = 0;
-      })
-      .finally(() => {
-        liveDrain = undefined;
-        startLiveDrain();
-      });
-  };
   const enqueueLive = (event: WorkerLiveEvent) => {
     if (liveDegraded) {
       return;
     }
     try {
-      const bounded = boundLiveEvent(event);
-      if (!coalescePendingLiveEvent(pendingLiveEvents, bounded)) {
-        pendingLiveEvents.push(bounded);
-      }
-      startLiveDrain();
+      void client.emit(boundLiveEvent(event)).catch(() => {
+        // Preview loss must not block inference, transcript durability, or finishing.
+        liveDegraded = true;
+      });
     } catch {
       liveDegraded = true;
-      pendingLiveEvents.length = 0;
-    }
-  };
-  const flush = async () => {
-    let drain = liveDrain;
-    while (drain) {
-      await drain;
-      drain = liveDrain;
     }
   };
   const startedAt = Date.now();
@@ -274,7 +206,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
           phase: "start",
           name: event.toolName,
           toolCallId: event.toolCallId,
-          args: event.args,
+          args: redactAgentDiagnosticPayload(event.args),
           ...(event.hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
         },
       });
@@ -287,7 +219,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
           phase: "update",
           name: event.toolName,
           toolCallId: event.toolCallId,
-          partialResult: event.partialResult,
+          partialResult: redactAgentDiagnosticPayload(event.partialResult),
           ...(event.hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
         },
       });
@@ -301,7 +233,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
           name: event.toolName,
           toolCallId: event.toolCallId,
           isError: event.isError,
-          result: event.result,
+          result: redactAgentDiagnosticPayload(event.result),
           ...(event.hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
         },
       });
@@ -321,7 +253,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
           phase: "finishing",
           ...terminal,
           ...(lastAssistant?.stopReason === "error"
-            ? { error: lastAssistant.errorMessage ?? "Worker inference failed." }
+            ? { error: redactLiveText(lastAssistant.errorMessage ?? "Worker inference failed.") }
             : {}),
           ...(lastAssistant?.stopReason === "aborted" ? { aborted: true } : {}),
         },
@@ -340,7 +272,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
         endedAt: Date.now(),
         ...(failure.aborted
           ? { stopReason: "aborted", aborted: true }
-          : { error: failure.error.message }),
+          : { error: redactLiveText(failure.error.message) }),
       },
     };
   };
@@ -352,5 +284,5 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
     }
     await client.emit(boundLiveEvent(terminalLiveEvent));
   };
-  return { handleSessionEvent, enqueueRunFailure, flush, emitTerminal };
+  return { handleSessionEvent, enqueueRunFailure, emitTerminal };
 }

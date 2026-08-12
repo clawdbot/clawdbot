@@ -8,7 +8,7 @@ import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import { resolveOwnerPromptNumbers } from "./owner-display.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "./prompt-surface.js";
 import { buildSkillWorkshopPromptSection } from "./skill-workshop-prompt.js";
-import { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
+import { buildSubagentSystemPrompt } from "./subagents/spawn/subagent-system-prompt.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 
 describe("buildAgentSystemPrompt", () => {

@@ -77,7 +77,7 @@ export const sessionCompactImpl = vi.fn(async () => ({
 }));
 export const sessionManualCompactionMock = vi.fn();
 export const sessionAutomaticCompactionMock = vi.fn();
-export const triggerInternalHook: Mock<(event?: unknown) => void> = vi.fn();
+export const triggerInternalHookMock: Mock<(event?: unknown) => void> = vi.fn();
 const sanitizeSessionHistoryMock = vi.fn(
   async (params: { messages: unknown[] }) => params.messages,
 );
@@ -176,7 +176,7 @@ function createMockCompactionSession() {
   };
   return session;
 }
-export const createAgentSessionMock = vi.fn(async (_options?: unknown) => ({
+export const createAgentSessionMock = vi.fn(async (..._args: [unknown?, unknown?]) => ({
   session: createMockCompactionSession(),
 }));
 function createMockToolDefinitions(tools: unknown[] = []) {
@@ -615,7 +615,7 @@ export function resetCompactHooksHarnessMocks(): void {
     details: { ok: true },
   });
 
-  triggerInternalHook.mockReset();
+  triggerInternalHookMock.mockReset();
   resetCompactSessionStateMocks();
   createOpenClawCodingToolsMock.mockReset();
   createOpenClawCodingToolsMock.mockReturnValue([]);
@@ -717,14 +717,13 @@ export async function loadCompactHooksHarness(): Promise<{
     );
     return {
       ...actual,
-      triggerInternalHook,
+      triggerInternalHook: triggerInternalHookMock,
     };
   });
 
   vi.doMock("../sessions/index.js", () => ({
     AuthStorage: function AuthStorage() {},
     ModelRegistry: function ModelRegistry() {},
-    createAgentSession: createAgentSessionMock,
     DefaultResourceLoader: function DefaultResourceLoader() {
       return {
         reload: vi.fn(async () => undefined),
@@ -740,6 +739,10 @@ export async function loadCompactHooksHarness(): Promise<{
     },
     estimateTokens: estimateTokensMock,
     generateSummary: vi.fn(async () => "summary"),
+  }));
+
+  vi.doMock("../sessions/sdk.js", () => ({
+    createAgentSessionForEmbeddedRunner: createAgentSessionMock,
   }));
 
   vi.doMock("../session-tool-result-guard-wrapper.js", () => ({
@@ -778,7 +781,7 @@ export async function loadCompactHooksHarness(): Promise<{
       (auth: { mode: string; source: string }, provider: string) =>
         `No API key resolved for provider "${provider}" (auth mode: ${auth.mode}, checked: ${auth.source}).`,
     ),
-    getApiKeyForModel: (params: { profileId?: string; allowAuthProfileFallback?: boolean }) =>
+    getApiKeyForModelCore: (params: { profileId?: string; allowAuthProfileFallback?: boolean }) =>
       getApiKeyForModelMock(params),
     hasUsableCustomProviderApiKey: vi.fn(() => false),
     resolveProviderEntryApiKeyProfileReference: resolveProviderEntryApiKeyProfileReferenceMock,
@@ -872,17 +875,6 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../agent-tools.js", () => ({
     createOpenClawCodingTools: createOpenClawCodingToolsMock,
-    resolveProcessToolScopeKey: ({
-      scopeKey,
-      sessionKey,
-      sessionId,
-      agentId,
-    }: {
-      scopeKey?: string;
-      sessionKey?: string;
-      sessionId?: string;
-      agentId?: string;
-    }) => scopeKey ?? sessionKey ?? sessionId ?? (agentId ? `agent:${agentId}` : undefined),
   }));
 
   vi.doMock("./replay-history.js", () => ({
@@ -961,9 +953,12 @@ export async function loadCompactHooksHarness(): Promise<{
     applySkillEnvOverridesFromSnapshot: vi.fn(() => () => {}),
   }));
 
-  vi.doMock("../../skills/loading/workspace.js", () => ({
-    loadWorkspaceSkillEntries: vi.fn(() => []),
-    resolveSkillsPromptForRun: vi.fn(() => undefined),
+  vi.doMock("../../skills/loading/workspace-skill-loader.js", () => ({
+    loadWorkspaceSkills: vi.fn(() => []),
+  }));
+
+  vi.doMock("../../skills/loading/workspace-skill-prompt.js", () => ({
+    resolveSkillsPrompt: vi.fn(() => undefined),
   }));
 
   vi.doMock("../agent-scope.js", () => ({
@@ -994,7 +989,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../../plugins/memory-runtime.js", () => ({
-    getActiveMemorySearchManager: getMemorySearchManagerMock,
+    getActiveMemorySearchManagerCore: getMemorySearchManagerMock,
   }));
 
   vi.doMock("../date-time.js", () => ({

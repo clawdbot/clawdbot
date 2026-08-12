@@ -18,6 +18,7 @@ class FakeSocket extends EventTarget {
 function createFakeRfb() {
   const instances: FakeRfb[] = [];
   class FakeRfb extends EventTarget implements RfbClient {
+    background = "";
     viewOnly = false;
     scaleViewport = false;
     readonly disconnect = vi.fn();
@@ -36,14 +37,8 @@ function createFakeRfb() {
 
 describe("DesktopClient", () => {
   it.each([
-    [
-      "http://control.example.test/chat",
-      "ws://control.example.test/worker-desktop/observe?token=abc",
-    ],
-    [
-      "https://control.example.test/chat",
-      "wss://control.example.test/worker-desktop/observe?token=abc",
-    ],
+    ["http://control.example.test/chat", "ws://control.example.test/desktop/observe?token=abc"],
+    ["https://control.example.test/chat", "wss://control.example.test/desktop/observe?token=abc"],
   ])("resolves relative observer URLs against %s", async (gatewayUrl, expectedUrl) => {
     const { Rfb, instances } = createFakeRfb();
     const sockets: FakeSocket[] = [];
@@ -56,7 +51,7 @@ describe("DesktopClient", () => {
 
     await client.connect({
       gatewayUrl,
-      wsUrl: "/worker-desktop/observe?token=abc",
+      wsUrl: "/desktop/observe?token=abc",
       password: "secret",
       viewOnly: true,
       target,
@@ -69,17 +64,19 @@ describe("DesktopClient", () => {
 
   it("propagates RFB options and disconnects through the returned handle", async () => {
     const { Rfb, instances } = createFakeRfb();
-    const socket = new FakeSocket("ws://control.example.test/worker-desktop/observe");
+    const socket = new FakeSocket("ws://control.example.test/desktop/observe");
     const client = new DesktopClient(Rfb, () => socket as unknown as WebSocket);
 
     const handle = await client.connect({
       gatewayUrl: "ws://control.example.test",
-      wsUrl: "/worker-desktop/observe",
+      wsUrl: "/desktop/observe",
       password: "secret",
+      background: "rgb(8, 8, 8)",
       viewOnly: false,
       target: document.createElement("div"),
     });
 
+    expect(instances[0]?.background).toBe("rgb(8, 8, 8)");
     expect(instances[0]?.viewOnly).toBe(false);
     expect(instances[0]?.scaleViewport).toBe(true);
     expect(instances[0]?.options).toEqual({ credentials: { password: "secret" } });
@@ -90,12 +87,12 @@ describe("DesktopClient", () => {
 
   it("forwards socket close metadata through the RFB disconnect callback", async () => {
     const { Rfb, instances } = createFakeRfb();
-    const socket = new FakeSocket("ws://control.example.test/worker-desktop/observe");
+    const socket = new FakeSocket("ws://control.example.test/desktop/observe");
     const onDisconnect = vi.fn();
     const client = new DesktopClient(Rfb, () => socket as unknown as WebSocket);
 
     await client.connect({
-      wsUrl: "ws://control.example.test/worker-desktop/observe",
+      wsUrl: "ws://control.example.test/desktop/observe",
       viewOnly: true,
       target: document.createElement("div"),
       onDisconnect,

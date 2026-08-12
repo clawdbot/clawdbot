@@ -210,7 +210,9 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     },
     onPlatformSendDispatch: async () => {
       params.abortSignal?.throwIfAborted();
-      if (platformQueueId && queuedPreSendState !== "acked") {
+      // Once any payload returns an identity, unknown-after-send protects the whole batch.
+      // A later payload dispatch must not regress that durable evidence to attempt-started.
+      if (platformQueueId && queuedPreSendState !== "acked" && queuedPostSendState === undefined) {
         try {
           if (producerClaimId) {
             await markDeliveryPlatformSendDispatched(

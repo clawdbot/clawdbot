@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
 import * as taskExecutor from "../../tasks/task-executor.js";
-import { finalizeTaskRunByRunId } from "../../tasks/task-executor.js";
+import { finalizeTaskRunByRunIdCore } from "../../tasks/task-executor.js";
 import * as taskRegistry from "../../tasks/task-registry.js";
 import { markTaskLostById } from "../../tasks/task-registry.js";
 import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "../../tasks/task-registry.store.sqlite.js";
@@ -584,7 +584,7 @@ describe("cron task run terminal records", () => {
         if (!taskRunId) {
           throw new Error("expected cron task run id");
         }
-        finalizeTaskRunByRunId({
+        finalizeTaskRunByRunIdCore({
           runId: taskRunId,
           runtime: "cron",
           status: "cancelled",
@@ -664,8 +664,8 @@ describe("cron task run terminal records", () => {
         if (!taskRunId) {
           throw new Error("expected cron task run id");
         }
-        const finalize = taskExecutor.finalizeTaskRunByRunId;
-        vi.spyOn(taskExecutor, "finalizeTaskRunByRunId")
+        const finalize = taskExecutor.finalizeTaskRunByRunIdCore;
+        vi.spyOn(taskExecutor, "finalizeTaskRunByRunIdCore")
           .mockReturnValueOnce([])
           .mockImplementation((params) => finalize(params));
 
@@ -929,7 +929,7 @@ describe("cron task run terminal records", () => {
         });
         const legacyRunId = `cron:legacy-job:${startedAt}`;
         // Older releases persisted the reservation id without a uniqueness suffix.
-        taskExecutor.createRunningTaskRun({
+        taskExecutor.createRunningTaskRunCore({
           runtime: "cron",
           sourceId: "legacy-job",
           ownerKey: "",
@@ -941,7 +941,7 @@ describe("cron task run terminal records", () => {
           startedAt,
         });
         expect(tryFindCronTaskRunIdForRecovery(state, "legacy-job", startedAt)).toBe(legacyRunId);
-        finalizeTaskRunByRunId({
+        finalizeTaskRunByRunIdCore({
           runId: legacyRunId,
           runtime: "cron",
           status: "timed_out",

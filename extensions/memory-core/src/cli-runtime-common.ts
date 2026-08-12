@@ -8,6 +8,7 @@ import {
   type MemoryExtraPath,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   defaultRuntime,
   formatErrorMessage,
@@ -23,7 +24,6 @@ import {
   type OpenClawConfig,
   withManager,
 } from "./cli.host.runtime.js";
-import { asRecord } from "./dreaming-shared.js";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
 import type { ShortTermAuditSummary } from "./short-term-promotion.js";
 const { warn } = theme;
@@ -107,8 +107,8 @@ function emitMemorySecretResolveDiagnostics(
   }
 }
 export function resolveMemoryPluginConfig(cfg: OpenClawConfig): Record<string, unknown> {
-  const entry = asRecord(cfg.plugins?.entries?.["memory-core"]);
-  return asRecord(entry?.config) ?? {};
+  const entry = asNullableRecord(cfg.plugins?.entries?.["memory-core"]);
+  return asNullableRecord(entry?.config) ?? {};
 }
 export function formatAuditCounts(audit: ShortTermAuditSummary): string {
   const scriptCoverage = audit.conceptTagScripts

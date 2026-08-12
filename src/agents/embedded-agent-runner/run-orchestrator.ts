@@ -135,11 +135,10 @@ async function runEmbeddedAgentInternal(
   // Outer fallback attempts defer session suspension only while another
   // candidate remains. Direct and final-candidate runs suspend normally.
   const failureSuspension = resolveSessionSuspensionTarget();
-  const suspendForFailure = (suspensionParams: Omit<SessionSuspensionParams, "laneId">) => {
+  const suspendForFailure = (suspensionParams: SessionSuspensionParams) => {
     const suspension = buildEmbeddedFailureSuspension({
       suspension: suspensionParams,
       runAgentId: params.agentId,
-      laneId: globalLane,
     });
     if (failureSuspension.mode === "defer") {
       failureSuspension.defer(suspension);
@@ -267,7 +266,12 @@ async function runEmbeddedAgentInternal(
         () =>
           params.preparedModelRuntimeMode === "isolated-read-only"
             ? acquireReadOnlyPreparedModelRuntime(preparedInput)
-            : acquireAgentRunPreparedModelRuntime(preparedInput, { retainIdleRunOwner }),
+            : acquireAgentRunPreparedModelRuntime(preparedInput, {
+                retainIdleRunOwner,
+                // Turns need only configured admission facts. Full live model inventory remains
+                // available through the snapshot's lazy control-plane loader.
+                catalogMode: "static",
+              }),
       );
       startupStages.mark("prepared-runtime");
       const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;

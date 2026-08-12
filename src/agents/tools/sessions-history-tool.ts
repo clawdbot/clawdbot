@@ -3,6 +3,7 @@
  *
  * Reads bounded, redacted session transcript history after session visibility filtering.
  */
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -22,7 +23,7 @@ import {
   jsonResult,
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
-  readStringParam,
+  readToolStringParam,
   ToolInputError,
 } from "./common.js";
 import {
@@ -216,7 +217,7 @@ function readHistoryMessageSeq(message: unknown): number | undefined {
     return undefined;
   }
   const seq = (meta as Record<string, unknown>).seq;
-  return typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0 ? seq : undefined;
+  return asPositiveSafeInteger(seq);
 }
 
 function readHistoryMessageId(message: unknown): string | undefined {
@@ -365,13 +366,13 @@ export function createSessionsHistoryTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
-      const sessionKeyParam = readStringParam(params, "sessionKey", {
+      const sessionKeyParam = readToolStringParam(params, "sessionKey", {
         required: true,
       });
       const limit = readPositiveIntegerParam(params, "limit");
       const offset = readOffsetParam(params);
-      const messageId = readStringParam(params, "messageId");
-      const sessionId = readStringParam(params, "sessionId");
+      const messageId = readToolStringParam(params, "messageId");
+      const sessionId = readToolStringParam(params, "sessionId");
       if (offset !== undefined && messageId) {
         throw new ToolInputError("offset and messageId cannot be used together");
       }

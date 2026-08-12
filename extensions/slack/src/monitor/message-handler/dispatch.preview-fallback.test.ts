@@ -92,6 +92,7 @@ type TestDispatchSequenceEntry =
 let mockedDispatchSequence: TestDispatchSequenceEntry[] = [];
 let mockedQueuedDispatchCounts: TestDispatchCounts = { tool: 0, block: 0, final: 0 };
 let mockedDispatcherCapturesDeliveryErrors = false;
+let mockedAgentRunTerminalOutcome: "completed" | "failed" | undefined;
 
 let mockedProgressEvents: string[] = [];
 let mockedEmptyProgressToolName: string | undefined;
@@ -579,8 +580,31 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
         summary?: string;
         title?: string;
         name?: string;
+        status?: string;
+        exitCode?: number | null;
       },
     ) => {
+      if (params.event === "command-output") {
+        const status =
+          params.exitCode === 0
+            ? "completed"
+            : params.exitCode != null
+              ? `exit ${params.exitCode}`
+              : params.status;
+        const id = params.toolCallId ? `command:${params.toolCallId}` : params.itemId;
+        const raw =
+          (entry.streaming?.progress?.commandText ?? entry.streaming?.preview?.commandText) ===
+          "raw";
+        return {
+          kind: "command-output",
+          ...(id ? { id } : {}),
+          text: raw && params.title ? params.title : (status ?? params.name ?? "exec"),
+          label: params.name ?? "exec",
+          ...(raw && params.title ? { detail: params.title } : {}),
+          ...(status ? { status } : {}),
+          toolName: params.name ?? "exec",
+        };
+      }
       if (params.event === "tool") {
         if (params.name === mockedEmptyProgressToolName) {
           return undefined;
@@ -847,12 +871,18 @@ vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
   resolvePinnedMainDmOwnerFromAllowlist: () => mockedPinnedMainDmOwner,
 }));
 
-vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
-  isRecord: (value: unknown): value is Record<string, unknown> =>
-    typeof value === "object" && value !== null && !Array.isArray(value),
-  normalizeOptionalLowercaseString: (value?: string) => value?.toLowerCase(),
-  normalizeOptionalString: (value?: string) => value,
-}));
+vi.mock("openclaw/plugin-sdk/string-coerce-runtime", async (importOriginal) => {
+  const { asOptionalRecord, isRecord } =
+    await importOriginal<typeof import("openclaw/plugin-sdk/string-coerce-runtime")>();
+  const normalizeMockLowercaseString = (value?: string) => value?.toLowerCase();
+  const readMockOptionalString = (value?: string) => value;
+  return {
+    asOptionalRecord,
+    isRecord,
+    normalizeOptionalLowercaseString: normalizeMockLowercaseString,
+    normalizeOptionalString: readMockOptionalString,
+  };
+});
 
 vi.mock("../../actions.js", () => ({
   reactSlackMessage: reactSlackMessageMock,
@@ -952,6 +982,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   type DispatchParams = Parameters<typeof actual.dispatchChannelInboundTurn>[0];
   return {
     ...actual,
+    readAgentRunTerminalOutcome: () => mockedAgentRunTerminalOutcome,
     dispatchChannelInboundTurn: async (params: DispatchParams) => {
       capturedReplyOptions = params.replyOptions as typeof capturedReplyOptions;
       if (mockedReplyOptionEvents.length > 0) {
@@ -1121,6 +1152,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
     mockedQueuedDispatchCounts = { tool: 0, block: 0, final: 0 };
     mockedDispatcherCapturesDeliveryErrors = false;
+    mockedAgentRunTerminalOutcome = undefined;
     mockedProgressEvents = [];
     mockedEmptyProgressToolName = undefined;
     mockedReplyOptionEvents = [];
@@ -1925,6 +1957,42 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     });
     expect(statusReactionControllerMock.setQueued).toHaveBeenCalledTimes(1);
     expect(statusReactionControllerMock.setDone).toHaveBeenCalledTimes(1);
+    expect(statusReactionControllerMock.restoreInitial).toHaveBeenCalledTimes(1);
+    expect(statusReactionControllerMock.setDone.mock.invocationCallOrder[0]).toBeLessThan(
+      statusReactionControllerMock.restoreInitial.mock.invocationCallOrder[0] ?? 0,
+    );
+  });
+
+  it("marks a recovered agent failure as failed then restores its initial reaction", async () => {
+    mockedAgentRunTerminalOutcome = "failed";
+    mockedNativeStreaming = true;
+    mockedSlackStreamingMode = "progress";
+    mockedReplyOptionEvents = [{ kind: "item", progressText: "Recovering failed run" }];
+    mockedDispatchSequence = [
+      { kind: "final", payload: { text: "Something failed", isError: true } },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        cfg: { messages: { statusReactions: { enabled: true } } },
+        accountConfig: {
+          streaming: { mode: "progress", progress: { nativeTaskCards: true, render: "rich" } },
+        },
+        ackReactionMessageTs: "171234.111",
+        ackReactionPromise: Promise.resolve(true),
+      }),
+    );
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expect(startSlackStreamMock).toHaveBeenCalledTimes(1);
+    expect(stopSlackStreamMock).toHaveBeenCalledTimes(1);
+    expect(collectNativeTaskUpdates().at(-1)).toEqual(expect.objectContaining({ status: "error" }));
+    expect(statusReactionControllerMock.setError).toHaveBeenCalledTimes(1);
+    expect(statusReactionControllerMock.setDone).not.toHaveBeenCalled();
+    expect(statusReactionControllerMock.restoreInitial).toHaveBeenCalledTimes(1);
+    expect(statusReactionControllerMock.setError.mock.invocationCallOrder[0]).toBeLessThan(
+      statusReactionControllerMock.restoreInitial.mock.invocationCallOrder[0] ?? 0,
+    );
   });
 
   it("keeps Slack lifecycle reactions off by default when an ack reaction exists", async () => {
@@ -3799,6 +3867,36 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n🛠️ Exec\n• done");
     expect(draftStream.update.mock.calls.flat().join("\n")).not.toContain("pnpm test");
+  });
+
+  it("preserves command output text when raw Slack progress is configured", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      {
+        kind: "command_output",
+        phase: "end",
+        title: "pnpm test -- --watch=false",
+        name: "exec",
+        exitCode: 1,
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: {
+          streaming: {
+            mode: "progress",
+            progress: { label: "Shelling", commandText: "raw" },
+          },
+        },
+      }),
+    );
+
+    expect(draftStream.update.mock.calls.flat().join("\n")).toContain("pnpm test -- --watch=false");
   });
 
   it("suppresses standalone Slack tool progress when progress lines are disabled", async () => {

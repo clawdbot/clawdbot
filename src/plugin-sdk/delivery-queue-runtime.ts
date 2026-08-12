@@ -1,13 +1,10 @@
 // Delivery queue runtime helpers persist and replay outbound plugin delivery work.
-import {
-  drainPendingDeliveries as coreDrainPendingDeliveries,
-  type DeliverFn,
-} from "../infra/outbound/delivery-queue.js";
+import { drainPendingDeliveriesCore, type DeliverFn } from "../infra/outbound/delivery-queue.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 
 type DrainPendingDeliveriesOptions = Omit<
-  Parameters<typeof coreDrainPendingDeliveries>[0],
+  Parameters<typeof drainPendingDeliveriesCore>[0],
   "deliver"
 > & {
   /** Optional delivery implementation for tests or plugin-owned send paths. */
@@ -28,7 +25,7 @@ export async function drainPendingDeliveries(opts: DrainPendingDeliveriesOptions
     // Keep lazy resolution and draining in one lease so suspension cannot split the handoff.
     const deliver =
       opts.deliver ?? (await loadOutboundDeliverRuntime()).deliverOutboundPayloadsInternal;
-    await coreDrainPendingDeliveries({
+    await drainPendingDeliveriesCore({
       ...opts,
       deliver,
     });

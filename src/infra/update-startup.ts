@@ -36,10 +36,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
-import {
-  readSuccessfulGitUpdateReceipt,
-  type SuccessfulGitUpdateReceipt,
-} from "./restart-sentinel.js";
+import { readVerifiedGitUpdateReceipt, type VerifiedGitUpdateReceipt } from "./restart-sentinel.js";
 import {
   resolveGatewayRestartDeferralTimeoutMs,
   scheduleGatewaySigusr1Restart,
@@ -570,14 +567,14 @@ function clearAutoState(nextState: UpdateCheckState): void {
   delete nextState.autoFirstSeenAt;
 }
 
-async function resolveStartupInstallStatus(fetchGit: boolean) {
+async function resolveStartupInstallStatus(checkDevGit: boolean) {
   const [root, installReceipt] = await Promise.all([
     resolveOpenClawPackageRoot({
       moduleUrl: import.meta.url,
       argv1: process.argv[1],
       cwd: process.cwd(),
     }),
-    readSuccessfulGitUpdateReceipt(),
+    readVerifiedGitUpdateReceipt(),
   ]);
   const gitUpstreamFallback =
     installReceipt?.upstreamRef && root && updateInstallRootsMatch(root, installReceipt.root)
@@ -586,8 +583,9 @@ async function resolveStartupInstallStatus(fetchGit: boolean) {
   const status = await checkUpdateStatus({
     root,
     timeoutMs: 2500,
-    fetchGit,
+    fetchGit: checkDevGit,
     includeRegistry: false,
+    ...(checkDevGit ? { useDetachedDevUpstream: true } : {}),
     ...(gitUpstreamFallback ? { gitUpstreamFallback } : {}),
   });
   return { root, status, installReceipt };
@@ -607,7 +605,7 @@ function gitCommitsMatch(left: string, right: string): boolean {
 
 function resolveGitInstalledAtMs(
   git: NonNullable<UpdateCheckResult["git"]>,
-  installReceipt: SuccessfulGitUpdateReceipt | null,
+  installReceipt: VerifiedGitUpdateReceipt | null,
   root: string | null,
 ): number | undefined {
   return installReceipt &&
@@ -621,7 +619,7 @@ function resolveGitInstalledAtMs(
 
 function resolveGitScheduleStatus(
   update: UpdateCheckResult,
-  installReceipt: SuccessfulGitUpdateReceipt | null,
+  installReceipt: VerifiedGitUpdateReceipt | null,
   root: string | null,
 ): GitScheduleStatus | undefined {
   if (update.installKind !== "git") {
@@ -672,7 +670,7 @@ function withInstallStatus(
   schedule: UpdateScheduleState,
   update: UpdateCheckResult,
   includeGitStatus: boolean,
-  installReceipt: SuccessfulGitUpdateReceipt | null,
+  installReceipt: VerifiedGitUpdateReceipt | null,
   root: string | null,
 ): UpdateScheduleState {
   const git = includeGitStatus ? resolveGitScheduleStatus(update, installReceipt, root) : undefined;
@@ -1124,10 +1122,11 @@ export async function runGatewayUpdateCheck(params: {
         reason: EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
       });
     }
-    const hasTrackedMain = git.branch === DEV_BRANCH && git.upstreamSource === "tracking";
+    const hasTrackedDevUpstream =
+      (git.branch === DEV_BRANCH || git.branch === "HEAD") && git.upstreamSource === "tracking";
     const hasReceiptBackedDetachedHead = git.branch === "HEAD" && git.upstreamSource === "receipt";
     const canRunTrackedDevCampaign =
-      (hasTrackedMain || hasReceiptBackedDetachedHead) && git.ahead === 0;
+      (hasTrackedDevUpstream || hasReceiptBackedDetachedHead) && git.ahead === 0;
     if (shouldRunAutoUpdate && canRunTrackedDevCampaign) {
       const lastAttemptAt = state.autoLastAttemptAt ? Date.parse(state.autoLastAttemptAt) : null;
       const recentAttempt =

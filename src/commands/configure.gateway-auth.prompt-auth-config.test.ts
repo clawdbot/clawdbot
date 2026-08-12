@@ -144,8 +144,8 @@ const mocks = vi.hoisted(() => ({
     },
   ),
   promptCustomApiConfig: vi.fn(),
-  resolvePluginProviders: vi.fn(() => []),
-  resolveProviderPluginChoice: vi.fn<() => unknown>(() => null),
+  resolvePluginProvidersCore: vi.fn(() => []),
+  resolveProviderPluginChoiceCore: vi.fn<() => unknown>(() => null),
   loadStaticManifestCatalogRowsForList: vi.fn<() => readonly NormalizedModelCatalogRow[]>(() => []),
   resolvePreferredProviderForAuthChoice: vi.fn<() => Promise<string | undefined>>(
     async () => undefined,
@@ -195,11 +195,11 @@ vi.mock("./onboard-custom.js", () => ({
 }));
 
 vi.mock("../plugins/providers.runtime.js", () => ({
-  resolvePluginProviders: mocks.resolvePluginProviders,
+  resolvePluginProvidersCore: mocks.resolvePluginProvidersCore,
 }));
 
 vi.mock("../plugins/provider-wizard.js", () => ({
-  resolveProviderPluginChoice: mocks.resolveProviderPluginChoice,
+  resolveProviderPluginChoiceCore: mocks.resolveProviderPluginChoiceCore,
 }));
 
 vi.mock("./models/list.manifest-catalog.js", () => ({
@@ -300,8 +300,8 @@ async function runPromptAuthConfigWithAllowlist(includeMinimaxProvider = false) 
   mocks.promptModelAllowlist.mockResolvedValue({
     models: ["kilocode/kilo-auto/balanced"],
   });
-  mocks.resolvePluginProviders.mockReturnValue([]);
-  mocks.resolveProviderPluginChoice.mockReturnValue(null);
+  mocks.resolvePluginProvidersCore.mockReturnValue([]);
+  mocks.resolveProviderPluginChoiceCore.mockReturnValue(null);
 
   return promptAuthConfig({}, makeRuntime(), noopPrompter);
 }
@@ -334,7 +334,7 @@ describe("promptAuthConfig", () => {
     mocks.promptAuthChoiceGrouped.mockResolvedValue("token");
     mocks.applyAuthChoice.mockResolvedValue({ config: {} });
     mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
-    mocks.resolveProviderPluginChoice.mockReturnValue({
+    mocks.resolveProviderPluginChoiceCore.mockReturnValue({
       provider: {
         id: "anthropic",
         label: "Anthropic",
@@ -380,7 +380,7 @@ describe("promptAuthConfig", () => {
       models: ["anthropic/claude-sonnet-4-6"],
       scopeKeys: ["anthropic/claude-opus-4-6", "anthropic/claude-sonnet-4-6"],
     });
-    mocks.resolveProviderPluginChoice.mockReturnValue({
+    mocks.resolveProviderPluginChoiceCore.mockReturnValue({
       provider: {
         id: "anthropic",
         label: "Anthropic",
@@ -433,7 +433,7 @@ describe("promptAuthConfig", () => {
       models: ["openai/gpt-5.5"],
       scopeKeys: ["openai/gpt-5.5", "openai/gpt-5.4-mini"],
     });
-    mocks.resolveProviderPluginChoice.mockReturnValue({
+    mocks.resolveProviderPluginChoiceCore.mockReturnValue({
       provider: {
         id: "openai",
         label: "OpenAI",
@@ -495,7 +495,7 @@ describe("promptAuthConfig", () => {
       models: ["openai/gpt-5.5", "openai/gpt-5.3-codex"],
       scopeKeys: ["openai/gpt-5.5", "openai/gpt-5.3-codex"],
     });
-    mocks.resolveProviderPluginChoice.mockReturnValue(null);
+    mocks.resolveProviderPluginChoiceCore.mockReturnValue(null);
 
     const result = await promptAuthConfig({}, makeRuntime(), noopPrompter);
 
@@ -534,7 +534,7 @@ describe("promptAuthConfig", () => {
     } as OpenClawConfig;
     mocks.applyAuthChoice.mockResolvedValue({ config: existingConfig });
     mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
-    mocks.resolveProviderPluginChoice.mockReturnValue(null);
+    mocks.resolveProviderPluginChoiceCore.mockReturnValue(null);
 
     await promptAuthConfig(existingConfig, makeRuntime(), noopPrompter);
 
@@ -578,7 +578,7 @@ describe("promptAuthConfig", () => {
       },
     ]);
     mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
-    mocks.resolveProviderPluginChoice.mockReturnValue(null);
+    mocks.resolveProviderPluginChoiceCore.mockReturnValue(null);
 
     await promptAuthConfig(existingConfig, makeRuntime(), noopPrompter);
 
@@ -608,7 +608,7 @@ describe("promptAuthConfig", () => {
       },
     });
     mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
-    mocks.resolveProviderPluginChoice.mockReturnValue(null);
+    mocks.resolveProviderPluginChoiceCore.mockReturnValue(null);
 
     await promptAuthConfig({}, makeRuntime(), noopPrompter);
 
@@ -636,7 +636,7 @@ describe("promptAuthConfig", () => {
       },
     });
     mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
-    mocks.resolveProviderPluginChoice.mockReturnValue({
+    mocks.resolveProviderPluginChoiceCore.mockReturnValue({
       provider: {
         id: "github-copilot",
         label: "GitHub Copilot",
@@ -677,8 +677,8 @@ describe("promptAuthConfig", () => {
       },
     });
     mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
-    mocks.resolvePluginProviders.mockReturnValue([]);
-    mocks.resolveProviderPluginChoice.mockReturnValue(null);
+    mocks.resolvePluginProvidersCore.mockReturnValue([]);
+    mocks.resolveProviderPluginChoiceCore.mockReturnValue(null);
     mocks.loadStaticManifestCatalogRowsForList.mockReturnValue([
       {
         provider: "github-copilot",
@@ -709,7 +709,7 @@ describe("promptAuthConfig", () => {
       models: ["openai/gpt-5.5"],
       scopeKeys: ["openai/gpt-5.5", "openai/gpt-5.5-pro"],
     });
-    mocks.resolveProviderPluginChoice.mockReturnValue(null);
+    mocks.resolveProviderPluginChoiceCore.mockReturnValue(null);
 
     const result = await promptAuthConfig(
       {
@@ -743,8 +743,8 @@ describe("promptAuthConfig", () => {
     mocks.resolvePreferredProviderForAuthChoice
       .mockResolvedValueOnce("wecom")
       .mockResolvedValueOnce("kilocode");
-    mocks.resolvePluginProviders.mockReturnValue([]);
-    mocks.resolveProviderPluginChoice.mockReturnValue(null);
+    mocks.resolvePluginProvidersCore.mockReturnValue([]);
+    mocks.resolveProviderPluginChoiceCore.mockReturnValue(null);
 
     await promptAuthConfig({}, makeRuntime(), noopPrompter);
 

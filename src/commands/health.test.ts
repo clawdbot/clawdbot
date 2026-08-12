@@ -382,6 +382,7 @@ describe("healthCommand", () => {
         config: {},
         token: "setup-token",
         password: "setup-password",
+        ignoreEnvUrlOverride: true,
       },
       runtime as never,
     );
@@ -391,6 +392,7 @@ describe("healthCommand", () => {
     expect(gatewayRequest.method).toBe("health");
     expect(gatewayRequest.token).toBe("setup-token");
     expect(gatewayRequest.password).toBe("setup-password");
+    expect(gatewayRequest.ignoreEnvUrlOverride).toBe(true);
   });
 
   it("outputs JSON for gateway transport failures in JSON mode", async () => {
@@ -639,9 +641,19 @@ describe("healthCommand", () => {
       error: TEST_AUTH_CLOSE_ERROR,
     });
 
-    await healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime as never);
+    await healthCommand(
+      { json: false, timeoutMs: 5000, config: {}, ignoreEnvUrlOverride: true },
+      runtime as never,
+    );
 
     expect(isGatewaySecretRefUnavailableErrorMock).toHaveBeenCalledWith(error);
+    expect(buildGatewayProbeConnectionDetailsMock).toHaveBeenCalledWith({
+      config: {},
+      token: undefined,
+      password: undefined,
+      ignoreEnvUrlOverride: true,
+      localPortOverride: undefined,
+    });
     expect(probeGatewayStatusMock).toHaveBeenCalledWith({
       url: TEST_GATEWAY_URL,
       token: undefined,

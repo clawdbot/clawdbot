@@ -425,6 +425,7 @@ describe("Codex app-server binding store", () => {
           source: "account" as const,
           appName: "ChatGPT Meetings",
           allowDestructiveActions: true,
+          allowOpenWorld: false,
           destructiveApprovalMode: "auto" as const,
           mcpServerNames: [],
         },

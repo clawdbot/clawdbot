@@ -9,7 +9,7 @@ import { ANTHROPIC_CONTEXT_1M_TOKENS } from "../agents/context-resolution.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
-} from "../agents/subagent-registry.test-helpers.js";
+} from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {

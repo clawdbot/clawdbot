@@ -17,6 +17,12 @@ CREATE TABLE IF NOT EXISTS mcp_oauth_stores (
   updated_at INTEGER NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS mcp_oauth_pending_authorizations (
+  state TEXT NOT NULL PRIMARY KEY,
+  store_key TEXT NOT NULL,
+  create_time INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS diagnostic_events (
   scope TEXT NOT NULL,
   event_key TEXT NOT NULL,
@@ -446,6 +452,17 @@ CREATE INDEX IF NOT EXISTS idx_operator_approvals_resolved
 CREATE INDEX IF NOT EXISTS idx_operator_approvals_runtime_pending
   ON operator_approvals(runtime_epoch, approval_id)
   WHERE status = 'pending';
+
+CREATE TABLE IF NOT EXISTS operator_approval_execution_identities (
+  approval_id TEXT NOT NULL PRIMARY KEY
+    REFERENCES operator_approvals(approval_id) ON DELETE CASCADE,
+  source_context_id TEXT NOT NULL CHECK (
+    length(source_context_id) BETWEEN 1 AND 256 AND source_context_id = trim(source_context_id)
+  ),
+  source_execution_id TEXT NOT NULL CHECK (
+    length(source_execution_id) BETWEEN 1 AND 256 AND source_execution_id = trim(source_execution_id)
+  )
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS schema_meta (
   meta_key TEXT NOT NULL PRIMARY KEY,
@@ -1410,6 +1427,25 @@ CREATE INDEX IF NOT EXISTS idx_cron_jobs_agent_session
   ON cron_jobs(agent_id, session_key, updated_at DESC, job_id)
   WHERE agent_id IS NOT NULL OR session_key IS NOT NULL;
 
+-- Runtime-private authority is independent of job_json so downgraded writers
+-- can rewrite recognized job config without erasing or silently widening it.
+CREATE TABLE IF NOT EXISTS cron_job_runtime_authorities (
+  store_key TEXT NOT NULL,
+  job_id TEXT NOT NULL,
+  authority_json TEXT,
+  authority_input_fingerprint TEXT,
+  recovery_required INTEGER NOT NULL,
+  PRIMARY KEY (store_key, job_id),
+  FOREIGN KEY (store_key, job_id)
+    REFERENCES cron_jobs(store_key, job_id) ON DELETE CASCADE,
+  CHECK (recovery_required IN (0, 1)),
+  CHECK (
+    (recovery_required = 0 AND authority_json IS NOT NULL AND authority_input_fingerprint IS NOT NULL)
+    OR
+    (recovery_required = 1 AND authority_json IS NULL AND authority_input_fingerprint IS NULL)
+  )
+) STRICT;
+
 -- Scratch is separate from cron_jobs so scheduler state writes and downgraded
 -- full-row replacement preserve it. New builds prune rows explicitly on job removal.
 -- content NULL is a tombstone: it keeps the revision lineage monotonic across
@@ -1821,6 +1857,24 @@ CREATE TABLE IF NOT EXISTS worktree_provisioned_file_chunks (
   PRIMARY KEY (worktree_id, path, chunk_index)
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS projects (
+  id TEXT NOT NULL PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  repo_root TEXT NOT NULL,
+  origin_url TEXT,
+  source TEXT NOT NULL CHECK (source IN ('registered', 'cloned')),
+  created_at_ms INT NOT NULL,
+  updated_at_ms INT NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS user_preferences (
+  profile_id TEXT NOT NULL,
+  pref_key TEXT NOT NULL,
+  value_json TEXT NOT NULL,
+  updated_at_ms INT NOT NULL,
+  PRIMARY KEY (profile_id, pref_key)
+) STRICT;
+
 -- Gateway-owned custom session group catalog (names + display order).
 -- Membership stays on each session entry's category field; this table only
 -- owns which groups exist and how operator UIs order them.
@@ -2014,6 +2068,43 @@ CREATE INDEX IF NOT EXISTS idx_worker_session_placements_session_key
 
 CREATE INDEX IF NOT EXISTS idx_worker_session_placements_reconcile
   ON worker_session_placements(updated_at_ms, session_id);
+
+-- Worker-visible session RPC authority is persisted against the exact turn
+-- claim. The launch descriptor is informative only; Gateway dispatch always
+-- revalidates this record and the live placement claim before executing.
+CREATE TABLE IF NOT EXISTS worker_turn_tool_authorities (
+  session_id TEXT NOT NULL PRIMARY KEY,
+  environment_id TEXT NOT NULL,
+  owner_epoch INTEGER NOT NULL CHECK (owner_epoch >= 1),
+  placement_generation INTEGER NOT NULL CHECK (placement_generation >= 0),
+  claim_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  tool_names_json TEXT NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  FOREIGN KEY (session_id) REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
+) STRICT;
+
+-- Tool-call ids are idempotency keys only within one exact source turn claim.
+-- A running operation from another Gateway instance is ambiguous and is never
+-- replayed. A persisted random seed separates durable downstream identities
+-- from Gateway authentication keys and survives ordinary process restarts.
+CREATE TABLE IF NOT EXISTS worker_session_tool_operations (
+  source_session_id TEXT NOT NULL,
+  source_claim_id TEXT NOT NULL,
+  tool_call_id TEXT NOT NULL,
+  tool_name TEXT NOT NULL CHECK (tool_name IN ('sessions_spawn', 'sessions_send')),
+  request_digest TEXT NOT NULL,
+  operation_seed TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed', 'unknown')),
+  child_session_key TEXT,
+  result_json TEXT,
+  gateway_instance_id TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (source_session_id, source_claim_id, tool_call_id),
+  FOREIGN KEY (source_session_id)
+    REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
+) STRICT;
 
 -- A reconciliation journal is written before managed-worktree mutation. The
 -- bounded Git base snapshot repairs any subset left by an interrupted apply.
@@ -2238,3 +2329,21 @@ CREATE TABLE IF NOT EXISTS model_catalog_remote (
   last_modified TEXT,
   checked_at INTEGER NOT NULL
 ) STRICT;
+
+-- scope_id is non-null because SQLite treats NULLs as distinct in unique indexes/PKs,
+-- which would allow duplicate team rows. This PK also avoids a rebuild for identity scope.
+CREATE TABLE IF NOT EXISTS secret_store_entries (
+  scope_kind TEXT NOT NULL CHECK (scope_kind IN ('team', 'identity')),
+  scope_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  value TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('secret', 'env')),
+  created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+  updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0),
+  updated_by TEXT,
+  deleted_at_ms INTEGER,
+  CHECK ((scope_kind = 'team' AND scope_id = '') OR (scope_kind = 'identity' AND length(scope_id) > 0)),
+  PRIMARY KEY (scope_kind, scope_id, name)
+) STRICT;
+CREATE INDEX IF NOT EXISTS secret_store_entries_live_idx
+  ON secret_store_entries (scope_kind, scope_id, name) WHERE deleted_at_ms IS NULL;

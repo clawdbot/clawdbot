@@ -3,6 +3,7 @@ import type { ClientRequest } from "node:http";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
+import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import WebSocket from "ws";
@@ -194,7 +195,7 @@ function createCdpSender(ws: WebSocket, opts?: { commandTimeoutMs?: number }) {
       } catch (err) {
         pending.delete(id);
         clearPendingTimer(entry);
-        reject(err instanceof Error ? err : new Error(String(err)));
+        reject(toStringifiedError(err));
       }
     });
   };
@@ -214,7 +215,7 @@ function createCdpSender(ws: WebSocket, opts?: { commandTimeoutMs?: number }) {
     // non-Error branch would require synthetically emitting on the socket,
     // which the library treats as an unhandled error and hangs the test.
     /* c8 ignore next */
-    closeWithError(err instanceof Error ? err : new Error(String(err)));
+    closeWithError(toStringifiedError(err));
   });
 
   ws.on("message", (data) => {
@@ -386,7 +387,7 @@ export async function withCdpSocket<T>(
       // Error from Node's `ws` library, the latter is already an Error. The
       // non-Error wrap is defensive and structurally unreachable.
       /* c8 ignore next */
-      closeWithError(err instanceof Error ? err : new Error(String(err)));
+      closeWithError(toStringifiedError(err));
       // Cancellation on the final attempt must not become a handshake error.
       opts?.signal?.throwIfAborted();
       if (attempt >= maxHandshakeRetries || !shouldRetryCdpHandshakeError(err)) {
@@ -409,7 +410,7 @@ export async function withCdpSocket<T>(
     try {
       return await fn(send);
     } catch (err) {
-      closeWithError(err instanceof Error ? err : new Error(String(err)));
+      closeWithError(toStringifiedError(err));
       throw err;
     } finally {
       ws.close();

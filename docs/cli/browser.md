@@ -122,21 +122,50 @@ System-profile import is enabled by default. Set `browser.allowSystemProfileImpo
 
 ```bash
 openclaw browser extension path
+openclaw browser extension install
+openclaw browser extension install --json --wait-ms 60000
+openclaw browser extension status
+openclaw browser extension status --json
+openclaw browser extension uninstall-host
 openclaw browser extension pair
 openclaw browser extension pair --gateway-url wss://gateway.example.com
 openclaw browser extension cdp
 openclaw browser extension cdp --json
 ```
 
-- `extension path` prints the unpacked extension directory for Chrome's **Load
-  unpacked** flow.
-- `extension pair` creates the host-local relay key when needed and prints the
-  pairing string. `--gateway-url` creates a direct remote-Gateway pairing URL;
-  non-loopback URLs must use `wss://`.
+- `extension install` copies the bundled runtime into a stable state-directory
+  path and pre-registers its deterministic, origin-locked native bootstrap host
+  in existing Chrome-family user-data roots. Launch Chrome, run this command,
+  and use **Load unpacked** only after it prints the stable path. The command
+  waits while Chrome records that exact path, then verifies the recorded ID
+  against Chromium's path-derived ID. **Load unpacked** is the only manual
+  action in normal setup.
+- `extension status` reports the installed copy, detected IDs/profiles,
+  owned-registration health, and whether manual setup is required. JSON output
+  never includes a pairing string or relay key.
+- `extension uninstall-host` removes only verified OpenClaw-owned native-host
+  manifests and launchers. It does not remove the extension from Chrome.
+- `extension path` is read-only. It prints the stable installed copy when
+  present and the bundled source directory otherwise.
+- `extension pair` remains the advanced manual flow. `--gateway-url` creates a
+  direct remote-Gateway pairing URL; non-loopback URLs must use `wss://`.
 - `extension cdp` prints non-secret Browser Relay Authentication v2 metadata:
   the loopback browser/CDP endpoints, protocol version, key ID, and fixed
   challenge/complete binding. It never prints the relay key or an authorization
   header by default.
+
+Automatic local bootstrap connects through the local Gateway's exact
+`/browser/extension` route so the first authenticated extension connection
+starts the lazy browser-control service. Keep `openclaw gateway run` or the
+managed Gateway service running; no separate browser request or prewarm is
+needed. Local OpenClaw and mcporter calls still use the profile relay port
+reported by `extension pair` or `extension cdp` after that wakeup. Browser-node
+pairings continue to use the relay on the browser-node host, while explicit
+`--gateway-url` pairings remain direct-remote and manual-only.
+
+The advanced manual `extension pair` command without `--gateway-url` retains
+the host-local `/extension` relay URL. It does not wake Browser control, so the
+selected profile relay must already be running before the extension connects.
 
 `extension cdp --legacy-bearer` is a temporary migration escape hatch. It
 prints the old Bearer header with a warning only while
@@ -144,7 +173,12 @@ prints the old Bearer header with a warning only while
 without printing a credential. Use `--json` for machine output; warnings remain
 on stderr so stdout stays valid JSON.
 
-Setup, security model, and migration steps: [Chrome extension](/tools/chrome-extension).
+Setup, security model, and recovery steps: [Chrome extension](/tools/chrome-extension).
+
+If the extension already attempted automatic setup before the native host
+existed, Chromium retains that miss for the running browser process. Restart
+Chrome once, then repeat the ordered install flow; popup retries alone cannot
+recover that existing process.
 
 ## Tabs
 

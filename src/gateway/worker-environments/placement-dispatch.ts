@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { supportsWorkerExecutionContextLaunch } from "./admission.js";
 import {
   createPlacementFailureActions,
   isUnavailableEnvironment,
@@ -14,7 +15,8 @@ import type {
   WorkerPlacementDispatchRequest,
   WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
-import { type WorkerEnvironmentService, workerEnvironmentIdForIdempotencyKey } from "./service.js";
+import { deriveEnvironmentIntent } from "./service-contract.js";
+import type { WorkerEnvironmentService } from "./service.js";
 import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
 import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
 import {
@@ -79,9 +81,12 @@ function requireProvisionedEnvironment(
   if (
     (environment.state !== "ready" && environment.state !== "idle") ||
     !environment.bootstrapReceipt ||
-    environment.environmentId !== expectedEnvironmentId
+    environment.environmentId !== expectedEnvironmentId ||
+    !supportsWorkerExecutionContextLaunch(environment.bootstrapReceipt)
   ) {
-    throw new Error(`Worker environment is not dispatchable: ${environment.state}`);
+    throw new Error(
+      `Worker environment is not dispatchable with the current execution-context contract: ${environment.state}`,
+    );
   }
   return {
     environmentId: environment.environmentId,
@@ -152,7 +157,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       });
       const localPath = await options.resolveWorkspacePath(request);
       const idempotencyKey = `session-dispatch:${request.sessionId}:${placement.generation}`;
-      const expectedEnvironmentId = workerEnvironmentIdForIdempotencyKey(idempotencyKey);
+      const expectedEnvironmentId = deriveEnvironmentIntent(idempotencyKey).environmentId;
       placement = placements.transition({
         sessionId: request.sessionId,
         from: "requested",
@@ -161,7 +166,16 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         patch: { environmentId: expectedEnvironmentId },
       });
       reportTransition(onTransition, placement);
-      const environment = await environments.create(request.profileId, idempotencyKey);
+      const environment = request.inheritedProfile
+        ? await environments.createFromProfileSnapshot(
+            {
+              profileId: request.profileId,
+              providerId: request.inheritedProfile.providerId,
+              profileSnapshot: request.inheritedProfile.profileSnapshot,
+            },
+            idempotencyKey,
+          )
+        : await environments.create(request.profileId, idempotencyKey);
       const provisioned = requireProvisionedEnvironment(environment, expectedEnvironmentId);
       environmentId = provisioned.environmentId;
       ownerEpoch = provisioned.ownerEpoch;
@@ -176,8 +190,14 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         },
       });
       reportTransition(onTransition, placement);
-      const readyTunnel = await environments.startTunnel({ environmentId, ownerEpoch });
-      const synced = await readyTunnel.syncWorkspace({
+      const credential = await environments.attachSession({
+        environmentId,
+        ownerEpoch,
+        sessionId: request.sessionId,
+      });
+      ownerEpoch = credential.ownerEpoch;
+      const tunnel = await environments.startTunnel({ environmentId, ownerEpoch });
+      const synced = await tunnel.syncWorkspace({
         localPath,
         sessionId: request.sessionId,
         generation: placement.generation,
@@ -193,13 +213,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         },
       });
       reportTransition(onTransition, placement);
-      const credential = await environments.attachSession({
-        environmentId,
-        ownerEpoch,
-        sessionId: request.sessionId,
-      });
-      ownerEpoch = credential.ownerEpoch;
-      await environments.startTunnel({ environmentId, ownerEpoch });
       const startingPlacement = placement;
       const activePlacement = await options.runActivationBarrier({
         sessionId: request.sessionId,
@@ -340,6 +353,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             // owner lock are still held. A committed manifest or durable ref keeps
             // recovery authoritative.
             if (!canonicalExists && !preparedExists && stillOwnsEmptyResult()) {
+              await placements.closeWorkerTurnToolState(reclaimClaim);
               placements.cancelWorkspaceResultAndReleaseTurn(reclaimClaim);
             }
           });

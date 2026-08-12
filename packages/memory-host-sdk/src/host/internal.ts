@@ -8,6 +8,7 @@ import { runWithConcurrency as runWithConcurrencyImpl } from "./concurrency.js";
 import { MEMORY_HOST_ROOT_FILENAME, normalizeConfiguredMemoryExtraPaths } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
 import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs.js";
+import { isExplicitExtraMarkdownFilePath } from "./explicit-extra-markdown.js";
 import {
   isFileMissingError,
   readRegularFile,
@@ -62,7 +63,7 @@ export type MemoryChunk = {
 };
 
 // Persisted with index metadata so boundary changes rebuild unchanged files.
-export const MEMORY_CHUNKING_VERSION = 2;
+export const MEMORY_CHUNKING_VERSION = 3;
 
 type MultimodalMemoryChunk = {
   chunk: MemoryChunk;
@@ -230,7 +231,8 @@ export async function listMemoryFiles(
   try {
     const dirStat = await fs.lstat(memoryDir);
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
-      await collectMemoryFilesFromDir(memoryDir, result, multimodal, shouldSkipWorkspaceMemoryPath);
+      // Default memory roots stay Markdown-only; multimodal discovery is an extraPaths opt-in.
+      await collectMemoryFilesFromDir(memoryDir, result, undefined, shouldSkipWorkspaceMemoryPath);
     }
   } catch {}
 
@@ -256,7 +258,11 @@ export async function listMemoryFiles(
           );
           continue;
         }
-        if (stat.isFile() && isAllowedMemoryFilePath(inputPath, multimodal)) {
+        if (
+          stat.isFile() &&
+          (isExplicitExtraMarkdownFilePath(inputPath) ||
+            isAllowedMemoryFilePath(inputPath, multimodal))
+        ) {
           result.push(inputPath);
         }
       } catch {}

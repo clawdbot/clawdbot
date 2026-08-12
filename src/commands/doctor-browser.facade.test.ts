@@ -4,13 +4,14 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   detectLegacyClawdBrowserProfileResidue,
   maybeArchiveLegacyClawdBrowserProfileResidue,
+  maybeRepairOwnedChromeExtensionNativeHosts,
   noteChromeMcpBrowserReadiness,
 } from "./doctor-browser.js";
 
-const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
+const loadBundledPluginPublicSurfaceModuleSyncCore = vi.hoisted(() => vi.fn());
 
 vi.mock("../plugin-sdk/facade-loader.js", () => ({
-  loadBundledPluginPublicSurfaceModuleSync,
+  loadBundledPluginPublicSurfaceModuleSyncCore,
 }));
 
 function requireFirstNoteCall(noteFn: ReturnType<typeof vi.fn>): unknown[] {
@@ -23,12 +24,12 @@ function requireFirstNoteCall(noteFn: ReturnType<typeof vi.fn>): unknown[] {
 
 describe("doctor browser facade", () => {
   beforeEach(() => {
-    loadBundledPluginPublicSurfaceModuleSync.mockReset();
+    loadBundledPluginPublicSurfaceModuleSyncCore.mockReset();
   });
 
   it("delegates browser readiness checks to the browser facade surface", async () => {
     const delegate = vi.fn().mockResolvedValue(undefined);
-    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+    loadBundledPluginPublicSurfaceModuleSyncCore.mockReturnValue({
       noteChromeMcpBrowserReadiness: delegate,
     });
 
@@ -41,7 +42,7 @@ describe("doctor browser facade", () => {
 
     await noteChromeMcpBrowserReadiness(cfg, { noteFn });
 
-    expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
+    expect(loadBundledPluginPublicSurfaceModuleSyncCore).toHaveBeenCalledWith({
       dirName: "browser",
       artifactBasename: "browser-doctor.js",
     });
@@ -56,7 +57,7 @@ describe("doctor browser facade", () => {
       canonicalUserDataDir: "/tmp/openclaw-home/browser/openclaw/user-data",
     };
     const detect = vi.fn().mockReturnValue(residue);
-    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+    loadBundledPluginPublicSurfaceModuleSyncCore.mockReturnValue({
       noteChromeMcpBrowserReadiness: vi.fn(),
       detectLegacyClawdBrowserProfileResidue: detect,
     });
@@ -73,7 +74,7 @@ describe("doctor browser facade", () => {
     };
 
     await expect(detectLegacyClawdBrowserProfileResidue(cfg, deps)).resolves.toEqual(residue);
-    expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
+    expect(loadBundledPluginPublicSurfaceModuleSyncCore).toHaveBeenCalledWith({
       dirName: "browser",
       artifactBasename: "browser-doctor.js",
     });
@@ -82,7 +83,7 @@ describe("doctor browser facade", () => {
 
   it("delegates legacy clawd browser profile cleanup to the browser facade surface", async () => {
     const cleanup = vi.fn().mockResolvedValue({ changes: ["archived"], warnings: [] });
-    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+    loadBundledPluginPublicSurfaceModuleSyncCore.mockReturnValue({
       noteChromeMcpBrowserReadiness: vi.fn(),
       maybeArchiveLegacyClawdBrowserProfileResidue: cleanup,
     });
@@ -103,15 +104,29 @@ describe("doctor browser facade", () => {
       changes: ["archived"],
       warnings: [],
     });
-    expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
+    expect(loadBundledPluginPublicSurfaceModuleSyncCore).toHaveBeenCalledWith({
       dirName: "browser",
       artifactBasename: "browser-doctor.js",
     });
     expect(cleanup).toHaveBeenCalledWith(cfg, deps);
   });
 
+  it("delegates owned Chrome native-host repair to the browser facade surface", async () => {
+    const repair = vi.fn().mockResolvedValue({ changes: ["repaired"], warnings: [] });
+    loadBundledPluginPublicSurfaceModuleSyncCore.mockReturnValue({
+      noteChromeMcpBrowserReadiness: vi.fn(),
+      maybeRepairOwnedChromeExtensionNativeHosts: repair,
+    });
+
+    await expect(maybeRepairOwnedChromeExtensionNativeHosts()).resolves.toEqual({
+      changes: ["repaired"],
+      warnings: [],
+    });
+    expect(repair).toHaveBeenCalledOnce();
+  });
+
   it("warns when browser profile cleanup surface is unavailable", async () => {
-    loadBundledPluginPublicSurfaceModuleSync.mockImplementation(() => {
+    loadBundledPluginPublicSurfaceModuleSyncCore.mockImplementation(() => {
       throw new Error("missing browser doctor facade");
     });
 
@@ -139,7 +154,7 @@ describe("doctor browser facade", () => {
         },
       ),
     ).resolves.toBeNull();
-    expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
+    expect(loadBundledPluginPublicSurfaceModuleSyncCore).not.toHaveBeenCalled();
   });
 
   it("skips loading the browser cleanup surface when legacy residue is absent", async () => {
@@ -152,11 +167,11 @@ describe("doctor browser facade", () => {
         },
       ),
     ).resolves.toEqual({ changes: [], warnings: [] });
-    expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
+    expect(loadBundledPluginPublicSurfaceModuleSyncCore).not.toHaveBeenCalled();
   });
 
   it("warns and no-ops when the browser doctor surface is unavailable", async () => {
-    loadBundledPluginPublicSurfaceModuleSync.mockImplementation(() => {
+    loadBundledPluginPublicSurfaceModuleSyncCore.mockImplementation(() => {
       throw new Error("missing browser doctor facade");
     });
 

@@ -16,6 +16,10 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tools.js";
 import { recordRunSkillUsage } from "../skills/runtime/run-usage.js";
 import {
+  copyAgentToolSourceExecutionGuard,
+  runAgentToolSourceExecutionGuard,
+} from "./agent-tool-source-execution-guard.js";
+import {
   buildToolContentPrivateData,
   emitSkillUsedDiagnostic,
   emitToolBlockedSecurityEvent,
@@ -69,7 +73,7 @@ import {
 } from "./code-mode-control-tools.js";
 import { attachInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 import { buildToolMutationState } from "./tool-mutation.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 import {
   formatToolExecutionErrorMessage,
   isTrustedToolExecutionPreflightError,
@@ -299,7 +303,7 @@ export function wrapToolWithBeforeToolCallHook(
       }
       const toolCallOrdinal = ctx?.allocateToolOutcomeOrdinal?.(toolCallId);
       const preExecutionStartedAt = Date.now();
-      const normalizedToolName = normalizeToolName(toolName || "tool");
+      const normalizedToolName = normalizeToolPolicyName(toolName || "tool");
       const trace =
         hookOptions.emitDiagnostics && ctx?.trace
           ? freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(ctx.trace))
@@ -491,6 +495,9 @@ export function wrapToolWithBeforeToolCallHook(
           toolParams: executeParams,
         });
       }
+      // Host capabilities can close while hooks, approval, validation, or
+      // steering awaits. Recheck at the final synchronous source boundary.
+      runAgentToolSourceExecutionGuard(tool);
       onImplementationStart?.();
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
       const eventBase = buildEventBase(executeParams);
@@ -701,6 +708,7 @@ export function rewrapToolWithBeforeToolCallHook(
   copyPluginToolMeta(tool, rewrapSource);
   copyChannelAgentToolMeta(tool as never, rewrapSource as never);
   copyToolTerminalPresentation(tool, rewrapSource);
+  copyAgentToolSourceExecutionGuard(tool, rewrapSource);
   return wrapToolWithBeforeToolCallHook(rewrapSource, ctx ?? preservedContext, options);
 }
 

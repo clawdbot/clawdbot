@@ -3,7 +3,6 @@ import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plu
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { NativeCommandSpec } from "openclaw/plugin-sdk/native-command-registry";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createDiscordActivityButton } from "../activities/interaction.js";
 import {
@@ -27,10 +26,11 @@ import {
   createDiscordModelPickerFallbackSelect,
   createDiscordNativeCommand,
 } from "./native-command.js";
+import type { DiscordProviderCommandSpec } from "./provider.commands.js";
 import { createDiscordQuestionButton } from "./questions.js";
 import type { ThreadBindingManager } from "./thread-bindings.types.js";
 
-type DiscordVoiceManager = import("../voice/manager.js").DiscordVoiceManager;
+type DiscordVoiceManager = import("../voice/voice-runtime.js").DiscordVoiceManager;
 
 export function createDiscordProviderInteractionSurface(params: {
   cfg: OpenClawConfig;
@@ -38,7 +38,7 @@ export function createDiscordProviderInteractionSurface(params: {
   accountId: string;
   applicationId?: string;
   token: string;
-  commandSpecs: NativeCommandSpec[];
+  commandSpecs: DiscordProviderCommandSpec[];
   nativeEnabled: boolean;
   voiceEnabled: boolean;
   groupPolicy: "open" | "disabled" | "allowlist";

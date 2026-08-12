@@ -102,11 +102,12 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         guard let route = await currentSessionMutationRoute() else { return nil }
         let transport = self
         return OpenClawChatSessionMutationRouteLease(
-            patchSession: { key, label, category, pinned, archived, unread in
+            patchSession: { key, expectedSessionID, label, category, pinned, archived, unread in
                 let target = transport.sessionTarget(for: key)
                 let request = OpenClawChatGatewayRequests.patchSession(
                     sessionKey: target.sessionKey,
                     agentID: target.agentID,
+                    expectedSessionID: expectedSessionID,
                     label: label,
                     category: category,
                     pinned: pinned,
@@ -431,6 +432,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
 
     func patchSession(
         key: String,
+        expectedSessionID: String? = nil,
         label: String?? = nil,
         category: String?? = nil,
         pinned: Bool? = nil,
@@ -441,6 +443,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         let request = OpenClawChatGatewayRequests.patchSession(
             sessionKey: target.sessionKey,
             agentID: target.agentID,
+            expectedSessionID: expectedSessionID,
             label: label,
             category: category,
             pinned: pinned,
@@ -773,6 +776,13 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
     func listQuestions() async throws -> [QuestionRecord] {
         let data = try await gateway.request(OpenClawChatGatewayRequests.questionList())
         return try JSONDecoder().decode(QuestionListResult.self, from: data).questions
+    }
+
+    func listTasks(sessionKey: String, agentID: String?) async throws -> [TaskSummary] {
+        let data = try await gateway.request(OpenClawChatGatewayRequests.tasksList(
+            sessionKey: sessionKey,
+            agentID: agentID))
+        return try JSONDecoder().decode(TasksListResult.self, from: data).tasks
     }
 
     func getQuestion(id: String) async throws -> QuestionRecord {

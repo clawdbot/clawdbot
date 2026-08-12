@@ -124,6 +124,8 @@ export function registerNativeHookRelay(
     expiresAtMs,
     preToolUseFailureProjections: new Map(),
     ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.runBeforeToolCall ? { runBeforeToolCall: params.runBeforeToolCall } : {}),
+    ...(params.assertActive ? { assertActive: params.assertActive } : {}),
     ...(params.onPreToolUseFailure ? { onPreToolUseFailure: params.onPreToolUseFailure } : {}),
   };
   relays.set(relayId, registration);
@@ -265,6 +267,9 @@ export async function invokeNativeHookRelay(
     event,
     rawPayload: params.rawPayload,
   });
+  if (event === "pre_tool_use" || event === "permission_request") {
+    registration.assertActive?.();
+  }
   recordNativeHookRelayInvocation(normalized);
   const startedAt = Date.now();
   const response = await processNativeHookRelayInvocation({
@@ -272,6 +277,11 @@ export async function invokeNativeHookRelay(
     invocation: normalized,
     adapter: getNativeHookRelayProviderAdapter(provider),
   });
+  // Policy and approval callbacks may yield while their admitted run closes.
+  // Never let a late allow cross back into the native runtime.
+  if (event === "pre_tool_use" || event === "permission_request") {
+    registration.assertActive?.();
+  }
   if (
     normalized.toolUseId &&
     response.failureDisposition &&

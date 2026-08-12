@@ -299,8 +299,11 @@ suite.define(() => {
 
       await page.locator("#new-session-place-trigger").click();
       const placePopover = page.locator("wa-popover.new-session-page__place-popover");
-      await placePopover.getByRole("button", { name: "Worktree" }).click();
-      await placePopover.getByLabel("Base branch").fill("main");
+      const worktreeButton = placePopover.getByRole("button", { name: "Worktree" });
+      await worktreeButton.waitFor({ state: "visible" });
+      const initialBranchRequestCount = (await gateway.getRequests("worktrees.branches")).length;
+      await worktreeButton.click();
+      await expect.poll(() => placePopover.getByLabel("Base branch").inputValue()).toBe("main");
       await placePopover.getByLabel("Worktree name").fill("terminal-task");
       await page.locator("#new-session-place-trigger").click();
       await page.locator(".new-session-page__message").fill("  inspect the checkout  ");
@@ -329,6 +332,9 @@ suite.define(() => {
         cwd: worktreePath,
         initialMessage: "inspect the checkout",
       });
+      expect(await gateway.getRequests("worktrees.branches")).toHaveLength(
+        initialBranchRequestCount,
+      );
       const requests = await gateway.getRequests();
       const methods = requests.map((request) => request.method);
       expect(methods.indexOf("worktrees.create")).toBeLessThan(

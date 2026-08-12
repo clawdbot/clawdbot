@@ -8,6 +8,7 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
+import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
@@ -436,6 +437,14 @@ function renderCatalogSessionRow(
       y,
       trigger,
     );
+  const openMenuFromEvent = (event: MouseEvent | KeyboardEvent) =>
+    handleContextMenuEvent(
+      event,
+      event instanceof KeyboardEvent
+        ? (event.currentTarget as HTMLElement).querySelector("[data-catalog-session-menu]")
+        : null,
+      (trigger, x, y) => openMenu(x, y, trigger ?? undefined),
+    );
   return html`
     <div
       class="sidebar-recent-session session-row-host ${active
@@ -445,10 +454,8 @@ function renderCatalogSessionRow(
         : ""}"
       data-session-key=${key}
       role="listitem"
-      @contextmenu=${(event: MouseEvent) => {
-        event.preventDefault();
-        openMenu(event.clientX, event.clientY);
-      }}
+      @contextmenu=${openMenuFromEvent}
+      @keydown=${openMenuFromEvent}
     >
       <a
         href=${href}

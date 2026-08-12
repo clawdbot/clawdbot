@@ -1,5 +1,5 @@
 import {
-  asOptionalRecord as asRecord,
+  asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -35,7 +35,7 @@ function readMemoryToolResultEvidence(params: {
   hasUsableMemoryResult: boolean;
   hasUnavailableMemorySearchResult: boolean;
 } {
-  const result = asRecord(params.result);
+  const result = asOptionalRecord(params.result);
   const rawContent = result?.content;
   const textContent =
     normalizeOptionalString(result?.detailedContent) ??
@@ -63,11 +63,11 @@ function readMemoryToolResultEvidence(params: {
 }
 
 function extractAssistantTextFromSessionRecord(value: unknown): string {
-  const record = asRecord(value);
+  const record = asOptionalRecord(value);
   if (!record) {
     return "";
   }
-  const nestedMessage = asRecord(record.message);
+  const nestedMessage = asOptionalRecord(record.message);
   const topLevelMessage = normalizeOptionalString(record.role) === "assistant" ? record : undefined;
   const message = nestedMessage ?? topLevelMessage;
   if (!message || normalizeOptionalString(message.role) !== "assistant") {

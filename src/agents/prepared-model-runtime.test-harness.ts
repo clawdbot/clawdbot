@@ -181,7 +181,7 @@ vi.mock("./auth-profiles/runtime-materializations.js", () => ({
 }));
 
 vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
-  getPreparedRuntimeAuthProfileStoreSnapshot: () => preparedModelRuntimeMocks.preparedAuthStore,
+  getPreparedRuntimeAuthProfileStoreSnapshotCore: () => preparedModelRuntimeMocks.preparedAuthStore,
   getRuntimeAuthProfileStoreSnapshot: () => preparedModelRuntimeMocks.preparedAuthStore,
   getRuntimeAuthProfileStoreSnapshotRevision: () => 0,
   registerRuntimeAuthProfileStoreMutationListener: (

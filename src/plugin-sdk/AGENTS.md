@@ -66,6 +66,14 @@ can affect bundled plugins and third-party plugins.
   execute plugin runtime, that is usually a boundary smell. Prefer metadata or
   descriptor-driven control-plane seams first.
 
+## Versioned Required Capabilities
+
+- Always: when a shipped Plugin SDK parameter contract gains required host authority, introduce a versioned type that requires it. Keep the legacy type source-compatible for its documented deprecation window, and migrate every bundled/internal caller in the same change.
+- Always: keep host capabilities generic and closure-bound. Bind every exposed tool, preparer, callback, approval operation, and native-action surface; retained copies must fail after owner or capability closure, including closure during awaited policy work.
+- Never: treat legacy optionality as a capability-free runtime path, reconstruct host authority inside a plugin, or add provider-specific authority to the generic contract.
+- Never: hand-edit generated SDK baselines, declarations, hashes, or budgets. Regenerate them canonically.
+- Ask first: obtain SDK and security owner acceptance before shortening a compatibility window, making a shipped type source-incompatible, or widening a capability’s trust, authority, or persistence boundary.
+
 ## Verification
 
 - If you touch SDK seams that affect lazy loading, hot channel entrypoints, or

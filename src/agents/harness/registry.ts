@@ -23,6 +23,9 @@ export function registerAgentHarness(
   const id = harness.id.trim();
   const harnesses = getAgentHarnesses();
   const pluginId = resolveDirectPluginRegistrationOwner(options?.ownerPluginId) ?? "core";
+  if (id === "openclaw") {
+    throw new Error('agent harness id "openclaw" is reserved for the built-in runtime');
+  }
   const entry = {
     pluginId,
     source: "runtime",
@@ -55,6 +58,15 @@ export function getRegisteredAgentHarness(id: string): RegisteredAgentHarness | 
         ownerPluginId: registration.pluginId === "core" ? undefined : registration.pluginId,
       }
     : undefined;
+}
+
+/** Resolves the registry-owned approval identity for the exact registered harness object. */
+export function resolveAgentHarnessOwnerPluginId(harness: AgentHarness): string {
+  const registration = getRegisteredAgentHarness(harness.id);
+  if (registration?.harness !== harness) {
+    throw new Error(`Agent harness ${harness.id} changed during owner resolution.`);
+  }
+  return registration.ownerPluginId ?? "core";
 }
 
 /** Lists registered harness records for selection and lifecycle fan-out. */

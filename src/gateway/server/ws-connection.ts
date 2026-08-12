@@ -160,8 +160,12 @@ type GatewayWsSharedHandlerParams = {
   gatewayHost?: string;
   pluginSurfaceScheme?: "http" | "https";
   getPluginNodeCapabilities?: () => PluginNodeCapabilitySurface[];
-  resolvedAuth: ResolvedGatewayAuth;
-  getResolvedAuth?: () => ResolvedGatewayAuth;
+  /**
+   * Auth is read per connection, not per process: a reload can rotate it while
+   * this handler stays attached. One getter keeps that the only source, so no
+   * caller can hand over a snapshot that silently outlives the config it came from.
+   */
+  getResolvedAuth: () => ResolvedGatewayAuth;
   getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
@@ -240,8 +244,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     port,
     pluginSurfaceScheme,
     getPluginNodeCapabilities,
-    resolvedAuth,
-    getResolvedAuth = () => resolvedAuth,
+    getResolvedAuth,
     getRequiredSharedGatewaySessionGeneration = () =>
       resolveSharedGatewaySessionGeneration(
         getResolvedAuth(),

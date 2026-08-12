@@ -17,7 +17,7 @@ import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   EMPTY_PLUGIN_SCHEMA,
-  makeTempDir,
+  makePluginLoaderTempDir,
   mkdirSafe,
   type PluginRegistry,
   resetPluginLoaderTestStateForTest,
@@ -133,7 +133,7 @@ export function setupBundledDreamingMemoryPlugins(params?: {
   coreBody?: string;
 }) {
   const selectedId = params?.selectedId ?? "memory-lancedb";
-  const bundledDir = makeTempDir();
+  const bundledDir = makePluginLoaderTempDir();
   const memoryCoreDir = path.join(bundledDir, "memory-core");
   const selectedMemoryDir = path.join(bundledDir, selectedId);
   mkdirSafe(memoryCoreDir);
@@ -191,7 +191,7 @@ export function writeBundledPlugin(params: {
   filename?: string;
   bundledDir?: string;
 }) {
-  const bundledDir = params.bundledDir ?? makeTempDir();
+  const bundledDir = params.bundledDir ?? makePluginLoaderTempDir();
   const plugin = writePlugin({
     id: params.id,
     dir: bundledDir,
@@ -204,7 +204,7 @@ export function writeBundledPlugin(params: {
 }
 
 export function makeOpenClawDevSourceRoot() {
-  const root = makeTempDir();
+  const root = makePluginLoaderTempDir();
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }), "utf-8");
   mkdirSafe(path.join(root, "src"));
   mkdirSafe(path.join(root, "extensions"));
@@ -217,7 +217,7 @@ export function writeWorkspacePlugin(params: {
   filename?: string;
   workspaceDir?: string;
 }) {
-  const workspaceDir = params.workspaceDir ?? makeTempDir();
+  const workspaceDir = params.workspaceDir ?? makePluginLoaderTempDir();
   const workspacePluginDir = path.join(workspaceDir, ".openclaw", "extensions", params.id);
   mkdirSafe(workspacePluginDir);
   const plugin = writePlugin({
@@ -230,7 +230,7 @@ export function writeWorkspacePlugin(params: {
 }
 
 export function withStateDir<T>(run: (stateDir: string) => T) {
-  const stateDir = makeTempDir();
+  const stateDir = makePluginLoaderTempDir();
   return withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => run(stateDir));
 }
 
@@ -254,7 +254,7 @@ export function loadBundledMemoryPluginRegistry(options?: {
     });
   }
 
-  const bundledDir = makeTempDir();
+  const bundledDir = makePluginLoaderTempDir();
   let pluginDir = bundledDir;
   let pluginFilename = options?.pluginFilename ?? "memory-core.cjs";
 
@@ -306,7 +306,7 @@ export function loadBundledMemoryPluginRegistry(options?: {
 
 export function setupBundledTelegramPlugin() {
   if (!cachedBundledTelegramDir) {
-    cachedBundledTelegramDir = makeTempDir();
+    cachedBundledTelegramDir = makePluginLoaderTempDir();
     writePlugin({
       id: "telegram",
       body: BUNDLED_TELEGRAM_PLUGIN_BODY,
@@ -597,8 +597,8 @@ export function createErrorLogger(errors: string[]) {
 }
 
 function createEscapingEntryFixture(params: { id: string; sourceBody: string }) {
-  const pluginDir = makeTempDir();
-  const outsideDir = makeTempDir();
+  const pluginDir = makePluginLoaderTempDir();
+  const outsideDir = makePluginLoaderTempDir();
   const outsideEntry = path.join(outsideDir, "outside.cjs");
   const linkedEntry = path.join(pluginDir, "entry.cjs");
   fs.writeFileSync(outsideEntry, params.sourceBody, "utf-8");
@@ -676,7 +676,7 @@ export function createSetupEntryChannelPluginFixture(params: {
   requireBundledFullRuntimeBeforeLoad?: boolean;
 }) {
   useNoBundledPlugins();
-  const pluginDir = makeTempDir();
+  const pluginDir = makePluginLoaderTempDir();
   const fullMarker = path.join(pluginDir, "full-loaded.txt");
   const setupMarker = path.join(pluginDir, "setup-loaded.txt");
   const listAccountIds = params.configured ? '["default"]' : "[]";
@@ -888,9 +888,9 @@ module.exports = {
 
 export function createEnvResolvedPluginFixture(pluginId: string) {
   useNoBundledPlugins();
-  const openclawHome = makeTempDir();
-  const ignoredHome = makeTempDir();
-  const stateDir = makeTempDir();
+  const openclawHome = makePluginLoaderTempDir();
+  const ignoredHome = makePluginLoaderTempDir();
+  const stateDir = makePluginLoaderTempDir();
   const pluginDir = path.join(openclawHome, "plugins", pluginId);
   mkdirSafe(pluginDir);
   const plugin = writePlugin({

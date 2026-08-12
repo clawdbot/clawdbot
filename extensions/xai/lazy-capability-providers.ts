@@ -308,6 +308,9 @@ function createLazyXaiRealtimeVoiceBridge(
                 ...(req.onEvent
                   ? { onEvent: guardProviderCallback(loadGeneration, req.onEvent) }
                   : {}),
+                ...(req.onResponseDone
+                  ? { onResponseDone: guardProviderCallback(loadGeneration, req.onResponseDone) }
+                  : {}),
                 ...(req.onToolCall
                   ? { onToolCall: guardProviderCallback(loadGeneration, req.onToolCall) }
                   : {}),

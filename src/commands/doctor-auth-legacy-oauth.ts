@@ -40,8 +40,8 @@ export async function maybeRepairLegacyOAuthProfileIds(
     return cfg;
   }
   let nextCfg = cfg;
-  const { resolvePluginProviders } = await loadProviderRuntime();
-  const providers = resolvePluginProviders({
+  const { resolvePluginProvidersCore } = await loadProviderRuntime();
+  const providers = resolvePluginProvidersCore({
     config: cfg,
     env: process.env,
     mode: "setup",

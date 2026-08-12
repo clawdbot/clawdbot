@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { hasModelSwitchContinuitySignal } from "./model-switch-eval.js";
@@ -103,8 +104,7 @@ async function runToolContinuity(
       },
       splitModelRef,
       normalizeModelRef,
-      normalizeLowercaseStringOrEmpty: (value: unknown) =>
-        typeof value === "string" ? value.trim().toLowerCase() : "",
+      normalizeLowercaseStringOrEmpty,
       resolveQaLiveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,
       hasModelSwitchContinuitySignal,
       runAgentPrompt,
@@ -138,6 +138,21 @@ describe("model-switch tool continuity terminal evidence", () => {
     });
     expect(result.steps[0]?.details).toBe(
       "the **model handoff** preserved the QA mission after rereading the scenario pack",
+    );
+  });
+
+  it("accepts a logical read appended after the physical Code Mode exec", async () => {
+    const { result } = await runToolContinuity(["exec", "read"]);
+
+    expect(result.status).toBe("pass");
+    expect(result.modelSwitchEvidence).toMatchObject({
+      alternate: { runId: "run-2", successfulToolNames: ["exec", "read"] },
+    });
+  });
+
+  it("rejects a bare successful Code Mode exec without logical read evidence", async () => {
+    await expect(runToolContinuity(["exec"])).rejects.toThrow(
+      "alternate-model run did not return exact owned successful read evidence",
     );
   });
 

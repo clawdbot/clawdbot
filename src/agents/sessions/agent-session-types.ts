@@ -84,6 +84,8 @@ export interface AgentSessionConfig {
   withSessionWriteSettlement?: AgentSessionWriteSettlementRunner;
   /** Owner of reactive context-overflow recovery. Defaults to the session. */
   contextOverflowRecoveryOwner?: "session" | "caller";
+  /** Whether disposing this object ends the durable provider session. Defaults to true. */
+  cleanupProviderSessionResourcesOnDispose?: boolean;
 }
 
 export interface ExtensionBindings {

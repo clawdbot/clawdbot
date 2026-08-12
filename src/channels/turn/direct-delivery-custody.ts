@@ -35,14 +35,16 @@ export function createDirectPendingFinalCustody(
         pendingFinalDeliveryCompletion: identity,
       }),
     onPlatformSendDispatch: () => {
-      admission ??= settlePendingFinalDelivery(completion, "unknown", "prepared").then((result) => {
-        if (result.state !== "unknown") {
-          throw new PlatformMessageNotDispatchedError(
-            "Pending final delivery ownership changed before platform dispatch",
-            { cause: new Error(`pending final delivery is ${result.state}`) },
-          );
-        }
-      });
+      admission ??= settlePendingFinalDelivery(completion, "unknown", ["prepared", "queued"]).then(
+        (result) => {
+          if (result.state !== "unknown") {
+            throw new PlatformMessageNotDispatchedError(
+              "Pending final delivery ownership changed before platform dispatch",
+              { cause: new Error(`pending final delivery is ${result.state}`) },
+            );
+          }
+        },
+      );
       return admission;
     },
   };

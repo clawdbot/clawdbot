@@ -14,12 +14,11 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
-import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { buildDashboardSessionKey } from "../session-create-service.js";
-import { loadSessionEntryReadOnly } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import {
   abandonTaskSuggestionAcceptance,
   beginTaskSuggestionAcceptance,
@@ -70,9 +69,13 @@ async function rollbackSuggestedTaskSession(params: {
   agentId?: string;
   options: GatewayRequestHandlerOptions;
 }): Promise<boolean> {
-  let deletionConfirmed = false;
+  let deletionResponse: { ok: true; worktreePreserved: boolean } | { ok: false } | undefined;
   try {
-    await sessionDeleteHandlers["sessions.delete"]?.({
+    const deleteSession = sessionDeleteHandlers["sessions.delete"];
+    if (!deleteSession) {
+      return false;
+    }
+    await deleteSession({
       ...params.options,
       params: {
         key: params.key,
@@ -81,41 +84,33 @@ async function rollbackSuggestedTaskSession(params: {
         emitLifecycleHooks: false,
       },
       respond: (ok, payload) => {
-        deletionConfirmed = Boolean(
-          ok &&
-          payload &&
-          typeof payload === "object" &&
-          typeof (payload as { deleted?: unknown }).deleted === "boolean",
-        );
+        if (
+          !ok ||
+          !payload ||
+          typeof payload !== "object" ||
+          typeof (payload as { deleted?: unknown }).deleted !== "boolean"
+        ) {
+          deletionResponse = { ok: false };
+          return;
+        }
+        deletionResponse = {
+          ok: true,
+          worktreePreserved:
+            (payload as { worktreePreserved?: unknown }).worktreePreserved !== undefined,
+        };
       },
     });
   } catch {
-    // The state probes below determine whether the preallocated session key
-    // and its worktree were fully removed despite a handler-level failure.
+    return false;
+  }
+  if (!deletionResponse?.ok || deletionResponse.worktreePreserved) {
+    return false;
   }
   try {
-    if (
-      !deletionConfirmed &&
-      loadSessionEntryReadOnly(params.key, { agentId: params.agentId }).entry
-    ) {
-      return false;
-    }
+    return !loadGatewaySessionEntryReadOnly(params.key, { agentId: params.agentId }).entry;
   } catch {
     return false;
   }
-  const worktree = managedWorktrees.findLiveByOwner("session", params.key);
-  if (worktree) {
-    try {
-      await managedWorktrees.remove({
-        id: worktree.id,
-        reason: "suggested-task-seed-failed",
-        force: true,
-      });
-    } catch {
-      return false;
-    }
-  }
-  return managedWorktrees.findLiveByOwner("session", params.key) === undefined;
 }
 
 async function failSuggestedTaskSession(params: {
@@ -363,9 +358,9 @@ async function deliverSuggestedTaskToSourceSession(params: {
   const agentId = resolveSuggestionAgentId(params.suggestion, params.options);
   const fail = (error: NonNullable<Parameters<RespondFn>[2]>) =>
     failSuggestedTaskDelivery({ taskId: params.taskId, options: params.options, error });
-  let source: ReturnType<typeof loadSessionEntryReadOnly>;
+  let source: ReturnType<typeof loadGatewaySessionEntryReadOnly>;
   try {
-    source = loadSessionEntryReadOnly(params.suggestion.sessionKey, { agentId });
+    source = loadGatewaySessionEntryReadOnly(params.suggestion.sessionKey, { agentId });
   } catch (error) {
     return fail(errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
   }

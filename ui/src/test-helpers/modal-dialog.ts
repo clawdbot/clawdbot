@@ -43,6 +43,40 @@ export function installDialogPolyfill(): () => void {
   };
 }
 
+/**
+ * Wait for the confirm dialog `showConfirmDialog` renders into `document.body`.
+ * Returned separately from answering it so tests can mutate owner state (a
+ * reconnect, an agent switch) while the decision is still pending.
+ */
+export function waitForConfirmDialogActions(): Promise<HTMLElement> {
+  return vi.waitFor(() => {
+    const actions = document.body.querySelector<HTMLElement>(
+      "openclaw-modal-dialog .exec-approval-actions",
+    );
+    if (!actions) {
+      throw new Error("Expected an open confirm dialog");
+    }
+    return actions;
+  });
+}
+
+export function answerConfirmDialog(actions: HTMLElement, choice: "confirm" | "cancel") {
+  const button = actions.querySelector<HTMLButtonElement>(
+    choice === "confirm" ? ".btn.danger, .btn.primary" : ".btn[autofocus]",
+  );
+  if (!button) {
+    throw new Error(`Expected the confirm dialog's ${choice} button`);
+  }
+  button.click();
+}
+
+/** Let each dialog owner release its module state before a test removes the DOM. */
+export function cancelOpenModalDialogs() {
+  for (const dialog of document.body.querySelectorAll("openclaw-modal-dialog")) {
+    dialog.dispatchEvent(new CustomEvent("modal-cancel"));
+  }
+}
+
 /** Await a dialog whose owner loads it behind a lazy import, then read it. */
 export async function waitForRenderedModalDialog(container: HTMLElement) {
   await vi.waitFor(() => {
@@ -51,6 +85,25 @@ export async function waitForRenderedModalDialog(container: HTMLElement) {
     }
   });
   return getRenderedModalDialog(container);
+}
+
+export async function waitForInputDialog(): Promise<HTMLInputElement> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const input = document.body.querySelector("openclaw-modal-dialog input");
+    if (input instanceof HTMLInputElement) {
+      return input;
+    }
+    await nextFrame();
+  }
+  throw new Error("Expected an open input dialog");
+}
+
+export async function submitInputDialog(value: string): Promise<void> {
+  const input = await waitForInputDialog();
+  input.value = value;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  await nextFrame();
+  input.closest("form")?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 }
 
 export async function getRenderedModalDialog(container: HTMLElement) {

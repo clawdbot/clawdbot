@@ -11,6 +11,7 @@ import {
   parseStrictInteger,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserActRequest } from "./client-actions.types.js";
 import { DEFAULT_BROWSER_ACTION_TIMEOUT_MS } from "./constants.js";
 
@@ -110,7 +111,7 @@ function addNavigationGraceMs(durationMs: number, count = 1): number {
 }
 
 function isActionObject(value: unknown): value is BrowserActRequest {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  return isRecord(value);
 }
 
 function resolveLeafExecutionBudgetMs(

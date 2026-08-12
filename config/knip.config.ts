@@ -21,6 +21,8 @@ const repositoryScriptEntries = [
   "apps/android/scripts/build-release-artifacts.ts!",
   "scripts/bundle-a2ui.mts!",
   "scripts/build-discord-activity-sdk.mts!",
+  "scripts/check-control-ui-performance.mts!",
+  "scripts/check-control-ui-precompressed-assets.mts!",
   "scripts/check-live-cache.ts!",
   "scripts/check-package-dist-imports.mjs!",
   "scripts/dev/ios-node-e2e.ts!",
@@ -156,9 +158,9 @@ const rootEntries = [
   // Loaded by URL from setup-inference-detection.ts; no static import edge exists.
   "src/system-agent/setup-inference-detection.worker.ts!",
   // Split runtime loaded through a path assembled in subagent-registry.ts.
-  "src/agents/subagent-registry.runtime.ts!",
+  "src/agents/subagents/registry/subagent-registry.runtime.ts!",
   // Loaded lazily by the sweeper only when a receipt-bearing or interrupted row is found.
-  "src/agents/subagent-registry-restart-recovery.ts!",
+  "src/agents/subagents/registry/subagent-registry-restart-recovery.ts!",
   // Task cancellation loads this control facade by string path to avoid a registry cycle.
   "src/tasks/task-registry-control.runtime.ts!",
   // Human plugin listing lazily loads its formatter to keep JSON startup lean.
@@ -190,10 +192,6 @@ const rootEntries = [
   "src/plugins/contracts/rootdir-boundary-canary.ts!",
   // Mintlify executes every JavaScript file in the docs content directory on each page.
   "docs/nav-tabs-underline.js!",
-  // Knip loads these audit configurations by command-line path.
-  "config/knip.config.ts!",
-  "config/knip.all-exports.config.ts!",
-  "config/knip.scripts-exports.config.ts!",
   // Native applications load these JavaScript assets directly rather than through Node imports.
   "apps/android/app/src/main/assets/katex/katex.min.js!",
   "apps/android/app/src/main/assets/katex/renderer.js!",
@@ -379,7 +377,6 @@ const config = {
     // Declaration companions describe executable JavaScript modules; they are not standalone roots.
     "scripts/**/*.d.{mts,ts}",
     "**/live-*.ts",
-    "src/secrets/credential-matrix.ts",
     "src/shared/text/assistant-visible-text.ts",
     bundledPluginFile("telegram", "src/bot/reply-threading.ts"),
     bundledPluginFile("telegram", "src/draft-chunking.ts"),
@@ -413,6 +410,10 @@ const config = {
     "src/plugins/memory-state.ts": ["exports", "types"],
     "src/plugins/session-discussion-registry.ts": ["exports"],
     "src/tasks/detached-task-runtime-state.ts": ["exports"],
+    // Focused Control UI tests consume these explicit state-machine seams;
+    // production uses them through their owning module/controller.
+    "ui/src/pages/chat/chat-state-refresh.ts": ["exports"],
+    "ui/src/pages/chat/composer-persistence.ts": ["exports"],
     // Focused media tests consume these explicit seams; production uses the helpers in-module.
     "src/agents/embedded-agent-subscribe.handlers.lifecycle.ts": ["exports"],
     "src/gateway/server-methods/chat-webchat-media.ts": ["exports"],
@@ -499,6 +500,7 @@ const config = {
       // Mirror the published export map so knip sees every dist entry point.
       entry: [
         "src/index.ts!",
+        "src/provider-types.ts!",
         "src/providers.ts!",
         "src/types.ts!",
         "src/validation.ts!",
@@ -600,6 +602,7 @@ const config = {
     "packages/media-core": {
       entry: [
         "src/index.ts!",
+        "src/attachment-classify.ts!",
         "src/base64.ts!",
         "src/constants.ts!",
         "src/content-length.ts!",
@@ -680,13 +683,12 @@ const config = {
       "browser-host-inspection.ts!",
       "browser-maintenance.ts!",
       "browser-profiles.ts!",
+      // Built by tsdown as the native messaging executable; Chrome launches it by path.
+      "native-host-entry.ts!",
       // Chrome manifest/package scripts load these without TypeScript imports.
       "chrome-extension/background.js!",
+      "chrome-extension/options.js!",
       "chrome-extension/popup.js!",
-      "chrome-extension/sidepanel.js!",
-      "scripts/build-copilot-runtime.mjs!",
-      // esbuild receives this browser bootstrap by an assembled path.
-      "scripts/copilot-runtime-entry.ts!",
       "scripts/copy-chrome-extension.mjs!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/canvas`]: bundledPluginWorkspace([

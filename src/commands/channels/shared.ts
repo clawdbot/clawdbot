@@ -7,18 +7,14 @@ import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targ
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import {
-  requireValidConfigFileSnapshot,
-  requireValidConfigSnapshot,
-} from "../config-validation.js";
+import { requireValidConfig, requireValidConfigFileSnapshot } from "../config-validation.js";
 
 export type ChatChannel = ChannelId;
 
-export { requireValidConfigSnapshot };
 export { requireValidConfigFileSnapshot };
 
 /** Load valid channel command config with read-only secret resolution applied. */
-export async function requireValidConfig(
+export async function requireValidChannelConfig(
   runtime: RuntimeEnv = defaultRuntime,
   secretResolution?: {
     commandName?: string;
@@ -26,7 +22,7 @@ export async function requireValidConfig(
     skipPluginValidation?: boolean;
   },
 ): Promise<OpenClawConfig | null> {
-  const cfg = await requireValidConfigSnapshot(
+  const cfg = await requireValidConfig(
     runtime,
     secretResolution?.skipPluginValidation ? { skipPluginValidation: true } : undefined,
   );

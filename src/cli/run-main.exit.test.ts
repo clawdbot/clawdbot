@@ -58,6 +58,11 @@ const closeActiveMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {
 const hasMemoryRuntimeMock = vi.hoisted(() => vi.fn(() => false));
 const listRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn((): unknown[] => []));
 const disposeRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn(async () => {}));
+const hasManagedProviderLocalServicesMock = vi.hoisted(() => vi.fn(() => false));
+const hasProviderTransportDispatcherPoolMock = vi.hoisted(() => vi.fn(() => false));
+const providerCleanupModuleImportState = vi.hoisted(() => ({ local: 0, transport: 0 }));
+const stopManagedProviderLocalServicesMock = vi.hoisted(() => vi.fn());
+const closeProviderTransportDispatcherPoolMock = vi.hoisted(() => vi.fn(async () => {}));
 const getActiveMcpLoopbackRuntimeMock = vi.hoisted(() =>
   vi.fn<() => { port: number } | undefined>(() => undefined),
 );
@@ -268,8 +273,6 @@ vi.mock("./one-shot-exit.js", () => ({
 
 vi.mock("../infra/env.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/env.js")>()),
-  isTruthyEnvValue: (value?: string) =>
-    typeof value === "string" && ["1", "on", "true", "yes"].includes(value.trim().toLowerCase()),
   normalizeEnv: normalizeEnvMock,
 }));
 
@@ -306,7 +309,7 @@ vi.mock("../infra/runtime-guard.js", () => ({
 }));
 
 vi.mock("../plugins/memory-runtime.js", () => ({
-  closeActiveMemorySearchManagers: closeActiveMemorySearchManagersMock,
+  closeActiveMemorySearchManagersCore: closeActiveMemorySearchManagersMock,
 }));
 
 vi.mock("../plugins/memory-state.js", () => ({
@@ -317,6 +320,21 @@ vi.mock("../agents/harness/registry.js", () => ({
   listRegisteredAgentHarnesses: listRegisteredAgentHarnessesMock,
   disposeRegisteredAgentHarnesses: disposeRegisteredAgentHarnessesMock,
 }));
+
+vi.mock("../agents/provider-runtime-lifecycle.js", () => ({
+  hasManagedProviderLocalServices: hasManagedProviderLocalServicesMock,
+  hasProviderTransportDispatcherPool: hasProviderTransportDispatcherPoolMock,
+}));
+
+vi.mock("../agents/provider-local-service.js", () => {
+  providerCleanupModuleImportState.local += 1;
+  return { stopManagedProviderLocalServices: stopManagedProviderLocalServicesMock };
+});
+
+vi.mock("../agents/provider-transport-dispatcher-pool.js", () => {
+  providerCleanupModuleImportState.transport += 1;
+  return { closeProviderTransportDispatcherPool: closeProviderTransportDispatcherPoolMock };
+});
 
 vi.mock("../gateway/mcp-http.loopback-runtime.js", () => ({
   getActiveMcpLoopbackRuntime: getActiveMcpLoopbackRuntimeMock,
@@ -560,6 +578,8 @@ describe("runCli exit behavior", () => {
     });
     hasMemoryRuntimeMock.mockReturnValue(false);
     listRegisteredAgentHarnessesMock.mockReturnValue([]);
+    hasManagedProviderLocalServicesMock.mockReturnValue(false);
+    hasProviderTransportDispatcherPoolMock.mockReturnValue(false);
     outputPrecomputedBrowserHelpTextMock.mockReturnValue(false);
     outputPrecomputedNodesHelpTextMock.mockReturnValue(false);
     outputPrecomputedRootHelpTextMock.mockReturnValue(false);
@@ -583,6 +603,22 @@ describe("runCli exit behavior", () => {
     delete process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH;
     delete process.env.OPENCLAW_HIDE_BANNER;
     loggingState.forceConsoleToStderr = false;
+  });
+
+  it("does not load inactive provider cleanup modules for cold help", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => "nodes", aliases: () => [] }],
+      parseAsync,
+    });
+
+    await withEnvAsync({ OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1" }, async () => {
+      await runCli(["node", "openclaw", "nodes", "--help"]);
+    });
+
+    expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "nodes", "--help"]);
+    expect(providerCleanupModuleImportState).toEqual({ local: 0, transport: 0 });
   });
 
   it("does not import dotenv for gateway forms without a workspace file", async () => {
@@ -663,8 +699,16 @@ describe("runCli exit behavior", () => {
   it("completes asynchronous teardown before returning to the outer entrypoint", async () => {
     const order: string[] = [];
     listRegisteredAgentHarnessesMock.mockReturnValueOnce([{ harness: { id: "copilot" } }]);
+    hasManagedProviderLocalServicesMock.mockReturnValueOnce(true);
+    hasProviderTransportDispatcherPoolMock.mockReturnValueOnce(true);
     disposeRegisteredAgentHarnessesMock.mockImplementationOnce(async () => {
       order.push("harnesses");
+    });
+    stopManagedProviderLocalServicesMock.mockImplementationOnce(() => {
+      order.push("provider-local-services");
+    });
+    closeProviderTransportDispatcherPoolMock.mockImplementationOnce(async () => {
+      order.push("provider-transport-dispatchers");
     });
     getActiveMcpLoopbackRuntimeMock.mockReturnValueOnce({ port: 1234 });
     closeMcpLoopbackServerMock.mockImplementationOnce(async () => {
@@ -678,7 +722,13 @@ describe("runCli exit behavior", () => {
 
     await runCli(["node", "openclaw", "models", "status", "--probe"]);
 
-    expect(order).toEqual(["harnesses", "mcp-loopback", "memory"]);
+    expect(order).toEqual([
+      "harnesses",
+      "provider-local-services",
+      "provider-transport-dispatchers",
+      "mcp-loopback",
+      "memory",
+    ]);
     expect(flushExitAfterOneShotOutputMock).not.toHaveBeenCalled();
   });
 

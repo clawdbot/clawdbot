@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 // Covers installed plugin index read, write, and policy behavior.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
@@ -46,10 +47,6 @@ function writeRuntimeEntry(rootDir: string) {
     "throw new Error('runtime entry should not load while building installed plugin index');\n",
     "utf-8",
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");

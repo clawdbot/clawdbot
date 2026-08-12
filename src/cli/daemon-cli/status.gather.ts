@@ -1,5 +1,6 @@
 // Collects daemon status from service files, config snapshots, ports, probes, and plugin drift.
 import fs from "node:fs/promises";
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import JSON5 from "json5";
 import type { classifyGatewayConnectFailure } from "../../../packages/gateway-protocol/src/connect-error-details.js";
@@ -174,10 +175,7 @@ function resolveSnapshotRuntimeConfig(snapshot: ConfigFileSnapshot | null): Open
 }
 
 function coerceStatusConfig(value: unknown): OpenClawConfig {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-  return value as OpenClawConfig;
+  return asNonArrayRecord(value) as OpenClawConfig;
 }
 
 function hasOwnKey(value: unknown, key: string): boolean {
@@ -568,7 +566,10 @@ function hasActiveGatewayExecProbeCredential(params: {
         explicitAuth: params.explicitAuth,
         modeOverride: params.mode,
         path,
+        // Remote probe config suppresses ambient credentials across auth types.
+        // Mirror that owner here so env auth cannot hide a winning exec ref.
         remoteTokenFallback: "remote-only",
+        remotePasswordFallback: "remote-only",
       })
     ) {
       return false;

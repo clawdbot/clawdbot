@@ -21,7 +21,7 @@ function deferred<T>() {
 
 function setupResult(
   setupCode: string,
-  access?: "full" | "limited",
+  access?: "full" | "limited" | "node",
   accessDowngraded?: boolean,
 ): DevicePairSetup {
   return {
@@ -141,6 +141,22 @@ describe("device pairing setup state", () => {
     });
     expect(state.devicePairSetupAccess).toBe("limited");
     expect(state.devicePairSetup?.setupCode).toBe("LIMITED");
+  });
+
+  it("requests the node bootstrap profile when selected", async () => {
+    const request = vi.fn().mockResolvedValue(setupResult("NODE", "node"));
+    const state = stateWithClient({
+      request,
+    } as unknown as DevicePairSetupState["client"]);
+
+    await setDevicePairSetupAccess(state, "node");
+    await refreshDevicePairSetup(state);
+
+    expect(request).toHaveBeenCalledWith("device.pair.setupCode", {
+      bootstrapProfile: "node",
+      includeQr: false,
+    });
+    expect(state.devicePairSetupAccess).toBe("node");
   });
 
   it("reflects a server-side plaintext downgrade", async () => {

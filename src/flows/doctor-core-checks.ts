@@ -5,6 +5,7 @@ import { isExperimentalClawsEnabled } from "../claws/experimental.js";
 import {
   detectLegacyClawdBrowserProfileResidue,
   maybeArchiveLegacyClawdBrowserProfileResidue,
+  maybeRepairOwnedChromeExtensionNativeHosts,
   noteChromeMcpBrowserReadiness,
   type LegacyClawdBrowserProfileResidue,
 } from "../commands/doctor-browser.js";
@@ -1005,6 +1006,23 @@ const browserCheck: HealthCheck = {
     const collector = createNoteCollector("core/doctor/browser");
     await noteChromeMcpBrowserReadiness(ctx.cfg, { noteFn: collector.noteFn });
     return collector.findings;
+  },
+  async repair(ctx) {
+    if (ctx.dryRun === true) {
+      return {
+        status: "skipped",
+        reason: "native-host repair requires filesystem writes",
+        changes: [],
+      };
+    }
+    const result = await maybeRepairOwnedChromeExtensionNativeHosts();
+    return {
+      ...(result.changes.length === 0 && result.warnings.length > 0
+        ? { status: "failed" as const, reason: result.warnings.join("; ") }
+        : {}),
+      changes: result.changes,
+      warnings: result.warnings,
+    };
   },
 };
 

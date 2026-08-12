@@ -53,6 +53,13 @@ vi.mock("./webhook-handler.js", () => ({
 const { synologyChatPlugin } = await import("./channel.js");
 const getSynologyChatSetupStatus = createPluginSetupWizardStatus(synologyChatPlugin);
 
+describe("synology chat target classification", () => {
+  it("accepts numeric chat user ids as direct", () => {
+    expect(synologyChatPlugin.messaging?.inferTargetChatType?.({ to: "42" })).toBe("direct");
+    expect(synologyChatPlugin.messaging?.inferTargetChatType?.({ to: "room" })).toBeUndefined();
+  });
+});
+
 describe("createSynologyChatPlugin", () => {
   beforeEach(() => {
     vi.stubEnv("SYNOLOGY_CHAT_TOKEN", "");

@@ -744,13 +744,13 @@ directive warnings.
 **Disable model overrides entirely:**
 
 ```json5
-{ messages: { tts: { modelOverrides: { enabled: false } } } }
+{ tts: { modelOverrides: { enabled: false } } }
 ```
 
 **Allow provider switching while keeping other knobs configurable:**
 
 ```json5
-{ messages: { tts: { modelOverrides: { enabled: true, allowProvider: true, allowSeed: false } } } }
+{ tts: { modelOverrides: { enabled: true, allowProvider: true, allowSeed: false } } }
 ```
 
 ## Slash commands

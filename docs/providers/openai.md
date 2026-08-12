@@ -48,7 +48,7 @@ changing config.
 | Goal                                              | Use                                                                | Notes                                                               |
 | ------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------- |
 | ChatGPT/Codex subscription, native Codex runtime  | `openai/gpt-5.6-sol`                                               | Fresh subscription setup; sign in with Codex auth.                  |
-| Direct API-key billing for agent turns            | `openai/gpt-5.6` plus an ordered API-key auth profile              | Fresh API-key setup; the bare direct-API id resolves to Sol.        |
+| Direct API-key billing for agent turns            | `openai/gpt-5.6-sol` plus an ordered API-key auth profile          | Fresh API-key setup uses the explicit Sol id.                       |
 | Choose an exact GPT-5.6 tier                      | `openai/gpt-5.6-sol`, `-terra`, or `-luna`                         | Check `models list` for the tiers available to this account.        |
 | Account without GPT-5.6 access                    | `openai/gpt-5.5`                                                   | Explicit recovery choice; OpenClaw does not silently downgrade.     |
 | Direct API-key billing, explicit OpenClaw runtime | `openai/gpt-5.6` plus provider/model `agentRuntime.id: "openclaw"` | Select a normal `openai` API-key profile.                           |
@@ -116,11 +116,13 @@ lower-cost tier. See the
 [GPT-5.6 launch announcement](https://openai.com/index/previewing-gpt-5-6-sol/)
 and [access guide](https://help.openai.com/en/articles/20001325-a-preview-of-gpt-5-6-sol-terra-and-luna).
 
-With direct OpenAI API-key auth, the bare `openai/gpt-5.6` id is an alias for
-Sol and is the fresh setup default. The native Codex catalog does not apply
-that direct-API alias client-side; depending on workspace access, it can show
-the exact Sol, Terra, and Luna ids. Fresh ChatGPT/Codex OAuth setup therefore
-uses `openai/gpt-5.6-sol`. Check the current account with:
+OpenAI's [GPT-5.6 Sol model page](https://developers.openai.com/api/docs/models/gpt-5.6-sol)
+documents the bare `openai/gpt-5.6` id as a supported alias for Sol. Fresh
+API-key and ChatGPT/Codex OAuth setup use the canonical `openai/gpt-5.6-sol`
+ref so model pickers do not show both names for the same tier. Run
+`openclaw doctor --fix` to rewrite persisted bare OpenAI refs to that canonical
+identity. The native Codex catalog can show the exact Sol, Terra, and Luna ids depending on
+workspace access. Check the current account with:
 
 ```bash
 openclaw models list --provider openai
@@ -265,27 +267,28 @@ for the full example.
 
     ```json5
     {
-      env: { OPENAI_API_KEY: "example-openai-key-not-real" },
-      agents: { defaults: { model: { primary: "openai/gpt-5.6" } } },
+      env: { vars: { OPENAI_API_KEY: "example-openai-key-not-real" } },
+      agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
     }
     ```
 
-    The bare direct-API `gpt-5.6` id resolves to the Sol tier. If this API
-    organization does not expose GPT-5.6, set the primary to
-    `openai/gpt-5.5` explicitly.
+    The bare direct-API `gpt-5.6` alias is also accepted and resolves to the
+    Sol tier. If this API organization does not expose GPT-5.6, set the primary
+    to `openai/gpt-5.5` explicitly.
 
     To try ChatGPT's current Instant model from the OpenAI API, set the model
     to `openai/chat-latest`:
 
     ```json5
     {
-      env: { OPENAI_API_KEY: "example-openai-key-not-real" },
+      env: { vars: { OPENAI_API_KEY: "example-openai-key-not-real" } },
       agents: { defaults: { model: { primary: "openai/chat-latest" } } },
     }
     ```
 
     `chat-latest` is a moving alias. Fresh OpenAI API-key setup instead uses
-    `openai/gpt-5.6`, whose bare direct-API id resolves to Sol. Existing
+    `openai/gpt-5.6-sol`. The bare direct-API `openai/gpt-5.6` alias remains
+    supported and resolves to Sol. Existing
     explicit primaries, including `openai/gpt-5.5`, remain unchanged. The
     `chat-latest` alias only accepts `medium` text verbosity; OpenClaw forces
     any other requested verbosity to `medium` for this model.
@@ -806,12 +809,9 @@ request reaches the provider, so aspect-ratio requests generally still work.
 
 ## GPT-5 prompt contribution
 
-OpenClaw adds a shared GPT-5 prompt contribution for GPT-5-family models on
-the `openai` provider (including legacy pre-repair Codex refs that normalize
-to `openai/*`). Other providers that also serve GPT-5-family model ids, such
-as OpenRouter or opencode routes, do not receive this overlay; it is gated on
-provider id `openai`, not on model id alone. Older GPT-4.x models never
-receive it.
+OpenClaw adds a shared GPT-5 prompt contribution to matching GPT-5-family
+OpenClaw-assembled prompts. The OpenAI plugin setting below controls the
+friendly style on OpenAI-family routes. Older GPT-4.x model ids do not match.
 
 The native Codex app-server harness does not receive the persona/tool-
 discipline behavior contract or the friendly interaction-style overlay through
@@ -935,14 +935,16 @@ value into `plugins.entries.openai.config.personality` when that key is unset.
     {
       tools: {
         media: {
+          models: [
+            {
+              type: "provider",
+              provider: "openai",
+              model: "gpt-4o-transcribe",
+              capabilities: ["audio"],
+            },
+          ],
           audio: {
-            models: [
-              {
-                type: "provider",
-                provider: "openai",
-                model: "gpt-4o-transcribe",
-              },
-            ],
+            enabled: true,
           },
         },
       },

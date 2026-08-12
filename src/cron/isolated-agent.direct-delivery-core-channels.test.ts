@@ -1,7 +1,7 @@
 // Direct delivery tests cover isolated agent delivery through core channel targets.
 import "./isolated-agent.mocks.js";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
+import { runSubagentAnnounceFlow } from "../agents/subagents/announce/subagent-announce.js";
 import type {
   ChannelOutboundAdapter,
   ChannelOutboundContext,

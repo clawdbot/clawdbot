@@ -65,7 +65,7 @@ function conversationResult(record: ConversationDeliveryRecord): DurableDelivery
 export async function settlePendingFinalDelivery(
   completion: Extract<DurableDeliveryCompletion, { kind: "pending-final" }>,
   state: Exclude<DurableDeliveryCompletionResult["state"], "rejected" | "stale">,
-  expectedState?: "prepared" | "queued" | "unknown",
+  expectedStates?: readonly ("prepared" | "queued" | "unknown")[],
   stateDir?: string,
 ): Promise<DurableDeliveryCompletionResult> {
   let settled: DurableDeliveryCompletionResult["state"] = "stale";
@@ -86,7 +86,7 @@ export async function settlePendingFinalDelivery(
         return null;
       }
       const current = deliveries[index]!.state;
-      if (expectedState && current !== expectedState) {
+      if (expectedStates && !expectedStates.some((expected) => expected === current)) {
         return null;
       }
       const terminal =
@@ -94,7 +94,31 @@ export async function settlePendingFinalDelivery(
         current === "suppressed" ||
         (current === "unknown" && state === "unknown");
       settled = terminal ? current : state;
-      if (settled === current) {
+      const pending = internalEntry.pendingFinalDelivery;
+      const existingNotice = internalEntry.pendingDeliveryNotice;
+      const owedNotice =
+        settled === "unknown" &&
+        (current === "queued" || current === "unknown") &&
+        pending.context &&
+        pending.intentId &&
+        !(existingNotice?.intentId === pending.intentId && existingNotice.state === "owed") &&
+        (!existingNotice || existingNotice.createdAt <= pending.createdAt)
+          ? {
+              pendingDeliveryNotice: {
+                createdAt: pending.createdAt,
+                context: pending.context,
+                intentId: pending.intentId,
+                state: "owed" as const,
+              },
+            }
+          : undefined;
+      const clearsNotice =
+        settled !== "queued" &&
+        settled !== "unknown" &&
+        existingNotice?.intentId === pending.intentId;
+      // The pre-I/O claim preserves crash-window ambiguity. Any authoritative
+      // fate for that intent must clear debt before a later turn can surface it.
+      if (settled === current && !owedNotice && !clearsNotice) {
         return null;
       }
       wakeRecovery =
@@ -114,6 +138,7 @@ export async function settlePendingFinalDelivery(
           ...internalEntry.pendingFinalDelivery,
           deliveries: deliveries.with(index, { id: completion.deliveryId, state: settled }),
         },
+        ...(clearsNotice ? { pendingDeliveryNotice: undefined } : owedNotice),
         updatedAt: Date.now(),
       };
     },
@@ -121,7 +146,7 @@ export async function settlePendingFinalDelivery(
   );
   if (wakeRecovery) {
     const { scheduleMainSessionRecoveryPendingTarget } =
-      await import("../../agents/main-session-recovery-owner-release.js");
+      await import("../../agents/main-session-recovery/main-session-recovery-owner-release.js");
     scheduleMainSessionRecoveryPendingTarget({
       sessionId: completion.sessionId,
       sessionKey: completion.sessionKey,
@@ -144,7 +169,13 @@ export async function markDurableDeliveryQueued(
   expectedPendingFinalState?: "prepared",
 ): Promise<DurableDeliveryCompletionResult> {
   return completion.kind === "pending-final"
-    ? await settlePendingFinalDelivery(completion, "queued", expectedPendingFinalState)
+    ? // The reply dispatcher may have claimed direct custody ("queued") before the
+      // durable enqueue; both states still belong to this send attempt.
+      await settlePendingFinalDelivery(
+        completion,
+        "queued",
+        expectedPendingFinalState ? ["prepared", "queued"] : undefined,
+      )
     : conversationResult(
         markConversationDeliveryQueued(
           scopeForCompletion(completion),
@@ -189,8 +220,10 @@ export async function rejectDurableDelivery(
   error: string,
   stateDir?: string,
 ): Promise<DurableDeliveryCompletionResult> {
+  // Proven no-send: terminal suppression, not the unknown state that owes an
+  // uncertainty notice for a send the provider asserts never began.
   return completion.kind === "pending-final"
-    ? await settlePendingFinalDelivery(completion, "unknown", undefined, stateDir)
+    ? await settlePendingFinalDelivery(completion, "suppressed", undefined, stateDir)
     : conversationResult(
         markConversationDeliveryRejected(
           scopeForCompletion(completion),

@@ -1,4 +1,8 @@
-import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatAttachment,
+  ChatComposerDraftRetry,
+  ChatQueueItem,
+} from "../../lib/chat/chat-types.ts";
 import {
   INTERRUPTED_SETTINGS_WAIT_ERROR,
   MAX_STORED_QUEUE_ITEMS,
@@ -66,10 +70,7 @@ type RestoreOptions = {
   sessionKey?: string;
 };
 
-export type ChatComposerDraftRetry = {
-  expectedDraftRevision: number;
-  draftRevision: number;
-};
+export type { ChatComposerDraftRetry } from "../../lib/chat/chat-types.ts";
 
 type ChatComposerPersistStatus = "persisted" | "conflict" | "storage-failed";
 
@@ -399,6 +400,12 @@ function persistChatComposerStateResult(
       options.agentId,
     ).session;
     if (persisted?.draftRevision === draftRevision && (persisted.draft ?? "") === draft) {
+      // Notify only on presence transitions: sidebar draft indicators consume
+      // presence, and content-only notifies would let projection subscribers
+      // re-persist a stale pane over a newer draft (route-fallback invariant).
+      if (Boolean(storedDraft) !== Boolean(draft)) {
+        notifyStoredChatOutboxChanges();
+      }
       return "persisted";
     }
     // Retention limits can make a successful storage write omit this draft.
@@ -424,6 +431,7 @@ export function admitStoredChatComposerQueueItem(
   sessionKey: string,
   item: ChatQueueItem,
   agentId?: string,
+  replacesId?: string,
 ): boolean {
   const storage = getSafeSessionStorage();
   if (!storage || !sessionKey.trim()) {
@@ -448,7 +456,11 @@ export function admitStoredChatComposerQueueItem(
       sessionKey,
       scope.agentScope === UNRESOLVED_GLOBAL_AGENT_SCOPE ? undefined : scope.agentScope,
     );
-    const queue = session?.queue ?? [];
+    // An edited row and its replacement are one write: the source is retired only
+    // by the write that stores the replacement, so a rejected write leaves the
+    // original queued instead of losing both copies. Filtering before the cap
+    // check also keeps a replacement admissible on a full queue.
+    const queue = (session?.queue ?? []).filter((entry) => entry.id !== replacesId);
     const existing = queue.find((entry) => entry.id === serialized.id);
     if (existing) {
       if (!queueItemsEqual(existing, serialized, scope)) {

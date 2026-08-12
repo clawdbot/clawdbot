@@ -917,6 +917,7 @@ export async function maybeResolveSignalApprovalReaction(params: {
       approvalKind: target.approvalKind,
       decision: target.decision,
       channel: "signal",
+      accountId: params.accountId,
       senderId: actorId,
       gatewayUrl: params.gatewayUrl,
     });

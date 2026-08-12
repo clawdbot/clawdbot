@@ -1040,3 +1040,35 @@ describe("cron view editor", () => {
     expect(model.getAttribute("list")).toBe("cron-model-suggestions");
   });
 });
+
+describe("cron view native selects", () => {
+  it("shows authoritative form values instead of first options in the create form", () => {
+    const container = renderView({ createOpen: true });
+    const action = getElement(container, "select#cron-payload-kind", HTMLSelectElement);
+    expect(action.value).toBe("agentTurn");
+    const runsIn = getElement(container, "select#cron-session-target", HTMLSelectElement);
+    expect(runsIn.value).toBe("isolated");
+    const unit = Array.from(container.querySelectorAll("select")).find(
+      (entry) => entry.getAttribute("aria-label") === "Unit",
+    );
+    expect(unit?.value).toBe("minutes");
+    // Negative control: the delivery-mode default is also the first option, so
+    // this passes before and after the fix and proves the harness reads selects.
+    const delivery = getElement(container, "select#cron-delivery-mode", HTMLSelectElement);
+    expect(delivery.value).toBe("announce");
+  });
+
+  it("shows persisted non-first values in jobs filters and runs sort", () => {
+    const activity = renderView({ listTab: "activity", runsSortDir: "asc" });
+    const sort = getElement(activity, "select.cron-run-sort", HTMLSelectElement);
+    expect(sort.value).toBe("asc");
+    expect(sort.querySelector('option[value="asc"]')?.hasAttribute("selected")).toBe(true);
+    const tasks = renderView({ jobsLastStatusFilter: "error" });
+    const lastStatus = getElement(
+      tasks,
+      'select[data-test-id="cron-jobs-last-status-filter"]',
+      HTMLSelectElement,
+    );
+    expect(lastStatus.value).toBe("error");
+  });
+});

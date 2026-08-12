@@ -204,8 +204,11 @@ describe("qa scenario catalog", () => {
 
     expect(marked.map((scenario) => scenario.id).toSorted()).toEqual(expected);
     const ssh = readQaScenarioById("gateway-ssh-tunnels");
-    expect(ssh.execution).toMatchObject({ kind: "script", parallelSafe: true });
-    expect(ssh.execution).not.toHaveProperty("allowBlockedEvidence");
+    expect(ssh.execution).toMatchObject({
+      kind: "script",
+      parallelSafe: true,
+      allowBlockedEvidence: true,
+    });
   });
 
   it("rejects invalid provider metadata at the catalog boundary", () => {

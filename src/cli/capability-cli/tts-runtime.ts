@@ -5,7 +5,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
+import { resolveApiKeyForProviderCore } from "../../agents/model-auth.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
@@ -204,7 +204,7 @@ async function injectTtsAuthProfileApiKey(params: {
   if (ttsProviderConfigHasApiKey(existingProviderConfig?.value)) {
     return params.cfg;
   }
-  const auth = await resolveApiKeyForProvider({
+  const auth = await resolveApiKeyForProviderCore({
     provider: providerId,
     cfg: params.cfg,
     credentialPrecedence: "profile-first",

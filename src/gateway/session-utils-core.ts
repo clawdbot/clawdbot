@@ -1,18 +1,21 @@
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   countActiveDescendantRuns,
   getSessionDisplaySubagentRunByChildSessionKey,
   listSubagentRunsForController,
-} from "../agents/subagent-registry-read.js";
+} from "../agents/subagents/registry/subagent-registry-read.js";
 import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   shouldKeepSubagentRunChildLink,
-} from "../agents/subagent-run-liveness.js";
+} from "../agents/subagents/registry/subagent-run-liveness.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { isTerminalSessionStatus, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
 import { truncateUtf16Safe } from "../utils.js";
 import {
   estimateUsageCost,
@@ -79,7 +82,7 @@ export function deriveSessionTitle(
 }
 
 export function resolvePositiveNumber(value: number | null | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+  return asPositiveFiniteNumber(value);
 }
 
 export function deriveSessionUnread(
@@ -195,7 +198,7 @@ export function resolveEstimatedSessionCostUsd(params: {
   explicitCostUsd?: number;
   rowContext?: SessionListRowContext;
 }): number | undefined {
-  const explicitCostUsd = resolveNonNegativeNumber(
+  const explicitCostUsd = asNonNegativeFiniteNumber(
     params.explicitCostUsd ?? params.entry?.estimatedCostUsd,
   );
   if (explicitCostUsd !== undefined) {
@@ -231,7 +234,7 @@ export function resolveEstimatedSessionCostUsd(params: {
     },
     cost,
   });
-  return resolveNonNegativeNumber(estimated);
+  return asNonNegativeFiniteNumber(estimated);
 }
 
 const STALE_STORE_ONLY_CHILD_LINK_MS = 60 * 60 * 1_000;

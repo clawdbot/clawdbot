@@ -1,7 +1,12 @@
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { getRuntimeConfig } from "../io.js";
-import { resolveStorePath } from "./paths.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 import { resolveSessionEntrySelection } from "./session-accessor.entry.js";
+import {
+  resolveSqliteTranscriptScope,
+  toDatabaseOptions,
+} from "./session-accessor.sqlite-scope.js";
 import type {
   SessionTranscriptReadScope,
   SessionTranscriptReadTarget,
@@ -25,7 +30,7 @@ function resolveRuntimeContext(
   }
   const configuredStorePath =
     resolveConcreteSessionStorePath(scope.storePath) ??
-    resolveStorePath(getRuntimeConfig().session?.store, { agentId, env: scope.env });
+    resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId, env: scope.env });
   const storePath = resolveSessionStorePathForScope({
     agentId,
     env: scope.env,
@@ -53,7 +58,13 @@ export async function resolveSessionTranscriptRuntimeTarget(
   return { ...context, sessionId: scope.sessionId };
 }
 
-export { resolveSessionTranscriptRuntimeTarget as resolveSessionTranscriptRuntimeReadTarget };
+/** Resolves the physical agent database that owns one runtime transcript. */
+export function resolveSessionTranscriptDatabasePath(
+  target: SessionTranscriptRuntimeTarget,
+): string {
+  const resolved = resolveSqliteTranscriptScope(target);
+  return resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved));
+}
 
 export function resolveSessionTranscriptReadTarget(
   scope: SessionTranscriptReadScope,
@@ -65,7 +76,7 @@ export function resolveSessionTranscriptReadTarget(
   }
   const configuredStorePath =
     resolveConcreteSessionStorePath(scope.storePath) ??
-    resolveStorePath(getRuntimeConfig().session?.store, { agentId, env: scope.env });
+    resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId, env: scope.env });
   const storePath = resolveSessionStorePathForScope({
     agentId,
     env: scope.env,

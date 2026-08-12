@@ -7,6 +7,10 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import {
+  MAX_TIMER_TIMEOUT_MS,
+  resolveTimerTimeoutMs,
+} from "../packages/normalization-core/src/number-coercion.ts";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
 import {
   parseNonNegativeInt,
@@ -25,6 +29,9 @@ import {
   readQaSuiteSummary,
   selectPluginEntries,
 } from "./lib/plugin-gateway-gauntlet.mts";
+// Termination tests import this entrypoint in a child before publishing readiness.
+// Keep its record guard on the dependency-light script seam to avoid startup skew.
+import { isRecord } from "./lib/record-shared.mjs";
 
 const DEFAULT_QA_SCENARIOS = [
   "channel-chat-baseline",
@@ -54,7 +61,6 @@ const SINGLE_VALUE_FLAGS = new Set([
   "--wall-anomaly-multiplier",
 ]);
 const COMMAND_OUTPUT_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
-const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const ANSI_PATTERN = new RegExp(String.raw`\u001B\[[0-9;]*m`, "gu");
 
 type ProcessSignal = `SIG${string}`;
@@ -114,10 +120,6 @@ type GauntletContext = {
   qaTimeoutMs: number;
 };
 type QaSummary = NonNullable<ReturnType<typeof readQaSuiteSummary>["summary"]>;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 /**
  * Parses plugin gateway gauntlet CLI arguments and env defaults.
@@ -551,13 +553,10 @@ function stripAnsi(value: string) {
   return value.replace(ANSI_PATTERN, "");
 }
 
-function resolveTimerTimeoutMs(valueMs: number) {
-  const value = Number.isFinite(valueMs) ? Math.floor(valueMs) : MAX_TIMER_TIMEOUT_MS;
-  return Math.min(Math.max(value, 1), MAX_TIMER_TIMEOUT_MS);
-}
-
 function resolveOptionalTimerTimeoutMs(valueMs: number | undefined) {
-  return valueMs === undefined || valueMs <= 0 ? null : resolveTimerTimeoutMs(valueMs);
+  return valueMs === undefined || valueMs <= 0
+    ? null
+    : resolveTimerTimeoutMs(valueMs, MAX_TIMER_TIMEOUT_MS);
 }
 
 function writeCommandLog(params: {
@@ -615,7 +614,10 @@ export function runMeasuredCommandLive(params: GauntletMeasuredCommandParams) {
     const maxBufferBytes = params.maxBufferBytes ?? COMMAND_OUTPUT_MAX_BUFFER_BYTES;
     const maxRelayBytes = params.consoleOutputMaxBytes ?? maxBufferBytes;
     const timeoutMs = resolveOptionalTimerTimeoutMs(params.timeoutMs);
-    const timeoutKillGraceMs = resolveTimerTimeoutMs(params.timeoutKillGraceMs ?? 5_000);
+    const timeoutKillGraceMs = resolveTimerTimeoutMs(
+      params.timeoutKillGraceMs ?? 5_000,
+      MAX_TIMER_TIMEOUT_MS,
+    );
     const spawnOptions = mode === "none" ? (params.spawnOptions ?? {}) : {};
     const useProcessGroup =
       process.platform !== "win32" &&

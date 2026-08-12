@@ -1,5 +1,6 @@
 // Codex plugin module implements apply behavior.
 import path from "node:path";
+import { coerceErrorMessage as formatCodexMigrationError } from "openclaw/plugin-sdk/error-runtime";
 import {
   applyMigrationManualItem,
   markMigrationItemConflict,
@@ -291,10 +292,6 @@ async function applyCodexPluginInstallItem(
 function isCodexPluginInventoryLoadError(error: unknown): boolean {
   const message = formatCodexMigrationError(error);
   return message.includes("codex app-server plugin/list timed out");
-}
-
-function formatCodexMigrationError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function resolveTargetCodexAppServer(ctx: MigrationProviderContext) {

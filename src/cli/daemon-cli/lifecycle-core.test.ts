@@ -4,10 +4,10 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { GatewayServiceControlArgs } from "../../daemon/service-types.js";
 import type { GatewayService } from "../../daemon/service.js";
 import {
-  defaultRuntime,
+  lifecycleTestRuntime,
   resetLifecycleRuntimeLogs,
   resetLifecycleServiceMocks,
-  runtimeLogs,
+  lifecycleRuntimeLogs,
   service,
   stubEmptyGatewayEnv,
 } from "./test-helpers/lifecycle-core-harness.js";
@@ -38,7 +38,7 @@ vi.mock("../../config/config.js", () => ({
 }));
 
 vi.mock("../../runtime.js", () => ({
-  defaultRuntime,
+  defaultRuntime: lifecycleTestRuntime,
 }));
 
 vi.mock("../../infra/restart-intent.js", () => ({
@@ -74,7 +74,7 @@ let runServiceStop: typeof import("./lifecycle-core.js").runServiceStop;
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe logged JSON shape.
 function readJsonLog<T extends object>() {
-  const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+  const jsonLine = lifecycleRuntimeLogs.find((line) => line.trim().startsWith("{"));
   return JSON.parse(jsonLine ?? "{}") as T;
 }
 
@@ -248,8 +248,8 @@ describe("runServiceRestart token drift", () => {
       opts: { json: false },
     });
 
-    expect(runtimeLogs).toContain("Gateway service not loaded.");
-    expect(runtimeLogs).toContain(
+    expect(lifecycleRuntimeLogs).toContain("Gateway service not loaded.");
+    expect(lifecycleRuntimeLogs).toContain(
       "Start with: Restart the container or the service that manages it for openclaw-demo-container.",
     );
   });
@@ -680,7 +680,7 @@ describe("runServiceRestart token drift", () => {
       expectedPort: 19_001,
     });
 
-    const repairWarnings = runtimeLogs.filter((line) =>
+    const repairWarnings = lifecycleRuntimeLogs.filter((line) =>
       line.startsWith(
         "Gateway service already running, but its installed service definition needs repair:",
       ),

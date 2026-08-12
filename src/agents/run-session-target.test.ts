@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentRunSessionTarget as resolveAgentRunSessionTargetImpl } from "./run-session-target.js";
 
@@ -92,7 +92,7 @@ describe("agent run session target", () => {
     const storePath = path.join(tempDir, "existing", "sessions.json");
     const sessionId = "2fb701ef-6425-4c48-9b6f-5a170aa2477e";
     const sessionKey = "agent:main:telegram:direct:reporter";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       { sessionId, updatedAt: 1 },
     );
@@ -110,7 +110,7 @@ describe("agent run session target", () => {
     const storePath = path.join(tempDir, "runtime-config", "sessions.json");
     const sessionId = "7ef14ab2-4801-40e1-9c56-83f9250c1706";
     const sessionKey = "agent:main:discord:direct:reporter";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       { sessionId, updatedAt: 1 },
     );
@@ -209,11 +209,11 @@ describe("agent run session target", () => {
   it("recovers the stored key from a legacy SQLite marker", async () => {
     const storePath = path.join(tempDir, "legacy", "sessions.json");
     const sessionKey = "agent:main:dashboard:legacy-session";
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       { sessionId: "legacy-session", updatedAt: 1 },
     );
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey: "agent:main:legacy-session", storePath },
       { sessionId: "legacy-session", updatedAt: 2 },
     );

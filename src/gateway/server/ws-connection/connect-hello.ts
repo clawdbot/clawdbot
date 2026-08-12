@@ -3,6 +3,7 @@ import {
   GATEWAY_SERVER_CAPS,
   PROTOCOL_VERSION,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { sha256Base64Url } from "../../../infra/crypto-digest.js";
 import {
   redeemDeviceBootstrapTokenProfile,
   revokeDeviceBootstrapToken,
@@ -37,6 +38,7 @@ export async function sendGatewayHello(
   context: GatewayConnectPhaseContext,
   state: DeviceAuthorizedGatewayConnect,
   pluginSurfaceUrls: Record<string, string>,
+  authenticatedUserProfileId?: string,
 ): Promise<void> {
   const {
     connId,
@@ -66,13 +68,31 @@ export async function sendGatewayHello(
     hasTokenAuth,
     hasPasswordAuth,
     bootstrapTokenCandidate,
+    authResult,
     authMethod,
+    sessionSharedGatewaySessionGeneration,
     issuedBootstrapProfile,
     handoffBootstrapProfile,
     deviceToken,
     bootstrapDeviceTokens,
     controlUiDeviceAuthMigrationPending,
   } = state;
+  // Prefer the authenticated human; principal scopes never inherit device-token rows.
+  const authenticatedPrincipal = authenticatedUserProfileId ?? authResult.user;
+  const recoveryScopeMaterial = authenticatedPrincipal
+    ? ["principal", authenticatedPrincipal, device?.id ?? ""]
+    : deviceToken?.token
+      ? ["device-token", deviceToken.token]
+      : sessionSharedGatewaySessionGeneration
+        ? ["shared-auth", sessionSharedGatewaySessionGeneration, device?.id ?? ""]
+        : device?.id
+          ? ["device", device.id]
+          : undefined;
+  const recoveryScope =
+    role === "operator" && recoveryScopeMaterial
+      ? sha256Base64Url(JSON.stringify(recoveryScopeMaterial))
+      : undefined;
+  const canMigrateRecovery = role === "operator" && !authenticatedPrincipal && Boolean(deviceToken);
   const snapshot = buildGatewaySnapshot({
     includeSensitive: scopes.includes(ADMIN_SCOPE),
     includeUpdateDetails: canReadDetailedUpdateMetadata(role, scopes),
@@ -115,6 +135,8 @@ export async function sendGatewayHello(
     auth: {
       role,
       scopes,
+      ...(recoveryScope ? { recoveryScope } : {}),
+      ...(canMigrateRecovery ? { recoveryMigrationAllowed: true as const } : {}),
       ...(deviceToken
         ? {
             deviceToken: deviceToken.token,

@@ -550,7 +550,6 @@ export type PluginRegistry = {
   memoryPromptSupplements: MemoryPromptSupplementRegistration[];
   sessionDiscussionProviders: Map<string, PluginSessionDiscussionRegistration>;
   contextEngines: Map<string, ContextEngineRegistration>;
-  commandRegistryLocked: boolean;
   gatewayHandlers: GatewayRequestHandlers;
   gatewayMethodDescriptors: GatewayMethodDescriptor[];
   dashboardDataBindings: Map<string, PluginDashboardDataBindingRegistration>;

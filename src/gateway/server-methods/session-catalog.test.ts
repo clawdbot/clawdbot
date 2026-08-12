@@ -39,6 +39,7 @@ const conversationBindingMocks = vi.hoisted(() => ({
 
 vi.mock("../../plugins/runtime.js", () => ({
   getActivePluginRegistry: () => hoisted.activeRegistry,
+  requireActivePluginRegistry: () => hoisted.activeRegistry,
 }));
 
 vi.mock("../../sessions/session-state-events.js", () => ({
@@ -57,7 +58,7 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
   return { ...actual, listSessionEntriesReadOnly: hoisted.listSessionEntriesReadOnly };
 });
 
-const { resolveSessionCatalogCreateTarget, sessionCatalogHandlers } =
+const { resolveRegisteredCatalogCreateTarget, sessionCatalogHandlers } =
   await import("./session-catalog.js");
 
 function provider(
@@ -780,7 +781,7 @@ describe("session catalog Gateway methods", () => {
       },
     ];
 
-    expect(resolveSessionCatalogCreateTarget("claude", "research", {})).toEqual({
+    expect(resolveRegisteredCatalogCreateTarget("claude", "research", {})).toEqual({
       ok: true,
       target: {
         model: "anthropic/claude-opus-4-8",
@@ -788,7 +789,7 @@ describe("session catalog Gateway methods", () => {
         pluginOwnerId: "anthropic",
       },
     });
-    expect(resolveSessionCatalogCreateTarget("missing", "research", {})).toEqual({
+    expect(resolveRegisteredCatalogCreateTarget("missing", "research", {})).toEqual({
       ok: false,
       message: "unknown session catalog: missing",
       unknownCatalog: true,

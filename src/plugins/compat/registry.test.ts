@@ -80,7 +80,10 @@ describe("plugin compatibility registry", () => {
       if (record.status === "deprecated") {
         expect(record.deprecated, record.code).toMatch(datePattern);
         expect(record.warningStarts, record.code).toMatch(datePattern);
-        if (removalDatePendingCompatCodes.has(record.code)) {
+        if (record.removalGate !== undefined) {
+          expect(record.removalGate, record.code).toBe("next-plugin-sdk-major");
+          expect(record.removeAfter, record.code).toBeUndefined();
+        } else if (removalDatePendingCompatCodes.has(record.code)) {
           expect(record.removeAfter, record.code).toBeUndefined();
         } else {
           expect(record.removeAfter, record.code).toMatch(datePattern);
@@ -123,6 +126,11 @@ describe("plugin compatibility registry", () => {
       expect(records.get(code)?.removeAfter).toBeUndefined();
       expect(records.get(code)?.replacement).toMatch(/retain/u);
     }
+    expect(records.get("plugin-sdk-inbound-reply-dispatch-subpath")).toMatchObject({
+      status: "deprecated",
+      removalGate: "next-plugin-sdk-major",
+      removeAfter: undefined,
+    });
     expect(records.get("agent-harness-sdk-alias")?.surfaces).toEqual([
       "openclaw/plugin-sdk/agent-harness",
       "openclaw/plugin-sdk/agent-harness-runtime",
@@ -168,17 +176,17 @@ describe("plugin compatibility registry", () => {
     );
   });
 
-  it("tracks the context-engine legacy host-param default through its two-week window", () => {
+  it("keeps the removed context-engine host-param default as a migration tombstone", () => {
     const record = listPluginCompatRecords().find(
       (candidate) => candidate.code === "context-engine-legacy-host-param-default",
     );
 
     expect(record).toMatchObject({
-      status: "deprecated",
-      deprecated: "2026-07-29",
-      warningStarts: "2026-07-29",
-      removeAfter: "2026-08-12",
+      status: "removed",
+      replacement:
+        "`ContextEngineInfo.acceptedHostParams` for restricted projection; omitted declarations receive full host params",
     });
+    expect(record?.removeAfter).toBeUndefined();
   });
 
   it("keeps deprecated explicit target parser calls inside compatibility shims", () => {

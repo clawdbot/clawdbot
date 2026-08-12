@@ -7,16 +7,13 @@ import {
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
-import {
-  GatewayClient,
-  GatewayClientRequestError,
-  type GatewayReconnectPausedInfo,
-} from "../gateway/client.js";
+import { GatewayClientRequestError, type GatewayReconnectPausedInfo } from "../gateway/client.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { VERSION } from "../version.js";
 import { configureNodeHost, type NodeHostGatewayConfig } from "./config.js";
+import { createNodeHostGatewayCandidateConnection } from "./gateway-candidate-connection.js";
 import {
   coerceNodeInvokeCancelPayload,
   coerceNodeInvokeInputPayload,
@@ -30,6 +27,9 @@ type NodeHostRunOptions = {
   gatewayPort: number;
   gatewayTls?: boolean;
   gatewayTlsFingerprint?: string;
+  gatewayCandidates?: NodeHostGatewayConfig[];
+  gatewayBootstrapToken?: string;
+  preferGatewayBootstrapToken?: boolean;
   /** Optional WebSocket context path (e.g. "/openclaw-gw"). */
   gatewayContextPath?: string;
   nodeId?: string;
@@ -220,6 +220,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const nodeId = config.nodeId;
   const displayName = config.displayName ?? fallbackDisplayName;
   const gateway = config.gateway ?? plannedGateway;
+  const gatewayCandidates = opts.gatewayCandidates?.length ? opts.gatewayCandidates : [gateway];
 
   const cfg = getRuntimeConfig();
   const preparedRuntime = await prepareNodeHostRuntime({
@@ -228,22 +229,13 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     enableAgentRuns: true,
     installedAppsSharingEnabled: config.installedAppsSharing,
   });
-  const { token, password } = await resolveNodeHostGatewayCredentials({
-    config: cfg,
-    env: process.env,
-  });
+  const { token, password } = opts.preferGatewayBootstrapToken
+    ? {}
+    : await resolveNodeHostGatewayCredentials({
+        config: cfg,
+        env: process.env,
+      });
 
-  const host = gateway.host ?? "127.0.0.1";
-  const urlHost =
-    host.includes(":") && !(host.startsWith("[") && host.endsWith("]")) ? `[${host}]` : host;
-  const port = gateway.port ?? 18789;
-  const scheme = gateway.tls ? "wss" : "ws";
-  const contextPath = gateway.contextPath
-    ? gateway.contextPath.startsWith("/")
-      ? gateway.contextPath
-      : `/${gateway.contextPath}`
-    : "";
-  const url = `${scheme}://${urlHost}:${port}${contextPath}`;
   let inventory: NodeHostInventory = preparedRuntime.initialInventory;
   let gatewayHelloReceived = false;
   let gatewayConnectionGeneration = 0;
@@ -451,27 +443,42 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     );
   };
 
-  const client = new GatewayClient({
-    url,
-    token: token || undefined,
-    password: password || undefined,
-    instanceId: nodeId,
-    clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-    clientDisplayName: displayName,
-    clientVersion: VERSION,
-    platform: resolveNodeHostGatewayPlatform(process.platform),
-    deviceFamily: resolveNodeHostGatewayDeviceFamily(process.platform),
-    mode: GATEWAY_CLIENT_MODES.NODE,
-    role: "node",
-    scopes: [],
-    // Pair the built-in MCP command family up front. Server inventory is
-    // restart-scoped availability, not a capability upgrade requiring re-pairing.
-    caps: preparedRuntime.manifest.caps,
-    commands: preparedRuntime.manifest.commands,
-    pathEnv: preparedRuntime.manifest.pathEnv,
-    permissions: undefined,
-    deviceIdentity: loadOrCreateDeviceIdentity(),
-    tlsFingerprint: gateway.tlsFingerprint,
+  const persistWinningGateway = (winningGateway: NodeHostGatewayConfig) => {
+    void configureNodeHost({
+      nodeId,
+      displayName,
+      fallbackDisplayName,
+      gateway: winningGateway,
+      installedAppsSharing: config.installedAppsSharing,
+    }).catch((error: unknown) => {
+      writeStderrLine(`node host gateway endpoint persistence failed: ${String(error)}`);
+    });
+  };
+
+  const client = createNodeHostGatewayCandidateConnection({
+    candidates: gatewayCandidates,
+    clientOptions: {
+      token: token || undefined,
+      bootstrapToken: opts.gatewayBootstrapToken,
+      preferBootstrapToken: opts.preferGatewayBootstrapToken,
+      password: password || undefined,
+      instanceId: nodeId,
+      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      clientDisplayName: displayName,
+      clientVersion: VERSION,
+      platform: resolveNodeHostGatewayPlatform(process.platform),
+      deviceFamily: resolveNodeHostGatewayDeviceFamily(process.platform),
+      mode: GATEWAY_CLIENT_MODES.NODE,
+      role: "node",
+      scopes: [],
+      // Pair the built-in MCP command family up front. Server inventory is
+      // restart-scoped availability, not a capability upgrade requiring re-pairing.
+      caps: preparedRuntime.manifest.caps,
+      commands: preparedRuntime.manifest.commands,
+      pathEnv: preparedRuntime.manifest.pathEnv,
+      permissions: undefined,
+      deviceIdentity: loadOrCreateDeviceIdentity(),
+    },
     onEvent: (evt) => {
       if (evt.event === "node.invoke.cancel") {
         const payload = coerceNodeInvokeCancelPayload(evt.payload);
@@ -491,12 +498,11 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
         return;
       }
       const payload = coerceNodeInvokePayload(evt.payload);
-      if (!payload) {
-        return;
+      if (payload) {
+        void activeRuntime.invoke(payload);
       }
-      void activeRuntime.invoke(payload);
     },
-    onHelloOk: (hello) => {
+    onHelloOk: (hello, url) => {
       writeStderrLine(`node host gateway connected: ${url}`);
       gatewayConnectionGeneration += 1;
       gatewayHelloReceived = true;
@@ -505,9 +511,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       optionalPublicationStates = new Map();
       publishInventory();
     },
-    onConnectError: (err) => {
+    onConnectError: (error) => {
       // keep retrying (handled by GatewayClient)
-      writeStderrLine(`node host gateway connect failed: ${err.message}`);
+      writeStderrLine(`node host gateway connect failed: ${error.message}`);
     },
     onReconnectPaused: (info) => {
       handleNodeHostReconnectPaused(info, {
@@ -524,6 +530,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       activeRuntime.cancelAll();
       writeStderrLine(`node host gateway closed (${code}): ${reason}`);
     },
+    onWinningCandidate: persistWinningGateway,
   });
   const activeRuntime = preparedRuntime.start({
     client,

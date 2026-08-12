@@ -276,7 +276,7 @@ describe("resolvePluginWebSearchProviders", () => {
         await vi.importActual<typeof import("./manifest-registry.js")>("./manifest-registry.js");
       return {
         ...actual,
-        loadPluginManifestRegistry: (
+        loadPluginManifestRegistryCore: (
           ...args: Parameters<LoadPluginManifestRegistryForPluginRegistry>
         ) => loadPluginManifestRegistryMock(...args),
       };

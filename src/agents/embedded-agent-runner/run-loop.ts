@@ -17,7 +17,6 @@ import {
   selectContextEngineForTranscriptHost,
 } from "../harness/context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engine-turn-attempt.js";
-import type { McpAppChannelView } from "../mcp-ui-resource.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeUsage } from "../usage.js";
@@ -31,8 +30,9 @@ import { createEmbeddedRunReplayState } from "./replay-state.js";
 import { handleEmbeddedAssistantFailure } from "./run/assistant-failure.js";
 import { prepareAndDispatchEmbeddedRunAttempt } from "./run/attempt-dispatch-preparation.js";
 import { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
+import { forgetPromptBuildDrainCacheForRun } from "./run/attempt-prompt-helpers.js";
 import { recoverEmbeddedRunAttempt } from "./run/attempt-recovery.js";
-import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.js";
+import { createMcpAttemptCarryover } from "./run/attempt-result.js";
 import { hasCodexAppServerRecoveryRetryBudget } from "./run/codex-app-server-recovery.js";
 import { createEmbeddedRunCompactionRuntime } from "./run/compaction-runtime.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
@@ -44,13 +44,14 @@ import { createIdleTimeoutBreakerState } from "./run/idle-timeout-breaker.js";
 import {
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
-} from "./run/incomplete-turn.js";
+} from "./run/incomplete-turn-recovery.js";
 import { measureEmbeddedAgentPreparation } from "./run/preparation-timing.js";
 import {
   beginRunAttempt,
   createRunRetryBudget,
   isRunRetryBudgetExhausted,
   recordRunRetry,
+  type RunRetryBudget,
 } from "./run/retry-budget.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import { prepareEmbeddedRunRuntime } from "./run/runtime-preparation.js";
@@ -66,7 +67,7 @@ import { createUsageAccumulator } from "./usage-accumulator.js";
 export async function runPreparedEmbeddedLoop(
   input: PreparedEmbeddedRunInput,
 ): Promise<EmbeddedAgentRunResult> {
-  const params = input.runParams;
+  let params = input.runParams;
   let { provider, modelId } = input;
   const {
     agentDir,
@@ -105,6 +106,10 @@ export async function runPreparedEmbeddedLoop(
       }),
     { config: params.config },
   );
+  params = { ...params, admittedRunContext: preparedRuntime.admittedRunContext };
+  // Admission is resolved once before the retry loop. Carry that exact object through every
+  // attempt/recovery owner so downstream dispatch cannot lose the admitted context.
+  const admittedRunInput: PreparedEmbeddedRunInput = { ...input, runParams: params };
   provider = preparedRuntime.provider;
   modelId = preparedRuntime.modelId;
   const {
@@ -182,7 +187,7 @@ export async function runPreparedEmbeddedLoop(
   const maxEmptyResponseRetryAttempts = DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT;
 
   const MAX_RUN_RETRY_ATTEMPTS = resolveMaxRunRetryIterations(profileCandidates.length);
-  const runRetryBudget = createRunRetryBudget(MAX_RUN_RETRY_ATTEMPTS);
+  const runRetryBudget: RunRetryBudget = createRunRetryBudget(MAX_RUN_RETRY_ATTEMPTS);
   const contextRecoveryState = createEmbeddedRunContextRecoveryState();
   let bootstrapPromptWarningSignaturesSeen =
     params.bootstrapPromptWarningSignaturesSeen ??
@@ -294,6 +299,8 @@ export async function runPreparedEmbeddedLoop(
     admission: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
     isHeartbeat: isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind),
     lease: contextEngineLogicalTurnLease,
+    recorder: params.userTurnTranscriptRecorder,
+    sessionTarget: params.sessionTarget,
   });
   const contextEngine = contextEngineLogicalTurnLease.begin().engine;
   const resolveContextEnginePluginId = () =>
@@ -311,7 +318,7 @@ export async function runPreparedEmbeddedLoop(
     });
     let authRetryPending = false;
     let accumulatedReplayState = createEmbeddedRunReplayState();
-    let latestMcpAppChannelView: McpAppChannelView | undefined;
+    const mcpAttemptCarryover = createMcpAttemptCarryover();
     while (true) {
       refreshPreparedRuntimeSnapshot();
       if (isRunRetryBudgetExhausted(runRetryBudget)) {
@@ -358,7 +365,7 @@ export async function runPreparedEmbeddedLoop(
         maxRunLoopIterations: runRetryBudget.maxAttempts,
       });
       const dispatch = await prepareAndDispatchEmbeddedRunAttempt({
-        runInput: input,
+        runInput: admittedRunInput,
         preparedRuntime,
         contextEngine,
         sessionPromptState,
@@ -384,12 +391,9 @@ export async function runPreparedEmbeddedLoop(
       });
       startupStagesEmitted = dispatch.startupStagesEmitted;
       const { dispatchedAttempt, runtimePlan } = dispatch;
-      // Preserve the newest launch target before normalization can request an early retry.
-      latestMcpAppChannelView =
-        dispatchedAttempt.rawAttempt.latestMcpAppChannelView ?? latestMcpAppChannelView;
-      dispatchedAttempt.rawAttempt.latestMcpAppChannelView = latestMcpAppChannelView;
+      mcpAttemptCarryover.apply(dispatchedAttempt.rawAttempt);
       const normalizedAttempt = await normalizeEmbeddedRunAttempt({
-        runInput: input,
+        runInput: admittedRunInput,
         preparedRuntime,
         dispatchedAttempt,
         sessionPromptState,
@@ -432,7 +436,7 @@ export async function runPreparedEmbeddedLoop(
         canRestartForLiveSwitch,
       } = normalizedAttempt;
       const recovery = await recoverEmbeddedRunAttempt({
-        runInput: input,
+        runInput: admittedRunInput,
         preparedRuntime,
         normalizedAttempt,
         runtimePlan,
@@ -463,8 +467,6 @@ export async function runPreparedEmbeddedLoop(
         lastRetryFailoverReason = recovery.lastRetryFailoverReason;
         continue;
       }
-      const { shouldSurfaceCodexCompletionTimeout } = recovery;
-
       const assistantFailureOutcome = await handleEmbeddedAssistantFailure({
         runParams: params,
         attempt,
@@ -473,6 +475,7 @@ export async function runPreparedEmbeddedLoop(
         terminalState,
         activeErrorContext,
         provider,
+        providerOwner: preparedRuntime.snapshot().providerRuntimeHandle.plugin,
         modelId,
         model: model.id,
         thinkLevel,
@@ -531,6 +534,7 @@ export async function runPreparedEmbeddedLoop(
         terminalBase: {
           runParams: params,
           provider,
+          providerOwner: preparedRuntime.snapshot().providerRuntimeHandle.plugin,
           model: model.id,
           activeErrorContext,
           authProfileStore: attemptAuthProfileStore,
@@ -556,10 +560,13 @@ export async function runPreparedEmbeddedLoop(
         terminalState: resolvedTerminalState,
         attemptCompactionCount: terminalAttemptCompactionCount,
         prepared: terminalPrepared,
-        finalizationAttempted: settledTurnFinalizationAttempted,
+        finalizationOutcome: settledTurnFinalizationOutcome,
       } = finalizedTerminal;
       lastRunPromptUsage = finalizedTerminal.lastRunPromptUsage;
-      if (finalizedTerminal.finalizationSucceeded) {
+      if (
+        settledTurnFinalizationOutcome === "answered" ||
+        settledTurnFinalizationOutcome === "completed-empty"
+      ) {
         assistantProfileFailureReason = null;
       }
 
@@ -581,7 +588,7 @@ export async function runPreparedEmbeddedLoop(
       const terminalTimeoutResult = resolveEmbeddedRunTerminalTimeout({
         timedOutDuringPrompt,
         hasSuccessfulFinalAssistantAfterPromptTimeout,
-        shouldSurfaceCodexCompletionTimeout,
+        shouldSurfaceCodexCompletionTimeout: recovery.shouldSurfaceCodexCompletionTimeout,
         attempt: terminalAttempt,
         hasPartialAssistantTextAfterPromptTimeout,
         payloads,
@@ -648,7 +655,7 @@ export async function runPreparedEmbeddedLoop(
         attemptAuthProfileStore,
         apiKeyInfo: getApiKeyInfo(),
         agentHarnessId: agentHarness.id,
-        settledTurnFinalizationAttempted,
+        settledTurnFinalizationOutcome,
         pluginHarnessOwnsTransport,
         pluginHarnessOwnsAuthBootstrap,
         reportedModelRef,

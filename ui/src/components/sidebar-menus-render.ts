@@ -7,6 +7,7 @@ import { openEditor } from "../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
+import { categoryClearReturnsToGroups } from "../lib/sessions/grouping.ts";
 import {
   canArchiveSessionRow,
   canDeleteSessionRows,
@@ -15,6 +16,7 @@ import {
 } from "../lib/sessions/session-key.ts";
 import { renderSidebarAgentMenu, renderSidebarIdentityMenu } from "./app-sidebar-agent-menu.ts";
 import { renderSidebarCustomizeMenu, renderSidebarMoreMenu } from "./app-sidebar-nav-menus.ts";
+import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
 import {
   renderSidebarCatalogViewMenu,
   renderSidebarSessionGroupMenu,
@@ -82,7 +84,7 @@ export function renderSidebarAgentMenuForController(controller: SidebarMenusCont
     position,
     basePath: host.basePath,
     activeId,
-    activeName: identity?.name?.trim() || (agent ? normalizeAgentLabel(agent) : activeId),
+    activeName: normalizeAgentLabel(agent ?? { id: activeId }, identity),
     agents,
     identities,
     filter: controller.agentMenuFilter,
@@ -178,9 +180,12 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
           unread: batchRows ? allUnread : session.unread,
           archived: allArchived,
           category: batchRows ? sharedCategory : (session.category ?? null),
+          categoryClearReturnsToGroups:
+            sharedCategory !== null &&
+            rows.every((row) => categoryClearReturnsToGroups(row, host.sessionsGrouping)),
         }}
         .selectionCount=${rows.length}
-        .lastActive=${batchRows ? "" : session.meta}
+        .lastActive=${batchRows ? "" : formatSidebarTimestamp(session.updatedAt)}
         .anchor=${menu}
         .trigger=${controller.sessionMenuTrigger}
         .disabled=${!host.connected}
@@ -316,6 +321,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     peopleSortAvailable: host.sessionPeopleSortAvailable(),
     statusFilter: host.sessionsStatusFilter,
     showCron: host.sessionsShowCron,
+    showSystem: host.sessionsShowSystem,
     creators: host.sessionOwnershipVisible ? host.sessionCreatorOptions : [],
     creatorFilterId: host.sessionCreatorFilterActive ? host.sessionCreatorFilterId : null,
     onGroupingChange: (grouping) => {
@@ -337,6 +343,10 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     },
     onShowCronChange: (show) => {
       host.sessionOrganizer.setSessionsShowCron(show);
+      controller.closeSessionSortMenu({ restoreFocus: true });
+    },
+    onShowSystemChange: (show) => {
+      host.sessionOrganizer.setSessionsShowSystem(show);
       controller.closeSessionSortMenu({ restoreFocus: true });
     },
     onClose: (restoreFocus) => {

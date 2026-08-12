@@ -41,6 +41,7 @@ async function pollQaBus(params: {
   baseUrl: string;
   accountId: string;
   cursor: number;
+  acknowledgedCursor?: number;
   timeoutMs: number;
 }): Promise<QaBusPollResult> {
   const response = await fetch(`${params.baseUrl}/v1/poll`, {
@@ -51,6 +52,7 @@ async function pollQaBus(params: {
     body: JSON.stringify({
       accountId: params.accountId,
       cursor: params.cursor,
+      acknowledgedCursor: params.acknowledgedCursor,
       timeoutMs: params.timeoutMs,
     }),
   });
@@ -160,6 +162,27 @@ describe("qa-bus server", () => {
       baseUrl: bus.baseUrl,
       accountId: "acct-a",
       cursor: firstPoll.cursor,
+      acknowledgedCursor: 0,
+      timeoutMs: 0,
+    });
+    expect(state.getAcknowledgedPollCursor("acct-a")).toBe(0);
+    const unacknowledgedRestart = await pollQaBus({
+      baseUrl: bus.baseUrl,
+      accountId: "acct-a",
+      cursor: 0,
+      timeoutMs: 0,
+    });
+    expect(
+      unacknowledgedRestart.events.flatMap((event) =>
+        "message" in event ? [event.message.id] : [],
+      ),
+    ).toEqual([consumed.id]);
+
+    await pollQaBus({
+      baseUrl: bus.baseUrl,
+      accountId: "acct-a",
+      cursor: firstPoll.cursor,
+      acknowledgedCursor: firstPoll.cursor,
       timeoutMs: 0,
     });
     expect(state.getAcknowledgedPollCursor("acct-a")).toBe(firstPoll.cursor);
@@ -250,6 +273,24 @@ describe("qa-bus server", () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
       error: "poll cursor must be an integer at least 0.",
+    });
+  });
+
+  it("rejects acknowledgements beyond the fetched cursor", async () => {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    stops.push(bus["stop"]);
+
+    const response = await postQaBusJson(bus.baseUrl, "/v1/poll", {
+      accountId: "acct-a",
+      cursor: 1,
+      acknowledgedCursor: 2,
+      timeoutMs: 0,
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "acknowledged poll cursor must not exceed the requested poll cursor.",
     });
   });
 

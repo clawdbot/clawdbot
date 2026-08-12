@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isIncognitoSessionKey } from "../incognito-session.js";
@@ -963,13 +964,10 @@ function isCodexThreadNotFoundError(error: unknown): boolean {
   // compaction.rs asserts message.contains("thread not found")). So the message
   // is the authoritative positive signal here, not the generic code. This is a
   // self-heal recovery gate, not user-facing classification.
-  return formatCompactionError(error).toLowerCase().includes("thread not found");
+  return coerceErrorMessage(error).toLowerCase().includes("thread not found");
 }
 
 function formatCompactionError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error);
+  return coerceErrorMessage(error);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

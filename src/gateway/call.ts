@@ -984,6 +984,11 @@ async function executeGatewayRequestWithScopes<T>(params: {
         if (settled || ignoreClose) {
           return;
         }
+        if (info?.connectError) {
+          ignoreClose = true;
+          stop(info.connectError);
+          return;
+        }
         if (
           !primaryRequestStarted &&
           info?.transientPreHelloCleanClose === true &&
@@ -1292,5 +1297,4 @@ export async function callGateway<T = Record<string, unknown>>(
 export function randomIdempotencyKey() {
   return randomUUID();
 }
-export { testing as __testing };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -636,6 +636,34 @@ describe("buildQaRuntimeEnv", () => {
     expect(developmentEnv.NODE_ENV).toBe("development");
   });
 
+  it("does not inherit parent channel or provider skip controls", () => {
+    const env = buildQaRuntimeEnv({
+      ...createParams({
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_PROVIDERS: "1",
+      }),
+    });
+
+    expect(env.OPENCLAW_SKIP_CHANNELS).toBeUndefined();
+    expect(env.OPENCLAW_SKIP_PROVIDERS).toBeUndefined();
+  });
+
+  it("honors explicit channel and provider skip controls", () => {
+    const env = buildQaRuntimeEnv({
+      ...createParams({
+        OPENCLAW_SKIP_CHANNELS: "inherited",
+        OPENCLAW_SKIP_PROVIDERS: "inherited",
+      }),
+      runtimeEnvPatch: {
+        OPENCLAW_SKIP_CHANNELS: "patched-channels",
+        OPENCLAW_SKIP_PROVIDERS: "patched-providers",
+      },
+    });
+
+    expect(env.OPENCLAW_SKIP_CHANNELS).toBe("patched-channels");
+    expect(env.OPENCLAW_SKIP_PROVIDERS).toBe("patched-providers");
+  });
+
   it("maps live frontier key aliases into provider env vars", () => {
     const env = buildQaRuntimeEnv({
       ...createParams({
@@ -992,10 +1020,10 @@ describe("buildQaRuntimeEnv", () => {
 
   it("waits for a fresh in-process restart boundary after the current log offset", async () => {
     let logs = "old restart mode: in-process restart\n";
-    const offset = logs.length;
+    const mark = logs.length;
     const wait = testing.waitForQaGatewayRestartBoundary({
-      logs: () => logs,
-      offset,
+      readLogsSince: (since) => logs.slice(since),
+      mark,
       pollMs: 1,
       timeoutMs: 100,
     });
@@ -1007,26 +1035,55 @@ describe("buildQaRuntimeEnv", () => {
 
   it("keeps restart offsets stable after stderr output", async () => {
     const output = testing.createQaGatewayChildLogCollector();
-    output.push(Buffer.from("gateway ready\n"));
-    output.push(Buffer.from("stderr warning\n"));
-    const offset = output.text().length;
+    output.push("stdout", Buffer.from("gateway ready\n"));
+    output.push("stderr", Buffer.from("stderr warning\n"));
+    const mark = output.mark();
     const wait = testing.waitForQaGatewayRestartBoundary({
-      logs: () => output.text(),
-      offset,
+      readLogsSince: (since) => output.readSince(since),
+      mark,
       pollMs: 1,
       timeoutMs: 100,
     });
 
-    output.push(Buffer.from("signal SIGUSR1 received\nrestart mode: in-process restart\n"));
+    output.push(
+      "stdout",
+      Buffer.from("signal SIGUSR1 received\nrestart mode: in-process restart\n"),
+    );
 
     await expect(wait).resolves.toBeUndefined();
+  });
+
+  it("bounds diagnostics while monotonic marks retain fresh output semantics", () => {
+    const output = testing.createQaGatewayChildLogCollector();
+    output.push("stdout", Buffer.from(`old😀${"x".repeat(70_000)}`));
+    const mark = output.mark();
+    output.push("stdout", Buffer.from("fresh restart mode: in-process restart\n"));
+
+    expect(output.text()).toContain("[qa-lab] older gateway logs truncated");
+    expect(output.text().length).toBeLessThan(66_000);
+    expect(output.readSince(mark)).toBe("fresh restart mode: in-process restart\n");
+    expect(output.text()).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+  });
+
+  it("decodes interleaved stdout and stderr independently", () => {
+    const output = testing.createQaGatewayChildLogCollector();
+    const stdout = Buffer.from("before 😀 after\n");
+
+    output.push("stdout", stdout.subarray(0, 9));
+    output.push("stderr", Buffer.from("warning ⚠️\n"));
+    output.push("stdout", stdout.subarray(9));
+
+    expect(output.text()).toBe("before warning ⚠️\n😀 after");
+    expect(output.text()).not.toContain("�");
   });
 
   it("times out when a SIGUSR1 restart never reaches the boundary", async () => {
     await expect(
       testing.waitForQaGatewayRestartBoundary({
-        logs: () => "signal SIGUSR1 received\n",
-        offset: 0,
+        readLogsSince: () => "signal SIGUSR1 received\n",
+        mark: 0,
         pollMs: 1,
         timeoutMs: 1,
       }),
@@ -1036,8 +1093,8 @@ describe("buildQaRuntimeEnv", () => {
   it("keeps oversized restart-boundary poll intervals within the timeout", async () => {
     await expect(
       testing.waitForQaGatewayRestartBoundary({
-        logs: () => "signal SIGUSR1 received\n",
-        offset: 0,
+        readLogsSince: () => "signal SIGUSR1 received\n",
+        mark: 0,
         pollMs: Number.MAX_SAFE_INTEGER,
         timeoutMs: 5,
       }),

@@ -315,7 +315,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
     // Real scope resolver: spawn's admin-tier pinning depends on params-aware
     // sessions.patch policy, so a stub here would hide policy regressions.
     resolveLeastPrivilegeOperatorScopesForMethod,
-    upsertSessionEntry: async (
+    upsertSessionEntryCore: async (
       scope: { storePath?: string; sessionKey: string },
       patch: Record<string, unknown>,
     ) => {
@@ -383,11 +383,11 @@ export async function loadSubagentSpawnModuleForTest(params: {
     ...createDefaultSessionHelperMocks(),
   }));
 
-  vi.doMock("../../subagent-depth.js", () => ({
+  vi.doMock("./subagent-depth.js", () => ({
     getSubagentDepthFromSessionStore: params.getSubagentDepthFromSessionStore ?? (() => 0),
   }));
 
-  vi.doMock("../../subagent-registry.js", () => ({
+  vi.doMock("../registry/subagent-registry.js", () => ({
     completeCollectorLaunchCleanup: params.completeCollectorLaunchCleanupMock ?? vi.fn(),
     countActiveRunsForSession: params.countActiveRunsForSession ?? (() => 0),
     listSwarmRunsForGroup: params.listSwarmRunsForGroup ?? vi.fn(() => []),

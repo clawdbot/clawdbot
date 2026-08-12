@@ -8,9 +8,9 @@ import { walkDirectorySync } from "../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   normalizePluginsConfigWithResolver,
-  resolveEffectivePluginActivationState,
-  resolveMemorySlotDecision,
+  resolvePolicyPluginActivationState,
 } from "../../plugins/config-policy.js";
+import { resolveMemorySlotDecision } from "../../plugins/config-state.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../../plugins/plugin-metadata-lifecycle.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { hasKind } from "../../plugins/slots.js";
@@ -86,7 +86,7 @@ export function resolvePluginSkillDirs(params: {
     if (!record.skills || record.skills.length === 0) {
       continue;
     }
-    const activationState = resolveEffectivePluginActivationState({
+    const activationState = resolvePolicyPluginActivationState({
       id: record.id,
       origin: record.origin,
       config: normalizedPlugins,

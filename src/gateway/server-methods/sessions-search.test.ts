@@ -13,7 +13,7 @@ vi.mock("../../config/sessions/session-transcript-search.js", () => ({
 }));
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
-  listSessionEntries: (...args: unknown[]) => listSessionEntriesMock(...args),
+  listSessionEntriesCore: (...args: unknown[]) => listSessionEntriesMock(...args),
   listSessionEntriesReadOnly: (...args: unknown[]) => listSessionEntriesMock(...args),
 }));
 vi.mock("../../config/sessions.js", async (importOriginal) => ({
