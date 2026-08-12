@@ -151,6 +151,18 @@ export function fanInChannelIngressLifecycles(
   const failAll = async (error: unknown) => {
     await Promise.all(lifecycles.map(async (lifecycle) => await lifecycle.onFailed?.(error)));
   };
+  const cancellationHandlers = lifecycles.flatMap((lifecycle) =>
+    lifecycle.onCancelled ? [lifecycle.onCancelled] : [],
+  );
+  // Omit aggregate cancellation unless every durable source supports it. Callers
+  // can then use settle/abandon without an acknowledged-but-unsettled claim.
+  const cancelAll =
+    cancellationHandlers.length === lifecycles.length
+      ? async () => {
+          handedOff = true;
+          await Promise.all(cancellationHandlers.map(async (cancel) => await cancel()));
+        }
+      : undefined;
   return {
     lifecycle: {
       abortSignal:
@@ -176,10 +188,7 @@ export function fanInChannelIngressLifecycles(
         handedOff = true;
         await failAll(error);
       },
-      onCancelled: async () => {
-        handedOff = true;
-        await Promise.all(lifecycles.map(async (lifecycle) => await lifecycle.onCancelled?.()));
-      },
+      ...(cancelAll ? { onCancelled: cancelAll } : {}),
       onAbandoned: async () => {
         handedOff = true;
         await abandonAll();

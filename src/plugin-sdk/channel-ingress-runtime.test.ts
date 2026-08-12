@@ -76,6 +76,27 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
     expect(fanInChannelIngressLifecycles([]).lifecycle).toBeUndefined();
   });
 
+  it("does not expose cancellation when a source cannot cancellation-settle", async () => {
+    const adopted = vi.fn(async () => {});
+    const cancelled = vi.fn(async () => {});
+    const createLifecycle = (onCancelled?: () => Promise<void>) => ({
+      abortSignal: new AbortController().signal,
+      onAdopted: adopted,
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onFailed: vi.fn(async () => {}),
+      onAbandoned: vi.fn(async () => {}),
+      ...(onCancelled ? { onCancelled } : {}),
+    });
+    const combined = fanInChannelIngressLifecycles([createLifecycle(cancelled), createLifecycle()]);
+
+    expect(combined.lifecycle).not.toHaveProperty("onCancelled");
+    await combined.settle();
+
+    expect(adopted).toHaveBeenCalledTimes(2);
+    expect(cancelled).not.toHaveBeenCalled();
+  });
+
   it("can abandon claims after terminal settlement adoption fails", async () => {
     const abandoned = vi.fn(async () => {});
     const combined = fanInChannelIngressLifecycles([
