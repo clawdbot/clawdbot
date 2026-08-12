@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "../infra/errors.js";
+import { finalizeStagedPluginRegistryReplacement } from "../plugins/runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   createGatewayKernel,
@@ -81,10 +82,12 @@ export async function startGatewayServerCore(
     });
     startupSettled = startup.startupSettled;
   } catch (err) {
-    // The pre-bind registry is still STAGED for any failure before the loader's post-bind
-    // activation commits it (transport create, ws attach, listener bind): the close's
-    // registry clear aborts the staged attempt and restores the displaced survivor. The
-    // close also scrubs the snapshot families unconditionally, so restore the survivor's
+    // The displaced survivor stays recoverable for any failure in here: before the loader's
+    // post-bind activation the pre-bind registry is still STAGED (transport create, ws
+    // attach, listener bind), and after it the activation retained the abort marker while
+    // deferring the survivor's retirement (finalize below never ran). Either way the close's
+    // registry clear tears down this attempt's registry and restores the displaced survivor.
+    // The close also scrubs the snapshot families unconditionally, so restore the survivor's
     // captured prior state once teardown settles — mirroring the kernel's own failure path,
     // even when the close itself throws.
     try {
@@ -94,6 +97,12 @@ export async function startGatewayServerCore(
     }
     throw err;
   }
+  // Complete startup success: everything that can reject startup has run, so the displaced
+  // survivor from a second embedded start retires exactly once here. Deferred-mode sidecars
+  // ("defer") finishing after this point are post-startup runtime failures — they log and
+  // never abort startup (server-startup-post-attach's sidecar catch) — so they no longer
+  // hold the survivor recoverable; "start" mode awaits sidecars inside the try above.
+  finalizeStagedPluginRegistryReplacement();
   // The public server is fully initialized now. Leave a short I/O window before
   // background prewarms and cleanup imports compete for the startup CPU.
   const postReadyWorkTimer = setTimeout(releasePostReadyWork, POST_READY_WORK_START_DELAY_MS);

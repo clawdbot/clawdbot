@@ -372,6 +372,10 @@ export function activatePluginRegistry(
     stageActivePluginRegistry(registry, cacheKey, runtimeSubagentMode, workspaceDir);
     initializeGlobalHookRunner(registry);
     activateContextEngineRegistrations(registry);
+    // Direct replacements (reload, CLI loads) complete here — the displaced previous registry
+    // retires immediately. Gateway startup's activation instead lands on a marker transferred
+    // from the bootstrap's pre-bind stage: the commit installs slot ownership but defers the
+    // displaced survivor's retirement to startup-success finalize (see plugins/runtime).
     commitStagedPluginRegistry(activeSnapshot.activeRegistry, registry);
   } catch (error) {
     restoreActivePluginRegistrySnapshot(activeSnapshot);

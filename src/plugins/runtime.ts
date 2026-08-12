@@ -64,8 +64,9 @@ export type ActivePluginRegistrySnapshot = {
 // snapshot (registry, key, subagent mode, workspace dir) must come back — otherwise the clear
 // empties the slot and its tail wipes global host state the displaced survivor still owns.
 // Staging a successor over a still-staged attempt TRANSFERS the marker (the abort target stays
-// the original survivor); any other install or clear invalidates it so a stale snapshot can
-// never resurrect.
+// the original survivor); committing a transferred marker RETAINS it (the survivor's retirement
+// defers to finalizeStagedPluginRegistryReplacement on complete startup success); any other
+// install or clear invalidates it so a stale snapshot can never resurrect.
 let stagedRegistryRevert: {
   registry: PluginRegistry;
   snapshot: ActivePluginRegistrySnapshot;
@@ -210,15 +211,18 @@ export function commitStagedPluginRegistry(
   previousRegistry: PluginRegistry | null,
   registry: PluginRegistry,
 ): void {
-  // A transferred marker (nested stage) means the true displaced survivor lives in the
-  // marker snapshot; the caller's previousRegistry is then the intermediate attempt registry
-  // it captured before its own stage, and both retire here — the survivor exactly once, as a
-  // completed replacement.
-  const displacedSurvivor =
-    stagedRegistryRevert?.registry === registry
-      ? stagedRegistryRevert.snapshot.activeRegistry
-      : previousRegistry;
-  if (stagedRegistryRevert?.registry === registry) {
+  // A transferred marker (nested stage) means the true displaced survivor lives in the marker
+  // snapshot; the caller's previousRegistry is then the intermediate attempt registry it
+  // captured before its own stage. Only the intermediate retires here: the survivor is still
+  // live and serving until the whole startup succeeds, so its destructive retirement DEFERS —
+  // the marker persists as the abortable handle until finalize consumes it, or a clear aborts
+  // back to the survivor. A direct marker (the caller's own stage, previousRegistry IS the
+  // survivor) has no deferred window and completes the replacement immediately.
+  const marker = stagedRegistryRevert?.registry === registry ? stagedRegistryRevert : null;
+  const displacedSurvivor = marker ? marker.snapshot.activeRegistry : previousRegistry;
+  const deferSurvivorRetirement =
+    marker !== null && displacedSurvivor !== previousRegistry && state.activeRegistry === registry;
+  if (marker && !deferSurvivorRetirement) {
     // The attempt owns the slot from here: a later clear is a real clear, not an abort.
     stagedRegistryRevert = null;
   }
@@ -228,6 +232,24 @@ export function commitStagedPluginRegistry(
   if (previousRegistry !== displacedSurvivor && retirePluginRegistryIfUnused(previousRegistry)) {
     cleanupRetiredPluginHostRegistry(previousRegistry!);
   }
+  if (deferSurvivorRetirement || !retirePluginRegistryIfUnused(displacedSurvivor)) {
+    return;
+  }
+  cleanupRetiredPluginHostRegistry(displacedSurvivor!);
+}
+
+/**
+ * Consumes a retained (transferred) marker on complete startup success: the displaced survivor
+ * retires exactly once here, as a completed replacement. Until this runs, the marker keeps the
+ * survivor abortable — clearActivePluginRegistry after a failed late startup restores it.
+ * No-op when no deferred window is open (fresh start, reload replacement, minimal gateway).
+ */
+export function finalizeStagedPluginRegistryReplacement(): void {
+  if (!stagedRegistryRevert || stagedRegistryRevert.registry !== state.activeRegistry) {
+    return;
+  }
+  const displacedSurvivor = stagedRegistryRevert.snapshot.activeRegistry;
+  stagedRegistryRevert = null;
   if (!retirePluginRegistryIfUnused(displacedSurvivor)) {
     return;
   }
@@ -461,8 +483,11 @@ function clearActivePluginRegistryState(): PluginRegistry | null {
 }
 
 export async function clearActivePluginRegistry(): Promise<void> {
-  // Clearing an uncommitted staged registry is an ABORT: capture the displaced survivor
-  // snapshot before the state clear consumes the marker, restore it synchronously below.
+  // Clearing an unfinalized attempt (staged, or committed with a retained marker awaiting
+  // finalize) is an ABORT: capture the displaced survivor snapshot before the state clear
+  // consumes the marker, restore it synchronously below. The attempt's own registry — by the
+  // committed phase the fully LOADED one with live hooks — tears down through the clear's
+  // normal retirement path first; the survivor's slot restore follows.
   const revertSnapshot =
     stagedRegistryRevert && stagedRegistryRevert.registry === state.activeRegistry
       ? stagedRegistryRevert.snapshot

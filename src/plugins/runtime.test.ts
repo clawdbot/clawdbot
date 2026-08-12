@@ -8,6 +8,7 @@ import {
   captureActivePluginRegistrySnapshot,
   clearActivePluginRegistry,
   commitStagedPluginRegistry,
+  finalizeStagedPluginRegistryReplacement,
   getActivePluginRegistry,
   getActivePluginRegistryKey,
   getActivePluginRuntimeSubagentMode,
@@ -243,7 +244,11 @@ describe("setActivePluginRegistry", () => {
 // kernel; the loader then stages+commits the fully loaded registry OVER that still-staged
 // attempt (loader-shared's activatePluginRegistry). The nested stage transfers the abort
 // marker so the original displaced survivor — not the intermediate attempt registry — is what
-// a pre-commit clear restores and what the commit finally retires, exactly once.
+// a clear restores and what retirement finally targets, exactly once.
+// ClawSweeper cycle 44 (P1): the nested commit is an INSTALL that retains the marker — the
+// survivor's destructive retirement defers to finalizeStagedPluginRegistryReplacement on
+// complete startup success, so a clear between commit and finalize still aborts to the
+// survivor. Direct (non-nested) commits — reload replacements — finalize immediately.
 describe("staged plugin registry attempt", () => {
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
@@ -255,8 +260,35 @@ describe("staged plugin registry attempt", () => {
     return survivor;
   }
 
-  it("commits a nested stage by retiring the original survivor exactly once", () => {
-    const survivor = seedSurvivor();
+  function seedObservableSurvivor() {
+    // Retirement observability: the disable-time runtime lifecycle cleanup only fires when
+    // the survivor's destructive retirement actually runs, and it must run exactly once.
+    let cleanupCount = 0;
+    let signalCleanup: (() => void) | undefined;
+    const cleanupSignal = new Promise<void>((resolve) => {
+      signalCleanup = resolve;
+    });
+    const survivor = createEmptyPluginRegistry();
+    survivor.runtimeLifecycles = [
+      {
+        pluginId: "survivor-plugin",
+        lifecycle: {
+          id: "survivor-lifecycle",
+          cleanup() {
+            cleanupCount += 1;
+            signalCleanup?.();
+          },
+        },
+        source: "/virtual/survivor/index.ts",
+        rootDir: "/virtual/survivor",
+      },
+    ];
+    setActivePluginRegistry(survivor, "survivor-key", "gateway-bindable");
+    return { survivor, cleanupSignal, cleanupCount: () => cleanupCount };
+  }
+
+  it("retains the marker at the nested commit and defers the survivor's retirement", async () => {
+    const { survivor, cleanupSignal, cleanupCount } = seedObservableSurvivor();
     const preBind = createEmptyPluginRegistry();
     stageActivePluginRegistry(preBind, null, "default");
     const loaderCapture = captureActivePluginRegistrySnapshot();
@@ -266,23 +298,65 @@ describe("staged plugin registry attempt", () => {
 
     commitStagedPluginRegistry(loaderCapture.activeRegistry, loaded);
 
+    // Install-retaining-handle: the loaded registry owns the slot, the intermediate attempt
+    // registry retired, but the displaced survivor stays live until finalize.
     expect(getActivePluginRegistry()).toBe(loaded);
-    expect(isPluginRegistryRetired(survivor)).toBe(true);
     expect(isPluginRegistryRetired(preBind)).toBe(true);
+    expect(isPluginRegistryRetired(survivor)).toBe(false);
+    expect(cleanupCount()).toBe(0);
+
+    finalizeStagedPluginRegistryReplacement();
+
+    expect(isPluginRegistryRetired(survivor)).toBe(true);
+    await waitForCleanupSignal(cleanupSignal, "survivor retirement cleanup");
+    // The marker was consumed: a second finalize (and a later clear) must not retire again.
+    finalizeStagedPluginRegistryReplacement();
+    await clearActivePluginRegistry();
+    expect(getActivePluginRegistry()).toBeNull();
+    expect(cleanupCount()).toBe(1);
   });
 
-  it("clears to an empty slot after the nested commit consumed the marker", async () => {
-    const survivor = seedSurvivor();
+  it("aborts to the survivor when cleared after the nested commit but before finalize", async () => {
+    const { survivor, cleanupCount } = seedObservableSurvivor();
     const preBind = createEmptyPluginRegistry();
     stageActivePluginRegistry(preBind, null, "default");
     const loaded = createEmptyPluginRegistry();
     stageActivePluginRegistry(loaded, "loaded-key", "gateway-bindable");
     commitStagedPluginRegistry(preBind, loaded);
 
+    // Late startup failure: the attempt's LOADED registry is active when the close clears.
     await clearActivePluginRegistry();
 
-    expect(getActivePluginRegistry()).toBeNull();
+    // Attempt teardown first, survivor restore after: the loaded registry retired while the
+    // survivor came back live with its slot snapshot — key, mode — and no disable cleanup.
+    expect(isPluginRegistryRetired(loaded)).toBe(true);
+    expect(getActivePluginRegistry()).toBe(survivor);
+    expect(isPluginRegistryRetired(survivor)).toBe(false);
+    expect(getActivePluginRegistryKey()).toBe("survivor-key");
+    expect(getActivePluginRuntimeSubagentMode()).toBe("gateway-bindable");
+    expect(cleanupCount()).toBe(0);
+    // A finalize that races the abort (marker already consumed) must not retire the restored
+    // survivor.
+    finalizeStagedPluginRegistryReplacement();
+    expect(isPluginRegistryRetired(survivor)).toBe(false);
+  });
+
+  it("retires the displaced registry immediately on a direct stage/commit", () => {
+    // The reload replacement path (loader-shared's activatePluginRegistry outside startup):
+    // no outer staged attempt, so the marker snapshot IS the previous registry and the
+    // commit completes the replacement with no deferred window.
+    const survivor = seedSurvivor();
+    const capture = captureActivePluginRegistrySnapshot();
+    const loaded = createEmptyPluginRegistry();
+    stageActivePluginRegistry(loaded, "reload-key", "gateway-bindable");
+
+    commitStagedPluginRegistry(capture.activeRegistry, loaded);
+
+    expect(getActivePluginRegistry()).toBe(loaded);
     expect(isPluginRegistryRetired(survivor)).toBe(true);
+    finalizeStagedPluginRegistryReplacement();
+    expect(getActivePluginRegistry()).toBe(loaded);
+    expect(isPluginRegistryRetired(loaded)).toBe(false);
   });
 
   it("aborts a nested stage back to the original survivor", async () => {

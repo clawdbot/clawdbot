@@ -176,8 +176,10 @@ export async function prepareGatewayPluginBootstrap(params: {
   // Stage, never set: this pre-bind publish is provisional until the attempt completes the
   // replacement. A plain set would retire a still-running embedded Gateway's registry here —
   // firing its "disable" lifecycle/scheduler cleanup — while the attempt can still fail. The
-  // loader's post-bind activation commits the staged registry (retiring the displaced one);
-  // reusing the already-active registry leaves its slot key/mode/workspace untouched.
+  // loader's post-bind activation installs the loaded registry but keeps the displaced
+  // survivor abortable; it retires only when startup returns successfully (server-start's
+  // finalize). Reusing the already-active registry leaves its slot key/mode/workspace
+  // untouched.
   if (pluginRegistry !== getActivePluginRegistry()) {
     stageActivePluginRegistry(pluginRegistry, null, "default");
   }

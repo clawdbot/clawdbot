@@ -5,6 +5,11 @@
 // fired. These tests drive the REAL startGatewayServerCore: a port-in-use bind failure must
 // restore the survivor (registry live, key/mode preserved, snapshot families reactivated), and
 // a fully successful second start must still retire the displaced survivor exactly once.
+// ClawSweeper cycle 44 (P1): the survivor must stay recoverable PAST the loader's post-bind
+// activation too — startup work after it (post-attach sidecars in "start" mode, config-reloader
+// registration) can still reject startGatewayServerCore. The activation installs the loaded
+// registry but retains the abort marker; the survivor retires only at startup-success finalize,
+// so a late failure's close aborts back to it.
 import net from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -52,6 +57,49 @@ import { startGatewayServerCore } from "./server-start.js";
 // Full production (non-minimal) startups: local runs finish well under this, the budget only
 // buys headroom for loaded CI runners plus the bind-failure EADDRINUSE retry window (~10s).
 const START_BUDGET_MS = 180_000;
+
+// Config-reloader registration is the last real startup step in finishGatewayStartup that can
+// reject startGatewayServerCore, and it runs AFTER the loader's post-bind activation: the probe
+// observes what the activation left behind at that exact point, and the flag turns the step
+// into the reviewer's late-startup failure.
+const reloaderFixture = vi.hoisted(() => ({
+  failStart: false,
+  survivor: null as object | null,
+  survivorRetiredAtReloaderStart: null as boolean | null,
+  activeRegistryAtReloaderStart: null as object | null,
+}));
+
+vi.mock("./server-reload-handlers.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./server-reload-handlers.js")>();
+  const [registryLifecycle, pluginRuntime] = await Promise.all([
+    import("../plugins/registry-lifecycle.js"),
+    import("../plugins/runtime.js"),
+  ]);
+  return {
+    ...actual,
+    startManagedGatewayConfigReloader: (
+      ...args: Parameters<typeof actual.startManagedGatewayConfigReloader>
+    ) => {
+      if (reloaderFixture.survivor) {
+        reloaderFixture.survivorRetiredAtReloaderStart = registryLifecycle.isPluginRegistryRetired(
+          reloaderFixture.survivor as never,
+        );
+        reloaderFixture.activeRegistryAtReloaderStart = pluginRuntime.getActivePluginRegistry();
+      }
+      if (reloaderFixture.failStart) {
+        throw new Error("fixture late-startup failure");
+      }
+      return actual.startManagedGatewayConfigReloader(...args);
+    },
+  };
+});
+
+function resetReloaderFixture(): void {
+  reloaderFixture.failStart = false;
+  reloaderFixture.survivor = null;
+  reloaderFixture.survivorRetiredAtReloaderStart = null;
+  reloaderFixture.activeRegistryAtReloaderStart = null;
+}
 
 async function createServerStartTestState(label: string): Promise<OpenClawTestState> {
   const state = await createOpenClawTestState({
@@ -274,10 +322,88 @@ describe("startGatewayServerCore late startup failure", () => {
     },
   );
 
-  // Success-path guard: deferring the commit to the loader's post-bind activation must not
-  // lose the retirement itself. A fully successful second start still retires the displaced
-  // survivor exactly once — the activation commit's retirement, not a second one from the
-  // completed replacement's own close — and ends with the loaded registry installed.
+  // ClawSweeper cycle 44 (P1): the reviewer's residual — startup fails AFTER the loader's
+  // post-bind activation installed the fully loaded registry (here: the config-reloader
+  // registration, in "start" mode so post-attach sidecar work already completed inside the
+  // try). The activation must have kept the abort marker pointing at the original survivor,
+  // so the failure's close tears the loaded attempt registry down and restores the survivor
+  // live and un-retired.
+  it(
+    "restores the surviving gateway when startup fails after the loader's activation",
+    { timeout: START_BUDGET_MS },
+    async () => {
+      const port = await getFreePort();
+      const state = await createServerStartTestState("gateway-start-late-failure");
+      const token = "gateway-start-late-failure-token";
+      await state.writeConfig({
+        gateway: {
+          auth: { mode: "token", token },
+          controlUi: { enabled: false },
+          port,
+        },
+      });
+      state.applyEnv();
+      resetPluginRuntimeStateForTest();
+      clearRuntimeConfigSnapshot();
+      clearSecretsRuntimeSnapshotState();
+      const { survivor, lifecycleCleanupReasons, schedulerCleanupReasons } =
+        createObservableSurvivor();
+      setActivePluginRegistry(survivor, "embedded-prior-late", "gateway-bindable");
+      registerSurvivorSchedulerJob(survivor, schedulerCleanupReasons);
+      const runningConfig: OpenClawConfig = { channels: {} };
+      setAppliedRuntimeConfigSnapshot(runningConfig, runningConfig);
+      const priorSnapshot = getRuntimeConfigSnapshot();
+      expect(priorSnapshot).not.toBeNull();
+      reloaderFixture.failStart = true;
+      reloaderFixture.survivor = survivor;
+      try {
+        await expect(
+          startGatewayServerCore(port, {
+            auth: { mode: "token", token },
+            bind: "loopback",
+            controlUiEnabled: false,
+            sidecarStartup: "start",
+          }),
+        ).rejects.toThrow("fixture late-startup failure");
+        // At the failure point the activation had already installed the attempt's loaded
+        // registry — but the survivor must NOT have been retired with startup still pending.
+        expect(reloaderFixture.activeRegistryAtReloaderStart).not.toBeNull();
+        expect(reloaderFixture.activeRegistryAtReloaderStart).not.toBe(survivor);
+        expect(reloaderFixture.survivorRetiredAtReloaderStart).toBe(false);
+        // The close aborted the attempt back to the survivor: live, active, mode preserved,
+        // and the attempt's loaded registry torn down.
+        expect(getActivePluginRegistry()).toBe(survivor);
+        expect(isPluginRegistryRetired(survivor)).toBe(false);
+        expect(getActivePluginRegistryKey()).toBe("embedded-prior-late");
+        expect(getActivePluginRuntimeSubagentMode()).toBe("gateway-bindable");
+        expect(
+          isPluginRegistryRetired(reloaderFixture.activeRegistryAtReloaderStart as PluginRegistry),
+        ).toBe(true);
+        // Retirement cleanup is fire-and-forget: give any scheduled cleanup a bounded window
+        // to land, then prove the survivor's destructive disable cleanup never fired.
+        await new Promise((resolve) => {
+          setTimeout(resolve, 100);
+        });
+        expect(lifecycleCleanupReasons).toEqual([]);
+        expect(schedulerCleanupReasons).toEqual([]);
+        expect(survivorSchedulerJobGeneration()).toBeDefined();
+        // The failed start restored the survivor's captured config snapshot family.
+        expect(getRuntimeConfigSnapshot()).toBe(priorSnapshot);
+      } finally {
+        resetReloaderFixture();
+        clearSecretsRuntimeSnapshotState();
+        resetPluginRuntimeStateForTest();
+        clearRuntimeConfigSnapshot();
+        await state.cleanup();
+      }
+    },
+  );
+
+  // Success-path guard: deferring the survivor's retirement to startup-success finalize must
+  // not lose the retirement itself. A fully successful second start still retires the
+  // displaced survivor exactly once — at finalize, observably NOT yet at the loader's
+  // activation (the config-reloader probe runs between the two) and not a second time from
+  // the completed replacement's own close — and ends with the loaded registry installed.
   it(
     "retires the displaced survivor exactly once when the second start fully succeeds",
     { timeout: START_BUDGET_MS },
@@ -299,6 +425,7 @@ describe("startGatewayServerCore late startup failure", () => {
         createObservableSurvivor();
       setActivePluginRegistry(survivor, "embedded-prior-success", "gateway-bindable");
       registerSurvivorSchedulerJob(survivor, schedulerCleanupReasons);
+      reloaderFixture.survivor = survivor;
       let server: Awaited<ReturnType<typeof startGatewayServerCore>> | undefined;
       try {
         // "start" (not "defer"): close never awaits a still-deferred sidecar sequence, so a
@@ -310,6 +437,10 @@ describe("startGatewayServerCore late startup failure", () => {
           controlUiEnabled: false,
           sidecarStartup: "start",
         });
+        // Retirement ordering: at config-reloader registration — after the loader's
+        // activation, before startup returned — the survivor was still recoverable. It
+        // retires at finalize, when startGatewayServerCore resolves, never at activation.
+        expect(reloaderFixture.survivorRetiredAtReloaderStart).toBe(false);
         // The loaded startup registry owns the slot; the displaced survivor retired once,
         // with its disable-time lifecycle and scheduler cleanup fired.
         expect(getActivePluginRegistry()).not.toBe(survivor);
@@ -334,6 +465,7 @@ describe("startGatewayServerCore late startup failure", () => {
         try {
           await server?.close({ reason: "server-start success guard cleanup" });
         } finally {
+          resetReloaderFixture();
           resetPluginRuntimeStateForTest();
           clearRuntimeConfigSnapshot();
           await state.cleanup();

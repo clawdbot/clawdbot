@@ -144,10 +144,10 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
   // Startup-failure cleanup is scoped to state THIS attempt published: an embedded process
   // can already run a Gateway whose registry, config snapshot, and secrets runtime these
   // globals hold, and a second kernel attempt failing at ANY stage must not strip them from
-  // it. Bootstrap STAGES its pre-bind registry (no retirement) and clearing an uncommitted
-  // staged registry reverts the slot to the displaced survivor snapshot; the displaced
-  // registry retires only when the loader activates the fully loaded startup registry after
-  // the listener binds (see startGatewayServerCore -> finishGatewayStartup), never here.
+  // it. Bootstrap STAGES its pre-bind registry (no retirement) and clearing an unfinalized
+  // attempt reverts the slot to the displaced survivor snapshot; the displaced registry
+  // retires only when complete startup succeeds (startGatewayServerCore's finalize after
+  // finishGatewayStartup returns), never here.
   const priorRegistry = getActivePluginRegistry();
   const priorSnapshot = getRuntimeConfigSnapshot();
   const priorSourceSnapshot = getRuntimeConfigSourceSnapshot();
@@ -259,12 +259,14 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
     });
     // The pre-bind registry stays STAGED past kernel success: transport creation and the
     // listener bind still lie ahead in startGatewayServerCore and can fail as a unit. The
-    // commit — retiring the displaced survivor exactly once, as a completed replacement —
-    // happens when the loader activates the fully loaded startup registry after the listener
-    // binds (loader-shared's activatePluginRegistry stage/commit, marker-transfer semantics
-    // in plugins/runtime). Committing here let a bind failure close the attempt with the
-    // survivor already retired and nothing live left to restore. The caller's failure path
-    // reuses this attempt's snapshot-family restore through the handle returned below.
+    // loader's post-bind activation then installs the fully loaded startup registry but
+    // RETAINS the transferred abort marker (loader-shared's activatePluginRegistry
+    // stage/commit, marker semantics in plugins/runtime); the displaced survivor retires
+    // exactly once — as a completed replacement — only when startGatewayServerCore's
+    // finalize runs after ALL startup work succeeds. Retiring any earlier let a later
+    // startup failure close the attempt with the survivor already retired and nothing live
+    // left to restore. The caller's failure path reuses this attempt's snapshot-family
+    // restore through the handle returned below.
     return {
       ...requestRuntime,
       restorePriorSnapshotFamiliesAfterStartupFailure: restorePriorSnapshotFamilies,
@@ -274,8 +276,9 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
       // The close's shutdown clears the attempt's staged (uncommitted) registry, which
       // reverts the slot to the displaced survivor snapshot — key, subagent mode, workspace
       // dir — and skips the host-state wipe the survivor still owns (see
-      // clearActivePluginRegistry). The commit only happens later (the loader's post-bind
-      // activation), so every failure landing here still holds an unretired survivor. The
+      // clearActivePluginRegistry). The survivor retires only at startup-success finalize,
+      // long after this kernel stage, so every failure landing here still holds an
+      // unretired survivor. The
       // close then scrubs the snapshot families unconditionally (its secrets clear cascades
       // into the config snapshot, applied hash, and ambient policy), so restore them to the
       // captured prior state once teardown settles — even when the close itself throws.
