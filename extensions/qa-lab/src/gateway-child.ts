@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   createQaBundledPluginsDir,
   resolveQaOwnerPluginIdsForProviderIds,
@@ -24,7 +25,6 @@ import {
 import {
   resolveQaGatewayChildCommand,
   runQaGatewayCliCommand,
-  stageQaPackagedMockAuthProfiles,
   type QaGatewayChildCommand,
 } from "./gateway-child-command.js";
 import {
@@ -67,7 +67,7 @@ import {
   stageQaLiveApiKeyProfiles,
   stageQaLiveAnthropicSetupToken,
 } from "./providers/live-frontier/auth.js";
-import { stageQaMockAuthProfiles } from "./providers/shared/mock-auth.js";
+import { buildQaMockProfileId, stageQaMockAuthProfiles } from "./providers/shared/mock-auth.js";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import { buildQaGatewayConfig, type QaThinkingLevel } from "./qa-gateway-config.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
@@ -77,6 +77,7 @@ export type { QaGatewayChildCommand } from "./gateway-child-command.js";
 export type { QaCliBackendAuthMode } from "./providers/env.js";
 const QA_GATEWAY_CHILD_RPC_STARTUP_TIMEOUT_MS = 30_000;
 const QA_GATEWAY_CHILD_RPC_RETRY_HEALTH_TIMEOUT_MS = 60_000;
+const QA_PACKAGE_AUTH_FAILURE_MAX_CHARS = 2_048;
 
 export type QaGatewayChildStateMutationContext = {
   configPath: string;
@@ -179,6 +180,50 @@ function resolveQaControlUiRoot(params: { repoRoot: string; controlUiEnabled?: b
   const controlUiRoot = path.join(params.repoRoot, "dist", "control-ui");
   const indexPath = path.join(controlUiRoot, "index.html");
   return existsSync(indexPath) ? controlUiRoot : undefined;
+}
+
+function createQaPackagedMockApiKey(): string {
+  const prefix = ["s", "k"].join("");
+  return `${prefix}-${["qa", "mock", randomUUID().replaceAll("-", "")].join("-")}`;
+}
+
+async function stageQaPackagedMockAuthProfiles(params: {
+  command: QaGatewayChildCommand;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  providers: readonly string[];
+}): Promise<void> {
+  for (const provider of uniqueStrings(params.providers)) {
+    try {
+      await runQaGatewayCliCommand({
+        executablePath: params.command.executablePath,
+        argsPrefix: params.command.argsPrefix ?? [],
+        args: [
+          "models",
+          "auth",
+          "--agent",
+          "qa",
+          "paste-api-key",
+          "--provider",
+          provider,
+          "--profile-id",
+          buildQaMockProfileId(provider),
+        ],
+        cwd: params.command.cwd ?? params.cwd,
+        env: params.env,
+        stdin: `${createQaPackagedMockApiKey()}\n`,
+      });
+    } catch (error) {
+      const errorMessage = toErrorObject(error, "installed package auth command failed").message;
+      const details = sliceUtf16Safe(
+        redactQaGatewayDebugText(errorMessage),
+        0,
+        QA_PACKAGE_AUTH_FAILURE_MAX_CHARS,
+      );
+      // oxlint-disable-next-line preserve-caught-error -- Candidate CLI errors can contain the submitted API key; only the redacted message crosses this boundary.
+      throw new Error(`installed package mock auth bootstrap failed for ${provider}: ${details}`);
+    }
+  }
 }
 
 export async function startQaGatewayChild(params: {

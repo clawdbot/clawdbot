@@ -1,11 +1,8 @@
 // Qa Lab plugin module owns gateway child command bootstrap behavior.
 import { spawn, type ChildProcess } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   appendQaChildOutput,
   appendQaChildOutputTail,
@@ -15,11 +12,7 @@ import {
   readQaChildOutput,
 } from "./child-output.js";
 import { hasQaGatewayChildExited, monitorQaChildFailure } from "./gateway-child-process.js";
-import { redactQaGatewayDebugText } from "./gateway-log-redaction.js";
 import type { QaGatewayProcessBoundaryConfig } from "./gateway-process-boundary.js";
-import { buildQaMockProfileId } from "./providers/shared/mock-auth.js";
-
-const QA_PACKAGE_AUTH_FAILURE_MAX_CHARS = 2_048;
 
 type QaGatewayChildDirectCommand = {
   executablePath: string;
@@ -75,50 +68,6 @@ export async function runQaGatewayCliCommand(params: {
     child.stdin?.end(params.stdin);
   }
   return await result;
-}
-
-function createQaPackagedMockApiKey(): string {
-  const prefix = ["s", "k"].join("");
-  return `${prefix}-${["qa", "mock", randomUUID().replaceAll("-", "")].join("-")}`;
-}
-
-export async function stageQaPackagedMockAuthProfiles(params: {
-  command: QaGatewayChildCommand;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  providers: readonly string[];
-}): Promise<void> {
-  for (const provider of uniqueStrings(params.providers)) {
-    try {
-      await runQaGatewayCliCommand({
-        executablePath: params.command.executablePath,
-        argsPrefix: params.command.argsPrefix ?? [],
-        args: [
-          "models",
-          "auth",
-          "--agent",
-          "qa",
-          "paste-api-key",
-          "--provider",
-          provider,
-          "--profile-id",
-          buildQaMockProfileId(provider),
-        ],
-        cwd: params.command.cwd ?? params.cwd,
-        env: params.env,
-        stdin: `${createQaPackagedMockApiKey()}\n`,
-      });
-    } catch (error) {
-      const errorMessage = toErrorObject(error, "installed package auth command failed").message;
-      const details = sliceUtf16Safe(
-        redactQaGatewayDebugText(errorMessage),
-        0,
-        QA_PACKAGE_AUTH_FAILURE_MAX_CHARS,
-      );
-      // oxlint-disable-next-line preserve-caught-error -- Candidate CLI errors can contain the submitted API key; only the redacted message crosses this boundary.
-      throw new Error(`installed package mock auth bootstrap failed for ${provider}: ${details}`);
-    }
-  }
 }
 
 async function readQaGatewayCliCommand(child: ChildProcess): Promise<string> {
