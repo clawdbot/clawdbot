@@ -1,4 +1,5 @@
 // Shares channel-configured checks across config and runtime surfaces.
+import { normalizeChatChannelId } from "../channels/ids.js";
 import { getChannelEnvVars } from "../secrets/channel-env-vars.js";
 import { isRecord } from "../utils.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -9,8 +10,24 @@ export function resolveChannelConfigRecord(
   channelId: string,
 ): Record<string, unknown> | null {
   const channels = cfg.channels as Record<string, unknown> | undefined;
-  const entry = channels?.[channelId];
-  return isRecord(entry) ? entry : null;
+  if (!channels) {
+    return null;
+  }
+  const entry = channels[channelId];
+  if (isRecord(entry)) {
+    return entry;
+  }
+  // Validation admits any declared spelling of a channel against canonical identity — the
+  // config record resolves the AUTHORED key through the same identity, or an authored variant
+  // (`channels.QQBot`) validates while activation misses the canonical lookup, skips incumbent
+  // suppression, and first registration serves an implementation whose schema never accepted
+  // the settings.
+  const canonical = normalizeChatChannelId(channelId) ?? channelId;
+  const authoredKey = Object.keys(channels).find(
+    (key) => (normalizeChatChannelId(key) ?? key) === canonical,
+  );
+  const authored = authoredKey === undefined ? undefined : channels[authoredKey];
+  return isRecord(authored) ? authored : null;
 }
 
 /** Checks whether a shallow channel config contains activation-relevant values. */

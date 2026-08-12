@@ -861,4 +861,49 @@ describe("plugin loader preferOver activation", () => {
     // successful setup-only registration is restored for the operator's setup flow.
     expect(registry.channelSetups.map((entry) => entry.pluginId)).toContain("qqbot");
   });
+
+  // ClawSweeper review (2026-08-12) P1 + convergence regression: an authored VARIANT spelling
+  // of a configured channel must flow through activation, suppression, and registration to the
+  // same replacement whose schema validation accepted. The configured-channel signal filter
+  // used to canonicalize the id and read `channels.<canonical>` exactly, miss the authored
+  // record, and leave the incumbent serving unsuppressed.
+  it("suppresses the incumbent for a channel configured under an authored variant spelling", () => {
+    const bundledRoot = makePluginLoaderTempDir();
+    writeChannelToolPlugin({
+      rootDir: bundledRoot,
+      id: "qqbot",
+      channelId: "qqbot",
+      enabledByDefault: true,
+      toolName: "qqbot_remind_legacy",
+    });
+    const externalRoot = makePluginLoaderTempDir();
+    const externalPluginDir = writeChannelToolPlugin({
+      rootDir: externalRoot,
+      id: "openclaw-qqbot",
+      channelId: "qqbot",
+      preferOver: ["qqbot"],
+    });
+    const env = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+    };
+    const rawConfig: OpenClawConfig = {
+      channels: { QQBot: { appId: "app", clientSecret: "secret" } },
+      plugins: { load: { paths: [externalPluginDir] } },
+    };
+    const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+      env,
+    });
+
+    // The replacement owns the channel exactly as it would for the canonical spelling: the
+    // plan saw the authored record, enabled the replacement, and suppressed the incumbent.
+    expect(autoEnabled.config.plugins?.entries?.["openclaw-qqbot"]?.enabled).toBe(true);
+    expect(registry.channels.map((entry) => entry.pluginId)).toEqual(["openclaw-qqbot"]);
+  });
 });
