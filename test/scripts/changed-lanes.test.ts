@@ -2421,6 +2421,11 @@ describe("delegationFailedBeforeRunning", () => {
     ].join("\n");
 
     expect(delegationFailedBeforeRunning(output)).toBe(true);
+    expect(
+      delegationFailedBeforeRunning(
+        "[crabbox] selected binary failed basic --version/--help sanity checks",
+      ),
+    ).toBe(true);
   });
 
   it("does not mistake an infrastructure error kind for a command verdict", () => {
