@@ -170,6 +170,44 @@ describe("channel account config mutations", () => {
     expect(prepared.ok).toBe(true);
   });
 
+  it("reports missing setup env vars before plugin-owned input preparation", async () => {
+    const prepareAccountConfigInput = vi.fn(() => {
+      throw new Error("prepare should stay lazy when env metadata already rejects input");
+    });
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "env-chat" }),
+      setupContract: defineChannelSetupContract({
+        fields: {
+          useEnv: {
+            kind: "boolean",
+            cli: { flags: "--use-env", description: "Use environment credentials" },
+            envVars: ["ENV_CHAT_TOKEN"],
+          },
+        },
+        adapter: {
+          prepareAccountConfigInput,
+          applyAccountConfig: ({ cfg }) => cfg,
+        },
+      }),
+    } as ChannelPlugin;
+
+    const prepared = await prepareChannelAccountConfiguration({
+      cfg: {},
+      plugin,
+      resolveInput: () => ({ useEnv: true }),
+      runtime,
+    });
+
+    expect(prepared).toEqual({
+      ok: false,
+      error: {
+        kind: "invalid-input",
+        message: expect.stringContaining("ENV_CHAT_TOKEN"),
+      },
+    });
+    expect(prepareAccountConfigInput).not.toHaveBeenCalled();
+  });
+
   it("normalizes plugin-resolved account IDs only at the config mutation boundary", async () => {
     const applyAccountConfig = vi.fn(({ cfg }) => cfg);
     const onAccountConfigChanged = vi.fn();

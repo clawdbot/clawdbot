@@ -85,6 +85,10 @@ export async function prepareChannelAccountConfiguration(params: {
       accountId: params.requestedAccountId,
       input,
     }) ?? normalizeAccountId(params.requestedAccountId);
+  const missingEnvMessage = resolveMissingSetupEnvMessage(params.plugin, input);
+  if (missingEnvMessage) {
+    return resultError({ kind: "invalid-input", message: missingEnvMessage });
+  }
   if (setup.prepareAccountConfigInput) {
     await params.beforePersistentEffect?.();
     input = await setup.prepareAccountConfigInput({
@@ -102,10 +106,6 @@ export async function prepareChannelAccountConfiguration(params: {
   });
   if (validationError) {
     return resultError({ kind: "invalid-input", message: validationError });
-  }
-  const missingEnvMessage = resolveMissingSetupEnvMessage(params.plugin, input);
-  if (missingEnvMessage) {
-    return resultError({ kind: "invalid-input", message: missingEnvMessage });
   }
 
   return ok({
