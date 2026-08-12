@@ -33,6 +33,64 @@ function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T>
 }
 
 describe("WorkboardReconciler", () => {
+  it("does not mutate a source-matched card without its exact revision", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const provider = createWorkboardReconciliationProvider(new WorkboardReconciler(store));
+    const created = await provider.apply({
+      sourceUrl: "https://example.test/runs/source-match",
+      tenant: "acme",
+      idempotencyKey: "source-match-create",
+      observationId: "source-match-create",
+      sourceUpdatedAt: 1,
+      card: { title: "Original title" },
+    });
+
+    const result = await provider.apply({
+      sourceUrl: "https://example.test/runs/source-match",
+      tenant: "acme",
+      idempotencyKey: "source-match-update",
+      observationId: "source-match-update",
+      sourceUpdatedAt: 2,
+      card: { title: "Must not overwrite" },
+    });
+
+    expect(result).toMatchObject({ outcome: "conflict", card: { id: created.card.id } });
+    expect((await store.get(created.card.id))?.title).toBe("Original title");
+  });
+
+  it("validates provider source URIs and byte-bounded addresses before any mutation", async () => {
+    const provider = createWorkboardReconciliationProvider(
+      new WorkboardReconciler(new WorkboardStore(createMemoryStore())),
+    );
+    const observation = {
+      sourceUrl: "https://example.test/runs/valid",
+      tenant: "acme",
+      idempotencyKey: "valid",
+      observationId: "valid",
+      sourceUpdatedAt: 1,
+      card: { title: "Valid" },
+    };
+
+    await expect(provider.apply({ ...observation, sourceUrl: "not a uri" })).rejects.toThrow(
+      "sourceUrl must be an absolute https URL.",
+    );
+    await expect(
+      provider.apply({ ...observation, sourceUrl: "file:///private/run" }),
+    ).rejects.toThrow("sourceUrl must be an absolute https URL.");
+    await expect(
+      provider.apply({ ...observation, sourceUrl: `https://example.test/${"é".repeat(1_000)}` }),
+    ).rejects.toThrow("sourceUrl must be 2000 bytes or fewer.");
+    await expect(provider.apply({ ...observation, cardId: "c".repeat(121) })).rejects.toThrow(
+      "cardId must be 120 bytes or fewer.",
+    );
+    await expect(provider.list({ tenant: "t".repeat(81) })).rejects.toThrow(
+      "tenant must be 80 bytes or fewer.",
+    );
+    await expect(provider.list({ boardId: "b".repeat(81) })).rejects.toThrow(
+      "boardId must be 80 bytes or fewer.",
+    );
+  });
+
   it("requires an observation id and a revision for every existing-card mutation", async () => {
     const reconciler = new WorkboardReconciler(new WorkboardStore(createMemoryStore()));
     const provider = createWorkboardReconciliationProvider(reconciler);

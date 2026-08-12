@@ -237,6 +237,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
   async applyReconciliation(
     observation: WorkboardReconciliationObservation,
     link: WorkboardExternalExecutionLink,
+    options: { requireExpectedRevision?: boolean } = {},
   ): Promise<WorkboardReconciliationApplyResult> {
     return await this.enqueueMutation(async () => {
       const cards = await this.list();
@@ -280,8 +281,10 @@ export class WorkboardStore extends WorkboardNotificationStore {
           return reconciliationResult(existing, "conflict", link);
         }
         if (
-          observation.expectedRevision !== undefined &&
-          observation.expectedRevision !== existing.updatedAt
+          options.requireExpectedRevision === true
+            ? observation.expectedRevision !== existing.updatedAt
+            : observation.expectedRevision !== undefined &&
+              observation.expectedRevision !== existing.updatedAt
         ) {
           return reconciliationResult(existing, "conflict", link);
         }

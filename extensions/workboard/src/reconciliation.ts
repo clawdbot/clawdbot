@@ -55,6 +55,27 @@ function readBoundedString(value: unknown, name: string, maximum: number): strin
   return result;
 }
 
+function readBoundedUtf8String(value: unknown, name: string, maximum: number): string {
+  const result = readRequiredString(value, name);
+  if (Buffer.byteLength(result, "utf8") > maximum) {
+    throw new Error(`${name} must be ${maximum} bytes or fewer.`);
+  }
+  return result;
+}
+
+function readSourceUrl(value: unknown): string {
+  const sourceUrl = readBoundedUtf8String(value, "sourceUrl", MAX_SOURCE_URL_LENGTH);
+  try {
+    const url = new URL(sourceUrl);
+    if (url.protocol !== "https:" || !url.hostname || url.username || url.password) {
+      throw new Error();
+    }
+  } catch {
+    throw new Error("sourceUrl must be an absolute https URL.");
+  }
+  return sourceUrl;
+}
+
 function readTimestamp(value: unknown, name: string): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
     throw new Error(`${name} must be a non-negative timestamp.`);
@@ -278,8 +299,8 @@ export function projectReconciliationObservation(
     readTimestamp(input.expectedRevision, "expectedRevision");
   }
   return {
-    sourceUrl: readBoundedString(input.sourceUrl, "sourceUrl", MAX_SOURCE_URL_LENGTH),
-    tenant: readBoundedString(input.tenant, "tenant", MAX_TENANT_LENGTH),
+    sourceUrl: readSourceUrl(input.sourceUrl),
+    tenant: readBoundedUtf8String(input.tenant, "tenant", MAX_TENANT_LENGTH),
     ...(input.objectiveKey === undefined
       ? {}
       : {
@@ -289,13 +310,15 @@ export function projectReconciliationObservation(
             MAX_OBJECTIVE_KEY_LENGTH,
           ),
         }),
-    idempotencyKey: readBoundedString(
+    idempotencyKey: readBoundedUtf8String(
       input.idempotencyKey,
       "idempotencyKey",
       MAX_IDEMPOTENCY_KEY_LENGTH,
     ),
     sourceUpdatedAt: readTimestamp(input.sourceUpdatedAt, "sourceUpdatedAt"),
-    ...(input.cardId === undefined ? {} : { cardId: readRequiredString(input.cardId, "cardId") }),
+    ...(input.cardId === undefined
+      ? {}
+      : { cardId: readBoundedUtf8String(input.cardId, "cardId", MAX_TRIAGE_CARD_ID_LENGTH) }),
     ...(input.expectedRevision === undefined
       ? {}
       : { expectedRevision: readTimestamp(input.expectedRevision, "expectedRevision") }),
@@ -325,16 +348,20 @@ export function projectReconciliationSourceObservation(
     throw new Error("staleAfterMisses must be between 1 and 1000.");
   }
   return {
-    cardId: readBoundedString(input.cardId, "cardId", 120),
-    tenant: readBoundedString(input.tenant, "tenant", 80),
-    objectiveKey: readBoundedString(input.objectiveKey, "objectiveKey", MAX_OBJECTIVE_KEY_LENGTH),
-    sourceUrl: readBoundedString(input.sourceUrl, "sourceUrl", 2000),
-    reconciliationAssociationKey: readBoundedString(
+    cardId: readBoundedUtf8String(input.cardId, "cardId", MAX_TRIAGE_CARD_ID_LENGTH),
+    tenant: readBoundedUtf8String(input.tenant, "tenant", MAX_TENANT_LENGTH),
+    objectiveKey: readBoundedUtf8String(
+      input.objectiveKey,
+      "objectiveKey",
+      MAX_OBJECTIVE_KEY_LENGTH,
+    ),
+    sourceUrl: readSourceUrl(input.sourceUrl),
+    reconciliationAssociationKey: readBoundedUtf8String(
       input.reconciliationAssociationKey,
       "reconciliationAssociationKey",
       MAX_ASSOCIATION_KEY_LENGTH,
     ),
-    observationId: readBoundedString(
+    observationId: readBoundedUtf8String(
       input.observationId,
       "observationId",
       MAX_OBSERVATION_ID_LENGTH,
@@ -353,9 +380,13 @@ export class WorkboardReconciler {
     const cursor = decodeCursor(input.cursor);
     const limit = readLimit(input.limit);
     const tenant =
-      input.tenant === undefined ? undefined : readRequiredString(input.tenant, "tenant");
+      input.tenant === undefined
+        ? undefined
+        : readBoundedUtf8String(input.tenant, "tenant", MAX_TENANT_LENGTH);
     const boardId =
-      input.boardId === undefined ? undefined : readRequiredString(input.boardId, "boardId");
+      input.boardId === undefined
+        ? undefined
+        : readBoundedUtf8String(input.boardId, "boardId", MAX_TENANT_LENGTH);
     if (input.terminal !== undefined && typeof input.terminal !== "boolean") {
       throw new Error("terminal must be a boolean.");
     }
@@ -411,23 +442,7 @@ export class WorkboardReconciler {
       MAX_OBSERVATION_ID_LENGTH,
     );
     const projected = projectReconciliationObservation(input);
-    const existingCardMutation = projected.cardId !== undefined;
-    if (existingCardMutation && projected.expectedRevision === undefined) {
-      const card = await this.store.get(projected.cardId!);
-      if (!card) throw new Error(`card not found: ${projected.cardId}`);
-      return {
-        outcome: "conflict",
-        observationId,
-        card,
-        link: {
-          sourceUrl: projected.sourceUrl,
-          tenant: projected.tenant,
-          sourceUpdatedAt: projected.sourceUpdatedAt,
-          reconciliationAssociationKey: "",
-        },
-      };
-    }
-    const result = await this.applyProjected(projected);
+    const result = await this.applyProjected(projected, { requireExpectedRevision: true });
     signal?.throwIfAborted();
     return {
       outcome:
@@ -442,8 +457,11 @@ export class WorkboardReconciler {
     };
   }
 
-  private async applyProjected(observation: WorkboardReconciliationObservation) {
-    return await this.store.applyReconciliation(observation, linkFor(observation));
+  private async applyProjected(
+    observation: WorkboardReconciliationObservation,
+    options?: { requireExpectedRevision?: boolean },
+  ) {
+    return await this.store.applyReconciliation(observation, linkFor(observation), options);
   }
 }
 
