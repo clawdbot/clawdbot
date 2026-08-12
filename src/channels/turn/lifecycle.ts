@@ -112,10 +112,9 @@ export function assembleResolvedChannelTurn<
 function resolveAssembledReplyPipeline(
   params: DispatchableChannelTurn,
 ): Pick<AssembledChannelTurn, "dispatcherOptions" | "replyOptions"> {
-  const turnAdoptionLifecycle =
-    params.turnAdoptionLifecycle ?? params.replyOptions?.turnAdoptionLifecycle;
-  let replyOptions = turnAdoptionLifecycle
-    ? { ...params.replyOptions, turnAdoptionLifecycle }
+  const adoption = params.turnAdoptionLifecycle ?? params.replyOptions?.turnAdoptionLifecycle;
+  let replyOptions = adoption
+    ? { ...params.replyOptions, turnAdoptionLifecycle: adoption }
     : params.replyOptions;
   if (params.routeSessionKey !== params.ctxPayload.SessionKey) {
     replyOptions = withReplySystemEventSessionKey(replyOptions ?? {}, params.routeSessionKey);
