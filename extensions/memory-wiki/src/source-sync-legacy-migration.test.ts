@@ -37,10 +37,11 @@ function openStore(env: NodeJS.ProcessEnv) {
 // A reject-new store capped at `cap` rows: mirrors the real store's
 // PLUGIN_STATE_LIMIT_EXCEEDED contract without seeding 20,000 rows.
 function createCapacityCappedStore(cap: number) {
+  const limit = { cap };
   const values = new Map<string, unknown>();
   const openKeyedStore = <T>(_options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> => ({
     async register(key, value) {
-      if (!values.has(key) && values.size >= cap) {
+      if (!values.has(key) && values.size >= limit.cap) {
         throw Object.assign(new Error("namespace row limit reached"), {
           code: "PLUGIN_STATE_LIMIT_EXCEEDED",
         });
@@ -76,7 +77,13 @@ function createCapacityCappedStore(cap: number) {
       values.clear();
     },
   });
-  return { openKeyedStore, values };
+  return {
+    openKeyedStore,
+    values,
+    setCap(next: number) {
+      limit.cap = next;
+    },
+  };
 }
 
 describe("memory wiki source sync legacy key migration", () => {
@@ -175,6 +182,7 @@ describe("memory wiki source sync legacy key migration", () => {
       translatedCount: 2,
       prunedCount: 0,
       retainedKeys: [],
+      capacityRetainedKeys: [],
     });
 
     const state = await readMemoryWikiSourceSyncState(vaultRoot, store);
@@ -191,6 +199,7 @@ describe("memory wiki source sync legacy key migration", () => {
       translatedCount: 0,
       prunedCount: 0,
       retainedKeys: [],
+      capacityRetainedKeys: [],
     });
   });
 
@@ -244,7 +253,12 @@ describe("memory wiki source sync legacy key migration", () => {
         openKeyedStore: openKeyedStoreForEnv(env),
         unsafeLocalConfiguredPaths: [],
       }),
-    ).resolves.toEqual({ translatedCount: 0, prunedCount: 1, retainedKeys: [] });
+    ).resolves.toEqual({
+      translatedCount: 0,
+      prunedCount: 1,
+      retainedKeys: [],
+      capacityRetainedKeys: [],
+    });
 
     // The orphaned page is removed, its Notes salvaged, and the row deleted.
     await expect(fs.access(pageAbsPath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -265,7 +279,12 @@ describe("memory wiki source sync legacy key migration", () => {
         openKeyedStore: openKeyedStoreForEnv(env),
         unsafeLocalConfiguredPaths: [],
       }),
-    ).resolves.toEqual({ translatedCount: 0, prunedCount: 0, retainedKeys: [] });
+    ).resolves.toEqual({
+      translatedCount: 0,
+      prunedCount: 0,
+      retainedKeys: [],
+      capacityRetainedKeys: [],
+    });
   });
 
   it("matches legacy unsafe-local rows to the root that produced the recorded page", () => {
@@ -310,7 +329,7 @@ describe("memory wiki source sync legacy key migration", () => {
     ).toBeUndefined();
   });
 
-  it("migrates a legacy row when the namespace is at capacity", async () => {
+  it("retains a legacy row at namespace capacity and migrates once capacity frees", async () => {
     const stateDir = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const vaultRoot = path.join(stateDir, "vault");
     const capped = createCapacityCappedStore(2);
@@ -342,15 +361,41 @@ describe("memory wiki source sync legacy key migration", () => {
       store,
     );
 
-    // register-before-delete would need a third row and throw reject-new; the
-    // capacity fallback frees the legacy slot first.
-    await expect(
+    const migrate = () =>
       migrateLegacyImportedSourceSyncKeys({
         vaultRoot,
         openKeyedStore: capped.openKeyedStore,
         unsafeLocalConfiguredPaths: [],
-      }),
-    ).resolves.toEqual({ translatedCount: 1, prunedCount: 0, retainedKeys: [] });
+      });
+
+    // register-before-delete would need a third row and throw reject-new. The
+    // migration must retain the legacy row rather than free its slot first:
+    // deleting the only durable ownership row ahead of the replacement would
+    // lose it for good if the process dies between the two writes.
+    await expect(migrate()).resolves.toEqual({
+      translatedCount: 0,
+      prunedCount: 0,
+      retainedKeys: [],
+      capacityRetainedKeys: ["/tmp/legacy-at-capacity.md"],
+    });
+
+    expect(capped.values.size).toBe(2);
+    const legacySyncKeys = [...capped.values.values()].map(
+      (value) => (value as { syncKey: string }).syncKey,
+    );
+    expect(legacySyncKeys.toSorted()).toEqual([
+      "/tmp/legacy-at-capacity.md",
+      "bridge:/tmp/full.md",
+    ]);
+
+    // Once capacity frees, a rerun finishes the migration idempotently.
+    capped.setCap(3);
+    await expect(migrate()).resolves.toEqual({
+      translatedCount: 1,
+      prunedCount: 0,
+      retainedKeys: [],
+      capacityRetainedKeys: [],
+    });
 
     expect(capped.values.size).toBe(2);
     const syncKeys = [...capped.values.values()].map(
@@ -360,6 +405,64 @@ describe("memory wiki source sync legacy key migration", () => {
       "bridge:/tmp/full.md",
       "bridge:/tmp/legacy-at-capacity.md",
     ]);
+  });
+
+  it("completes a capacity-blocked translation in the same run after stale pruning frees a slot", async () => {
+    const stateDir = await tempDirs.createTempDir("memory-wiki-source-sync-");
+    const vaultRoot = path.join(stateDir, "vault");
+    const capped = createCapacityCappedStore(2);
+    const store = createMemoryWikiSourceSyncStateStore(capped.openKeyedStore);
+    const pagePath = "sources/stale.md";
+    const pageAbsPath = path.join(vaultRoot, pagePath);
+    await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
+    await fs.writeFile(pageAbsPath, "# stale page\n", "utf8");
+    // A stale unsafe-local row plus a translatable bridge row fill the cap.
+    await writeMemoryWikiSourceSyncState(
+      vaultRoot,
+      {
+        version: 1,
+        entries: {
+          "/tmp/gone/stale.md": {
+            group: "unsafe-local" as const,
+            pagePath,
+            sourcePath: "/tmp/gone/stale.md",
+            sourceUpdatedAtMs: 1,
+            sourceSize: 2,
+            renderFingerprint: "fp",
+          },
+          "/tmp/legacy-bridge-at-capacity.md": {
+            group: "bridge" as const,
+            pagePath: "sources/legacy-bridge-at-capacity.md",
+            sourcePath: "/tmp/legacy-bridge-at-capacity.md",
+            sourceUpdatedAtMs: 1,
+            sourceSize: 2,
+            renderFingerprint: "fp",
+          },
+        },
+      },
+      store,
+    );
+
+    // The bridge row cannot register its scoped replacement until stale
+    // pruning frees the slot; the migration must complete it in the same run.
+    await expect(
+      migrateLegacyImportedSourceSyncKeys({
+        vaultRoot,
+        openKeyedStore: capped.openKeyedStore,
+        unsafeLocalConfiguredPaths: [],
+      }),
+    ).resolves.toEqual({
+      translatedCount: 1,
+      prunedCount: 1,
+      retainedKeys: [],
+      capacityRetainedKeys: [],
+    });
+
+    const syncKeys = [...capped.values.values()].map(
+      (value) => (value as { syncKey: string }).syncKey,
+    );
+    expect(syncKeys).toEqual(["bridge:/tmp/legacy-bridge-at-capacity.md"]);
+    await expect(fs.access(pageAbsPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("keeps a page that another live row still owns when pruning", async () => {

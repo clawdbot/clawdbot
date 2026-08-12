@@ -646,6 +646,10 @@ type LegacyImportedSourceSyncMigrationResult = {
   translatedCount: number;
   prunedCount: number;
   retainedKeys: string[];
+  // Legacy rows kept because a full reject-new namespace could not hold the
+  // scoped replacement; deleting them first would risk losing durable
+  // ownership between two separate write transactions.
+  capacityRetainedKeys: string[];
 };
 
 export function translateLegacyImportedSourceSyncKey(params: {
@@ -726,8 +730,36 @@ export async function migrateLegacyImportedSourceSyncKeys(params: {
     path.resolve(configuredPath),
   );
 
+  // Migrates one legacy row to its scoped key. Returns "capacity" when a full
+  // reject-new namespace cannot hold the temporary extra row; the legacy row
+  // is left untouched in that case so durable ownership is never lost.
+  const migrateRow = async (
+    row: LegacyImportedSourceSyncRow,
+    nextSyncKey: string,
+  ): Promise<"migrated" | "capacity"> => {
+    const nextStoreKey = resolveStateEntryKey(vaultRootKey, nextSyncKey);
+    if (await raw.lookup(nextStoreKey)) {
+      await raw.delete(row.storeKey);
+      return "migrated";
+    }
+    try {
+      // Register the scoped replacement before deleting the legacy row so a
+      // crash mid-migration never loses ownership; reruns are idempotent.
+      await raw.register(nextStoreKey, { ...row.entry, vaultRootKey, syncKey: nextSyncKey });
+    } catch (error) {
+      if (!isPluginStateLimitExceeded(error)) {
+        throw error;
+      }
+      return "capacity";
+    }
+    await raw.delete(row.storeKey);
+    return "migrated";
+  };
+
   let translatedCount = 0;
   const staleRows: LegacyImportedSourceSyncRow[] = [];
+  const capacityRows: { row: LegacyImportedSourceSyncRow; nextSyncKey: string }[] = [];
+  const capacityRetainedKeys: string[] = [];
   for (const row of legacyRows) {
     const nextSyncKey = translateLegacyImportedSourceSyncKey({
       entry: row.entry,
@@ -740,38 +772,31 @@ export async function migrateLegacyImportedSourceSyncKeys(params: {
       staleRows.push(row);
       continue;
     }
-    const nextStoreKey = resolveStateEntryKey(vaultRootKey, nextSyncKey);
-    if (await raw.lookup(nextStoreKey)) {
-      await raw.delete(row.storeKey);
+    if ((await migrateRow(row, nextSyncKey)) === "migrated") {
       translatedCount += 1;
-      continue;
+    } else {
+      capacityRows.push({ row, nextSyncKey });
     }
-    try {
-      // Register the scoped replacement before deleting the legacy row so a
-      // crash mid-migration never loses ownership; reruns are idempotent.
-      await raw.register(nextStoreKey, { ...row.entry, vaultRootKey, syncKey: nextSyncKey });
-    } catch (error) {
-      if (!isPluginStateLimitExceeded(error)) {
-        throw error;
-      }
-      // A full reject-new namespace cannot hold the temporary extra row: free
-      // the legacy slot first. A crash here loses one ownership row, which the
-      // next sync re-creates from the surviving page file (Notes live in the
-      // page, not the row).
-      await raw.delete(row.storeKey);
-      await raw.register(nextStoreKey, { ...row.entry, vaultRootKey, syncKey: nextSyncKey });
-      translatedCount += 1;
-      continue;
-    }
-    await raw.delete(row.storeKey);
-    translatedCount += 1;
   }
 
+  // Prune stale rows before retrying capacity-blocked ones: pruning frees
+  // namespace slots that may let those translations complete in the same run.
   const prunedCount = await pruneLegacyImportedSourceRows({
     vaultRoot: params.vaultRoot,
     openKeyedStore: params.openKeyedStore,
     rows: staleRows,
   });
 
-  return { translatedCount, prunedCount, retainedKeys };
+  for (const { row, nextSyncKey } of capacityRows) {
+    if ((await migrateRow(row, nextSyncKey)) === "migrated") {
+      translatedCount += 1;
+      continue;
+    }
+    // Still no free slot. Deleting the legacy row first would leave a crash
+    // window with no durable ownership at all, so retain it instead; Doctor
+    // surfaces a warning and a later run retries once capacity frees up.
+    capacityRetainedKeys.push(row.syncKey);
+  }
+
+  return { translatedCount, prunedCount, retainedKeys, capacityRetainedKeys };
 }

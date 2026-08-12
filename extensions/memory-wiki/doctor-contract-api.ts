@@ -360,6 +360,11 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
             `Retained unrecognized Memory Wiki source sync row for ${vaultRoot}: ${retainedKey}`,
           );
         }
+        for (const capacityKey of result.capacityRetainedKeys) {
+          warnings.push(
+            `Memory Wiki source sync namespace is full; retained legacy ownership row for ${vaultRoot}: ${capacityKey}. The migration retries on each doctor run once stale rows or removed sources free namespace capacity.`,
+          );
+        }
       }
       return { changes, warnings };
     },

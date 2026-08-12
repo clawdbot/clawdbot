@@ -200,7 +200,7 @@ describe("memory wiki source ownership across import modes", () => {
       relativePath: "MEMORY.md",
       absolutePath,
       agentIds: ["main"],
-      contentType: "markdown",
+      contentType: "markdown" as const,
     });
     registerMemoryCapability("memory-core", {
       publicArtifacts: {
