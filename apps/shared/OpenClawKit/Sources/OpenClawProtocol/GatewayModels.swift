@@ -19228,6 +19228,182 @@ public struct ShutdownEvent: Codable, Sendable {
     }
 }
 
+public struct PortalSummary: Codable, Sendable {
+    public let id: String
+    public let title: String
+    public let port: Int
+    public let listenport: Int
+    public let tokenquery: String
+    public let url: String
+    public let path: String?
+    public let description: String?
+    public let createdatms: Int
+
+    public init(
+        id: String,
+        title: String,
+        port: Int,
+        listenport: Int,
+        tokenquery: String,
+        url: String,
+        path: String? = nil,
+        description: String? = nil,
+        createdatms: Int)
+    {
+        self.id = id
+        self.title = title
+        self.port = port
+        self.listenport = listenport
+        self.tokenquery = tokenquery
+        self.url = url
+        self.path = path
+        self.description = description
+        self.createdatms = createdatms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case port
+        case listenport = "listenPort"
+        case tokenquery = "tokenQuery"
+        case url
+        case path
+        case description
+        case createdatms = "createdAtMs"
+    }
+}
+
+public struct PortalListParams: Codable, Sendable {}
+
+public struct PortalListResult: Codable, Sendable {
+    public let portals: [PortalOpenResult]
+
+    public init(
+        portals: [PortalOpenResult])
+    {
+        self.portals = portals
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case portals
+    }
+}
+
+public struct PortalOpenParams: Codable, Sendable {
+    public let port: Int
+    public let title: String?
+    public let description: String?
+    public let path: String?
+
+    public init(
+        port: Int,
+        title: String? = nil,
+        description: String? = nil,
+        path: String? = nil)
+    {
+        self.port = port
+        self.title = title
+        self.description = description
+        self.path = path
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case port
+        case title
+        case description
+        case path
+    }
+}
+
+public struct PortalOpenResult: Codable, Sendable {
+    public let id: String
+    public let title: String
+    public let port: Int
+    public let listenport: Int
+    public let tokenquery: String
+    public let url: String
+    public let path: String?
+    public let description: String?
+    public let createdatms: Int
+
+    public init(
+        id: String,
+        title: String,
+        port: Int,
+        listenport: Int,
+        tokenquery: String,
+        url: String,
+        path: String? = nil,
+        description: String? = nil,
+        createdatms: Int)
+    {
+        self.id = id
+        self.title = title
+        self.port = port
+        self.listenport = listenport
+        self.tokenquery = tokenquery
+        self.url = url
+        self.path = path
+        self.description = description
+        self.createdatms = createdatms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case port
+        case listenport = "listenPort"
+        case tokenquery = "tokenQuery"
+        case url
+        case path
+        case description
+        case createdatms = "createdAtMs"
+    }
+}
+
+public struct PortalCloseParams: Codable, Sendable {
+    public let id: String
+
+    public init(
+        id: String)
+    {
+        self.id = id
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+    }
+}
+
+public struct PortalCloseResult: Codable, Sendable {
+    public let closed: Bool
+
+    public init(
+        closed: Bool)
+    {
+        self.closed = closed
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case closed
+    }
+}
+
+public struct PortalChangedEvent: Codable, Sendable {
+    public let portals: [PortalOpenResult]
+
+    public init(
+        portals: [PortalOpenResult])
+    {
+        self.portals = portals
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case portals
+    }
+}
+
 public enum BoardOp: Codable, Sendable {
     case tabCreate(BoardTabCreateOp)
     case tabUpdate(BoardTabUpdateOp)
