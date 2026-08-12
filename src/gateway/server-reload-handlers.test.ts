@@ -5476,6 +5476,10 @@ describe("gateway plugin hot reload handlers", () => {
       restartPending: false,
       preserveKnownAccount: true,
     });
+    expect(channelHandlers.start).toHaveBeenCalledWith("discord", "catalog-account", {
+      includeKnownAccounts: true,
+      preserveManualStop: true,
+    });
     expect(handlers.setState).not.toHaveBeenCalled();
   });
 
