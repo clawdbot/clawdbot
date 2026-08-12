@@ -3808,14 +3808,13 @@ openclaw-chat-video-player {
 }
 
 .slash-menu-group + .slash-menu-group {
-  margin-top: 3px;
-  padding-top: 3px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+  margin-top: 2px;
+  padding-top: 4px;
 }
 
 .slash-menu-group__label {
-  padding: 4px 8px 2px;
-  font-size: var(--control-ui-text-xs);
+  padding: 4px 8px 3px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-weight: 650;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -3823,9 +3822,10 @@ openclaw-chat-video-player {
 }
 
 .slash-menu-item {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
   align-items: center;
-  gap: 7px;
+  column-gap: 16px;
   min-height: var(--menu-item-height);
   padding: 0 8px;
   border-radius: var(--menu-item-radius);
@@ -3834,7 +3834,23 @@ openclaw-chat-video-player {
 
 .slash-menu-item:hover,
 .slash-menu-item--active {
-  background: color-mix(in srgb, var(--bg-hover) 68%, transparent);
+  background: color-mix(in srgb, var(--bg-hover) 52%, transparent);
+}
+
+.slash-menu-leading,
+.slash-menu-trailing {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.slash-menu-leading {
+  gap: 8px;
+}
+
+.slash-menu-trailing {
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .slash-menu-icon {
@@ -3858,36 +3874,39 @@ openclaw-chat-video-player {
 }
 
 .slash-menu-name {
-  font-size: 0.78rem;
+  flex-shrink: 0;
+  max-width: calc(100% - 24px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--control-ui-text-sm);
   font-weight: 500;
-  font-family: var(--mono);
-  color: color-mix(in srgb, var(--text) 78%, var(--muted));
+  color: var(--text);
   white-space: nowrap;
 }
 
 .slash-menu-args {
-  font-size: 0.7rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--control-ui-text-xs);
   /* Full-opacity --muted keeps slash-arg hints at WCAG AA on dark surfaces. */
   color: var(--muted);
-  font-family: var(--mono);
+  white-space: nowrap;
 }
 
 .slash-menu-desc {
-  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: right;
-  font-size: 0.72rem;
+  font-size: var(--control-ui-text-sm);
   color: var(--muted);
 }
 
 .slash-menu-badge {
-  font-size: 0.65rem;
-  font-weight: 600;
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 500;
   color: var(--muted);
   white-space: nowrap;
   flex-shrink: 0;

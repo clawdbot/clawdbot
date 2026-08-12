@@ -340,13 +340,17 @@ export function renderSlashMenu(
                   requestUpdate();
                 }}
               >
-                ${state.slashMenuCommand?.icon
-                  ? html`<span class="slash-menu-icon"
-                      >${renderSlashIcon(state.slashMenuCommand.icon)}</span
-                    >`
-                  : nothing}
-                <span class="slash-menu-name">${arg}</span>
-                <span class="slash-menu-desc">/${state.slashMenuCommand?.name} ${arg}</span>
+                <span class="slash-menu-leading">
+                  <span class="slash-menu-icon"
+                    >${state.slashMenuCommand?.icon
+                      ? renderSlashIcon(state.slashMenuCommand.icon)
+                      : nothing}</span
+                  >
+                  <span class="slash-menu-name">${arg}</span>
+                </span>
+                <span class="slash-menu-trailing">
+                  <span class="slash-menu-desc">/${state.slashMenuCommand?.name} ${arg}</span>
+                </span>
               </div>
             `,
           )}
@@ -396,19 +400,23 @@ export function renderSlashMenu(
                 requestUpdate();
               }}
             >
-              ${cmd.icon
-                ? html`<span class="slash-menu-icon">${renderSlashIcon(cmd.icon)}</span>`
-                : nothing}
-              <span class="slash-menu-name">/${cmd.name}</span>
-              ${cmd.args ? html`<span class="slash-menu-args">${cmd.args}</span>` : nothing}
-              <span class="slash-menu-desc">${getSlashCommandDescription(cmd)}</span>
-              ${cmd.argOptions?.length
-                ? html`<span class="slash-menu-badge"
-                    >${t("chat.commands.optionCount", {
-                      count: String(cmd.argOptions.length),
-                    })}</span
-                  >`
-                : nothing}
+              <span class="slash-menu-leading">
+                <span class="slash-menu-icon"
+                  >${cmd.icon ? renderSlashIcon(cmd.icon) : nothing}</span
+                >
+                <span class="slash-menu-name">/${cmd.name}</span>
+                ${cmd.args ? html`<span class="slash-menu-args">${cmd.args}</span>` : nothing}
+              </span>
+              <span class="slash-menu-trailing">
+                <span class="slash-menu-desc">${getSlashCommandDescription(cmd)}</span>
+                ${cmd.argOptions?.length
+                  ? html`<span class="slash-menu-badge"
+                      >${t("chat.commands.optionCount", {
+                        count: String(cmd.argOptions.length),
+                      })}</span
+                    >`
+                  : nothing}
+              </span>
             </div>
           `,
         )}

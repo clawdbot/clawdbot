@@ -276,9 +276,13 @@ export function renderSkillMenu(
                     requestUpdate();
                   }}
                 >
-                  <span class="slash-menu-icon">${icons.zap}</span>
-                  <span class="slash-menu-name">$${command.name}</span>
-                  <span class="slash-menu-desc">${getSlashCommandDescription(command)}</span>
+                  <span class="slash-menu-leading">
+                    <span class="slash-menu-icon">${icons.zap}</span>
+                    <span class="slash-menu-name">$${command.name}</span>
+                  </span>
+                  <span class="slash-menu-trailing">
+                    <span class="slash-menu-desc">${getSlashCommandDescription(command)}</span>
+                  </span>
                 </div>
               `,
             )}
