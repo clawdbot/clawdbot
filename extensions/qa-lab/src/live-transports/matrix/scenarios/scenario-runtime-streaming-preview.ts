@@ -134,7 +134,7 @@ export async function runStreamingReplacementRetentionScenario(
         event.roomId === context.roomId &&
         event.sender === context.sutUserId &&
         isMatrixQaMessageLikeKind(event.kind) &&
-        doesMatrixQaReplyBodyMatchToken(event, secondText) &&
+        event.body?.includes(secondToken) === true &&
         event.eventId !== secondDraftEventId &&
         event.replacesEventId === undefined,
       roomId: context.roomId,
@@ -198,7 +198,8 @@ export async function runStreamingReplacementRetentionScenario(
       redactionEventId: secondRedaction.event.eventId,
       redactionTargetEventId: secondRedaction.event.redactsEventId,
       secondDriverEventId,
-      secondReply: buildMatrixReplyArtifact(secondReply.event, secondText),
+      secondReply: buildMatrixReplyArtifact(secondReply.event),
+      secondToken,
     },
     details: [
       `retained draft event: ${firstDraftEventId}`,
