@@ -32,6 +32,10 @@ import type { DiscordVoiceReceive } from "./voice-receive.js";
 
 const logger = createSubsystemLogger("discord/voice");
 
+function isVoiceSessionStopped(entry: VoiceSessionEntry): boolean {
+  return entry.sessionLifecycle.status === "stopped";
+}
+
 type DiscordVoiceSdk = ReturnType<typeof loadDiscordVoiceSdk>;
 type DiscordVoiceConnection = ReturnType<DiscordVoiceSdk["joinVoiceChannel"]>;
 
@@ -661,7 +665,7 @@ export class DiscordVoiceSessions {
         entry.realtimeLifecycle.status !== "starting" ||
         entry.realtimeLifecycle.generation !== generation ||
         entry.realtimeLifecycle.instance !== realtime ||
-        entry.sessionLifecycle.status === "stopped" ||
+        isVoiceSessionStopped(entry) ||
         options?.isCurrent?.() === false ||
         (options?.requireLiveEntry === true && this.params.sessions.get(entry.guildId) !== entry)
       ) {
