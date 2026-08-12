@@ -810,6 +810,12 @@ describe("xai provider plugin", () => {
     expect(
       provider.isModernModelRef?.({
         provider: "xai",
+        modelId: "grok-4.3",
+      } as never),
+    ).toBe(true);
+    expect(
+      provider.isModernModelRef?.({
+        provider: "xai",
         modelId: "grok-4.20-multi-agent-experimental-beta-0304",
       } as never),
     ).toBe(false);
