@@ -419,6 +419,26 @@ describe("authorizeSlackSystemEventSender", () => {
 });
 
 describe("resolveSlackCommandIngress", () => {
+  it.each([
+    ["allows the workspace-qualified user in its workspace", "T11111111", "allow", true],
+    ["blocks the same bare user ID in another workspace", "T22222222", "block", false],
+  ] as const)("%s", async (_name, teamId, decision, allowed) => {
+    const result = await resolveSlackCommandIngress({
+      ctx: makeAuthorizeCtx(),
+      teamId,
+      senderId: "U_SHARED",
+      channelType: "channel",
+      channelId: "C_SHARED",
+      ownerAllowFromLower: [],
+      channelUsers: ["team:T11111111:user:U_SHARED"],
+      allowTextCommands: false,
+      hasControlCommand: false,
+    });
+
+    expect(result.senderAccess.decision).toBe(decision);
+    expect(result.senderAccess.gate?.allowed).toBe(allowed);
+  });
+
   it("does not authorize commands when sender denial stops before the command gate", async () => {
     const result = await resolveSlackCommandIngress({
       ctx: makeAuthorizeCtx(),

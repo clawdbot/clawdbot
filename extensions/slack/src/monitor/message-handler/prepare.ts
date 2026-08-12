@@ -1138,6 +1138,7 @@ export async function prepareSlackMessage(params: {
     isRoom && Array.isArray(channelConfig?.users) && channelConfig.users.length > 0;
   const messageIngress = await resolveSlackCommandIngress({
     ctx,
+    teamId: opts.eventScope?.teamId ?? ctx.teamId,
     senderId,
     senderName: senderNameForAuth,
     channelType: conversation.resolvedChannelType ?? "channel",

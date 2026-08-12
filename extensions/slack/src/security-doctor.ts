@@ -3,5 +3,5 @@ import { buildMutableAllowEntryDetector } from "openclaw/plugin-sdk/channel-poli
 
 export const isSlackMutableAllowEntry = buildMutableAllowEntryDetector({
   stableIdPattern:
-    /^(?:(?:(?:[sS][lL][aA][cC][kK]|[uU][sS][eE][rR]):)?(?:[UWBCGDT][A-Z0-9]{2,}|[A-Za-z0-9]{8,})|<@[A-Za-z0-9]{8,}>)$/,
+    /^(?:team:T[A-Z0-9]+:user:[UW][A-Z0-9]+|(?:(?:(?:slack|user):)?(?:[UWBCGDT][A-Z0-9]{2,}|[A-Z0-9]{8,})|<@[A-Z0-9]{8,}>))$/i,
 });

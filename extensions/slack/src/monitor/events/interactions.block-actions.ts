@@ -927,6 +927,7 @@ async function resolveSlackBlockActionCommandAuthorized(params: {
 
   const commandIngress = await resolveSlackCommandIngress({
     ctx: params.ctx,
+    teamId: params.eventScope?.teamId ?? params.ctx.teamId,
     senderId: params.parsed.userId,
     senderName,
     channelType: params.auth.channelType ?? "channel",
