@@ -2040,7 +2040,10 @@ describe("mattermost inbound user posts", () => {
           chatmode: "onmessage",
           dmPolicy: "open",
           groupPolicy: "open",
-          streaming: { mode: "block", preview: { toolProgress: true } },
+          streaming: {
+            mode: "block",
+            preview: { toolProgress: true, commandText: "raw" },
+          },
         },
       },
     };
