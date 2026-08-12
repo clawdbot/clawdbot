@@ -202,7 +202,7 @@ export async function prepareGatewayLifecycle(params: {
         instanceId: session.nodeId,
         reason: "connect",
       });
-      incrementPresenceVersion();
+      broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
       recordRemoteNodeInfo({
         nodeId: session.nodeId,
         connId: session.connId,

@@ -78,7 +78,9 @@ export function summarizeWorkerEnvironment(
     id: record.environmentId,
     type: "worker",
     status: WORKER_STATUS[record.state],
-    trust: "disposable",
+    ...(record.sharedHost === null
+      ? {}
+      : { trust: record.sharedHost ? "persistent" : "disposable" }),
     worker: {
       providerId: record.providerId,
       ...(record.leaseId ? { leaseId: record.leaseId } : {}),
@@ -132,9 +134,7 @@ export function listWorkerProfiles(context: GatewayRequestContext) {
   return Object.entries(profiles)
     .flatMap(([id, profile]) => {
       const providerId = typeof profile.provider === "string" ? profile.provider.trim() : "";
-      return id.trim() && providerId
-        ? [{ id: id.trim(), providerId, trust: "disposable" as const }]
-        : [];
+      return id.trim() && providerId ? [{ id: id.trim(), providerId }] : [];
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }
